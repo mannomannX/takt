@@ -64,3 +64,63 @@ fn the_default_follows_profile_and_target() {
     assert_eq!(Instrument::parse("states"), Some(Instrument::States));
     assert_eq!(Instrument::parse("alles"), None);
 }
+
+/// GEN-016: Unter `statements` traegt `pc` den Byte-Offset einer
+/// Anweisung (11.2) — auch nach einem Zustandswechsel. Die Nummer des
+/// betretenen Blatts gehoert in die Stufe `states`; im selben Feld waere
+/// sie ein Offset, der auf keine Anweisung zeigt.
+#[test]
+fn under_statements_every_pc_store_is_a_statement_offset() {
+    let p = program(SRC);
+    let m = &p.machines[0];
+    let st = takt_llvm::machine::state_struct(m, &p).expect("Struct");
+    let pc = st.index_of(takt_llvm::machine::Role::Pc, 0).expect("pc");
+    let mut offsets = std::collections::BTreeSet::new();
+    for b in m.blocks() {
+        b.walk(&mut |s| {
+            offsets.insert(s.span.start);
+        });
+    }
+    let triple = Target::X86_64_WINDOWS.triple;
+    let ir =
+        takt_llvm::lower::program_with(&p, triple, &takt_llvm::symbols::Prefix::default(), Instrument::Statements).ir;
+    let field = format!("getelementptr inbounds %m_state, ptr %0, i32 0, i32 {pc}");
+    let mut regs: Vec<String> = Vec::new();
+    let mut stored = Vec::new();
+    for line in ir.lines() {
+        if line.starts_with("define ") {
+            regs.clear();
+        }
+        let l = line.trim();
+        if let Some((reg, rest)) = l.split_once(" = ")
+            && rest == field
+        {
+            regs.push(reg.to_string());
+        }
+        if let Some(rest) = l.strip_prefix("store i32 ")
+            && let Some((value, ptr)) = rest.split_once(", ptr ")
+            && regs.iter().any(|r| r == ptr)
+        {
+            stored.push(value.parse::<u32>().unwrap_or_else(|_| panic!("pc mit `{value}`")));
+        }
+    }
+    assert!(!stored.is_empty(), "kein Store auf pc gefunden");
+    let foreign: Vec<u32> = stored.into_iter().filter(|v| !offsets.contains(v)).collect();
+    assert!(foreign.is_empty(), "pc traegt Werte, die keine Anweisung sind: {foreign:?} (Anweisungen: {offsets:?})");
+}
+
+/// GEN-016: Jede Stufe hat ihren Namen, und der Default kennt jedes
+/// Profil auf jedem Ziel.
+#[test]
+fn every_level_parses_and_every_profile_has_a_default() {
+    for level in [Instrument::Statements, Instrument::States, Instrument::Off] {
+        assert_eq!(Instrument::parse(level.name()), Some(level));
+    }
+    for target in Target::ALL {
+        assert_eq!(Instrument::default_for(Some(RuntimeProfile::LinuxRt), target), Instrument::Statements);
+        assert_eq!(Instrument::default_for(Some(RuntimeProfile::Baremetal), target), Instrument::States);
+        assert_eq!(Instrument::default_for(Some(RuntimeProfile::Shared), target), Instrument::States);
+        let bare = if target.is_bare_metal() { Instrument::States } else { Instrument::Statements };
+        assert_eq!(Instrument::default_for(None, target), bare, "{}", target.name);
+    }
+}

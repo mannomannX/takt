@@ -251,3 +251,87 @@ fn fault_is_fail_on_a_machine_is_an_error() {
     );
     assert!(p.is_none() && diags.iter().any(|d| d.contains("nur an einem Szenario")), "{diags:?}");
 }
+
+/// 13.5, 13.6 als Tabelle (Szenario, Verdikt, Ende): ohne Aussage
+/// `INCONCLUSIVE`, `verdict fail` ist `FAIL`, ein Szenario in `FAULTED`
+/// endet dort mit `FAIL` (`fault_is_fail`), und eines, das nie fertig
+/// wird, endet an der Tickgrenze.
+#[test]
+fn the_verdict_and_end_of_a_scenario_follow_13_5_and_13_6() {
+    let p = ok("
+output p_sim : float[bar] @ sim(\"daq/p\") with safe = 1 bar
+
+scenario \"says nothing\" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            p_sim = 2 bar
+            wait 2 ms
+            -> DONE
+    state DONE:
+        enter:
+            p_sim = 3 bar
+
+scenario \"fails\" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            wait 2 ms
+            verdict fail \"no\"
+            -> DONE
+    state DONE:
+        enter:
+            p_sim = 3 bar
+
+scenario \"faults\" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            wait 2 ms
+            expect false, \"broken\"
+
+scenario \"never ends\" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            until false timeout 1 s
+            verdict pass
+");
+    for (name, verdict, ended) in [
+        ("says nothing", Verdict::Inconclusive, Ended::Scenario),
+        ("fails", Verdict::Fail, Ended::Scenario),
+        ("faults", Verdict::Fail, Ended::Scenario),
+        ("never ends", Verdict::Inconclusive, Ended::Ticks),
+    ] {
+        let r =
+            run(&p, &Trace::default(), &RunOptions { ticks: 20, scenario: Some(name.into()), ..Default::default() })
+                .expect("Lauf");
+        assert_eq!((r.verdict, r.ended), (verdict, ended), "{name}:\n{}", r.trace.render());
+    }
+    let t =
+        run(&p, &Trace::default(), &RunOptions { ticks: 20, scenario: Some("faults".into()), ..Default::default() })
+            .expect("Lauf")
+            .trace
+            .render();
+    assert!(t.contains("t=2 state faults FAULTED"), "{t}");
+}
+
+/// 13.6: Als Maschinenname — im Trace und fuer `--scenario` — steht der
+/// Name mit `_` statt Leerraum; beide Schreibweisen waehlen dasselbe.
+#[test]
+fn a_scenario_name_with_spaces_is_written_with_underscores() {
+    let p = ok(PROGRAM);
+    let spaced = run_scenario(&p, "pressure rises").trace.render();
+    let joined = run_scenario(&p, "pressure_rises").trace.render();
+    assert_eq!(spaced, joined);
+    assert!(spaced.contains("verdict pressure_rises pass"), "{spaced}");
+}
+
+/// Ein unbekanntes Szenario nennt sich in der Meldung.
+#[test]
+fn an_unknown_scenario_names_itself() {
+    let p = ok(PROGRAM);
+    let options = RunOptions { ticks: 10, scenario: Some("nope".into()), ..Default::default() };
+    let e = run(&p, &Trace::default(), &options).expect_err("unbekannt");
+    assert!(format!("{e:?}").contains("Szenario `nope` gibt es nicht"), "{e:?}");
+}

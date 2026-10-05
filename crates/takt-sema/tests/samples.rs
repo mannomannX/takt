@@ -88,3 +88,45 @@ machine watch:
     assert!(trace.contains("t=0 alert watch on \"current spike\""), "der Ausreisser meldet sich: {trace}");
     assert!(trace.contains("t=1 alert watch off \"current spike\""), "und verstummt wieder: {trace}");
 }
+
+/// Alle sechs Reduktionen auf einem Tick-Array (8.9), mit Werten, deren
+/// Ergebnis exakt ist: Quadratsumme 36, also `rms` 3 A, Summe 10, also
+/// `mean` 2.5 A.
+#[test]
+fn all_six_reductions_have_exact_values() {
+    let trace = simulate(
+        "\
+input i_dut : samples<float[A] in 0.0 A .. 10.0 A, 4> @ hw(\"daq1/ai2\") with rate = 4 kHz
+
+output lo   : float[A] @ hw(\"o/lo\")   with safe = 0.0 A
+output hi   : float[A] @ hw(\"o/hi\")   with safe = 0.0 A
+output avg  : float[A] @ hw(\"o/avg\")  with safe = 0.0 A
+output rms  : float[A] @ hw(\"o/rms\")  with safe = 0.0 A
+output n    : int in 0..99 @ hw(\"o/n\") with safe = 0
+output tail : float[A] @ hw(\"o/tail\") with safe = 0.0 A
+
+machine watch:
+    initial RUN
+    state RUN:
+        loop:
+            lo = i_dut.min()
+            hi = i_dut.max()
+            avg = i_dut.mean()
+            rms = i_dut.rms()
+            n = i_dut.count
+            tail = i_dut.last
+",
+        "t=0 in i_dut [3.0 A, 1.0 A, 5.0 A, 1.0 A]\n",
+        1,
+    );
+    for line in [
+        "t=0 out lo 1.0 A\n",
+        "t=0 out hi 5.0 A\n",
+        "t=0 out avg 2.5 A\n",
+        "t=0 out rms 3.0 A\n",
+        "t=0 out n 4\n",
+        "t=0 out tail 1.0 A\n",
+    ] {
+        assert!(trace.contains(line), "`{}` fehlt:\n{trace}", line.trim_end());
+    }
+}

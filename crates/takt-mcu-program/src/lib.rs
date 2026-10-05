@@ -48,6 +48,7 @@ unsafe extern "C" {
     fn app_idle(arena: *mut c_void) -> u8;
     fn app_deadline(arena: *mut c_void) -> i64;
     fn app_advance(arena: *mut c_void, n: i64);
+    fn app_tune(arena: *mut c_void, param: u32, value: *const c_void, len: i32) -> i32;
     fn app_persist_snapshot(arena: *mut c_void, out: *mut c_void, cap: i32) -> i32;
     fn app_persist_restore(arena: *mut c_void, bytes: *const c_void, len: i32) -> i32;
     fn app_next_run(arena: *mut c_void, delay: *mut i64) -> i32;
@@ -208,6 +209,12 @@ impl Program for Generated {
     fn advance(&mut self, ticks: u64) {
         // SAFETY: der Rahmen rueckt seine Uhr vor; die Schleife ruft es nur im Schlaf.
         unsafe { app_advance(self.arena, ticks as i64) };
+    }
+
+    fn tune(&mut self, param: u32, value: &[u8]) {
+        let len = i32::try_from(value.len()).unwrap_or(i32::MAX);
+        // SAFETY: der Rahmen liest `len` Byte ab `value` (8.4).
+        let _ = unsafe { app_tune(self.arena, param, value.as_ptr().cast(), len) };
     }
 
     fn persist_snapshot(&mut self, out: &mut [u8]) -> usize {

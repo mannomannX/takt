@@ -1,5 +1,12 @@
 //! Der Watchdog ohne Register (12.3): was ein Board zu seiner Frist rechnet.
 
+/// Die Frist eines Watchdogs, der Mikrosekunden nimmt (MWDT des C6), in
+/// ganzen Mikrosekunden, aufgerundet und mindestens eine: Er schlaegt nie
+/// vor der Frist zu.
+pub fn timeout_us(timeout_ns: i64) -> u64 {
+    u64::try_from(timeout_ns).unwrap_or(0).div_ceil(1_000).max(1)
+}
+
 /// Vorteiler (`PR`, 0 fuer /4 bis 6 fuer /256) und Nachladewert (`RLR`,
 /// 12 Bit) des IWDG einer STM32 fuer die Frist `timeout_ns` bei einem
 /// LSI von `lsi_hz` (RM0368 17.3).
@@ -23,6 +30,14 @@ pub fn iwdg(timeout_ns: i64, lsi_hz: u32) -> (u8, u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_microsecond_timeout_rounds_up_and_is_never_zero() {
+        assert_eq!(timeout_us(20_000_000), 20_000);
+        assert_eq!(timeout_us(20_000_001), 20_001);
+        assert_eq!(timeout_us(0), 1);
+        assert_eq!(timeout_us(-5), 1);
+    }
 
     /// Der schnellste LSI des F401 laut Datenblatt.
     const LSI_MAX: u32 = 47_000;

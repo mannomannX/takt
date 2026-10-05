@@ -1,0 +1,2 @@
+t=200 alert edge_watch on "chamber_p entprellt: IMPLAUSIBLE"
+t=400 alert edge_watch off "chamber_p entprellt: IMPLAUSIBLE"

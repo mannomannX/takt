@@ -68,3 +68,79 @@ machine m:
     assert!(t.contains("t=2 out pending 1"), "{t}");
     assert!(t.contains("t=3 out pending 0"), "{t}");
 }
+
+const BYTES: &str = "input rx : stream<u8> @ hw(\"u/rx\") with max_rate = 200 Hz, capacity = 4, overflow = fault\n";
+
+/// Der Inhalt des untersuchten Elements, zweimal im selben Tick gelesen:
+/// `peek` veraendert nichts, beide sehen dasselbe Element.
+#[test]
+fn peek_twice_in_a_tick_shows_the_same_element() {
+    let p = compile(&format!(
+        "{BYTES}output a : u8 @ hw(\"o/a\") with safe = 0
+output b : u8 @ hw(\"o/b\") with safe = 0
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            a = rx.peek().or(0)
+            b = rx.peek().or(0)
+"
+    ));
+    let t = trace(&p, "t=1 in rx 7\nt=1 in rx 8\n", 3);
+    for line in ["t=1 out a 7", "t=1 out b 7", "t=2 out a 8", "t=2 out b 8", "t=3 out a 0"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+}
+
+/// 9.6: Jeder Leser hat seinen Cursor; der Puffer verdraengt erst, was der
+/// langsamste gelesen hat. Ein Handler, der alles nimmt, nimmt dem, der nur
+/// peekt, nichts weg.
+#[test]
+fn a_second_reader_does_not_take_what_the_peeker_has_not_seen() {
+    let p = compile(&format!(
+        "{BYTES}output a : u8 @ hw(\"o/a\") with safe = 0
+output total : int in 0..99 @ hw(\"o/total\") with safe = 0
+machine peeker:
+    initial RUN
+    state RUN:
+        loop:
+            a = rx.peek().or(0)
+machine eater:
+    var n : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        on rx as e:
+            n = min(n + 1, 99)
+            total = n
+"
+    ));
+    let t = trace(&p, "t=1 in rx 7\nt=1 in rx 8\n", 4);
+    for line in ["t=1 out a 7", "t=1 out total 2", "t=2 out a 8", "t=3 out a 0"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+}
+
+/// Lemma 9.6.1: Wer nur peekt, verbraucht ein Element je Tick. Kommen
+/// zwei je Tick in einen Puffer fuer vier, waechst sein Fenster, bis es
+/// ueberlaeuft — `overflow = fault` meldet `StreamOverflow` dem Leser.
+#[test]
+fn a_peek_only_reader_overflows_when_elements_come_faster() {
+    let p = compile(&format!(
+        "{BYTES}output a : u8 @ hw(\"o/a\") with safe = 0
+machine m:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        loop:
+            a = rx.peek().or(0)
+    state SAFE:
+        when false: -> RUN
+"
+    ));
+    let stimulus: String = (1..=4).map(|t| format!("t={t} in rx {t}\nt={t} in rx {}\n", t + 10)).collect();
+    let t = trace(&p, &stimulus, 5);
+    // Fenster am Tickende 1, 2, 3; in Tick 4 kaemen fuenf in vier Plaetze.
+    for line in ["t=3 out a 2", "t=4 fault m StreamOverflow \"Stream `rx` uebergelaufen\" -> SAFE"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+}

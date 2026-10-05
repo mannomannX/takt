@@ -1,0 +1,17 @@
+# Tunables ueber den Weg der Schleife (8.4, KON1-014): Ein Satz gilt vor dem
+# Schritt seiner Grenze; ein Wert ausserhalb der Range bleibt ohne Wirkung.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+tunable param GAIN : int in 0..100 = 5
+
+output level : int in 0..1000 @ sim("o/level")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            level = GAIN * 2

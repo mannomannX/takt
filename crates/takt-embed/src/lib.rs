@@ -116,8 +116,9 @@ pub trait Input<T> {
 /// Ein Eingabestrom: je Aufruf hoechstens ein Element.
 pub trait StreamInput {
     /// Schreibt das naechste Element nach `buf`; `None`, wenn keines wartet.
-    /// Ein laengeres als `buf` kuerzt der Treiber; der Rand verwirft es
-    /// (12.6 Zeile 5).
+    /// Ein laengeres als `buf` kuerzt der Treiber. Text und Bytes kuerzt der
+    /// Rand auf ihr `N` (3.9); ein Record-Element, das nicht seine Laenge
+    /// hat, verwirft er als `malformed` (12.6 Zeile 5).
     fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece>;
 }
 

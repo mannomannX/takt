@@ -341,6 +341,20 @@ impl Lowerer<'_> {
             self.check(value, elem)?
         };
         let len_max = self.max_len(&v);
+        // Pruefung 16: Der Text passt in sein Element; gekuerzt wird nie.
+        if let (Type::Line { cap } | Type::Bytes { cap } | Type::Str { cap }, true) =
+            (self.ty(elem).clone(), !byte_stream && is_textual(value))
+            && len_max > cap
+        {
+            let n = self.type_name(elem);
+            self.error_hint(
+                crate::lower::format::SC16,
+                value.span,
+                format!("der Text braucht bis zu {len_max} Bytes, ein Element `{n}` fasst {cap}"),
+                "das Element vergroessern oder den Text kuerzen; gekuerzt wird nie (Pruefung 16)",
+            );
+            return None;
+        }
         Some(takt_mir::stmt::StmtKind::Send { stream, value: v, len_max })
     }
 
@@ -383,6 +397,9 @@ impl Lowerer<'_> {
         for stmt in &body.stmts {
             match &stmt.kind {
                 takt_mir::stmt::StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), .. } => {
+                    if !self.scheduled_scalar(*c, stmt.span) {
+                        return None;
+                    }
                     self.add_output_queue(*c);
                 }
                 _ => {
@@ -401,7 +418,9 @@ impl Lowerer<'_> {
 
     /// `pulse o = v for d` (7.5): Zucker fuer `o = v; at now + d: o = <Latch
     /// vor dem Statement>`. Das Desugaring erzeugt beide Anweisungen; die
-    /// Wiederherstellung liest den Latch zur Planungszeit.
+    /// Wiederherstellung liest den Latch zur Planungszeit und wird darum
+    /// vor dem Setzen geplant — danach laese sie schon `v`, und der Puls
+    /// endete nie.
     pub fn pulse(
         &mut self,
         output: &ast::Ident,
@@ -413,6 +432,9 @@ impl Lowerer<'_> {
             self.error(SC3, output.span, format!("`{}` ist kein Output", output.name));
             return None;
         };
+        if !self.scheduled_scalar(c, output.span) {
+            return None;
+        }
         let ty = self.program.channels[c.index()].ty;
         let v = self.check(value, ty)?;
         let dur = self.tys.duration;
@@ -436,13 +458,29 @@ impl Lowerer<'_> {
             span,
         );
         let body = takt_mir::stmt::Block { stmts: vec![restore], span };
-        // Erst setzen, dann die Wiederherstellung planen.
         let set = takt_mir::stmt::Stmt::new(
             takt_mir::stmt::StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), value: v },
             span,
         );
         let plan = takt_mir::stmt::Stmt::new(takt_mir::stmt::StmtKind::At { time: at, body }, span);
-        Some(vec![set, plan])
+        Some(vec![plan, set])
+    }
+
+    /// Pruefung 21 (5.5): Geplant werden nur skalare Outputs — Bool, Zahl,
+    /// Enum. Sonst ein Fehler an `span`.
+    fn scheduled_scalar(&mut self, c: ChannelId, span: Span) -> bool {
+        let ty = self.program.channels[c.index()].ty;
+        if matches!(self.ty(ty), Type::Bool | Type::Int { .. } | Type::Float { .. } | Type::Enum(_)) {
+            return true;
+        }
+        let (name, shown) = (self.program.channels[c.index()].name.clone(), self.type_name(ty));
+        self.error_hint(
+            crate::checks::SC21,
+            span,
+            format!("`{name}` ist vom Typ `{shown}` und kein skalarer Output; geplant werden nur skalare"),
+            "`at` und `pulse` nur mit Outputs vom Typ Bool, Zahl oder Enum (5.5, 7.5)",
+        );
+        false
     }
 
     /// Traegt einen Output mit geplanten Schreibvorgaengen in `Layout` ein

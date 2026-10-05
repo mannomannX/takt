@@ -23,14 +23,38 @@ fn the_llvm_tools_are_found_when_installed() {
     assert!(tools.available(), "gefunden, aber nicht ausfuehrbar");
 }
 
-/// Jedes Ziel bekommt Werkzeuge, auch ohne installierte GNU-Kette.
+/// GEN-015: Jedes Ziel bekommt Werkzeuge, auch ohne installierte
+/// GNU-Kette, und sie lesen ein Objekt dieses Ziels: Abschnitte und
+/// Symbole kommen heraus.
 #[test]
 fn every_target_gets_tools() {
-    let have_llvm = Binutils::llvm().is_some();
+    let Some(_) = takt_testkit::require("llvm-tools", Binutils::llvm(), "`rustup component add llvm-tools`") else {
+        return;
+    };
+    let Some(clang) =
+        takt_testkit::require("clang", takt_llvm::toolchain::find().path().cloned(), "`TAKT_CLANG` setzen")
+    else {
+        return;
+    };
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-llvm-tools");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
     for t in Target::ALL {
         let tools = Binutils::best_for(t);
-        if have_llvm {
-            assert!(tools.available(), "{}: LLVM ist da, also muessen es die Werkzeuge auch sein", t.name);
+        assert!(tools.available(), "{}: LLVM ist da, also muessen es die Werkzeuge auch sein", t.name);
+        let (ll, obj) = (dir.join(format!("{}.ll", t.name)), dir.join(format!("{}.o", t.name)));
+        let ir = format!("target triple = \"{}\"\n\ndefine i32 @takt_probe(i32 %x) {{\n  ret i32 %x\n}}\n", t.triple);
+        std::fs::write(&ll, ir).expect("IR");
+        let mut cmd = std::process::Command::new(&clang);
+        cmd.args(["-c", "-Wno-override-module"]).arg(format!("--target={}", t.triple));
+        if !t.march.is_empty() {
+            cmd.arg(format!("-march={}", t.march));
         }
+        let ok = cmd.arg(&ll).arg("-o").arg(&obj).status().is_ok_and(|s| s.success());
+        assert!(ok, "{}: clang uebersetzt das Probeobjekt nicht", t.name);
+        let sections = tools.sections(&obj).unwrap_or_else(|| panic!("{}: keine Abschnitte", t.name));
+        assert!(sections.text > 0, "{}: `.text` leer: {sections:?}", t.name);
+        let symbols = tools.symbols(&obj).unwrap_or_else(|| panic!("{}: keine Symbole", t.name));
+        assert!(symbols.iter().any(|s| s.name.ends_with("takt_probe")), "{}: {symbols:?}", t.name);
     }
 }

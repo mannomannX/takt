@@ -63,3 +63,29 @@ fn the_gate_says_which_checks_could_not_decide() {
     assert!(stdout.contains("39 Speicher        ok\n"), "{stdout}");
     assert!(stdout.contains("28 Jitter          ok, Warnung: `probe` wird nur zu Tickbeginn geschrieben"), "{stdout}");
 }
+
+/// Mit Hardware-Konfiguration bindet das Gate (Tabelle 10, Zeile 32: nicht
+/// entscheidbar heisst nicht bestanden): Ohne `tick_source` scheitert der
+/// Aufruf an Pruefung 32; zu wenig RAM ist `39 Speicher verletzt`.
+#[test]
+fn a_binding_gate_fails_the_check() {
+    let program = "crates/takt-conformance/tests/programs/guard.takt";
+    let hw = ["--hardware", "corpus-try/hw/esp32c6.hw", "--target", "riscv32imac"];
+    let out = takt(&[&["check", program, "--report"][..], &hw].concat());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{stdout}");
+    assert!(stdout.contains("error[SC-32]") && stdout.contains("`tick_source` fehlt"), "{stdout}");
+
+    let text = std::fs::read_to_string(root().join("corpus-try/hw/esp32c6.hw")).expect("Konfiguration");
+    assert!(text.contains("\nram = 451600\n"), "{text}");
+    let small =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-small-ram-{}.hw", std::process::id()));
+    std::fs::write(&small, text.replace("\nram = 451600\n", "\nram = 16\n")).expect("Konfiguration");
+    let small_hw = ["--hardware", small.to_str().expect("Pfad"), "--target", "riscv32imac"];
+    let out = takt(&[&["check", program, "--report"][..], &small_hw].concat());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{stdout}");
+    assert!(stdout.contains("39 Speicher        verletzt: "), "{stdout}");
+    assert!(stdout.contains("error[SC-39]"), "{stdout}");
+    let _ = std::fs::remove_file(&small);
+}

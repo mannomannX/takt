@@ -43,7 +43,9 @@ impl Streams {
     /// Stelle; liefert dessen `seq`. Die Stelle traegt `t` (i64,
     /// Nanosekunden), dann die Laenge (i32), dann die Bytes: Text in
     /// der Sammlungsform `{ i32 len, [N x i8] }`, ein Record in der
-    /// kanonischen Byteform (plan/m6.md 2.2).
+    /// kanonischen Byteform (plan/m6.md 2.2). Bei einem `line<N>` meldet
+    /// das Bit 31 der Laenge, dass der Rand gekuerzt hat
+    /// ([`TRUNCATED`](Self::TRUNCATED), 3.9).
     pub const AT: &'static str = "stream_at";
 
     /// Schreibt das `i`-te Element ohne Umweg: `{ i32 len, [N x i8] }`
@@ -53,6 +55,10 @@ impl Streams {
 
     /// Versatz der Laenge in dem, was `AT` schreibt.
     pub const LEN_AT: u32 = 8;
+    /// Das Bit der Laenge, mit dem `AT` und `BIND` ein gekuerztes Element
+    /// eines `line<N>` melden (3.9: der Rand hat gekuerzt); der erzeugte
+    /// Code nimmt es heraus und legt es in `.truncated`.
+    pub const TRUNCATED: u32 = 0x8000_0000;
     /// Versatz der Bytes in dem, was `AT` schreibt.
     pub const BYTES_AT: u32 = 12;
 
@@ -159,6 +165,17 @@ pub fn payload_cap(p: &Program, elem: TypeId) -> Result<u32, NotYet> {
     }
 }
 
+/// Nimmt das Bit [`Streams::TRUNCATED`] aus der Laenge eines `line<N>`
+/// unter `dst` und legt es in sein Flag `.truncated` (3.9).
+pub fn split_truncation(dst: Reg, cap: u32, m: &mut Module) {
+    let len = m.inst(&format!("load i32, ptr {dst}"));
+    let cut = m.inst(&format!("icmp slt i32 {len}, 0"));
+    let clean = m.inst(&format!("and i32 {len}, {}", !Streams::TRUNCATED));
+    m.void_inst(&format!("store i32 {clean}, ptr {dst}"));
+    let flag = m.inst(&format!("getelementptr inbounds i8, ptr {dst}, i64 {}", 4 + cap));
+    m.void_inst(&format!("store i1 {cut}, ptr {flag}"));
+}
+
 /// Ein Platz fuer ein Element, wie `P_stream_at` es schreibt.
 pub fn scratch(p: &Program, elem: TypeId, m: &mut Module) -> Result<Reg, NotYet> {
     let cap = payload_cap(p, elem)?;
@@ -178,8 +195,7 @@ pub fn copy_payload(buf: Reg, dst: Reg, elem: TypeId, p: &Program, m: &mut Modul
             let src = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", Streams::LEN_AT));
             m.copy(&pair, &src.to_string(), &dst.to_string());
             if matches!(p.types.list.get(elem.index()), Some(Type::Line { .. })) {
-                let flag = m.inst(&format!("getelementptr inbounds i8, ptr {dst}, i64 {}", 4 + cap));
-                m.void_inst(&format!("store i1 false, ptr {flag}"));
+                split_truncation(dst, *cap, m);
             }
             Ok(())
         }
@@ -187,6 +203,15 @@ pub fn copy_payload(buf: Reg, dst: Reg, elem: TypeId, p: &Program, m: &mut Modul
             let src = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {}", Streams::BYTES_AT));
             crate::persist::decode_canonical(p, elem, src, dst, m)
         }
+    }
+}
+
+/// Die Laenge des Fensters ab dem Cursor; ist es zu (`closed`, Modus ENTRY,
+/// 9.6), null.
+pub fn window_count(n: Reg, closed: Option<String>, m: &mut Module) -> Reg {
+    match closed {
+        Some(c) => m.inst(&format!("select i1 {c}, i32 0, i32 {n}")),
+        None => n,
     }
 }
 

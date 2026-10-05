@@ -481,8 +481,14 @@ impl Lowerer<'_> {
             match item {
                 ast::StatePrelude::Fault(target) => {
                     if let Some(t) = self.fault_target(target) {
+                        // 5.3: φ(s) = s ist der kuerzeste Zyklus des
+                        // Fault-Walds (Pruefung 9).
                         if t == FaultTarget::State(id) {
-                            self.error(SC8, target.span, "Fault-Ziel darf nicht der Zustand selbst sein (5.3)");
+                            self.error(
+                                crate::checks::SC9,
+                                target.span,
+                                "Fault-Ziel darf nicht der Zustand selbst sein (5.3)",
+                            );
                         } else {
                             self.mctx.as_mut().expect("Maschine").machine.states[id.index()].fault_target = Some(t);
                         }
@@ -742,6 +748,20 @@ impl Lowerer<'_> {
             ast::SeqItem::Repeat { count, body, span } => {
                 let int = self.tys.int;
                 let n = self.check(count, int)?;
+                // 8.4, Pruefung 35: Ein Tunable aendert sich im Lauf, die
+                // Zahl der Durchlaeufe steht fest.
+                if let Some(p) = self.first_tunable(&n) {
+                    let name = self.program.params[p.index()].name.clone();
+                    self.error_hint(
+                        crate::checks::SC35,
+                        count.span,
+                        format!(
+                            "`tunable param {name}` ist keine Compile-Zeit-Konstante und zaehlt kein `repeat` (8.4)"
+                        ),
+                        "`repeat` braucht `const`, `param` oder ein Literal",
+                    );
+                    return None;
+                }
                 let range = match n.kind {
                     ExprKind::Int(k) if k > 0 => {
                         Some(Range { lo: Const::Int(0), hi: Const::Int(k), origin: RangeOrigin::Declared })
@@ -1036,8 +1056,32 @@ impl Lowerer<'_> {
 
     /// `scenario "name" [every d]:` als Maschine (13.6).
     pub fn scenario_decl(&mut self, decl: &ast::ScenarioDecl) {
+        // 13.6: Der Name wird mit `_` statt Leerraum zum Maschinennamen und
+        // damit zum Bezeichner in Trace und Codegen; erlaubt sind darum
+        // Buchstaben, Ziffern, `_` und Leerzeichen.
+        let label = &decl.name.value;
+        if let Some(bad) = label.chars().find(|c| !(c.is_ascii_alphanumeric() || *c == '_' || *c == ' ')) {
+            self.error_hint(
+                SC2,
+                decl.name.span,
+                format!("Szenarioname \"{label}\" enthaelt `{bad}` (13.6)"),
+                "erlaubt sind Buchstaben, Ziffern, `_` und Leerzeichen",
+            );
+            return;
+        }
         let id = MachineId(self.program.machines.len() as u32);
         let name = takt_mir::machine::scenario_name(&decl.name.value);
+        // Szenarien senkt die Sema nach allen Maschinen und Instanzen; jede
+        // steht also schon in der Liste.
+        if self.program.machines.iter().any(|m| m.name == name) {
+            self.error_hint(
+                SC2,
+                decl.name.span,
+                format!("das Szenario heisst als Maschine `{name}`, wie schon eine andere Maschine (13.6)"),
+                "den Szenarionamen eindeutig waehlen",
+            );
+            return;
+        }
         self.program.machines.push(Machine::new(name.clone()));
         let state_enum = self.state_enum(&name, &decl.body);
         self.state_enums.insert(id, state_enum);

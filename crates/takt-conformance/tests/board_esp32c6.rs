@@ -16,7 +16,7 @@ use common::board::{
     overrun_reaches_every_machine, run_interpreted,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
-use takt_conformance::board::{self, Board, CORPUS, Options};
+use takt_conformance::board::{self, Board, Options};
 use takt_conformance::compare;
 
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
@@ -43,14 +43,6 @@ fn run_corpus(board: &mut Esp32c6, name: &str, fresh: bool) -> String {
         .build(&board::corpus_path(name), &options)
         .and_then(|elf| board.run(&elf, &options))
         .unwrap_or_else(|e| panic!("{name}: {e}"))
-}
-
-/// Die Zahl hinter einem Wort der Abschlusszeile (`takt schlief 0
-/// ueberlaeufe 0 journal geschrieben 3 …`).
-fn counter(text: &str, label: &str) -> Option<u64> {
-    let line = text.lines().find(|l| l.starts_with("takt schlief "))?;
-    let rest = line.split_once(label)?.1;
-    rest.split_whitespace().next()?.parse().ok()
 }
 
 /// Die Zahl hinter `takt schlief`.
@@ -342,7 +334,7 @@ fn the_battery_manager_of_14_7_runs_on_board_2() {
         .build(&board::corpus_path(name), &options)
         .and_then(|elf| board.run(&elf, &options))
         .unwrap_or_else(|e| panic!("{name}: {e}"));
-    assert!(counter(&text, "journal geschrieben").is_some_and(|n| n >= 1), "kein Journal:\n{}", tail(&text));
+    assert!(board::counter(&text, "journal geschrieben").is_some_and(|n| n >= 1), "kein Journal:\n{}", tail(&text));
     let options = takt_interp::RunOptions { ticks: TICKS_14_7, ..Default::default() };
     let interpreted =
         takt_interp::run(&corpus(name), &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
@@ -402,16 +394,16 @@ fn the_journal_costs_time_but_not_semantics() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "58_persist_alert.takt";
     let text = run_corpus(&mut board, name, true);
-    let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
+    let writes = board::counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
     assert!(writes > 1, "das Journal schrieb nur {writes}-mal; der Fall aus 12.3 trat nicht ein:\n{text}");
-    assert_eq!(counter(&text, "fehlgeschlagen"), Some(0), "ein Schreibvorgang scheiterte:\n{text}");
+    assert_eq!(board::counter(&text, "fehlgeschlagen"), Some(0), "ein Schreibvorgang scheiterte:\n{text}");
     eprintln!(
         "{name}: {writes} Journal-Schreibvorgaenge, {} verlorene Perioden, Rueckstand {} ns; \
          loeschen {} ns, programmieren {} ns",
-        counter(&text, "verloren").unwrap_or(0),
-        counter(&text, "rueckstand").unwrap_or(0),
-        counter(&text, "nvm loeschen").unwrap_or(0),
-        counter(&text, "programmieren").unwrap_or(0)
+        board::counter(&text, "verloren").unwrap_or(0),
+        board::counter(&text, "rueckstand").unwrap_or(0),
+        board::counter(&text, "nvm loeschen").unwrap_or(0),
+        board::counter(&text, "programmieren").unwrap_or(0)
     );
     let times = text.lines().filter(|l| l.contains(" time took=")).count();
     assert!(times as u64 >= TICKS, "die Zeitzeilen fehlen ({times} von {TICKS}):\n{text}");
@@ -431,10 +423,14 @@ fn the_journal_writes_in_sleep_windows() {
     let Some((mut board, _guard)) = board() else { return };
     let name = "59_persist_idle.takt";
     let text = run_corpus(&mut board, name, true);
-    let writes = counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
+    let writes = board::counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
     assert!(writes >= 1, "das Journal schrieb nie im Schlaf:\n{text}");
-    assert_eq!(counter(&text, "verloren"), Some(0), "ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}");
-    assert_eq!(counter(&text, "ueberlaeufe"), Some(0), "{text}");
+    assert_eq!(
+        board::counter(&text, "verloren"),
+        Some(0),
+        "ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}"
+    );
+    assert_eq!(board::counter(&text, "ueberlaeufe"), Some(0), "{text}");
     let diffs = compare(&run_interpreted(&corpus(name)), &text);
     assert!(diffs.is_empty(), "{diffs:?}");
 }
@@ -480,7 +476,7 @@ fn the_board_agrees_with_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     // `TAKT_ESP32C6_ONLY=42_map.takt` fuer einen einzelnen Fall.
     let only = std::env::var("TAKT_ESP32C6_ONLY").ok();
-    let failed = agreement(&mut board, CORPUS, only.as_deref());
+    let failed = agreement(&mut board, &board::corpus(), only.as_deref());
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 

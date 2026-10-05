@@ -26,100 +26,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-/// Der Differentialkorpus, soweit er auf ein Board gehoert: ohne den Port
-/// auf `mmio` (68), dessen Adresse ein Register des C6 ist.
-pub const CORPUS: &[&str] = &[
-    "01_minimal.takt",
-    "02_units_and_data.takt",
-    "03_sequences_and_faults.takt",
-    "12_bitfields.takt",
-    "13_framing.takt",
-    "13_protocol_analysis.takt",
-    "14_latency.takt",
-    "15_quality.takt",
-    "16_timing.takt",
-    "17_nested.takt",
-    "18_blocks.takt",
-    "19_faults.takt",
-    "20_native.takt",
-    "21_fault_targets.takt",
-    "22_faulted_outputs.takt",
-    "23_patterns.takt",
-    "24_send_has.takt",
-    "25_format.takt",
-    "26_samples.takt",
-    "27_every.takt",
-    "28_scheduled.takt",
-    "32_next_run_after.takt",
-    "33_enum_param.takt",
-    "34_next_run_on_start.takt",
-    "35_persist.takt",
-    "36_int_units.takt",
-    "37_follows.takt",
-    "39_sha256.takt",
-    "40_jobs.takt",
-    "41_tunables.takt",
-    "42_map.takt",
-    "43_sent.takt",
-    "45_journal_cut.takt",
-    "46_matrices.takt",
-    "47_monitors.takt",
-    "49_record_streams.takt",
-    "50_clause_words.takt",
-    "51_text_into_bytes.takt",
-    "52_padding_fields.takt",
-    "53_stream_kinds.takt",
-    "54_inout.takt",
-    "55_frames_with_bytes.takt",
-    "56_idle_timer.takt",
-    "57_persist_often.takt",
-    "58_persist_alert.takt",
-    "59_persist_idle.takt",
-    "60_resume.takt",
-    "62_type_generics.takt",
-    "63_scoped_instances.takt",
-    "64_scoped_exit.takt",
-    "69_qp_box.takt",
-    "70_padded_record.takt",
-    "71_places.takt",
-    "72_handler_levels.takt",
-    "73_after_levels.takt",
-    "74_instance_index.takt",
-    "75_implicit_checks.takt",
-    "76_stream_views.takt",
-    "77_float_faults.takt",
-    "78_length_guards.takt",
-    "79_byte_literals.takt",
-    "80_payload_variants.takt",
-    "81_persist_variants.takt",
-    "82_scheduled_sleep.takt",
-    "83_durations.takt",
-    "84_defaults.takt",
-    "85_observe_invalid.takt",
-    "86_units.takt",
-    "87_fault_kinds.takt",
-    "88_capture_segments.takt",
-    "89_fault_paths.takt",
-    "90_abort.takt",
-    "91_subnormals.takt",
-    "92_idle_streams.takt",
-    "93_confirmations.takt",
-    "94_float_ranges.takt",
-    "95_boundary_ranges.takt",
-    "96_record_outputs.takt",
-    "97_fast_math.takt",
-    "98_last_fault.takt",
-    "99_exit_fault.takt",
-    "100_dispatch.takt",
-    "101_correct_math.takt",
-    "102_correct_math_f32.takt",
-    "103_math_domains.takt",
-    "104_linear_has.takt",
-    "105_subnormals_f32.takt",
-    // 12.7: die Startmuster; ohne Plattformwerte die Plattform ohne Startstufe.
-    "sim/12_7/program.takt",
-    "sim/14_7/program.takt",
-];
+/// Der Korpus der Boards: was das Manifest der Suite `board` gibt
+/// ([`crate::suites`]), dazu die Beispiele ([`crate::suites::EXAMPLES`]).
+pub fn corpus() -> Vec<&'static str> {
+    let mut out = crate::suites::programs("board");
+    out.extend(crate::suites::EXAMPLES);
+    out
+}
 
 /// Die Zeile, mit der jedes Bring-up seinen Lauf beendet.
 pub const END: &str = "takt end";
@@ -134,31 +47,81 @@ pub const MARK: &str = "takt trace\r\n";
 /// Abschlusszeile, wie viele Bytes das Board ab [`MARK`] sandte
 /// (`gesendet N`), und ebenso viele muessen bis zu ihr angekommen sein.
 ///
-/// Ohne Marke und Bilanz (Messkern, Natives) gibt es nichts zu zaehlen.
-pub(crate) fn complete(text: String) -> Result<String, String> {
+/// Ohne Marke und Bilanz (Messkern, Natives) gibt es nichts zu zaehlen; ein
+/// Lauf des Programms ([`Bin::Takt`]) braucht beide, und sein Trace muss bis
+/// zum letzten Tick reichen, wenn das Programm nicht selbst endet (12.7):
+/// Ein Bring-up, das zu frueh `takt end` schreibt, liefert sonst einen
+/// kurzen Trace, und [`crate::compare`] saehe nur, was der Interpreter
+/// danach noch aendert.
+pub(crate) fn complete(text: String, options: &Options) -> Result<String, String> {
     let summary = text.rfind("takt schlief ");
-    let value = |word: &str| {
-        let mut words = text[summary?..].lines().next()?.split_whitespace();
-        words.by_ref().find(|w| *w == word)?;
-        words.next()?.parse::<u64>().ok()
-    };
-    if let Some(n) = value("verworfen").filter(|n| *n > 0) {
+    if let Some(n) = counter(&text, "verworfen").filter(|n| *n > 0) {
         return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"));
     }
     let mark = text[..summary.unwrap_or(text.len())].rfind(MARK);
-    match (mark, summary.zip(value("gesendet"))) {
-        (None, None) => Ok(text),
+    match (mark, summary.zip(counter(&text, "gesendet"))) {
+        (None, None) if options.bin != Bin::Takt => return Ok(text),
+        (None, None) => return Err("Trace unvollstaendig: ohne `takt trace` und Bilanz (KON1-010)".into()),
         (Some(m), Some((s, sent))) => {
             let arrived = s - (m + MARK.len());
-            if u64::try_from(arrived).is_ok_and(|a| a == sent) {
-                Ok(text)
-            } else {
-                Err(format!("Trace unvollstaendig: das Board sandte {sent} Byte, angekommen sind {arrived} (FB-304)"))
+            if u64::try_from(arrived).is_ok_and(|a| a != sent) {
+                return Err(format!(
+                    "Trace unvollstaendig: das Board sandte {sent} Byte, angekommen sind {arrived} (FB-304)"
+                ));
             }
         }
-        (Some(_), None) => Err("Trace unvollstaendig: nach `takt trace` fehlt die Bilanz (FB-304)".into()),
-        (None, Some(_)) => Err("Trace unvollstaendig: vor der Bilanz fehlt `takt trace` (FB-304)".into()),
+        (Some(_), None) => return Err("Trace unvollstaendig: nach `takt trace` fehlt die Bilanz (FB-304)".into()),
+        (None, Some(_)) => return Err("Trace unvollstaendig: vor der Bilanz fehlt `takt trace` (FB-304)".into()),
     }
+    let ended = text
+        .lines()
+        .any(|l| l.strip_prefix("t=").and_then(|r| r.split_once(' ')).is_some_and(|(_, r)| r.starts_with("end ")));
+    let checked = options.bin == Bin::Takt && !options.timed && options.ticks > 0 && !ended;
+    match reached(&text) {
+        _ if !checked => Ok(text),
+        Some(last) if last + 1 >= options.ticks => Ok(text),
+        last => Err(format!(
+            "Trace unvollstaendig: er reicht bis Tick {}, der Lauf hat {} Ticks (KON1-010)",
+            last.map_or_else(|| "keinem".to_string(), |t| t.to_string()),
+            options.ticks
+        )),
+    }
+}
+
+/// Die Zahl hinter `label` in der letzten Bilanzzeile eines Laufs (`takt
+/// schlief 0 ueberlaeufe 0 … journal geschrieben 3 …`, geschrieben von
+/// `takt_rt_baremetal::report`); `label` kann aus mehreren Woertern bestehen.
+pub fn counter(text: &str, label: &str) -> Option<u64> {
+    let line = text.lines().rev().find(|l| l.starts_with("takt schlief "))?;
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let label: Vec<&str> = label.split_whitespace().collect();
+    let at = words.windows(label.len()).position(|w| w == label.as_slice())?;
+    words.get(at + label.len())?.parse().ok()
+}
+
+/// Der letzte Tick, bis zu dem ein Konformitaetslauf reicht. Die Zeitzeile
+/// `t=<k> time ... slept=<n>` deckt die Ticks `k` bis `k + n`; das Board
+/// schreibt sie hoechstens je Millisekunde, unter einer Millisekunde Tick
+/// also nur jeden `m`-ten Tick (FB-271). Dieses `m` teilt jedes `k`, der
+/// groesste gemeinsame Teiler der Zeilen ist darum eine obere Schranke fuer
+/// die Luecke nach der letzten.
+fn reached(text: &str) -> Option<u64> {
+    let times: Vec<(u64, u64)> = text
+        .lines()
+        .filter_map(|l| {
+            let (k, rest) = l.trim_end().strip_prefix("t=")?.split_once(" time ")?;
+            let slept = rest.split_whitespace().find_map(|w| w.strip_prefix("slept="))?.parse().ok()?;
+            Some((k.parse().ok()?, slept))
+        })
+        .collect();
+    let gcd = |mut a: u64, mut b: u64| {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    };
+    let step = times.iter().map(|(k, _)| *k).fold(0, gcd).max(1);
+    times.iter().map(|(k, slept)| k + slept + step - 1).max()
 }
 
 /// Ein Verstoss gegen den Treibervertrag im Trace eines Laufs (12.6).
@@ -322,6 +285,10 @@ pub fn corpus_path(name: &str) -> PathBuf {
     root().join("corpus-try").join(name)
 }
 
+/// So oft baut ein Prozess neu, wenn ihm ein anderer das Binary zwischen
+/// Bau und Kopie ueberschrieben hat (KON1-009).
+pub(crate) const ATTEMPTS: usize = 5;
+
 /// Das Bring-up eines Boards, wie `cargo` es baut.
 pub(crate) struct Bringup {
     /// Das Crate, relativ zur Wurzel.
@@ -344,21 +311,37 @@ impl Bringup {
     /// je Board nur den Stand der Quellen, gegen den gebaut wird: Ein neuer
     /// Stand raeumt die frueheren weg. Ohne das wuchs er mit jeder Aenderung
     /// an `src`, bis das Temp-Laufwerk voll war.
+    ///
+    /// Baut ein zweiter Prozess in dasselbe Zielverzeichnis, ueberschreibt er
+    /// womoeglich das ELF zwischen dem Bau und dem Kopieren. Darum legt jeder
+    /// Bau seinen Schluessel als Symbol ins ELF (`TAKT_IMAGE_KEY`,
+    /// `takt_board_support::image_key`), und veroeffentlicht wird nur eine
+    /// Kopie, die ihn traegt; sonst wird neu gebaut. Geprueft wird das ELF:
+    /// Das Rohabbild fuer den Bootloader entsteht erst aus ihm, und `objcopy`
+    /// laesst die Symbole weg.
     pub fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
         let images = crate::target_dir().join("takt-board-images");
         let stand = images.join(format!("{}-{:016x}", self.triple, self.sources()?));
-        let cached = stand.join(format!("{:016x}.elf", self.key(program, options)?));
+        let key = format!("{:016x}", self.key(program, options)?);
+        let cached = stand.join(format!("{key}.elf"));
         if cached.is_file() {
             return Ok(cached);
         }
-        let elf = self.build_uncached(program, options)?;
-        if !stand.is_dir() {
-            self.forget_stale(&images);
+        let ours = |part: &Path| -> Result<bool, String> {
+            let elf = std::fs::read(part).map_err(|e| format!("{}: {e}", part.display()))?;
+            Ok(takt_board_support::image_key::carries(&elf, &key))
+        };
+        for _ in 0..ATTEMPTS {
+            let elf = self.build_uncached(program, options, &key)?;
+            if !stand.is_dir() {
+                self.forget_stale(&images);
+            }
+            std::fs::create_dir_all(&stand).map_err(|e| format!("{}: {e}", stand.display()))?;
+            if publish_checked(&elf, &cached, ours)? {
+                return Ok(cached);
+            }
         }
-        std::fs::create_dir_all(&stand)
-            .and_then(|()| std::fs::copy(&elf, &cached))
-            .map_err(|e| format!("{}: {e}", cached.display()))?;
-        Ok(cached)
+        Err(format!("{key}: {ATTEMPTS}-mal gebaut, jedes Mal hatte ein anderer Prozess das ELF ueberschrieben"))
     }
 
     /// Entfernt die Abbilder frueherer Staende dieses Boards; gegen sie
@@ -391,15 +374,16 @@ impl Bringup {
             // Die Verdrahtung des Bring-ups und der Treiber-Crates (12.6).
             std::fs::read(dir.join(crate::bringup::WIRING)).unwrap_or_default().hash(&mut h);
         }
+        hash_build_inputs(&dir, &mut h);
         Ok(h.finish())
     }
 
-    /// Der Schluessel eines Abbilds in seinem Stand: das Programm, die
-    /// Optionen und die C-Referenz. Aendert sich nichts davon, ist das
-    /// Abbild dasselbe.
+    /// Der Schluessel eines Abbilds in seinem Stand: das Programm samt den
+    /// Konfigurationen, die es importiert, die Optionen und die C-Referenz.
+    /// Aendert sich nichts davon, ist das Abbild dasselbe.
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
-        std::fs::read(program).map_err(|e| format!("{}: {e}", program.display()))?.hash(&mut h);
+        hash_program(program, &mut h)?;
         (options.ticks, options.fresh, options.timed, options.rtos, options.hostile_fpu, self.triple).hash(&mut h);
         if let Some(hw) = &options.hardware {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
@@ -422,8 +406,9 @@ impl Bringup {
         Ok(h.finish())
     }
 
-    /// `cargo build` des Bring-ups mit dem Programm.
-    fn build_uncached(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
+    /// `cargo build` des Bring-ups mit dem Programm; `key` landet als Symbol
+    /// im ELF.
+    fn build_uncached(&self, program: &Path, options: &Options, key: &str) -> Result<PathBuf, String> {
         let bin = match options.bin {
             Bin::Takt => "takt",
             Bin::Bench { .. } => "bench",
@@ -437,6 +422,7 @@ impl Bringup {
             .arg(root().join(self.dir).join("Cargo.toml"))
             .env("TAKT_PROGRAM", program)
             .env("TAKT_TICKS", options.ticks.to_string())
+            .env("TAKT_IMAGE_KEY", key)
             .envs(self.env.iter().copied());
         if options.fresh {
             cargo.env("TAKT_FRESH_JOURNAL", "1");
@@ -480,6 +466,77 @@ impl Bringup {
             .map(PathBuf::from)
             .ok_or_else(|| "cargo meldete kein Binary".to_string())
     }
+}
+
+/// Ein Programm und die Konfigurationen, die es per `import channels`
+/// liest (8.2): Sie liegen neben ihm und gehen in sein Abbild ein.
+pub(crate) fn hash_program(program: &Path, h: &mut DefaultHasher) -> Result<(), String> {
+    let text = std::fs::read_to_string(program).map_err(|e| format!("{}: {e}", program.display()))?;
+    text.hash(h);
+    let dir = program.parent().unwrap_or(Path::new("."));
+    for file in takt_sema::channel_imports(&text) {
+        let path = dir.join(&file);
+        file.hash(h);
+        std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?.hash(h);
+    }
+    Ok(())
+}
+
+/// Was ein Abbild bestimmt, ohne in `src` zu stehen: Bauskripte und
+/// Manifeste aller Crates, Manifest und Lock des Workspace und die Versionen
+/// von rustc (wie `cargo` sie im Bring-up `dir` waehlt) und clang.
+pub(crate) fn hash_build_inputs(dir: &Path, h: &mut DefaultHasher) {
+    let root = root();
+    for name in ["Cargo.toml", "Cargo.lock"] {
+        std::fs::read(root.join(name)).unwrap_or_default().hash(h);
+    }
+    let mut crates: Vec<PathBuf> =
+        std::fs::read_dir(root.join("crates")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+    crates.sort();
+    for krate in &crates {
+        for name in ["build.rs", "Cargo.toml"] {
+            std::fs::read(krate.join(name)).unwrap_or_default().hash(h);
+        }
+    }
+    let version = |tool: &Path| {
+        Command::new(tool).arg("--version").current_dir(dir).output().map(|o| o.stdout).unwrap_or_default()
+    };
+    version(Path::new("rustc")).hash(h);
+    if let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() {
+        version(&clang).hash(h);
+    }
+}
+
+/// Kopiert ein gebautes Abbild in den Zwischenspeicher: erst unter einem
+/// Zwischennamen, dann umbenannt. Ein abgebrochener Lauf hinterlaesst so
+/// kein halbes Abbild, das der naechste fuer gueltig hielte.
+///
+/// `ours` prueft die Kopie, bevor sie ihren Namen bekommt: Baut ein anderer
+/// Prozess in dasselbe Zielverzeichnis, kann er das Binary zwischen dem Bau
+/// und dem Kopieren ueberschrieben haben. Die Kopie aendert niemand mehr;
+/// ist sie nicht die eigene, gilt nichts (`Ok(false)`). Hat ein anderer
+/// Prozess denselben Schluessel schon veroeffentlicht, bleibt dessen Abbild
+/// — es laeuft womoeglich gerade.
+pub(crate) fn publish_checked(
+    built: &Path,
+    cached: &Path,
+    ours: impl Fn(&Path) -> Result<bool, String>,
+) -> Result<bool, String> {
+    let name = cached.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // Die Endung bleibt am Ende: Ein Wirtsabbild muss sich so ausfuehren lassen.
+    let part = cached.with_file_name(format!("{}.part.{name}", std::process::id()));
+    let fail = |e: std::io::Error| format!("{}: {e}", cached.display());
+    std::fs::copy(built, &part).map_err(fail)?;
+    let published = match ours(&part) {
+        Ok(true) if cached.is_file() => Ok(true),
+        Ok(true) => match std::fs::rename(&part, cached) {
+            Err(_) if cached.is_file() => Ok(true),
+            other => other.map(|()| true).map_err(fail),
+        },
+        other => other,
+    };
+    let _ = std::fs::remove_file(&part);
+    published
 }
 
 /// Namen und Inhalte eines Verzeichnisbaums, in fester Ordnung.
@@ -654,22 +711,52 @@ pub(crate) fn port_listed(port: &str, present: bool, within: Duration) -> bool {
 mod tests {
     use super::*;
 
-    /// Ein Lauf des Boards: Kopf, Marke, `body`, Bilanz mit `sent`.
+    /// Ein Lauf des Boards: Kopf, Marke, `body`, Bilanz mit `sent` — in der
+    /// Form, die `takt_rt_baremetal::run::report` schreibt (dessen Test
+    /// `the_balance_line_names_every_counter`).
     fn run(body: &str, dropped: u32, sent: usize) -> String {
         format!(
-            "takt auf stm32f401\r\n\r\ntakt trace\r\n{body}takt schlief 0 ueberlaeufe 0 verworfen {dropped} \
-             gesendet {sent} journal geschrieben 0\r\ntakt end\r\n"
+            "takt auf stm32f401\r\n\r\ntakt trace\r\n{body}takt schlief 0 ueberlaeufe 0 verspaetet 0 verloren 0 \
+             rueckstand 0 ns verworfen {dropped} gesendet {sent} journal geschrieben 0 fehlgeschlagen 0 flush 1 \
+             nvm loeschen 0 ns programmieren 0 ns stack 2048\r\ntakt end\r\n"
         )
     }
 
     /// Verworfene Bytes machen den Lauf unbrauchbar, ein vollstaendiger
-    /// und einer ohne Abschlusszeile gehen durch.
+    /// geht durch, und ein Messkern hat weder Marke noch Bilanz.
     #[test]
     fn a_trace_with_dropped_bytes_is_refused() {
         let body = "t=1 out a 1\r\n";
-        assert!(complete(run(body, 25076, body.len())).is_err_and(|e| e.contains("25076")));
-        assert!(complete(run(body, 0, body.len())).is_ok());
-        assert!(complete("bench takt min 1\ntakt end\n".to_string()).is_ok());
+        let any = Options::default();
+        assert!(complete(run(body, 25076, body.len()), &any).is_err_and(|e| e.contains("25076")));
+        assert!(complete(run(body, 0, body.len()), &any).is_ok());
+        assert!(complete("bench takt min 1\ntakt end\n".to_string(), &Options::bench(1, None)).is_ok());
+    }
+
+    /// **Ein Lauf des Programms braucht Marke, Bilanz und alle Ticks**
+    /// (KON1-010): Ohne Marke und Bilanz, oder mit einem Trace, der vor dem
+    /// letzten Tick endet, ist er unvollstaendig; ein Programm, das selbst
+    /// endet (12.7), ein Schlaf bis zum Ende und eine Zeitzeile je zwanzig
+    /// Ticks (Tick unter einer Millisekunde) reichen.
+    #[test]
+    fn a_program_run_needs_the_mark_the_count_and_every_tick() {
+        let options = Options::fresh(10);
+        let times = |ticks: std::ops::Range<u64>| -> String {
+            ticks.map(|k| format!("t={k} time took=0 drift=0 slept=0\r\n")).collect()
+        };
+        assert!(complete("t=0 out a 1\r\ntakt end\r\n".to_string(), &options).is_err_and(|e| e.contains("Bilanz")));
+        let body = times(0..10);
+        assert!(complete(run(&body, 0, body.len()), &options).is_ok());
+        let short = times(0..6);
+        assert!(complete(run(&short, 0, short.len()), &options).is_err_and(|e| e.contains("bis Tick 5")));
+        let ended = format!("{short}t=5 end now\r\n");
+        assert!(complete(run(&ended, 0, ended.len()), &options).is_ok());
+        let slept = "t=0 time took=0 drift=0 slept=0\r\nt=1 time took=0 drift=0 slept=8\r\n";
+        assert!(complete(run(slept, 0, slept.len()), &options).is_ok());
+        let sparse: String = (0..3).map(|k| format!("t={} time took=0 drift=0 slept=0\r\n", k * 20)).collect();
+        assert!(complete(run(&sparse, 0, sparse.len()), &Options::fresh(60)).is_ok());
+        assert!(complete(run(&sparse, 0, sparse.len()), &Options::fresh(61)).is_err());
+        assert!(complete(run("", 0, 0), &Options::timed(10)).is_ok(), "in Echtzeit ohne Zeitzeilen");
     }
 
     /// Was zwischen Board und Wirt verloren ging, zeigt die Bilanz: Sie
@@ -677,9 +764,62 @@ mod tests {
     #[test]
     fn a_trace_that_lost_bytes_on_the_way_is_refused() {
         let body = "t=1 out a 1\r\nt=2 out a 2\r\n";
-        assert!(complete(run(body, 0, body.len())).is_ok());
+        let any = Options::default();
+        assert!(complete(run(body, 0, body.len()), &any).is_ok());
         let lost = run("t=1 out a 1t=2 out a 2\r\n", 0, body.len());
-        assert!(complete(lost).is_err_and(|e| e.contains("sandte 26 Byte, angekommen sind 24")));
+        assert!(complete(lost, &any).is_err_and(|e| e.contains("sandte 26 Byte, angekommen sind 24")));
+    }
+
+    /// Eine Leitung, die alles annimmt.
+    struct Memory<'a>(&'a std::cell::RefCell<Vec<u8>>);
+
+    impl takt_rt_baremetal::Port for Memory<'_> {
+        fn try_write(&mut self, b: u8) -> bool {
+            self.0.borrow_mut().push(b);
+            true
+        }
+    }
+
+    /// **Die Bilanzzeile der Bring-ups geht durch den Leser des Wirts**
+    /// (12.5, 13.8; RT-035): `takt_rt_baremetal::report` schreibt sie, wie
+    /// ein Board sie sendet; `complete` nimmt den Lauf an, und [`counter`]
+    /// liest jede Kennzahl, die die Board-Tests lesen, mit ihrem Wert. Benennt
+    /// `report` ein Wort um, faellt das hier auf und nicht erst am Board.
+    #[test]
+    fn the_balance_line_of_a_board_reads_back_on_the_host() {
+        let line = std::cell::RefCell::new(Vec::new());
+        let mut t = takt_rt_baremetal::Telemetry::<_, 4096>::new(Memory(&line));
+        t.write("takt auf wirt\r\n");
+        t.mark();
+        for k in 0..4 {
+            t.write(&format!("t={k} time took=0 drift=0 slept=0\r\n"));
+        }
+        let mut overrun = takt_rt_core::Overrun::new(takt_rt_core::Policy::Fault);
+        (overrun.late, overrun.lost, overrun.worst_drift) = (1, 2, 2_500_000);
+        let stats = takt_rt_baremetal::Stats { slept: 9, overruns: 3, flushed: true, next_run: None };
+        let journal = takt_rt_baremetal::JournalStats { writes: 4, failures: 1, erase_ns: 12, program_ns: 5 };
+        takt_rt_baremetal::report(&mut t, &overrun, &stats, &journal, Some(2048));
+        let text = String::from_utf8(line.into_inner()).expect("ASCII");
+        let text = complete(text, &Options::fresh(4)).unwrap_or_else(|e| panic!("{e}"));
+        let body = "t=0 time took=0 drift=0 slept=0\r\n".len() * 4;
+        let counters = [
+            ("schlief", 9),
+            ("ueberlaeufe", 3),
+            ("verspaetet", 1),
+            ("verloren", 2),
+            ("rueckstand", 2_500_000),
+            ("verworfen", 0),
+            ("gesendet", body as u64),
+            ("journal geschrieben", 4),
+            ("fehlgeschlagen", 1),
+            ("flush", 1),
+            ("nvm loeschen", 12),
+            ("programmieren", 5),
+            ("stack", 2048),
+        ];
+        for (label, want) in counters {
+            assert_eq!(counter(&text, label), Some(want), "`{label}` in:\n{text}");
+        }
     }
 
     /// Fehlt die Marke oder die Bilanz, ist nichts zu zaehlen — und das
@@ -688,9 +828,87 @@ mod tests {
     fn a_trace_needs_both_the_mark_and_the_count() {
         let body = "t=1 out a 1\r\n";
         let unmarked = run(body, 0, body.len()).replace("takt trace", "takt trce");
-        assert!(complete(unmarked).is_err_and(|e| e.contains("fehlt `takt trace`")));
+        assert!(complete(unmarked, &Options::default()).is_err_and(|e| e.contains("fehlt `takt trace`")));
         let uncounted = run(body, 0, body.len()).replace("gesendet", "gesndet");
-        assert!(complete(uncounted).is_err_and(|e| e.contains("fehlt die Bilanz")));
+        assert!(complete(uncounted, &Options::default()).is_err_and(|e| e.contains("fehlt die Bilanz")));
+    }
+
+    /// Ein Verzeichnis fuer einen Test im Zielverzeichnis, je Prozess und Name.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = crate::target_dir().join(format!("takt-board-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("Verzeichnis");
+        dir
+    }
+
+    /// **Eine Aenderung an einer importierten Konfiguration baut neu**
+    /// (KON1-009): Der Schluessel eines Abbilds haengt an den Dateien, die
+    /// das Programm per `import channels` liest (8.2), auf dem Board wie auf
+    /// dem Wirt.
+    #[test]
+    fn the_key_follows_the_imported_channels() {
+        let dir = scratch("imports");
+        let program = dir.join("recorded.takt");
+        std::fs::write(&program, "import channels from \"recorded.hw\"\n").expect("Programm");
+        std::fs::write(dir.join("recorded.hw"), "a\n").expect("Konfiguration");
+        let bringup = Bringup { dir: "crates/takt-bringup-host", triple: "x", inputs: &[], env: &[] };
+        let host = host::Host::new();
+        let options = Options::fresh(10);
+        let (board_before, host_before) =
+            (bringup.key(&program, &options).expect("Schluessel"), host.key(&program, &options).expect("Schluessel"));
+        std::fs::write(dir.join("recorded.hw"), "b\n").expect("Konfiguration");
+        let (board_after, host_after) =
+            (bringup.key(&program, &options).expect("Schluessel"), host.key(&program, &options).expect("Schluessel"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_ne!(board_before, board_after, "das Board baute mit der alten Konfiguration");
+        assert_ne!(host_before, host_after, "der Wirt baute mit der alten Konfiguration");
+    }
+
+    /// **Ein abgebrochenes Kopieren hinterlaesst kein gueltiges Abbild**
+    /// (KON1-009): Das Abbild entsteht unter einem Zwischennamen und erhaelt
+    /// seinen Namen erst, wenn es ganz geschrieben ist.
+    #[test]
+    fn an_image_gets_its_name_only_when_complete() {
+        let dir = scratch("publish");
+        let (from, to) = (dir.join("built.elf"), dir.join("cached.elf"));
+        std::fs::write(&from, [7u8; 64]).expect("Abbild");
+        assert_eq!(publish_checked(&from, &to, |_| Ok(true)), Ok(true));
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("lesbar")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into())
+            .collect();
+        let copied = std::fs::read(&to).expect("Abbild");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(copied, [7u8; 64]);
+        assert_eq!(names.len(), 2, "kein Zwischenstand bleibt liegen: {names:?}");
+    }
+
+    /// **Ein fremdes Binary bekommt keinen Namen, ein veroeffentlichtes
+    /// bleibt** (KON1-009 fuer zwei Prozesse): Hat ein anderer Prozess das
+    /// gebaute Binary ueberschrieben, faellt die Kopie durch die Pruefung,
+    /// und nichts liegt danach im Zwischenspeicher. Hat er denselben
+    /// Schluessel schon veroeffentlicht, bleibt sein Abbild unberuehrt.
+    #[test]
+    fn a_foreign_binary_is_not_published_and_a_published_one_stays() {
+        let dir = scratch("publish-checked");
+        let (from, to) = (dir.join("built.exe"), dir.join("cached.exe"));
+        std::fs::write(&from, b"key B").expect("Abbild");
+        let ours =
+            |part: &Path| -> Result<bool, String> { Ok(std::fs::read(part).map_err(|e| e.to_string())? == b"key A") };
+        assert_eq!(publish_checked(&from, &to, ours), Ok(false));
+        let names = |dir: &Path| -> Vec<String> {
+            std::fs::read_dir(dir).expect("lesbar").flatten().map(|e| e.file_name().to_string_lossy().into()).collect()
+        };
+        assert_eq!(names(&dir), ["built.exe"], "weder Abbild noch Zwischenstand");
+        std::fs::write(&from, b"key A").expect("Abbild");
+        std::fs::write(&to, b"key A, schon da").expect("Abbild");
+        assert_eq!(publish_checked(&from, &to, ours), Ok(true));
+        let kept = std::fs::read(&to).expect("Abbild");
+        let left = names(&dir).len();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(kept, b"key A, schon da");
+        assert_eq!(left, 2, "kein Zwischenstand bleibt liegen");
     }
 
     /// Jede Zeile des Rands faellt in ihre Zeile der Tabelle; Erholung,

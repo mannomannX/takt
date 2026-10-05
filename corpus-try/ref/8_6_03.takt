@@ -1,13 +1,13 @@
-stream<UpdateMsg> update_q with capacity = 16  # Dateiebene; genau ein Schreiber (Single-Writer, statisch)
+stream<UpdateMsg> update_q with capacity = 16  # Dateiebene; genau ein Schreiber (Single-Writer, statisch)  # ~ SC-2
 
 machine receiver:  # Schreiber
     initial RUN
     state RUN:
-        on can_rx as f:
+        on can_rx as f:  # ~ SC-2
             send update_q, UpdateMsg(kind = CHUNK, data = f.data.data)
 
 machine flasher:  # Leser, Cursor je Konsument
     initial RUN
     state RUN:
-        on update_q as m:
+        on update_q as m:  # ~ SC-2
             log "update chunk {m.seq}"

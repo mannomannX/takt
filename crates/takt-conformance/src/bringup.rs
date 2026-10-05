@@ -45,6 +45,7 @@ pub fn compile(path: &str) -> Option<takt_mir::Program> {
         build: takt_sema::Build::Hw,
         profile: None,
         channel_imports,
+        core: None,
     };
     let checked = takt_sema::compile(&src, &options);
     if checked.program.is_none() {
@@ -70,23 +71,46 @@ pub fn arena(frame: &takt_frame::mcu::McuHarness, triple: &str, flags: &[&str], 
 /// Adresse der Rust-Typ, der sie bedient ([`takt_frame::drivers::wiring`]).
 pub const WIRING: &str = "takt-drivers.toml";
 
-/// Liest die Verdrahtungen aus `files`, in ihrer Reihenfolge; nennen zwei
-/// dieselbe Adresse, gilt die erste.
+/// Liest die Verdrahtungen aus `files` fuer das Build-Skript
+/// ([`read_wiring`]); ein Fehler bricht den Bau ab.
 pub fn wiring(files: &[&Path]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
     for file in files {
         println!("cargo:rerun-if-changed={}", file.display());
-        let text = fs::read_to_string(file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-        out.extend(takt_frame::drivers::wiring(&text).unwrap_or_else(|e| panic!("{}: {e}", file.display())));
     }
-    out
+    read_wiring(files).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Die Verdrahtungen aus `files`, in ihrer Reihenfolge zusammengefuehrt.
+/// Genau ein Geraet bedient eine Adresse (12.6): Nennen zwei Dateien
+/// dieselbe, etwa Bring-up und Treiber-Crate, ist das ein Fehler mit beiden
+/// Dateien und kein Vorrang der ersten.
+pub fn read_wiring(files: &[&Path]) -> Result<Vec<(String, String)>, String> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut from: Vec<&Path> = Vec::new();
+    for file in files {
+        let text = fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        for (address, ty) in takt_frame::drivers::wiring(&text).map_err(|e| format!("{}: {e}", file.display()))? {
+            if let Some(i) = out.iter().position(|(a, _)| *a == address) {
+                return Err(format!(
+                    "{}: `{address}` verdrahtet schon {}; genau ein Geraet bedient eine Adresse (12.6)",
+                    file.display(),
+                    from[i].display()
+                ));
+            }
+            out.push((address, ty));
+            from.push(file);
+        }
+    }
+    Ok(out)
 }
 
 /// Schreibt die Treiber des Programms fuer einen Pruefstand nach `file`
 /// (12.6): den Trait `Drivers`, den Pruefstand `Rig` nach `wiring` und den
 /// Kleber vom Rahmen zu ihm, mit dem Praefix der Bring-ups. Eine Adresse
-/// ohne Geraet bekommt einen ausdruecklichen Stummel, den die
-/// Dokumentation von `Rig` nennt.
+/// ohne Geraet bekommt einen Stummel, den die Dokumentation von `Rig` nennt;
+/// wer ihn nicht verlangt, prueft die Verdrahtung vorher
+/// ([`takt_frame::drivers::wiring_errors`], so `board::host` mit
+/// Treiber-Crate).
 pub fn drivers(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) {
     use takt_frame::drivers::{of, rust_glue, rust_rig, rust_trait};
     let list = of(p, &takt_frame::layout::of(p));
@@ -202,5 +226,29 @@ fn walk(dir: &Path, newest: &mut Option<(SystemTime, PathBuf)>) {
         {
             *newest = Some((t, path));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_wiring;
+
+    /// **Zwei Dateien verdrahten eine Adresse: ein Fehler** (12.6, GEN-021),
+    /// der beide Dateien und die Adresse nennt, gleich in welcher
+    /// Reihenfolge; jede Datei fuer sich ist gueltig.
+    #[test]
+    fn a_second_file_cannot_wire_an_address_again() {
+        let dir = crate::target_dir().join(format!("takt-wiring-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("Verzeichnis");
+        let (bringup, driver) = (dir.join("bringup.toml"), dir.join("driver.toml"));
+        std::fs::write(&bringup, "\"sys/previous_run\" = \"Host\"\n").expect("schreibbar");
+        std::fs::write(&driver, "\"edge_o\" = \"O\"\n\"sys/previous_run\" = \"Crate\"\n").expect("schreibbar");
+        for files in [[&bringup, &driver], [&driver, &bringup]] {
+            let e = read_wiring(&[files[0].as_path(), files[1].as_path()]).expect_err("doppelt");
+            assert!(e.contains("`sys/previous_run`") && e.contains("bringup.toml") && e.contains("driver.toml"), "{e}");
+        }
+        assert_eq!(read_wiring(&[driver.as_path()]).map(|w| w.len()), Ok(2));
+        assert!(read_wiring(&[dir.join("fehlt.toml").as_path()]).is_err_and(|e| e.contains("fehlt.toml")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

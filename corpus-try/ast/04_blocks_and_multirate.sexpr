@@ -9,8 +9,8 @@
     (if (not seeded)
       (= y x)
       (= seeded true))
-    (var a :float (/ (.as dt s) (+ (.as tau s) (.as dt s))))
-    (= y (+ y (* a (- x y))))
+    (var a :float (/ (.as dt s) (paren (+ (.as tau s) (.as dt s)))))
+    (= y (+ y (* a (paren (- x y)))))
     (return y)))
 (block limiter [U] (max_rate:float[U/s])
   (var last :float[U] 0)
@@ -36,18 +36,18 @@
   (initial RUN)
   (state RUN
     (loop
-      (check (< (.max i_phase) I_MAX) "phase overcurrent" for=200us)
-      (= i_meas (.mean i_phase))
+      (check (< (.max i_phase ()) I_MAX) "phase overcurrent" for=200us)
+      (= i_meas (.mean i_phase ()))
       (var err :float[A] (- (call speed_setpoint_current) i_meas))
       (= duty (call clamp01 (/ (* KP err) I_MAX))))
-    (when (>= (.max i_phase) I_MAX) -> TRIP
+    (when (>= (.max i_phase ()) I_MAX) -> TRIP
       (raise tripped)))
   (state TRIP
     (enter
       (= duty 0)
       (= fault_led true))))
 (fn clamp01 (x:float) -> float
-  (return (if (< x 0) 0 (if (> x 1) 1 x))))
+  (return (if (< x 0) 0 (paren (if (> x 1) 1 x)))))
 (fn speed_setpoint_current () -> float[A]
   (return 10[A]))
 (machine speed_ctrl follows=current_ctrl every=1ms phase=100us
@@ -67,7 +67,7 @@
   (initial RUN)
   (state RUN
     (loop
-      (= out (/ setpoint 100[pct2])))))
+      (= out (/ setpoint (paren 100[pct2]))))))
 (input fan_sp_a :float[pct2] in 0..100[pct2] @hw("ui/fan_a"))
 (input fan_sp_b :float[pct2] in 0..100[pct2] @hw("ui/fan_b"))
 (output fan_a :float in 0..1 @hw("pwm/fan_a") safe=0)

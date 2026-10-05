@@ -3,7 +3,6 @@
 //! Die Tests uebersetzen echte Korpusprogramme, nicht erfundene MIR —
 //! ein Struct, der nur fuer Testdaten stimmt, ist kein Beleg.
 
-use takt_llvm::emit::Module;
 use takt_llvm::machine::{self, Role, depth, state_struct};
 use takt_llvm::toolchain::{Clang, find};
 use takt_mir::program::Program;
@@ -57,47 +56,63 @@ fn corpus(name: &str) -> Program {
 /// weg — `step_function` raeumt sie selbst ab. Der Test prueft, dass das,
 /// was *entsteht*, gueltig ist.
 fn ir_of(p: &Program) -> String {
-    let mut m = Module::new("korpus", "x86_64-pc-windows-msvc");
-    takt_llvm::abi::Abi::declare(&mut m);
-    takt_llvm::stream::Streams::declare(&mut m);
-    // Bloecke zuerst: Die Maschinen halten ihre Instanzen (5.7).
-    let methoden: Vec<_> = p.blocks.iter().flat_map(|b| b.step.iter().chain(&b.methods).copied()).collect();
-    for b in &p.blocks {
-        let Some(inst) = takt_llvm::block::instance_of(b, p) else { continue };
-        takt_llvm::block::declare(b, &inst, &mut m);
-        for fid in b.step.iter().chain(&b.methods) {
-            let Some(f) = p.fns.get(fid.index()) else { continue };
-            let _ = takt_llvm::fns::block_method(b, f, p, &mut m);
-        }
-    }
-    // Reine Funktionen, die die Maschinen erreichen (4.4) — wie der
-    // Codegen: Bibliothekscode, den niemand ruft, gehoert nicht zum
-    // Programm (Lemma 3.4).
-    for id in takt_mir::analysis::reachable_fns(p) {
-        if !methoden.contains(&id) {
-            let _ = takt_llvm::fns::function(&p.fns[id.index()], p, &mut m);
-        }
-    }
-    for machine in &p.machines {
-        let Some(st) = state_struct(machine, p) else { continue };
-        machine::declare_state(machine, &st, &mut m);
-        let _ = takt_llvm::step::step_function(machine, &st, p, &mut m);
-    }
-    m.finish()
+    lowered(p).ir
 }
 
-/// Die Korpusprogramme, deren Maschinen der Codegen heute vollstaendig
-/// senkt. Die Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt
-/// auffaellt.
-/// Alle Korpusdateien, die fehlerfrei zu MIR uebersetzen — der Codegen
-/// senkt sie vollstaendig. Die Liste *ist* `UEBERSETZBAR`, und dass sie
-/// es ist, hat den Codegen fertig gemacht.
-const VOLLSTAENDIG: [&str; 11] = UEBERSETZBAR;
+/// Die Uebersetzung, wie `takt build` sie macht (`lower::program`): Ein
+/// Verwurf steht in `skipped`, statt still eine Maschine zu verlieren.
+fn lowered(p: &Program) -> takt_llvm::lower::Lowered {
+    takt_llvm::lower::program(p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default())
+}
 
-/// Alle Korpusdateien, die fehlerfrei zu MIR uebersetzen — auch die, deren
-/// Maschinen der Codegen nur teilweise senkt. Was er *erzeugt*, muss
-/// gueltig sein, sonst faellt eine halbe Funktion erst spaeter auf.
-const UEBERSETZBAR: [&str; 11] = [
+/// Die Schrittfunktionen eines Moduls samt ihrer `loop:`-Rumpfe:
+/// `define ... @<m>_step(` bzw. `@<m>_loop_<i>(` bis zur schliessenden
+/// Klammer. Eintritt und Initialisierung bleiben aussen vor.
+fn step_ir(ir: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for line in ir.lines() {
+        if line.starts_with("define ") {
+            inside = line.contains("_step(") || line.contains("_loop_");
+        }
+        if inside {
+            out.push_str(line);
+            out.push('\n');
+        }
+        if line == "}" {
+            inside = false;
+        }
+    }
+    out
+}
+
+/// Die definierten Funktionen eines Moduls: Name und Rumpf bis zur
+/// schliessenden Klammer. Eine Pruefung am Rumpf sieht nur, was dort
+/// steht, nicht, was irgendwo im Modul vorkommt (GEN-007).
+fn bodies(ir: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut current: Option<(String, String)> = None;
+    for line in ir.lines() {
+        if line.starts_with("define ") {
+            let name = line.split('@').nth(1).and_then(|r| r.split('(').next()).unwrap_or_default();
+            current = Some((name.to_string(), String::new()));
+        }
+        if let Some((_, body)) = &mut current {
+            body.push_str(line);
+            body.push('\n');
+        }
+        if line == "}"
+            && let Some(done) = current.take()
+        {
+            out.push(done);
+        }
+    }
+    out
+}
+
+/// Die Korpusprogramme, die der Codegen vollstaendig senken muss. Die
+/// Liste waechst mit ihm; sie steht hier, damit ein Rueckschritt auffaellt.
+const KORPUS: [&str; 11] = [
     "18_blocks.takt",
     "01_minimal.takt",
     "02_units_and_data.takt",
@@ -125,15 +140,20 @@ fn the_configuration_is_a_path_array_of_fixed_depth() {
     assert_eq!(st.fields[1].role, Role::TimeInState);
 }
 
-/// Eine Maschine mit geschachtelten Zustaenden hat Tiefe > 1.
+/// Eine Maschine mit geschachtelten Zustaenden hat Tiefe > 1:
+/// `RUNNING.WARMUP` in `17_nested` liegt eine Ebene unter der Wurzel.
 #[test]
 fn nested_states_increase_the_depth() {
-    let p = corpus("03_sequences_and_faults.takt");
-    let deepest = p.machines.iter().map(depth).max().expect("Maschinen");
-    assert!(deepest >= 1);
-    for m in &p.machines {
-        let st = state_struct(m, &p).expect("Struct baubar");
-        assert_eq!(st.depth, depth(m), "{}", m.name);
+    let p = corpus("17_nested.takt");
+    let m = p.machines.iter().find(|m| m.name == "plant").expect("plant");
+    assert_eq!(depth(m), 2);
+    assert_eq!(state_struct(m, &p).expect("Struct baubar").depth, 2);
+    for name in ["03_sequences_and_faults.takt", "17_nested.takt"] {
+        let p = corpus(name);
+        for m in &p.machines {
+            let st = state_struct(m, &p).expect("Struct baubar");
+            assert_eq!(st.depth, depth(m), "{}", m.name);
+        }
     }
 }
 
@@ -200,13 +220,20 @@ fn only_leaf_states_become_switch_targets() {
 /// das, was in `conf` steht.
 #[test]
 fn the_path_to_a_leaf_fits_into_the_configuration() {
-    let p = corpus("03_sequences_and_faults.takt");
-    for m in &p.machines {
-        let d = depth(m) as usize;
-        for leaf in machine::leaves(m) {
-            let path = machine::path_to(m, leaf);
-            assert!(path.len() <= d, "{}: Pfad {} laenger als Tiefe {d}", m.name, path.len());
-            assert_eq!(path[0].index(), m.states[leaf.index()].parent.map_or(leaf, |_| path[0]).index());
+    for name in ["03_sequences_and_faults.takt", "17_nested.takt"] {
+        let p = corpus(name);
+        for m in &p.machines {
+            let d = depth(m) as usize;
+            for leaf in machine::leaves(m) {
+                let path = machine::path_to(m, leaf);
+                assert!(path.len() <= d, "{}: Pfad {} laenger als Tiefe {d}", m.name, path.len());
+                // Wurzel vorn, Blatt hinten, dazwischen je Schritt ein Kind.
+                assert!(m.states[path[0].index()].parent.is_none(), "{}: Pfad beginnt nicht an der Wurzel", m.name);
+                assert_eq!(path.last(), Some(&leaf), "{}: Pfad endet nicht am Blatt", m.name);
+                for pair in path.windows(2) {
+                    assert_eq!(m.states[pair[1].index()].parent, Some(pair[0]), "{}: {path:?}", m.name);
+                }
+            }
         }
     }
 }
@@ -227,11 +254,22 @@ fn the_machines_of_the_corpus_compile_to_object_code() {
         return;
     };
     let clang = Clang::At(path);
-    for name in VOLLSTAENDIG {
+    for name in KORPUS {
         let p = corpus(name);
-        let ir = ir_of(&p);
+        let out = lowered(&p);
+        assert!(out.complete(), "{name}: {:?}", out.skipped.iter().map(|s| &s.reason).collect::<Vec<_>>());
+        assert!(out.without_persist.is_empty(), "{name}: ohne Lesepfad {:?}", out.without_persist);
+        let ir = out.ir;
         assert!(ir.contains("_state = type"), "{name}: kein Zustands-Struct");
-        assert!(ir.contains("_step("), "{name}: keine Schrittfunktion");
+        // Je Maschine mit eigenem Schritt ihre Definition (11.2), nicht nur
+        // irgendein `_step(`.
+        for m in p.machines.iter().filter(|m| m.kind != takt_mir::machine::MachineKind::Template) {
+            let step = format!("@{}_step(", takt_llvm::fns::sanitized(&m.name));
+            assert!(
+                ir.lines().any(|l| l.starts_with("define ") && l.contains(&step)),
+                "{name}: `{step}` ist nicht definiert"
+            );
+        }
         assert!(ir.contains("switch i8"), "{name}: kein `switch` ueber die Blaetter (11.2)");
         let dir =
             std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-llvm-m-{}", name.replace('.', "_")));
@@ -286,35 +324,59 @@ fn an_output_is_written_to_the_latch() {
     );
 }
 
-/// Eine Maschine, die der Codegen nicht vollstaendig senkt, hinterlaesst
-/// keine halbe Funktion — sie waere gueltige IR mit falschem Inhalt.
+/// GEN-006: Eine Maschine, die der Codegen nicht vollstaendig senkt, nennt
+/// ihren Grund und hinterlaesst keine halbe Funktion — sie waere gueltige
+/// IR mit falschem Inhalt. `{d:float}` im Handlermuster senkt er nicht
+/// (die Umwandlung haette eine zweite Rundungsquelle, `captures.rs`).
 #[test]
 fn an_incomplete_machine_leaves_no_half_function() {
-    let p = corpus("12_bitfields.takt");
-    let ir = ir_of(&p);
-    let defines = ir.matches("define ").count();
-    let rets = ir
-        .matches(
-            "
-}",
-        )
-        .count();
-    assert_eq!(
-        defines, rets,
-        "offene oder halbe Funktion in:
-{ir}"
-    );
+    let src = "system:
+    language = 1
+    tick = 10 ms
+
+input rx : stream<line<32>> @ hw(\"uart0/rx\") with max_rate = 100 Hz, framing = lines, capacity = 4
+
+output o : float @ hw(\"o/o\") with safe = 0.0
+
+machine m:
+    initial RUN
+    state RUN:
+        on rx matches \"d={d:float}\" as ev:
+            o = ev.d
+";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let out = lowered(&p);
+    assert!(!out.complete(), "`{{d:float}}` wird heute nicht gesenkt; der Test braucht ein anderes Beispiel");
+    assert!(out.skipped.iter().any(|s| s.machine == "m"), "{:?}", out.skipped);
+    let defines = out.ir.lines().filter(|l| l.starts_with("define ")).count();
+    let ends = out.ir.lines().filter(|l| *l == "}").count();
+    assert_eq!(defines, ends, "offene oder halbe Funktion");
+    assert!(!out.ir.lines().any(|l| l.starts_with("define ") && l.contains("@m_step(")), "halber Schritt");
 }
 
-/// Auch die Maschinen-IR traegt keine Fast-Math-Flags (4.2).
+/// GEN-011: Die IR jedes Korpusprogramms traegt auf jedem Ziel weder
+/// Fast-Math-Flags noch `llvm.fmuladd` (4.2): LLVM darf nicht
+/// kontrahieren, was der Interpreter getrennt rundet.
 #[test]
 fn machine_ir_carries_no_fast_math_flags() {
-    let p = corpus("13_protocol_analysis.takt");
-    let ir = ir_of(&p);
-    for (i, line) in ir.lines().enumerate() {
-        let code = line.split(';').next().unwrap_or("");
-        for flag in ["fast", "nnan", "ninf", "nsz", "arcp", "contract", "reassoc"] {
-            assert!(!code.split_whitespace().any(|w| w == flag), "Zeile {}: `{flag}`", i + 1);
+    let extra = ["46_matrices.takt", "97_fast_math.takt", "101_correct_math.takt", "102_correct_math_f32.takt"];
+    for name in KORPUS.iter().chain(&extra) {
+        let p = corpus(name);
+        for target in takt_llvm::target::Target::ALL {
+            let ir = takt_llvm::lower::program(&p, target.triple, &takt_llvm::symbols::Prefix::default()).ir;
+            for (i, line) in ir.lines().enumerate() {
+                let code = line.split(';').next().unwrap_or("");
+                for flag in ["fast", "nnan", "ninf", "nsz", "arcp", "contract", "reassoc", "afn"] {
+                    assert!(
+                        !code.split_whitespace().any(|w| w == flag),
+                        "{name} ({}) Zeile {}: `{flag}`",
+                        target.name,
+                        i + 1
+                    );
+                }
+                assert!(!code.contains("fmuladd"), "{name} ({}) Zeile {}: `fmuladd`", target.name, i + 1);
+            }
         }
     }
 }
@@ -411,7 +473,7 @@ fn the_loop_body_runs_before_the_transitions() {
 /// uebersetzen: Dort darf `scope` keinen offenen Knoten finden.
 #[test]
 fn the_measurement_agrees_with_the_codegen() {
-    for name in VOLLSTAENDIG {
+    for name in KORPUS {
         let p = corpus(name);
         let mut cov = takt_llvm::scope::Coverage::default();
         for m in &p.machines {
@@ -497,7 +559,7 @@ fn the_quality_scale_matches_the_runtime() {
 #[test]
 fn after_never_fires_in_the_entry_tick() {
     let p = corpus("16_timing.takt");
-    let ir = ir_of(&p);
+    let ir = step_ir(&ir_of(&p));
     let deadlines: Vec<i64> = ir
         .lines()
         .filter_map(|l| l.trim().strip_prefix("%").and_then(|l| l.split_once(" = icmp sge i64 %")))
@@ -519,7 +581,7 @@ fn after_never_fires_in_the_entry_tick() {
 #[test]
 fn an_ancestor_loop_runs_in_every_leaf_below_it() {
     let p = corpus("17_nested.takt");
-    let ir = ir_of(&p);
+    let ir = step_ir(&ir_of(&p));
     // Der `check p < 90 bar` steht einmal im Programm, unter `RUNNING`
     // mit zwei Blaettern — und genau einmal in der IR.
     let checks = ir.matches("fcmp olt").count();
@@ -592,12 +654,16 @@ fn the_common_ancestor_lies_strictly_above_the_target_state() {
 /// haetten sonst dieselbe Marke — ungueltige IR, die nur LLVM findet.
 #[test]
 fn every_label_in_the_generated_ir_is_unique() {
-    for name in VOLLSTAENDIG {
+    for name in KORPUS {
         let p = corpus(name);
         let ir = ir_of(&p);
         let mut seen = std::collections::BTreeSet::new();
         for line in ir.lines() {
             let t = line.trim_end();
+            // Marken gelten je Funktion.
+            if t.starts_with("define ") {
+                seen.clear();
+            }
             if t.ends_with(':') && !t.starts_with(' ') && !t.starts_with(';') {
                 assert!(seen.insert(t.to_string()), "{name}: Marke `{t}` kommt zweimal vor");
             }
@@ -620,7 +686,7 @@ fn everything_the_codegen_emits_assembles() {
         return;
     };
     let clang = Clang::At(path);
-    for name in UEBERSETZBAR {
+    for name in KORPUS {
         let p = corpus(name);
         let ir = ir_of(&p);
         let dir =
@@ -644,20 +710,26 @@ fn everything_the_codegen_emits_assembles() {
 /// stehen — LLVM nimmt es nicht an.
 #[test]
 fn nothing_follows_a_terminator() {
-    for name in UEBERSETZBAR {
+    for name in KORPUS {
         let p = corpus(name);
         let ir = ir_of(&p);
-        let mut terminated = false;
+        let (mut terminated, mut inside) = (false, false);
         for line in ir.lines() {
             let t = line.trim();
-            if t.is_empty() || t.starts_with(';') {
-                continue;
-            }
-            if t.ends_with(':') || t.starts_with("define") {
-                terminated = false;
+            // Nur Rumpfe; Metadaten und Deklarationen stehen ausserhalb.
+            if t.starts_with("define") {
+                (terminated, inside) = (false, true);
                 continue;
             }
             if t == "}" {
+                inside = false;
+                continue;
+            }
+            if !inside || t.is_empty() || t.starts_with(';') {
+                continue;
+            }
+            if t.ends_with(':') {
+                terminated = false;
                 continue;
             }
             assert!(!terminated, "{name}: `{t}` steht hinter einem Terminator");
@@ -763,7 +835,7 @@ fn wrapping_arithmetic_has_no_overflow_flags() {
 /// zurueckweisen.
 #[test]
 fn every_called_function_is_defined_or_declared() {
-    for name in UEBERSETZBAR {
+    for name in KORPUS {
         let p = corpus(name);
         let ir = ir_of(&p);
         for line in ir.lines() {
@@ -813,16 +885,22 @@ fn a_monomorphised_name_becomes_a_valid_symbol() {
 fn step_runs_at_most_once_per_activation() {
     let p = corpus("18_blocks.takt");
     let ir = ir_of(&p);
-    assert!(
-        ir.contains("store i1 true"),
-        "das `stepped`-Flag wird nicht gesetzt:
-{ir}"
-    );
-    assert!(
-        ir.contains("step1_ende") || ir.contains("_ende"),
-        "kein Zweig um den Aufruf:
-{ir}"
-    );
+    // Der Rumpf, der `c.step(…)` ruft: Dort wird das Flag gefragt, gesetzt
+    // und um den Aufruf verzweigt.
+    let is_call = |l: &str| l.contains("call ") && l.contains("@takt_block_counter_step(");
+    let calls: Vec<(String, String)> =
+        bodies(&ir).into_iter().filter(|(n, b)| n.starts_with("gauge_") && b.lines().any(is_call)).collect();
+    assert!(!calls.is_empty(), "kein Rumpf von `gauge` ruft `step`:\n{ir}");
+    for (name, body) in &calls {
+        let lines: Vec<&str> = body.lines().collect();
+        let call = lines.iter().position(|l| is_call(l)).unwrap_or_default();
+        let before = &lines[..call];
+        assert!(before.iter().any(|l| l.contains("br i1")), "`{name}`: kein Zweig vor dem Aufruf:\n{body}");
+        assert!(
+            before.iter().any(|l| l.contains("store i1 true")),
+            "`{name}`: das Flag steht nicht vor dem Aufruf:\n{body}"
+        );
+    }
 }
 
 /// Eine Blockmethode bekommt die Instanz als Zeiger: Sie aendert ihren
@@ -973,18 +1051,14 @@ fn a_constant_field_is_verified() {
 fn match_tests_the_cases_in_source_order() {
     let p = corpus("13_protocol_analysis.takt");
     let ir = ir_of(&p);
-    assert!(
-        ir.contains("case"),
-        "keine `case`-Marken:
-{ir}"
-    );
-    let first = ir.find("case").expect("erster case");
-    let rest = &ir[first..];
-    assert!(
-        rest.contains("_sonst_"),
-        "kein Weiterreichen an den naechsten `case`:
-{ir}"
-    );
+    // Im Rumpf mit dem `match` von `parser`: erst die `case`-Marken, dann
+    // das Weiterreichen an den naechsten.
+    let (name, body) = bodies(&ir)
+        .into_iter()
+        .find(|(n, b)| n.starts_with("parser_") && b.contains("case"))
+        .unwrap_or_else(|| panic!("kein Rumpf von `parser` mit `case`-Marken:\n{ir}"));
+    let first = body.find("case").unwrap_or_default();
+    assert!(body[first..].contains("_sonst_"), "`{name}`: kein Weiterreichen an den naechsten `case`:\n{body}");
 }
 
 /// 3.8: `match` auf `T!E` entscheidet am Flag im Feld 2, nicht an den
@@ -1045,13 +1119,14 @@ fn interp_unrolls_the_search() {
 fn interp_keeps_the_operation_order_of_the_interpreter() {
     let p = corpus("02_units_and_data.takt");
     let ir = ir_of(&p);
-    let at = ir.find("fdiv").expect("Division");
-    let before = &ir[..at];
-    assert!(
-        before.contains("fmul"),
-        "die Multiplikation steht nicht vor der Division:
-{ir}"
-    );
+    // Im Rumpf von `oven`, der `interp` rechnet: die Multiplikation vor der
+    // Division, nicht irgendwo davor im Modul.
+    let (name, body) = bodies(&ir)
+        .into_iter()
+        .find(|(n, b)| n.starts_with("oven_") && b.contains("fdiv"))
+        .unwrap_or_else(|| panic!("kein Rumpf von `oven` mit einer Division:\n{ir}"));
+    let at = body.find("fdiv").unwrap_or_default();
+    assert!(body[..at].contains("fmul"), "`{name}`: die Multiplikation steht nicht vor der Division:\n{body}");
 }
 
 /// **Der virtuelle Schlaf rueckt jeden Zeitzaehler vor** (9.9, FB-268).
@@ -1068,4 +1143,241 @@ fn virtual_sleep_advances_every_timer() {
     let start = ir.find(&head).unwrap_or_else(|| panic!("kein `{head}` in der IR"));
     let call = ir[start..].lines().find(|l| l.contains("@takt_advance_timers(")).unwrap_or_else(|| panic!("{ir}"));
     assert!(call.contains(&format!("i32 {}, i64", machine::timers(m))), "{call}");
+}
+
+/// Wie viele Indexpruefungen eine Maschine noch traegt: was die Analyse
+/// beweist, faellt aus der MIR (3.4).
+fn index_checks(p: &Program) -> usize {
+    let mut n = 0;
+    for m in &p.machines {
+        takt_mir::visit::for_each_expr_machine(m, &mut |e| {
+            n += usize::from(matches!(
+                e.kind,
+                takt_mir::expr::ExprKind::Checked { kind: takt_mir::expr::CheckedKind::Index { .. }, .. }
+            ));
+        });
+    }
+    n
+}
+
+/// SYN-024: `b.clear()` im Schleifenkoerper nimmt die Schranke `k < b.len`
+/// zurueck, auch wenn `written_vars` den Empfaenger nicht nennt: Der
+/// Methodenaufruf vergisst sie, und die Indexpruefung von `b[k]` bleibt —
+/// geweitet (300 Durchlaeufe), abgerollt (100) und an der Grenze
+/// `UNROLL_LIMIT` (128 und 129 Durchlaeufe zu je zwei Anweisungen).
+#[test]
+fn clearing_the_vector_in_a_loop_keeps_the_index_check() {
+    assert_eq!(takt_mir::analysis::walk::UNROLL_LIMIT, 256, "die Grenzfaelle unten rechnen mit 256");
+    for (n, clear) in [(300, true), (100, true), (128, true), (129, true), (100, false)] {
+        let clear = if clear { "b.clear()" } else { "pass" };
+        let src = format!(
+            "system:
+    language = 1
+    tick = 10 ms
+
+output o : int @ hw(\"o/o\") with safe = 0
+
+machine m:
+    var b : vec<int, 8> = default
+    var k : int in 0..7 = 0
+    var x : int = 0
+    initial RUN
+    state RUN:
+        loop:
+            b.push(1)
+            if k < b.len:
+                for i in range({n}):
+                    x = b[k]
+                    {clear}
+            o = x
+"
+        );
+        let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+        let out = takt_sema::compile(&src, &options);
+        let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+        assert!(errors.is_empty(), "{n}: {}", errors.join("\n"));
+        let p = out.program.expect("Programm");
+        // Ohne `clear` beweist die Schranke den Index; die Gegenprobe zeigt,
+        // dass der Test etwas misst.
+        let want = usize::from(clear != "pass");
+        assert_eq!(index_checks(&p), want, "{n} Durchlaeufe mit `{clear}`");
+    }
+}
+
+/// SEM1-049: Im Modus ENTRY ist das Fenster eines Stroms leer (9.6) — in
+/// `enter:` und `exit:` immer, auch wo ein Wechsel sie im Schritt ausfuehrt,
+/// in einem `loop:` im Eintritts-Tick. Jede Zaehlung des Fensters fuer
+/// `for x in s` und `s.count` (8.6) geht darum durch ein `select` auf null:
+/// in der `loop:`-Funktion ueber ihren Entry-Parameter, sonst fest.
+#[test]
+fn a_window_is_empty_in_entry_mode() {
+    let src = "system:
+    language = 1
+    tick = 1 ms
+
+input rx : stream<u8> @ hw(\"u/rx\") with max_rate = 200 kHz, capacity = 256
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    var count : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        enter:
+            for x in rx:
+                count = (count + 1) % 100
+            count = min(rx.count, 99)
+        loop:
+            for x in rx:
+                count = (count + 1) % 100
+            n = min(rx.count, 99)
+        when count > 50: -> DONE
+        exit:
+            for x in rx:
+                count = (count + 1) % 100
+    state DONE:
+        loop:
+            n = count
+";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    assert!(!out.has_errors(), "{:?}", out.diagnostics);
+    let p = out.program.expect("Programm");
+    let low = lowered(&p);
+    assert!(low.skipped.is_empty(), "{:?}", low.skipped);
+    let mut function = String::new();
+    let mut counted = 0;
+    for line in low.ir.lines() {
+        if line.starts_with("define ") {
+            function = line.to_string();
+        }
+        let Some((reg, _)) = line.trim().split_once(" = call i32 @app_stream_count(") else { continue };
+        counted += 1;
+        let gated = low
+            .ir
+            .lines()
+            .find_map(|l| l.trim().split_once(&format!(", i32 0, i32 {reg}")).map(|(g, _)| g.to_string()));
+        let gate = gated.unwrap_or_else(|| panic!("{reg} in `{function}` geht ungeprueft in die Schleife"));
+        let want = if function.contains("_loop_") { "select i1 %5" } else { "select i1 true" };
+        assert!(gate.ends_with(want), "`{function}`: {gate}");
+    }
+    assert!(counted >= 5, "Fenster in `enter:`, `exit:` und `loop:`:\n{}", low.ir);
+}
+
+/// INT-025 (5.9): Der erzeugte Restore verwirft einen `persist`-Eintrag mit
+/// NaN- oder Inf-Bitmuster auch ohne Range, wie der Interpreter
+/// (`Nvm::load`): Vor der Range steht die Pruefung des Exponenten.
+#[test]
+fn the_restore_refuses_a_non_finite_float() {
+    let src = "system:
+    language = 1
+    tick = 1 ms
+    float = f32
+
+output n : float @ hw(\"o/n\") with safe = 0.0
+
+machine m:
+    persist var level : float = 1.5
+    persist var wide : f64 = 2.5
+    initial RUN
+    state RUN:
+        loop:
+            n = level
+";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let low = lowered(&p);
+    assert!(low.skipped.is_empty(), "{:?}", low.skipped);
+    let head = low.ir.lines().find(|l| l.starts_with("define") && l.contains(" @m_persist_restore(")).expect("Restore");
+    let start = low.ir.find(head).unwrap_or_default();
+    let body = low.ir[start..].split("\n}").next().unwrap_or_default();
+    assert!(body.contains(", 2139095040") && body.contains(", 9218868437227405312"), "Exponent je Breite:\n{body}");
+}
+
+/// SEM1-030: `vec<T, N>` in `persist` senkt der Codegen — Laenge, dann die
+/// Elemente in einer Schleife zur Laufzeit; der Lauf gegen den Interpreter
+/// steht in `takt-conformance/tests/persist_native.rs`
+/// (`random_vectors_are_encoded_alike`). Im Pruefdurchlauf liegt jedes
+/// gelesene Byte vor dem Ende des Eintrags: Eine Laenge, die mehr Elemente
+/// verspricht, als der Eintrag traegt, liest nicht hinter die Nutzlast.
+#[test]
+fn a_persisted_vector_is_lowered_and_read_within_its_entry() {
+    let src = "system:
+    language = 1
+    tick = 1 ms
+
+output n : int @ hw(\"o/n\") with safe = 0
+
+machine m:
+    persist var list : vec<int, 4> = default
+    initial RUN
+    state RUN:
+        loop:
+            n = list.len as int
+";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let low = lowered(&p);
+    assert!(low.skipped.is_empty(), "{:?}", low.skipped);
+    let body = |name: &str| {
+        let head = low.ir.lines().find(|l| l.starts_with("define") && l.contains(&format!(" @{name}("))).expect(name);
+        let start = low.ir.find(head).unwrap_or_default();
+        low.ir[start..].split("\n}").next().unwrap_or_default().to_string()
+    };
+    let (restore, snapshot) = (body("m_persist_restore"), body("m_persist_snapshot"));
+    assert!(restore.contains("vec") && snapshot.contains("vec"), "eine Schleife je Richtung");
+    let loads = restore.matches("load i64, ptr").count();
+    let bounds = restore.matches("icmp ule i64").count();
+    assert!(bounds >= 2, "Grenzen je Lesen im Pruefdurchlauf ({bounds} bei {loads} Ladevorgaengen):\n{restore}");
+}
+
+/// KON1-017 (Lemma 3.4): Eine Schiebung rechnet nur dann in `i32`, wenn ihr
+/// Betrag bewiesen in `0..31` liegt. `m >> 50` passt mit `m in 0..1000` in
+/// `i32`, aber `ashr i32 _, 50` ist undefiniert (LLVM: poison); ebenso ein
+/// Betrag, der selbst nur bis 8191 reicht.
+#[test]
+fn a_shift_by_more_than_31_bits_stays_wide() {
+    let src = "system:
+    language = 1
+    tick = 1 ms
+
+input k : int in 0..100000000 @ hw(\"i/k\")
+output y : int @ hw(\"o/y\") with safe = 0
+output z : int @ hw(\"o/z\") with safe = 0
+output w : int @ hw(\"o/w\") with safe = 0
+
+machine m:
+    var n : int in 0..1000 = 7
+    initial RUN
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            y = n >> 50
+            z = 3 >> (k.or(0) >> 15)
+            w = n >> 3
+";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let ir = ir_of(&p);
+    for (name, body) in bodies(&ir).into_iter().filter(|(n, _)| n.starts_with("m_")) {
+        for line in body.lines().filter(|l| l.contains("ashr i32") || l.contains("shl i32") || l.contains("lshr i32")) {
+            let amount = line.rsplit(", ").next().unwrap_or_default();
+            let bounded = amount.parse::<u32>().is_ok_and(|a| a < 32);
+            assert!(bounded, "`{name}`: Schiebung in i32 um einen unbeschraenkten Betrag: {line}");
+        }
+    }
+}
+
+/// `for (k, v) in m` ueber eine `map` (3.9, Korpus 114): Der Codegen senkt
+/// es — eine Schleife ueber die Slots in ihrer Reihenfolge, die belegten
+/// (Marke 1) mit Schluessel und Wert aus der kanonischen Form; der Lauf
+/// gegen den Interpreter steht im Vergleich von `takt-conformance`.
+#[test]
+fn a_map_is_iterated_slot_by_slot() {
+    let p = corpus("114_for_pairs.takt");
+    let low = lowered(&p);
+    assert!(low.skipped.is_empty(), "{:?}", low.skipped);
+    let pairs: Vec<(String, String)> = bodies(&low.ir).into_iter().filter(|(_, b)| b.contains("paare")).collect();
+    assert_eq!(pairs.len(), 1, "eine Funktion mit der Schleife");
+    let body = &pairs[0].1;
+    assert!(body.contains("icmp eq i8") && body.contains(", 1\n"), "die Marke eines belegten Slots:\n{body}");
 }

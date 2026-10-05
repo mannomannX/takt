@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-14: Eine Periode, die kein Vielfaches des Ticks ist, wirkt als die
+# naechstgroessere: `2500 us` laeuft alle 3 ms (7.2).
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m every 2500 us:  # ~ SC-14
+    initial A
+
+    state A:
+        loop:
+            v = true
+
+        after 9 ms: -> A

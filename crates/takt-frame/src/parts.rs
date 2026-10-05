@@ -84,7 +84,16 @@ fn prototype(f: takt_native::Native) -> String {
 pub fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout) {
     for slot in &layout.outputs {
         let Some(i) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
-        let Some(safe) = &p.channels[i].attrs.safe else { continue };
+        // Ohne `safe` gilt der Vorgabewert des Typs (`Value::default_for`),
+        // im Latch lauter Nullen — auch am Ende eines Laufs (12.7).
+        let Some(safe) = &p.channels[i].attrs.safe else {
+            let _ = writeln!(
+                s,
+                "    memset(a->latch + {}, 0, {}); /* {} ohne safe: Vorgabe */",
+                slot.offset, slot.size, slot.name
+            );
+            continue;
+        };
         if let Some(text) = safe_payload(p, slot, safe) {
             s.push_str(&text);
             continue;
@@ -311,6 +320,7 @@ pub fn abort_phase(
     x: &Prefix,
 ) {
     let abort = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort);
+    let overflow = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::StreamOverflow);
     let scoped = scoped_of(p);
     for m in driven {
         let Some(i) = p.machines.iter().position(|x| x.name == m.name) else { continue };
@@ -318,7 +328,18 @@ pub fn abort_phase(
             Some((owner, _, n)) => format!(" && a->scope_{owner}_{n}"),
             None => String::new(),
         };
-        let (condition, pending) = (format!("a->raised[{i}]{scope}"), format!("a->pending[{i}]{scope}"));
+        // 9.3, 9.4: Eine Maschine in `FAULTED` nimmt keinen Fault; ein
+        // vorgemerkter wartet, bis sie `FAULTED` verlaesst. Der Abort-Phase
+        // gehoeren nur Abort und Runtime; ein `StreamOverflow` wirkt erst bei
+        // der naechsten Aktivierung (8.6).
+        let live = match in_faulted(p, m) {
+            Some(test) => format!(" && !({test})"),
+            None => String::new(),
+        };
+        let (condition, pending) = (
+            format!("a->raised[{i}]{scope}{live}"),
+            format!("a->pending[{i}] && a->pending[{i}] != {overflow}{scope}{live}"),
+        );
         let active = match (m.period.max(1), m.phase) {
             (1, _) => "1".to_string(),
             (per, ph) => format!("{tick} % {per} == {ph}"),
@@ -537,8 +558,25 @@ fn c_of(llvm: &str) -> &'static str {
 /// 5.11: je gescopter Instanz, ob sie zu Beginn des vorigen Ticks aktiv
 /// war — der Vergleich liefert Ein- und Austritt.
 pub fn scope_flags(t: &mut Text, p: &Program) {
-    for (owner, _, i) in scoped_of(p) {
+    let scoped = scoped_of(p);
+    for (owner, _, i) in &scoped {
         let _ = writeln!(t.fields, "    _Bool scope_{owner}_{i};");
+    }
+    // 5.11: Der Tick (plus eins) des letzten Fault-Uebergangs je Maschine;
+    // ein Besitzer, der seinen Zustand so verliess, fuehrt die `exit:`-Bloecke
+    // seiner Instanzen nicht aus (`note_fault`, `scoped_lifecycle`).
+    if !scoped.is_empty() {
+        let _ = writeln!(t.fields, "    long long fault_tick[{}];", p.machines.len().max(1));
+    }
+}
+
+/// Merkt im Fault-Rueckruf eines Rahmens (`P_fault`) den Tick des
+/// Fault-Uebergangs der Maschine `m` (5.11): `scoped_lifecycle` laesst
+/// danach die `exit:`-Bloecke ihrer Instanzen aus, wie der Interpreter
+/// (`leave_scoped` mit `faulted`). Ohne gescopte Instanzen nichts.
+pub fn note_fault(s: &mut String, p: &Program, indent: &str) {
+    if !scoped_of(p).is_empty() {
+        let _ = writeln!(s, "{indent}a->fault_tick[m] = a->tick + 1;");
     }
 }
 
@@ -578,6 +616,11 @@ pub fn steps(
     tick: &str,
     x: &Prefix,
 ) {
+    // 9.6 `deliver(D_k)`: Was der vorige Tick an Stroeme mit `drop_oldest`
+    // gesendet hat, wird vor der Trigger-Phase sichtbar (7.5).
+    if crate::streams::stages(p) {
+        let _ = writeln!(s, "{indent}takt_int_deliver_sent(a);");
+    }
     for m in driven {
         if !m.layout.trigger_flags.is_empty() {
             let _ = writeln!(s, "{indent}{x}_{0}_triggers(a);", m.name);
@@ -596,11 +639,16 @@ pub fn steps(
             None => condition,
         };
         // 9.6: Ein vorgemerkter Fault geht zu Beginn des Schritts in den
-        // Zustand; der Schritt nimmt ihn statt seines Rumpfs.
+        // Zustand; der Schritt nimmt ihn statt seines Rumpfs. In `FAULTED`
+        // wartet er, bis die Maschine es verlaesst (9.3).
         let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
+        let live = match in_faulted(p, m) {
+            Some(test) => format!(" && !({test})"),
+            None => String::new(),
+        };
         let _ = writeln!(
             s,
-            "{indent}{condition}{{ if (a->pending[{i}]) {{ {x}_{0}_pend(a, a->pending[{i}]); a->pending[{i}] = 0; }} {x}_{0}_step(a); {x}_{0}_publish(a); }}",
+            "{indent}{condition}{{ if (a->pending[{i}]{live}) {{ {x}_{0}_pend(a, a->pending[{i}]); a->pending[{i}] = 0; }} {x}_{0}_step(a); {x}_{0}_publish(a); }}",
             m.name
         );
     }
@@ -629,6 +677,7 @@ pub fn scoped_of(p: &Program) -> Vec<(String, String, usize)> {
 pub fn scoped_lifecycle(s: &mut String, p: &Program, layout: &Layout, indent: &str, x: &Prefix) {
     for (owner, inst, i) in scoped_of(p) {
         let state = takt_llvm::arena::state_name(&inst);
+        let by_fault = left_by_fault(p, &owner);
         let _ = writeln!(s, "{indent}{{ _Bool now = {x}_{owner}_scope_{i}(a);");
         let _ = writeln!(s, "{indent}  if (now && !a->scope_{owner}_{i}) {{");
         let _ = writeln!(s, "{indent}    memset(a->{state}, 0, sizeof a->{state});");
@@ -638,14 +687,36 @@ pub fn scoped_lifecycle(s: &mut String, p: &Program, layout: &Layout, indent: &s
         let _ = writeln!(s, "{indent}  }} else if (!now && a->scope_{owner}_{i}) {{");
         // 5.11: erst die `exit:`-Bloecke von innen nach aussen, dann
         // gehen die Outputs auf `safe` — sie ueberschreiben, was ein
-        // `exit` an ihnen tat, genau wie im Interpreter.
-        let _ = writeln!(s, "{indent}    {x}_{inst}_exit_all(a);");
+        // `exit` an ihnen tat, genau wie im Interpreter. Verliess der
+        // Besitzer den Zustand ueber einen Fault, laufen keine `exit:`.
+        let _ = writeln!(s, "{indent}    if (!({by_fault})) {x}_{inst}_exit_all(a);");
         safe_outputs_of(s, p, layout, &inst, &format!("{indent}    "));
         let _ = writeln!(s, "{indent}    memset(a->{state}, 0, sizeof a->{state});");
         let _ = writeln!(s, "{indent}    {x}_{inst}_publish(a);");
         let _ = writeln!(s, "{indent}  }}");
         let _ = writeln!(s, "{indent}  a->scope_{owner}_{i} = now; }}");
     }
+}
+
+/// Hat der Besitzer seinen Zustand ueber einen Fault verlassen (5.11)? In
+/// diesem Tick mit einem Fault-Uebergang (`note_fault`), oder er steht in
+/// `FAULTED` — hinter dem letzten Blatt (5.3). Dieselbe Frage wie
+/// `faulted || last_fault.tick == tick` im Interpreter.
+fn left_by_fault(p: &Program, owner: &str) -> String {
+    let Some((i, m)) = p.machines.iter().enumerate().find(|(_, m)| m.name == owner) else { return "0".into() };
+    let mut test = format!("a->fault_tick[{i}] == a->tick + 1");
+    if let Some(faulted) = in_faulted(p, m) {
+        let _ = write!(test, " || {faulted}");
+    }
+    test
+}
+
+/// Steht die Maschine in `FAULTED` (5.3)? Das Blatt steht dann hinter dem
+/// letzten (`conf[0]`, wie der Schritt es liest); `None` ohne Zustand.
+fn in_faulted(p: &Program, m: &takt_mir::machine::Machine) -> Option<String> {
+    let at = takt_llvm::machine::state_struct(m, p)?.byte_offset(takt_llvm::machine::Role::Conf, 0)?;
+    let leaves = takt_llvm::machine::leaves(m).len();
+    Some(format!("a->{}[{at}] >= {leaves}", takt_llvm::arena::state_name(&m.name)))
 }
 
 /// Die Outputs einer Maschine auf ihren `safe`-Wert (5.11, 5.2 Regel 5).
@@ -669,19 +740,21 @@ fn safe_outputs_of(s: &mut String, p: &Program, layout: &Layout, machine: &str, 
 /// `fresh` und die Signale loeschen — ein Signal ist einen Tick sichtbar
 /// (5.8), und ohne `fresh` liest ein Follower wieder Ψ_k (7.2).
 /// Der Commit eines Ticks, fuer beide Rahmen und fuer Tick 0 dieselbe
-/// Folge (12.1): erst Ψ, dann die `sim`-Outputs an ihre `hw`-Inputs (8.3,
+/// Folge (12.1): erst die geplanten Ausgaben, dann Ψ, dann die `sim`-Outputs an ihre `hw`-Inputs (8.3,
 /// Unit-Delay wie bei Ψ), dann die Sendepuffer (8.8: gesendet wird beim
 /// Commit, und der Treiber holt seine Rate ab, bevor der Latch
 /// ausgeschrieben wird) und die internen Ringe (8.6). Zwei Fassungen
 /// dieser Folge wichen einmal voneinander ab (FB-269).
 pub fn commit_sequence(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str, tick: &str) {
-    psi_commit(s, p, driven, indent);
     // 9.8, 12.1: Was in diesem Tick faellig wird, geht nach den Schritten
     // in den Latch, vor dem Commit — ein geplanter Wert gewinnt gegen eine
-    // Zuweisung desselben Ticks, und die `sim`-Bindung sieht ihn.
+    // Zuweisung desselben Ticks, und die `sim`-Bindung sieht ihn. Vor Ψ:
+    // Eine andere Maschine liest den Ausgang im naechsten Tick so, wie er
+    // committet wurde (`committed_output` im Interpreter), samt Plan.
     if !queued_outputs(p).is_empty() {
         let _ = writeln!(s, "{indent}takt_apply_scheduled(a, {tick} * {}LL);", p.config.tick);
     }
+    psi_commit(s, p, driven, indent);
     sim_bindings(s, p, indent);
     let _ = writeln!(s, "{indent}takt_tx_commit(a, {tick});");
     let _ = writeln!(s, "{indent}takt_int_commit(a);");
@@ -742,6 +815,94 @@ pub fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
 /// Der Vorgabewert des Parameters `index` als C-Literal.
 pub fn param_literal(p: &Program, index: usize) -> Option<String> {
     literal(p, &p.params.get(index)?.default)
+}
+
+/// `takt_tune(a, param, value, len)`: ein Tunable aendert sich (8.4), fuer
+/// beide Rahmen. `value` ist die kanonische Byteform (5.9); angenommen wird
+/// nur ein `tunable param` mit passender Laenge, endlicher Zahl, bekannter
+/// Variante und Wert in seiner Range, wie `run.rs` im Interpreter — sonst
+/// bleibt der Wert, und die Rueckgabe ist 0 (`rejected`). Der Wert gilt ab
+/// dem naechsten Schritt; die Schleife ruft vor ihm (`Runtime::service_with`).
+pub fn tune(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
+    use takt_mir::types::{Const, FloatWidth, Type};
+    let bound = |c: &Const| match c {
+        Const::Int(i) | Const::Duration(i) => format!("{i}LL"),
+        Const::Float(f) => format!("{f:?}"),
+        Const::Bool(b) => u8::from(*b).to_string(),
+    };
+    let _ = writeln!(
+        s,
+        "static int32_t takt_tune(struct {x}_arena *a, uint32_t param, const unsigned char *v, int32_t len) {{"
+    );
+    let _ = writeln!(s, "    unsigned long long raw = 0;");
+    let _ = writeln!(s, "    if (len < 1 || len > 8) return 0;");
+    let _ = writeln!(s, "    for (int i = 0; i < len; i++) raw |= (unsigned long long)v[i] << (8 * i);");
+    let _ = writeln!(s, "    switch (param) {{");
+    for (i, param) in p.params.iter().enumerate() {
+        let Some(slot) = layout.parameters.iter().find(|sl| sl.name == param.name).filter(|_| param.tunable) else {
+            continue;
+        };
+        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
+        let (bytes, check) = match p.types.list.get(param.ty.index()) {
+            Some(Type::Bool) => (1, "x <= 1".to_string()),
+            Some(Type::Int { width, range, .. }) => (
+                u64::from(width.bits() / 8),
+                range
+                    .as_ref()
+                    .map_or_else(|| "1".into(), |r| format!("x >= {} && x <= {}", bound(&r.lo), bound(&r.hi))),
+            ),
+            Some(Type::Float { width, range, .. }) => {
+                let finite = "x == x && x - x == 0".to_string();
+                let check = match range {
+                    Some(r) => format!("{finite} && x >= {} && x <= {}", bound(&r.lo), bound(&r.hi)),
+                    None => finite,
+                };
+                (if *width == FloatWidth::F32 { 4 } else { 8 }, check)
+            }
+            Some(Type::Duration { range }) => (
+                8,
+                range
+                    .as_ref()
+                    .map_or_else(|| "1".into(), |r| format!("x >= {} && x <= {}", bound(&r.lo), bound(&r.hi))),
+            ),
+            // Eine Variante ohne Felder: die Diskriminante als `i64` (5.9).
+            Some(Type::Enum(e)) => {
+                let Some(def) = p.enums.get(e.index()).filter(|d| d.variants.iter().all(|v| v.fields.is_empty()))
+                else {
+                    continue;
+                };
+                let known: Vec<String> = def.variants.iter().map(|v| format!("d == {}LL", v.discriminant)).collect();
+                let _ = writeln!(s, "    case {i}: {{ /* {} */", param.name);
+                let _ = writeln!(s, "        long long d;");
+                let _ = writeln!(s, "        if (len != 8) return 0;");
+                let _ = writeln!(s, "        memcpy(&d, &raw, 8);");
+                let _ = writeln!(s, "        if (!({})) return 0;", known.join(" || "));
+                let _ = writeln!(s, "        *({ct} *)(a->params + {}) = ({ct})d;", slot.offset);
+                let _ = writeln!(s, "        return 1;");
+                let _ = writeln!(s, "    }}");
+                continue;
+            }
+            _ => continue,
+        };
+        let unsigned = match bytes {
+            1 => "uint8_t",
+            2 => "uint16_t",
+            4 => "uint32_t",
+            _ => "uint64_t",
+        };
+        let _ = writeln!(s, "    case {i}: {{ /* {} */", param.name);
+        let _ = writeln!(s, "        {unsigned} u = ({unsigned})raw;");
+        let _ = writeln!(s, "        {ct} x;");
+        let _ = writeln!(s, "        if (len != {bytes}) return 0;");
+        let _ = writeln!(s, "        memcpy(&x, &u, {bytes});");
+        let _ = writeln!(s, "        if (!({check})) return 0;");
+        let _ = writeln!(s, "        *({ct} *)(a->params + {}) = x;", slot.offset);
+        let _ = writeln!(s, "        return 1;");
+        let _ = writeln!(s, "    }}");
+    }
+    let _ = writeln!(s, "    default: (void)a; (void)raw; return 0;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
 }
 
 /// Ein Literal als C-Text; alles andere braeuchte den Interpreter.
@@ -903,9 +1064,11 @@ pub fn job_tables(s: &mut String, p: &Program, x: &Prefix) -> Option<(usize, u64
 pub fn job_call(s: &mut String, p: &Program, args: &str, len: &str, out: &str, out_len: &str, indent: &str) {
     let _ = writeln!(s, "{indent}const unsigned char *arg[8]; int n[8]; int k = 0, p = 0;");
     let _ = writeln!(s, "{indent}for (k = 0; k < 8; k++) {{ arg[k] = {args}; n[k] = 0; }}");
+    // Ein Block, dessen Laenge ueber das Ende reicht, gilt nicht: Keine
+    // Native liest hinter die Argumente (4.5).
     let _ = writeln!(
         s,
-        "{indent}for (k = 0; k < 8 && p + 4 <= {len}; k++) {{ n[k] = (int)takt_job_le32({args} + p); arg[k] = {args} + p + 4; p += 4 + n[k]; }}"
+        "{indent}for (k = 0; k < 8 && p + 4 <= {len}; k++) {{ n[k] = (int)takt_job_le32({args} + p); if (n[k] < 0 || n[k] > {len} - p - 4) {{ n[k] = 0; break; }} arg[k] = {args} + p + 4; p += 4 + n[k]; }}"
     );
     let _ = writeln!(s, "{indent}{out_len} = 0;");
     let _ = writeln!(s, "{indent}switch (native) {{");

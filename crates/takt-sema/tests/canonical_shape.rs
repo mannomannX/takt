@@ -112,8 +112,19 @@ fn valid(s: &mut Shape<'_>, rng: &mut Rng, out: &mut Vec<u8>) {
             let w = s.u8() as usize;
             out.extend(&rng.next().to_le_bytes()[..w]);
         }
-        op::F32 => out.extend(&(rng.next() as u32).to_le_bytes()),
-        op::F64 | op::DURATION => out.extend(rng.next().to_le_bytes()),
+        // Endliche Bitmuster: Ein Exponent aus lauter Einsen (Inf, NaN) ist
+        // keine Byteform (5.9, INT-025); ein Bit weniger macht ihn endlich.
+        op::F32 => {
+            let bits = rng.next() as u32;
+            let bits = if (bits >> 23) & 0xFF == 0xFF { bits & !(1 << 23) } else { bits };
+            out.extend(&bits.to_le_bytes());
+        }
+        op::F64 => {
+            let bits = rng.next();
+            let bits = if (bits >> 52) & 0x7FF == 0x7FF { bits & !(1 << 52) } else { bits };
+            out.extend(bits.to_le_bytes());
+        }
+        op::DURATION => out.extend(rng.next().to_le_bytes()),
         op::ENUM => {
             let n = s.u16();
             let pick = rng.below(u64::from(n));
@@ -142,11 +153,25 @@ fn valid(s: &mut Shape<'_>, rng: &mut Rng, out: &mut Vec<u8>) {
                 valid(s, rng, out);
             }
         }
-        op::BYTES | op::STR => {
+        op::BYTES => {
             let cap = s.u32();
             let n = rng.below(u64::from(cap) + 1) as u32;
             out.extend(n.to_le_bytes());
             (0..n).for_each(|_| out.push(b'a' + rng.below(26) as u8));
+        }
+        // Ein Text aus Zeichen von ein bis vier Bytes, hoechstens `cap` Bytes.
+        op::STR => {
+            let cap = s.u32() as usize;
+            let budget = rng.below(cap as u64 + 1) as usize;
+            let mut text = String::new();
+            for c in std::iter::repeat_with(|| ['a', '\u{e4}', '\u{20ac}', '\u{1d11e}'][rng.below(4) as usize]) {
+                if text.len() + c.len_utf8() > budget {
+                    break;
+                }
+                text.push(c);
+            }
+            out.extend((text.len() as u32).to_le_bytes());
+            out.extend(text.as_bytes());
         }
         op::VEC => {
             let cap = s.u32();
@@ -257,4 +282,23 @@ fn a_string_holds_n_bytes_not_n_characters() {
     fields[2] = takt_interp::Value::Str("ääa".into());
     let bytes = takt_interp::bytes::encode(&p, &takt_interp::Value::Record(fields), ty).expect("fuenf Bytes");
     assert!(decodes(&shape, &bytes, true));
+}
+
+/// Die Erzeugung gueltiger Texte trifft mehrbytige Zeichen; sonst saehe
+/// der Vergleich oben nur ASCII.
+#[test]
+fn the_generated_texts_hold_multibyte_characters() {
+    let p = program();
+    let ty = types(&p).into_iter().find(|(n, _)| n == "big").expect("big").1;
+    let shape = shape(&p, ty).expect("Gestalt");
+    let mut rng = Rng(0x5eed);
+    let mut widths = std::collections::BTreeSet::new();
+    for _ in 0..200 {
+        let mut good = Vec::new();
+        valid(&mut Shape { s: &shape, at: 0 }, &mut rng, &mut good);
+        let Ok(takt_interp::Value::Record(fields)) = decode(&p, &good, ty) else { panic!("gueltig: {good:02x?}") };
+        let takt_interp::Value::Str(name) = &fields[2] else { panic!("`name` ist ein Text") };
+        widths.extend(name.chars().map(char::len_utf8));
+    }
+    assert_eq!(widths.into_iter().collect::<Vec<_>>(), [1, 2, 3, 4]);
 }

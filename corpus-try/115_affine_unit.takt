@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Eine eigene affine Einheit (Census UnitAffine, 3.2): Ueberdruck gegen
+# Normaldruck. Ein Wert in `barg` liegt 1.01325 bar ueber dem absoluten
+# Druck in `bar`; eine Differenz zweier Werte ist eine Differenz in `bar`.
+
+unit barg = affine(bar, 1.01325)
+
+output absolute : float[bar] @ hw("o/absolute") with safe = 0 bar
+output rise     : float[bar] @ hw("o/rise")     with safe = 0 bar
+
+machine m:
+    var gauge : float[barg] = 2 barg
+    var first : float[barg] = 2 barg
+    initial RUN
+
+    state RUN:
+        loop:
+            absolute = gauge.to(bar)
+            rise = gauge - first
+            gauge = gauge + 0.5 bar

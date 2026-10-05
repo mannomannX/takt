@@ -17,13 +17,18 @@ input  q     : int in 0..100    @ hw("edge_a/q")
 input  k     : int in 0..100    @ hw("edge_b/k")
 input  rx    : stream<line<16>> @ hw("edge_u/rx") with max_rate = 200 Hz, capacity = 8
 input  pairs : stream<Pair>     @ hw("edge_c/rx") with max_rate = 400 Hz, capacity = 8
-output o     : bool             @ hw("edge_o/o")   with safe = false
-output p_ok  : bool             @ hw("o/p_ok")     with safe = false
-output q_ok  : bool             @ hw("o/q_ok")     with safe = false
-output k_ok  : bool             @ hw("o/k_ok")     with safe = false
-output lines : int in 0..100    @ hw("o/lines")    with safe = 0
-output sum   : int in 0..1000   @ hw("o/sum")      with safe = 0
-output up    : bool             @ hw("o/up")       with safe = false
+output o     : bool             @ hw("edge_o/o")  with safe = false
+output p_ok  : bool             @ hw("o/p_ok")    with safe = false
+output q_ok  : bool             @ hw("o/q_ok")    with safe = false
+output k_ok  : bool             @ hw("o/k_ok")    with safe = false
+output lines : int in 0..100    @ hw("o/lines")   with safe = 0
+output sum   : int in 0..1000   @ hw("o/sum")     with safe = 0
+output up    : bool             @ hw("o/up")      with safe = false
+# Zeile 6, dritter Fall (KON1-012): `edge_t/tx` meldet in Tick 12 mehr
+# freien Platz, als der Strom fasst.
+output tx : stream<u8> @ hw("edge_t/tx") with max_rate = 100 Hz, capacity = 64
+# Zeile 6, Dauerversagen: `edge_f/o` bestaetigt nie.
+output f : bool @ hw("edge_f/o") with safe = false
 
 machine watch:
     initial RUN
@@ -34,8 +39,8 @@ machine watch:
             k_ok = k.valid
         on rx as e:
             lines = min(lines + 1, 100)
-        on pairs as f:
-            sum = min(sum + (f.data.a as int) + (f.data.b as int), 1000)
+        on pairs as pair:
+            sum = min(sum + (pair.data.a as int) + (pair.data.b as int), 1000)
 
 # Zeile 6: Der Besitzer von `o` bekommt `Runtime(Driver)` und erholt sich.
 machine actor:
@@ -50,3 +55,22 @@ machine actor:
         enter:
             up = false
         after 20 ms: -> UP
+
+# Zeile 6, dritter Fall: Der Besitzer von `tx` bekommt `Runtime(Driver)` und
+# erholt sich wie `actor`.
+machine talker:
+    fault -> QUIET
+    initial TALK
+    state TALK:
+        loop:
+            send tx, 1
+    state QUIET:
+        after 20 ms: -> TALK
+
+# Zeile 6, Dauerversagen: ohne `fault ->` geht der Besitzer von `f` nach
+# dem ersten `Runtime(Driver)` nach FAULTED.
+machine failing:
+    initial ON
+    state ON:
+        loop:
+            f = true

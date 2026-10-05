@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 3 (3.6): Ein einheitenloses Literal im Einheitenkontext ist ein
+# Fehler mit Vorschlag `meinst du …?` — im Vergleich mit Fliesskomma, in
+# der Zuweisung an eine Ganzzahl mit Einheit und als Konstante, die erst
+# der Typ der Zuweisung trifft.
+
+const C : float = 3.0
+
+input  p     : float[bar] in 0..100 bar @ hw("d/p")
+output p_sim : float[bar]               @ sim("d/p")
+output hot   : bool                     @ hw("o/hot") with safe = false
+output y     : float[bar]               @ hw("o/y")   with safe = 0 bar
+output w     : int[mV]                  @ hw("o/w")   with safe = 0 mV
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            hot = p < 300  # ~ SC-3
+            y = C          # ~ SC-3
+            w = 5          # ~ SC-3

@@ -200,9 +200,10 @@ impl Row {
         self.deviations.is_empty()
     }
 
-    /// Haelt die Funktion ihre Zusage?
+    /// Haelt die Funktion ihre Zusage? Ein Stack von null Byte ist keine
+    /// Messung: Das Malen des Stacks lief nicht.
     pub fn within_contract(&self) -> bool {
-        self.stack <= self.contract
+        self.stack > 0 && self.stack <= self.contract
     }
 }
 
@@ -298,6 +299,16 @@ mod tests {
         let bad = Measured { output: "0000000000000001".into(), ..good(1) };
         let rows = judge(&v, &[good(0), bad]).expect("vollstaendig");
         assert_eq!(rows[0].deviations, vec![48]);
+    }
+
+    /// Ein Stack von null Byte ist keine Messung (das Malen lief nicht) und
+    /// haelt die Zusage darum nicht ein; einer ueber ihr ebenso wenig.
+    #[test]
+    fn a_stack_of_zero_is_no_measurement() {
+        let row = |stack| Row { native: Native::Crc32, vectors: 1, deviations: Vec::new(), stack, contract: 64 };
+        assert!(row(64).within_contract());
+        assert!(!row(65).within_contract());
+        assert!(!row(0).within_contract());
     }
 
     /// Das Board meldet, was `parse` liest.

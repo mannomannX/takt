@@ -26,9 +26,9 @@
   (SETPOINT 180[degC])
   (BAND 2[K]))
 (fn clamp [U] (x:float[U] lo:float[U] hi:float[U]) -> float[U]
-  (return (if (< x lo) lo (if (> x hi) hi x))))
+  (return (if (< x lo) lo (paren (if (> x hi) hi x)))))
 (fn shunt_current (u:float[V]) -> float[A]
-  (return (.to (/ u (.to R_SHUNT ohm)) A)))
+  (return (.to (paren (/ u (.to R_SHUNT ohm))) A)))
 (fn severity_of (delta:float[K]) -> Severity
   (if (> delta (* 3 MAX_STEP))
     (return ALARM))

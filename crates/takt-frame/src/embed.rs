@@ -75,6 +75,7 @@ fn ffi(x: &Prefix) -> String {
         format!("pub fn {x}_idle(a: *mut c_void) -> u8;"),
         format!("pub fn {x}_deadline(a: *mut c_void) -> i64;"),
         format!("pub fn {x}_advance(a: *mut c_void, n: i64);"),
+        format!("pub fn {x}_tune(a: *mut c_void, param: u32, value: *const c_void, len: i32) -> i32;"),
         format!("pub fn {x}_persist_snapshot(a: *mut c_void, out: *mut c_void, cap: i32) -> i32;"),
         format!("pub fn {x}_persist_restore(a: *mut c_void, bytes: *const c_void, len: i32) -> i32;"),
         format!("pub fn {x}_dump(a: *mut c_void, all: i32);"),
@@ -155,11 +156,14 @@ impl<'a> Program<'a> {{
 
     /// Der Griff fuer den Job-Kontext (4.5): Er rechnet, was `service` als
     /// `jobs` meldet. Es gibt ihn einmal je Programm, damit nie zwei
-    /// Job-Kontexte dieselbe Arena rechnen; `None` beim zweiten Aufruf.
+    /// Job-Kontexte dieselbe Arena rechnen; `None` beim zweiten Aufruf. Er
+    /// rechnet nie auf einer Arena vor `init`: Das Programm beginnt hier,
+    /// wenn es noch nicht begonnen hat.
     pub fn jobs(&mut self) -> Option<Jobs<'a>> {{
         if core::mem::replace(&mut self.jobs_taken, true) {{
             return None;
         }}
+        self.ensure_init();
         Some(Jobs {{ arena: self.arena, borrow: core::marker::PhantomData }})
     }}
 }}
@@ -202,6 +206,7 @@ impl takt_embed::Jobs for Jobs<'_> {{
 
 impl takt_embed::rt::Program for Program<'_> {{
     fn tick(&mut self, k: u64, _now: i64) {{
+        self.ensure_init();
         // Der Kern zaehlt ab 0; der Rahmen nennt den ersten Tick nach dem
         // Start `t=1` (Tick 0 ist der Start).
         // SAFETY: die Arena aus `new`.
@@ -209,11 +214,21 @@ impl takt_embed::rt::Program for Program<'_> {{
     }}
 
     fn raise_overrun(&mut self) {{
+        self.ensure_init();
         // SAFETY: wie oben.
         unsafe {{ ffi::{x}_overrun(self.arena) }}
     }}
 
+    fn tune(&mut self, param: u32, value: &[u8]) {{
+        self.ensure_init();
+        let len = i32::try_from(value.len()).unwrap_or(i32::MAX);
+        // SAFETY: Der Rahmen liest `len` Byte ab `value`; einen Wert, den er
+        // nicht annimmt, laesst er stehen (8.4).
+        let _ = unsafe {{ ffi::{x}_tune(self.arena, param, value.as_ptr().cast(), len) }};
+    }}
+
     fn raise_hardware(&mut self) {{
+        self.ensure_init();
         // SAFETY: wie oben.
         unsafe {{ ffi::{x}_hardware(self.arena) }}
     }}
@@ -226,22 +241,28 @@ impl takt_embed::rt::Program for Program<'_> {{
     }}
 
     fn sleep_allowed(&self) -> bool {{
-        // SAFETY: liest die Arena.
-        unsafe {{ ffi::{x}_idle(self.arena) != 0 }}
+        // Vor `init` ist die Arena nicht beschrieben; geschlafen wird nicht.
+        // SAFETY: liest die Arena nach `init`.
+        self.initialized && unsafe {{ ffi::{x}_idle(self.arena) != 0 }}
     }}
 
     fn next_deadline(&self) -> Option<i64> {{
-        // SAFETY: liest die Arena.
+        if !self.initialized {{
+            return None;
+        }}
+        // SAFETY: liest die Arena nach `init`.
         let ns = unsafe {{ ffi::{x}_deadline(self.arena) }};
         (ns >= 0).then_some(ns)
     }}
 
     fn advance(&mut self, ticks: u64) {{
+        self.ensure_init();
         // SAFETY: die Arena aus `new`.
         unsafe {{ ffi::{x}_advance(self.arena, ticks as i64) }}
     }}
 
     fn persist_snapshot(&mut self, out: &mut [u8]) -> usize {{
+        self.ensure_init();
         let cap = i32::try_from(out.len()).unwrap_or(i32::MAX);
         // SAFETY: Der Rahmen schreibt hoechstens `cap` Byte an `out`.
         let n = unsafe {{ ffi::{x}_persist_snapshot(self.arena, out.as_mut_ptr().cast(), cap) }};
@@ -264,6 +285,9 @@ impl takt_embed::rt::Program for Program<'_> {{
     }}
 
     fn next_run(&self) -> Option<takt_embed::rt::NextRun> {{
+        if !self.initialized {{
+            return None;
+        }}
         let mut delay = 0i64;
         // SAFETY: liest die Arena und schreibt `delay`.
         let code = unsafe {{ ffi::{x}_next_run(self.arena, &mut delay) }};
@@ -271,11 +295,13 @@ impl takt_embed::rt::Program for Program<'_> {{
     }}
 
     fn commit(&mut self) {{
+        self.ensure_init();
         // SAFETY: gibt den Latch der Arena an die Treiber.
         unsafe {{ ffi::{x}_commit(self.arena) }}
     }}
 
     fn trace(&mut self, outputs: takt_embed::rt::Outputs) {{
+        self.ensure_init();
         let all = match outputs {{
             takt_embed::rt::Outputs::None => return,
             takt_embed::rt::Outputs::Changed => 0,
@@ -289,11 +315,13 @@ impl takt_embed::rt::Program for Program<'_> {{
     }}
 
     fn end(&mut self) {{
+        self.ensure_init();
         // SAFETY: schreibt die Zeile `end` und die `safe`-Werte in den Latch.
         unsafe {{ ffi::{x}_end(self.arena) }}
     }}
 
     fn dispatch_job(&mut self) -> bool {{
+        self.ensure_init();
         // SAFETY: die Arena aus `new`.
         unsafe {{ ffi::{x}_job_dispatch(self.arena) != 0 }}
     }}

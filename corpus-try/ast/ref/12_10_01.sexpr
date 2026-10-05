@@ -1,0 +1,12 @@
+(record UartStatus layout=little
+  (bits flags: u32
+    (tx_full: bool at 0 ro)
+    (oflow: bool at 1 w1c)
+    (rx_level: u8 at 8..12)))
+(port uart_st :UartStatus @mmio(0x4000_1000))
+(driver-machine uart0 every=10ms
+  (initial RUN)
+  (state RUN
+    (loop
+      (= busy (.tx_full (.flags uart_st)))
+      (= (.oflow (.flags uart_st)) true))))

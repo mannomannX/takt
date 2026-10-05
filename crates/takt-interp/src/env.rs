@@ -75,6 +75,8 @@ pub enum Observation {
         message: String,
         /// Name des Ziels.
         target: String,
+        /// Die Stelle, die faultete.
+        span: Span,
     },
     /// `raise sig` (5.8).
     Signal {

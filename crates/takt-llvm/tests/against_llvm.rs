@@ -109,7 +109,7 @@ fn llvm_reads_our_float_literals_as_the_intended_numbers() {
     let clang = clang_or_skip!();
     let dir = Temp::new("literale");
     // 0.1 ist der Fall, an dem sich Dezimalschreibweise verraet.
-    for value in [1.0_f64, 0.1, -0.0, 2.5e-308, 1.7976931348623157e308] {
+    for value in [1.0_f64, 0.1, -0.0, 2.5e-308, 1.7976931348623157e308, f64::from_bits(1), f64::MIN_POSITIVE] {
         let lit = float_literal(value, &LlvmType::F64);
         let ir = format!(
             "target triple = \"x86_64-pc-windows-msvc\"\n\
@@ -123,6 +123,31 @@ fn llvm_reads_our_float_literals_as_the_intended_numbers() {
         let got = clang.run(&ir, &dir.0).unwrap_or_else(|e| panic!("{value}: {e}"));
         let back: f64 = got.trim().parse().unwrap_or_else(|e| panic!("{value}: `{got}` ({e})"));
         assert_eq!(back.to_bits(), value.to_bits(), "LLVM liest {lit} als {back}, nicht als {value}");
+    }
+}
+
+/// GEN-002: Dasselbe fuer `float`: LLVM nimmt das Muster des `double`,
+/// das den `f32` genau traegt. Gelesen werden die Bits des `float` selbst,
+/// ohne Umweg ueber `printf`, das `float` zu `double` erweitert.
+#[test]
+fn llvm_reads_our_f32_literals_as_the_intended_numbers() {
+    let clang = clang_or_skip!();
+    let dir = Temp::new("literale32");
+    for value in [0.1_f32, -0.0, f32::MIN_POSITIVE, f32::from_bits(1), f32::MAX, 3.0, 1e-36] {
+        let lit = float_literal(f64::from(value), &LlvmType::F32);
+        let ir = format!(
+            "target triple = \"x86_64-pc-windows-msvc\"\n\
+             @.fmt = private constant [4 x i8] c\"%x\\00\\00\"\n\
+             declare i32 @printf(ptr, ...)\n\
+             define i32 @main() {{\n  \
+               %1 = bitcast float {lit} to i32\n  \
+               %2 = call i32 (ptr, ...) @printf(ptr @.fmt, i32 %1)\n  \
+               ret i32 0\n\
+             }}\n"
+        );
+        let got = clang.run(&ir, &dir.0).unwrap_or_else(|e| panic!("{value}: {e}"));
+        let bits = u32::from_str_radix(got.trim(), 16).unwrap_or_else(|e| panic!("{value}: `{got}` ({e})"));
+        assert_eq!(bits, value.to_bits(), "LLVM liest {lit} als {:e}, nicht als {value:e}", f32::from_bits(bits));
     }
 }
 
@@ -209,39 +234,53 @@ machine m:
         ..Default::default()
     };
     let p = takt_sema::compile(src, &o).program.expect("uebersetzt");
-    let target = takt_llvm::Target::RISCV32IMAC;
-    let instrument = takt_llvm::Instrument::default_for(p.config.runtime_profile(), target);
-    let ir = takt_llvm::lower::program_with(&p, target.triple, &takt_llvm::symbols::Prefix::default(), instrument).ir;
-    let (ll, asm) = (dir.0.join("finite.ll"), dir.0.join("finite.s"));
-    std::fs::write(&ll, &ir).expect("IR schreibbar");
-    let ok = std::process::Command::new(&clang)
-        .args(["-S", "-Wno-override-module", "-ffreestanding", "-nostdlib"])
-        .arg(format!("--target={}", target.triple))
-        .arg(format!("-march={}", target.march))
-        .args(takt_llvm::toolchain::object_flags(target.triple))
-        .arg(&ll)
-        .arg("-o")
-        .arg(&asm)
-        .status()
-        .is_ok_and(|s| s.success());
-    assert!(ok, "clang schlug fehl");
-    let text = std::fs::read_to_string(&asm).expect("Assembler lesbar");
-    assert!(text.contains("__muldf3"), "die Arithmetik laeuft in Software:\n{text}");
-    for compare in ["__unorddf2", "__eqdf2", "__nedf2", "__unordsf2", "__eqsf2", "__nesf2"] {
-        assert!(!text.contains(compare), "eine Pruefung ruft `{compare}`:\n{text}");
+    // GEN-003: beide Kerne ohne Doppel-FPU; der Thumb-Kern rechnet `f32` in
+    // Hardware und `f64` ueber `__aeabi_*`.
+    let cases: [(takt_llvm::Target, &str, &[&str]); 2] = [
+        (
+            takt_llvm::Target::RISCV32IMAC,
+            "__muldf3",
+            &["__unorddf2", "__eqdf2", "__nedf2", "__unordsf2", "__eqsf2", "__nesf2"],
+        ),
+        (
+            takt_llvm::Target::THUMBV7EM,
+            "__aeabi_dmul",
+            &["__aeabi_dcmpun", "__aeabi_dcmpeq", "__aeabi_fcmpun", "__aeabi_fcmpeq", "__unorddf2", "__eqdf2"],
+        ),
+    ];
+    for (target, software, forbidden) in cases {
+        let instrument = takt_llvm::Instrument::default_for(p.config.runtime_profile(), target);
+        let ir =
+            takt_llvm::lower::program_with(&p, target.triple, &takt_llvm::symbols::Prefix::default(), instrument).ir;
+        let (ll, asm) =
+            (dir.0.join(format!("finite_{}.ll", target.name)), dir.0.join(format!("finite_{}.s", target.name)));
+        std::fs::write(&ll, &ir).expect("IR schreibbar");
+        let mut cmd = std::process::Command::new(&clang);
+        cmd.args(["-S", "-Wno-override-module", "-ffreestanding", "-nostdlib"])
+            .arg(format!("--target={}", target.triple));
+        if !target.march.is_empty() {
+            cmd.arg(format!("-march={}", target.march));
+        }
+        let ok = cmd
+            .args(takt_llvm::toolchain::object_flags(target.triple))
+            .arg(&ll)
+            .arg("-o")
+            .arg(&asm)
+            .status()
+            .is_ok_and(|s| s.success());
+        assert!(ok, "{}: clang schlug fehl", target.name);
+        let text = std::fs::read_to_string(&asm).expect("Assembler lesbar");
+        assert!(text.contains(software), "{}: die Arithmetik laeuft nicht in Software:\n{text}", target.name);
+        for compare in forbidden {
+            assert!(!text.contains(compare), "{}: eine Pruefung ruft `{compare}`:\n{text}", target.name);
+        }
     }
 }
 
-/// 11.3: Reproduzierbare Builds.
-///
-/// Geprueft wird der *Inhalt* der Objektdatei, nicht ihr Kopf: Das
-/// COFF-Format traegt an Byte 4 bis 7 einen Zeitstempel, den clang setzt
-/// und nicht der Codegen. 11.3 verlangt „keine Zeitstempel oder Pfade im
-/// Binary" vom Compiler; den Stempel des Assemblers schaltet erst der
-/// Linkschritt ab (`/Brepro`), und er gehoert nicht zu dem, was hier zu
-/// belegen ist.
-///
-/// Was hier zu belegen ist: Aus derselben IR entsteht derselbe Code.
+/// 11.3: Reproduzierbare Builds — aus derselben IR entsteht dasselbe
+/// Objekt, Byte fuer Byte. Das COFF-Format traegt an Byte 4 bis 7 einen
+/// Zeitstempel; `Clang::deterministic` schaltet ihn ab (FB-165), und
+/// genau das wird hier verlangt statt maskiert.
 #[test]
 fn the_same_ir_produces_the_same_code() {
     let clang = clang_or_skip!();
@@ -252,19 +291,23 @@ fn the_same_ir_produces_the_same_code() {
         clang.assembles(&ir, &dir.0).unwrap_or_else(|e| panic!("{e}"));
         objekte.push(std::fs::read(dir.0.join("modul.o")).expect("Objektdatei lesbar"));
     }
-    assert_eq!(objekte[0].len(), objekte[1].len(), "verschiedene Groesse");
-    // Byte 4 bis 7: Zeitstempel des COFF-Kopfes.
-    let ohne_stempel = |o: &[u8]| {
-        let mut v = o.to_vec();
-        v[4..8].fill(0);
-        v
-    };
-    assert_eq!(ohne_stempel(&objekte[0]), ohne_stempel(&objekte[1]), "zwei Laeufe, zwei verschiedene Objektdateien");
+    if cfg!(windows) {
+        assert_eq!(objekte[0][4..8], [0, 0, 0, 0], "der COFF-Kopf traegt einen Zeitstempel");
+    }
+    assert!(objekte[0] == objekte[1], "zwei Laeufe, zwei verschiedene Objektdateien");
 }
 
 /// Und die IR selbst traegt ueberhaupt keinen Zeitstempel — das ist die
-/// Zusage, die 11.3 dem Compiler macht.
+/// Zusage, die 11.3 dem Compiler macht: zweimal dieselbe MIR durch
+/// `lower::program`, zweimal derselbe Text.
 #[test]
 fn the_generated_ir_is_byte_identical_across_runs() {
-    assert_eq!(every_float_instruction(), every_float_instruction());
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/23_patterns.takt"))
+        .expect("lesbar");
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let ir = || {
+        let p = takt_sema::compile(&src, &options).program.expect("Programm");
+        takt_llvm::lower::program(&p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default()).ir
+    };
+    assert_eq!(ir(), ir());
 }

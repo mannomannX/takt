@@ -21,7 +21,7 @@ use crate::expr::{Accessor, BinaryOp, Builtin, CheckedKind, ConvertKind, Expr, E
 use crate::expr::{MatchKind, TProp, TemporalOp, UnaryOp};
 use crate::fns::FnParam;
 use crate::machine::{Guard, Handler, Machine, MachineKind, SeqItem, State, Target, TransTrigger, Transition};
-use crate::program::{Direction, Program};
+use crate::program::{Direction, Framing, Meta, Program};
 use crate::stmt::{ArmPattern, Block, CheckKind, Place, StmtKind};
 use crate::types::{HandleKind, Type};
 use crate::{TypeId, visit};
@@ -182,6 +182,22 @@ with_all! {
         Campaign,
         /// Ein Knoten (v2).
         Node,
+        /// `framing = raw` eines Stroms (8.6).
+        FramingRaw,
+        /// `framing = lines`.
+        FramingLines,
+        /// `framing = cobs`.
+        FramingCobs,
+        /// `framing = length_prefixed(…)`.
+        FramingLengthPrefixed,
+        /// `framing = fixed(n)`.
+        FramingFixed,
+        /// Das Metadatum `label` (2.5).
+        Label,
+        /// Das Metadatum `display = U` (2.5).
+        Display,
+        /// Das Metadatum `group` (2.5).
+        Group,
     }
 }
 
@@ -352,6 +368,16 @@ pub fn census(p: &Program) -> BTreeSet<Construct> {
     }
     for ch in channels {
         c.ty(ch.ty);
+        c.meta(&ch.meta);
+        if let Some(framing) = ch.attrs.framing {
+            c.feature(match framing {
+                Framing::Raw => Feature::FramingRaw,
+                Framing::Lines => Feature::FramingLines,
+                Framing::Cobs => Feature::FramingCobs,
+                Framing::LengthPrefixed(_) => Feature::FramingLengthPrefixed,
+                Framing::Fixed(_) => Feature::FramingFixed,
+            });
+        }
         if matches!(types.get(ch.ty), Type::Stream(_)) {
             c.feature(match ch.dir {
                 Direction::Input => Feature::InputStream,
@@ -365,6 +391,7 @@ pub fn census(p: &Program) -> BTreeSet<Construct> {
     }
     for prm in params {
         c.feature(if prm.tunable { Feature::Tunable } else { Feature::Param });
+        c.meta(&prm.meta);
         c.ty(prm.ty);
         c.expr(&prm.default);
     }
@@ -374,6 +401,9 @@ pub fn census(p: &Program) -> BTreeSet<Construct> {
             c.feature(Feature::Monitor);
         }
         c.prop(&prop.formula);
+    }
+    for cmd in commands {
+        c.meta(&cmd.meta);
     }
     for t in triggers {
         c.feature(Feature::Trigger);
@@ -407,6 +437,21 @@ impl Census<'_> {
         self.out.insert(Construct::Feature(f));
     }
 
+    /// Die Metadaten (2.5); `doc` ist Kommentar und keine Konstruktion.
+    fn meta(&mut self, m: &Meta) {
+        let Meta { label, display, group, doc: _ } = m;
+        let present = [
+            (label.is_some(), Feature::Label),
+            (display.is_some(), Feature::Display),
+            (group.is_some(), Feature::Group),
+        ];
+        for (on, f) in present {
+            if on {
+                self.feature(f);
+            }
+        }
+    }
+
     fn params(&mut self, params: &[FnParam]) {
         for prm in params {
             self.ty(prm.ty);
@@ -438,9 +483,10 @@ impl Census<'_> {
             layout: _,
             budget: _,
             declared_budget: _,
-            meta: _,
+            meta,
             span: _,
         } = m;
+        self.meta(meta);
         let flags = [
             (*period > 1, Feature::Multirate),
             (*phase > 0, Feature::Phase),
@@ -499,9 +545,10 @@ impl Census<'_> {
             sequence_ticks: _,
             instances,
             step_name: _,
-            meta: _,
+            meta,
             span: _,
         } = s;
+        self.meta(meta);
         let flags = [
             (!children.is_empty(), Feature::ChildStates),
             (*idle, Feature::Idle),

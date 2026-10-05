@@ -112,9 +112,7 @@ static LAST_STAMP: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
 /// ein Fehler und kein Runden).
 pub fn init(systimer: SYSTIMER<'static>, tick_ns: i64) -> Result<SystimerTick, InitError> {
     let counts = takt_board_support::counts_for(TIMER_HZ, tick_ns).map_err(InitError::Period)?;
-    if tick_ns % 1_000 != 0 {
-        return Err(InitError::SubMicrosecond);
-    }
+    let micros = takt_board_support::whole_micros(tick_ns).ok_or(InitError::SubMicrosecond)?;
     cycles::enable();
     tick::set_counts_per_tick(counts);
     let alarm = SystemTimer::new(systimer).alarm0;
@@ -124,7 +122,7 @@ pub fn init(systimer: SYSTIMER<'static>, tick_ns: i64) -> Result<SystimerTick, I
     // ihrem Alarm liegt.
     tick::set_origin(SystemTimer::unit_value(Unit::Unit0));
     alarm
-        .load_value(Duration::from_micros((tick_ns / 1_000).unsigned_abs()))
+        .load_value(Duration::from_micros(micros))
         .map_err(|_| InitError::Period(takt_board_support::PeriodError::TooLong))?;
     alarm.enable_interrupt(true);
     alarm.start();

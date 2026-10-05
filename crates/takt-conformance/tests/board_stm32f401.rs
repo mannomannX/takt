@@ -16,7 +16,7 @@ use common::board::{
     long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
-use takt_conformance::board::{self, Board, CORPUS, Options};
+use takt_conformance::board::{self, Board, Options};
 
 /// Was der F401 nicht fasst: `45_journal_cut` haelt ein Flash-Modell mit
 /// zwei Sektoren im RAM, und `.bss` laeuft um gut 47 KiB ueber die 64 KiB
@@ -148,7 +148,7 @@ fn the_board_agrees_with_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     // `TAKT_F401_ONLY=42_map.takt` fuer einen einzelnen Fall.
     let only = std::env::var("TAKT_F401_ONLY").ok();
-    let names: Vec<&str> = CORPUS.iter().copied().filter(|n| !TOO_BIG.contains(n)).collect();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n)).collect();
     let failed = agreement(&mut board, &names, only.as_deref());
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
@@ -163,7 +163,7 @@ fn the_board_agrees_with_the_interpreter() {
 fn the_board_agrees_with_the_interpreter_under_rtos() {
     let Some((mut board, _guard)) = board() else { return };
     let only = std::env::var("TAKT_F401_ONLY").ok();
-    let names: Vec<&str> = CORPUS.iter().copied().filter(|n| !TOO_BIG.contains(n)).collect();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n)).collect();
     let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).under_rtos());
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }

@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 42 (3.11): Der Lint warnt schon, wenn eine Seite ueber 16 liegt;
+# eine Obergrenze als Fehler gibt es nicht (Pruefung 30).
+
+output n : float @ hw("o/n") with safe = 0
+
+machine m:
+    var tall : mat<17, 1> = default   # ~ SC-42
+    var wide : mat<1, 17> = default   # ~ SC-42
+    var huge : mat<40, 40> = default  # ~ SC-42
+    initial RUN
+    state RUN:
+        loop:
+            n = tall[0, 0] + wide[0, 0] + huge[0, 0]

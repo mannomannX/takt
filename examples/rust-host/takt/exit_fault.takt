@@ -1,0 +1,39 @@
+# Der Austritt einer gescopten Instanz (5.11, KON2-024): Verlaesst der
+# Besitzer den Zustand ueber einen Fault-Uebergang, laufen die `exit:`-
+# Bloecke der Instanz nicht, bei einem gewoehnlichen Uebergang schon. Bei
+# `n = 5` scheitert der Check, bei `n = 9` geht es regulaer nach SAFE.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+output a : bool          @ sim("o/a") with safe = false
+output k : int in 0..999 @ sim("o/k")
+
+machine blip(o: output bool) every 1 ms:
+    initial LOW
+
+    state LOW:
+        enter:
+            o = true
+
+        exit:
+            log "instanz verlassen"
+
+machine ctrl:
+    var n : int in 0..999 = 0
+
+    initial RUN
+
+    state RUN:
+        instance p = blip(o = a)
+
+        loop:
+            n = (n + 1) % 1000
+            k = n
+            check n != 5 -> SAFE
+
+        when n == 9: -> SAFE
+
+    state SAFE:
+        after 3 ms: -> RUN

@@ -1,0 +1,5 @@
+match classify(ev):
+    case ERASE(s): measure erase_sector = s
+    case WRITE(a, n): measure write_addr = a
+    case BOOT(v): verify v >= 3, "bootloader too old: {v}"
+    case OTHER: pass

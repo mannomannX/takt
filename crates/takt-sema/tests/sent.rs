@@ -77,3 +77,79 @@ machine m:
     .expect_err("Fehler erwartet");
     assert!(e.join("\n").contains("nur an einem Ausgabestrom"), "{e:?}");
 }
+
+/// Ein Ausgabestrom mit 4 Byte Puffer, den der Treiber mit einem Byte je
+/// Tick leert; jedes `go` sendet drei Byte. `overflow` setzt `policy`.
+fn overflowing(policy: &str) -> Program {
+    compile(&format!(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+output tx   : stream<u8> @ hw(\"uart0/tx\") with max_rate = 100 Hz, capacity = 4{policy}
+output busy : bool       @ hw(\"o/busy\")   with safe = false
+
+command go
+
+machine dut:
+    fault -> SAFE
+    var msg : bytes<3> = default
+    initial RUN
+    state RUN:
+        enter:
+            msg.push(0x61)
+            msg.push(0x62)
+            msg.push(0x63)
+        loop:
+            busy = true
+            if go:
+                send tx, msg
+    state SAFE:
+        enter:
+            busy = false
+"
+    ))
+    .expect("uebersetzt")
+}
+
+/// 8.8: Zur Laufzeit ist `send` mit `len > tx.free` ein `StreamOverflow`.
+/// Tick 1 legt drei Byte ab, bis Tick 2 holt der Treiber eines: zwei frei,
+/// drei verlangt.
+#[test]
+fn a_send_beyond_the_free_space_is_a_stream_overflow() {
+    let p = overflowing("");
+    let stimulus = Trace::parse("t=1 cmd go\nt=2 cmd go\n").expect("Stimulus");
+    let t = run(&p, &stimulus, &RunOptions { ticks: 4, ..Default::default() }).expect("Lauf").trace.render();
+    assert!(t.contains("t=2 fault dut StreamOverflow \"Sendepuffer `tx` hat 2 Byte frei, 3 verlangt\" -> SAFE"), "{t}");
+}
+
+/// 8.8: Mit `overflow = drop` ist es ein Alert statt eines Faults; er ist
+/// aktiv im Tick des Verwurfs und faellt beim naechsten gelungenen `send`.
+#[test]
+fn a_dropped_send_raises_an_alert_until_the_next_send_succeeds() {
+    let p = overflowing(", overflow = drop");
+    let stimulus = Trace::parse("t=1 cmd go\nt=2 cmd go\nt=6 cmd go\n").expect("Stimulus");
+    let t = run(&p, &stimulus, &RunOptions { ticks: 8, ..Default::default() }).expect("Lauf").trace.render();
+    let alerts: Vec<&str> = t.lines().filter(|l| l.contains(" alert dut ")).collect();
+    assert_eq!(
+        alerts,
+        ["t=2 alert dut on \"Sendepuffer `tx` voll, 3 Byte verworfen\"", "t=6 alert dut off \"Sendepuffer `tx`\""],
+        "{t}"
+    );
+    assert!(!t.contains("fault"), "{t}");
+}
+
+/// 8.8: Ohne `max_rate` ist die Hoechstlaenge von `sent` die Kapazitaet,
+/// und der Treiber holt alles in einem Tick.
+#[test]
+fn sent_without_max_rate_carries_the_whole_capacity() {
+    let src = PROGRAM
+        .replace("with max_rate = 100 Hz, capacity = 16", "with capacity = 16")
+        .replace("    var last : bytes<1>? = none", "    var last : bytes<16>? = none");
+    let p = compile(&src).expect("uebersetzt");
+    let stimulus = Trace::parse("t=1 cmd go\n").expect("Stimulus");
+    let t = run(&p, &stimulus, &RunOptions { ticks: 4, ..Default::default() }).expect("Lauf").trace.render();
+    for line in ["t=2 out got 3", "t=2 out any true", "t=3 out any false"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+}

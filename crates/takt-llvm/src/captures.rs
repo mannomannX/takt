@@ -156,6 +156,97 @@ pub fn walk(
     Ok((ok, at))
 }
 
+/// `has P` (8.7): Das Muster darf an jedem Zeichenanfang und am Ende
+/// beginnen; es gilt die frueheste Stelle, an der der Durchlauf gelingt.
+/// `cap` ist die Kapazitaet der Zeile.
+///
+/// **Linear (FB-351).** Kann ein Ansatz bis zum Zeilenende lesen, sucht
+/// der Durchlaufautomat des Musters die Fundstelle in einem Lauf ueber die
+/// Zeile (`scan`); die Werte holt danach ein einziger Durchlauf ab dort,
+/// und nur, wenn es Werte gibt. Jedes andere Muster setzt den Durchlauf an
+/// jeder Stelle neu an und liest je Ansatz hoechstens seine Reichweite
+/// (`Scan::for_has`).
+pub fn has(
+    pieces: &[PatternPiece],
+    text: Reg,
+    cap: u32,
+    into: Option<&Target<'_>>,
+    m: &mut Module,
+) -> Result<Reg, NotYet> {
+    let Some(scan) = takt_mir::scan::Scan::for_has(pieces, cap) else {
+        return has_from_every_start(pieces, text, into, m);
+    };
+    let start = crate::scan::first(&scan, text, m);
+    let found = m.inst(&format!("icmp sge i32 {start}, 0"));
+    if into.is_none() || !takt_mir::dfa::extracts(pieces) {
+        return Ok(found);
+    }
+    let k = m.next_label();
+    let (values, done) = (format!("has{k}_werte"), format!("has{k}_fertig"));
+    let from = m.block().to_string();
+    m.void_inst(&format!("br i1 {found}, label %{values}, label %{done}"));
+    m.label(&values);
+    let (ok, _) = walk(pieces, text, into, start, m)?;
+    let walked = m.block().to_string();
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    Ok(m.inst(&format!("phi i1 [ false, %{from} ], [ {ok}, %{walked} ]")))
+}
+
+/// `has` mit dem Durchlauf ab jeder Stelle, fuer ein Muster ohne Automaten.
+/// Ein Ansatz beginnt an einem Zeichenanfang, wie im Interpreter: Ein
+/// `str<N>` vorn faende im Zeichen sonst einen frueheren Start, dessen
+/// Spanne um die Bytes davor kuerzer ist.
+fn has_from_every_start(
+    pieces: &[PatternPiece],
+    text: Reg,
+    into: Option<&Target<'_>>,
+    m: &mut Module,
+) -> Result<Reg, NotYet> {
+    let k = m.next_label();
+    let (head, body, done) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
+    let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
+    let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+    let start_ptr = m.alloca("i32");
+    m.void_inst(&format!("store i32 0, ptr {start_ptr}"));
+    let hit_ptr = m.alloca("i1");
+    m.void_inst(&format!("store i1 false, ptr {hit_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+
+    m.label(&head);
+    let start = m.inst(&format!("load i32, ptr {start_ptr}"));
+    // Auch hinter dem letzten Zeichen wird geprueft: Ein leeres Muster
+    // passt am Ende (8.7).
+    let in_text = m.inst(&format!("icmp sle i32 {start}, {len}"));
+    let bisher = m.inst(&format!("load i1, ptr {hit_ptr}"));
+    let open_still = m.inst(&format!("xor i1 {bisher}, true"));
+    let searching = m.inst(&format!("and i1 {in_text}, {open_still}"));
+    m.void_inst(&format!("br i1 {searching}, label %{body}, label %{done}"));
+
+    m.label(&body);
+    let (probe, attempt, next) = (format!("has{k}_zeichen"), format!("has{k}_ansatz"), format!("has{k}_weiter"));
+    let at_end = m.inst(&format!("icmp eq i32 {start}, {len}"));
+    m.void_inst(&format!("br i1 {at_end}, label %{attempt}, label %{probe}"));
+    m.label(&probe);
+    let bytes = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 4"));
+    let byte_p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {start}"));
+    let byte = m.inst(&format!("load i8, ptr {byte_p}"));
+    let high = m.inst(&format!("and i8 {byte}, -64"));
+    let inside = m.inst(&format!("icmp eq i8 {high}, -128"));
+    m.void_inst(&format!("br i1 {inside}, label %{next}, label %{attempt}"));
+    m.label(&attempt);
+    let (ok, _) = walk(pieces, text, into, start, m)?;
+    m.void_inst(&format!("store i1 {ok}, ptr {hit_ptr}"));
+    m.void_inst(&format!("br label %{next}"));
+    m.label(&next);
+    let next_i = m.inst(&format!("add i32 {start}, 1"));
+    m.void_inst(&format!("store i32 {next_i}, ptr {start_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+
+    m.label(&done);
+    Ok(m.inst(&format!("load i1, ptr {hit_ptr}")))
+}
+
 /// Ein Literal: Es muss Byte fuer Byte stehen (8.7).
 ///
 /// Die Laenge ist zur Uebersetzungszeit bekannt, also wird der Vergleich
@@ -238,10 +329,13 @@ impl Class {
     }
 }
 
-/// Das laengste Praefix aus Zeichen einer Klasse, hoechstens `max`.
+/// Der Lauf aus Zeichen einer Klasse (8.7): Er endet am ersten Zeichen
+/// ausserhalb oder am Textende.
 ///
-/// Ein leeres Praefix ist kein Treffer: Jede Klasse verlangt mindestens
-/// ein Zeichen (8.7, `{1,…}`).
+/// Ein leerer Lauf ist kein Treffer — jede Klasse verlangt mindestens ein
+/// Zeichen (`{1,…}`) —, ein Lauf ueber `max` Zeichen auch: Das Muster
+/// bindet nie nur den Anfang einer Zahl oder eines Worts (SYN-039). Darum
+/// liest die Schleife hoechstens `max + 1` Zeichen.
 fn bounded(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, class_of: Class, max: u32, m: &mut Module) {
     let k = m.next_label();
     let (head, body, done) = (format!("kl{k}"), format!("kl{k}_rumpf"), format!("kl{k}_fertig"));
@@ -252,7 +346,7 @@ fn bounded(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, class_of: Class, max:
     let at = m.inst(&format!("load i32, ptr {at_ptr}"));
     let in_text = m.inst(&format!("icmp slt i32 {at}, {len}"));
     let taken = m.inst(&format!("sub i32 {at}, {start}"));
-    let under_max = m.inst(&format!("icmp slt i32 {taken}, {max}"));
+    let under_max = m.inst(&format!("icmp sle i32 {taken}, {max}"));
     let may_take = m.inst(&format!("and i1 {in_text}, {under_max}"));
     m.void_inst(&format!("br i1 {may_take}, label %{body}, label %{done}"));
 
@@ -269,8 +363,11 @@ fn bounded(bytes: Reg, len: Reg, at_ptr: Reg, ok_ptr: Reg, class_of: Class, max:
     let end_at = m.inst(&format!("load i32, ptr {at_ptr}"));
     let empty = m.inst(&format!("icmp eq i32 {end_at}, {start}"));
     let has_any = m.inst(&format!("xor i1 {empty}, true"));
+    let run = m.inst(&format!("sub i32 {end_at}, {start}"));
+    let within = m.inst(&format!("icmp sle i32 {run}, {max}"));
+    let fits = m.inst(&format!("and i1 {has_any}, {within}"));
     let old = m.inst(&format!("load i1, ptr {ok_ptr}"));
-    let new_ok = m.inst(&format!("and i1 {old}, {has_any}"));
+    let new_ok = m.inst(&format!("and i1 {old}, {fits}"));
     m.void_inst(&format!("store i1 {new_ok}, ptr {ok_ptr}"));
 }
 

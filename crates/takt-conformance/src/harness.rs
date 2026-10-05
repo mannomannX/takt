@@ -106,6 +106,20 @@ pub fn build_with(p: &Program, machine: &str, ticks: u64, inputs: &[Stimulus]) -
     build_inner(p, Some(machine), None, ticks, inputs, &[], false)
 }
 
+/// Das Programm mit den Parameterwerten des Profils `name` (8.4): Defaults,
+/// dann das Profil, wie `eval_params` im Interpreter. Der Rahmen setzt den
+/// Parametervektor aus den Defaults; ohne diesen Schritt liefe ein Szenario
+/// mit Profil nativ mit anderen Parametern als im Interpreter. `None`, wenn
+/// es das Profil nicht gibt.
+pub fn with_profile(p: &Program, name: &str) -> Option<Program> {
+    let profile = p.profiles.iter().find(|x| x.name == name)?;
+    let mut out = p.clone();
+    for (id, value) in &profile.assignments {
+        out.params[id.index()].default = value.clone();
+    }
+    Some(out)
+}
+
 /// Der gemeinsame Rumpf: `Some(name)` tickt eine Maschine, `None` alle —
 /// mit `scenario` dazu das gewaehlte Szenario (13.6).
 fn build_inner(
@@ -264,6 +278,11 @@ fn build_inner(
     takt_frame::edge::emit(&mut t, p, &layout, &driven, most, takt_frame::streams::Trace::Stdio, x);
     t.code.push_str(&feed);
 
+    // 8.4: der Einstieg fuer Tunables, derselbe wie im Produktrahmen.
+    if inputs.iter().any(|s| matches!(s, Stimulus::Tune { .. })) {
+        takt_frame::parts::tune(&mut t.code, p, &layout, x);
+    }
+
     let _ = writeln!(t.code, "int main(void) {{");
     let _ = writeln!(t.code, "    struct {x}_arena *const a = &g_arena;");
     let _ = writeln!(t.code, "    TAKT_IEEE_MODE();");
@@ -346,17 +365,21 @@ fn build_inner(
     // 5.4: Operator-Abort und Runtime-Faults von aussen werden vorgemerkt,
     // wie `apply_stimulus` im Interpreter.
     pended(&mut t.code, p, inputs, "        ");
-    // 8.4: Ein Tunable gilt ab seiner Tick-Grenze; der Rahmen schreibt den
-    // Parametervektor vor dem Schritt, wie `apply_stimulus` im Interpreter.
+    // 8.4: Ein Tunable gilt ab seiner Tick-Grenze; der Rahmen gibt ihn vor
+    // dem Schritt an `takt_tune`, wie die Schleife des Produktrahmens
+    // (`Runtime::service_with`), und `takt_tune` prueft Typ und Range wie
+    // `apply_stimulus` im Interpreter.
     for stim in inputs {
         let Stimulus::Tune { tick, name, text } = stim else { continue };
-        let Some((i, slot)) = layout.parameters.iter().enumerate().find(|(_, s)| s.name == *name) else { continue };
-        let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let Some(value) = tune_literal(p, i, text) else { continue };
+        let Some(i) = p.params.iter().position(|q| q.name == *name) else { continue };
+        let Some(bytes) = tune_bytes(p, i, text) else { continue };
+        let list: Vec<String> = bytes.iter().map(u8::to_string).collect();
         let _ = writeln!(
             t.code,
-            "        if (a->tick == {tick}) *({ct} *)(a->params + {}) = {value}; /* tune {name} */",
-            slot.offset
+            "        if (a->tick == {tick}) {{ static const unsigned char v[] = {{ {} }}; \
+             (void)takt_tune(a, {i}u, v, {}); }} /* tune {name} */",
+            list.join(", "),
+            bytes.len()
         );
     }
     steps(&mut t.code, p, &layout, &driven, "        ", "a->tick", x);
@@ -393,6 +416,9 @@ fn build_inner(
         }
         let _ = writeln!(t.code, "    printf(\"\\n\");");
     }
+    // Wie die Boards: Die letzte Zeile nennt, bis wohin der Lauf kam — nach
+    // der Schleife `ticks + 1`, nach dem Ende eines Laufs (12.7) dessen Tick.
+    let _ = writeln!(t.code, "    printf(\"takt end %lld\\n\", a->tick);");
     let _ = writeln!(t.code, "    return 0;");
     let _ = writeln!(t.code, "}}");
 
@@ -557,8 +583,9 @@ fn record_dump(p: &Program, slot: &takt_frame::layout::Slot) -> Option<String> {
 }
 
 /// `printf`-Format und Argumente eines Werts an `at` im Latch: Skalare,
-/// Enums ohne Felder und Records daraus. Eine Dauer schreibt der
-/// Interpreter mit Einheit; sie und alles Uebrige bleiben aussen vor.
+/// Enums ohne Felder, Arrays und Records daraus (ein Padding `_ : [3] u8`
+/// schreibt der Interpreter mit). Eine Dauer schreibt der Interpreter mit
+/// Einheit; sie und alles Uebrige bleiben aussen vor.
 fn field_text(p: &Program, ty: takt_mir::TypeId, llvm: &takt_llvm::ty::LlvmType, at: u64) -> Option<(String, String)> {
     use takt_llvm::ty::LlvmType;
     use takt_mir::types::Type;
@@ -573,6 +600,17 @@ fn field_text(p: &Program, ty: takt_mir::TypeId, llvm: &takt_llvm::ty::LlvmType,
                 args.push_str(&fa);
             }
             fmt.push(')');
+            Some((fmt, args))
+        }
+        (Type::Array { elem, len }, LlvmType::Array(inner, n)) if n == len => {
+            let (mut fmt, mut args) = ("[".to_string(), String::new());
+            for i in 0..u64::from(*n) {
+                let (ff, fa) = field_text(p, *elem, inner, at + i * inner.aligned_size())?;
+                fmt.push_str(if i > 0 { ", " } else { "" });
+                fmt.push_str(&ff);
+                args.push_str(&fa);
+            }
+            fmt.push(']');
             Some((fmt, args))
         }
         (Type::Bool, LlvmType::Int(1)) => {
@@ -613,32 +651,39 @@ fn field_text(p: &Program, ty: takt_mir::TypeId, llvm: &takt_llvm::ty::LlvmType,
 /// Bau nicht auf die Sperre eines laufenden `cargo` wartet.
 pub fn native_library() -> Result<std::path::PathBuf, String> {
     static LIB: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
-    LIB.get_or_init(|| {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let out = std::process::Command::new("cargo")
-            .args(["rustc", "--release", "--lib", "--crate-type", "staticlib", "--features", "host,ecdsa,rsa,aes-gcm"])
-            .arg("--message-format=json-render-diagnostics")
-            .arg("--manifest-path")
-            .arg(root.join("crates/takt-native-abi/Cargo.toml"))
-            .arg("--target-dir")
-            .arg(crate::target_dir().join("native-abi"))
-            .output()
-            .map_err(|e| format!("cargo: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).into_owned());
-        }
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter(|l| l.contains("\"reason\":\"compiler-artifact\""))
-            .filter_map(|l| {
-                let rest = &l[l.find("\"filenames\":[\"")? + "\"filenames\":[\"".len()..];
-                Some(rest[..rest.find('"')?].replace("\\\\", "\\"))
-            })
-            .find(|f| f.ends_with(".lib") || f.ends_with(".a"))
-            .map(std::path::PathBuf::from)
-            .ok_or_else(|| "cargo meldete keine statische Bibliothek".to_string())
-    })
-    .clone()
+    LIB.get_or_init(|| native_library_for(None)).clone()
+}
+
+/// Dieselbe Bibliothek fuer ein Ziel (`Some(triple)`, etwa die Boards) oder
+/// den Wirt (`None`), ohne Zwischenspeicher im Prozess.
+pub fn native_library_for(triple: Option<&str>) -> Result<std::path::PathBuf, String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut cargo = std::process::Command::new("cargo");
+    cargo.args(["rustc", "--release", "--lib", "--crate-type", "staticlib", "--features", "host,ecdsa,rsa,aes-gcm"]);
+    if let Some(triple) = triple {
+        cargo.args(["--target", triple]);
+    }
+    let out = cargo
+        .arg("--message-format=json-render-diagnostics")
+        .arg("--manifest-path")
+        .arg(root.join("crates/takt-native-abi/Cargo.toml"))
+        .arg("--target-dir")
+        .arg(crate::target_dir().join("native-abi"))
+        .output()
+        .map_err(|e| format!("cargo: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.contains("\"reason\":\"compiler-artifact\""))
+        .filter_map(|l| {
+            let rest = &l[l.find("\"filenames\":[\"")? + "\"filenames\":[\"".len()..];
+            Some(rest[..rest.find('"')?].replace("\\\\", "\\"))
+        })
+        .find(|f| f.ends_with(".lib") || f.ends_with(".a"))
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| "cargo meldete keine statische Bibliothek".to_string())
 }
 
 /// `printf`-Format und Cast fuer einen Skalar: Fliesskomma mit 17
@@ -681,6 +726,11 @@ fn pended(s: &mut String, p: &Program, inputs: &[Stimulus], indent: &str) {
 /// `maybe_sleep()` nach 9.9 am Ende eines Ticks: Sind alle Maschinen
 /// `idle`, rueckt der Rahmen bis vor die frueheste `after`-Frist, wie
 /// `Runtime::sleep` — `n = d / T0 - 1`, und der Tick an der Frist laeuft.
+/// Dieselbe Annahme wie der Interpreter (`Run::earliest_deadline`, FB-429):
+/// `<m>_deadline` zaehlt die Basis-Ticks ab jetzt bis zu der Aktivierung, an
+/// der die Frist faellt — bei einer Periode ueber einem Tick also bis zu
+/// einem Tick der Maschine —, und `<m>_advance(n)` nimmt die vollen `n`
+/// Basis-Ticks und behaelt den Rest von `n / Periode`.
 /// Die Zeitzeile traegt `slept`, wie auf dem Board; der Vergleich liest
 /// sie nicht. Ausstehende geplante Ausgaben, ein laufender Job und ein
 /// Fault, der hinter einem Abort wartet (`pending`), verbieten den
@@ -739,34 +789,13 @@ fn virtual_sleep(
     let _ = writeln!(s, "        }}");
 }
 
-/// Der Wert einer `tune`-Zeile als C-Text (8.4): ausserhalb der Range
-/// verworfen, wie im Interpreter.
-fn tune_literal(p: &Program, index: usize, text: &str) -> Option<String> {
-    use takt_interp::Value;
-    let param = p.params.get(index)?;
-    let v = takt_interp::trace::parse_value(text, param.ty, p).ok()?;
-    let range = match p.types.get(param.ty) {
-        takt_mir::types::Type::Int { range, .. }
-        | takt_mir::types::Type::Float { range, .. }
-        | takt_mir::types::Type::Duration { range } => *range,
-        _ => None,
-    };
-    if range.is_some_and(|r| !takt_interp::in_range(&v, &r)) {
-        return None;
-    }
-    Some(match v {
-        Value::Int(n) => n.to_string(),
-        Value::UInt(n) => n.to_string(),
-        Value::Bool(b) => u8::from(b).to_string(),
-        Value::Duration(ns) => ns.to_string(),
-        Value::F64(f) => format!("{f:?}"),
-        Value::F32(f) => format!("{f:?}f"),
-        Value::Enum { variant, .. } => {
-            let takt_mir::types::Type::Enum(e) = p.types.get(param.ty) else { return None };
-            p.enums.get(e.index())?.variants.get(variant as usize)?.discriminant.to_string()
-        }
-        _ => return None,
-    })
+/// Der Wert einer `tune`-Zeile in kanonischer Byteform (5.9), wie ihn
+/// `takt_tune` nimmt; `None`, wenn der Text kein Wert des Parametertyps ist.
+/// Die Range prueft `takt_tune` selbst, wie im Produktrahmen.
+fn tune_bytes(p: &Program, index: usize, text: &str) -> Option<Vec<u8>> {
+    let ty = p.params.get(index)?.ty;
+    let v = takt_interp::trace::parse_value(text, ty, p).ok()?;
+    takt_interp::bytes::encode(p, &v, ty).ok()
 }
 
 /// Die Varianten eines Enum-Outputs mit ihren Diskriminanten (3.7).

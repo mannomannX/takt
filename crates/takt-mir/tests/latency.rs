@@ -22,10 +22,15 @@ fn every_site_is_at_least_one_period() {
     }
 }
 
+/// SYN-027: Das Beispielprogramm traegt jede Art von Fault-Stelle — `check`
+/// im `loop:`, `expect` hinter einem `match` und `abort` in `exit:` —, und
+/// die Analyse findet jede.
 #[test]
-fn abort_sites_are_recognised() {
+fn every_site_kind_is_recognised() {
     let p = full_program();
     let l = latency(&p);
     let kinds: Vec<SiteKind> = l.sites.iter().map(|s| s.kind).collect();
-    assert!(kinds.contains(&SiteKind::Check), "checks sind Fault-Stellen: {kinds:?}");
+    for kind in [SiteKind::Check, SiteKind::Expect, SiteKind::Abort] {
+        assert!(kinds.contains(&kind), "{} ist eine Fault-Stelle: {kinds:?}", kind.name());
+    }
 }

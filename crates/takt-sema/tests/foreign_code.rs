@@ -372,3 +372,133 @@ fn casting_an_enum_names_the_way_to_its_discriminant() {
     assert!(e.contains("`as` auf `Cmd`"), "die Ablehnung fehlt:\n{e}");
     assert!(e.contains("layout"), "die Meldung nennt den Weg nicht:\n{e}");
 }
+
+/// Jede Ganzzahlbreite an ihren Grenzen (4.1, 3.1): `lo` und `hi` gehen
+/// durch und stehen unveraendert im Trace, `lo - 1` und `hi + 1` sind genau
+/// ein Fehler.
+#[test]
+fn every_integer_width_takes_its_edges_and_refuses_one_beyond() {
+    for (ty, lo, below, hi, above) in [
+        ("i8", "-128", "-129", "127", "128"),
+        ("i16", "-32768", "-32769", "32767", "32768"),
+        ("i32", "-2147483648", "-2147483649", "2147483647", "2147483648"),
+        ("int", "-9223372036854775808", "-9223372036854775809", "9223372036854775807", "9223372036854775808"),
+        ("u8", "0", "-1", "255", "256"),
+        ("u16", "0", "-1", "65535", "65536"),
+        ("u32", "0", "-1", "4294967295", "4294967296"),
+        ("u64", "0", "-1", "18446744073709551615", "18446744073709551616"),
+    ] {
+        for value in [lo, hi] {
+            let trace = simulate(
+                &format!(
+                    "output y : {ty} @ sim(\"o\")\n\nmachine m:\n    initial A\n    state A:\n        loop:\n            \
+                     y = {value}\n"
+                ),
+                1,
+            );
+            assert!(trace.contains(&format!("t=0 out y {value}\n")), "{ty} = {value}:\n{trace}");
+        }
+        for value in [below, above] {
+            let e = errors(&format!("fn f() -> {ty}:\n    var x : {ty} = {value}\n    return x\n"));
+            assert_eq!(e.lines().count(), 1, "{ty} = {value}: genau eine Meldung:\n{e}");
+            assert!(e.contains("[SC-3]"), "{ty} = {value}:\n{e}");
+        }
+    }
+}
+
+/// Die Methoden des `stopwatch` aendern seinen Zustand (11.4): `start`
+/// laesst `step` zaehlen, `stop` haelt die Zeit an.
+#[test]
+fn start_and_stop_drive_the_stopwatch() {
+    let trace = driven(
+        "\
+output y : Duration @ sim(\"o\")
+command halt
+
+machine m:
+    var sw = stopwatch()
+    initial A
+    state A:
+        enter:
+            sw.start()
+        loop:
+            y = sw.step(tick)
+        when halt:
+            sw.stop()
+            -> B
+    state B:
+        loop:
+            y = sw.step(tick)
+",
+        "t=3 cmd halt\n",
+        6,
+    );
+    for line in ["t=0 out y 1 ms\n", "t=3 out y 4 ms\n"] {
+        assert!(trace.contains(line), "`{line}` fehlt:\n{trace}");
+    }
+    assert!(!trace.contains("out y 5 ms"), "nach `stop` steht die Zeit:\n{trace}");
+}
+
+#[test]
+fn an_unknown_block_method_is_an_error() {
+    let e = errors(&STOPWATCH.replace("            sw.stop()\n", "            sw.reset2()\n"));
+    assert_eq!(e.lines().count(), 1, "{e}");
+    assert!(e.contains("reset2"), "{e}");
+}
+
+/// `pulse` in der Sequenz setzt den Output und stellt ihn nach der Dauer
+/// zurueck (7.5): `e` ist von Tick 0 bis 4 wahr, ab Tick 5 wieder falsch.
+#[test]
+fn pulse_in_a_sequence_sets_and_restores_its_output() {
+    let trace = simulate(
+        "\
+output e : bool @ hw(\"gpio/e\") with safe = false
+
+machine m every 1 ms:
+    initial A
+    state A:
+        sequence:
+            pulse e = true for 5 ms
+            wait 20 ms
+            -> A
+",
+        8,
+    );
+    assert!(trace.contains("t=0 out e true\n"), "{trace}");
+    assert!(trace.contains("t=5 out e false\n"), "die Wiederherstellung fehlt:\n{trace}");
+}
+
+/// Ein vorwaerts gelesenes Signal traegt den Wert seines Schreibers: mit
+/// Unit-Delay ab Tick 1 wahr.
+#[test]
+fn a_forward_read_signal_carries_its_value() {
+    let trace = simulate(
+        "\
+output y : bool @ sim(\"o\")
+
+machine a every 1 ms:
+    initial A
+    state A:
+        loop:
+            y = b.ready
+        after 1 s: -> A
+
+machine b every 1 ms:
+    signal ready
+    initial B
+    state B:
+        loop:
+            raise ready
+        after 1 s: -> B
+",
+        3,
+    );
+    assert!(trace.contains("t=0 out y false\n") && trace.contains("t=1 out y true\n"), "{trace}");
+}
+
+/// Laeuft ein Programm mit Stimulus und liefert den Trace.
+fn driven(body: &str, stimulus: &str, ticks: u64) -> String {
+    let program = compile(body);
+    let stimulus = Trace::parse(stimulus).expect("Stimulus");
+    run(&program, &stimulus, &RunOptions { ticks, ..Default::default() }).expect("Lauf").trace.render()
+}

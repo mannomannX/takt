@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 3 (3.4): Ein Literal ausserhalb der Range seines Ziels ist ein
+# Fehler, wo immer es steht — Default, Profilwert, Initialisierer —, fuer
+# Ganzzahlen mit und ohne Einheit wie fuer Fliesskomma.
+
+param LIMIT : float[bar] in 0..10 bar = 11 bar  # ~ SC-3
+param STEP  : int in 1..5 = 1
+
+profile FAST:
+    STEP = 6  # ~ SC-3
+
+output o : int in 0..9 @ hw("o/o") with safe = 0
+
+machine m:
+    var n : int in 0..9 = 10               # ~ SC-3
+    var u : int[mV] in 0..100 mV = 200 mV  # ~ SC-3
+    var x : float in -1.0..1.0 = 1.5       # ~ SC-3
+    initial RUN
+    state RUN:
+        loop:
+            o = n

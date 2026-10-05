@@ -11,17 +11,16 @@
 # =============================================================================
 
 system:
-    language        = 1
-    tick            = 1 ms          # 1 ms Basis-Tick: Paketrate 44 Hz (22,7 ms) und
-                                    # RDM-Antwortfenster (min 176 us, max 2 ms) liegen
-                                    # oberhalb bzw. werden per at/pulse (7.5) getroffen.
-    float           = f32           # Zielklasse "32-Bit mit f32-FPU" (12.8, Lint 41)
-    target          = baremetal     # 12.8
-    output_timing   = asap          # Latenz vor Jitter: Dimmerwerte sofort (1.4)
-    tick_source     = hw("tim2/update")
-    tick_tolerance  = 2 pct for 10 ticks
-    fault_is_fail   = true
-
+    language = 1
+    tick     = 1 ms  # 1 ms Basis-Tick: Paketrate 44 Hz (22,7 ms) und
+    # RDM-Antwortfenster (min 176 us, max 2 ms) liegen
+    # oberhalb bzw. werden per at/pulse (7.5) getroffen.
+    float          = f32        # Zielklasse "32-Bit mit f32-FPU" (12.8, Lint 41)
+    target         = baremetal  # 12.8
+    output_timing  = asap       # Latenz vor Jitter: Dimmerwerte sofort (1.4)
+    tick_source    = hw("tim2/update")
+    tick_tolerance = 2 pct for 10 ticks
+    fault_is_fail  = true
 
 # =============================================================================
 # 1. Einheiten
@@ -29,38 +28,37 @@ system:
 
 # Slots sind Zaehlgroessen mit eigener Dimension: die Verwechslung von
 # Slot-Nummer und Byte-Offset im Frame ist damit ein Typfehler (3.2).
-unit slot   = 1
-unit pid_u  = 1                     # Parameter-ID-Raum, dimensionslos gezaehlt
+unit slot  = 1
+unit pid_u = 1  # Parameter-ID-Raum, dimensionslos gezaehlt
 
 # DMX-Pegel als eigene Einheit, damit 8-Bit-Rohwert und normierter Pegel
 # nicht vermischt werden (Einheiten auf Integern, 3.2, v1.1).
-unit lvl    = 1                     # 0..255 Rohpegel
-unit permil = 0.001                 # normierter Pegel, dimensionslos
-
+unit lvl    = 1      # 0..255 Rohpegel
+unit permil = 0.001  # normierter Pegel, dimensionslos
 
 # =============================================================================
 # 2. Protokollkonstanten (ANSI E1.11 / E1.20)
 # =============================================================================
 
-const SC_NULL            : u8 = 0x00           # DMX512 NULL Start Code
-const SC_RDM             : u8 = 0xCC           # RDM Start Code (E1.20 6.2.1)
-const RDM_SUB_START_CODE : u8 = 0x01           # E1.20 Table 6-1
+const SC_NULL            : u8 = 0x00  # DMX512 NULL Start Code
+const SC_RDM             : u8 = 0xCC  # RDM Start Code (E1.20 6.2.1)
+const RDM_SUB_START_CODE : u8 = 0x01  # E1.20 Table 6-1
 
-const DMX_SLOTS          : int = 512
+const DMX_SLOTS : int = 512
 
 # RDM Command Classes (E1.20 Table 6-2)
-const CC_DISCOVERY       : u8 = 0x10
-const CC_DISCOVERY_RESP  : u8 = 0x11
-const CC_GET             : u8 = 0x20
-const CC_GET_RESP        : u8 = 0x21
-const CC_SET             : u8 = 0x30
-const CC_SET_RESP        : u8 = 0x31
+const CC_DISCOVERY      : u8 = 0x10
+const CC_DISCOVERY_RESP : u8 = 0x11
+const CC_GET            : u8 = 0x20
+const CC_GET_RESP       : u8 = 0x21
+const CC_SET            : u8 = 0x30
+const CC_SET_RESP       : u8 = 0x31
 
 # Response Types (E1.20 Table 6-3)
-const RT_ACK             : u8 = 0x00
-const RT_ACK_TIMER       : u8 = 0x01
-const RT_NACK_REASON     : u8 = 0x02
-const RT_ACK_OVERFLOW    : u8 = 0x03
+const RT_ACK          : u8 = 0x00
+const RT_ACK_TIMER    : u8 = 0x01
+const RT_NACK_REASON  : u8 = 0x02
+const RT_ACK_OVERFLOW : u8 = 0x03
 
 # Parameter-IDs (E1.20 Table A-3), die dieser Responder fuehrt
 const PID_DISC_UNIQUE_BRANCH : u16 = 0x0001
@@ -77,22 +75,21 @@ const PID_RECORD_SENSORS     : u16 = 0x0202
 const PID_RESET_DEVICE       : u16 = 0x1001
 
 # NACK Reason Codes (E1.20 Table A-17)
-const NR_UNKNOWN_PID         : u16 = 0x0000
-const NR_FORMAT_ERROR        : u16 = 0x0001
-const NR_HARDWARE_FAULT      : u16 = 0x0002
-const NR_DATA_OUT_OF_RANGE   : u16 = 0x0004
-const NR_BUFFER_FULL         : u16 = 0x0005
-const NR_UNSUPPORTED_CC      : u16 = 0x0007
+const NR_UNKNOWN_PID       : u16 = 0x0000
+const NR_FORMAT_ERROR      : u16 = 0x0001
+const NR_HARDWARE_FAULT    : u16 = 0x0002
+const NR_DATA_OUT_OF_RANGE : u16 = 0x0004
+const NR_BUFFER_FULL       : u16 = 0x0005
+const NR_UNSUPPORTED_CC    : u16 = 0x0007
 
 # Zeiten aus E1.20 Table 3-2 / 3-3 (Responder-Sicht)
-const RESP_DELAY_MIN     : Duration = 176 us   # frueheste Antwort nach Paketende
-const RESP_DELAY_DISC    : Duration = 200 us   # Discovery-Antwort (kein Break!)
-const RESP_TIMEOUT_MAX   : Duration = 2 ms     # spaeteste Antwort
-const DISC_MUTE_HOLD     : Duration = 5 s      # Alter eines Discovery-Kontexts
+const RESP_DELAY_MIN   : Duration = 176 us  # frueheste Antwort nach Paketende
+const RESP_DELAY_DISC  : Duration = 200 us  # Discovery-Antwort (kein Break!)
+const RESP_TIMEOUT_MAX : Duration = 2 ms    # spaeteste Antwort
+const DISC_MUTE_HOLD   : Duration = 5 s     # Alter eines Discovery-Kontexts
 
 # DMX-Ausfallerkennung (E1.11 Anhang: kein gueltiges Paket -> Ausgang halten/aus)
-const DMX_LOSS_TIMEOUT   : Duration = 2500 ms
-
+const DMX_LOSS_TIMEOUT : Duration = 2500 ms
 
 # =============================================================================
 # 3. Drahtformate (3.7 layout)
@@ -107,21 +104,21 @@ record Uid layout big:
 # Vollstaendiger fester Teil bis einschliesslich PDL. Die Nutzlast (PD) liegt
 # als bytes<231> dahinter und wird per reader (3.9) ausgewertet.
 record RdmHeader layout big:
-    start_code      : u8 = 0xCC            # Konstantenfeld: decode prueft (3.7)
-    sub_start_code  : u8 = 0x01
-    message_length  : u8  in 24..255       # Slots bis einschliesslich PD
-    dest_uid        : Uid
-    src_uid         : Uid
-    transaction     : u8
-    port_or_resp    : u8                   # PortID (Req) / ResponseType (Resp)
-    msg_count       : u8
-    sub_device      : u16
-    command_class   : u8
-    parameter_id    : u16
-    pdl             : u8  in 0..231
+    start_code     : u8 = 0xCC  # Konstantenfeld: decode prueft (3.7)
+    sub_start_code : u8 = 0x01
+    message_length : u8 in 24..255  # Slots bis einschliesslich PD
+    dest_uid       : Uid
+    src_uid        : Uid
+    transaction    : u8
+    port_or_resp   : u8  # PortID (Req) / ResponseType (Resp)
+    msg_count      : u8
+    sub_device     : u16
+    command_class  : u8
+    parameter_id   : u16
+    pdl            : u8 in 0..231
 
-const RDM_HEADER_LEN : u32[B] = 24 B       # Table 6-1: Slot 0..23
-const RDM_MAX_PD     : int    = 231
+const RDM_HEADER_LEN : u32[B] = 24 B  # Table 6-1: Slot 0..23
+const RDM_MAX_PD     : int = 231
 
 # --- Discovery-Antwort (E1.20 7.6.4): 7x 0xFE, 0xAA, 12 kodierte Byte, 4 CRC --
 record DiscResponse layout big:
@@ -154,30 +151,29 @@ record SensorValue layout big:
 
 # --- SENSOR_DEFINITION Nutzlast (E1.20 10.7.1, ohne Description-Text) --------
 record SensorDef layout big:
-    sensor_number   : u8
-    sensor_type     : u8
-    sensor_unit     : u8
-    sensor_prefix   : u8
-    range_min       : i16
-    range_max       : i16
-    normal_min      : i16
-    normal_max      : i16
-    recorded_support: u8
+    sensor_number    : u8
+    sensor_type      : u8
+    sensor_unit      : u8
+    sensor_prefix    : u8
+    range_min        : i16
+    range_max        : i16
+    normal_min       : i16
+    normal_max       : i16
+    recorded_support : u8
 
 # --- Eingehendes DMX/RDM-Frame vom Rahmungs-Transducer des Treibers ----------
 # Der Treiber (TCB, 12.6) liefert je Break-zu-Break-Rahmen genau ein Element:
 # Start-Code plus Datenslots, Zeitstempel = Ende des letzten Slots.
 record DmxFrame layout big:
     start_code : u8
-    length     : u16 in 1..513              # Start-Code + Datenslots
+    length     : u16 in 1..513  # Start-Code + Datenslots
     data       : bytes<512> with len = length
 
 # --- Sensorzustand, persistierbar (POD, 5.9) ---------------------------------
 record SensorState:
-    lowest    : i16
-    highest   : i16
-    recorded  : i16
-
+    lowest   : i16
+    highest  : i16
+    recorded : i16
 
 # =============================================================================
 # 4. Enums
@@ -192,7 +188,6 @@ enum PidClass open: DISCOVERY_PID, DEVICE_PID, SENSOR_PID, UNKNOWN_PID
 
 enum RdmErr: SHORT, BAD_CHECKSUM, BAD_SUB_START, NOT_FOR_US, BAD_LENGTH
 
-
 # =============================================================================
 # 5. Channels
 # =============================================================================
@@ -200,62 +195,51 @@ enum RdmErr: SHORT, BAD_CHECKSUM, BAD_SUB_START, NOT_FOR_US, BAD_LENGTH
 # --- Empfang ------------------------------------------------------------------
 # Ein Element je DMX/RDM-Rahmen. 44 Hz nominal; max_rate mit Reserve fuer
 # Controller, die schneller senden (E1.11 erlaubt bis ~836 Hz bei 24 Slots).
-input  dmx_rx      : stream<DmxFrame> @ hw("uart1/dmx_rx")
-                     with max_rate = 900 Hz, capacity = 4,
-                          framing = raw, overflow = drop_oldest,
-                          doc = "Break-zu-Break gerahmte DMX512-Pakete"
+input  dmx_rx : stream<DmxFrame> @ hw("uart1/dmx_rx") with max_rate = 900 Hz, capacity = 4, framing = raw, overflow = drop_oldest, doc = "Break-zu-Break gerahmte DMX512-Pakete"
 
 # Rahmungsfehler und Timing-Verstoesse des Empfaengers als eigener Strom:
 # Beobachtung, nie Steuerung (Entscheidung 14).
-input  rx_errors   : stream<u8>       @ hw("uart1/dmx_err")
-                     with max_rate = 900 Hz, capacity = 8, overflow = drop_oldest
+input  rx_errors : stream<u8> @ hw("uart1/dmx_err") with max_rate = 900 Hz, capacity = 8, overflow = drop_oldest
 
 # --- Senden --------------------------------------------------------------------
 # Der Treiber setzt DE/RE, sendet Break+MAB (bzw. bei Discovery ohne Break)
 # und gibt die Leitung wieder frei. Die Sprache sieht nur Bytes.
-output rdm_tx      : stream<u8>       @ hw("uart1/rdm_tx")
-                     with max_rate = 250000 Hz, capacity = 264
+output rdm_tx : stream<u8> @ hw("uart1/rdm_tx") with max_rate = 250000 Hz, capacity = 264
 
 # Sendefreigabe des Transceivers: per pulse exakt fuer die Dauer der Antwort
 # aktiviert; guard/jitter kommen aus der Konformitaetsmessung (13.8).
-output tx_enable   : bool             @ hw("gpio/rs485_de")
-                     with safe = false, jitter = 2 us
+output tx_enable : bool @ hw("gpio/rs485_de") with safe = false, jitter = 2 us
 
 # --- Nutzlast des Geraets ------------------------------------------------------
-output dimmer      : [4] float in 0..1 @ hw("pwm/ch[0:4]")
-                     with safe = [0.0, 0.0, 0.0, 0.0]
-output identify_led: bool              @ hw("gpio/ident")  with safe = false
-output status_led  : u8 in 0..255      @ hw("pwm/status")  with safe = 0
+output dimmer       : [4] float in 0..1 @ hw("pwm/ch[0:4]") with safe = [0.0, 0.0, 0.0, 0.0]
+output identify_led : bool              @ hw("gpio/ident")  with safe = false
+output status_led   : u8 in 0..255      @ hw("pwm/status")  with safe = 0
 
 # --- Sensorik ------------------------------------------------------------------
-input  temp_heatsink : float[degC] in -40..125 degC @ hw("afe/ntc0")
-                       with max_age = 500 ms, max_slew = 20 K/s, debounce = 3
-input  v_supply      : float[V]    in 0..30 V       @ hw("afe/vin")
-                       with max_age = 500 ms, max_slew = 50 V/s, debounce = 3
+input  temp_heatsink : float[degC] in -40..125 degC @ hw("afe/ntc0") with max_age = 500 ms, max_slew = 20 K/s, debounce = 3
+input  v_supply      : float[V] in 0..30 V          @ hw("afe/vin")  with max_age = 500 ms, max_slew = 50 V/s, debounce = 3
 
 # --- Bedienung -----------------------------------------------------------------
-input  addr_switch   : u16 in 1..512 @ hw("gpio/dip") with max_age = 200 ms
+input  addr_switch : u16 in 1..512 @ hw("gpio/dip") with max_age = 200 ms
 command factory_reset
-
 
 # =============================================================================
 # 6. Parameter und Profile
 # =============================================================================
 
-param MANUFACTURER_ID : u16 in 0x0001..0x7FFF = 0x7FF0   # E1.20 Anhang: 0x7FFx Test
-param DEVICE_SERIAL   : u32 = 0x0000_0001
-param DEVICE_MODEL    : u16 = 0x0101
-param PRODUCT_CATEGORY: u16 = 0x0501                     # Dimmer, E1.20 Table A-5
-param SOFTWARE_VERSION: u32 = 0x0001_0300                # 1.3.0
-param DMX_FOOTPRINT   : u16 in 1..512 = 4
-param SENSOR_COUNT    : u8  in 0..8   = 2
-param USE_DIP_ADDRESS : bool = false                     # DIP ueberschreibt RDM
+param MANUFACTURER_ID  : u16 in 0x0001..0x7FFF = 0x7FF0  # E1.20 Anhang: 0x7FFx Test
+param DEVICE_SERIAL    : u32 = 0x0000_0001
+param DEVICE_MODEL     : u16 = 0x0101
+param PRODUCT_CATEGORY : u16 = 0x0501       # Dimmer, E1.20 Table A-5
+param SOFTWARE_VERSION : u32 = 0x0001_0300  # 1.3.0
+param DMX_FOOTPRINT    : u16 in 1..512 = 4
+param SENSOR_COUNT     : u8 in 0..8 = 2
+param USE_DIP_ADDRESS  : bool = false  # DIP ueberschreibt RDM
 
 profile FACTORY_TEST:
     MANUFACTURER_ID = 0x7FF0
     DEVICE_SERIAL   = 0xFFFF_FFFF
     USE_DIP_ADDRESS = true
-
 
 # =============================================================================
 # 7. Reine Funktionen — Protokollarithmetik
@@ -326,7 +310,6 @@ fn classify_pid(pid: u16) -> PidClass:
         case 0x0050, 0x0060, 0x00C0, 0x00F0, 0x1000, 0x1001: return DEVICE_PID
         case _: return UNKNOWN_PID
 
-
 # =============================================================================
 # 8. Bloecke — Zustandsbehaftete Bausteine
 # =============================================================================
@@ -341,7 +324,7 @@ block sensor_track():
             st = SensorState(lowest = v, highest = v, recorded = v)
             seen = true
         else:
-            st.lowest  = min(st.lowest, v)
+            st.lowest = min(st.lowest, v)
             st.highest = max(st.highest, v)
         return st
     record_now(v: i16) -> SensorState:
@@ -366,7 +349,6 @@ block blinker(period: Duration in 100 ms..10 s):
         acc = 0 s
         return lit
 
-
 # =============================================================================
 # 9. Maschine: Frame-Klassifikation und DMX-Datenpfad
 #
@@ -378,14 +360,14 @@ block blinker(period: Duration in 100 ms..10 s):
 machine dmx_core every 1 ms:
     fault -> DMX_SAFE
 
-    pub var slots        : bytes<512> = default      # letzter gueltiger DMX-Frame
-    pub var slot_count   : int in 0..512 = 0
-    pub var dmx_present  : bool = false
-    pub var frames_seen  : int in 0..1_000_000 = 0
-    pub var start_addr   : u16 in 1..512 = 1         # von rdm_responder gesetzt
+    pub var slots       : bytes<512> = default  # letzter gueltiger DMX-Frame
+    pub var slot_count  : int in 0..512 = 0
+    pub var dmx_present : bool = false
+    pub var frames_seen : int in 0..1_000_000 = 0
+    pub var start_addr  : u16 in 1..512 = 1  # von rdm_responder gesetzt
 
-    var last_frame_at    : Duration = 0 s
-    var ident_blink      = blinker(period = 500 ms)
+    var last_frame_at : Duration = 0 s
+    var ident_blink   = blinker(period = 500 ms)
 
     initial WAIT_SIGNAL
 
@@ -457,7 +439,6 @@ machine dmx_core every 1 ms:
             status_led = 0
         after 1 s: -> WAIT_SIGNAL
 
-
 # Abbildung der Slots ab start_addr auf einen Kanal: ausserhalb des
 # empfangenen Frames bleibt er 0, wie E1.11 es fuer nicht gesendete Slots
 # verlangt.
@@ -465,7 +446,6 @@ fn slot_value(s: bytes<512>, count: int in 0..512, idx: int in 0..515) -> u8:
     if idx < 0 or idx >= count:
         return 0
     return s[idx]
-
 
 # =============================================================================
 # 10. Maschine: RDM-Responder
@@ -480,10 +460,10 @@ machine rdm_responder follows dmx_core every 1 ms:
     fault -> RDM_SAFE
 
     # --- Persistenter Geraetezustand (5.9) -----------------------------------
-    persist var cfg_start_addr : u16 in 1..512 = 1   with min_interval = 5 s
-    persist var cfg_personality: u8  in 1..4   = 1   with min_interval = 5 s
-    persist var muted          : bool = false        with min_interval = 30 s
-    persist var boot_count     : int in 0..1_000_000 = 0 with min_interval = 60 s
+    persist var cfg_start_addr  : u16 in 1..512 = 1 with min_interval = 5 s
+    persist var cfg_personality : u8 in 1..4 = 1 with min_interval = 5 s
+    persist var muted           : bool = false with min_interval = 30 s
+    persist var boot_count      : int in 0..1_000_000 = 0 with min_interval = 60 s
 
     # --- Veroeffentlichte Groessen -------------------------------------------
     pub var identify      : bool = false
@@ -494,8 +474,8 @@ machine rdm_responder follows dmx_core every 1 ms:
     pub var last_pid      : u16 = 0
 
     # --- Discovery-Zustand (E1.20 7.6) ---------------------------------------
-    var disc_lo   : Uid = Uid(manufacturer = 0x0000, device = 0x0000_0000)
-    var disc_hi   : Uid = Uid(manufacturer = 0xFFFF, device = 0xFFFF_FFFF)
+    var disc_lo : Uid = Uid(manufacturer = 0x0000, device = 0x0000_0000)
+    var disc_hi : Uid = Uid(manufacturer = 0xFFFF, device = 0xFFFF_FFFF)
 
     # --- Sensorik -------------------------------------------------------------
     var trk_temp  = sensor_track()
@@ -544,7 +524,7 @@ machine rdm_responder follows dmx_core every 1 ms:
         enter:
             own_uid = Uid(manufacturer = MANUFACTURER_ID, device = DEVICE_SERIAL)
             boot_count = min(boot_count + 1, 1_000_000)
-            muted = false          # E1.20 7.6.3: nach Reset ist der Responder unmuted
+            muted = false  # E1.20 7.6.3: nach Reset ist der Responder unmuted
             tx_enable = false
             log "rdm responder boot {boot_count}, uid {MANUFACTURER_ID:hex}:{DEVICE_SERIAL:hex}"
         after 10 ms: -> LISTEN
@@ -585,10 +565,10 @@ machine rdm_responder follows dmx_core every 1 ms:
     # -------------------------------------------------------------------------
     state FACTORY:
         enter:
-            cfg_start_addr  = 1
+            cfg_start_addr = 1
             cfg_personality = 1
-            muted           = false
-            identify        = false
+            muted = false
+            identify = false
             sens_temp = trk_temp.reset_range(sens_temp.recorded)
             sens_volt = trk_volt.reset_range(sens_volt.recorded)
             log "factory reset"
@@ -602,7 +582,6 @@ machine rdm_responder follows dmx_core every 1 ms:
             identify = false
         after 500 ms: -> LISTEN
 
-
 # =============================================================================
 # 11. RDM-Verarbeitung als reine Funktionen + Aktionen
 #
@@ -612,9 +591,9 @@ machine rdm_responder follows dmx_core every 1 ms:
 # =============================================================================
 
 record RdmRequest:
-    hdr  : RdmHeader
-    pd   : bytes<231>
-    pdl  : int in 0..231
+    hdr : RdmHeader
+    pd  : bytes<231>
+    pdl : int in 0..231
 
 # Vollstaendiges Parsen inklusive Pruefsumme. Jede Verletzung ist ein
 # Fehlercode, kein Fault: ein fremdes oder kaputtes Paket darf den
@@ -629,7 +608,7 @@ fn parse_rdm(frame: DmxFrame) -> RdmRequest!RdmErr:
 
     var h = RdmHeader.decode(frame.data)
     if not h.valid:
-        return ERR(BAD_SUB_START)        # Konstantenfelder 0xCC/0x01 passen nicht
+        return ERR(BAD_SUB_START)  # Konstantenfelder 0xCC/0x01 passen nicht
 
     var hdr = h
     # message_length zaehlt Slot 0 .. letzter PD-Slot; danach folgen 2 CRC-Byte.
@@ -653,7 +632,6 @@ fn parse_rdm(frame: DmxFrame) -> RdmRequest!RdmErr:
 
     return OK(RdmRequest(hdr = hdr, pd = pd, pdl = hdr.pdl as int))
 
-
 # --- Antwortaufbau ------------------------------------------------------------
 
 # Gemeinsamer Kopf einer normalen Antwort (E1.20 6.2.9: Quelle und Ziel
@@ -662,20 +640,20 @@ fn build_response(req: RdmHeader, own: Uid, rt: u8,
                   pd: bytes<231>, pdl: int in 0..231) -> bytes<264>:
     var msg_len : int = 24 + pdl
     var hdr = RdmHeader(
-        start_code     = SC_RDM,
+        start_code = SC_RDM,
         sub_start_code = RDM_SUB_START_CODE,
         message_length = msg_len as u8,
-        dest_uid       = req.src_uid,
-        src_uid        = own,
-        transaction    = req.transaction,
-        port_or_resp   = rt,
-        msg_count      = 0,
-        sub_device     = req.sub_device,
-        command_class  = req.command_class + 1,
-        parameter_id   = req.parameter_id,
-        pdl            = pdl as u8)
+        dest_uid = req.src_uid,
+        src_uid = own,
+        transaction = req.transaction,
+        port_or_resp = rt,
+        msg_count = 0,
+        sub_device = req.sub_device,
+        command_class = req.command_class + 1,
+        parameter_id = req.parameter_id,
+        pdl = pdl as u8)
 
-    var out : bytes<264> = default
+    var out  : bytes<264> = default
     var head = hdr.encode()
     for i in range(24):
         var ok = out.push(head[i])
@@ -685,14 +663,14 @@ fn build_response(req: RdmHeader, own: Uid, rt: u8,
         var ok2 = out.push(pd[i])
 
     var csum = rdm_checksum(out, msg_len)
-    var ok3 = out.push((csum >> 8) as u8)
-    var ok4 = out.push((csum & 0x00FF) as u8)
+    var ok3  = out.push((csum >> 8) as u8)
+    var ok4  = out.push((csum & 0x00FF) as u8)
     return out
 
 fn build_nack(req: RdmHeader, own: Uid, reason: u16) -> bytes<264>:
     var pd : bytes<231> = default
-    var a = pd.push((reason >> 8) as u8)
-    var b = pd.push((reason & 0x00FF) as u8)
+    var a  = pd.push((reason >> 8) as u8)
+    var b  = pd.push((reason & 0x00FF) as u8)
     return build_response(req, own, RT_NACK_REASON, pd, 2)
 
 fn build_ack(req: RdmHeader, own: Uid, pd: bytes<231>, pdl: int in 0..231) -> bytes<264>:
@@ -702,20 +680,20 @@ fn build_ack(req: RdmHeader, own: Uid, pd: bytes<231>, pdl: int in 0..231) -> by
 # (E1.20 7.6.4). Der Treiber sendet sie ohne Break, gesteuert ueber den
 # Rahmungsmodus des Ausgabestroms.
 fn build_disc_response(own: Uid) -> bytes<264>:
-    var raw = own.encode()                 # 6 Byte big endian
+    var raw  = own.encode()  # 6 Byte big endian
     var euid : [12] u8 = default
     for i in range(6):
         var pair = encode_euid_pair(raw[i])
-        euid[2 * i]     = (pair >> 8) as u8
+        euid[2 * i] = (pair >> 8) as u8
         euid[2 * i + 1] = (pair & 0x00FF) as u8
 
     var ecs32 = encode_disc_checksum(euid)
     var resp = DiscResponse(
-        preamble  = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE],
+        preamble = [0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE, 0xFE],
         separator = 0xAA,
-        euid      = euid,
-        ecs       = [(ecs32 >> 24) as u8, ((ecs32 >> 16) & 0xFF) as u8,
-                     ((ecs32 >> 8) & 0xFF) as u8, (ecs32 & 0xFF) as u8])
+        euid = euid,
+        ecs = [(ecs32 >> 24) as u8, ((ecs32 >> 16) & 0xFF) as u8,
+               ((ecs32 >> 8) & 0xFF) as u8, (ecs32 & 0xFF) as u8])
 
     var out : bytes<264> = default
     var enc = resp.encode()
@@ -723,39 +701,38 @@ fn build_disc_response(own: Uid) -> bytes<264>:
         var ok = out.push(enc[i])
     return out
 
-
 # --- Nutzlastbau je PID -------------------------------------------------------
 
 fn pd_device_info(start_addr: u16 in 1..512, personality: u8 in 1..4,
                   footprint: u16, sensors: u8, model: u16,
                   cat: u16, sw: u32) -> bytes<231>:
     var info = DeviceInfo(
-        protocol_major   = 0x01,
-        protocol_minor   = 0x00,
-        device_model     = model,
+        protocol_major = 0x01,
+        protocol_minor = 0x00,
+        device_model = model,
         product_category = cat,
         software_version = sw,
-        dmx_footprint    = footprint,
-        dmx_personality  = personality,
-        personality_cnt  = 4,
-        dmx_start_addr   = start_addr,
-        sub_device_cnt   = 0,
-        sensor_count     = sensors)
+        dmx_footprint = footprint,
+        dmx_personality = personality,
+        personality_cnt = 4,
+        dmx_start_addr = start_addr,
+        sub_device_cnt = 0,
+        sensor_count = sensors)
     var enc = info.encode()
-    var pd : bytes<231> = default
+    var pd  : bytes<231> = default
     for i in range(19):
         var ok = pd.push(enc[i])
     return pd
 
 fn pd_u16(v: u16) -> bytes<231>:
     var pd : bytes<231> = default
-    var a = pd.push((v >> 8) as u8)
-    var b = pd.push((v & 0x00FF) as u8)
+    var a  = pd.push((v >> 8) as u8)
+    var b  = pd.push((v & 0x00FF) as u8)
     return pd
 
 fn pd_u8(v: u8) -> bytes<231>:
     var pd : bytes<231> = default
-    var a = pd.push(v)
+    var a  = pd.push(v)
     return pd
 
 # E1.20 10.4.1: Liste der unterstuetzten PIDs ohne die Pflicht-PIDs.
@@ -772,13 +749,13 @@ fn pd_supported_params() -> bytes<231>:
 
 fn pd_sensor_value(n: u8, st: SensorState, now_v: i16) -> bytes<231>:
     var sv = SensorValue(
-        sensor_number  = n,
-        present_value  = now_v,
-        lowest_value   = st.lowest,
-        highest_value  = st.highest,
+        sensor_number = n,
+        present_value = now_v,
+        lowest_value = st.lowest,
+        highest_value = st.highest,
         recorded_value = st.recorded)
     var enc = sv.encode()
-    var pd : bytes<231> = default
+    var pd  : bytes<231> = default
     for i in range(9):
         var ok = pd.push(enc[i])
     return pd
@@ -787,21 +764,20 @@ fn pd_sensor_def(n: u8) -> bytes<231>:
     # Sensor 0: Temperatur (Type 0x00, Unit CENTIGRADE 0x01, Prefix DECI 0x0B)
     # Sensor 1: Spannung    (Type 0x01, Unit VOLTS_DC   0x05, Prefix DECI 0x0B)
     var d = SensorDef(
-        sensor_number    = n,
-        sensor_type      = 0x00 if n == 0 else 0x01,
-        sensor_unit      = 0x01 if n == 0 else 0x05,
-        sensor_prefix    = 0x0B,
-        range_min        = -400 if n == 0 else 0,
-        range_max        = 1250 if n == 0 else 300,
-        normal_min       = 0    if n == 0 else 100,
-        normal_max       = 700  if n == 0 else 260,
-        recorded_support = 0x03)                  # recorded + lowest/highest
+        sensor_number = n,
+        sensor_type = 0x00 if n == 0 else 0x01,
+        sensor_unit = 0x01 if n == 0 else 0x05,
+        sensor_prefix = 0x0B,
+        range_min = -400 if n == 0 else 0,
+        range_max = 1250 if n == 0 else 300,
+        normal_min = 0 if n == 0 else 100,
+        normal_max = 700 if n == 0 else 260,
+        recorded_support = 0x03)  # recorded + lowest/highest
     var enc = d.encode()
-    var pd : bytes<231> = default
+    var pd  : bytes<231> = default
     for i in range(13):
         var ok = pd.push(enc[i])
     return pd
-
 
 # =============================================================================
 # 11a. Antwortwahl (E1.20 6.2.9)
@@ -823,7 +799,6 @@ fn response_kind(hdr: RdmHeader, own: Uid, muted: bool) -> RespKind:
     if uid_is_broadcast(hdr.dest_uid, own.manufacturer):
         return NO_RESPONSE
     return NORMAL
-
 
 fn answer(req: RdmRequest, own: Uid, start_addr: u16 in 1..512,
           personality: u8 in 1..4, st_temp: SensorState,
@@ -858,7 +833,6 @@ fn answer(req: RdmRequest, own: Uid, start_addr: u16 in 1..512,
 
     return build_nack(req.hdr, own, NR_UNKNOWN_PID)
 
-
 # =============================================================================
 # 12. Die Handler-Logik als Maschine mit eigenem Zustand
 #
@@ -879,8 +853,8 @@ machine rdm_dispatch follows rdm_responder every 1 ms:
     pub var pending_kind : RespKind = NO_RESPONSE
     pub var pending_at   : Duration = 0 s
 
-    var buf   : bytes<264> = default
-    var blen  : int in 0..264 = 0
+    var buf  : bytes<264> = default
+    var blen : int in 0..264 = 0
 
     initial IDLE
 
@@ -894,7 +868,7 @@ machine rdm_dispatch follows rdm_responder every 1 ms:
     state SENDING:
         enter:
             blen = rdm_responder.tx_len
-            buf  = rdm_responder.tx_buf
+            buf = rdm_responder.tx_buf
 
         sequence:
             # Sendefreigabe exakt fuer die Dauer der Antwort. Der Zeitpunkt ist
@@ -910,7 +884,6 @@ machine rdm_dispatch follows rdm_responder every 1 ms:
             tx_enable = false
         after 200 ms: -> IDLE
 
-
 # =============================================================================
 # 13. Eigenschaften (v1.1) — was der Treiber garantiert
 # =============================================================================
@@ -925,7 +898,6 @@ property dmx_loss_darkens: always(dmx_core.state == SIGNAL_LOST implies dimmer[0
 
 property bus_released: always(tx_enable implies once[3 ms](rdm_responder.rdm_rx_count > 0))
 
-
 # =============================================================================
 # 14. Plant-Modell fuer die Simulation (8.3)
 #
@@ -933,10 +905,10 @@ property bus_released: always(tx_enable implies once[3 ms](rdm_responder.rdm_rx_
 # und streut Discovery- und GET-Pakete ein. Nur im Sim-Build gelinkt.
 # =============================================================================
 
-output dmx_rx_sim   : stream<DmxFrame> @ sim("uart1/dmx_rx")
-output temp_sim     : float[degC]      @ sim("afe/ntc0")
-output vin_sim      : float[V]         @ sim("afe/vin")
-output dip_sim      : u16              @ sim("gpio/dip")
+output dmx_rx_sim : stream<DmxFrame> @ sim("uart1/dmx_rx")
+output temp_sim   : float[degC]      @ sim("afe/ntc0")
+output vin_sim    : float[V]         @ sim("afe/vin")
+output dip_sim    : u16              @ sim("gpio/dip")
 
 machine controller_model every 1 ms:
     var txn   : u8 = 0
@@ -946,8 +918,8 @@ machine controller_model every 1 ms:
     state RUN:
         loop:
             temp_sim = 42.5 degC
-            vin_sim  = 23.8 V
-            dip_sim  = 1
+            vin_sim = 23.8 V
+            dip_sim = 1
 
             every 23 ms:
                 level = (level + 8).wrap_u8()
@@ -961,25 +933,24 @@ machine controller_model every 1 ms:
                 txn = (txn + 1).wrap_u8()
                 send dmx_rx_sim, make_disc_unique_branch(txn)
 
-
 fn make_disc_unique_branch(txn: u8) -> DmxFrame:
     var lo = Uid(manufacturer = 0x0000, device = 0x0000_0000)
     var hi = Uid(manufacturer = 0xFFFF, device = 0xFFFF_FFFF)
     var hdr = RdmHeader(
-        start_code     = SC_RDM,
+        start_code = SC_RDM,
         sub_start_code = RDM_SUB_START_CODE,
         message_length = 36,
-        dest_uid       = Uid(manufacturer = 0xFFFF, device = 0xFFFF_FFFF),
-        src_uid        = Uid(manufacturer = 0x0001, device = 0x0000_0001),
-        transaction    = txn,
-        port_or_resp   = 1,
-        msg_count      = 0,
-        sub_device     = 0,
-        command_class  = CC_DISCOVERY,
-        parameter_id   = PID_DISC_UNIQUE_BRANCH,
-        pdl            = 12)
+        dest_uid = Uid(manufacturer = 0xFFFF, device = 0xFFFF_FFFF),
+        src_uid = Uid(manufacturer = 0x0001, device = 0x0000_0001),
+        transaction = txn,
+        port_or_resp = 1,
+        msg_count = 0,
+        sub_device = 0,
+        command_class = CC_DISCOVERY,
+        parameter_id = PID_DISC_UNIQUE_BRANCH,
+        pdl = 12)
 
-    var d : bytes<512> = default
+    var d    : bytes<512> = default
     var head = hdr.encode()
     for i in range(24):
         var a = d.push(head[i])
@@ -993,7 +964,6 @@ fn make_disc_unique_branch(txn: u8) -> DmxFrame:
     var e1 = d.push((cs >> 8) as u8)
     var e2 = d.push((cs & 0x00FF) as u8)
     return DmxFrame(start_code = SC_RDM, length = 39, data = d)
-
 
 # =============================================================================
 # 15. Szenarien (13.6)
@@ -1031,6 +1001,6 @@ campaign rdm_timing_scan:
     program "dmx512_rdm_responder.takt"
     profile FACTORY_TEST
     sweep DMX_FOOTPRINT = [1, 4, 16, 512]
-    sweep SENSOR_COUNT  = [0, 2]
+    sweep SENSOR_COUNT = [0, 2]
     repeat 2
     stop_on fail

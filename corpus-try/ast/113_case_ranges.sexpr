@@ -1,0 +1,27 @@
+(system
+  (language 1)
+  (tick 1ms))
+(enum Band
+  (LOW)
+  (MID)
+  (HIGH)
+  (OTHER))
+(output band :Band @hw("o/band") safe=OTHER)
+(machine m
+  (var k :int in 0..20 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (match k
+        (case 0..3 7
+          (= band LOW))
+        (case 4..6
+          (= band MID))
+        (case 10..12 15
+          (= band HIGH))
+        (case _
+          (= band OTHER)))
+      (if (< k 20)
+        (+= k 1))
+      (else
+        (= k 0)))))

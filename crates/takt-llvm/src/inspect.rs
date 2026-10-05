@@ -450,10 +450,11 @@ fn parse_sections(text: &str) -> Sections {
             n if is_iram_text(n) => s.iram_text += bytes,
             n if is_iram_rodata(n) => s.iram_rodata += bytes,
             n if n.starts_with(".text") => s.text += bytes,
-            n if n.starts_with(".rodata") || n.starts_with(".rdata") => s.rodata += bytes,
+            // `.srodata`, `.sdata`, `.sbss`: die kleinen Daten auf riscv32.
+            n if n.starts_with(".rodata") || n.starts_with(".rdata") || n.starts_with(".srodata") => s.rodata += bytes,
             n if n.starts_with(".xdata") || n.starts_with(".pdata") => s.rodata += bytes,
-            n if n.starts_with(".data") => s.data += bytes,
-            n if n.starts_with(".bss") => s.bss += bytes,
+            n if n.starts_with(".data") || n.starts_with(".sdata") => s.data += bytes,
+            n if n.starts_with(".bss") || n.starts_with(".sbss") => s.bss += bytes,
             _ => {}
         }
     }
@@ -494,7 +495,7 @@ fn is_iram_text(name: &str) -> bool {
 /// Konstanten, die der Tick im RAM liest (12.3): DFA- und `const`-Tabellen,
 /// `safe`-Werte.
 fn is_iram_rodata(name: &str) -> bool {
-    has_prefix(name, &["rwtext.rodata", "iram0.rodata", "iram.rodata", "srodata"])
+    has_prefix(name, &["rwtext.rodata", "iram0.rodata", "iram.rodata"])
 }
 
 #[cfg(test)]
@@ -541,6 +542,18 @@ section                    size         addr
 
     /// `.rwtext` beginnt mit `.r` und darf nicht als Flash-Konstante
     /// zaehlen; `.rodata` umgekehrt nicht als IRAM.
+    /// GEN-018: Kleine Daten (`-msmall-data-limit`, LLVM-Voreinstellung auf
+    /// riscv32) sind Konstanten, Daten und `.bss` wie ihre grossen
+    /// Geschwister. Ins RAM holt `.srodata` erst ein Linkerskript, und dann
+    /// heisst der Abschnitt des Abbilds `.rwtext`.
+    #[test]
+    fn small_data_counts_by_its_kind() {
+        let s = parse_sections(".text 100 0\n.srodata.cst8 8 0\n.sdata 4 0\n.sbss 4 0\n");
+        assert_eq!(s.iram(), 0);
+        assert_eq!(s.flash(), 112);
+        assert_eq!(s.ram(), 8);
+    }
+
     #[test]
     fn rwtext_and_rodata_are_told_apart() {
         let s = parse_sections(".rwtext 10 0\n.rwtext.literal 4 0\n.rodata 7 0\n");

@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 17 (8.6, 5.9): Andere Typen sind keine Elementtypen — auch
+# nicht ueber einen Alias oder als Record mit einem Feld ohne POD-Form.
+
+record Holder:
+    maybe : int?
+
+type Level = float
+
+stream<Level> levels with capacity = 4    # ~ SC-17
+stream<Holder> holders with capacity = 4  # ~ SC-17
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            n = 1

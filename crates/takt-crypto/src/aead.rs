@@ -17,13 +17,19 @@ use aes_gcm::{Aes128Gcm, Aes256Gcm, KeyInit, Nonce, Tag};
 pub fn decrypt(key: &[u8], nonce: &[u8], aad: &[u8], data: &[u8], tag: &[u8], out: &mut [u8]) -> Option<usize> {
     let nonce = Nonce::<U12>::from(<[u8; 12]>::try_from(nonce).ok()?);
     let tag = Tag::from(<[u8; 16]>::try_from(tag).ok()?);
+    // Erst der Schluessel, dann die Kopie: Ein Abbruch danach liesse das
+    // Chiffrat in `out` stehen (INT-032).
+    if key.len() != 16 && key.len() != 32 {
+        return None;
+    }
     let plain = out.get_mut(..data.len())?;
     plain.copy_from_slice(data);
-    let opened = match key.len() {
-        16 => Aes128Gcm::new_from_slice(key).ok()?.decrypt_in_place_detached(&nonce, aad, plain, &tag),
-        32 => Aes256Gcm::new_from_slice(key).ok()?.decrypt_in_place_detached(&nonce, aad, plain, &tag),
-        _ => return None,
+    let opened = if key.len() == 16 {
+        Aes128Gcm::new_from_slice(key).map(|c| c.decrypt_in_place_detached(&nonce, aad, plain, &tag))
+    } else {
+        Aes256Gcm::new_from_slice(key).map(|c| c.decrypt_in_place_detached(&nonce, aad, plain, &tag))
     };
+    let opened = opened.unwrap_or(Err(aes_gcm::Error));
     if opened.is_err() {
         plain.fill(0);
         return None;

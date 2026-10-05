@@ -76,7 +76,7 @@ Mat(Solve),ja,nein: Matrizen sind nicht kodiert,ja
 Mat(Cholesky),ja,nein: Matrizen sind nicht kodiert,ja
 Builtin(Now),ja,ja,ja
 Builtin(Tick),ja,ja,ja
-Builtin(TimeInState),ja,teilweise: `time_in_state` nur in einem Zustand,nein
+Builtin(TimeInState),ja,teilweise: `time_in_state` nur in einem Zustand,ja
 Builtin(LastFault),"teilweise: `LastFault` nur in der Gestalt `str<128>`, `int`, `int`",nein: eingebaute Groesse ohne Modell,ja
 Builtin(Event),ja,nein: eingebaute Groesse ohne Modell,ja
 Check(DivZero),ja,ja,ja
@@ -244,7 +244,7 @@ Feature(HandlerPattern),teilweise: kein `{x:float}` im Handler-Muster,nein: Hand
 Feature(HandlerGuard),ja,nein: Handler und Stroeme sind nicht kodiert,ja
 Feature(After),ja,ja,ja
 Feature(GuardExpr),ja,ja,ja
-Feature(GuardMatch),ja,nein: Guards mit Muster sind nicht kodiert,ja
+Feature(GuardMatch),teilweise: kein `{x:float}` im Guard-Muster,nein: Guards mit Muster sind nicht kodiert,ja
 Feature(GuardNext),ja,nein: Guards mit Muster sind nicht kodiert,ja
 Feature(TargetState),ja,ja,ja
 Feature(TargetFaulted),ja,ja,ja
@@ -274,3 +274,11 @@ Feature(Port),ja,nein: Trigger und Registerports sind nicht kodiert,ja
 Feature(Recorded),ja,ja,ja
 Feature(Campaign),ja,ja,ja
 Feature(Node),ja,ja,nein
+Feature(FramingRaw),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(FramingLines),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(FramingCobs),ja,nein: Handler und Stroeme sind nicht kodiert,nein
+Feature(FramingLengthPrefixed),ja,nein: Handler und Stroeme sind nicht kodiert,nein
+Feature(FramingFixed),ja,nein: Handler und Stroeme sind nicht kodiert,nein
+Feature(Label),ja,ja,ja
+Feature(Display),ja,ja,nein
+Feature(Group),ja,ja,nein

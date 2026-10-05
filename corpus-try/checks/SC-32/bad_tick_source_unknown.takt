@@ -1,0 +1,16 @@
+system:  # ~ SC-32
+    language    = 1
+    tick        = 10 ms
+    tick_source = hw("daq/nope")
+
+# Pruefung 32 (7.1): `daq/nope` steht nicht in der Konfiguration. Die
+# Meldung steht am Anfang der Datei, wo `system:` steht.
+
+output led : bool @ hw("ui/led") with safe = false
+
+machine m:
+    initial S
+
+    state S:
+        loop:
+            led = true

@@ -49,7 +49,7 @@ pub use image::Image;
 pub use loaded::Loaded;
 pub use machine::MachineState;
 pub use property::{Monitor, Outcome, PropertyResult};
-pub use run::{Ended, Run, RunOptions, RunResult, Verdict, run};
+pub use run::{Ended, Run, RunOptions, RunResult, StimulusError, Verdict, read_stimulus, run};
 pub use system::Sim;
 pub use trace::{Trace, TraceLine};
 pub use value::{Fault, Quality, Reason, Sample, Trap, Value};

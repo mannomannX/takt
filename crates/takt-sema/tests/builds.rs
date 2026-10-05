@@ -132,3 +132,56 @@ fn an_unbound_channel_in_use_fails_the_hardware_build() {
     assert_eq!(hw.len(), 1, "genau `spare`, nicht das unbenutzte `later`: {hw:?}");
     assert!(hw[0].contains("SC-13") && hw[0].contains("`spare`"), "{hw:?}");
 }
+
+/// Die Fehler eines Programms je Build.
+fn errors_in(src: &str, kind: takt_sema::Build) -> Vec<String> {
+    let options =
+        takt_sema::Options { policy: takt_diag::Policy::default(), build: kind, profile: None, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect()
+}
+
+/// 8.1, Pruefung 13: Auch ein *geschriebener* Output und ein *gelesener*
+/// Strom ohne Bindung sind im Hardware-Build benutzt.
+#[test]
+fn a_written_output_and_a_read_stream_without_binding_fail_the_hardware_build() {
+    let src = QUELLE
+        .replace(
+            "output v ",
+            "output spare_out : bool @ none with safe = false\n\
+             input  rx : stream<u8> @ none with max_rate = 1 kHz, capacity = 16\n\
+             output rx_sim : stream<u8> @ sim(\"u/rx\")\n\
+             output v ",
+        )
+        .replace(
+            "            v = p.valid and p > 2 bar\n",
+            "            v = p.valid and p > 2 bar\n            spare_out = true\n        on rx as b:\n            v = b.data > 3\n",
+        );
+    assert!(errors_in(&src, takt_sema::Build::Sim).is_empty(), "{:?}", errors_in(&src, takt_sema::Build::Sim));
+    let hw = errors_in(&src, takt_sema::Build::Hw);
+    assert_eq!(hw.len(), 2, "{hw:?}");
+    assert!(hw.iter().any(|e| e.contains("[SC-13]") && e.contains("`spare_out`")), "{hw:?}");
+    assert!(hw.iter().any(|e| e.contains("[SC-13]") && e.contains("`rx`")), "{hw:?}");
+}
+
+/// Pruefung 13 (8.3, 12.7): Benutzt heisst benutzt von einer Maschine des
+/// HW-Builds. Szenarien und Plant-Modelle — Maschinen, die `sim`-Outputs
+/// schreiben — gehoeren nicht dazu.
+#[test]
+fn only_machines_of_the_hardware_build_use_a_channel() {
+    let spare = QUELLE.replace("output v ", "input  spare : bool @ none\noutput v ");
+    let scenario = spare.clone()
+        + "\nscenario \"reads spare\" every 10 ms:\n    initial RUN\n    state RUN:\n        sequence:\n\
+           \x20           wait 20 ms\n            expect spare.or(false), \"spare\"\n            verdict pass \"done\"\n";
+    let model =
+        spare.replace("            p_sim = 3 bar\n", "            p_sim = 3 bar if spare.or(false) else 2 bar\n");
+    let controller = spare.replace("v = p.valid and p > 2 bar", "v = spare.or(false)");
+    for (what, src, used) in
+        [("Szenario", &scenario, false), ("Plant-Modell", &model, false), ("Steuerung", &controller, true)]
+    {
+        assert_ne!(*src, spare, "{what}: Ersetzung griff nicht");
+        let hw = errors_in(src, takt_sema::Build::Hw);
+        let flagged = hw.iter().any(|e| e.contains("[SC-13]") && e.contains("`spare`"));
+        assert_eq!(flagged, used, "{what}: {hw:?}");
+    }
+}

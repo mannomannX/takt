@@ -1,0 +1,4 @@
+(property no_ignition_without_fuel (always (implies igniter (== fuel_main OPEN))))
+(property abort_recovers (always (implies (== (.state hotfire) SAFE) (eventually[10s] (== (.state hotfire) IDLE)))))
+(property no_chatter (always (implies (== valve OPEN) (stable[50ms] (== valve OPEN)))))
+(property armed_before_fire (always (implies igniter (once[1s] armed))))

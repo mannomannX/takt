@@ -109,8 +109,13 @@ pub struct Model {
     pub state: Vec<StateVar>,
     /// Eingaben je Tick: `i.<channel>`, `i.cmd.<command>`, `i.now`.
     pub inputs: Vec<(String, Sort)>,
-    /// Annahmen je Tick: Kanal-Ranges und `assumption`-Formeln (13.3).
+    /// Annahmen je Tick aus Typen und Rand: Kanal-Ranges, `max_slew`, Ψ.
     pub assumptions: Vec<Term>,
+    /// `assumption`-Formeln (13.3). Sie beschraenken die Beweisverpflichtung
+    /// der Eigenschaften, nicht die Typsicherheit (3.4): Eine Pruefstelle
+    /// wird ohne sie klassifiziert, sonst liesse eine Beweisdatei eine
+    /// Pruefung aus, die ein Lauf jenseits der Annahme braucht.
+    pub assumed: Vec<Term>,
     /// Invarianten des Zustands aus den Typen (3.4): Ranges, Enums, Blaetter,
     /// Zaehler — sie gelten in jedem erreichbaren Zustand, weil ein Wert
     /// ausserhalb faultet statt gespeichert zu werden.
@@ -319,11 +324,12 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     assumptions.extend(slew);
     assumptions.extend(enc.psi_assumptions.clone());
     let scoped = enc.scope.is_some();
+    let mut assumed = Vec::new();
     for prop in p.properties.iter().filter(|_| !scoped) {
         match enc.goal(prop, &pre)? {
             Some(goal) => {
                 if goal.assumption {
-                    assumptions.push(goal.formula.clone());
+                    assumed.push(goal.formula.clone());
                 }
                 properties.push(goal);
             }
@@ -354,6 +360,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         state,
         inputs: enc.inputs.into_iter().collect(),
         assumptions,
+        assumed,
         invariants,
         properties,
         checks,
@@ -538,6 +545,7 @@ impl Enc<'_> {
         }
     }
 
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn expr(&mut self, e: &Expr, cx: &Cx<'_>, env: &Env, flow: &mut Flow) -> R<Term> {
         let span = e.span;
         let sort = self.sort_of(e.ty, span);
@@ -650,7 +658,7 @@ impl Enc<'_> {
                     let timer = env.get(&self.loc_timer(m, leaf)).cloned().expect("Timer");
                     Term::bin(Op::Mul, timer, Term::int(period))
                 }
-                other => return no(format!("`{other:?}`"), span),
+                other @ (Builtin::LastFault | Builtin::Event) => return no(format!("`{other:?}`"), span),
             },
             ExprKind::Unary { op, expr } => {
                 let x = self.expr(expr, cx, env, flow)?;
@@ -708,7 +716,29 @@ impl Enc<'_> {
                 }
                 self.call(*callee, xs, cx, env, flow, span)?
             }
-            other => return no(format!("Ausdruck {}", node_name(other)), span),
+            other @ (ExprKind::Str(_)
+            | ExprKind::None
+            | ExprKind::Record { .. }
+            | ExprKind::Array(_)
+            | ExprKind::Tuple(..)
+            | ExprKind::BlockInit { .. }
+            | ExprKind::Armed(_)
+            | ExprKind::PortRead(_)
+            | ExprKind::Field { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Index2 { .. }
+            | ExprKind::Slice { .. }
+            | ExprKind::Accessor { .. }
+            | ExprKind::Format(_)
+            | ExprKind::JobState { .. }
+            | ExprKind::Stream(_)
+            | ExprKind::Matches { .. }
+            | ExprKind::NativeCall { .. }
+            | ExprKind::MatOp { .. }
+            | ExprKind::Decode { .. }
+            | ExprKind::Lift(_)
+            | ExprKind::Ok(_)
+            | ExprKind::Err(_)) => return no(format!("Ausdruck {}", node_name(other)), span),
         })
     }
 
@@ -730,6 +760,7 @@ impl Enc<'_> {
         Ok(Term::ite(active, new, old))
     }
 
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn binary(&mut self, op: BinaryOp, a: Term, b: Term, span: Span) -> R<Term> {
         let float = matches!(a.sort(), Sort::F32 | Sort::F64);
         Ok(match op {
@@ -757,6 +788,7 @@ impl Enc<'_> {
         })
     }
 
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn intrinsic(&mut self, op: Intrinsic, xs: Vec<Term>, span: Span) -> R<Term> {
         let float = xs.first().is_some_and(|x| matches!(x.sort(), Sort::F32 | Sort::F64));
         Ok(match (op, xs.as_slice()) {
@@ -781,6 +813,7 @@ impl Enc<'_> {
 
     /// Eine implizite Pruefung (4.1): Range und Division sind Fault-Zweige,
     /// Nichtendlichkeit ebenso; Ueberlauf und Gueltigkeit sind Annahmen.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn checked(&mut self, kind: &CheckedKind, x: Term, span: Span, cx: &Cx<'_>, flow: &mut Flow) -> R<Term> {
         let fail = match kind {
             // Die Intervallanalyse hat sie bewiesen (3.4).
@@ -866,6 +899,7 @@ impl Enc<'_> {
     }
 
     /// Der Rumpf einer Funktion: Zuweisungen an Lokale, `if`, `return`.
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn fn_block(&mut self, b: &Block, cx: &mut Cx<'_>, env: &mut Env, flow: &mut Flow, ret: &mut Term) -> R<()> {
         for s in &b.stmts {
             if flow.alive.is_bool(false) {
@@ -915,7 +949,25 @@ impl Enc<'_> {
                     flow.alive = Term::or(vec![ft.alive, fe.alive]);
                 }
                 StmtKind::Pass | StmtKind::Observe(_) => {}
-                other => return no(format!("Anweisung {} in einer Funktion", stmt_name(other)), s.span),
+                other @ (StmtKind::Assign { .. }
+                | StmtKind::Check { .. }
+                | StmtKind::Goto(_)
+                | StmtKind::Abort { .. }
+                | StmtKind::ForRange { .. }
+                | StmtKind::ForEach { .. }
+                | StmtKind::Match { .. }
+                | StmtKind::Send { .. }
+                | StmtKind::At { .. }
+                | StmtKind::Cancel(_)
+                | StmtKind::Skip(_)
+                | StmtKind::Raise(_)
+                | StmtKind::Job { .. }
+                | StmtKind::Every { .. }
+                | StmtKind::Break
+                | StmtKind::Arm { .. }
+                | StmtKind::MethodCall { .. }) => {
+                    return no(format!("Anweisung {} in einer Funktion", stmt_name(other)), s.span);
+                }
             }
         }
         Ok(())
@@ -923,6 +975,7 @@ impl Enc<'_> {
 
     // ------------------------------------------------------------ Anweisungen
 
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn block(&mut self, b: &Block, cx: &Cx<'_>, env: &mut Env, flow: &mut Flow) -> R<()> {
         let m = cx.m.expect("Maschine");
         for s in &b.stmts {
@@ -936,7 +989,9 @@ impl Enc<'_> {
                     let loc = match target {
                         Place::Var(id) => self.loc_var(m, *id),
                         Place::Output(c) => self.loc_out(*c),
-                        _ => return no("Zuweisung an Feld oder Element", span),
+                        Place::Port(_) | Place::Field(..) | Place::Index(..) | Place::Index2(..) => {
+                            return no("Zuweisung an Feld oder Element", span);
+                        }
                     };
                     let old = env.get(&loc).cloned().ok_or_else(|| Unsupported { what: "Ort".into(), span })?;
                     env.insert(loc, Term::ite(flow.alive.clone(), v, old));
@@ -988,7 +1043,9 @@ impl Enc<'_> {
                                 Term::eq(subj.clone(), Term::int(i64::from(*variant)))
                             }
                             ArmPattern::Wild => Term::bool(true),
-                            _ => return no("`case` mit Werten oder Feldern", arm.span),
+                            ArmPattern::Variant { .. } | ArmPattern::Values(_) => {
+                                return no("`case` mit Werten oder Feldern", arm.span);
+                            }
                         };
                         let take = Term::and(vec![remaining.clone(), cond.clone()]);
                         let mut env_a = env.clone();
@@ -1023,7 +1080,16 @@ impl Enc<'_> {
                     self.method_call(target.as_ref(), receiver, *method, args, cx, env, flow, span)?;
                 }
                 StmtKind::Observe(_) | StmtKind::Pass => {}
-                other => return no(format!("Anweisung {}", stmt_name(other)), span),
+                other @ (StmtKind::ForEach { .. }
+                | StmtKind::Return(_)
+                | StmtKind::Send { .. }
+                | StmtKind::At { .. }
+                | StmtKind::Cancel(_)
+                | StmtKind::Skip(_)
+                | StmtKind::Job { .. }
+                | StmtKind::Every { .. }
+                | StmtKind::Break
+                | StmtKind::Arm { .. }) => return no(format!("Anweisung {}", stmt_name(other)), span),
             }
         }
         Ok(())
@@ -1089,6 +1155,7 @@ impl Enc<'_> {
     /// der Zustand der Instanz in den Feldern; `requires` des `step` ist eine
     /// Pruefstelle ohne Laufzeitpruefung (5.7).
     #[allow(clippy::too_many_arguments)]
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn method_call(
         &mut self,
         target: Option<&Place>,
@@ -1112,7 +1179,9 @@ impl Enc<'_> {
             Method::Reset => return self.block_reset(&def, &fields, cx, env, flow),
             Method::Step => def.step.ok_or_else(|| Unsupported { what: "`step`".into(), span })?,
             Method::Block(f) => f,
-            _ => return no("Sammlungsmethode", span),
+            Method::Push | Method::Append | Method::Insert | Method::Remove | Method::Clear => {
+                return no("Sammlungsmethode", span);
+            }
         };
         let f = self.p.fns[fid.index()].clone();
         let base = fields.len() as u32;
@@ -1167,7 +1236,9 @@ impl Enc<'_> {
             let loc = match t {
                 Place::Var(id) => self.loc_var(m, *id),
                 Place::Output(c) => self.loc_out(*c),
-                _ => return no("Ziel eines Methodenaufrufs", span),
+                Place::Port(_) | Place::Field(..) | Place::Index(..) | Place::Index2(..) => {
+                    return no("Ziel eines Methodenaufrufs", span);
+                }
             };
             let old = env[&loc].clone();
             env.insert(loc, Term::ite(flow.alive.clone(), ret, old));
@@ -1775,6 +1846,7 @@ impl Enc<'_> {
         }))
     }
 
+    #[deny(clippy::wildcard_enum_match_arm)]
     fn tprop(&mut self, f: &TProp, cx: &Cx<'_>, env: &Env) -> R<Option<Term>> {
         Ok(Some(match f {
             TProp::Atom(e) => {
@@ -1788,13 +1860,17 @@ impl Enc<'_> {
                 Some(t) => t.not(),
                 None => return Ok(None),
             },
-            TProp::And(a, b) | TProp::Or(a, b) | TProp::Implies(a, b) => {
+            TProp::And(a, b) => {
                 let (Some(x), Some(y)) = (self.tprop(a, cx, env)?, self.tprop(b, cx, env)?) else { return Ok(None) };
-                match f {
-                    TProp::And(..) => Term::and(vec![x, y]),
-                    TProp::Or(..) => Term::or(vec![x, y]),
-                    _ => Term::or(vec![x.not(), y]),
-                }
+                Term::and(vec![x, y])
+            }
+            TProp::Or(a, b) => {
+                let (Some(x), Some(y)) = (self.tprop(a, cx, env)?, self.tprop(b, cx, env)?) else { return Ok(None) };
+                Term::or(vec![x, y])
+            }
+            TProp::Implies(a, b) => {
+                let (Some(x), Some(y)) = (self.tprop(a, cx, env)?, self.tprop(b, cx, env)?) else { return Ok(None) };
+                Term::or(vec![x.not(), y])
             }
             TProp::Temporal { .. } => return Ok(None),
         }))

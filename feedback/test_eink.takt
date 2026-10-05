@@ -1,8 +1,8 @@
 system:
     language = 1
-    tick = 1 ms
-    target = baremetal
-    float = f32
+    tick     = 1 ms
+    target   = baremetal
+    float    = f32
 
 # ==============================================================================
 # Hardware-Schnittstellen und Protokoll-Definitionen für E-Ink Display (SSD1680)
@@ -10,15 +10,15 @@ system:
 # ==============================================================================
 
 # --- Physische I/O Channels ---
-output epd_cs_n     : bool          @ hw("spi0/cs0")       with safe = true
-output epd_dc       : bool          @ hw("gpio/epd_dc")    with safe = false
-output epd_rst_n    : bool          @ hw("gpio/epd_rst")   with safe = true
-output epd_pwr_en   : bool          @ hw("gpio/epd_pwr")   with safe = false
-output spi_tx       : stream<u8>    @ hw("spi0/tx")        with max_rate = 2000000 Hz, capacity = 512
+output epd_cs_n   : bool       @ hw("spi0/cs0")     with safe = true
+output epd_dc     : bool       @ hw("gpio/epd_dc")  with safe = false
+output epd_rst_n  : bool       @ hw("gpio/epd_rst") with safe = true
+output epd_pwr_en : bool       @ hw("gpio/epd_pwr") with safe = false
+output spi_tx     : stream<u8> @ hw("spi0/tx")      with max_rate = 2000000 Hz, capacity = 512
 
-input  epd_busy_raw : bool          @ hw("gpio/epd_busy")  with debounce = 3, max_age = 5 ms
-input  vdd_sense    : float[V] in 2.0..4.0 V       @ hw("adc/vdd")     with max_age = 50 ms
-input  ambient_temp : float[degC] in -30..70 degC @ hw("sensor/temp") with max_age = 500 ms
+input  epd_busy_raw : bool                        @ hw("gpio/epd_busy") with debounce = 3, max_age = 5 ms
+input  vdd_sense    : float[V] in 2.0..4.0 V      @ hw("adc/vdd")       with max_age = 50 ms
+input  ambient_temp : float[degC] in -30..70 degC @ hw("sensor/temp")   with max_age = 500 ms
 
 # --- Operative Steuer-Kommandos ---
 command cmd_init
@@ -90,7 +90,7 @@ machine epd_controller every 1 ms:
     # `persist` ist v1.1 (5.9) und wird heute mit SC-3 abgelehnt — die
     # Zaehler stehen hier als das, was der Treiber wirklich braucht.
     persist var total_refreshes : int in 0..1000000 = 0 with min_interval = 10 s
-    persist var fault_counter   : int in 0..10000   = 0 with min_interval = 5 s
+    persist var fault_counter   : int in 0..10000 = 0 with min_interval = 5 s
 
     pub var status        : EpdStatus = OFF
     pub var rows_written  : int in 0..200 = 0
@@ -394,9 +394,9 @@ machine epd_controller every 1 ms:
 # liegt.
 # ==============================================================================
 
-output epd_busy_sim : bool             @ sim("gpio/epd_busy")
-output vdd_sim      : float[V]         @ sim("adc/vdd")
-output temp_sim     : float[degC]      @ sim("sensor/temp")
+output epd_busy_sim : bool        @ sim("gpio/epd_busy")
+output vdd_sim      : float[V]    @ sim("adc/vdd")
+output temp_sim     : float[degC] @ sim("sensor/temp")
 
 machine epd_panel every 1 ms:
     # Restlaufzeit der aktuellen Panel-Beschaeftigung.
@@ -408,7 +408,7 @@ machine epd_panel every 1 ms:
         # Versorgung und Temperatur sind hier konstant; ein Szenario, das
         # Brownout oder Kaeltebetrieb prueft, wuerde genau diese beiden
         # Zeilen ersetzen.
-        vdd_sim  = 3.3 V
+        vdd_sim = 3.3 V
         temp_sim = 22.0 degC
 
     state UNPOWERED:

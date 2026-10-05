@@ -1,0 +1,2 @@
+t=50 state hotfire ARMED.IGNITION.S0
+t=700 fault hotfire Timeout "Timeout in `IGNITION.S1`" -> SAFE

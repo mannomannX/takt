@@ -21,6 +21,13 @@ fn file_errors(src: &str) -> Vec<Diagnostic> {
     parse_file(&toks).1
 }
 
+/// Der einzige Fehler eines Schnipsels als (Byte-Anfang, Meldung).
+fn only_error(src: &str) -> (u32, String) {
+    let errors = snippet(src).1;
+    assert_eq!(errors.len(), 1, "{src}: {errors:?}");
+    (errors[0].span.start, errors[0].message.clone())
+}
+
 fn only_stmt(src: &str) -> StmtKind {
     let (items, errors) = snippet(src);
     assert!(errors.is_empty(), "{errors:?}");
@@ -34,8 +41,8 @@ fn only_stmt(src: &str) -> StmtKind {
 fn shift_right_is_two_joint_greater_signs() {
     let StmtKind::Expr(e) = only_stmt("x >> 2\n") else { panic!() };
     assert!(matches!(e.kind, ExprKind::Binary { op: BinaryOp::Shr, .. }));
-    let (_, errors) = snippet("x > > 2\n");
-    assert_eq!(errors.len(), 1, "`> >` mit Leerzeichen ist kein Shift: {errors:?}");
+    // `> >` mit Leerzeichen ist kein Shift.
+    assert_eq!(only_error("x > > 2\n"), (4, "erwartet einen Ausdruck, gefunden `>`".into()));
 }
 
 #[test]
@@ -62,10 +69,9 @@ fn property_atoms_are_comparisons() {
     assert!(errors.is_empty(), "{errors:?}");
     let (_, errors) = snippet("property q: x if a else b\n");
     assert!(errors[0].message.contains("Bedingungsform"), "{}", errors[0]);
-    let (_, errors) = snippet("x = always(y)\n");
-    assert!(!errors.is_empty(), "Temporaloperator ausserhalb einer Eigenschaft");
-    let (_, errors) = snippet("property r: g(always(x))\n");
-    assert!(!errors.is_empty(), "Temporaloperator in einem Argument");
+    let temporal = "erwartet einen Ausdruck, gefunden Schluesselwort `always`".to_string();
+    assert_eq!(only_error("x = always(y)\n"), (4, temporal.clone()), "ausserhalb einer Eigenschaft");
+    assert_eq!(only_error("property r: g(always(x))\n"), (14, temporal), "in einem Argument");
 }
 
 #[test]
@@ -74,7 +80,7 @@ fn generic_arguments_are_classified_by_name_and_next_token() {
     let (items, errors) = snippet(src);
     assert!(errors.is_empty(), "{errors:?}");
     let sexpr = takt_syntax::sexpr::snippet(&items);
-    assert!(sexpr.contains("[U 1/s KiB/s T? (+ N 1) (* n 2) (> a b) 3[K] bytes<4> [4]u8]"), "{sexpr}");
+    assert!(sexpr.contains("[U 1/s KiB/s T? (+ N 1) (* n 2) (paren (> a b)) 3[K] bytes<4> [4]u8]"), "{sexpr}");
 }
 
 #[test]
@@ -101,16 +107,15 @@ fn contextual_word_after_number_is_not_a_unit() {
 fn dimensionless_one_only_as_numerator() {
     let StmtKind::Var(v) = only_stmt("var k = 0.0005 1/s\n") else { panic!() };
     assert!(matches!(v.value.kind, ExprKind::Number { unit: Some(_), .. }));
-    let (_, errors) = snippet("x = 1 1\n");
-    assert_eq!(errors.len(), 1, "`1 1` ist kein Literal: {errors:?}");
+    // `1 1` ist kein Literal.
+    assert_eq!(only_error("x = 1 1\n"), (6, "erwartet Zeilenende, gefunden `1`".into()));
 }
 
 #[test]
 fn unit_literal_ends_at_the_first_space() {
     let StmtKind::Var(v) = only_stmt("var a = 5 K / min\n") else { panic!() };
     assert!(matches!(v.value.kind, ExprKind::Binary { op: BinaryOp::Div, .. }), "`5 K / min` ist eine Division");
-    let (_, errors) = snippet("var b = 9.81 m/s^2 m/s^2\n");
-    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(only_error("var b = 9.81 m/s^2 m/s^2\n"), (19, "erwartet Zeilenende, gefunden `m`".into()));
 }
 
 #[test]
@@ -118,13 +123,16 @@ fn joint_operator_after_a_unit_literal_is_an_error() {
     assert!(snippet("x = 3 K^2 ^ y\n").1.is_empty());
     let (_, errors) = snippet("x = 3 K^2^y\n");
     assert!(errors[0].message.contains("Einheitenausdruck"), "{}", errors[0]);
-    assert!(!snippet("x = 3 s*2\n").1.is_empty());
+    let unit = "erwartet einen Einheitennamen wie `bar`, `K/min` oder `1/s`, gefunden `2`";
+    assert_eq!(only_error("x = 3 s*2\n"), (8, unit.into()));
 }
 
 #[test]
 fn stray_greater_sign_in_type_arguments_is_an_error() {
-    let (_, errors) = snippet("var s : samples<float[A], 100> 100> = default\n");
-    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        only_error("var s : samples<float[A], 100> 100> = default\n"),
+        (31, "erwartet `=`, gefunden `100`".into())
+    );
 }
 
 #[test]
@@ -307,4 +315,91 @@ fn a_machine_level_declaration_at_file_level_names_its_place() {
     let d = errors.first().expect("abgelehnt");
     let hint = d.suggestion.as_deref().unwrap_or_default();
     assert!(hint.contains("5.8"), "der Hinweis nennt 5.8: {hint}");
+}
+
+/// Der Segment-Default einer Sequenz (6.2) bleibt auch im Schnipsel erhalten.
+#[test]
+fn a_snippet_sequence_keeps_its_timeout() {
+    let (items, errors) = snippet("sequence with timeout = 5 s -> X:\n    wait 1 s\n");
+    assert!(errors.is_empty(), "{errors:?}");
+    let sexpr = takt_syntax::sexpr::snippet(&items);
+    assert!(sexpr.starts_with("(sequence timeout=5s -> X\n"), "{sexpr}");
+}
+
+/// Negativfaelle je Produktion mit Code, Zeile, Spalte und Meldung (10:
+/// Position, Ursache, Vorschlag). Eine Meldung, die nicht `erwartet X,
+/// gefunden Y` lautet, traegt einen Vorschlag.
+#[test]
+fn parser_errors_name_place_and_cause() {
+    let state = |section: &str, body: &str| {
+        format!("machine m:\n    initial A\n    state A:\n        {section}:\n{body}        {section}:\n{body}")
+    };
+    let pass = "            pass\n";
+    let cases: Vec<(String, (u32, u32), &str)> = vec![
+        (state("enter", pass), (6, 9), "`enter` ist in diesem Zustand doppelt"),
+        (state("loop", pass), (6, 9), "`loop` ist in diesem Zustand doppelt"),
+        (state("exit", pass), (6, 9), "`exit` ist in diesem Zustand doppelt"),
+        (state("sequence", "            wait 1 s\n"), (6, 9), "`sequence` ist in diesem Zustand doppelt"),
+        (
+            "machine m:\n    initial A\n    state A:\n        initial B\n        initial C\n        state B:\n            loop: pass\n        state C:\n            loop: pass\n".into(),
+            (5, 9),
+            "`initial` ist in diesem Zustand doppelt",
+        ),
+        (
+            "block b(x: int):\n    step() -> int:\n        return x\n    step() -> int:\n        return x\n".into(),
+            (4, 5),
+            "`step` ist doppelt",
+        ),
+        ("block b(x: int):\n    var y : int = 0\n".into(), (3, 1), "ein Block braucht `step(…)` oder eine Methode"),
+        ("if x:\n".into(), (2, 1), "erwartet eingerueckten Block"),
+        ("fn f() -> int:\n".into(), (2, 1), "erwartet eingerueckten Block"),
+        ("match x:\n    pass\n".into(), (2, 5), "erwartet `case`, gefunden Schluesselwort `pass`"),
+        ("elif x:\n    pass\n".into(), (1, 1), "`elif` ohne vorangehendes `if`"),
+        ("else:\n    pass\n".into(), (1, 1), "`else` ohne vorangehendes `if`"),
+        ("input a : bool @ hw(\"a/b\") with safe = ,\n".into(), (1, 40), "erwartet einen Ausdruck, gefunden `,`"),
+        ("input a : bool @ hw(\"a/b\") with ,\n".into(), (1, 33), "erwartet ein Attribut wie `safe`, `max_age`, `capacity`, gefunden `,`"),
+    ];
+    let mut failures = Vec::new();
+    for (src, place, message) in &cases {
+        let toks = tokenize(src);
+        assert!(toks.errors.is_empty(), "{src}: {:?}", toks.errors);
+        let errors = parse_snippet(&toks).1;
+        let Some(d) = errors.first() else {
+            failures.push(format!("{src:?}: angenommen"));
+            continue;
+        };
+        let at = SourceMap::single("t", src.as_str()).line_col(d.span);
+        if d.code != "P" || at != *place || !d.message.starts_with(message) {
+            failures.push(format!("{src:?}: erwartet {message} an {place:?}, erhalten {d} an {at:?}"));
+        }
+        if !d.message.starts_with("erwartet ") && d.suggestion.is_none() {
+            failures.push(format!("{src:?}: ohne Vorschlag: {d}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Nach einer gescheiterten Kopfzeile gehoert der eingerueckte Block zu ihr:
+/// kein Folgefehler fuer die Einrueckung, und die Zeile danach wird wieder
+/// geprueft statt still verschluckt.
+#[test]
+fn recovery_skips_the_block_of_a_failed_line() {
+    let src = "elif x:\n    pass\ny = = 1\nz = 2\n";
+    let errors = snippet(src).1;
+    let map = SourceMap::single("t", src);
+    let places: Vec<_> = errors.iter().map(|d| map.line_col(d.span)).collect();
+    assert_eq!(places, [(1, 1), (3, 5)], "{errors:?}");
+    assert_eq!(errors[0].message, "`elif` ohne vorangehendes `if`");
+    let errors = snippet("else:\n    pass\n").1;
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].message, "`else` ohne vorangehendes `if`");
+}
+
+/// Der Platzhalter eines Formatstrings ist genau ein Ausdruck (3.9, L5.4).
+#[test]
+fn a_placeholder_is_exactly_one_expression() {
+    let toks = tokenize("a b");
+    let d = takt_syntax::parse_expr(&toks).expect_err("zwei Ausdruecke");
+    assert_eq!((d.code, d.span.start), ("P", 2));
+    assert_eq!(d.message, "erwartet Ende des Ausdrucks, gefunden `b`");
 }

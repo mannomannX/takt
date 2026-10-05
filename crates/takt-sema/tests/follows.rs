@@ -178,3 +178,165 @@ machine fresh follows src:
     );
     assert!(diags.iter().any(|d| d.contains("SC-33") && d.contains("Fault-Pfad")), "{diags:?}");
 }
+
+#[test]
+fn a_follower_of_a_slower_machine_reads_its_last_activation() {
+    // 7.2: frisch, wenn die gefolgte Maschine in diesem Tick aktiv war,
+    // sonst Psi — also der Wert ihrer letzten Aktivierung.
+    let p = ok("output y : int in 0..999 @ hw(\"o/y\") with safe = 0
+
+machine src every 2 ms:
+    pub var x : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            x = x + 1
+
+machine fresh follows src:
+    initial RUN
+    state RUN:
+        loop:
+            y = src.x
+");
+    let t = trace(&p, 5, None);
+    for line in ["t=0 out y 1\n", "t=2 out y 2\n", "t=4 out y 3\n"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+    assert!(!t.contains("t=1 out y") && !t.contains("t=3 out y"), "dazwischen bleibt der Wert:\n{t}");
+}
+
+#[test]
+fn the_followed_machine_reads_its_follower_from_psi() {
+    // 7.2: Die gefolgte Maschine liest den Follower nie frisch; sie laeuft
+    // vor ihm und sieht seinen Wert vom vorigen Tick.
+    let p = ok("output y : int in 0..999 @ hw(\"o/y\") with safe = 0
+
+machine src:
+    initial RUN
+    state RUN:
+        loop:
+            y = fresh.w
+
+machine fresh follows src:
+    pub var w : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            w = w + 1
+");
+    let t = trace(&p, 3, None);
+    for line in ["t=0 out y 0\n", "t=1 out y 1\n", "t=2 out y 2\n"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+}
+
+#[test]
+fn a_follower_reads_state_and_signal_fresh() {
+    // 7.2: Zustand und Signale der gefolgten Maschine liest der Follower
+    // nach deren Schritt, `watch` mit Unit-Delay.
+    let p = ok("output high : bool @ hw(\"o/high\") with safe = false
+output pinged : bool @ hw(\"o/pinged\") with safe = false
+output late : bool @ hw(\"o/late\") with safe = false
+
+machine src:
+    signal ping
+    initial A
+    state A:
+        when true: -> B
+    state B:
+        enter:
+            raise ping
+        when true: -> A
+
+machine fresh follows src:
+    initial RUN
+    state RUN:
+        loop:
+            high = src.state == B
+            pinged = src.ping
+
+machine watch:
+    initial RUN
+    state RUN:
+        loop:
+            late = src.state == B
+");
+    let t = trace(&p, 4, None);
+    for line in [
+        "t=1 out high true\n",
+        "t=1 out pinged true\n",
+        "t=2 out high false\n",
+        "t=2 out pinged false\n",
+        "t=2 out late true\n",
+        "t=3 out late false\n",
+    ] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+    assert!(!t.contains("t=1 out late"), "`watch` sieht B erst einen Tick spaeter:\n{t}");
+}
+
+#[test]
+fn the_fault_path_of_a_follower_reads_fresh_in_the_step_and_psi_in_the_abort_phase() {
+    // 7.2: „Frische Lesevorgaenge gelten nur in der Schrittphase; in der
+    // Abort-Phase gilt Psi_k." `src.x` ist nach dem Schritt in Tick 2
+    // schon 3. Faultet der `check` des Followers, laeuft `SAFE.enter` noch
+    // in der Schrittphase und liest 3; ein Operator-Abort in Tick 2 fuehrt
+    // es in der Abort-Phase aus, dort gilt der Wert vom Tickbeginn: 2.
+    let program = |limit: u32| {
+        ok(&format!(
+            "output y : int in 0..999 @ hw(\"o/y\") with safe = 0
+
+machine src:
+    pub var x : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            x = x + 1
+
+machine fresh follows src:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        loop:
+            y = src.x
+            check src.x < {limit}, \"zu hoch\"
+    state SAFE:
+        enter:
+            y = src.x + 100
+"
+        ))
+    };
+    let t = trace(&program(3), 3, None);
+    assert!(t.contains("t=2 fault fresh CheckFailed"), "{t}");
+    assert!(t.contains("t=2 out y 103\n"), "Schrittphase: frisch:\n{t}");
+    let stimulus = Trace::parse("t=2 abort\n").expect("Stimulus");
+    let options = RunOptions { ticks: 3, ..Default::default() };
+    let t = run(&program(999), &stimulus, &options).expect("Lauf").trace.render();
+    assert!(t.contains("t=2 fault fresh Abort"), "{t}");
+    assert!(t.contains("t=2 out y 102\n"), "Abort-Phase: Psi:\n{t}");
+}
+
+#[test]
+fn a_self_follow_a_longer_cycle_and_an_unknown_machine_are_errors() {
+    // Pruefung 33: Kanten azyklisch; eine Selbstfolge meldet die Sema als
+    // SC-3 (lower/machine.rs), eine unbekannte Maschine als SC-2.
+    let machine = |name: &str, follows: &str| {
+        format!(
+            "machine {name} follows {follows}:\n    pub var v : int in 0..9 = 0\n    initial RUN\n    state RUN:\n        \
+             loop:\n            v = 1\n\n"
+        )
+    };
+    let (p, d) = compile(&machine("a", "a"));
+    assert!(p.is_none() && d.iter().any(|d| d.contains("[SC-3]")), "Selbstfolge: {d:?}");
+    let (p, d) = compile(&(machine("a", "b") + &machine("b", "c") + &machine("c", "a")));
+    assert!(p.is_none() && d.iter().any(|d| d.contains("[SC-33]") && d.contains("Zyklus")), "Dreierzyklus: {d:?}");
+    let (p, d) = compile(&machine("a", "nobody"));
+    assert!(p.is_none() && d.iter().any(|d| d.contains("[SC-2]") && d.contains("`nobody`")), "unbekannt: {d:?}");
+}
+
+#[test]
+fn the_warnings_about_follows_leave_the_program_intact() {
+    // FB-18, FB-38: Beide Meldungen sind Warnungen; das Programm entsteht.
+    let (p, d) = compile(PROGRAM);
+    assert!(p.is_some() && d.iter().any(|d| d.contains("SC-33")), "{d:?}");
+}

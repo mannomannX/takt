@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46 (3.7): `align` ist eine Zweierpotenz.
+
+record Hdr layout little, align = 3:  # ~ SC-46
+    kind : u8
+    len  : u16
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = true

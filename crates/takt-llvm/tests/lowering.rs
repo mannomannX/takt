@@ -2,7 +2,7 @@
 
 use takt_llvm::emit::Module;
 use takt_llvm::expr::{Lowered, Vars, lower};
-use takt_llvm::ty::{self, BY_POINTER, LlvmType};
+use takt_llvm::ty::{self, LlvmType};
 use takt_mir::expr::{BinaryOp, Expr, ExprKind, UnaryOp};
 use takt_mir::program::{Config, Program};
 use takt_mir::types::{FloatWidth, IntWidth, Range, RangeOrigin, Type};
@@ -73,6 +73,52 @@ fn scalar_types_map_to_their_llvm_widths() {
     assert_eq!(ty::lower(t.f32_, &p), Some(LlvmType::F32));
 }
 
+/// GEN-010: Die uebrigen Breiten und die Huellen um einen Wert, wie
+/// Interpreter und Rahmen sie erwarten (11.2, 3.8, 3.9).
+#[test]
+fn every_width_and_wrapper_has_its_layout() {
+    let (mut p, t) = program();
+    for (w, bits) in [
+        (IntWidth::I8, 8),
+        (IntWidth::U8, 8),
+        (IntWidth::I16, 16),
+        (IntWidth::U16, 16),
+        (IntWidth::U32, 32),
+        (IntWidth::U64, 64),
+    ] {
+        let id = push(&mut p, Type::Int { width: w, unit: None, range: None });
+        assert_eq!(ty::lower(id, &p), Some(LlvmType::Int(bits)), "{w:?}");
+    }
+    let bytes = |n| LlvmType::Array(Box::new(LlvmType::Int(8)), n);
+    let opt = push(&mut p, Type::Optional(t.f64_));
+    assert_eq!(
+        ty::lower(opt, &p),
+        Some(LlvmType::Struct(vec![LlvmType::F64, LlvmType::Int(1)])),
+        "Wert vorn, Flag hinten"
+    );
+    let b = push(&mut p, Type::Bytes { cap: 12 });
+    assert_eq!(ty::lower(b, &p), Some(LlvmType::Struct(vec![LlvmType::Int(32), bytes(12)])));
+    let line = push(&mut p, Type::Line { cap: 12 });
+    assert_eq!(ty::lower(line, &p), Some(LlvmType::Struct(vec![LlvmType::Int(32), bytes(12), LlvmType::Int(1)])));
+    let variants = ["IDLE", "RUN"].into_iter().enumerate().map(|(i, name)| takt_mir::types::VariantDef {
+        name: name.into(),
+        discriminant: i as i64,
+        fields: Vec::new(),
+        span: takt_diag::Span::default(),
+    });
+    p.enums.push(takt_mir::types::EnumDef {
+        name: "Mode".into(),
+        variants: variants.collect(),
+        layout: None,
+        open: false,
+        builtin: false,
+        span: takt_diag::Span::default(),
+    });
+    let id = takt_mir::EnumId(p.enums.len() as u32 - 1);
+    let mode = push(&mut p, Type::Enum(id));
+    assert_eq!(ty::lower(mode, &p), Some(LlvmType::Int(32)), "ein Enum ohne Felder ist seine Diskriminante");
+}
+
 /// 3.2: Dauern sind Nanosekunden in `i64`, nicht ein eigener Typ.
 #[test]
 fn a_duration_is_an_i64_of_nanoseconds() {
@@ -97,14 +143,22 @@ fn an_array_maps_to_an_llvm_array() {
     assert_eq!(ty::lower(arr, &p), Some(LlvmType::Array(Box::new(LlvmType::F64), 16)));
 }
 
-/// 11.2: Werte ueber 64 Byte werden per Zeiger uebergeben.
+/// 11.2: Grosse Werte gehen per Zeiger. Die Schwelle des Codegens ist
+/// `INDIRECT_MIN` (zwei Worte, FB-214); ein Aggregat genau darauf geht als
+/// Wert, eines darueber als `ptr` in die Signatur einer Funktion.
 #[test]
 fn the_pointer_threshold_follows_the_reference() {
     let (mut p, t) = program();
-    let small = push(&mut p, Type::Array { elem: t.f64_, len: 4 });
-    let large = push(&mut p, Type::Array { elem: t.f64_, len: 32 });
-    assert!(ty::lower(small, &p).unwrap().size() <= BY_POINTER);
-    assert!(ty::lower(large, &p).unwrap().size() > BY_POINTER);
+    let at = push(&mut p, Type::Array { elem: t.f64_, len: (ty::INDIRECT_MIN / 8) as u32 });
+    let above = push(&mut p, Type::Array { elem: t.f64_, len: (ty::INDIRECT_MIN / 8) as u32 + 1 });
+    let (at, above) = (ty::lower(at, &p).expect("Array"), ty::lower(above, &p).expect("Array"));
+    assert_eq!(at.size(), ty::INDIRECT_MIN);
+    assert!(!at.indirect() && above.indirect());
+    let sig = |param: LlvmType| {
+        takt_llvm::fns::Signature { declared: vec![param], ret: LlvmType::Int(1), sret: false }.declare("f")
+    };
+    assert_eq!(sig(at.clone()), format!("declare i1 @f({at})"));
+    assert_eq!(sig(above), "declare i1 @f(ptr readonly)");
 }
 
 /// Ein Typ, den der Codegen noch nicht kennt, meldet sich als solcher —
@@ -225,17 +279,18 @@ fn logical_not_and_bitwise_not_are_different() {
 /// nicht still etwas anderes.
 #[test]
 fn an_unsupported_expression_says_so() {
-    let (mut p, t) = program();
+    let (mut p, _) = program();
     let mut m = Module::new("t", "x86_64-unknown-linux-gnu");
     m.begin("f", &LlvmType::Void, &[]);
-    // `decode` braucht das Drahtformat (8.6); bis dahin meldet sich der
-    // Knoten, statt still etwas anderes zu erzeugen.
-    let bytes = push(&mut p, Type::Bytes { cap: 8 });
-    let call =
-        e(ExprKind::Decode { bytes: Box::new(e(ExprKind::Default, bytes)), record: takt_mir::RecordId(0) }, t.f64_);
-    let got = lower(&call, &p, &mut m, &NoVars);
+    // Ein Formatstring als Wert entsteht nur in `send` und Meldungen an Ort
+    // und Stelle (8.8); als freier Ausdruck meldet sich der Knoten, statt
+    // still etwas anderes zu erzeugen.
+    let text = push(&mut p, Type::Str { cap: 8 });
+    let format = e(ExprKind::Format(takt_mir::pattern::Format::text("x")), text);
+    let got = lower(&format, &p, &mut m, &NoVars);
     m.end(None);
-    assert!(got.is_err(), "`decode` ist noch nicht gesenkt");
+    let Err(err) = got else { panic!("ein Formatstring als Wert ist nicht gesenkt") };
+    assert_eq!(err.what, "Format-String");
 }
 
 /// Die Ranges aus M3 senken die Breite nicht von selbst — der Codegen

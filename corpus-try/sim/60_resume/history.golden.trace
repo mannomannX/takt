@@ -1,0 +1,14 @@
+t=0 state m WORK.FIRST
+t=0 out phase 1
+t=0 out paused false
+t=1 state m PAUSE
+t=1 out paused true
+t=3 state m WORK.FIRST
+t=3 out paused false
+t=5 state m WORK.SECOND
+t=5 out phase 2
+t=6 state m PAUSE
+t=6 out paused true
+t=8 state m WORK.SECOND
+t=8 out paused false
+t=12 verdict-final INCONCLUSIVE

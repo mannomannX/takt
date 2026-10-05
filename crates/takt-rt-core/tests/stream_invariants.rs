@@ -22,20 +22,34 @@ impl Sequence {
     }
 }
 
+/// Der Inhalt, den das Element mit der Nummer `seq` traegt: Ein
+/// vertauschtes oder verschobenes Element faellt so auf.
+fn content_of(seq: i64, i: usize) -> u8 {
+    (seq.wrapping_mul(7) as u8).wrapping_add(i as u8)
+}
+
 /// Was nach jedem Schritt gelten muss (9.6, 9.6.1).
 fn invariants(r: &Ring<'_>, cursor: i64, at_label: &str) {
     // Lemma 9.6.1: Der Puffer ist zweidimensional beschränkt.
     assert!(r.len() <= r.capacity(), "{at_label}: mehr Elemente als CAP");
     assert!(r.count(cursor) <= r.len(), "{at_label}: das Fenster ist größer als der Puffer");
-    // 9.6: Die Nummern sind streng steigend und lückenlos im Puffer.
+    // 9.6: Die Nummern sind streng steigend und lückenlos im Puffer, und
+    // jedes Element traegt den Inhalt seiner Nummer.
     let mut vorige: Option<i64> = None;
+    let mut bytes = 0;
     for i in 0..r.len() {
         let Some(d) = r.at(i64::MIN, i) else { panic!("{at_label}: Element {i} fehlt") };
         if let Some(v) = vorige {
             assert_eq!(d.seq, v + 1, "{at_label}: die Nummern haben eine Luecke");
         }
         vorige = Some(d.seq);
+        let mut buf = [0u8; 8];
+        let n = r.read(d, &mut buf);
+        let want: Vec<u8> = (0..d.len as usize).map(|i| content_of(d.seq, i)).collect();
+        assert_eq!(&buf[..n], &want[..], "{at_label}: Inhalt von Element {}", d.seq);
+        bytes += d.len as usize;
     }
+    assert!(bytes <= r.capacity_bytes(), "{at_label}: {bytes} Byte, mehr als CAPB");
     // Die nächste Nummer liegt hinter der letzten vergebenen.
     if let Some(last_seen) = vorige {
         assert!(r.end() > last_seen, "{at_label}: `end` liegt nicht hinter der letzten Nummer");
@@ -58,8 +72,8 @@ fn the_invariants_hold_under_random_operations() {
             match sequence.next() % 5 {
                 0..=2 => {
                     let n = (sequence.next() % 4 + 1) as usize;
-                    let content = [(step_of % 251) as u8; 4];
-                    r.push(i64::from(step_of), &content[..n], sequence.next() % 2 == 0);
+                    let content: Vec<u8> = (0..n).map(|i| content_of(r.end(), i)).collect();
+                    r.push(i64::from(step_of), &content, sequence.next() % 2 == 0);
                 }
                 3 => {
                     if let Some(e) = r.at(cursor, 0) {
@@ -109,22 +123,23 @@ fn content_survives_the_ring_boundary() {
     let (mut d, mut b) = ([Desc::default(); 4], [0u8; 11]);
     let mut r = Ring::new(&mut d, &mut b);
     let mut cursor = 0i64;
+    let mut wrapped = 0;
     for step_of in 0..200u32 {
         let n = (step_of % 3 + 1) as usize;
-        let mark = (step_of % 251) as u8;
-        let content = [mark, mark.wrapping_add(1), mark.wrapping_add(2)];
-        if r.push(0, &content[..n], true) == Delivery::Overflow {
+        let content: Vec<u8> = (0..n).map(|i| content_of(r.end(), i)).collect();
+        if r.push(0, &content, true) == Delivery::Overflow {
             continue;
         }
-        // Alles im Fenster lesen und mit dem Erwarteten vergleichen.
+        // Alles im Fenster lesen und mit dem Erwarteten vergleichen: Der
+        // Inhalt folgt aus der Nummer des Elements.
         let mut i = 0;
         while let Some(e) = r.at(cursor, i) {
             let mut buf = [0u8; 4];
             let gelesen = r.read(e, &mut buf);
             assert_eq!(gelesen, e.len as usize, "Schritt {step_of}: verschieden viele Bytes");
-            // Das erste Byte traegt die Marke des Schritts, in dem das
-            // Element entstand — es muss zu seiner Nummer passen.
-            assert!(buf[0] < 251, "Schritt {step_of}: der Inhalt ist beschaedigt");
+            let want: Vec<u8> = (0..gelesen).map(|j| content_of(e.seq, j)).collect();
+            assert_eq!(&buf[..gelesen], &want[..], "Schritt {step_of}: Inhalt von Element {}", e.seq);
+            wrapped += usize::from(e.offset as usize + gelesen > 11);
             i += 1;
         }
         if let Some(e) = r.at(cursor, 0) {
@@ -132,6 +147,7 @@ fn content_survives_the_ring_boundary() {
             r.evict(cursor);
         }
     }
+    assert!(wrapped > 0, "kein Element lag ueber der Naht");
 }
 
 /// Grenzfälle der Kapazität: ein Platz, ein Byte, gar keiner.

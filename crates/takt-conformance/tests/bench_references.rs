@@ -13,8 +13,8 @@ use takt_llvm::toolchain::Clang;
 /// Regelung und mehr als einmal um den Zeilenring.
 const TICKS: usize = 400;
 
-/// Der Digest je Tick im Interpreter.
-fn interpreted(name: &str) -> Vec<u64> {
+/// Ein Messkern, fuer die Simulation uebersetzt.
+fn kernel(name: &str) -> takt_mir::Program {
     let path = kernel_path(name, "takt");
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let options = takt_sema::Options {
@@ -26,37 +26,48 @@ fn interpreted(name: &str) -> Vec<u64> {
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));
-    let p = out.program.unwrap_or_else(|| panic!("{name}: kein Programm"));
+    out.program.unwrap_or_else(|| panic!("{name}: kein Programm"))
+}
+
+/// Der Trace des Interpreters ueber [`TICKS`] Ticks.
+fn interpreted_trace(name: &str, p: &takt_mir::Program) -> String {
     let options = takt_interp::RunOptions { ticks: TICKS as u64, ..Default::default() };
-    let run = takt_interp::run(&p, &takt_interp::Trace::default(), &options)
-        .unwrap_or_else(|e| panic!("{name}: Interpreter: {e:?}"));
-    digests(&run.trace.render())
+    takt_interp::run(p, &takt_interp::Trace::default(), &options)
+        .unwrap_or_else(|e| panic!("{name}: Interpreter: {e:?}"))
+        .trace
+        .render()
+}
+
+/// Der Digest je Tick im Interpreter.
+fn interpreted(name: &str) -> Vec<u64> {
+    digests(&interpreted_trace(name, &kernel(name))).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 /// Der Digest je Tick aus den Zeilen `t=… out digest …`. Ein Output steht
-/// nur im Trace, wenn er sich aendert; bis zur ersten Zeile gilt `safe`.
-fn digests(trace: &str) -> Vec<u64> {
+/// nur im Trace, wenn er sich aendert, und Tick 0 schreibt jeden; eine
+/// Zeile, die fehlt oder sich nicht lesen laesst, ist ein Fehler und kein
+/// stiller Wert (KON1-035).
+fn digests(trace: &str) -> Result<Vec<u64>, String> {
     let mut changes: Vec<Option<u64>> = vec![None; TICKS];
     for line in trace.lines() {
         let mut w = line.split_whitespace();
         let (Some(t), Some("out"), Some("digest"), Some(v)) = (w.next(), w.next(), w.next(), w.next()) else {
             continue;
         };
-        let (Some(t), Ok(v)) = (t.strip_prefix("t=").and_then(|t| t.parse::<usize>().ok()), v.parse::<u64>()) else {
-            continue;
-        };
+        let t = t.strip_prefix("t=").and_then(|t| t.parse::<usize>().ok()).ok_or(format!("`{line}`: kein Tick"))?;
+        let v = v.parse::<u64>().map_err(|e| format!("`{line}`: {e}"))?;
         if t < TICKS {
             changes[t] = Some(v);
         }
     }
-    let mut last = 0;
-    changes
+    let mut last = changes[0].ok_or("in Tick 0 steht kein Digest")?;
+    Ok(changes
         .into_iter()
         .map(|c| {
             last = c.unwrap_or(last);
             last
         })
-        .collect()
+        .collect())
 }
 
 /// Der Digest je Tick der C-Referenz, auf dem Wirt uebersetzt: dieselben
@@ -114,6 +125,40 @@ fn every_reference_computes_what_its_kernel_computes() {
                 }
             }
             Err(e) => failed.push(format!("{name}: {e}")),
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// Fehlende und unlesbare Digests sind Fehler (KON1-035).
+#[test]
+fn a_missing_or_unreadable_digest_is_an_error() {
+    assert!(digests("t=0 out digest 7\nt=3 out digest 9\n").is_ok_and(|d| d[2] == 7 && d[3] == 9));
+    assert!(digests("t=1 out digest 7\n").is_err(), "ohne Digest in Tick 0");
+    assert!(digests("t=0 out digest 7\nt=2 out digest x\n").is_err(), "unlesbar");
+}
+
+/// **Die Messkerne laufen nativ wie im Interpreter** (13.8, Satz 9.4.4;
+/// KON1-035): Was `takt bench` auf dem Board als Takt-Code misst, rechnet
+/// der erzeugte Code schon auf dem Wirt Tick fuer Tick wie der Interpreter
+/// — sonst stuende `same_digest` erst nach einem Boardlauf in Frage.
+#[test]
+fn every_kernel_runs_natively_like_the_interpreter() {
+    let Some(clang) = common::clang() else { return };
+    let mut failed = Vec::new();
+    for name in KERNELS {
+        let p = kernel(name);
+        let interpreted = interpreted_trace(name, &p);
+        let native = match common::run_native_all(&clang, &p, &format!("kern_{name}"), TICKS as u64) {
+            Ok(t) => t,
+            Err(e) => {
+                failed.push(format!("{name}: kein nativer Lauf: {e}"));
+                continue;
+            }
+        };
+        let diffs = takt_conformance::compare(&interpreted, &native);
+        if !diffs.is_empty() {
+            failed.push(format!("{name}: {} Abweichungen, etwa {:?}", diffs.len(), &diffs[..diffs.len().min(4)]));
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));

@@ -1,0 +1,9 @@
+t=0 state ctrl ARMING
+t=0 out vbus true
+t=0 out phase 1
+t=3 state ctrl CUT
+t=3 out phase 2
+t=4 out vbus false
+t=13 state ctrl ARMING
+t=13 out phase 1
+t=16 verdict-final INCONCLUSIVE

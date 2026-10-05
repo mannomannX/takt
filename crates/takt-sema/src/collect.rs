@@ -33,6 +33,8 @@ impl Lowerer<'_> {
     /// Phase 1: Tabellen ohne Ruempfe.
     pub fn collect(&mut self, file: &ast::File) {
         let mut imports = Vec::new();
+        let first_record = self.program.records.len();
+        let (first_stream, first_channel) = (self.program.streams.len(), self.program.channels.len());
         for item in &file.items {
             match item {
                 ast::Item::Enum(e) => self.register_enum(e),
@@ -64,7 +66,11 @@ impl Lowerer<'_> {
                 ast::Item::Node(n) => self.node_decl(n),
                 ast::Item::Property(_) => {}
                 ast::Item::Const(c) => self.const_decl(c),
-                ast::Item::Param(p) => self.param_decl(p),
+                ast::Item::Param(p) => {
+                    let errors = self.error_count();
+                    self.param_decl(p);
+                    self.reject_unless_declared(&p.name, errors);
+                }
                 ast::Item::Profile(_) => {}
                 ast::Item::Channel(c) => {
                     let errors = self.error_count();
@@ -81,7 +87,11 @@ impl Lowerer<'_> {
                         self.declare(&f.name, Entity::FnTemplate(idx));
                     }
                 }
-                ast::Item::Native(n) => self.native_decl(n),
+                ast::Item::Native(n) => {
+                    let errors = self.error_count();
+                    self.native_decl(n);
+                    self.reject_unless_declared(&n.name, errors);
+                }
                 ast::Item::Block(b) => {
                     if b.generics.is_empty() {
                         self.register_block(b);
@@ -103,6 +113,28 @@ impl Lowerer<'_> {
         // die Deklarationsreihenfolge loest das auf.
         for i in 0..self.program.records.len() {
             self.wire_layout(takt_mir::RecordId(i as u32));
+        }
+        // Pruefung 57 (3.9): Ein Record-Feld kann als Schluessel einen Record
+        // nennen, der weiter unten steht und beim Aufloesen noch keine Felder
+        // hatte; geprueft wird darum noch einmal mit allen Feldern.
+        for i in first_record..self.program.records.len() {
+            let fields: Vec<_> = self.program.records[i].fields.iter().map(|f| (f.ty, f.span)).collect();
+            for (ty, span) in fields {
+                self.check_map_keys_in(ty, span);
+            }
+        }
+        // Pruefung 17 (8.6, 5.9) ebenso nach allen Rumpfen: Elementtypen der
+        // Stroeme dieser Datei.
+        let streams: Vec<_> = self.program.streams[first_stream..].iter().map(|s| (s.elem, s.span)).collect();
+        let channels: Vec<_> = self.program.channels[first_channel..]
+            .iter()
+            .filter_map(|c| match self.program.types.get(c.ty) {
+                Type::Stream(elem) => Some((*elem, c.span)),
+                _ => None,
+            })
+            .collect();
+        for (elem, span) in streams.into_iter().chain(channels) {
+            self.check_stream_elem(elem, span);
         }
         if self.prelude {
             self.builtins_from_prelude();

@@ -12,6 +12,7 @@
 //! auf denen er gelingt.
 
 use takt_mir::pattern::{CaptureKind, Pattern, PatternPiece};
+use takt_mir::types::FloatWidth;
 
 use crate::value::Value;
 
@@ -19,10 +20,11 @@ use crate::value::Value;
 pub type Captures = Vec<Value>;
 
 /// Gleicht ein Textmuster gegen den ganzen Text ab (`matches`, 8.7).
-/// `None` heisst „kein Match"; ein Muster faultet nie.
-pub fn match_text(pieces: &[PatternPiece], text: &str) -> Option<Captures> {
+/// `None` heisst „kein Match"; ein Muster faultet nie. Ein `{x:float}`
+/// liest sich in `width`, der Breite des Programms.
+pub fn match_text(pieces: &[PatternPiece], text: &str, width: FloatWidth) -> Option<Captures> {
     let mut caps = Vec::new();
-    let rest = walk(pieces, text, &mut caps)?;
+    let rest = walk(pieces, text, width, &mut caps)?;
     // `matches` verlangt den ganzen Text; ein Rest bedeutet kein Match.
     if rest.is_empty() { Some(caps) } else { None }
 }
@@ -30,17 +32,17 @@ pub fn match_text(pieces: &[PatternPiece], text: &str) -> Option<Captures> {
 /// `has P` (8.7, FB-350): Das Muster darf an jeder Position beginnen und
 /// muss nicht bis zum Ende reichen; es gilt die frueheste Position, an der
 /// der Durchlauf gelingt.
-pub fn match_has(pieces: &[PatternPiece], text: &str) -> Option<Captures> {
-    let start = has_start(pieces, text)?;
+pub fn match_has(pieces: &[PatternPiece], text: &str, width: FloatWidth) -> Option<Captures> {
+    let start = has_start(pieces, text, width)?;
     let mut caps = Vec::new();
-    walk(pieces, &text[start..], &mut caps)?;
+    walk(pieces, &text[start..], width, &mut caps)?;
     Some(caps)
 }
 
 /// Die frueheste Byteposition, ab der der Durchlauf gelingt (`has`, 8.7);
 /// der Durchlaufautomat des Codegens (`takt_mir::scan`) muss genau sie finden.
-pub fn has_start(pieces: &[PatternPiece], text: &str) -> Option<usize> {
-    char_starts(text).find(|start| walk(pieces, &text[*start..], &mut Vec::new()).is_some())
+pub fn has_start(pieces: &[PatternPiece], text: &str, width: FloatWidth) -> Option<usize> {
+    char_starts(text).find(|start| walk(pieces, &text[*start..], width, &mut Vec::new()).is_some())
 }
 
 /// Positionen, an denen ein Zeichen beginnt, samt der Position hinter dem
@@ -51,7 +53,7 @@ fn char_starts(text: &str) -> impl Iterator<Item = usize> + '_ {
 
 /// Laeuft die Bausteine von links nach rechts ab und liefert den Rest des
 /// Texts. Jeder Baustein verbraucht ein Praefix des verbleibenden Texts.
-fn walk<'a>(pieces: &[PatternPiece], text: &'a str, caps: &mut Captures) -> Option<&'a str> {
+fn walk<'a>(pieces: &[PatternPiece], text: &'a str, width: FloatWidth, caps: &mut Captures) -> Option<&'a str> {
     let mut rest = text;
     for (i, piece) in pieces.iter().enumerate() {
         match piece {
@@ -62,7 +64,7 @@ fn walk<'a>(pieces: &[PatternPiece], text: &'a str, caps: &mut Captures) -> Opti
             }
             PatternPiece::Capture { kind, .. } => {
                 let (taken, tail) = take(kind, &pieces[i + 1..], rest)?;
-                caps.push(value_of(kind, taken)?);
+                caps.push(value_of(kind, taken, width)?);
                 rest = tail;
             }
         }
@@ -86,13 +88,18 @@ fn take<'a>(kind: &CaptureKind, after: &[PatternPiece], rest: &'a str) -> Option
     }
 }
 
-/// Laengstes Praefix aus Zeichen der Klasse, hoechstens `max` Zeichen.
-/// Ein leeres Praefix ist kein Match (jede Klasse verlangt `{1,…}`).
+/// Der Lauf aus Zeichen der Klasse (8.7): Er endet am ersten Zeichen
+/// ausserhalb oder am Textende. Ein leerer Lauf ist kein Match (jede Klasse
+/// verlangt `{1,…}`), ein Lauf ueber `max` Zeichen auch: Das Muster bindet
+/// nie nur den Anfang einer Zahl oder eines Worts (SYN-039).
 fn bounded(rest: &str, class: fn(char) -> bool, max: usize) -> Option<(&str, &str)> {
     let mut end = 0;
     for (n, (i, c)) in rest.char_indices().enumerate() {
-        if !class(c) || n == max {
+        if !class(c) {
             break;
+        }
+        if n == max {
+            return None;
         }
         end = i + c.len_utf8();
     }
@@ -170,15 +177,19 @@ fn literal(p: &PatternPiece) -> Option<&str> {
 }
 
 /// Wert eines Captures. Ein Ueberlauf bei `int`/`hex` und ein nicht endlicher
-/// Wert bei `float` sind „kein Match", kein Fault (8.7).
-fn value_of(kind: &CaptureKind, text: &str) -> Option<Value> {
+/// Wert bei `float` sind „kein Match", kein Fault (8.7). `float` liest sich
+/// direkt in der Breite des Programms: ein `f64` dazwischen rundete zweimal.
+fn value_of(kind: &CaptureKind, text: &str, width: FloatWidth) -> Option<Value> {
     match kind {
         CaptureKind::Int => text.parse::<i64>().ok().map(Value::Int),
         CaptureKind::Hex => {
             let digits = text.strip_prefix("0x").unwrap_or(text);
             i64::from_str_radix(digits, 16).ok().map(Value::Int)
         }
-        CaptureKind::Float => text.parse::<f64>().ok().filter(|f| f.is_finite()).map(Value::F64),
+        CaptureKind::Float => match width {
+            FloatWidth::F64 => text.parse::<f64>().ok().filter(|f| f.is_finite()).map(Value::F64),
+            FloatWidth::F32 => text.parse::<f32>().ok().filter(|f| f.is_finite()).map(Value::F32),
+        },
         CaptureKind::Word | CaptureKind::Str(_) => Some(Value::Str(text.to_string())),
     }
 }
@@ -200,13 +211,14 @@ pub fn match_value(
     kind: takt_mir::expr::MatchKind,
     v: &Value,
     consts: &[Value],
+    width: FloatWidth,
 ) -> Option<Captures> {
     match pattern {
         Pattern::Text { pieces, .. } => {
             let text = text_of(v)?;
             match kind {
-                takt_mir::expr::MatchKind::Matches => match_text(pieces, text),
-                takt_mir::expr::MatchKind::Has => match_has(pieces, text),
+                takt_mir::expr::MatchKind::Matches => match_text(pieces, text, width),
+                takt_mir::expr::MatchKind::Has => match_has(pieces, text, width),
             }
         }
         Pattern::Record { fields, .. } => {

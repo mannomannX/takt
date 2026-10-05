@@ -21,16 +21,31 @@
 //! Namenspruefungen ein.
 //!
 //! Liegt im Verzeichnis eine `hardware.hw`, laufen zusaetzlich die
-//! Pruefungen, die eine Konfiguration brauchen (`takt_sema::calibrated`).
-//! Sie entscheiden aus zwei Eingaben und sind darum ohne Konfiguration
-//! nicht nur stumm, sondern gar nicht anwendbar.
+//! Pruefungen, die eine Konfiguration brauchen (`takt_sema::calibrated`:
+//! Kalibrierung gegen das erste Ziel, Bindungen, Polling). Sie entscheiden
+//! aus zwei Eingaben und sind darum ohne Konfiguration nicht nur stumm,
+//! sondern gar nicht anwendbar. Eine Datei mit `tcb_policy = reviewed(…)`
+//! prueft wie `takt check` gegen `natives.review` im Verzeichnis.
+//!
+//! Eine Datei uebersetzt im Sim-Build ohne Zertifizierung; eine Zeile
+//! `#! hw` waehlt den HW-Build, `#! certification` den Zertifizierungsmodus
+//! (Pruefungen 12, 13, 4 und 24, die nur dort melden).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use takt_diag::{Policy, SourceMap};
+use takt_diag::{Policy, SourceMap, Span};
 use takt_sema::{Build, Options};
 use takt_testkit::expect;
+
+/// Build und Zertifizierung aus den Markierungen `#! hw` und
+/// `#! certification` einer Datei.
+fn marked_options(src: &str) -> Options {
+    let marks: Vec<&str> = src.lines().filter_map(|l| l.trim().strip_prefix("#!")).map(str::trim).collect();
+    let build = if marks.contains(&"hw") { Build::Hw } else { Build::Sim };
+    let policy = Policy { certification: marks.contains(&"certification"), ..Policy::default() };
+    Options { policy, build, profile: None, ..Default::default() }
+}
 
 /// Pruefungen, die ihren Code nie melden, mit Grund: Ihre `bad_`-Dateien
 /// koennen ihn nicht anmerken. Jede muss noch auftreten — meldet die
@@ -47,6 +62,16 @@ fn hardware(dir: &Path) -> Option<takt_mir::hardware::Hardware> {
     Some(takt_mir::hardware::parse(&text).expect("hardware.hw lesbar"))
 }
 
+/// Pruefung 31 mit `tcb_policy = reviewed(…)` wie `takt check`: gegen
+/// `natives.review` im Verzeichnis (leer, wenn sie fehlt), die Quellen der
+/// Projekt-Natives daneben.
+fn reviewed(dir: &Path, program: &takt_mir::Program) -> Vec<takt_diag::Diagnostic> {
+    let review = std::fs::read_to_string(dir.join("natives.review"))
+        .map(|t| takt_mir::review::parse(&t).expect("natives.review lesbar"))
+        .unwrap_or_default();
+    takt_sema::calibrated::reviewed(program, &review, &|from| std::fs::read(dir.join(from)).ok())
+}
+
 fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>, silent_seen: &mut Vec<String>) {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
@@ -61,11 +86,18 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>, silent_seen: &m
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
         let src = std::fs::read_to_string(&path).expect("lesbar");
         let map = SourceMap::single(name.as_str(), src.as_str());
-        let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
-        let checked = takt_sema::compile(&src, &options);
+        let checked = takt_sema::compile(&src, &marked_options(&src));
         let mut diagnostics = checked.diagnostics.clone();
         if let (Some(hw), Some(program)) = (&hw, &checked.program) {
-            diagnostics.extend(takt_sema::calibrated::polling(program, hw, hw.targets.values().next()));
+            let target = hw.targets.values().next();
+            if let Some(t) = target {
+                diagnostics.extend(takt_sema::calibrated::check(program, t, Span::new(0, 0)));
+            }
+            diagnostics.extend(takt_sema::calibrated::check_bindings(program, hw));
+            diagnostics.extend(takt_sema::calibrated::polling(program, hw, target));
+        }
+        if let Some(program) = checked.program.as_ref().filter(|p| p.config.tcb_reviewed) {
+            diagnostics.extend(reviewed(dir, program));
         }
         if name.starts_with("ok_") {
             seen_ok = true;

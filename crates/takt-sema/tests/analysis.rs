@@ -5,14 +5,21 @@
 //! 3.4 es verlangt. Lemma 3.4 prueft `theorems.rs`.
 
 use takt_diag::Policy;
+use takt_interp::trace::value_text;
+use takt_interp::{RunOptions, Trace, Trap, Value};
 use takt_mir::Program;
 use takt_mir::analysis::Report;
+use takt_mir::expr::ExprKind;
+use takt_mir::machine::VarScope;
+use takt_mir::program::Direction;
+use takt_mir::types::{Const, Type};
 use takt_sema::{Build, Options};
 
 const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
 const OUT: &str = "output n : int in 0..99 @ hw(\"o/n\") with safe = 0\n\n";
 
-/// Uebersetzt und liefert Programm samt Kennzahlen.
+/// Uebersetzt und liefert Programm samt Kennzahlen; jedes Programm laeuft
+/// dazu an den Raendern seiner Ranges (`bug_at_the_edges`).
 fn compile(body: &str) -> (Program, Report, Vec<String>) {
     let src = format!("{HEAD}{OUT}{body}");
     let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
@@ -20,7 +27,63 @@ fn compile(body: &str) -> (Program, Report, Vec<String>) {
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "unerwartete Fehler:\n{}", errors.join("\n"));
     let warnings: Vec<String> = out.diagnostics.iter().filter(|d| !d.is_error()).map(|d| format!("{d}")).collect();
-    (out.program.expect("Programm"), out.report, warnings)
+    let p = out.program.expect("Programm");
+    if let Some(bug) = bug_at_the_edges(&p) {
+        panic!("{bug}");
+    }
+    (p, out.report, warnings)
+}
+
+/// Ticks je Randlauf.
+const EDGE_TICKS: u64 = 6;
+
+/// 3.4: Ranges sind Tick-Rand-Invarianten, ein Beweis darf also nur von
+/// ihnen ausgehen, nie von einem Startwert. Jede Maschinenvariable mit
+/// Range startet einmal am unteren und einmal am oberen Rand, jeder Input
+/// mit Range wechselt Tick fuer Tick zwischen beiden. Eine faelschlich
+/// bewiesene Stelle meldet der Interpreter als Fehler des Compilers
+/// (`Trap::Bug`); ein Fault ist erlaubt.
+fn bug_at_the_edges(p: &Program) -> Option<String> {
+    let bounds = |ty| match p.types.get(ty) {
+        Type::Int { range: Some(r), .. } | Type::Float { range: Some(r), .. } | Type::Duration { range: Some(r) } => {
+            Some((r.lo, r.hi))
+        }
+        _ => None,
+    };
+    for upper in [false, true] {
+        let mut q = p.clone();
+        for v in q.machines.iter_mut().flat_map(|m| m.vars.iter_mut()) {
+            if let (VarScope::Machine, Some(init), Some((lo, hi))) = (v.scope, &mut v.init, bounds(v.ty)) {
+                init.kind = match if upper { hi } else { lo } {
+                    Const::Int(i) => ExprKind::Int(i),
+                    Const::Float(f) => ExprKind::Float(f),
+                    Const::Duration(d) => ExprKind::Duration(d),
+                    Const::Bool(b) => ExprKind::Bool(b),
+                };
+                init.range = None;
+            }
+        }
+        let mut stimulus = String::new();
+        for tick in 0..EDGE_TICKS {
+            for c in p.channels.iter().filter(|c| c.dir == Direction::Input) {
+                if let Some((lo, hi)) = bounds(c.ty) {
+                    let value = match if (tick % 2 == 0) == upper { hi } else { lo } {
+                        Const::Int(i) => Value::Int(i),
+                        Const::Float(f) => Value::F64(f),
+                        Const::Duration(d) => Value::Duration(d),
+                        Const::Bool(b) => Value::Bool(b),
+                    };
+                    stimulus += &format!("t={tick} in {} {}\n", c.name, value_text(&value, c.ty, p));
+                }
+            }
+        }
+        let stimulus = Trace::parse(&stimulus).expect("Randstimulus lesbar");
+        let options = RunOptions { ticks: EDGE_TICKS, ..Default::default() };
+        if let Err(Trap::Bug(bug)) = takt_interp::run(&q, &stimulus, &options) {
+            return Some(format!("am {} Rand faelschlich bewiesen: {bug}", if upper { "oberen" } else { "unteren" }));
+        }
+    }
+    None
 }
 
 /// Zahl der impliziten Pruefungen einer Ursache.
@@ -418,7 +481,7 @@ machine m:
             n = big
 ",
     );
-    for cause in ["Declared", "Index", "Convert", "Arith"] {
+    for cause in ["Declared", "Index", "Convert", "Arith", "NonFinite"] {
         assert!(r.checks.contains_key(cause), "`{cause}` fehlt in der Kennzahl: {:?}", r.checks);
     }
     let text = r.lines().join("\n");
@@ -855,11 +918,13 @@ machine m:
 
 #[test]
 fn a_sequence_var_always_carries_an_initialiser() {
-    // Pruefung 25 (Definite Assignment je Eintritt) hat heute keinen eigenen
-    // Fall: Die Grammatik verlangt an jedem `var` ein `=` (2.3, `var_decl`),
-    // also ist eine gehobene Variable nie uninitialisiert. Faellt diese
-    // Schranke, muss 25 einen Korpus bekommen — dann schlaegt dieser Test
-    // fehl und erinnert daran.
+    // Ein Sequenz-`var` ohne Initialisierer, der zweite Fall von Pruefung 25,
+    // ist nicht schreibbar: Die Grammatik verlangt an jedem `var` ein `=`
+    // (2.3, `var_decl`). Pruefung 25 loest der erste Fall aus, ein Capture
+    // nach einem weichen Timeout
+    // (corpus-try/checks/SC-25/bad_capture_after_soft_timeout.takt). Faellt
+    // die Schranke der Grammatik, braucht 25 eine zweite Korpusdatei — dann
+    // schlaegt dieser Test fehl und erinnert daran.
     let src = format!(
         "{HEAD}{OUT}{}",
         "machine m:
@@ -1507,6 +1572,19 @@ machine m:
     let StmtKind::Assign { value, .. } = &m.states[0].loop_block.stmts[0].kind else { panic!("Zuweisung") };
     let ExprKind::Checked { kind: CheckedKind::Range(range), .. } = &value.kind else { panic!("Knoten: {value:?}") };
     assert_eq!(range.origin, RangeOrigin::Proven, "der Interpreter prueft weiter, der Codegen nicht");
+    // 11.3: Der Beweis ist hier falsch — `a` waechst 160, 220. Der
+    // Interpreter prueft weiter und meldet den Verstoss als Fehler des
+    // Compilers (Pruefung 65), nicht als `RangeFault` des Programms.
+    let e = takt_interp::run(
+        &p,
+        &takt_interp::Trace::default(),
+        &takt_interp::RunOptions { ticks: 3, ..Default::default() },
+    )
+    .expect_err("ein bewiesener Check, der scheitert");
+    match e {
+        takt_interp::Trap::Bug(msg) => assert!(msg.contains("bewiesene Range verletzt"), "{msg}"),
+        other => panic!("Bug erwartet, nicht {other:?}"),
+    }
 
     let stale = Proof { program: "0000".into(), ..proof };
     let out = takt_sema::compile_with(&src, &options, Some(&stale));
@@ -1630,4 +1708,271 @@ machine m:
 ",
     );
     assert_eq!(count(&r, "Declared"), 0, "{:?}", r.checks);
+}
+
+/// Das Gegenstueck: Ohne Ruecksetzen treibt der Rumpf `code` ueber 255,
+/// die geweitete Schleife behaelt ihre Pruefung, und die Durchlaeufe vor
+/// dem letzten zaehlen nicht mit (3.4).
+#[test]
+fn widening_without_a_reset_keeps_the_loop_check_once() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var b : bytes<64> = default
+    initial RUN
+    state RUN:
+        loop:
+            var code : int in 1..255 = 1
+            for i in range(1024):
+                if i >= b.len:
+                    break
+                if b[i] != 0:
+                    code += 1
+            n = code % 100
+",
+    );
+    assert_eq!(count(&r, "Declared"), 1, "{:?}", r.checks);
+    assert_eq!(r.warned, 1, "die Pruefung steht in der Schleife: {:?}", r.checks);
+}
+
+/// 3.4: Eine Verfeinerung gilt nur, wo der Vergleich sie traegt — nicht im
+/// anderen Zweig, nicht hinter dem Zusammenfluss, nicht nach einem `check`
+/// in nur einem Zweig und nicht um eins jenseits der Schranke.
+#[test]
+fn a_refinement_stays_inside_what_the_comparison_proves() {
+    let program = |body: &str| {
+        format!(
+            "\
+machine m:
+    var big : int in 0..999 = 5
+    var flag : bool = false
+    initial RUN
+    state RUN:
+        loop:
+{body}"
+        )
+    };
+    for (what, body) in [
+        (
+            "im else-Zweig",
+            "            if big < 100:\n                n = 1\n            else:\n                n = big\n",
+        ),
+        ("hinter dem if", "            if big < 100:\n                n = big\n            n = big\n"),
+        ("check in nur einem Zweig", "            if flag:\n                check big < 100\n            n = big\n"),
+        ("Schranke um eins zu weit", "            if big <= 100:\n                n = big\n"),
+    ] {
+        let (_, r, _) = compile(&program(body));
+        assert_eq!(count(&r, "Declared"), 1, "{what}: {:?}", r.checks);
+    }
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var x : float in 0.0..100.0 = 5.0
+    var y : float in 0.0..10.0 = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            if x <= 10.5:
+                y = x
+            n = 1 if y > 5.0 else 0
+",
+    );
+    assert_eq!(count(&r, "Declared"), 1, "10.5 liegt ausserhalb von 0..10: {:?}", r.checks);
+}
+
+/// 3.4: „Ein `x != c` am Intervallrand schliesst `c` aus" — nur am Rand
+/// und nur fuer eine Konstante.
+#[test]
+fn a_not_equal_at_the_edge_excludes_the_edge_only() {
+    let divide = |cond: &str| {
+        let (_, r, _) = compile(&format!(
+            "\
+machine m:
+    var d : int in 0..10 = 2
+    var e : int in 0..1 = 0
+    initial RUN
+    state RUN:
+        loop:
+            if {cond}:
+                n = 50 / d
+"
+        ));
+        count(&r, "Arith")
+    };
+    assert_eq!(divide("d != 0"), 0, "der Rand 0 faellt heraus");
+    assert_eq!(divide("d != 5"), 1, "ein innerer Wert schliesst die Null nicht aus");
+    assert_eq!(divide("d != e"), 1, "eine Nicht-Konstante schliesst nichts aus");
+}
+
+/// Das Gegenstueck zu `a_length_guard_before_break_proves_the_index` und
+/// `a_guard_with_an_offset_proves_the_offset_index`: Der Zugriff um eins
+/// jenseits der Schranke behaelt seine Pruefung (3.4, Differenzschranken).
+#[test]
+fn an_index_one_past_the_difference_bound_keeps_its_check() {
+    let (_, r, _) = compile(
+        "\
+machine m:
+    var b : bytes<64> = default
+    initial RUN
+    state RUN:
+        loop:
+            var s : int in 0..99 = 0
+            for i in range(1024):
+                if i >= b.len:
+                    break
+                s = (s + (b[i] as int) + (b[i + 1] as int)) % 100
+            n = s
+",
+    );
+    assert_eq!(count(&r, "Index"), 1, "nur `b[i + 1]`: {:?}", r.checks);
+    let (_, r, _) = compile(
+        "\
+const HDR : int = 4
+
+record Hdr:
+    len : u16
+
+machine m:
+    var b : bytes<64> = default
+    var k : u16 = 0
+    initial RUN
+    state RUN:
+        loop:
+            var hh = Hdr(len = k)
+            if (b.len as int) < HDR + (hh.len as int) + 2:
+                n = 1
+            else:
+                var lo = b[HDR + (hh.len as int)] as int
+                var hi = b[HDR + (hh.len as int) + 1] as int
+                var far = b[HDR + (hh.len as int) + 2] as int
+                n = (lo + hi + far) % 100
+",
+    );
+    assert_eq!(count(&r, "Index"), 1, "nur `b[HDR + len + 2]`: {:?}", r.checks);
+}
+
+/// 10, Pruefungen 4 und 24: Im Zertifizierungsmodus ist jede unbewiesene
+/// Stelle ein Fehler mit dem Code ihrer Art — auch i64-Ueberlauf und
+/// `NonFinite`, die sonst nie warnen (Tabelle 10, Zeile 4).
+#[test]
+fn certification_rejects_each_cause_with_its_code() {
+    let options = |certification| Options {
+        policy: Policy { certification, ..Policy::default() },
+        build: Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
+    let errors = |vars: &str, stmt: &str, certification: bool| -> Vec<String> {
+        let body = format!(
+            "machine m:\n{vars}    initial RUN\n    state RUN:\n        loop:\n            {stmt}\n            n = 0\n"
+        );
+        let out = takt_sema::compile(&format!("{HEAD}{OUT}{body}"), &options(certification));
+        out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect()
+    };
+    for (vars, stmt, code, what) in [
+        ("    var big : int in 0..999 = 500\n    var v : int in 0..99 = 0\n", "v = big", "SC-4", "Range-Check"),
+        ("    var a : [4] u8 = [1, 2, 3, 4]\n    var k : int in 0..9 = 0\n", "var x = a[k]", "SC-4", "Index-Check"),
+        ("    var b : bytes<64> = default\n    var k : int in 0..9 = 0\n", "var x = b[k]", "SC-24", "Index-Check"),
+        ("    var w : int in 0..1000 = 7\n", "var c : u8 = w as u8", "SC-24", "Konversionspruefung"),
+        ("    var d : int in 0..10 = 2\n", "var q = 50 / d", "SC-4", "Arithmetikpruefung"),
+        ("    var k : int in 0..20 = 3\n    var s : u16 = 1\n", "s = s << k", "SC-24", "Arithmetikpruefung"),
+        ("    var t : Duration = 0 s\n", "t = t + tick", "SC-4", "Arithmetikpruefung"),
+        ("    var x : float = 1.5\n", "x = x * 2.0", "SC-4", "Endlichkeitspruefung"),
+    ] {
+        assert!(errors(vars, stmt, false).is_empty(), "`{stmt}` ohne Zertifizierung: {:?}", errors(vars, stmt, false));
+        let found = errors(vars, stmt, true);
+        assert_eq!(found.len(), 1, "`{stmt}`: {found:?}");
+        assert!(found[0].contains(&format!("[{code}]")) && found[0].contains(what), "`{stmt}`: {found:?}");
+    }
+}
+
+/// 11.3, Pruefung 65: Eine Beweisdatei mit passendem Hash nimmt nur die
+/// Pruefung weg, deren Stelle *und* Art sie nennt.
+#[test]
+fn an_external_proof_of_another_kind_or_place_drops_nothing() {
+    use takt_mir::analysis::proof::{Proof, Site};
+    let body = "\
+machine m:
+    var a : int in 0..200 = 100
+    initial RUN
+    state RUN:
+        loop:
+            a = a + 60
+            n = a % 100
+";
+    let src = format!("{HEAD}{OUT}{body}");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let site = takt_sema::compile(&src, &options).report.sites[0];
+    let program = takt_mir::review::hash_of(src.as_bytes());
+    for (what, sites) in [
+        ("fremde Art", vec![Site { start: site.span.start, kind: "div".into(), k: 3 }]),
+        ("fremder Versatz", vec![Site { start: site.span.start + 1, kind: "range".into(), k: 3 }]),
+        ("leere Liste", Vec::new()),
+    ] {
+        let out = takt_sema::compile_with(&src, &options, Some(&Proof { program: program.clone(), sites }));
+        assert!(!out.has_errors(), "{what}: {:?}", out.diagnostics);
+        assert_eq!(count(&out.report, "Declared"), 1, "{what}: {:?}", out.report.checks);
+    }
+}
+
+/// 11.3: Der Interpreter prueft eine extern bewiesene Range weiter. Ist der
+/// Beweis falsch — `a + 60` verlaesst `0..200` im zweiten Tick —, meldet er
+/// einen Fehler des Compilers, keinen Range-Fault.
+#[test]
+fn a_wrong_external_proof_is_a_compiler_bug_in_the_interpreter() {
+    use takt_mir::analysis::proof::{Proof, Site};
+    let src = format!(
+        "{HEAD}{OUT}\
+machine m:
+    var a : int in 0..200 = 100
+    initial RUN
+    state RUN:
+        loop:
+            a = a + 60
+            n = a % 100
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let site = takt_sema::compile(&src, &options).report.sites[0];
+    let proof = Proof {
+        program: takt_mir::review::hash_of(src.as_bytes()),
+        sites: vec![Site { start: site.span.start, kind: "range".into(), k: 3 }],
+    };
+    let p = takt_sema::compile_with(&src, &options, Some(&proof)).program.expect("Programm");
+    let stimulus = Trace::parse("").expect("leer");
+    match takt_interp::run(&p, &stimulus, &RunOptions { ticks: 3, ..Default::default() }) {
+        Err(Trap::Bug(b)) => assert!(b.contains("bewiesene Range verletzt: 220"), "{b}"),
+        other => panic!("ein Fehler des Compilers erwartet: {other:?}"),
+    }
+}
+
+/// Der Randlauf aus `compile` findet einen Beweis, der nur vom Startwert
+/// lebt: Mit `a = 0` haelt `b = a` die Range `0..100`, mit `a` am oberen
+/// Rand `200` nicht. Ein gewoehnlicher Lauf saehe nichts.
+#[test]
+fn the_edge_run_finds_a_proof_that_holds_only_for_the_start_value() {
+    use takt_mir::analysis::proof::{Proof, Site};
+    let src = format!(
+        "{HEAD}{OUT}\
+machine m:
+    var a : int in 0..200 = 0
+    var b : int in 0..100 = 0
+    initial RUN
+    state RUN:
+        loop:
+            b = a
+            n = b % 100
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let site = takt_sema::compile(&src, &options).report.sites[0];
+    let proof = Proof {
+        program: takt_mir::review::hash_of(src.as_bytes()),
+        sites: vec![Site { start: site.span.start, kind: "range".into(), k: 1 }],
+    };
+    let p = takt_sema::compile_with(&src, &options, Some(&proof)).program.expect("Programm");
+    let plain = takt_interp::run(&p, &Trace::parse("").expect("leer"), &RunOptions { ticks: 6, ..Default::default() });
+    assert!(plain.is_ok(), "vom Startwert aus haelt der Beweis: {:?}", plain.err());
+    let bug = bug_at_the_edges(&p).expect("der obere Rand verletzt ihn");
+    assert!(bug.contains("oberen") && bug.contains("bewiesene Range verletzt: 200"), "{bug}");
 }

@@ -164,6 +164,7 @@ fn entry_prototypes(x: &Prefix) -> String {
         format!("uint8_t {x}_idle({a});"),
         format!("int64_t {x}_deadline({a});"),
         format!("void {x}_advance({a}, int64_t n);"),
+        format!("int32_t {x}_tune({a}, uint32_t param, const void *value, int32_t len);"),
         format!("int32_t {x}_persist_snapshot({a}, void *out, int32_t cap);"),
         format!("int32_t {x}_persist_restore({a}, const void *in, int32_t len);"),
         format!("void {x}_dump({a}, int32_t all);"),
@@ -197,7 +198,8 @@ fn entry_prototypes(x: &Prefix) -> String {
 /// Bibliothek und steht hinter einem Guard; so binden mehrere Programme
 /// ihre Koepfe in dieselbe Uebersetzungseinheit.
 fn header(x: &Prefix, arena_types: &str, entries: &str, drivers: &str) -> String {
-    let guard = format!("{}_TAKT_H", x.as_str().to_uppercase());
+    // 12.11 (GEN-019): `TAKT_<PRAEFIX>_H` trifft keinen reservierten Makronamen.
+    let guard = format!("TAKT_{}_H", x.as_str().to_uppercase());
     let mut s = String::new();
     let _ = writeln!(s, "/* Der Kopf des Programms `{x}` (12.11); erzeugt von takt-frame. */");
     let _ = writeln!(s, "#ifndef {guard}");
@@ -274,7 +276,8 @@ pub fn rust_arena(bytes: u64, align: u64) -> String {
         "/// Die Arena des Programms (12.11): {bytes} Byte, ausgerichtet auf {align}, aus dem Rahmen fuer dieses \
          Ziel.\n#[repr(C, align({align}))]\npub struct Arena(core::mem::MaybeUninit<[u8; {bytes}]>);\n\n\
          impl Arena {{\n    /// Eine Arena vor `init`, das sie ganz beschreibt.\n    pub const fn new() -> Arena {{\n        \
-         Arena(core::mem::MaybeUninit::uninit())\n    }}\n}}\n"
+         Arena(core::mem::MaybeUninit::uninit())\n    }}\n}}\n\n\
+         impl Default for Arena {{\n    fn default() -> Arena {{\n        Arena::new()\n    }}\n}}\n"
     )
 }
 
@@ -361,18 +364,38 @@ static inline void takt_fenv_leave(takt_fenv saved) { (void)saved; }
 /// `takt_<name>`: Sie rechnet ihn in der IEEE-Umgebung (`FENV_C`). `params`
 /// und `args` sind die Parameter nach der Arena.
 fn guarded(s: &mut String, x: &Prefix, ret: &str, name: &str, params: &str, args: &str) {
+    entry(s, x, ret, name, params, args, None);
+}
+
+/// Wie [`guarded`], mit der Eintrittssperre (12.11): Ein Eintritt, waehrend
+/// ein anderer in dieselbe Arena rechnet — eine ISR, die den Schritt
+/// unterbricht und ihn noch einmal ruft —, rechnet nicht, sondern gibt
+/// `refused` zurueck und ist `Runtime(Overrun)` im naechsten Tick. Die
+/// Sperre ist ein atomarer Tausch; `init` setzt sie zurueck.
+fn locked(s: &mut String, x: &Prefix, ret: &str, name: &str, params: &str, args: &str, refused: &str) {
+    entry(s, x, ret, name, params, args, Some(refused));
+}
+
+fn entry(s: &mut String, x: &Prefix, ret: &str, name: &str, params: &str, args: &str, refused: Option<&str>) {
     let (params, args) = if params.is_empty() {
         (format!("struct {x}_arena *a"), "a".to_string())
     } else {
         (format!("struct {x}_arena *a, {params}"), format!("a, {args}"))
     };
     let call = format!("takt_{name}({args})");
-    let body = if ret == "void" {
-        format!("{call}; takt_fenv_leave(f);")
-    } else {
-        format!("{ret} r = {call}; takt_fenv_leave(f); return r;")
+    let (enter, leave) = match refused {
+        Some(r) => (
+            format!("if (__atomic_exchange_n(&a->entered, 1u, __ATOMIC_ACQUIRE)) {{ a->overrun = 1; return {r}; }} "),
+            " __atomic_store_n(&a->entered, 0u, __ATOMIC_RELEASE);".to_string(),
+        ),
+        None => (String::new(), String::new()),
     };
-    let _ = writeln!(s, "{ret} {x}_{name}({params}) {{ takt_fenv f = takt_fenv_enter(); {body} }}\n");
+    let body = if ret == "void" {
+        format!("{call}; takt_fenv_leave(f);{leave}")
+    } else {
+        format!("{ret} r = {call}; takt_fenv_leave(f);{leave} return r;")
+    };
+    let _ = writeln!(s, "{ret} {x}_{name}({params}) {{ {enter}takt_fenv f = takt_fenv_enter(); {body} }}\n");
 }
 
 /// Die Laufzeitmonitore (13.3): alle Eigenschaften mit `monitor`, weil der
@@ -452,6 +475,7 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     // ihn schreibt.
     let _ = writeln!(s, "void {x}_fault(struct {x}_arena *a, int m, int from, int code) {{");
     let _ = writeln!(s, "    (void)from;");
+    crate::parts::note_fault(s, p, "    ");
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
     let _ = writeln!(s, "    takt_board_trace(\"fault \");");
@@ -782,6 +806,8 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 /// `P_tick`: ein Tick, von der Schleife gerufen.
 fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     let _ = writeln!(t.fields, "    _Bool overrun, hardware;");
+    // 12.11: die Eintrittssperre ([`locked`]).
+    let _ = writeln!(t.fields, "    unsigned int entered;");
     let _ = writeln!(t.fields, "    _Bool driver_fault[{}];", driver_outputs(p, layout).len().max(1));
     let s = &mut t.code;
     let _ = writeln!(s, "/* Ein Tick (12.1, Schritte 2 bis 10). */");
@@ -856,7 +882,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
         let _ = writeln!(s, "    {x}_monitor_{i}(a, k);");
     }
     let _ = writeln!(s, "}}");
-    guarded(s, x, "void", "tick", "int64_t k", "k");
+    locked(s, x, "void", "tick", "int64_t k", "k", "");
 
     sleep(s, p.config.tick, layout, p, driven, x);
     platform(s, p, layout, x);
@@ -940,6 +966,11 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
             let _ = writeln!(s, "    if (takt_sched_pending(a)) return 0;");
         }
         let _ = writeln!(s, "    if ({x}_jobs_busy(a)) return 0;");
+        // 9.6: Was an einen Strom mit `drop_oldest` gesendet ist, wird im
+        // naechsten Tick zugestellt; ein Schlaf verschoebe die Zustellung.
+        if crate::streams::stages(p) {
+            let _ = writeln!(s, "    if (takt_int_staged(a)) return 0;");
+        }
         for m in driven {
             let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
             let _ = writeln!(s, "    if (a->pending[{i}]) return 0;");
@@ -971,13 +1002,28 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     // uebersprungener Tick ruft kein `_step`; ohne das feuerte jede
     // `after`-Frist um die geschlafenen Ticks zu spaet.
     let _ = writeln!(s, "void {x}_init(struct {x}_arena *a, void *user) {{ (void){x}_init_with(a, user, 0, 0); }}\n");
+    // Die Maschinen zaehlen ihre Aktivierungen in den Ticks `tick + 1 ..
+    // tick + n` aus dem Tick des Rahmens (`P_now`, FB-429); er rueckt darum
+    // erst nach ihnen vor.
     let _ = writeln!(s, "static void takt_advance(struct {x}_arena *a, int64_t n) {{");
-    let _ = writeln!(s, "    a->tick += n;");
     for m in driven {
         let _ = writeln!(s, "    {x}_{0}_advance(a, n);", m.name);
     }
+    let _ = writeln!(s, "    a->tick += n;");
     let _ = writeln!(s, "}}");
-    guarded(s, x, "void", "advance", "int64_t n", "n");
+    locked(s, x, "void", "advance", "int64_t n", "n", "");
+
+    // 8.4: die Tunables ueber den Weg der Schleife (`Program::tune`).
+    crate::parts::tune(s, p, layout, x);
+    locked(
+        s,
+        x,
+        "int32_t",
+        "tune",
+        "uint32_t param, const void *value, int32_t len",
+        "param, (const unsigned char *)value, len",
+        "0",
+    );
 
     // 5.9: Der Board-Treiber sieht nur Bytes. Snapshot reiht die Nutzlast
     // aller Maschinen, Restore verteilt sie; die Rueckgabe zaehlt die
@@ -996,7 +1042,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     let _ = writeln!(s, "    (void)out; (void)cap;");
     let _ = writeln!(s, "    return n;");
     let _ = writeln!(s, "}}");
-    guarded(s, x, "int32_t", "persist_snapshot", "void *out, int32_t cap", "out, cap");
+    locked(s, x, "int32_t", "persist_snapshot", "void *out, int32_t cap", "out, cap", "0");
     let _ = writeln!(s, "static int32_t takt_persist_restore(struct {x}_arena *a, const void *in, int32_t len) {{");
     let _ = writeln!(s, "    int n = 0;");
     for m in &persisting {
@@ -1005,7 +1051,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     let _ = writeln!(s, "    (void)in; (void)len;");
     let _ = writeln!(s, "    return n;");
     let _ = writeln!(s, "}}");
-    guarded(s, x, "int32_t", "persist_restore", "const void *in, int32_t len", "in, len");
+    locked(s, x, "int32_t", "persist_restore", "const void *in, int32_t len", "in, len", "0");
     let entries: usize = persisting.iter().map(|m| m.persist.len()).sum();
     let _ = writeln!(s, "const int32_t {x}_persist_entries = {entries};");
     let _ = writeln!(s, "const int32_t {x}_persist_bound = {};\n", takt_mir::persist::max_payload(p).unwrap_or(0));
@@ -1476,7 +1522,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "            int64_t t = now, seq = next;");
         let _ = writeln!(s, "            if (!{}(a->user, now, buf, {}, &len, &t, &seq)) break;", b.function, b.cap);
         let _ = writeln!(s, "            if (len < 0) len = 0;");
-        let _ = writeln!(s, "            if (len > {0}) len = {0};", b.cap);
+        let _ = writeln!(s, "            if (len > {0}) len = {0};", b.keep);
         let _ = writeln!(s, "            next = seq + 1;");
         let _ = writeln!(s, "            takt_edge_element(a, {}, buf, len, t, seq);", b.channel);
         let _ = writeln!(s, "        }}");
@@ -1651,7 +1697,7 @@ fn bound_scalars(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundScalar> {
             if fed.contains(&channel) {
                 return None;
             }
-            let function = format!("{x}_in_{}", slot.address.as_ref()?.ident());
+            let function = crate::drivers::input_symbol(slot.address.as_ref()?, x);
             let ct = c_type(&slot.ty, slot.signed)?;
             let number = match p.types.list.get(p.channels[channel].ty.index())? {
                 Type::Int { width, .. } if !width.signed() && width.bits() == 64 => {
@@ -1675,6 +1721,10 @@ struct BoundStream {
     /// ein ueberlanges, das der Treiber auf `cap` kuerzt, als `malformed`
     /// zaehlt (12.6 Zeile 5) und nicht als gueltiges gekuerztes.
     cap: u32,
+    /// So viele Bytes gehen an den Rand: `str<N>` und `bytes<N>` kuerzt er
+    /// auf ihr `N` (3.9); ein Record behaelt das eine Byte mehr fuer Zeile 5,
+    /// ein `line<N>` fuer `.truncated`, das der Rand setzt.
+    keep: u32,
     /// `MAXPT + 1`: so oft fragt der Rahmen je Tick.
     polls: u32,
 }
@@ -1692,11 +1742,16 @@ fn bound_streams(p: &Program, x: &Prefix) -> Vec<BoundStream> {
             if c.dir != Direction::Input || crate::streams::coupled_input(p, channel) {
                 return None;
             }
+            let n = crate::streams::payload_cap(p, *elem);
+            // `line<N>` kuerzt erst der Rand, der es fuer `.truncated` merkt
+            // (3.9, KON2-028); `str<N>` und `bytes<N>` schon hier.
+            let text = matches!(p.types.list.get(elem.index()), Some(Type::Str { .. } | Type::Bytes { .. }));
             Some(BoundStream {
                 name: c.name.clone(),
                 channel,
                 function: format!("{x}_poll_{}", addr.ident()),
-                cap: crate::streams::payload_cap(p, *elem).saturating_add(1),
+                cap: n.saturating_add(1),
+                keep: if text { n } else { n.saturating_add(1) },
                 polls: takt_hal::edge::maxpt_of(c, p.config.tick).unwrap_or(1).saturating_add(1),
             })
         })
@@ -1816,14 +1871,16 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     for (c, fname) in &streams {
         let Some(i) = index(&c.name) else { continue };
         let device = takt_mir::pattern::Address::simple(&outputs[i].device).ident();
-        let cap = c.attrs.capacity_bytes.map_or(-1, i64::from);
+        // 8.8: Der Sendepuffer eines Ausgabestroms ist `capacity` Bytes,
+        // Default 256 — dieselbe Zahl wie `takt_tx_cap` (streams.rs).
+        let cap = i64::from(c.attrs.capacity.unwrap_or(256));
         let _ = writeln!(
             s,
             "    if (takt_edge_output(1, alive_{device}, {fname}(a->user, now), {cap})) a->driver_fault[{i}] = 1;"
         );
     }
     let _ = writeln!(s, "}}");
-    guarded(s, x, "void", "commit", "", "");
+    locked(s, x, "void", "commit", "", "", "");
 }
 
 /// `P_output`: einen Ausgang lesen, nach Stellung.

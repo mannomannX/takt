@@ -14,10 +14,13 @@
 //!   Test ihn selbst ab: Schluesselwoerter und kontextuelle Woerter aus dem
 //!   Korpus, reservierte Woerter am Tokenizer, Membernamen, Attribute und
 //!   `system`-Eintraege aus den Programmen, die fehlerfrei uebersetzen,
-//!   Pruefungen aus `corpus-try/checks/`.
+//!   Pruefungen aus `corpus-try/checks/`, Produktionen der Grammatik aus der
+//!   Zaehlung des Parsers (`takt_syntax::parser::productions_of`) ueber
+//!   dieselben Programme.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use takt_sema::{Build, Options};
 use takt_syntax::{TokenKind, tokenize};
@@ -195,6 +198,19 @@ fn corpus() -> Vec<(String, bool)> {
         .collect()
 }
 
+/// Die Produktionen, die der Parser in den Programmen lief, die fehlerfrei
+/// uebersetzen.
+fn productions(corpus: &[(String, bool)]) -> &'static BTreeSet<&'static str> {
+    static REACHED: OnceLock<BTreeSet<&'static str>> = OnceLock::new();
+    REACHED.get_or_init(|| {
+        corpus
+            .iter()
+            .filter(|(_, ok)| *ok)
+            .flat_map(|(src, _)| takt_syntax::parser::productions_of(&tokenize(src), false))
+            .collect()
+    })
+}
+
 /// Der Inhalt eines Bezeichners der Form `attr: "safe"`, sonst er selbst.
 fn quoted(name: &str) -> &str {
     name.split('"').nth(1).unwrap_or(name)
@@ -236,6 +252,9 @@ fn derived(row: &Row, corpus: &[(String, bool)]) -> bool {
             src.lines().skip_while(|l| !l.starts_with("system:")).skip(1).take_while(|l| l.starts_with(' ')).any(whole)
         }),
         "Statische Pr\u{fc}fung" => workspace().join("corpus-try/checks").join(&row.id).is_dir(),
+        // Eine Produktion: Ihre Parserfunktion lief in einem Programm, das
+        // fehlerfrei uebersetzt.
+        "Grammatik" => productions(corpus).contains(word),
         _ => false,
     }
 }

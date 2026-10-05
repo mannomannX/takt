@@ -28,7 +28,7 @@ use std::vec::Vec;
 use std::{format, thread_local};
 
 use crate::Jobs as _;
-use takt_rt_core::{Clock, Outputs, Policy, Profile, Runtime, Sink, Tick, Watchdog};
+use takt_rt_core::{Clock, Outputs, Policy, Profile, Runtime, Sink, Tick, Tunables, Watchdog};
 
 thread_local! {
     static LINE: RefCell<String> = const { RefCell::new(String::new()) };
@@ -123,26 +123,103 @@ impl Sink for Conformance {
 /// # Panics
 ///
 /// Wenn der Griff des Job-Kontexts schon vergeben ist (`Program::jobs`).
-pub fn run<P: crate::Program>(mut program: P, tick_ns: i64, ticks: u64) -> String {
+pub fn run<P: crate::Program>(program: P, tick_ns: i64, ticks: u64) -> String {
     take();
-    let mut jobs = program.jobs().expect("der Job-Kontext gehoert der Testhilfe");
-    let mut rt =
-        Runtime::new(program, Logical::default(), Quiet, Conformance, Profile::BAREMETAL, tick_ns, Policy::Fault);
-    // Die Frist des letzten Ticks ist `(ticks - 1) * tick_ns`; ein Schlaf (9.9)
-    // ueber sie hinaus endet den Lauf, statt Ticks hinter dem Interpreter zu rechnen.
-    let end = i64::try_from(ticks).unwrap_or(i64::MAX).saturating_mul(tick_ns);
-    loop {
-        let next = rt.service();
-        if next.jobs {
-            jobs.work();
-            continue;
-        }
-        if next.ended.is_some() || next.deadline >= end {
-            break;
-        }
-        rt.clock.wait_until(next.deadline);
+    let mut stepper = Stepper::new(program, tick_ns, ticks);
+    let mut trace = String::new();
+    while let Some(part) = stepper.step() {
+        trace.push_str(&part);
     }
-    take()
+    trace
+}
+
+/// Wie [`run`], mit einer Quelle fuer Tunables (8.4): Ihre Saetze gehen ueber
+/// den Weg der Schleife in das Programm (`Runtime::service_with`,
+/// `Program::tune`), vor dem Schritt ihrer Grenze. Grenze `k` der Schleife
+/// ist Tick `k + 1` des Traces.
+///
+/// # Panics
+///
+/// Wie [`run`].
+pub fn run_tuned<P: crate::Program>(program: P, tick_ns: i64, ticks: u64, tunables: &mut dyn Tunables) -> String {
+    take();
+    let mut stepper = Stepper::new(program, tick_ns, ticks);
+    let mut trace = String::new();
+    while let Some(part) = stepper.step_with(Some(&mut *tunables)) {
+        trace.push_str(&part);
+    }
+    trace
+}
+
+/// Ein Programm in logischer Zeit, Frist fuer Frist (12.11, Form
+/// `logical`): Wer mehrere Programme im selben Faden abwechselnd faehrt,
+/// bekommt je Schritt den Trace genau dieses Programms. [`run`] ist dieser
+/// Schritt bis zum Ende.
+pub struct Stepper<P: crate::Program> {
+    rt: Runtime<P, Logical, Quiet, Conformance>,
+    jobs: P::Jobs,
+    /// Die Frist des letzten Ticks ist `(ticks - 1) * tick_ns`; ein Schlaf
+    /// (9.9) ueber sie hinaus endet den Lauf, statt Ticks hinter dem
+    /// Interpreter zu rechnen.
+    end: i64,
+    done: bool,
+}
+
+impl<P: crate::Program> Stepper<P> {
+    /// Faehrt `program` ueber `ticks` Ticks von `tick_ns`.
+    ///
+    /// # Panics
+    ///
+    /// Wenn der Griff des Job-Kontexts schon vergeben ist (`Program::jobs`).
+    pub fn new(mut program: P, tick_ns: i64, ticks: u64) -> Stepper<P> {
+        let jobs = program.jobs().expect("der Job-Kontext gehoert der Testhilfe");
+        let rt =
+            Runtime::new(program, Logical::default(), Quiet, Conformance, Profile::BAREMETAL, tick_ns, Policy::Fault);
+        let end = i64::try_from(ticks).unwrap_or(i64::MAX).saturating_mul(tick_ns);
+        Stepper { rt, jobs, end, done: false }
+    }
+
+    /// Rechnet bis zur naechsten Frist und liefert, was das Programm dabei
+    /// in den Trace schrieb; jeder Job rechnet zu Ende (4.5). `None`, wenn
+    /// der Lauf vorbei ist.
+    pub fn step(&mut self) -> Option<String> {
+        self.step_with(None)
+    }
+
+    /// Wie [`Stepper::step`], mit einer Quelle fuer Tunables (8.4).
+    pub fn step_with(&mut self, mut tunables: Option<&mut dyn Tunables>) -> Option<String> {
+        if self.done {
+            return None;
+        }
+        let before = take();
+        debug_assert!(before.is_empty(), "fremder Trace in diesem Faden: {before}");
+        loop {
+            let next = self
+                .rt
+                .service_with(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>, again(&mut tunables));
+            if next.jobs {
+                self.jobs.work();
+                continue;
+            }
+            if next.ended.is_some() || next.deadline >= self.end {
+                // Ein Schlaf ueber das Ende hinaus gibt die Zeile des Ticks
+                // davor erst hier frei (9.9).
+                self.rt.finish(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>);
+                self.done = true;
+            } else {
+                self.rt.clock.wait_until(next.deadline);
+            }
+            return Some(take());
+        }
+    }
+}
+
+/// Leiht die Tunables fuer einen Aufruf erneut.
+fn again<'a>(tunables: &'a mut Option<&mut dyn Tunables>) -> Option<&'a mut dyn Tunables> {
+    match tunables {
+        Some(t) => Some(&mut **t),
+        None => None,
+    }
 }
 
 /// Vergleicht `trace` mit dem Lauf des Interpreters ueber `ticks` Ticks fuer
@@ -150,16 +227,34 @@ pub fn run<P: crate::Program>(mut program: P, tick_ns: i64, ticks: u64) -> Strin
 /// `import channels` liegen neben ihm (8.2).
 ///
 /// Der Interpreter laeuft ohne Stimulus: Liefern die Treiber des Tests
-/// Eingaben, sieht er sie nicht. TODO(M11 Schritt 9): der Stimulus als
-/// Testtreiber, derselbe fuer beide Seiten.
+/// Eingaben, sieht er sie nicht; dafuer [`same_as_interpreter_with`].
 ///
 /// # Errors
 ///
 /// Wenn das Programm nicht uebersetzt, der Interpreter abbricht oder ein
 /// Ausgang abweicht; die Meldung nennt die ersten Abweichungen.
 pub fn same_as_interpreter(source: impl AsRef<Path>, ticks: u64, trace: &str) -> Result<(), String> {
+    same_as_interpreter_with(source, ticks, "", trace)
+}
+
+/// Wie [`same_as_interpreter`], und der Interpreter sieht `stimulus` in
+/// der Form eines Traces (`grammar/trace.md`: `in`, `cmd`, `runtime`, …):
+/// dieselben Eingaben, die die Treiber des Tests zu denselben Ticks liefern.
+/// Beide Seiten haelt der Test von Hand gleich. TODO(M11 Schritt 9): der
+/// Stimulus als Testtreiber, eine Quelle fuer beide Seiten.
+///
+/// # Errors
+///
+/// Wie [`same_as_interpreter`], dazu ein Stimulus, der kein Trace ist.
+pub fn same_as_interpreter_with(
+    source: impl AsRef<Path>,
+    ticks: u64,
+    stimulus: &str,
+    trace: &str,
+) -> Result<(), String> {
     let path = source.as_ref();
-    let widened = interpreted(path, ticks)?;
+    let stimulus = takt_interp::trace::Trace::parse(stimulus).map_err(|e| format!("Stimulus: {e}"))?;
+    let widened = interpreted(path, ticks, &stimulus)?;
     // Verglichen wird nur, was beide Seiten melden; ein Ausgang, den der Lauf
     // nie schreibt, fiele sonst durch (FB-305).
     let have = output_names(trace);
@@ -180,7 +275,7 @@ pub fn same_as_interpreter(source: impl AsRef<Path>, ticks: u64, trace: &str) ->
 
 /// Der Trace des Interpreters ueber `ticks` Ticks, `f32` als sein Wert in
 /// `f64` wie im erzeugten Code (4.2, FB-356).
-fn interpreted(path: &Path, ticks: u64) -> Result<String, String> {
+fn interpreted(path: &Path, ticks: u64, stimulus: &takt_interp::trace::Trace) -> Result<String, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new("."));
     let channel_imports = takt_sema::channel_imports(&text)
@@ -193,6 +288,7 @@ fn interpreted(path: &Path, ticks: u64) -> Result<String, String> {
         build: takt_sema::Build::Sim,
         profile: None,
         channel_imports,
+        core: None,
     };
     let checked = takt_sema::compile(&text, &options);
     let Some(p) = checked.program else {
@@ -201,10 +297,7 @@ fn interpreted(path: &Path, ticks: u64) -> Result<String, String> {
         return Err(format!("{}:\n{}", path.display(), errors.join("\n")));
     };
     let run = takt_interp::RunOptions { ticks, ..Default::default() };
-    let interpreted = takt_interp::run(&p, &takt_interp::trace::Trace::default(), &run)
-        .map_err(|e| format!("Interpreter: {e:?}"))?
-        .trace
-        .render();
+    let interpreted = takt_interp::run(&p, stimulus, &run).map_err(|e| format!("Interpreter: {e:?}"))?.trace.render();
     Ok(takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p)))
 }
 
@@ -231,7 +324,7 @@ mod tests {
     /// fehlender Ausgang scheitern und nennen, was fehlt.
     #[test]
     fn the_comparison_rejects_what_differs() {
-        let good = interpreted(Path::new(VALVE), 1000).expect("Interpreter");
+        let good = interpreted(Path::new(VALVE), 1000, &Default::default()).expect("Interpreter");
         assert!(good.contains("t=300 out valve true"), "{good}");
         assert_eq!(same_as_interpreter(VALVE, 1000, &good), Ok(()));
 

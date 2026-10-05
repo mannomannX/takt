@@ -333,4 +333,33 @@ mod tests {
         assert!(soft.contains("thumbv7em-none-eabi") && soft.contains("32-Bit mit f32-FPU"), "{soft}");
         assert!(Target::by_host_triple("mips-unknown-none").is_err());
     }
+
+    /// GEN-020: Jedes bekannte Tripel fuehrt zu seinem Ziel; beide
+    /// Soft-Float-Tripel nennen Tripel, Klasse und das richtige Tripel; ein
+    /// unbekanntes je Familie scheitert mit der Liste der bekannten.
+    #[test]
+    fn every_known_triple_and_every_family_is_answered() {
+        for t in Target::KNOWN {
+            assert_eq!(Target::by_host_triple(t.triple), Ok(t), "{}", t.triple);
+        }
+        for (soft, t) in
+            [("thumbv7em-none-eabi", Target::THUMBV7EM), ("armv7-unknown-linux-gnueabi", Target::ARMV7_LINUX)]
+        {
+            let e = Target::by_host_triple(soft).expect_err(soft);
+            assert!(e.contains(soft) && e.contains(t.class.name()) && e.contains(t.triple), "{e}");
+        }
+        for unknown in [
+            "x86_64-pc-windows-gnu",
+            "aarch64-apple-darwin",
+            "thumbv6m-none-eabi",
+            "riscv32imafc-unknown-none-elf",
+            "armv7-unknown-linux-musleabihf",
+        ] {
+            let e = Target::by_host_triple(unknown).expect_err(unknown);
+            assert!(e.contains(unknown) && e.contains("bekannt:"), "{e}");
+            for t in Target::KNOWN {
+                assert!(e.contains(t.triple), "{unknown}: `{}` fehlt in der Liste: {e}", t.triple);
+            }
+        }
+    }
 }

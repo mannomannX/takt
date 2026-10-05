@@ -1,0 +1,30 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output x0 :float @hw("o/x0") safe=0)
+(output x1 :float @hw("o/x1") safe=0)
+(output l10 :float @hw("o/l10") safe=0)
+(output pd :bool @hw("o/pd") safe=true)
+(output phase :int in 0..9 @hw("o/phase") safe=0)
+(const I2 :mat<2, 2> (array (array 1 0) (array 0 1)))
+(const INDEFINITE :mat<2, 2> (array (array 1 2) (array 2 1)))
+(machine m
+  (fault -> SAFE)
+  (var k :float 4.0)
+  (initial RUN)
+  (state RUN
+    (enter
+      (= phase 1))
+    (loop
+      (= k (- k 1.0))
+      (var a :mat<2, 2> (array (array 1.0 2.0) (array 2.0 (+ 4.0 k))))
+      (var x (call solve a (array (array 1.0) (array 3.0))))
+      (= x0 (index x 0 0))
+      (= x1 (index x 1 0))
+      (var c (.cholesky INDEFINITE ()))
+      (= pd (.valid c))
+      (= l10 (index (.or c I2) 1 0))))
+  (state SAFE
+    (enter
+      (= phase 2)
+      (= x0 7.0))))

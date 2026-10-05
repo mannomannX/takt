@@ -12,7 +12,7 @@
 (output word :u32 @hw("o/word") safe=0)
 (output ready :u32 @hw("o/ready") safe=0)
 (fn first (d:bytes<32>) -> u32
-  (return (| (| (| (as (index d 0) u32) (<< (as (index d 1) u32) 8)) (<< (as (index d 2) u32) 16)) (<< (as (index d 3) u32) 24))))
+  (return (| (| (| (paren (as (index d 0) u32)) (paren (<< (paren (as (index d 1) u32)) 8))) (paren (<< (paren (as (index d 2) u32)) 16))) (paren (<< (paren (as (index d 3) u32)) 24)))))
 (machine timing
   (var n :u32 in 0..100 0)
   (initial RUN)
@@ -79,7 +79,7 @@
       (var m :mat<2, 2> (array (array a 1) (array a 1)))
       (var v :mat<2, 2> (+ (array (array 1 0) (array 0 1)) (* m 0.0)))
       (if (< a 0.5)
-        (= v (.inv m)))
+        (= v (.inv m ())))
       (= inv_out (index v 0 0)))))
 (machine restart
   (var msg :bytes<64> default)

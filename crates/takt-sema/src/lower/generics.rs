@@ -51,7 +51,9 @@ impl Lowerer<'_> {
     }
 
     /// Fuehrt `f` mit gebundener generischer Umgebung und sauberem Kontext
-    /// aus: keine Maschine, keine Fakten, und als Sichtbereich die Ebene
+    /// aus: keine Maschine, keine Fakten, keine umgebende `for`-Schleife
+    /// (sonst naehme der Rumpf einer Vorlage, die in einer Schleife
+    /// instanziiert wird, ein `break` an), und als Sichtbereich die Ebene
     /// der Vorlage — das Prelude fuer eine Vorlage der Bibliothek, sonst
     /// die Datei.
     pub fn with_env<T>(&mut self, env: Env, prelude: bool, f: impl FnOnce(&mut Self) -> T) -> T {
@@ -59,10 +61,14 @@ impl Lowerer<'_> {
         let saved_prelude = std::mem::replace(&mut self.prelude, prelude);
         let saved_m = self.mctx.take();
         let saved_facts = std::mem::take(&mut self.facts);
+        let saved_for = std::mem::take(&mut self.for_depth);
+        let saved_closed = std::mem::take(&mut self.closed_block);
         let keep = if prelude { 1 } else { 2 };
         let inner = self.scopes.detach_inner(keep);
         let r = f(self);
         self.scopes.attach_inner(keep, inner);
+        self.closed_block = saved_closed;
+        self.for_depth = saved_for;
         self.facts = saved_facts;
         self.mctx = saved_m;
         self.prelude = saved_prelude;
@@ -267,6 +273,11 @@ impl Lowerer<'_> {
                     Binding::Const(self.const_int(&e)?)
                 }
                 (GenericVar::Type { .. }, ast::GenericArg::Type(t)) => Binding::Type(self.resolve_type(t)?),
+                // `[bool, 4]`: einen einfachen Namen vor `,` liest der Parser
+                // als Einheit; an einer Typvariablen ist er ein Typname.
+                (GenericVar::Type { .. }, ast::GenericArg::Unit(u)) if simple_type(u).is_some() => {
+                    Binding::Type(self.resolve_type(&simple_type(u).expect("Typname"))?)
+                }
                 (var, _) => {
                     let what = match var {
                         GenericVar::Unit(_) => "eine Einheit",
@@ -292,6 +303,7 @@ impl Lowerer<'_> {
         let mut arg_caps: Vec<Option<i64>> = vec![None; params.len()];
         let mut arg_types: Vec<Option<TypeId>> = vec![None; params.len()];
         let start = self.diags.len();
+        let mark = self.probe_mark();
         for (i, a) in args.iter().enumerate() {
             let idx = match &a.name {
                 None => i,
@@ -313,6 +325,7 @@ impl Lowerer<'_> {
             }
         }
         self.diags.truncate(start);
+        self.probe_reset(mark);
         // 3.12: Typvariablen aus der Struktur der Parameter.
         let saved = std::mem::replace(&mut self.env, Env::open(vars));
         for (i, p) in params.iter().enumerate() {
@@ -406,6 +419,34 @@ impl Lowerer<'_> {
         Some(out)
     }
 
+    /// Stand vor der Probe der Argumente in `solve_call`.
+    fn probe_mark(&self) -> Probe {
+        Probe {
+            pending: self.pending.len(),
+            anon: self.anon,
+            locals: self.fn_ctx.last().map(|c| c.locals.len()),
+            machine: self.mctx.as_ref().map(|m| (m.machine.vars.len(), m.machine.layout.block_instances.len())),
+        }
+    }
+
+    /// Verwirft, was die Probe angelegt hat: Die Argumente werden danach
+    /// gegen die Parametertypen ein zweites Mal gesenkt, und eine anonyme
+    /// Blockinstanz (5.7) entstuende sonst zweimal, samt zweitem `step`.
+    fn probe_reset(&mut self, mark: Probe) {
+        self.pending.truncate(mark.pending);
+        self.anon = mark.anon;
+        if let (Some(n), Some(ctx)) = (mark.locals, self.fn_ctx.last_mut()) {
+            ctx.locals.truncate(n);
+        }
+        if let (Some((vars, instances)), Some(m)) = (mark.machine, self.mctx.as_mut()) {
+            m.machine.vars.truncate(vars);
+            m.machine.layout.block_instances.truncate(instances);
+            for st in &mut m.machine.states {
+                st.vars.retain(|v| v.index() < vars);
+            }
+        }
+    }
+
     /// Konstantenvariable in einem Kapazitaetstyp (`bytes<N>`, `vec<T, N>`,
     /// `[N] T`, `line<N>`, `samples<T, N>`): ihr Index.
     fn type_const_pattern(&self, t: &ast::Type) -> Option<u32> {
@@ -427,8 +468,10 @@ impl Lowerer<'_> {
     /// hierher kommt; hier bleibt der Fall mit *wachsenden* Argumenten
     /// (`f[T]` ruft `f[[1] T]`). Jede Instanz hat einen eigenen
     /// Schluessel, ein Vergleich faende den Zyklus also nie — die Tiefe
-    /// des Stapels ist das Kriterium. Ohne sie laeuft die Senkung bis zum
-    /// Stapelueberlauf.
+    /// ist das Kriterium, gezaehlt ab dem ersten Auftreten derselben
+    /// Vorlage auf dem Stapel. Eine Kette verschiedener Vorlagen kehrt zu
+    /// keiner zurueck und ist kein Zyklus, wie lang sie auch ist. Ohne die
+    /// Schranke laeuft die Senkung bis zum Stapelueberlauf.
     ///
     /// Acht, nicht mehr: Jede Ebene schachtelt den Typ tiefer, und die
     /// Typaufloesung darueber kostet ihrerseits Stapel — ab zwoelf
@@ -436,7 +479,9 @@ impl Lowerer<'_> {
     /// Ebenen sind fuer echte Vorlagen reichlich.
     fn enter_instance(&mut self, key: &str, name: &str, span: Span) -> Option<()> {
         const DEPTH: usize = 8;
-        if self.memo_stack.len() >= DEPTH {
+        let template = |k: &str| k.split('[').next().map(str::to_owned);
+        let first = self.memo_stack.iter().position(|k| template(k) == template(key));
+        if first.is_some_and(|i| self.memo_stack.len() - i >= DEPTH) {
             let path = self.memo_stack[self.memo_stack.len() - 3..].join(" -> ");
             self.error_hint(
                 SC52,
@@ -526,7 +571,7 @@ impl Lowerer<'_> {
             origin: Some(origin),
             span: decl.span,
         });
-        let (locals, body) = self.lower_body(&params, ret, &decl.body, 0, None, decl.span)?;
+        let (locals, body) = self.lower_body(&params, None, ret, &decl.body, 0, None, decl.span)?;
         let f = &mut self.program.fns[id.index()];
         f.locals = locals;
         f.body = body;
@@ -658,6 +703,41 @@ impl Entity {
 }
 
 /// `ast::Capability` als Praedikat der MIR (3.12).
+/// Stand von Senkungsergebnissen mit Seiteneffekt, fuer `probe_reset`.
+struct Probe {
+    pending: usize,
+    anon: u32,
+    locals: Option<usize>,
+    machine: Option<(usize, usize)>,
+}
+
+/// Ein einfacher Skalarname als Typ (3.12): `bool`, `int`, `u8`, `f32`, …
+/// Andere Namen liest der Parser schon als Typ.
+fn simple_type(u: &ast::UnitExpr) -> Option<ast::Type> {
+    if !u.rest.is_empty() || u.first.exponent.is_some() {
+        return None;
+    }
+    let int = |ty| Some(ast::ScalarType::Int { ty, unit: None });
+    let float = |width| Some(ast::ScalarType::Float { width, unit: None });
+    let scalar = match u.first.name.as_ref()?.name.as_str() {
+        "bool" => Some(ast::ScalarType::Bool),
+        "int" => int(ast::IntType::Int),
+        "i8" => int(ast::IntType::I8),
+        "i16" => int(ast::IntType::I16),
+        "i32" => int(ast::IntType::I32),
+        "i64" => int(ast::IntType::I64),
+        "u8" => int(ast::IntType::U8),
+        "u16" => int(ast::IntType::U16),
+        "u32" => int(ast::IntType::U32),
+        "u64" => int(ast::IntType::U64),
+        "float" => float(None),
+        "f32" => float(Some(ast::FloatWidth::F32)),
+        "f64" => float(Some(ast::FloatWidth::F64)),
+        _ => None,
+    }?;
+    Some(ast::Type { kind: ast::TypeKind::Scalar { scalar, range: None, wrap: None }, span: u.span })
+}
+
 fn capability_of(c: ast::Capability) -> takt_mir::capability::Capability {
     use takt_mir::capability::Capability as C;
     match c {

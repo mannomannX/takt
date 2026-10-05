@@ -345,3 +345,94 @@ machine two:
         assert_eq!(other, base, "Reihenfolge {order}: der Trace haengt von der Schrittfolge ab");
     }
 }
+
+/// Ein Programm mit `persist var k : {ty} = {fallback}`, das `read` auf den
+/// Output `x : {out}` legt; daraus der Wert in Tick 0 bei einem Speicher mit
+/// `value` und ob `PersistReset` meldet.
+fn load(decls: &str, ty: &str, fallback: &str, out: &str, read: &str, value: Value) -> (String, bool) {
+    let p = compile(&format!(
+        "{decls}
+output x : {out} @ hw(\"o/x\") with safe = default
+
+machine m:
+    persist var k : {ty} = {fallback}
+    initial RUN
+    state RUN:
+        loop:
+            x = {read}
+"
+    ));
+    let mut nvm = Nvm::new();
+    nvm.put(only_hash(&p), value);
+    let trace = simulate(&p, nvm, 1);
+    let shown = trace.lines().find_map(|l| l.strip_prefix("t=0 out x ")).unwrap_or_default().to_string();
+    (shown, trace.contains("PersistReset"))
+}
+
+/// 5.9 als Tabelle: Range-Grenzen gelten, knapp daneben gilt der Default
+/// mit `PersistReset`; ebenso eine Variante, die das Enum nicht hat, ein
+/// Array falscher Laenge und ein Gleitkommawert mit NaN- oder
+/// Inf-Bitmuster — mit und ohne Range, denn `float` kennt nur endliche
+/// Werte (4.1), und ein solches Feld ist keine gueltige Byteform.
+#[test]
+fn the_validation_table_of_5_9() {
+    let int = |v: i64| load("", "int in 0..99", "7", "int in 0..99", "k", Value::Int(v));
+    assert_eq!(int(0), ("0".into(), false));
+    assert_eq!(int(99), ("99".into(), false));
+    assert_eq!(int(100), ("7".into(), true));
+    assert_eq!(int(-1), ("7".into(), true));
+
+    let ranged = |v: f64| load("", "float in 0.0..10.0", "1.5", "float", "k", Value::F64(v));
+    assert_eq!(ranged(10.0), ("10.0".into(), false));
+    assert_eq!(ranged(f64::NAN), ("1.5".into(), true));
+    assert_eq!(ranged(f64::INFINITY), ("1.5".into(), true));
+
+    let enumerated = |variant: u32| {
+        load("enum Mode: A, B, C\n", "Mode", "B", "Mode", "k", Value::Enum { variant, fields: Vec::new() })
+    };
+    assert_eq!(enumerated(2), ("C".into(), false));
+    assert_eq!(enumerated(3), ("B".into(), true));
+
+    let array = |n: i64| {
+        let items = (0..n).map(|_| Value::Int(4)).collect();
+        load("", "[3] int in 0..9", "[1, 2, 3]", "int in 0..9", "k[0]", Value::Array(items))
+    };
+    assert_eq!(array(3), ("4".into(), false));
+    assert_eq!(array(2), ("1".into(), true));
+}
+
+/// Ohne Range: Auch hier sind NaN und Inf keine gueltige Byteform (5.9),
+/// sonst gelangte ein nicht endlicher Wert in die Sprache (4.1).
+#[test]
+fn a_non_finite_float_without_a_range_falls_back_too() {
+    for v in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let got = load("", "float", "1.5", "float", "k", Value::F64(v));
+        assert_eq!(got, ("1.5".into(), true), "{v}");
+    }
+}
+
+/// 5.9, Pruefung 23: Der Typ-Hash aendert sich mit allem, was die Bedeutung
+/// der gespeicherten Bytes aendert — Breite, Gleitkommabreite, Array-Laenge,
+/// Feld- und Variantenreihenfolge, Dauer gegen Zahl.
+#[test]
+fn every_change_of_meaning_changes_the_hash() {
+    let hash = |decls: &str, var: &str| only_hash(&compile(&with_type(decls, var)));
+    for (what, a, b) in [
+        ("u8 -> u16", ("", "persist var k : u8 = 0"), ("", "persist var k : u16 = 0")),
+        ("f32 -> f64", ("", "persist var k : f32 = 0.0"), ("", "persist var k : f64 = 0.0")),
+        ("Array-Laenge", ("", "persist var k : [3] u8 = default"), ("", "persist var k : [4] u8 = default")),
+        (
+            "Feldreihenfolge",
+            ("record Rec:\n    a : u8\n    b : u16\n", "persist var k : Rec = default"),
+            ("record Rec:\n    b : u16\n    a : u8\n", "persist var k : Rec = default"),
+        ),
+        (
+            "Variantenreihenfolge",
+            ("enum Ev: A, B\n", "persist var k : Ev = A"),
+            ("enum Ev: B, A\n", "persist var k : Ev = A"),
+        ),
+        ("Dauer gegen Zahl", ("", "persist var k : Duration = 0 ms"), ("", "persist var k : i64 = 0")),
+    ] {
+        assert_ne!(hash(a.0, a.1), hash(b.0, b.1), "{what}");
+    }
+}

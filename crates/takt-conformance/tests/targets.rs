@@ -22,13 +22,6 @@ use takt_llvm::toolchain::Clang;
 
 mod common;
 
-/// Die Korpusprogramme, die auf beiden Zielen laufen muessen.
-///
-/// Dieselbe Art Liste wie die Abnahme in `differential.rs`: Was auf
-/// einer Architektur uebersetzt, muss auf der anderen dasselbe tun.
-const KORPUS: [&str; 5] =
-    ["01_minimal.takt", "02_units_and_data.takt", "16_timing.takt", "19_faults.takt", "20_native.takt"];
-
 /// Die Referenzbeispiele, die auf beiden Zielen laufen muessen.
 ///
 /// `plan.md` 6.2 macht sie zur Abnahme einer EX-ID: fertig heisst
@@ -37,7 +30,7 @@ const KORPUS: [&str; 5] =
 /// Zielmenge behauptet statt belegt.
 const EXAMPLES: [&str; 6] = ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6"];
 
-const TICKS: u64 = 20;
+const TICKS: u64 = 60;
 
 /// Ein Referenzbeispiel aus `corpus-try/sim/`.
 fn example(name: &str) -> takt_mir::Program {
@@ -72,13 +65,10 @@ fn cross_available() -> bool {
             .is_ok_and(|o| o.status.success())
 }
 
-/// Uebersetzt und laeuft ein Programm fuer ein Ziel.
-/// Uebersetzt und laeuft ein Programm fuer ein Ziel.
-///
-/// `machine` nennt die eine Maschine, die getickt wird; `None` fuehrt
-/// alle — noetig fuer Programme mit Plant-Modell (8.3), deren Eingaenge
-/// sonst `Bad` bleiben.
-fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&str>) -> Result<String, String> {
+/// Uebersetzt und laeuft ein Programm fuer ein Ziel, mit allen Maschinen
+/// wie die Abnahme — noetig fuer Programme mit Plant-Modell (8.3), deren
+/// Eingaenge sonst `Bad` blieben.
+fn run_for(target: Target, p: &takt_mir::Program, name: &str) -> Result<String, String> {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "takt-ziel-{}-{}",
         target.name,
@@ -93,10 +83,7 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str, machine: Option<&s
     // Dieselbe IR, nur mit anderem Triple: Das ist der Kern von 9.4.4.
     let ir = common::ir_for(p, target.triple);
     std::fs::write(&ll, &ir).map_err(|e| e.to_string())?;
-    let h = match machine {
-        Some(name) => takt_conformance::harness::build(p, name, TICKS),
-        None => takt_conformance::harness::build_all(p, TICKS, &[]),
-    };
+    let h = takt_conformance::harness::build_all(p, TICKS, &[]);
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
 
     // Uebersetzt wird in zwei Schritten: clang macht aus der IR ein
@@ -148,46 +135,55 @@ fn x86_64_and_aarch64_agree() {
     assert!(cross_available(), "die aarch64-Werkzeugkette fehlt; tools/Dockerfile.linux baut sie");
     let mut errors = Vec::new();
     let mut checked = 0;
-    // Die Korpusprogramme: je eine Maschine, wie in `differential.rs`.
-    for name in KORPUS {
-        let p = corpus(name);
-        let Some(machine) = p.machines.first().map(|m| m.name.clone()) else { continue };
-        if compare_all(name, &p, Some(&machine), &mut errors) {
-            checked += 1;
-        }
-    }
-    // Die Referenzbeispiele: alle Maschinen, weil fuenf von ihnen ein
-    // Plant-Modell haben (8.3).
-    for name in EXAMPLES {
-        let p = example(name);
-        if compare_all(name, &p, None, &mut errors) {
+    let korpus = takt_conformance::suites::programs("ziele");
+    for (name, p) in korpus.iter().map(|n| (*n, corpus(n))).chain(EXAMPLES.iter().map(|n| (*n, example(n)))) {
+        if compare_all(name, &p, &mut errors) {
             checked += 1;
         }
     }
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
-    assert_eq!(checked, KORPUS.len() + EXAMPLES.len(), "es wurden nicht alle Programme auf beiden Zielen geprueft");
+    assert_eq!(checked, korpus.len() + EXAMPLES.len(), "es wurden nicht alle Programme auf beiden Zielen geprueft");
     eprintln!("{checked} Programme auf x86-64 und aarch64 verglichen");
 }
 
-/// Laeuft ein Programm auf beiden Zielen und vergleicht die Traces.
+/// Laeuft ein Programm auf beiden Zielen und vergleicht die Traces
+/// miteinander und jeden mit dem Interpreter; ein Trace ohne `out`-Zeile
+/// verglich nichts (KON2-013).
 ///
 /// Liefert `true`, wenn der Vergleich zustande kam — ein Programm, das
 /// sich nicht bauen laesst, ist ein Fehler und kein Vergleich.
-fn compare_all(name: &str, p: &takt_mir::Program, machine: Option<&str>, errors: &mut Vec<String>) -> bool {
-    let a = match run_for(Target::X86_64_LINUX, p, name, machine) {
+fn compare_all(name: &str, p: &takt_mir::Program, errors: &mut Vec<String>) -> bool {
+    let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
+    let interpreted = match takt_interp::run(p, &takt_interp::Trace::default(), &options) {
+        Ok(r) => takt_conformance::run::widen_f32(&r.trace.render(), &takt_conformance::run::f32_outputs(p)),
+        Err(e) => {
+            errors.push(format!("{name}: der Interpreter bricht ab: {e:?}"));
+            return false;
+        }
+    };
+    let a = match run_for(Target::X86_64_LINUX, p, name) {
         Ok(t) => t,
         Err(e) => {
             errors.push(format!("{name} (x86-64): {e}"));
             return false;
         }
     };
-    let b = match run_for(Target::AARCH64_LINUX, p, name, machine) {
+    let b = match run_for(Target::AARCH64_LINUX, p, name) {
         Ok(t) => t,
         Err(e) => {
             errors.push(format!("{name} (aarch64): {e}"));
             return false;
         }
     };
+    for (target, trace) in [("x86-64", &a), ("aarch64", &b)] {
+        if !trace.lines().any(|l| l.split_whitespace().nth(1) == Some("out")) {
+            errors.push(format!("{name} ({target}): keine `out`-Zeile"));
+        }
+        let diffs = takt_conformance::compare(&interpreted, trace);
+        if !diffs.is_empty() {
+            errors.push(format!("{name} ({target}) gegen den Interpreter: {:?}", &diffs[..diffs.len().min(4)]));
+        }
+    }
     if a != b {
         let erste = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
         errors.push(format!(
@@ -212,11 +208,16 @@ fn both_targets_are_in_the_same_class() {
 ///
 /// Das ist die Bedingung dafuer, dass 9.4.4 eine Aussage ueber *eine*
 /// Uebersetzung ist und nicht ueber zwei Programme.
+///
+/// Ueber jedes Korpusprogramm, das die Sema annimmt (KON2-012).
 #[test]
 fn the_ir_differs_only_in_the_triple() {
-    let p = corpus("01_minimal.takt");
-    let a = common::ir_for(&p, Target::X86_64_LINUX.triple);
-    let b = common::ir_for(&p, Target::AARCH64_LINUX.triple);
     let ohne = |s: &str| s.lines().filter(|l| !l.starts_with("target triple")).collect::<Vec<_>>().join("\n");
-    assert_eq!(ohne(&a), ohne(&b), "die IR unterscheidet sich in mehr als dem Triple");
+    let programs = common::corpus_programs();
+    assert!(programs.len() >= 90, "zu wenige Korpusprogramme: {}", programs.len());
+    for (name, p) in programs {
+        let a = common::ir_for(&p, Target::X86_64_LINUX.triple);
+        let b = common::ir_for(&p, Target::AARCH64_LINUX.triple);
+        assert_eq!(ohne(&a), ohne(&b), "{name}: die IR unterscheidet sich in mehr als dem Triple");
+    }
 }

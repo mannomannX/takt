@@ -90,6 +90,14 @@ pub fn elapsed_ns(timer_hz: u32, counts: u64) -> i64 {
     i64::try_from(ns).unwrap_or(i64::MAX)
 }
 
+/// Eine Periode in ganzen Mikrosekunden, fuer Zeitgeber, die nur solche
+/// annehmen (der Alarm des C6-SYSTIMER). `None`, wenn sie keine ganze Zahl
+/// von Mikrosekunden ist oder nicht positiv: Abschneiden verschoebe jede
+/// Periode, ohne etwas zu brechen.
+pub fn whole_micros(period_ns: i64) -> Option<u64> {
+    (period_ns > 0 && period_ns % 1_000 == 0).then(|| period_ns.unsigned_abs() / 1_000)
+}
+
 const fn gcd(mut a: u64, mut b: u64) -> u64 {
     while b != 0 {
         (a, b) = (b, a % b);
@@ -100,6 +108,15 @@ const fn gcd(mut a: u64, mut b: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_period_in_whole_micros_is_exact_or_refused() {
+        assert_eq!(whole_micros(10_000_000), Some(10_000));
+        assert_eq!(whole_micros(1_000), Some(1));
+        assert_eq!(whole_micros(10_500), None);
+        assert_eq!(whole_micros(0), None);
+        assert_eq!(whole_micros(-1_000), None);
+    }
 
     const MHZ: u32 = 1_000_000;
 

@@ -96,27 +96,28 @@ impl Edition {
 /// Wortschatz waehlt. Liefert den Zahlentext mit Position, oder `None`, wenn der
 /// Eintrag fehlt. Syntaxfehler meldet spaeter der Parser.
 pub fn declared_edition(src: &str) -> Option<(String, Span)> {
-    let mut offset = 0usize;
+    // BOM und Tabulator meldet der Tokenizer; hier verschieben sie nur die Stelle.
+    let body = src.strip_prefix('\u{feff}').unwrap_or(src);
+    let mut offset = src.len() - body.len();
     let mut in_system = false;
-    for line in src.split_inclusive('\n') {
+    for line in body.split_inclusive('\n') {
         let content = line.trim_end_matches(['\n', '\r']);
-        let trimmed = content.trim_start_matches(' ');
-        let indented = content.len() > trimmed.len();
+        let trimmed = content.trim_start_matches([' ', '\t']);
+        let indent = content.len() - trimmed.len();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             offset += line.len();
             continue;
         }
-        if !indented {
+        if indent == 0 {
             in_system = trimmed.starts_with("system") && trimmed[6..].trim_start().starts_with(':');
         } else if in_system {
-            let body = trimmed.split('#').next().unwrap_or_default();
-            if let Some((key, value)) = body.split_once('=') {
-                if key.trim() == "language" {
-                    let value = value.trim();
-                    let start = offset + content.len() - content.trim_start_matches(' ').len()
-                        + trimmed.find(value).unwrap_or(0);
-                    return Some((value.to_string(), Span::new(start as u32, (start + value.len()) as u32)));
-                }
+            let entry = trimmed.split('#').next().unwrap_or_default();
+            if let Some((key, value)) = entry.split_once('=')
+                && key.trim() == "language"
+            {
+                let start = offset + indent + key.len() + 1 + (value.len() - value.trim_start().len());
+                let value = value.trim();
+                return Some((value.to_string(), Span::new(start as u32, (start + value.len()) as u32)));
             }
         }
         offset += line.len();
@@ -139,6 +140,20 @@ mod tests {
         assert_eq!(declared_edition("system:\n    tick = 1 ms\nconst LANG = 3\n"), None);
         let (_, span) = declared_edition("system:\n    language = 1\n").expect("gefunden");
         assert_eq!((span.start, span.end), (23, 24));
+    }
+
+    /// Die Spanne zeigt auf den Wert, auch wenn er nicht numerisch ist oder
+    /// BOM, Tabulator oder CRLF davor stehen; es gilt der erste Eintrag.
+    #[test]
+    fn the_span_points_at_the_value() {
+        let at = |src: &str| declared_edition(src).map(|(v, s)| (v, s.start, s.end));
+        assert_eq!(at("system:\n    language = e\n"), Some(("e".into(), 23, 24)), "nicht im Wort language");
+        assert_eq!(at("system:\n    language=7\n"), Some(("7".into(), 21, 22)));
+        assert_eq!(at("\u{feff}system:\n    language = 1\n"), Some(("1".into(), 26, 27)), "hinter der BOM");
+        assert_eq!(at("system:\n\tlanguage = 1\n"), Some(("1".into(), 20, 21)), "Tabulator als Einrueckung");
+        assert_eq!(at("system:\r\n    language = 1\r\n"), Some(("1".into(), 24, 25)));
+        assert_eq!(at("system:\n    language = 1\n    language = 2\n"), Some(("1".into(), 23, 24)));
+        assert_eq!(at("system:\n    language = 99999999999\n"), Some(("99999999999".into(), 23, 34)));
     }
 
     #[test]

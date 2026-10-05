@@ -12,9 +12,9 @@
   (state RUN
     (loop
       (= k (call min (+ k 1) 1000))
-      (var x :float in (- 1.0e4)..1.0e4 (- (* (as k float) 7.3) 3650.0))
+      (var x :float in (- 1.0e4)..1.0e4 (- (* (paren (as k float)) 7.3) 3650.0))
       (= sine (call sin_fast x))
       (= cosine (call cos_fast (* x 0.001)))
-      (= growth (call exp_fast (- (* (as k float) 0.2) 40.0)))
+      (= growth (call exp_fast (- (* (paren (as k float)) 0.2) 40.0)))
       (= angle (call atan2_fast sine cosine))
       (= bearing (call atan2_fast (- 0.0 cosine) (- sine 0.5))))))

@@ -134,3 +134,28 @@ fn an_end_on_wake_without_a_wake_source_warns() {
     assert!(only_idle.len() == 1 && only_idle[0].contains("Konfiguration"), "{only_idle:?}");
     assert!(wake_warnings(&ending("ON_WAKE", button), Some(&config(true))).is_empty());
 }
+
+/// 7.4, 12.7: `sys/clock` ist ein Input vom Typ `Duration`; ein anderer
+/// Typ oder die andere Richtung ist ein Fehler von Pruefung 60.
+#[test]
+fn the_clock_is_a_duration_input() {
+    for (line, want) in [
+        ("input  x : int @ hw(\"sys/clock\")", "verlangt `Duration`"),
+        ("output x : Duration @ hw(\"sys/clock\") with safe = 0 s", "ist am Geraet `sys` ein Input"),
+    ] {
+        let src =
+            format!("{HEAD}{line}\nmachine m:\n    initial RUN\n    state RUN:\n        loop:\n            pass\n");
+        let e = compile(&src).expect_err(line).join("\n");
+        assert!(e.contains("SC-60") && e.contains(want), "{line}:\n{e}");
+    }
+}
+
+/// 12.7: Ein Command weckt zwischen zwei Laeufen nicht — die Verbindung,
+/// ueber die es kaeme, ruht mit. `ON_WAKE` mit nur einem Command als
+/// Wake-Quelle warnt wie ohne jede Quelle.
+#[test]
+fn a_command_is_no_wake_source_between_runs() {
+    let command = "command wake_up with wake = true\n";
+    let warned = wake_warnings(&ending("ON_WAKE", command), None);
+    assert!(warned.len() == 1 && warned[0].contains("ON_START"), "{warned:?}");
+}

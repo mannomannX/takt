@@ -1,0 +1,4 @@
+t=20 state v1 OPENING
+t=130 state v1 OPEN_ST
+t=210 state v1 CLOSING
+t=320 state v1 CLOSED_ST

@@ -1,0 +1,12 @@
+t=0 in chamber_p 10 bar
+t=0 in raw_p 0 bar
+t=100 in chamber_p 10 bar
+t=100 in raw_p -0.5 bar
+t=200 in chamber_p 10 bar
+t=200 in raw_p 0 bar
+t=300 in chamber_p 10 bar
+t=300 in raw_p 250.5 bar
+t=400 in chamber_p 10 bar
+t=400 in raw_p 250 bar
+t=500 in chamber_p 10 bar
+t=500 in raw_p 250 bar

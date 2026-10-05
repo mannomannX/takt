@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-9 (5.3): phi(s) = s ist der kuerzeste Zyklus des Fault-Walds.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        fault -> RUN  # ~ SC-9
+        loop:
+            v = true

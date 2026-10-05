@@ -213,8 +213,10 @@ impl Ctx<'_, '_> {
                     _ => Value::UInt(raw),
                 }),
                 Some(Output::Digest(d)) => Ok(Value::Bytes(d.to_vec())),
-                // `fft256`: die 256 Werte in kanonischer Form (5.9).
-                Some(Output::Floats { bytes, len }) => crate::bytes::decode(p, &bytes[..len], n.ret)
+                // `fft256`: die 256 Werte in kanonischer Form (5.9), als
+                // Rechenergebnis auch nicht endlich (4.1: es faultet erst der
+                // `Checked`-Knoten um den Aufruf).
+                Some(Output::Floats { bytes, len }) => crate::bytes::decode_result(p, &bytes[..len], n.ret)
                     .map_err(|e| Trap::Bug(format!("`{}`: Ergebnis ohne Byteform ({e:?})", n.name))),
                 None => bug(format!("`{}`: {} Argumente passen nicht zur Signatur", n.name, inputs.len())),
             },
@@ -390,7 +392,8 @@ impl Ctx<'_, '_> {
                     match op {
                         Intrinsic::WrappingAdd => x + y,
                         Intrinsic::WrappingSub => x - y,
-                        _ => x * y,
+                        // Modulo 2^128 gerechnet: Die unteren Bits sind dieselben.
+                        _ => x.wrapping_mul(y),
                     },
                 ))
             }

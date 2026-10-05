@@ -87,6 +87,23 @@ pub struct RunResult {
     pub properties: Vec<PropertyResult>,
     /// Jede ausgefuehrte Anweisung als Zeile, wenn `steps` gesetzt war.
     pub steps: String,
+    /// Jeder Fault mit seiner Stelle, in der Reihenfolge des Traces. Die
+    /// Zeile `fault` nennt nur Maschine und Art; wer einen Pfad zu einer
+    /// bestimmten Pruefung bestaetigt (`takt prove`), braucht die Stelle.
+    pub faults: Vec<FaultSite>,
+}
+
+/// Ein Fault des Laufs mit der Stelle, die ihn ausloeste.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FaultSite {
+    /// Tick.
+    pub tick: u64,
+    /// Maschine.
+    pub machine: String,
+    /// Art.
+    pub kind: takt_mir::machine::FaultKind,
+    /// Die Stelle im Quelltext.
+    pub span: takt_diag::Span,
 }
 
 /// Warum ein Lauf endete (12.7, 13.6).
@@ -136,6 +153,7 @@ pub struct Run<'p> {
     /// Ein Abbruch aus der Schleife; `finish` liefert ihn.
     pub(crate) trap: Option<Trap>,
     steps: String,
+    faults: Vec<FaultSite>,
     /// Runtime-Faults, die die Schleife erhoben hat (7.3, 12.3, 12.6 Zeile
     /// 7); der naechste Tick stellt sie zu und schreibt ihre Zeile.
     pub(crate) raised: Vec<takt_mir::machine::RuntimeKind>,
@@ -199,14 +217,23 @@ impl<'p> Run<'p> {
         match only {
             // Die Scheibe traegt, was die fremden Maschinen im Tick 0 nach
             // ihrem Eintritt zeigten; ihre Anfangswerte rechnet `init` selbst.
-            Some(_) => sim.init_with(|s| apply_stimulus(s, stimulus, 0, &mut echo, only))?,
+            // Die Eingaben kommen wie im Gesamtlauf vor `init` und damit vor
+            // den Sim-Bindungen (8.3): Ein Input, den der Stimulus setzt, ist
+            // dort im Tick 0 schon gebunden, nicht erst im Tick 1 (SEM2-063).
+            Some(_) => {
+                apply_stimulus(&mut sim, stimulus, 0, &mut echo, None)?;
+                let foreign = foreign_lines(stimulus, 0);
+                sim.init_with(|s| apply_stimulus(s, &foreign, 0, &mut Vec::new(), only))?;
+            }
             None => {
                 apply_stimulus(&mut sim, stimulus, 0, &mut echo, only)?;
                 sim.init()?;
             }
         }
         writer.lines.append(&mut echo);
-        collect(&mut writer, &sim, 0, fault_is_fail(program, scenario), &mut verdict, &mut fail, &mut coverage);
+        let faults: Vec<FaultSite> = fault_sites(&sim, 0).collect();
+        let fail_on_fault = fault_is_fail(program, scenario);
+        collect(&mut writer, &sim, 0, fail_on_fault, &mut verdict, &mut fail, &mut coverage);
         writer.initial(&sim);
         observe_properties(&mut monitors, &sim, 0, &mut writer, &mut fail);
 
@@ -235,6 +262,7 @@ impl<'p> Run<'p> {
             deadline: None,
             trap: None,
             steps: String::new(),
+            faults,
             raised: Vec::new(),
         };
         run.deadline = run.earliest_deadline();
@@ -289,6 +317,7 @@ impl<'p> Run<'p> {
             &mut self.fail,
             &mut self.coverage,
         );
+        self.faults.extend(fault_sites(&self.sim, tick));
         self.writer.changes(&self.sim, tick);
         observe_properties(&mut self.monitors, &self.sim, tick, &mut self.writer, &mut self.fail);
         self.last = tick;
@@ -320,7 +349,19 @@ impl<'p> Run<'p> {
             return Err(trap);
         }
         let Run {
-            sim, ticks, mut writer, monitors, verdict, mut fail, coverage, start_params, ended, last, steps, ..
+            sim,
+            ticks,
+            mut writer,
+            monitors,
+            verdict,
+            mut fail,
+            coverage,
+            start_params,
+            ended,
+            last,
+            steps,
+            faults,
+            ..
         } = self;
         let at = if ended == Ended::Ticks { ticks } else { last };
         let properties = finish_properties(monitors, at, &mut writer, &mut fail);
@@ -334,7 +375,7 @@ impl<'p> Run<'p> {
         writer.lines.push(TraceLine { tick: at, kind: LineKind::Final { verdict: final_verdict.name().to_string() } });
         let params = params_of(&sim);
         Ok(RunResult {
-            trace: Trace { lines: writer.lines },
+            trace: Trace { lines: writer.lines, internal: sim.internal },
             verdict: final_verdict,
             ended,
             coverage,
@@ -342,6 +383,7 @@ impl<'p> Run<'p> {
             start_params,
             properties,
             steps,
+            faults,
         })
     }
 }
@@ -426,6 +468,22 @@ fn end_of(sim: &Sim<'_>) -> Option<Ended> {
     variants.get(*variant as usize)?.1.map(Ended::NextRun)
 }
 
+/// Die Zeilen der Scheibe, die fremde Maschinen beschreiben (12.5):
+/// Outputs, Zustaende, `pub var` und Signale eines Ticks.
+fn foreign_lines(stimulus: &Trace, tick: u64) -> Trace {
+    let lines = stimulus
+        .at(tick)
+        .filter(|l| {
+            matches!(
+                l.kind,
+                LineKind::Output { .. } | LineKind::State { .. } | LineKind::Published { .. } | LineKind::Signal { .. }
+            )
+        })
+        .cloned()
+        .collect();
+    Trace { lines, ..Trace::default() }
+}
+
 /// Speist die Stimuluszeilen eines Ticks ein.
 fn apply_stimulus(
     sim: &mut Sim<'_>,
@@ -498,17 +556,24 @@ fn apply_stimulus(
                 if !param.tunable {
                     return Err(Trap::Bug(format!("Stimulus: `{name}` ist kein `tunable param` (8.4)")));
                 }
-                let v = parse_value(value, param.ty, program).map_err(Trap::Bug)?;
-                let range = match program.types.get(param.ty) {
-                    Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range } => *range,
-                    _ => None,
-                };
-                let accepted = range.as_ref().is_none_or(|r| crate::eval::in_range(&v, r));
-                let text = value_text(&v, param.ty, program);
-                if accepted {
-                    sim.image.params[i] = v;
+                // Gegen Range und Einheit validiert (8.4): Eine fremde
+                // Einheit verwirft die Zeile wie ein Wert ausserhalb der Range.
+                if !crate::trace::unit_fits(value, param.ty, program) {
+                    let kind = LineKind::Tune { name: name.clone(), value: value.clone(), accepted: false };
+                    echo.push(TraceLine { tick, kind });
+                } else {
+                    let v = parse_value(value, param.ty, program).map_err(Trap::Bug)?;
+                    let range = match program.types.get(param.ty) {
+                        Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range } => *range,
+                        _ => None,
+                    };
+                    let accepted = range.as_ref().is_none_or(|r| crate::eval::in_range(&v, r));
+                    let text = value_text(&v, param.ty, program);
+                    if accepted {
+                        sim.image.params[i] = v;
+                    }
+                    echo.push(TraceLine { tick, kind: LineKind::Tune { name: name.clone(), value: text, accepted } });
                 }
-                echo.push(TraceLine { tick, kind: LineKind::Tune { name: name.clone(), value: text, accepted } });
             }
             // Eine verworfene Zeile der Aufzeichnung bleibt verworfen und
             // steht wieder so im Trace: Ein Golden reproduziert sich (12.5).
@@ -604,7 +669,8 @@ fn deliver(
     let mut next_seq: HashMap<ChannelId, i64> = HashMap::new();
     for (channel, sample) in deliveries {
         let Some(id) = channel_by_name(program, channel) else {
-            return Err(Trap::Bug(format!("Stimulus: Channel `{channel}` gibt es nicht")));
+            queue_internal(sim, channel, sample)?;
+            continue;
         };
         if program.channels[id.index()].dir != Direction::Input {
             return Err(Trap::Bug(format!("Stimulus: `{channel}` ist kein Input")));
@@ -653,6 +719,36 @@ fn deliver(
     Ok(())
 }
 
+/// Ein Element eines internen Stroms aus der Scheibe (12.5): Es kommt in
+/// die Warteschlange des Stroms, wie ein `send` des Schreibers im Tick
+/// davor, und wird im Schritt zugestellt. Nur im Maschinen-Replay und nur
+/// fuer einen Strom, den eine andere Maschine schreibt; die Folgenummer
+/// muss die sein, die das Element bekommt.
+fn queue_internal(sim: &mut Sim<'_>, name: &str, sample: &SampleText) -> Result<(), Trap> {
+    let program = sim.loaded.program;
+    let Some(i) = program.streams.iter().position(|s| s.name == name) else {
+        return Err(Trap::Bug(format!("Stimulus: Channel `{name}` gibt es nicht")));
+    };
+    let def = &program.streams[i];
+    if sim.foreign.is_empty() || def.writer.is_none_or(|w| !sim.foreign.contains(&w)) {
+        return Err(Trap::Bug(format!(
+            "Stimulus: `in {name}`: ein interner Strom steht nur in der Scheibe eines Lesers (12.5)"
+        )));
+    }
+    let queued = sim.image.stream_next[i].len() as i64;
+    let next = sim.image.stream_bufs[i].end().saturating_add(queued);
+    if sample.seq.is_some_and(|s| s != next) {
+        return Err(Trap::Bug(format!("Stimulus: `in {name}` mit seq={:?}, erwartet {next}", sample.seq)));
+    }
+    let value = element_value(sample.value.as_deref().unwrap_or_default(), def.elem, program)
+        .map_err(Trap::Bug)?
+        .ok_or_else(|| Trap::Bug(format!("Stimulus: `in {name}` ist kein Element des Stroms")))?;
+    let t = sample.t.unwrap_or_default();
+    let bytes = crate::stream::byte_len(&value);
+    sim.image.stream_next[i].push((t, value, bytes));
+    Ok(())
+}
+
 /// Ein Stromelement aus dem Stimulus. Ein Record-Strom nimmt es auch als
 /// Bytes in kanonischer Form (`0x…`, 8.6); misslingt `decode`, ist es
 /// `None` — verworfen und gezaehlt (12.6, Zeile 5).
@@ -694,6 +790,155 @@ fn driver_line(alert: &takt_hal::Alert, p: &Program) -> Option<LineKind> {
     })
 }
 
+/// Ein Stimulus, der nicht zum Programm passt: eine Eingabe des Nutzers,
+/// kein Fehler des Interpreters (SEM2-008). Die Zeile zaehlt ab 1 im Text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StimulusError {
+    /// Die Zeile im Stimulus.
+    pub line: usize,
+    /// Was nicht passt.
+    pub message: String,
+}
+
+impl std::fmt::Display for StimulusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Zeile {}: {}", self.line, self.message)
+    }
+}
+
+/// Liest einen Stimulus und prueft jede Zeile gegen das Programm: Kanaele,
+/// Commands, Tunables, Job-Handles, Runtime-Faults, Werte in ihrer
+/// Literalform und, in der Scheibe einer Maschine (`only`), die fremden
+/// Zeilen. Was hier besteht, laesst `run` nicht an einer Stimuluszeile
+/// scheitern; was nicht besteht, ist eine Eingabe mit Zeilennummer, kein
+/// `Trap::Bug`.
+pub fn read_stimulus(p: &Program, text: &str, only: Option<&str>) -> Result<Trace, StimulusError> {
+    let only = match only {
+        Some(name) => Some(
+            p.machines
+                .iter()
+                .position(|m| m.name == name)
+                .map(|i| MachineId(i as u32))
+                .ok_or_else(|| StimulusError { line: 0, message: format!("Maschine `{name}` gibt es nicht") })?,
+        ),
+        None => None,
+    };
+    let mut lines = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let error = |message: String| StimulusError { line: i + 1, message };
+        let parsed = crate::trace::parse_line(line).map_err(error)?;
+        check_line(p, &parsed.kind, only).map_err(error)?;
+        lines.push(parsed);
+    }
+    Ok(Trace { lines, ..Trace::default() })
+}
+
+/// Passt eine Stimuluszeile zum Programm? Dieselben Fragen, die
+/// `apply_stimulus` und `deliver` stellen, ohne ihre Wirkung.
+fn check_line(p: &Program, kind: &LineKind, only: Option<MachineId>) -> Result<(), String> {
+    let foreign = |name: &str| -> Result<MachineId, String> {
+        let m = p.machines.iter().position(|m| m.name == name).map(|i| MachineId(i as u32));
+        let m = m.ok_or_else(|| format!("Maschine `{name}` gibt es nicht"))?;
+        if only == Some(m) {
+            return Err(format!("`{name}` ist die abgespielte Maschine selbst"));
+        }
+        Ok(m)
+    };
+    match kind {
+        LineKind::Input { channel, sample } => match channel_by_name(p, channel) {
+            Some(id) => {
+                let c = &p.channels[id.index()];
+                if c.dir != Direction::Input {
+                    return Err(format!("`{channel}` ist kein Input"));
+                }
+                match p.types.list.get(c.ty.index()) {
+                    Some(Type::Stream(elem)) => {
+                        element_value(sample.value.as_deref().unwrap_or_default(), *elem, p).map(drop)
+                    }
+                    _ => sample_from_text(sample, c.ty, p).map(drop),
+                }
+            }
+            // Ein interner Strom steht nur in der Scheibe eines Lesers, den
+            // eine andere Maschine beschreibt (12.5).
+            None => match p.streams.iter().find(|s| s.name == *channel) {
+                Some(s) if only.is_some() && s.writer.is_some_and(|w| Some(w) != only) => {
+                    element_value(sample.value.as_deref().unwrap_or_default(), s.elem, p)?
+                        .map(drop)
+                        .ok_or_else(|| format!("`in {channel}` ist kein Element des Stroms"))
+                }
+                Some(_) => {
+                    Err(format!("`in {channel}`: ein interner Strom steht nur in der Scheibe eines Lesers (12.5)"))
+                }
+                None => Err(format!("Channel `{channel}` gibt es nicht")),
+            },
+        },
+        LineKind::Command { name } if !p.commands.iter().any(|c| c.name == *name) => {
+            Err(format!("Command `{name}` gibt es nicht"))
+        }
+        LineKind::Tune { name, value, accepted: true } => {
+            let param =
+                p.params.iter().find(|q| q.name == *name).ok_or_else(|| format!("Parameter `{name}` gibt es nicht"))?;
+            if !param.tunable {
+                return Err(format!("`{name}` ist kein `tunable param` (8.4)"));
+            }
+            // Eine fremde Einheit verwirft die Zeile im Lauf (8.4).
+            if !crate::trace::unit_fits(value, param.ty, p) {
+                return Ok(());
+            }
+            parse_value(value, param.ty, p).map(drop)
+        }
+        LineKind::Job { machine, handle } => {
+            let m = p
+                .machines
+                .iter()
+                .find(|m| m.name == *machine)
+                .ok_or_else(|| format!("Maschine `{machine}` gibt es nicht"))?;
+            if m.layout.job_slots.iter().any(|s| m.vars[s.handle.index()].name == *handle) {
+                Ok(())
+            } else {
+                Err(format!("`{machine}` hat kein Job-Handle `{handle}`"))
+            }
+        }
+        LineKind::Runtime { kind, output } => match (kind.as_str(), output) {
+            ("Driver", None) => Err("`runtime Driver` braucht den Output".into()),
+            ("Driver", Some(o)) if channel_by_name(p, o).is_none() => Err(format!("Output `{o}` gibt es nicht")),
+            ("Overrun" | "Driver" | "Hardware" | "Node", _) => Ok(()),
+            (other, _) => Err(format!("Runtime-Fault `{other}` gibt es nicht")),
+        },
+        LineKind::Output { channel, value } if only.is_some() => {
+            let id = channel_by_name(p, channel).ok_or_else(|| format!("Channel `{channel}` gibt es nicht"))?;
+            let c = &p.channels[id.index()];
+            if c.dir != Direction::Output || c.owner == only {
+                return Err(format!("`out {channel}` ist kein fremder Output"));
+            }
+            if matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))) {
+                return Err(format!("Ausgabestrom `{channel}` im Maschinen-Replay"));
+            }
+            parse_value(value, c.ty, p).map(drop)
+        }
+        LineKind::State { machine, .. } if only.is_some() => foreign(machine).map(drop),
+        LineKind::Published { machine, var, value } if only.is_some() => {
+            let def = &p.machines[foreign(machine)?.index()];
+            let v = def.vars.iter().find(|v| v.name == *var && v.public);
+            let v = v.ok_or_else(|| format!("`pub {machine} {var}` gibt es nicht"))?;
+            parse_value(value, v.ty, p).map(drop)
+        }
+        LineKind::Signal { machine, name } if only.is_some() => {
+            let def = &p.machines[foreign(machine)?.index()];
+            if def.signals.iter().any(|s| s.name == *name) {
+                Ok(())
+            } else {
+                Err(format!("`signal {machine} {name}` gibt es nicht"))
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 fn channel_by_name(p: &Program, name: &str) -> Option<ChannelId> {
     p.channels.iter().position(|c| c.name == name).map(|i| ChannelId(i as u32))
 }
@@ -719,6 +964,19 @@ fn foreign_machine(p: &Program, name: &str, only: Option<MachineId>) -> Result<M
 /// sonst der aus `system:`.
 fn fault_is_fail(program: &Program, scenario: Option<MachineId>) -> bool {
     scenario.and_then(|s| program.machines[s.index()].fault_is_fail).unwrap_or(program.config.fault_is_fail)
+}
+
+/// Die Faults eines Ticks mit ihrer Stelle (`RunResult::faults`).
+fn fault_sites<'s>(sim: &'s Sim<'_>, tick: u64) -> impl Iterator<Item = FaultSite> + 's {
+    sim.observations.iter().filter_map(move |(m, o)| match o {
+        Observation::Fault { kind, span, .. } => Some(FaultSite {
+            tick,
+            machine: sim.loaded.program.machines[m.index()].name.clone(),
+            kind: *kind,
+            span: *span,
+        }),
+        _ => None,
+    })
 }
 
 /// Sammelt die Beobachtungen eines Ticks in kanonischer Ordnung (T5).
@@ -773,7 +1031,7 @@ fn collect(
                 }
                 LineKind::Verdict { machine, pass: *pass, text: message.clone() }
             }
-            Observation::Fault { kind, message, target } => {
+            Observation::Fault { kind, message, target, .. } => {
                 if fault_is_fail {
                     *fail = true;
                 }

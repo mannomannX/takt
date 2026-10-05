@@ -1,1 +1,1 @@
-assumption slew_is_physical: always(abs(tank_p - tank_p.prev) < 5 bar) with monitor = true
+assumption slew_is_physical: always(abs(tank_p - tank_p.prev) < 5 bar) with monitor = true  # ~ SC-2

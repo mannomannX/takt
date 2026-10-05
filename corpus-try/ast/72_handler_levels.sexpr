@@ -11,7 +11,7 @@
   (initial RUN)
   (state RUN
     (loop
-      (= k (% (+ k 1) 256))
+      (= k (% (paren (+ k 1)) 256))
       (send s (as k u8)))))
 (machine consumer
   (var outer :int in 0..999 0)
@@ -28,17 +28,17 @@
   (state OUTER
     (initial A)
     (on s as e
-      (= outer (% (+ outer 1) 1000))
+      (= outer (% (paren (+ outer 1)) 1000))
       (= mark (as (.data e) int)))
     (state A
       (loop
         (= seen_mark mark))
       (on s as e
-        (= inner (% (+ inner 1) 1000))
+        (= inner (% (paren (+ inner 1)) 1000))
         (if (== (% inner 5) 0)
           (-> B))))
     (state B
       (on s as e
-        (= inner (% (+ inner 1) 1000))
-        (= n (% (+ n 1) 1000))
+        (= inner (% (paren (+ inner 1)) 1000))
+        (= n (% (paren (+ n 1)) 1000))
         (-> A)))))

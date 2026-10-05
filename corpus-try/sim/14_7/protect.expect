@@ -1,0 +1,3 @@
+t=310 fault bms CheckFailed "cell 2 overvoltage 4.375" -> PROTECT
+t=310 state bms PROTECT
+t=1310 state bms ACTIVE.SELFTEST.S0

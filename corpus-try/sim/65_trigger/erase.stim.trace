@@ -1,0 +1,2 @@
+t=2 in dut_log "Erasing sector 7"
+t=3 in dut_log "Erasing sector 9"

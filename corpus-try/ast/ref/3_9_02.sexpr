@@ -1,0 +1,15 @@
+(record Head layout=big
+  (start: u8 = 0xCC)
+  (len: u8)
+  (kind: u8))
+(fn frame (kind:u8 pd:bytes<32> pdl:int in 0..32) -> bytes<64>
+  (var out :bytes<64> default)
+  (.append out (.encode (Head start=0xCC len=0 kind=kind) ()))
+  (for i in (range 32)
+    (if (>= i pdl)
+      (break))
+    (.push out (index pd i)))
+  (= (index out 1) (as (paren (+ 3 pdl)) u8))
+  (var csum (call checksum out (+ 3 pdl)))
+  (.push out csum)
+  (return out))

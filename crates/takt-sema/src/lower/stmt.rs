@@ -67,8 +67,21 @@ impl Lowerer<'_> {
         out
     }
 
-    /// Eine Anweisung.
+    /// Eine Anweisung. Eine Zuweisung hebt danach die Dominanzfakten ihres
+    /// Ziels auf (3.5, 3.8): Der neue Wert kann wieder fehlen.
     pub fn stmt(&mut self, s: &ast::Stmt, kind: BlockKind) -> Option<Stmt> {
+        let out = self.lower_stmt(s, kind);
+        if let Some(Stmt {
+            kind: StmtKind::Assign { target, .. } | StmtKind::MethodCall { target: Some(target), .. },
+            ..
+        }) = &out
+        {
+            self.forget_facts(target);
+        }
+        out
+    }
+
+    fn lower_stmt(&mut self, s: &ast::Stmt, kind: BlockKind) -> Option<Stmt> {
         let span = s.span;
         let forbidden = |this: &mut Self, what: &str| {
             this.error_hint(
@@ -86,9 +99,13 @@ impl Lowerer<'_> {
             // 7.5: `arm t` / `disarm t`; die armierende Maschine besitzt
             // den Trigger, ihr Layout traegt sein `armed`.
             ast::StmtKind::Arm { arm, trigger } => {
-                let Some(Entity::Trigger(id)) = self.lookup(trigger) else {
-                    self.error(SC3, trigger.span, format!("`{}` ist kein Trigger", trigger.name));
-                    return None;
+                // Einen unbekannten Namen hat `lookup` schon gemeldet.
+                let id = match self.lookup(trigger)? {
+                    Entity::Trigger(id) => id,
+                    _ => {
+                        self.error(SC3, trigger.span, format!("`{}` ist kein Trigger", trigger.name));
+                        return None;
+                    }
                 };
                 let Some(mc) = self.mctx.as_mut() else {
                     self.error(SC3, span, "`arm` nur in einer Maschine (7.5)");
@@ -661,7 +678,11 @@ impl Lowerer<'_> {
                 self.error(SC8, span, "`at`-Bloecke enthalten nur Zuweisungen an Outputs (5.5)");
                 return None;
             }
-            let rhs = self.check(value, bty)?;
+            // 3.7: Ein Bitfeld fasst die vorzeichenlosen Werte seiner Bits;
+            // was nicht passt, ist ein Range-Verstoss, nie eine stille Maske.
+            let fits = self.bitfield_range(bty, lo, hi);
+            let rhs = self.check(value, fits)?;
+            let rhs = self.range_checked(rhs, fits, span);
             // 3.7: `active_low` kehrt den Wert an der Grenze um.
             let rhs = if bf.active_low {
                 let op = if matches!(self.ty(bty), Type::Bool) { UnaryOp::Not } else { UnaryOp::BitNot };
@@ -692,6 +713,27 @@ impl Lowerer<'_> {
     fn bitfield_names_at(&mut self, carrier: &ast::Expr) -> Option<Vec<String>> {
         let bits = self.carrier_bits(carrier)?;
         (!bits.is_empty()).then(|| bits.iter().map(|x| x.name.clone()).collect())
+    }
+
+    /// Der Typ, den eine Zuweisung an ein Bitfeld `lo..hi` vom Typ `ty`
+    /// erfuellen muss (3.7): `ty` mit der Range `0..2^w - 1`, geschnitten
+    /// mit dem Wertebereich von `ty`; deckt sich beides, `ty` selbst.
+    fn bitfield_range(&mut self, ty: TypeId, lo: u8, hi: u8) -> TypeId {
+        let Type::Int { width, unit, .. } = self.ty(ty).clone() else { return ty };
+        let bits = width.bits();
+        let (tmin, tmax) =
+            if width.signed() { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) };
+        let (from, to) = (tmin.max(0), tmax.min((1i128 << (u32::from(hi - lo) + 1)) - 1));
+        if (from, to) == (tmin, tmax) {
+            return ty;
+        }
+        let (Ok(from), Ok(to)) = (i64::try_from(from), i64::try_from(to)) else { return ty };
+        let range = takt_mir::types::Range {
+            lo: takt_mir::types::Const::Int(from),
+            hi: takt_mir::types::Const::Int(to),
+            origin: takt_mir::types::RangeOrigin::Declared,
+        };
+        self.intern(Type::Int { width, unit, range: Some(range) })
     }
 
     /// Die Bitfelder eines Traegerfelds (3.7).

@@ -15,6 +15,8 @@ use takt_mir::Program;
 use takt_mir::machine::MachineKind;
 use takt_sema::{Build, Options};
 
+mod common;
+
 /// Genug Ticks fuer beide Szenarien; das laengere braucht 31.
 const TICKS: u64 = 600;
 
@@ -95,4 +97,34 @@ fn the_whole_program_lowers_to_native_code() {
         takt_llvm::lower::program(&p, takt_llvm::Target::RISCV32IMAC.triple, &takt_llvm::symbols::Prefix::default()).ir;
     assert!(mcu.contains("load volatile"), "kein `load volatile` im IR der MCU");
     assert!(mcu.contains("store volatile"), "kein `store volatile` im IR der MCU");
+}
+
+/// **Beide Szenarien laufen nativ wie im Interpreter** (12.10, 9.4.4;
+/// KON1-019). Ports, `driver machine`, `resume` und Framer rechnet der
+/// erzeugte Code mit dem Geraetemodell; verglichen werden Ausgaenge, Faults
+/// und die Beobachtungen bis zum Ende des Szenarios — `verify` und `verdict`
+/// zeigen, dass die Nutzlast durchging, und kaemen nativ nicht, wenn nicht.
+#[test]
+fn both_scenarios_run_natively_like_the_interpreter() {
+    let Some(clang) = common::clang() else { return };
+    let p = program();
+    assert!(!p.properties.is_empty(), "das Programm traegt seine Eigenschaften");
+    for name in p.machines.iter().filter(|m| m.kind == MachineKind::Scenario).map(|m| m.name.clone()) {
+        let options = takt_interp::RunOptions { ticks: TICKS, scenario: Some(name.clone()), ..Default::default() };
+        let result = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf");
+        let interpreted = result.trace.render();
+        assert!(
+            interpreted.contains(&format!("verdict {name} pass")),
+            "{name}: kein bestandenes Verdikt:\n{interpreted}"
+        );
+        let last = result.trace.lines.iter().map(|l| l.tick).max().unwrap_or(0);
+        let native = common::run_native_scenario(&clang, &p, &format!("uart_{}", name.replace(' ', "_")), &name, TICKS)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let tick_of = |l: &str| l.strip_prefix("t=").and_then(|r| r.split(' ').next()?.parse::<u64>().ok());
+        let native: String =
+            native.lines().filter(|l| tick_of(l).is_some_and(|t| t <= last)).map(|l| format!("{l}\n")).collect();
+        assert!(native.contains(" verdict "), "{name}: nativ kein Verdikt:\n{native}");
+        let diffs = takt_conformance::compare(&interpreted, &native);
+        assert!(diffs.is_empty(), "{name}: {diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+    }
 }

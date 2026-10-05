@@ -9,13 +9,13 @@
   (initial RUN)
   (state RUN
     (loop
-      (= k (% (+ k 1) 256))
+      (= k (% (paren (+ k 1)) 256))
       (send q (as k u8)))))
 (machine counter
   (var seen :int in 0..999 0)
   (initial A)
   (on q as e
-    (= seen (% (+ seen 1) 1000))
+    (= seen (% (paren (+ seen 1)) 1000))
     (= n seen))
   (state A
     (enter

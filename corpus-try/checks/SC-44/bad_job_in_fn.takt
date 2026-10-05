@@ -1,0 +1,11 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-44 (4.5): Ein Job-Handle hat einen Slot in einer Maschine; eine
+# Funktion hat keinen.
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total
+
+fn digest(b: bytes<64>) -> bool:
+    job v = sha256(b)  # ~ SC-44
+    return true

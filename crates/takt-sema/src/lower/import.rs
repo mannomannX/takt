@@ -48,6 +48,9 @@ impl Lowerer<'_> {
                 }
                 continue;
             }
+            // Ein abgelehnter Kanal meldet keinen Folgefehler (FB-407).
+            let errors = self.error_count();
+            let ident = ast::Ident { name: name.clone(), span };
             let declared = declaration(c, &name).and_then(|text| {
                 let toks = takt_syntax::tokenize_in(&text, self.edition);
                 match takt_syntax::parse_file(&toks) {
@@ -62,6 +65,7 @@ impl Lowerer<'_> {
                 Ok(d) => d,
                 Err(e) => {
                     self.diags.push(Diagnostic::error(SC2, span, format!("`{file}`, Kanal `{}`: {e}", c.address)));
+                    self.reject_unless_declared(&ident, errors);
                     continue;
                 }
             };
@@ -78,6 +82,7 @@ impl Lowerer<'_> {
             if let Some(channel) = self.program.channels.get_mut(channels) {
                 channel.span = span;
             }
+            self.reject_unless_declared(&ident, errors);
         }
     }
 
@@ -219,6 +224,32 @@ mod tests {
         );
         let c = channel("direction = input\nmax_rate_hz = 200\n");
         assert!(declaration(&c, "log").is_err_and(|e| e.contains("Elementtyp")));
+    }
+
+    #[test]
+    fn negative_bounds_and_a_unit_without_range_carry_over() {
+        let c = channel("direction = input\nraw = i16\nrange = -40..125\n");
+        assert_eq!(declaration(&c, "t").as_deref(), Ok("input t : i16 in -40..125 @ hw(\"daq1/ai0\")\n"));
+        let c = channel("direction = input\nraw = i16\nunit = K\nrange = -40..125\n");
+        assert_eq!(declaration(&c, "t").as_deref(), Ok("input t : float[K] in -40.0..125.0 K @ hw(\"daq1/ai0\")\n"));
+        let c = channel("direction = input\nraw = i16\nunit = bar\n");
+        assert_eq!(declaration(&c, "p").as_deref(), Ok("input p : float[bar] @ hw(\"daq1/ai0\")\n"));
+    }
+
+    #[test]
+    fn an_output_stream_needs_no_safe_value() {
+        // 8.8: Ein Ausgabestrom hat keinen Latch und darum keinen `safe`.
+        let c = channel("direction = output\nraw = u8\nmax_rate_hz = 1000\n");
+        assert_eq!(
+            declaration(&c, "tx").as_deref(),
+            Ok("output tx : stream<u8> @ hw(\"daq1/ai0\") with max_rate = 1000 Hz\n")
+        );
+    }
+
+    #[test]
+    fn a_channel_without_direction_has_no_declaration() {
+        let c = channel("raw = bool\n");
+        assert_eq!(declaration(&c, "x"), Err("ohne `direction`".to_string()));
     }
 
     #[test]

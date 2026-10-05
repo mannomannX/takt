@@ -1,6 +1,6 @@
-# 10 — Nuancen ohne anderes Beispiel. Jede Schreibweise, die coverage.py in
-#      keiner anderen Datei findet, kommt hier einmal vor. Muss parsen; die
-#      Semantik ist zweitrangig, aber nicht absichtlich falsch.
+# 10 — Nuancen ohne anderes Beispiel. Jede Schreibweise, die sonst keine
+#      Datei zeigt, kommt hier einmal vor. Muss parsen; die Semantik ist
+#      zweitrangig, aber nicht absichtlich falsch.
 
 system:
     language      = 1

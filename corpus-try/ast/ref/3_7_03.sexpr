@@ -1,0 +1,4 @@
+(record AdcSample layout=big
+  (bits raw: u16
+    (chan: u8 at 12..15)
+    (value: u16 at 0..11)))

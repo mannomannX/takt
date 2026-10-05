@@ -12,6 +12,8 @@ mod machine;
 mod stmt;
 mod types;
 
+use std::collections::BTreeSet;
+
 use takt_diag::Diagnostic;
 
 use crate::ast::*;
@@ -68,6 +70,21 @@ pub(crate) fn parse_snippet_here(toks: &Tokens<'_>) -> (Vec<SnippetItem>, Vec<Di
     (items, p.errors)
 }
 
+/// Die Produktionen aus `grammar/takt.ebnf`, deren Parserfunktion beim Parsen
+/// lief: die Abdeckung der Grammatik durch eine Eingabe (plan.md 3).
+pub fn productions_of(toks: &Tokens<'_>, snippet: bool) -> BTreeSet<&'static str> {
+    with_deep_stack(|| {
+        let mut p = Parser::new(toks);
+        p.hits = Some(BTreeSet::new());
+        if snippet {
+            p.parse_snippet_items();
+        } else {
+            p.parse_file();
+        }
+        p.hits.unwrap_or_default()
+    })
+}
+
 /// Byte-Bereich eines Tokens als Diagnose-Position.
 pub(crate) fn token_span(t: &Token) -> Span {
     Span::new(t.start, t.end)
@@ -80,13 +97,18 @@ const DEEP_STACK: usize = 64 << 20;
 /// Fuehrt `f` auf einem Thread mit grossem Stapel aus, damit die Tiefengrenze
 /// `MAX_DEPTH` und nicht der Stapel entscheidet, was der Parser annimmt.
 pub(crate) fn with_deep_stack<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    with_stack(DEEP_STACK, f)
+}
+
+/// Fuehrt `f` auf einem Thread mit `bytes` Stapel aus und wartet auf ihn. Mit
+/// den Grenzen aus 2.1 (`MAX_DEPTH`, `MAX_TREE`) ist die Rekursion jedes
+/// Werkzeugs beschraenkt; wer sie durchlaeuft, bemisst seinen Stapel danach
+/// und laesst nicht den Hauptthread entscheiden (unter Windows 1 MiB). Eine
+/// Panik in `f` setzt sich im Aufrufer fort.
+pub fn with_stack<R: Send>(bytes: usize, f: impl FnOnce() -> R + Send) -> R {
     std::thread::scope(|scope| {
-        std::thread::Builder::new()
-            .stack_size(DEEP_STACK)
-            .spawn_scoped(scope, f)
-            .expect("Parser-Thread")
-            .join()
-            .expect("Parser-Thread ohne Panik")
+        let thread = std::thread::Builder::new().stack_size(bytes).spawn_scoped(scope, f).expect("Thread mit Stapel");
+        thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })
 }
 
@@ -99,20 +121,142 @@ pub struct Parser<'t, 's> {
     temporal: bool,
     /// Tiefe offener `<` in Typen: dort schliesst `>` und vergleicht nicht.
     angle: u32,
-    /// Verschachtelung von Ausdruecken, Typen und Bloecken (Grenze `MAX_DEPTH`).
+    /// Ebenen aus dem Tokenstrom je Token: offene eingerueckte Bloecke und
+    /// offene runde und eckige Klammern davor (2.1).
+    levels: Vec<u32>,
+    /// Ebenen, die erst der Parser sieht: Praefixoperatoren, `else`-Zweige
+    /// bedingter Ausdruecke, Typklammern `<…>` und Elementtypen von Feldern.
     depth: u32,
+    /// Die Produktionen, deren Funktion lief; nur fuer [`productions_of`].
+    hits: Option<BTreeSet<&'static str>>,
 }
 
-/// Tiefer verschachtelt darf kein Programm sein: schuetzt den Stapel des Parsers
-/// (und jedes spaeteren Durchlaufs ueber den Baum) vor pathologischen Eingaben.
+/// Tiefer verschachtelt darf kein Programm sein (2.1): schuetzt den Stapel des
+/// Parsers (und jedes spaeteren Durchlaufs ueber den Baum) vor pathologischen
+/// Eingaben. Eine Ebene ist ein eingerueckter Block, ein Klammerpaar (rund,
+/// eckig, Typklammer), ein Praefixoperator und der `else`-Zweig eines
+/// bedingten Ausdrucks, gezaehlt ueber alle Arten zusammen von der Datei an;
+/// Anweisungen, aeussere Ausdruecke, Infix-Operatoren und Kettenglieder zaehlen nicht.
 pub const MAX_DEPTH: u32 = 64;
+
+/// So viele Knoten tief ist ein Ausdruck hoechstens (2.1), jedes Kettenglied
+/// eingerechnet: `a + b + …` mit N Gliedern ist N tief. Neben `MAX_DEPTH`
+/// beschraenkt das die Rekursion jedes Werkzeugs, das einen Ausdruck durchlaeuft.
+pub const MAX_TREE: u32 = 256;
+
+/// Tiefe eines Ausdrucks in Knoten (2.1), mit den Teilausdruecken in
+/// Argumenten, Generik, Record-Mustern und Typen. Der Parser misst nur Baeume,
+/// deren Teile er schon gemessen hat; die Rekursion endet darum nach
+/// hoechstens `MAX_TREE` Knoten und den Ebenen der Typen.
+pub(crate) fn tree_depth(e: &Expr) -> u32 {
+    let one = |e: &Expr| tree_depth(e);
+    let below = match &e.kind {
+        ExprKind::Number { .. }
+        | ExprKind::Duration(_)
+        | ExprKind::Str(_)
+        | ExprKind::Bool(_)
+        | ExprKind::None
+        | ExprKind::Default
+        | ExprKind::Ident(_) => 0,
+        ExprKind::Call { generics, args, .. } => {
+            generics.iter().map(generic_depth).max().unwrap_or(0).max(args_depth(args))
+        }
+        ExprKind::Upper { args, .. } | ExprKind::TypeName { args, .. } => args.as_deref().map_or(0, args_depth),
+        ExprKind::Paren(x) | ExprKind::Unary { expr: x, .. } | ExprKind::Temporal { inner: x, .. } => one(x),
+        ExprKind::Tuple(a, b) | ExprKind::Binary { lhs: a, rhs: b, .. } | ExprKind::Implies { lhs: a, rhs: b } => {
+            one(a).max(one(b))
+        }
+        ExprKind::Index { base: a, index: b } => one(a).max(one(b)),
+        ExprKind::Array(items) => items.iter().map(one).max().unwrap_or(0),
+        ExprKind::InstanceArray { count, args, .. } => one(count).max(args_depth(args)),
+        ExprKind::Member { base, args, .. } => one(base).max(args.as_deref().map_or(0, args_depth)),
+        ExprKind::Slice { base: a, from: b, to: c }
+        | ExprKind::Index2 { base: a, row: b, col: c }
+        | ExprKind::Conditional { then: a, cond: b, otherwise: c } => one(a).max(one(b)).max(one(c)),
+        ExprKind::Cast { expr, ty } => one(expr).max(scalar_depth(ty)),
+        ExprKind::Match { subject, pattern, .. } => one(subject).max(match pattern {
+            Pattern::Text(_) => 0,
+            Pattern::Record { fields, .. } => fields.iter().map(|(_, e)| one(e)).max().unwrap_or(0),
+        }),
+    };
+    below + 1
+}
+
+fn args_depth(args: &[Arg]) -> u32 {
+    args.iter().map(|a| tree_depth(&a.value)).max().unwrap_or(0)
+}
+
+fn generic_depth(g: &GenericArg) -> u32 {
+    match g {
+        GenericArg::Unit(_) => 0,
+        GenericArg::Type(t) => type_depth(t),
+        GenericArg::Const(e) => tree_depth(e),
+    }
+}
+
+fn scalar_depth(s: &ScalarType) -> u32 {
+    match s {
+        ScalarType::Str(e) => tree_depth(e),
+        _ => 0,
+    }
+}
+
+/// Die tiefsten Ausdruecke eines Typs; Typknoten selbst zaehlen als Ebenen
+/// (`MAX_DEPTH`), nicht als Knoten eines Ausdrucks.
+fn type_depth(t: &Type) -> u32 {
+    let range = |r: &Option<Range>| r.as_ref().map_or(0, |r| tree_depth(&r.from).max(tree_depth(&r.to)));
+    match &t.kind {
+        TypeKind::Scalar { scalar, range: r, .. } => scalar_depth(scalar).max(range(r)),
+        TypeKind::Array { len, elem } | TypeKind::Vec { elem, len } | TypeKind::Samples { elem, len } => {
+            tree_depth(len).max(type_depth(elem))
+        }
+        TypeKind::Bytes(e) | TypeKind::Line(e) => tree_depth(e),
+        TypeKind::Stream(elem) => match elem.as_ref() {
+            ElemType::Bytes(e) | ElemType::Line(e) => tree_depth(e),
+            ElemType::Capture { elem, len } => tree_depth(len).max(type_depth(elem)),
+            ElemType::U8 | ElemType::Edge | ElemType::Named(_) => 0,
+        },
+        TypeKind::Table { key, value } => type_depth(key).max(type_depth(value)),
+        TypeKind::Mat { rows, cols, .. } => tree_depth(rows).max(tree_depth(cols)),
+        TypeKind::Map { key, value, len } => type_depth(key).max(type_depth(value)).max(tree_depth(len)),
+        TypeKind::Wrapped { inner, .. } => type_depth(inner),
+        TypeKind::Named { .. } | TypeKind::TypeVar { .. } | TypeKind::MatDim { .. } | TypeKind::VecDim(_) => 0,
+    }
+}
+
+/// Je Token die Zahl offener eingerueckter Bloecke und runder oder eckiger
+/// Klammern vor ihm.
+fn token_levels(toks: &Tokens<'_>) -> Vec<u32> {
+    let mut level = 0u32;
+    toks.tokens
+        .iter()
+        .map(|t| {
+            let before = level;
+            match (t.kind, toks.text(t)) {
+                (TokenKind::Indent, _) | (TokenKind::Op, "(" | "[") => level += 1,
+                (TokenKind::Dedent, _) | (TokenKind::Op, ")" | "]") => level = level.saturating_sub(1),
+                _ => {}
+            }
+            before
+        })
+        .collect()
+}
 
 const SCALAR_WORDS: &[&str] =
     &["bool", "int", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "float", "f32", "f64", "Duration", "str"];
 
 impl<'t, 's> Parser<'t, 's> {
     fn new(toks: &'t Tokens<'s>) -> Self {
-        Parser { toks, pos: 0, errors: Vec::new(), temporal: false, angle: 0, depth: 0 }
+        Parser {
+            toks,
+            pos: 0,
+            errors: Vec::new(),
+            temporal: false,
+            angle: 0,
+            levels: token_levels(toks),
+            depth: 0,
+            hits: None,
+        }
     }
 
     // ------------------------------------------------------------ Cursor
@@ -214,35 +358,31 @@ impl<'t, 's> Parser<'t, 's> {
         }
     }
 
-    /// Betritt eine Verschachtelungsebene (Ausdruck, Typ, Block).
-    fn enter(&mut self) -> PResult<()> {
-        if self.depth >= MAX_DEPTH {
+    /// Prueft an einer Stelle, an der der Parser absteigt (Ausdruck, Typ,
+    /// Block), dass sie hoechstens `MAX_DEPTH` Ebenen tief liegt (2.1).
+    fn enter(&self) -> PResult<()> {
+        let level = self.levels.get(self.pos).copied().unwrap_or(0) + self.depth;
+        if level > MAX_DEPTH {
             return Err(self.error_at(
                 self.tok(),
                 format!("zu tief verschachtelt (mehr als {MAX_DEPTH} Ebenen)"),
                 Some("Ausdruck oder Block aufteilen"),
             ));
         }
-        self.depth += 1;
         Ok(())
     }
 
-    fn leave(&mut self) {
-        self.depth -= 1;
-    }
-
-    /// `inner` eine Ebene tiefer (Rekursion ohne `parse_expr`: `not`,
-    /// Vorzeichen).
+    /// `inner` eine Ebene tiefer, fuer Ebenen ohne Klammer und Block:
+    /// Praefixoperator, `else`-Zweig, Typklammer, Elementtyp.
     fn deeper<T>(&mut self, inner: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
-        self.enter()?;
-        let result = inner(self);
-        self.leave();
+        self.depth += 1;
+        let result = self.enter().and_then(|()| inner(self));
+        self.depth -= 1;
         result
     }
 
-    /// Eine linksassoziative Kette `first { op next }`. Jedes Glied ist eine
-    /// Ebene des Baums und zaehlt gegen `MAX_DEPTH` (2.1): Eine lange Kette
-    /// baute sonst einen Baum, an dem rekursive Werkzeuge scheitern.
+    /// Eine linksassoziative Kette `first { op next }`. Infix-Operatoren sind
+    /// keine Ebene (2.1); die Kette baut ihren Baum in einer Schleife.
     fn chain<O>(
         &mut self,
         first: impl FnOnce(&mut Self) -> PResult<Expr>,
@@ -252,29 +392,39 @@ impl<'t, 's> Parser<'t, 's> {
     ) -> PResult<Expr> {
         let start = self.pos;
         let mut lhs = first(self)?;
-        let mut links = 0;
-        let result = loop {
-            let Some(o) = op(self) else { break Ok(lhs) };
-            if let Err(e) = self.enter() {
-                break Err(e);
-            }
-            links += 1;
-            match next(self) {
-                Ok(rhs) => lhs = join(self, start, o, lhs, rhs),
-                Err(e) => break Err(e),
-            }
-        };
-        for _ in 0..links {
-            self.leave();
+        let mut depth = tree_depth(&lhs);
+        loop {
+            let at = self.pos;
+            let Some(o) = op(self) else { break };
+            let rhs = next(self)?;
+            // Jedes Glied ist ein Knoten (2.1): Die Kette waechst nur, solange
+            // der Baum `MAX_TREE` haelt, und baut nie einen tieferen.
+            depth = 1 + depth.max(tree_depth(&rhs));
+            self.within_tree(depth, at)?;
+            lhs = join(self, start, o, lhs, rhs);
         }
-        result
+        Ok(lhs)
+    }
+
+    /// Ein Ausdruck mit `depth` Knoten Tiefe ist zu tief, wenn er `MAX_TREE`
+    /// uebersteigt; gemeldet am Token `at`, an dem er die Grenze ueberschritt.
+    fn within_tree(&self, depth: u32, at: usize) -> PResult<()> {
+        if depth <= MAX_TREE {
+            return Ok(());
+        }
+        let t = &self.toks.tokens[at.min(self.toks.tokens.len() - 1)];
+        Err(self.error_at(
+            t,
+            format!("Ausdruck zu tief (mehr als {MAX_TREE} Knoten, jedes Kettenglied eingerechnet)"),
+            Some("den Ausdruck ueber eine `var` teilen (2.1)"),
+        ))
     }
 
     /// `"<" … ">"` eines Typs; innen ist `>` kein Vergleich.
     fn in_angles<T>(&mut self, inner: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
         self.expect_op("<")?;
         self.angle += 1;
-        let result = inner(self);
+        let result = self.deeper(inner);
         self.angle -= 1;
         let value = result?;
         self.expect_op(">")?;
@@ -362,7 +512,7 @@ impl<'t, 's> Parser<'t, 's> {
     fn expect_indent(&mut self) -> PResult<()> {
         if self.at(TokenKind::Indent) {
             self.bump();
-            Ok(())
+            self.enter()
         } else {
             let t = self.tok();
             Err(self.error_at(t, "erwartet eingerueckten Block", Some("Block um 4 Leerzeichen einruecken")))
@@ -381,20 +531,29 @@ impl<'t, 's> Parser<'t, 's> {
         loop {
             match self.kind() {
                 TokenKind::Eof => return,
+                // Ein eingerueckter Block hinter der Zeile gehoert zu ihr und
+                // faellt mit ihr, statt Folgefehler zu melden.
                 TokenKind::Newline if depth == 0 => {
                     self.bump();
-                    return;
+                    if !self.at(TokenKind::Indent) {
+                        return;
+                    }
                 }
                 TokenKind::Indent => {
                     depth += 1;
                     self.bump();
                 }
+                // Nach dem Ende des Blocks beginnt die naechste Zeile; sie wird
+                // wieder geprueft, nicht mit uebersprungen.
                 TokenKind::Dedent => {
                     if depth == 0 {
                         return;
                     }
                     depth -= 1;
                     self.bump();
+                    if depth == 0 {
+                        return;
+                    }
                 }
                 _ => {
                     self.bump();
@@ -409,6 +568,21 @@ impl<'t, 's> Parser<'t, 's> {
         self.recover_line();
         if self.pos == start && !self.at(TokenKind::Eof) {
             self.bump();
+        }
+    }
+
+    /// Fehlerbehandlung auf oberster Ebene: Scheiterte eine Deklaration in
+    /// ihrem eingerueckten Rumpf, bleiben dessen Blockenden uebrig; sie
+    /// gehoeren zur gescheiterten Deklaration und sind kein neuer Fehler.
+    fn recover_item(&mut self, start: usize) {
+        self.recover(start);
+        while self.eat(TokenKind::Dedent) {}
+    }
+
+    /// Zaehlt die Produktion `name` als abgedeckt, wenn [`productions_of`] fragt.
+    fn cover(&mut self, name: &'static str) {
+        if let Some(hits) = &mut self.hits {
+            hits.insert(name);
         }
     }
 
@@ -469,6 +643,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `int_lit := INT | HEX | BIN | OCT`
     fn parse_int_lit(&mut self) -> PResult<IntLit> {
+        self.cover("int_lit");
         if matches!(self.kind(), TokenKind::Int | TokenKind::Hex | TokenKind::Bin | TokenKind::Oct) {
             let t = self.bump();
             Ok(IntLit { text: self.text_of(t).to_string(), span: self.span(t.start, t.end) })
@@ -479,6 +654,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `number := int_lit | FLOAT`
     fn parse_number(&mut self) -> PResult<Number> {
+        self.cover("number");
         if self.at(TokenKind::Float) {
             let t = self.bump();
             Ok(Number::Float(FloatLit { text: self.text_of(t).to_string(), span: self.span(t.start, t.end) }))
@@ -489,6 +665,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `duration_lit := DURATION`
     fn parse_duration_lit(&mut self) -> PResult<DurationLit> {
+        self.cover("duration_lit");
         let t = self.expect(TokenKind::Duration, "eine Dauer wie `200 ms`")?;
         Ok(DurationLit { ns: t.value, span: self.span(t.start, t.end) })
     }
@@ -497,6 +674,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `[ "with" attr { "," attr } ]`
     fn parse_with_attrs(&mut self) -> PResult<Vec<Attr>> {
+        self.cover("with_attrs");
         let mut attrs = Vec::new();
         if self.eat_kw("with") {
             loop {
@@ -511,6 +689,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `attr`
     fn parse_attr(&mut self) -> PResult<Attr> {
+        self.cover("attr");
         let start = self.pos;
         if !Self::is_word(self.kind()) {
             return Err(self.error_here("ein Attribut wie `safe`, `max_age`, `capacity`"));
@@ -570,6 +749,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `budget = {ram = 2 KiB, wcet = 20 us}` (7.2).
     fn parse_budget(&mut self) -> PResult<Vec<BudgetItem>> {
+        self.cover("budget");
         self.expect_op("{")?;
         let mut out = Vec::new();
         loop {
@@ -584,6 +764,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `budget_item`
     fn parse_budget_item(&mut self) -> PResult<BudgetItem> {
+        self.cover("budget_item");
         let start = self.pos;
         let tok = self.tok();
         let kind = if self.eat_word("ram") {
@@ -599,6 +780,7 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     fn parse_bool_word(&mut self) -> PResult<bool> {
+        self.cover("bool_word");
         if self.eat_kw("true") {
             Ok(true)
         } else if self.eat_kw("false") {
@@ -610,6 +792,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `framing`
     fn parse_framing(&mut self) -> PResult<Framing> {
+        self.cover("framing");
         if self.eat_word("raw") {
             Ok(Framing::Raw)
         } else if self.eat_word("lines") {
@@ -633,6 +816,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `binding`
     fn parse_binding(&mut self) -> PResult<Binding> {
+        self.cover("binding");
         if self.eat_word("hw") {
             self.expect_op("(")?;
             let s = self.string()?;
@@ -652,6 +836,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `generic_vars := "[" gvar { "," gvar } "]"`
     fn parse_generic_vars(&mut self) -> PResult<Vec<GenericVar>> {
+        self.cover("generic_vars");
         let mut vars = Vec::new();
         if self.eat_op("[") {
             loop {
@@ -667,6 +852,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `gvar`
     fn parse_gvar(&mut self) -> PResult<GenericVar> {
+        self.cover("gvar");
         if self.eat_kw("type") {
             let name = self.upper()?;
             let capability = if self.eat_op(":") { Some(self.parse_capability()?) } else { None };
@@ -682,6 +868,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `capability`
     fn parse_capability(&mut self) -> PResult<Capability> {
+        self.cover("capability");
         let c = if self.eat_word("pod") {
             Capability::Pod
         } else if self.eat_word("eq") {
@@ -702,6 +889,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `params := param { "," param }`; der Aufrufer prueft die Klammern.
     fn parse_params(&mut self) -> PResult<Vec<Param>> {
+        self.cover("params");
         let mut params = Vec::new();
         if self.at_op(")") {
             return Ok(params);
@@ -717,6 +905,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `param`
     fn parse_param(&mut self) -> PResult<Param> {
+        self.cover("param");
         let start = self.pos;
         let inout = self.eat_word("inout");
         let name = self.ident()?;
@@ -735,6 +924,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `"(" [ params ] ")"`
     fn parse_param_list(&mut self) -> PResult<Vec<Param>> {
+        self.cover("param_list");
         self.expect_op("(")?;
         let params = self.parse_params()?;
         self.expect_op(")")?;
@@ -743,6 +933,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `"(" [ args ] ")"`
     fn parse_arg_list(&mut self) -> PResult<Vec<Arg>> {
+        self.cover("arg_list");
         self.expect_op("(")?;
         let args = self.plain(Self::parse_args)?;
         self.expect_op(")")?;
@@ -751,6 +942,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `args := arg { "," arg }` (leer erlaubt; der Aufrufer prueft die Klammern)
     fn parse_args(&mut self) -> PResult<Vec<Arg>> {
+        self.cover("args");
         let mut args = Vec::new();
         if self.at_op(")") {
             return Ok(args);
@@ -766,6 +958,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `arg := [ IDENT "=" ] expr`
     fn parse_arg(&mut self) -> PResult<Arg> {
+        self.cover("arg");
         let start = self.pos;
         let name = if self.at(TokenKind::Ident) && self.at_op_at(1, "=") {
             let n = self.ident()?;
@@ -780,6 +973,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `range := const_expr ".." const_expr`
     fn parse_range(&mut self) -> PResult<Range> {
+        self.cover("range");
         let start = self.pos;
         let from = self.parse_const_expr()?;
         self.expect_op("..")?;
@@ -789,16 +983,19 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `const_expr := expr` (die Einschraenkung auf Konstanten prueft die Semantik)
     fn parse_const_expr(&mut self) -> PResult<Expr> {
+        self.cover("const_expr");
         self.parse_expr()
     }
 
     /// `duration_expr := expr`
     fn parse_duration_expr(&mut self) -> PResult<Expr> {
+        self.cover("duration_expr");
         self.parse_expr()
     }
 
     /// `pattern`
     fn parse_pattern(&mut self) -> PResult<Pattern> {
+        self.cover("pattern");
         if self.at(TokenKind::Str) {
             return Ok(Pattern::Text(self.string()?));
         }
@@ -823,6 +1020,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `unit_lit := unit_expr`, kompakt: nach einem Zahlenliteral reicht der
     /// Ausdruck genau so weit, wie die Tokens anliegen (lexer.md L4.3).
     fn parse_unit_lit(&mut self) -> PResult<UnitExpr> {
+        self.cover("unit_lit");
         let unit = self.parse_unit_expr(true)?;
         let prev_joint = self.toks.tokens[self.pos - 1].joint;
         if prev_joint && (self.at_op("*") || self.at_op("/") || self.at_op("^")) {
@@ -839,6 +1037,7 @@ impl<'t, 's> Parser<'t, 's> {
     ///
     /// `compact`: nur anliegende Tokens gehoeren dazu (`unit_lit`).
     fn parse_unit_expr(&mut self, compact: bool) -> PResult<UnitExpr> {
+        self.cover("unit_expr");
         let start = self.pos;
         let (first, mut rest) = if self.at(TokenKind::Int) && self.text() == "1" {
             let one = self.bump();
@@ -872,6 +1071,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `unit_lit` gehoert der Exponent nur anliegend dazu.
     /// `unit_name`: Einheitennamen tragen jede Namensform (3.2).
     pub(super) fn parse_unit_name(&mut self) -> PResult<Ident> {
+        self.cover("unit_name");
         if matches!(self.kind(), TokenKind::Ident | TokenKind::UpperIdent | TokenKind::TypeIdent) {
             let t = self.bump();
             return Ok(self.ident_of(t));
@@ -880,6 +1080,7 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     fn parse_unit_term(&mut self, compact: bool) -> PResult<UnitTerm> {
+        self.cover("unit_term");
         let start = self.pos;
         let name = if matches!(self.kind(), TokenKind::Ident | TokenKind::UpperIdent | TokenKind::TypeIdent) {
             let t = self.bump();
@@ -907,6 +1108,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `unit_tuple`
     fn parse_unit_tuple(&mut self) -> PResult<UnitTuple> {
+        self.cover("unit_tuple");
         if self.at(TokenKind::Int) && self.text() == "1" {
             self.bump();
             self.expect_op("/")?;
@@ -930,6 +1132,7 @@ impl<'t, 's> Parser<'t, 's> {
     // ------------------------------------------------------------ Schnipsel
 
     fn parse_snippet_items(&mut self) -> Vec<SnippetItem> {
+        self.cover("snippet_items");
         let mut items = Vec::new();
         while !self.at(TokenKind::Eof) {
             if self.eat(TokenKind::Newline) {
@@ -940,7 +1143,7 @@ impl<'t, 's> Parser<'t, 's> {
                 Ok(item) => items.push(item),
                 Err(e) => {
                     self.report(e);
-                    self.recover(start);
+                    self.recover_item(start);
                 }
             }
         }
@@ -948,6 +1151,7 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     fn parse_snippet_item(&mut self) -> PResult<SnippetItem> {
+        self.cover("snippet_item");
         if Self::is_word(self.kind()) && !self.assigned_next() {
             match self.text() {
                 "fault" => return Ok(SnippetItem::MachinePrelude(MachinePrelude::Fault(self.parse_fault_clause()?))),
@@ -965,7 +1169,10 @@ impl<'t, 's> Parser<'t, 's> {
                 "exit" => return Ok(SnippetItem::Exit(self.parse_exit_block()?)),
                 "loop" => return Ok(SnippetItem::Loop(self.parse_loop_block()?)),
                 "on" => return Ok(SnippetItem::On(self.parse_on_handler()?)),
-                "sequence" => return Ok(SnippetItem::Sequence(self.parse_sequence_block()?.1)),
+                "sequence" => {
+                    let (timeout, items) = self.parse_sequence_block()?;
+                    return Ok(SnippetItem::Sequence(timeout, items));
+                }
                 "when" | "after" => return Ok(SnippetItem::Transition(self.parse_transition()?)),
                 "state" => return Ok(SnippetItem::State(self.parse_state_decl()?)),
                 "instance" => return Ok(SnippetItem::Instance(self.parse_instance_decl()?)),

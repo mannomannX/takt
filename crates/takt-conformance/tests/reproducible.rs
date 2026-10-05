@@ -69,22 +69,32 @@ fn the_simulation_and_the_hardware_build_yield_the_same_ir() {
 
 /// **Stufe 1**: Zweimal uebersetzen ergibt dieselbe IR.
 ///
-/// Das ist die Stufe, die der Codegen allein verantwortet. Sie bricht,
+/// Das ist die Stufe, die Sema und Codegen verantworten. Sie bricht,
 /// sobald irgendwo ueber eine `HashMap` iteriert wird — deren Reihenfolge
-/// ist in Rust je Lauf anders, und genau dafuer gibt es diesen Test.
+/// ist in Rust je Instanz anders, und genau dafuer gibt es diesen Test.
+/// Darum zweimal von der Quelle an (KON2-015): Dieselbe MIR zweimal zu
+/// senken saehe eine Unstetigkeit der Sema nicht. Ueber jedes
+/// Korpusprogramm, das die Sema annimmt.
 #[test]
 fn the_same_source_yields_the_same_ir() {
-    let p = corpus(NAME);
-    let a = common::ir_of(&p);
-    let b = common::ir_of(&p);
-    assert_eq!(a.len(), b.len(), "die IR hat verschiedene Laenge");
-    if a != b {
-        let line = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
-        panic!(
-            "die IR weicht ab, erste Abweichung in Zeile {line}:\n  a: {}\n  b: {}",
-            a.lines().nth(line).unwrap_or(""),
-            b.lines().nth(line).unwrap_or("")
-        );
+    let programs = common::corpus_programs();
+    assert!(programs.len() >= 90, "zu wenige Korpusprogramme: {}", programs.len());
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try");
+    for (name, _) in programs {
+        let src = std::fs::read_to_string(root.join(&name)).expect("Quelle");
+        let compiled = || {
+            let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+            common::ir_of(&takt_sema::compile(&src, &options).program.expect("Programm"))
+        };
+        let (a, b) = (compiled(), compiled());
+        if a != b {
+            let line = a.lines().zip(b.lines()).position(|(x, y)| x != y).unwrap_or(0);
+            panic!(
+                "{name}: die IR weicht ab, erste Abweichung in Zeile {line}:\n  a: {}\n  b: {}",
+                a.lines().nth(line).unwrap_or(""),
+                b.lines().nth(line).unwrap_or("")
+            );
+        }
     }
 }
 
@@ -275,6 +285,91 @@ fn every_target_builds_reproducibly() {
     }
     assert_eq!(geprueft, 2, "es wurden nicht beide Ziele geprueft");
     eprintln!("{geprueft} Ziele reproduzierbar uebersetzt");
+}
+
+/// **Stufe 4 fuer die MCU-Ziele** (11.3, 13.4; KON2-014): Fuer
+/// `thumbv7em` und `riscv32imac` wird signiert, und dafuer braucht es keine
+/// Cross-Kette — clang uebersetzt beide. Erzeugter Code und MCU-Rahmen
+/// werden zweimal aus verschieden tiefen Verzeichnissen unter verschiedenen
+/// Dateinamen zu Objekten, und `takt build` baut das Objekt des Programms
+/// zweimal aus verschiedenen Arbeitsverzeichnissen (wie FB-308 von Hand);
+/// jedes Paar ist bitgleich.
+#[test]
+fn the_mcu_targets_build_reproducibly() {
+    let Some(path) = common::clang_path() else { return };
+    let p = corpus("40_jobs.takt");
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-repro-mcu");
+    let _ = std::fs::remove_dir_all(&root);
+    let frame = takt_frame::mcu::build(&p).source;
+    for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
+        let ir = common::ir_for(&p, target.triple);
+        let mut objects = Vec::new();
+        for (i, (dir, stem)) in [("a", "programm"), ("b/tiefer/noch_tiefer", "takt-build-4711")].into_iter().enumerate()
+        {
+            if i == 1 {
+                std::thread::sleep(std::time::Duration::from_millis(1100));
+            }
+            let dir = root.join(target.name).join(dir);
+            std::fs::create_dir_all(&dir).expect("Verzeichnis");
+            let mut pair = Vec::new();
+            // Der Rahmen heisst im Bring-up immer gleich; sein Name steht als
+            // Symbol der Quelldatei im Objekt. Die IR traegt `source_filename`
+            // selbst, ihr Dateiname wechselt wie bei `takt build` (FB-308).
+            for (file, text) in [(format!("{stem}.ll"), &ir), ("rahmen.c".to_string(), &frame)] {
+                std::fs::write(dir.join(&file), text).expect("Quelle");
+                let mut cmd = std::process::Command::new(&path);
+                let cmd = Clang::deterministic(&mut cmd)
+                    .current_dir(&dir)
+                    .args(["-Wno-override-module", "-O1", "-c", "-ffreestanding", "-nostdlib"])
+                    .arg(format!("--target={}", target.triple));
+                if !target.march.is_empty() {
+                    cmd.arg(format!("-march={}", target.march));
+                }
+                let out = cmd.args([file.as_str(), "-o", "aus.o"]).output().expect("clang");
+                assert!(out.status.success(), "{}: {}", target.name, String::from_utf8_lossy(&out.stderr));
+                pair.push(std::fs::read(dir.join("aus.o")).expect("Objekt"));
+            }
+            objects.push(pair);
+        }
+        for (k, what) in ["erzeugter Code", "MCU-Rahmen"].iter().enumerate() {
+            assert!(objects[0][k] == objects[1][k], "{} {what}: das Objekt haengt vom Verzeichnis ab", target.name);
+            let text = String::from_utf8_lossy(&objects[1][k]).to_string();
+            assert!(!text.contains("noch_tiefer") && !text.contains("4711"), "{} {what}: Pfad im Objekt", target.name);
+        }
+    }
+
+    let Some(takt) = takt_testkit::require("takt-cli", cli(), "`cargo build -p takt-cli`") else { return };
+    let program = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/40_jobs.takt");
+    let program = std::path::absolute(program).expect("Pfad");
+    for target in ["thumbv7em", "riscv32imac"] {
+        let mut objects = Vec::new();
+        for dir in ["x", "y/tiefer"] {
+            let dir = root.join("cli").join(target).join(dir);
+            std::fs::create_dir_all(&dir).expect("Verzeichnis");
+            let out = std::process::Command::new(&takt)
+                .current_dir(&dir)
+                .arg("build")
+                .arg(&program)
+                .args(["--target", target, "--prefix", "jobs", "--out", "jobs.o"])
+                .output()
+                .expect("takt build");
+            assert!(out.status.success(), "{target}: {}", String::from_utf8_lossy(&out.stderr));
+            objects.push(std::fs::read(dir.join("jobs.o")).expect("Objekt"));
+        }
+        assert!(objects[0] == objects[1], "{target}: `takt build` haengt vom Arbeitsverzeichnis ab");
+    }
+}
+
+/// Die CLI aus dem Zielverzeichnis (wie `cli_build.rs`).
+fn cli() -> Option<std::path::PathBuf> {
+    let exe = if cfg!(windows) { "takt.exe" } else { "takt" };
+    let target = takt_conformance::target_dir();
+    ["debug", "release"]
+        .iter()
+        .map(|profile| target.join(profile).join(exe))
+        .filter_map(|p| std::fs::metadata(&p).and_then(|m| m.modified()).ok().map(|t| (t, p)))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, p)| p)
 }
 
 /// Ist die Werkzeugkette fuer aarch64 da?

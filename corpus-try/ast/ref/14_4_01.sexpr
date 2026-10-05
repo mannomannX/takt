@@ -1,0 +1,21 @@
+(fn clamp [U] (x:float[U] lo:float[U] hi:float[U]) -> float[U]
+  (return (if (< x lo) lo (paren (if (> x hi) hi x)))))
+(block lowpass [U] (tau:Duration)
+  (var y :float[U] 0)
+  (var init :bool false)
+  (step (x:float[U] dt:Duration in tick..1h) -> float[U]
+    (if (not init)
+      (= y x)
+      (= init true))
+    (var a :float (/ (.as dt s) (paren (+ (.as tau s) (.as dt s)))))
+    (= y (+ y (* a (paren (- x y)))))
+    (return y)))
+(block pid [O, E] (kp:float[O/E] ki:float[O/E/s] kd:float[O*s/E] out_lo:float[O] out_hi:float[O])
+  (var integral :float[O] 0)
+  (var prev_err :float[E] 0)
+  (step (err:float[E] dt:Duration in tick..1h) -> float[O]
+    (var dts :float[s] (.as dt s))
+    (= integral (call clamp (+ integral (* (* ki err) dts)) out_lo out_hi))
+    (var deriv :float[O] (/ (* kd (paren (- err prev_err))) dts))
+    (= prev_err err)
+    (return (call clamp (+ (+ (* kp err) integral) deriv) out_lo out_hi))))

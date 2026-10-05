@@ -1,0 +1,28 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output reset_n :bool @hw("o/reset_n") safe=true)
+(output vbus_en :bool @hw("o/vbus") safe=true)
+(output phase :int in 0..9 @hw("o/phase") safe=0)
+(machine m
+  (var turn :int in 0..9 0)
+  (initial IDLE)
+  (state IDLE
+    (enter
+      (= phase 1)
+      (= vbus_en true))
+    (after 10ms -> ARMED))
+  (state ARMED
+    (enter
+      (= turn (call min (+ turn 1) 9))
+      (= phase 2)
+      (pulse reset_n false for=20ms)
+      (at (+ now 50ms)
+        (= vbus_en false)))
+    (when (and (== turn 1) (>= time_in_state 30ms)) -> STOPPED)
+    (after 80ms -> IDLE))
+  (state STOPPED
+    (enter
+      (= phase 3)
+      (cancel vbus_en))
+    (after 50ms -> IDLE)))

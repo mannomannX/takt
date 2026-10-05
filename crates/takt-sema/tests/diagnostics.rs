@@ -2,8 +2,9 @@
 //!
 //! - **Je Datei:** Jede Korpusdatei meldet genau die Fehler, die ihre
 //!   Anmerkungen nennen (`takt_testkit::expect`); ohne Anmerkung uebersetzt
-//!   sie fehlerfrei. Was `corpus-try/manifest.csv` nur als Syntax fuehrt
-//!   (`parse ok`), und die Ausschnitte der Referenz (`corpus-try/ref/`)
+//!   sie fehlerfrei. Das gilt auch fuer die Ausschnitte der Referenz
+//!   (`corpus-try/ref/`) ausser den Fragmenten in [`SNIPPET_FRAGMENTS`].
+//!   Was `corpus-try/manifest.csv` nur als Syntax fuehrt (`parse ok`),
 //!   prueft die Syntax; `corpus-try/checks/` hat einen eigenen Test.
 //! - **Die Schwere steht in Tabelle 10.** Jede Diagnose einer Pruefung hat
 //!   die Schwere, die die Tabelle nennt; die Anmerkungen nennen keine.
@@ -24,7 +25,7 @@ use takt_testkit::expect;
 
 /// Meldestellen in Sema und MIR, die kein Programm des Korpus ausloest.
 /// Die Zahl sinkt nur; der Test nennt die Stellen.
-const UNTRIGGERED: usize = 353;
+const UNTRIGGERED: usize = 320;
 
 /// Pruefungen der Tabelle 10 ohne Verzeichnis unter `corpus-try/checks/`,
 /// mit Grund. Die Liste schrumpft nur.
@@ -34,10 +35,36 @@ const WITHOUT_DIRECTORY: &[(&str, &str)] = &[
     ("SC-12", "braucht Kostenmodell und Hardware-Konfiguration; Faelle in tests/analysis.rs und tests/calibrated.rs"),
     ("SC-28", "braucht gemessenen Jitter der Hardware-Konfiguration; Faelle in tests/hardware.rs"),
     ("SC-29", "eine Pruefung der Kampagnen; Faelle in tests/campaigns.rs"),
-    ("SC-32", "braucht Kostenmodell und Hardware-Konfiguration; Faelle in tests/calibrated.rs"),
     ("SC-39", "braucht die Speichergrenzen der Hardware-Konfiguration; Faelle in tests/calibrated.rs"),
     ("SC-60", "braucht die Hardware-Konfiguration; Faelle in tests/hardware.rs und tests/sys_channels.rs"),
     ("SC-65", "braucht eine Beweisdatei; Faelle in tests/analysis.rs"),
+];
+
+/// Ausschnitte der Referenz, die bewusst keine Datei sind, mit Grund: Ihre
+/// Syntax prueft `parse_snippet` (takt-syntax), als Datei uebersetzt sieht
+/// die Sema nur Parserfehler. Jeder andere Ausschnitt traegt seine Fehler
+/// als Anmerkung (`# ~`), auch ein SC-2 fuer Namen aus dem umgebenden Text.
+/// Die Liste schrumpft nur.
+const SNIPPET_FRAGMENTS: &[(&str, &str)] = &[
+    ("corpus-try/ref/13_5_01.takt", "measure, verify und verdict ohne Szenario"),
+    ("corpus-try/ref/3_11_01.takt", "Variablen und Zuweisungen einer Maschine ohne Maschine"),
+    ("corpus-try/ref/3_11_03.takt", "Variablen und loop einer Maschine ohne Maschine"),
+    ("corpus-try/ref/3_5_01.takt", "ein loop-Block ohne Maschine"),
+    ("corpus-try/ref/3_7_05.takt", "eine match-Anweisung ohne Maschine"),
+    ("corpus-try/ref/3_9_01.takt", "eine Variable einer Maschine auf Dateiebene"),
+    ("corpus-try/ref/4_4_01.takt", "drei Anweisungen ohne Maschine"),
+    ("corpus-try/ref/5_11_01.takt", "ein Zustand mit gescopten Instanzen ohne Maschine"),
+    ("corpus-try/ref/5_12_01.takt", "ein Zustand mit resume ohne Maschine"),
+    ("corpus-try/ref/6_3_01.takt", "ein Zustand mit sequence ohne Maschine"),
+    ("corpus-try/ref/7_5_01.takt", "at, pulse und cancel ohne Maschine"),
+    ("corpus-try/ref/7_5_05.takt", "arm, disarm und until auf Dateiebene neben dem Trigger"),
+    ("corpus-try/ref/8_11_01.takt", "Kanaele und eine sequence ohne Zustand"),
+    ("corpus-try/ref/8_7_01.takt", "vier Musterliterale, keine Deklaration"),
+    ("corpus-try/ref/8_7_03.takt", "ein Zustand mit Handlern ohne Maschine"),
+    ("corpus-try/ref/8_7_05.takt", "until und when ohne Zustand"),
+    ("corpus-try/ref/8_8_01.takt", "send auf Dateiebene"),
+    ("corpus-try/ref/8_9_01.takt", "check und for ohne Maschine"),
+    ("corpus-try/ref/8_9_02.takt", "ein Handler ohne Zustand"),
 ];
 
 /// Ein Lauf: Datei, Zertifizierungsmodus, Diagnosen mit Zeile und Spalte.
@@ -54,7 +81,8 @@ fn workspace() -> PathBuf {
 
 /// Jede `.takt`-Datei unter `corpus-try` und `crates` ausser dem Prelude,
 /// fuer Simulation und Hardware, dazu im Zertifizierungsmodus; mit den
-/// kalibrierten Pruefungen, wo eine `hardware.hw` daneben liegt.
+/// kalibrierten Pruefungen, wo eine `hardware.hw` daneben liegt, und der
+/// Review-Pruefung, wo das Programm `tcb_policy = reviewed(…)` setzt.
 fn runs() -> &'static [Run] {
     static RUNS: OnceLock<Vec<Run>> = OnceLock::new();
     RUNS.get_or_init(|| {
@@ -84,7 +112,15 @@ fn runs() -> &'static [Run] {
                 let checked = takt_sema::compile(&src, &options);
                 let mut diagnostics = checked.diagnostics.clone();
                 if let (Some(hw), Some(program)) = (&hw, &checked.program) {
-                    diagnostics.extend(takt_sema::calibrated::polling(program, hw, hw.targets.values().next()));
+                    let target = hw.targets.values().next();
+                    if let Some(t) = target {
+                        diagnostics.extend(takt_sema::calibrated::check(program, t, takt_diag::Span::new(0, 0)));
+                    }
+                    diagnostics.extend(takt_sema::calibrated::check_bindings(program, hw));
+                    diagnostics.extend(takt_sema::calibrated::polling(program, hw, target));
+                }
+                if let Some(program) = checked.program.as_ref().filter(|p| p.config.tcb_reviewed) {
+                    diagnostics.extend(reviewed(&path, program));
                 }
                 let diagnostics = diagnostics
                     .into_iter()
@@ -98,6 +134,16 @@ fn runs() -> &'static [Run] {
         }
         out
     })
+}
+
+/// Pruefung 31 mit `tcb_policy = reviewed(…)` wie `takt check`: gegen
+/// `natives.review` neben dem Programm (leer, wenn sie fehlt), die Quellen
+/// der Projekt-Natives daneben.
+fn reviewed(path: &Path, program: &takt_mir::Program) -> Vec<Diagnostic> {
+    let review = std::fs::read_to_string(path.with_file_name("natives.review"))
+        .map(|t| takt_mir::review::parse(&t).expect("natives.review lesbar"))
+        .unwrap_or_default();
+    takt_sema::calibrated::reviewed(program, &review, &|from| std::fs::read(path.with_file_name(from)).ok())
 }
 
 fn relative(root: &Path, path: &Path) -> String {
@@ -145,11 +191,19 @@ fn parse_only() -> BTreeSet<String> {
 fn every_corpus_file_reports_exactly_its_annotated_errors() {
     let skip = parse_only();
     let mut wrong = Vec::new();
+    for (file, _) in SNIPPET_FRAGMENTS {
+        if !runs().iter().any(|r| r.file == *file) {
+            wrong.push(format!("{file}: steht in SNIPPET_FRAGMENTS, gibt es aber nicht"));
+        }
+    }
     for run in runs().iter().filter(|r| r.build == Build::Sim && !r.certification) {
-        if run.file.starts_with("corpus-try/checks/")
-            || run.file.starts_with("corpus-try/ref/")
-            || skip.contains(&run.file)
-        {
+        if run.file.starts_with("corpus-try/checks/") || skip.contains(&run.file) {
+            continue;
+        }
+        if let Some((_, why)) = SNIPPET_FRAGMENTS.iter().find(|(f, _)| *f == run.file) {
+            if !run.diagnostics.iter().any(|(_, _, d)| d.is_error()) {
+                wrong.push(format!("{}: uebersetzt jetzt ({why}); aus SNIPPET_FRAGMENTS nehmen", run.file));
+            }
             continue;
         }
         let src = std::fs::read_to_string(workspace().join(&run.file)).expect("lesbar");

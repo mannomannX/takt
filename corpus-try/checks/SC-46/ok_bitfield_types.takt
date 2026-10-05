@@ -1,0 +1,25 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46 (3.7): Ein Bitfeld, dessen Typ alle Werte seiner Bits fasst — auch
+# ein vorzeichenbehafteter, solange die Bits in seinen positiven Teil passen.
+
+record Reg layout little:
+    raw : u16 with bits:
+        wide  : u16 at 0..11
+        upper : bool at 15
+    other : u8 with bits:
+        low : i8 at 0..6
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var r : Reg = default
+    initial RUN
+
+    state RUN:
+        loop:
+            r.raw.wide = 4095
+            r.other.low = 127
+            v = r.raw.upper

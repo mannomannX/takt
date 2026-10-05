@@ -253,15 +253,19 @@ impl<N: Nvm> Journal<N> {
             self.free = None;
             return Loaded::Empty;
         };
+        // Der Gewinner bestimmt, wo weitergeschrieben wird und mit welcher
+        // Nummer — auch wenn er gleich nicht noch einmal zu lesen ist: Sonst
+        // loeschte der naechste Vorgang seinen Slot, und eine kleinere Nummer
+        // unterlaege beim naechsten Start einem aelteren Eintrag.
+        self.sequence = sequence;
+        self.slot = slot;
+        self.free = free[slot as usize];
+        self.ever_written = true;
         // Der Puffer traegt jetzt vielleicht einen anderen Eintrag; noch
         // einmal den Gewinner lesen.
         if self.read_entry(slot, offset, into).is_none() {
             return Loaded::Empty;
         }
-        self.sequence = sequence;
-        self.slot = slot;
-        self.free = free[slot as usize];
-        self.ever_written = true;
         Loaded::Found { length, sequence }
     }
 
@@ -341,28 +345,42 @@ impl<N: Nvm> Journal<N> {
 
     /// Schreibt ausstehende Aenderungen sofort (5.9: vor `reboot`,
     /// `boot_jump` und Deep Sleep). Blockiert, weil danach nichts mehr
-    /// laeuft, worauf Ruecksicht zu nehmen waere.
+    /// laeuft, worauf Ruecksicht zu nehmen waere — aber nur, solange `more`
+    /// wahr ist: Ein haengendes Geraet haelt das Ende des Laufs (12.7) nicht
+    /// ewig auf; der Vorgang gilt dann als gescheitert.
     ///
     /// `min_interval` gilt hier nicht: Es begrenzt den Verschleiss im
-    /// Dauerbetrieb, nicht den letzten Schreibvorgang vor dem Aus.
-    pub fn flush(&mut self, current: &[u8], stored: &mut [u8], stored_len: &mut usize) -> bool {
-        if !self.loaded {
-            return false;
-        }
-        while self.phase != Phase::Idle {
-            self.advance(stored, stored_len);
-        }
-        if self.failed_last {
+    /// Dauerbetrieb, nicht den letzten Schreibvorgang vor dem Aus. Ein
+    /// frueher gescheiterter Vorgang auch nicht: Der Stand wird noch einmal
+    /// versucht.
+    pub fn flush(
+        &mut self,
+        current: &[u8],
+        stored: &mut [u8],
+        stored_len: &mut usize,
+        mut more: impl FnMut() -> bool,
+    ) -> bool {
+        if !self.loaded || !self.settle(stored, stored_len, &mut more) {
             return false;
         }
         if !self.differs(current, stored, *stored_len) {
             return true;
         }
         self.begin(current, stored, stored_len);
+        self.settle(stored, stored_len, &mut more) && !self.failed_last
+    }
+
+    /// Treibt den laufenden Vorgang zu Ende, solange `more` wahr ist;
+    /// `false`, wenn der Aufrufer vorher aufgab.
+    fn settle(&mut self, stored: &[u8], stored_len: &mut usize, more: &mut impl FnMut() -> bool) -> bool {
         while self.phase != Phase::Idle {
+            if !more() {
+                self.give_up(stored_len);
+                return false;
+            }
             self.advance(stored, stored_len);
         }
-        !self.failed_last
+        true
     }
 
     /// Ein Schritt des Automaten.
@@ -401,8 +419,18 @@ impl<N: Nvm> Journal<N> {
     /// Geschrieben wird aus `stored`, nicht aus `current`: Der aendert sich
     /// weiter, waehrend das Geraet arbeitet, und der CRC muss zu den Bytes
     /// passen, die wirklich ankommen.
+    ///
+    /// Ein Stand, der nicht in `stored` oder mit Kopf nicht in einen leeren
+    /// Slot passt, wird verweigert und als gescheitert gezaehlt: Gekuerzt
+    /// waere er gueltig und falsch, und ein Slot, der ihn nie fasst, wuerde
+    /// je `min_interval` umsonst geloescht.
     fn begin(&mut self, current: &[u8], stored: &mut [u8], stored_len: &mut usize) {
-        let n = current.len().min(stored.len());
+        let n = current.len();
+        if n > stored.len() || entry_len(n) > self.nvm.slot_size() {
+            self.target = (1 - self.slot, 0);
+            self.give_up(stored_len);
+            return;
+        }
         stored[..n].copy_from_slice(&current[..n]);
         *stored_len = n;
         let header = Header {
@@ -483,7 +511,9 @@ impl<'a, N: Nvm> Persist<'a, N> {
     /// das Journal fand; wie viele Eintraege das Programm annahm, sagt
     /// `applied`.
     pub fn load(&mut self, program: &mut impl crate::loopcore::Program) -> (Loaded, usize) {
-        let found = self.journal.load(self.current);
+        // Ein Eintrag, der nicht in beide Puffer passt, gilt nicht.
+        let room = self.current.len().min(self.stored.len());
+        let found = self.journal.load(&mut self.current[..room]);
         let applied = match found {
             Loaded::Found { length, .. } => {
                 let n = length as usize;
@@ -504,16 +534,22 @@ impl<'a, N: Nvm> Persist<'a, N> {
     }
 
     /// Schreibt ausstehende Aenderungen synchron (5.9: vor `reboot`,
-    /// `boot_jump` und Deep Sleep).
-    pub fn flush(&mut self, program: &mut impl crate::loopcore::Program) -> bool {
+    /// `boot_jump` und Deep Sleep), solange `more` wahr ist
+    /// ([`Journal::flush`]).
+    pub fn flush(&mut self, program: &mut impl crate::loopcore::Program, more: impl FnMut() -> bool) -> bool {
         let n = program.persist_snapshot(self.current);
         let (current, stored) = (&*self.current, &mut *self.stored);
-        self.journal.flush(&current[..n], stored, &mut self.stored_len)
+        self.journal.flush(&current[..n], stored, &mut self.stored_len, more)
     }
 
     /// Das Journal darunter.
     pub fn journal(&self) -> &Journal<N> {
         &self.journal
+    }
+
+    /// Das Journal darunter, veraenderlich (Tests, Diagnose).
+    pub fn journal_mut(&mut self) -> &mut Journal<N> {
+        &mut self.journal
     }
 
     /// So lange haelt ein Vorgang des Geraets den Kern hoechstens (12.3).
@@ -532,7 +568,12 @@ impl<'a, N: Nvm> Persist<'a, N> {
 /// `cut_at` erfuellt, was 8.11 als `CUT_AT_BYTE` beschreibt: „bricht einen
 /// Programmiervorgang mitten im Sektor ab und laesst den Rest unbestimmt."
 /// Damit ist die Stromausfallsicherheit aus 5.9 pruefbar, ohne dass das
-/// Takt-Flash-Modell (M6) schon existiert.
+/// Takt-Flash-Modell (M6) schon existiert. Ohne Saat bleibt der Rest des
+/// Vorgangs, wie er war; mit [`FakeNvm::cut_at_seeded`] ist er unbestimmt.
+///
+/// Dazu Fehler des Geraets (13.8): ein Vorgang, der mit `Failed` endet
+/// ([`FakeNvm::fail_operation`]), und ein Lesen, das scheitert
+/// ([`FakeNvm::fail_read`]).
 ///
 /// `N` ist die Slotgroesse; ohne Allokation, wie der Rest des Crates.
 pub struct FakeNvm<const N: usize> {
@@ -546,9 +587,19 @@ pub struct FakeNvm<const N: usize> {
     cut_at: Option<u32>,
     written: u32,
     cut: bool,
+    /// Zustand des Zufalls, der nach dem Abbruch den Rest des Vorgangs
+    /// bestimmt; `None` laesst ihn unberuehrt.
+    garbage: Option<u32>,
     /// Ein Geraet, das den Kern anhaelt (12.3), so lange je Vorgang.
     blocking_ns: Option<i64>,
     erases: u32,
+    /// Der wievielte begonnene Vorgang von hier an mit `Failed` endet.
+    fail_operation: Option<u32>,
+    /// Der laufende Vorgang endet mit `Failed`.
+    failing: bool,
+    /// Das wievielte Lesen von hier an scheitert.
+    fail_read: Option<u32>,
+    reads: u32,
 }
 
 /// Der laufende Vorgang einer [`FakeNvm`].
@@ -569,8 +620,13 @@ impl<const N: usize> FakeNvm<N> {
             cut_at: None,
             written: 0,
             cut: false,
+            garbage: None,
             blocking_ns: None,
             erases: 0,
+            fail_operation: None,
+            failing: false,
+            fail_read: None,
+            reads: 0,
         }
     }
 
@@ -596,15 +652,59 @@ impl<const N: usize> FakeNvm<N> {
         self.cut_at = Some(n);
         self.written = 0;
         self.cut = false;
+        self.garbage = None;
+    }
+
+    /// Wie [`FakeNvm::cut_at`], und der Rest des abgebrochenen Vorgangs ist
+    /// unbestimmt (8.11): Ein Programmiervorgang loescht dort zufaellige
+    /// Bits, eine Loeschung setzt zufaellige Bits, in beliebiger Reihenfolge
+    /// ueber den Sektor. `seed` macht den Zufall wiederholbar.
+    pub fn cut_at_seeded(&mut self, n: u32, seed: u32) {
+        self.cut_at(n);
+        self.garbage = Some(seed | 1);
     }
 
     /// Strom wieder da: Der Inhalt bleibt, wie der Abbruch ihn liess.
     pub fn power_on(&mut self) {
         self.cut_at = None;
         self.cut = false;
+        self.garbage = None;
         self.written = 0;
         self.busy = 0;
         self.job = Job::None;
+        self.failing = false;
+    }
+
+    /// Der `n`-te Vorgang von hier an (0 ist der naechste, Loeschen oder
+    /// Schreiben) endet mit `Failed` und aendert nichts.
+    pub fn fail_operation(&mut self, n: u32) {
+        self.fail_operation = Some(n);
+    }
+
+    /// Das `n`-te Lesen von hier an (0 ist das naechste) scheitert.
+    pub fn fail_read(&mut self, n: u32) {
+        self.fail_read = Some(n);
+    }
+
+    /// Wie oft gelesen wurde.
+    pub fn reads(&self) -> u32 {
+        self.reads
+    }
+
+    /// Zaehlt einen begonnenen Vorgang gegen [`FakeNvm::fail_operation`].
+    fn count_operation(&mut self) {
+        self.failing = self.fail_operation == Some(0);
+        self.fail_operation = self.fail_operation.and_then(|n| n.checked_sub(1));
+    }
+
+    /// Das naechste Zufallsbyte (xorshift32).
+    fn noise(&mut self) -> u8 {
+        let mut x = self.garbage.unwrap_or(1);
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.garbage = Some(x);
+        x as u8
     }
 
     /// Wie viele Bytes seit dem letzten [`FakeNvm::cut_at`] geschrieben wurden.
@@ -623,13 +723,19 @@ impl<const N: usize> FakeNvm<N> {
     }
 
     /// Schreibt ein Byte, sofern der Strom noch da ist. Programmieren
-    /// loescht Bits nur (`&=`), wie NOR-Flash; `erase` setzt sie.
+    /// loescht Bits nur (`&=`), wie NOR-Flash; `erase` setzt sie. Nach dem
+    /// Abbruch mit Saat bekommt das Byte Zufall statt seines Werts.
     fn put(&mut self, slot: u8, at: usize, byte: u8, erase: bool) {
-        if self.cut {
-            return;
-        }
-        if self.cut_at.is_some_and(|n| self.written >= n) {
+        if !self.cut && self.cut_at.is_some_and(|n| self.written >= n) {
             self.cut = true;
+        }
+        if self.cut {
+            if self.garbage.is_some() {
+                let noise = self.noise();
+                if let Some(cell) = self.slots[slot as usize].get_mut(at) {
+                    *cell = if erase { *cell | noise } else { *cell & noise };
+                }
+            }
             return;
         }
         self.written = self.written.saturating_add(1);
@@ -654,6 +760,7 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         if self.busy > 0 || slot > 1 {
             return false;
         }
+        self.count_operation();
         self.job = Job::Erase(slot);
         self.busy = self.latency;
         self.erases += 1;
@@ -664,6 +771,7 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         if self.busy > 0 || slot > 1 || bytes.len() > N {
             return false;
         }
+        self.count_operation();
         let mut buf = [0u8; N];
         buf[..bytes.len()].copy_from_slice(bytes);
         self.job = Job::Write { slot, offset, len: bytes.len(), bytes: buf };
@@ -684,6 +792,10 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         if self.busy > 0 {
             return NvmState::Busy;
         }
+        if core::mem::take(&mut self.failing) {
+            self.job = Job::None;
+            return NvmState::Failed;
+        }
         match core::mem::replace(&mut self.job, Job::None) {
             Job::None => {}
             Job::Erase(slot) => {
@@ -701,6 +813,12 @@ impl<const N: usize> Nvm for FakeNvm<N> {
     }
 
     fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool {
+        self.reads = self.reads.saturating_add(1);
+        let failing = self.fail_read == Some(0);
+        self.fail_read = self.fail_read.and_then(|n| n.checked_sub(1));
+        if failing {
+            return false;
+        }
         let Some(src) = self.slots.get(slot as usize) else { return false };
         let at = offset as usize;
         let Some(slice) = src.get(at..at + into.len()) else { return false };

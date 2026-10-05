@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: Genauigkeit `.18` liegt ueber der Grenze 17.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var k : int in 0..100 = 3
+    var f : float[bar] = 2.5 bar
+    var q : vec<int, 4> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            log "Druck {f:.18}"  # ~ SC-16
+            v = true

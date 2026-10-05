@@ -14,6 +14,8 @@ rust-version = "1.86"
 # Der Bau uebersetzt das Takt-Programm mit: `takt-frame` erzeugt den Rahmen,
 # `takt-conformance` ruft `takt build` (`bringup`), `takt-llvm` nennt die Flags.
 [build-dependencies]
+# Der Schluessel des Baus im ELF (KON1-009).
+takt-board-support = { path = "../takt-board-support" }
 takt-conformance = { path = "../takt-conformance", default-features = false }
 takt-frame = { path = "../takt-frame" }
 takt-llvm = { path = "../takt-llvm" }

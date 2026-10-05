@@ -339,7 +339,7 @@ fn write_step(
 /// Eine Ebene des Zustandsbaums (5.2): ihr `loop:`, dann ihre Handler
 /// (8.7), dann die Ebenen darunter — je Blatt ein `switch`-Arm, der Code
 /// der Ebene selbst nur einmal. Ein Blatt endet in seinen Uebergaengen,
-/// vom Blatt aufwaerts, und seinem Fault-Trampolin.
+/// von aussen nach innen, und seinem Fault-Trampolin.
 fn level(
     node: Option<StateId>,
     here: &[StateId],
@@ -370,10 +370,10 @@ fn level(
     if let (Some(leaf), [only]) = (node, here)
         && leaf == *only
     {
-        // Die Uebergaenge vom Blatt aufwaerts: Der innerste Zustand
-        // entscheidet zuerst (5.2), und innerhalb einer Ebene gewinnt der
-        // erste passende in Quelltextreihenfolge.
-        for anc in machine::path_to(machine, leaf).iter().rev() {
+        // Die Uebergaenge von aussen nach innen: Der aeusserste Zustand
+        // entscheidet zuerst (5.2 Schritt 2, KON2-031), und innerhalb einer
+        // Ebene gewinnt der erste passende in Quelltextreihenfolge.
+        for anc in machine::path_to(machine, leaf).iter() {
             let list = machine.states[anc.index()].transitions.clone();
             transitions(&list, Some(*anc), Some(leaf), ctx, m, jump.end)?;
         }
@@ -430,6 +430,7 @@ fn level(
 /// haelt, gewinnt und verlaesst den Zustand. 8.7 verlangt dieselbe
 /// Reihenfolge fuer Handler — der Quelltext ist die Prioritaet, damit sie
 /// dasteht, statt hergeleitet werden zu muessen.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn transitions(
     list: &[Transition],
     at: Option<StateId>,
@@ -478,7 +479,10 @@ fn transitions(
         // ENTRY und noch in der alten Konfiguration. Ein Fault darin ist
         // einer des Blatts, das der Uebergang verlassen wollte — `exit:`
         // laeuft dann einmal, auf dem Fault-Pfad, statt zweimal.
-        block(&t.actions, ctx, m)?;
+        let outer = std::mem::replace(&mut ctx.entry_mode, true);
+        let done = block(&t.actions, ctx, m);
+        ctx.entry_mode = outer;
+        done?;
         change(t.target, from, ctx, m, end)?;
         m.label(&skip);
     }
@@ -651,10 +655,11 @@ fn switch(ctx: &mut Ctx<'_>, m: &mut Module, source: Source<'_>, goal: Goal, end
     };
     let cell = conf_cell(ctx, m)?;
     m.void_inst(&format!("store i8 {index}, ptr {cell}"));
-    // 11.2: `pc` nennt ab hier das neue Blatt, auch fuer einen Fault in
-    // seinem `enter:`.
+    // 11.2: Unter `states` nennt `pc` ab hier das neue Blatt, auch fuer
+    // einen Fault in seinem `enter:`. Unter `statements` traegt das Feld
+    // Byte-Offsets; die naechste Anweisung schreibt ihren.
     if let Some(leaf) = into
-        && m.instrument != crate::target::Instrument::Off
+        && m.instrument == crate::target::Instrument::States
     {
         crate::stmt::mark(leaf.0, ctx, m);
     }
@@ -679,6 +684,26 @@ fn switch(ctx: &mut Ctx<'_>, m: &mut Module, source: Source<'_>, goal: Goal, end
 /// `paths` sind die Fault-Pfade fuer `exit:` und fuer alles danach.
 #[allow(clippy::too_many_arguments)]
 fn switch_blocks(
+    ctx: &mut Ctx<'_>,
+    m: &mut Module,
+    exited: &[StateId],
+    entered: &[StateId],
+    into: Option<StateId>,
+    first: bool,
+    paths: (String, String),
+    end: &str,
+) -> Result<(), NotYet> {
+    // `exit:` und `enter:` laufen im Modus ENTRY (9.3): Die Fenster sind
+    // leer, auch hier im Schritt (9.6).
+    let outer = std::mem::replace(&mut ctx.entry_mode, true);
+    let done = switch_blocks_in_entry(ctx, m, exited, entered, into, first, paths, end);
+    ctx.entry_mode = outer;
+    done
+}
+
+/// [`switch_blocks`] im Modus ENTRY.
+#[allow(clippy::too_many_arguments)]
+fn switch_blocks_in_entry(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
     exited: &[StateId],
@@ -1045,8 +1070,10 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
 ///
 /// Ein uebersprungener Tick ruft kein `_step`; ohne diese Funktion bliebe
 /// `t_in_state` stehen und die `after`-Frist feuerte um die geschlafenen
-/// Ticks zu spaet. `n` kommt in Basis-Ticks und wird durch die Periode
-/// geteilt, weil der Zaehler Aktivierungen zaehlt (7.2).
+/// Ticks zu spaet. `n` kommt in Basis-Ticks; gezaehlt werden die
+/// Aktivierungen in den Ticks `jetzt + 1 .. jetzt + n` (7.2: `t % Periode
+/// == Phase`), mit `jetzt` aus `now` der Runtime. Der Rahmen ruft die
+/// Funktion darum, bevor er seinen Tick um `n` fortschreibt (FB-429).
 ///
 /// Alle Zaehler, wie [`machine::advance_timers`] am Schrittende: `after`
 /// liest den Zaehler seines Zustands, und nur den ersten vorzuruecken
@@ -1056,8 +1083,7 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
 ///
 /// Die `every`-Zaehler bleiben unberuehrt — 9.9 sagt es ausdruecklich,
 /// und in `idle` gibt es kein `loop:`, also auch kein `every`.
-pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
-    let period = i64::from(m.period.max(1));
+pub fn advance_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     module.begin_cold(
         &format!("{}_advance", m.name),
         &crate::ty::LlvmType::Void,
@@ -1065,12 +1091,42 @@ pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> R
     );
     if let Some(first) = machine::timer_cell(m, st, 0, module) {
         advance_loop(module);
-        let activations = module.inst(&format!("sdiv i64 %1, {period}"));
+        // FB-429: Die Lage der Maschine folgt aus dem globalen Basis-Tick
+        // (7.2: aktiv in den Ticks `t % Periode == Phase`); vorgerueckt
+        // wird um die Aktivierungen in den Ticks `jetzt + 1 .. jetzt + n`,
+        // der Rest gehoert dem naechsten Schlaf: `(n + r) / Periode` mit
+        // dem Abstand `r` von jetzt zur letzten Aktivierung. Mit Periode 1
+        // ist jeder Tick eine Aktivierung, und der Tick wird nicht gebraucht.
+        let activations = if m.period <= 1 {
+            "%1".to_string()
+        } else {
+            let r = lag(m, p, module);
+            let reach = module.inst(&format!("add i64 %1, {r}"));
+            module.inst(&format!("udiv i64 {reach}, {}", m.period)).to_string()
+        };
         let n = machine::timers(m);
         module.void_inst(&format!("call void @takt_advance_timers(ptr {first}, i32 {n}, i64 {activations})"));
     }
     module.end(None);
     Ok(())
+}
+
+/// Die Lage der Maschine im globalen Basis-Tick `k` aus `now` der Runtime
+/// (`Abi::NOW`, 3.3; FB-429): `r = (k - Phase) mod Periode`, die Ticks seit
+/// ihrer letzten Aktivierung (7.2: aktiv in den Ticks `t % Periode == Phase`).
+/// Der Rahmen fuehrt den Tick; `now` ist nie negativ.
+fn lag(m: &Machine, p: &Program, module: &mut Module) -> crate::emit::Reg {
+    let period = u64::from(m.period.max(1));
+    let phase = u64::from(m.phase) % period;
+    let now = module.inst(&format!("call i64 @{}(ptr %arena)", module.runtime(crate::abi::Abi::NOW)));
+    let k = module.inst(&format!("udiv i64 {now}, {}", p.config.tick.max(1)));
+    let shifted = module.inst(&format!("add i64 {k}, {}", period - phase));
+    module.inst(&format!("urem i64 {shifted}, {period}"))
+}
+
+/// Ist die Maschine eine gescopte Instanz (5.11)?
+fn scoped(m: &Machine, p: &Program) -> bool {
+    takt_mir::machine::scoped_instances(p).iter().any(|(_, si)| p.machines[si.machine.index()].name == m.name)
 }
 
 /// `takt_advance_timers(timers, n, delta)`: alle `n` Zaehler um `delta`
@@ -1343,12 +1399,14 @@ pub fn scope_function(
     Ok(())
 }
 
-/// `<maschine>_deadline(st) -> i64`: Basis-Ticks bis zur naechsten
-/// `after`-Frist.
+/// `<maschine>_deadline(st) -> i64`: Basis-Ticks ab jetzt bis zu dem Tick,
+/// in dem die naechste `after`-Frist feuert, wie `Run::earliest_deadline`
+/// im Interpreter (FB-429).
 ///
 /// `-1` heisst: keine Frist, es weckt nur ein Ereignis (9.9). `t_in_state`
-/// zaehlt Aktivierungen, die Runtime springt Basis-Ticks — die Periode
-/// rechnet zwischen beiden um (7.2).
+/// zaehlt Aktivierungen, die Runtime springt Basis-Ticks: Die Frist faellt
+/// in die naechste Aktivierung nach jetzt (`t % Periode == Phase`, 7.2)
+/// plus die fehlenden Aktivierungen mal Periode.
 pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
     let leaves = machine::leaves(m);
     // Eine Aktivierung dauert `period` Basis-Ticks (7.2); `t_in_state`
@@ -1406,10 +1464,21 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
     let cur = module.inst(&format!("load i8, ptr {slot}"));
     let timers = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {tis_i}"));
-    let value = module.inst(&format!(
-        "call i64 @takt_deadline_of(ptr {timers}, ptr {table}, i32 {}, i8 {cur}, i64 {period})",
-        rows.len()
-    ));
+    let missing =
+        module.inst(&format!("call i64 @takt_deadline_of(ptr {timers}, ptr {table}, i32 {}, i8 {cur})", rows.len()));
+    // Die naechste Aktivierung liegt `Periode - r` Ticks nach jetzt (`r`
+    // aus [`lag`]), jede fehlende eine Periode dahinter; mit Periode 1 ist
+    // sie der naechste Tick.
+    let ticks = if period == 1 {
+        module.inst(&format!("add i64 {missing}, 1"))
+    } else {
+        let r = lag(m, p, module);
+        let ahead = module.inst(&format!("sub i64 {period}, {r}"));
+        let rest = module.inst(&format!("mul i64 {missing}, {period}"));
+        module.inst(&format!("add i64 {ahead}, {rest}"))
+    };
+    let none = module.inst(&format!("icmp eq i64 {missing}, -1"));
+    let value = module.inst(&format!("select i1 {none}, i64 -1, i64 {ticks}"));
     module.end(Some((&crate::ty::LlvmType::Int(64), value.to_string())));
     Ok(())
 }
@@ -1417,14 +1486,15 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
 /// Eine Zeile der Fristentabelle: Blatt, Zaehler, Frist in Aktivierungen.
 const DEADLINE_ROW: &str = "{ i8, i32, i64 }";
 
-/// `takt_deadline_of(timers, table, n, leaf, period)`: die naechste Frist
-/// des Blatts in Basis-Ticks, -1 ohne Frist. Einmal je Modul.
+/// `takt_deadline_of(timers, table, n, leaf)`: wie viele Aktivierungen
+/// dem Blatt bis zu seiner naechsten Frist fehlen, -1 ohne Frist. Einmal
+/// je Modul.
 fn deadline_search(module: &mut Module) {
     if module.has_declared("@takt_deadline_of(") {
         return;
     }
     module.declare(&format!(
-        "define internal i64 @takt_deadline_of(ptr %timers, ptr %table, i32 %n, i8 %leaf, i64 %period) nounwind {{
+        "define internal i64 @takt_deadline_of(ptr %timers, ptr %table, i32 %n, i8 %leaf) nounwind {{
   br label %kopf
 kopf:
   %i = phi i32 [ 0, %0 ], [ %i1, %weiter ]
@@ -1456,10 +1526,7 @@ weiter:
   %i1 = add i32 %i, 1
   br label %kopf
 ende:
-  %keine = icmp eq i64 %best, -1
-  %ticks = mul i64 %best, %period
-  %r = select i1 %keine, i64 -1, i64 %ticks
-  ret i64 %r
+  ret i64 %best
 }}"
     ));
 }
@@ -1593,6 +1660,26 @@ fn emit_init(
                 return Err(e);
             }
         }
+        // Ein Initialisierer, der eine Funktion ruft oder prueft, hat einen
+        // Fault-Pfad. Ohne Eintritt gibt es kein Fault-Ziel: Der
+        // Interpreter verwirft den Lauf dort, weil s0 nicht entsteht; hier
+        // endet die Initialisierung an dieser Stelle, und die Marken muessen
+        // existieren, sonst assembliert die IR nicht (GEN-006).
+        if !enter {
+            let mut labels: Vec<String> = ctx.fault_paths.clone().into_iter().map(|f| ctx.fault_path(f)).collect();
+            if let Some(direct) = crate::expr::Vars::fault_label(&ctx.vars())
+                && !labels.contains(&direct)
+            {
+                labels.push(direct);
+            }
+            let end_at = format!("init_vars_ende_{}", m.name);
+            module.void_inst(&format!("br label %{end_at}"));
+            for label in labels {
+                module.label(&label);
+                module.void_inst(&format!("br label %{end_at}"));
+            }
+            module.label(&end_at);
+        }
     }
     if enter {
         // Die Zaehler der Maschinenebene beginnen bei `-1` („noch nicht
@@ -1626,7 +1713,23 @@ fn emit_init(
         // erzeugte Code eine Frist um einen Tick zu lang: Der Interpreter
         // steht zu Beginn von Tick 1 bei `t_in_state == 1`, der Code bei 0,
         // und `after 30 ms` feuert bei 10 ms Tick erst in Tick 4 statt 3.
-        advance_time(&ctx, module);
+        // Aktiv ist die Maschine in Tick 0 nur mit `phase = 0` (7.2: der
+        // Zaehler beginnt bei der Phase); mit Phase zaehlt Tick 0 nicht.
+        // Eine gescopte Instanz, die im Lauf eintritt, ist in ihrem
+        // Eintrittstick nicht aktiv (5.11: `active(inst, k)` fragt zu
+        // Tick-Beginn); ihr Eintritt zaehlt nur in Tick 0.
+        if m.phase == 0 && scoped(m, p) {
+            let now = module.inst(&format!("call i64 @{}(ptr %arena)", module.runtime(crate::abi::Abi::NOW)));
+            let first = module.inst(&format!("icmp slt i64 {now}, {}", p.config.tick.max(1)));
+            let (count, done) = (format!("tick_null_{}", m.name), format!("tick_null_{}_ende", m.name));
+            module.void_inst(&format!("br i1 {first}, label %{count}, label %{done}"));
+            module.label(&count);
+            advance_time(&ctx, module);
+            module.void_inst(&format!("br label %{done}"));
+            module.label(&done);
+        } else if m.phase == 0 {
+            advance_time(&ctx, module);
+        }
     }
     module.end(None);
     Ok(())
@@ -1843,8 +1946,7 @@ pub(crate) fn bind_direct(
         m.void_inst(&format!("store i64 {seq}, ptr {seq_ptr}"));
     }
     if let Some(takt_mir::types::Type::Line { cap }) = p.types.list.get(elem.index()) {
-        let flag = m.inst(&format!("getelementptr inbounds i8, ptr {data_ptr}, i64 {}", 4 + cap));
-        m.void_inst(&format!("store i1 false, ptr {flag}"));
+        crate::stream::split_truncation(data_ptr, *cap, m);
     }
     Ok(seq)
 }
@@ -2224,99 +2326,7 @@ fn pattern_has(
     m: &mut Module,
 ) -> Result<crate::emit::Reg, NotYet> {
     let into = target(b, ctx, m)?;
-    text_has(pieces, text, cap, &into, ctx, m)
-}
-
-/// Wie [`pattern_has`], mit fertigem Ziel fuer die Captures.
-///
-/// **Linear (FB-351).** Kann ein Ansatz bis zum Zeilenende lesen, sucht
-/// der Durchlaufautomat des Musters die Fundstelle in einem Lauf ueber die
-/// Zeile (`scan`); die Werte holt danach ein einziger Durchlauf ab dort,
-/// und nur, wenn es Werte gibt. Jedes andere Muster setzt den Durchlauf an
-/// jeder Stelle neu an und liest je Ansatz hoechstens seine Reichweite
-/// (`Scan::for_has`).
-fn text_has(
-    pieces: &[takt_mir::pattern::PatternPiece],
-    text: crate::emit::Reg,
-    cap: u32,
-    into: &Option<crate::captures::Target<'_>>,
-    ctx: &mut Ctx<'_>,
-    m: &mut Module,
-) -> Result<crate::emit::Reg, NotYet> {
-    let Some(scan) = takt_mir::scan::Scan::for_has(pieces, cap) else {
-        return has_from_every_start(pieces, text, into, ctx, m);
-    };
-    let start = crate::scan::first(&scan, text, m);
-    let found = m.inst(&format!("icmp sge i32 {start}, 0"));
-    if into.is_none() || !takt_mir::dfa::extracts(pieces) {
-        return Ok(found);
-    }
-    let k = m.next_label();
-    let (values, done) = (format!("has{k}_werte"), format!("has{k}_fertig"));
-    let from = m.block().to_string();
-    m.void_inst(&format!("br i1 {found}, label %{values}, label %{done}"));
-    m.label(&values);
-    let (ok, _) = crate::captures::walk(pieces, text, into.as_ref(), start, m)?;
-    let walked = m.block().to_string();
-    m.void_inst(&format!("br label %{done}"));
-    m.label(&done);
-    Ok(m.inst(&format!("phi i1 [ false, %{from} ], [ {ok}, %{walked} ]")))
-}
-
-/// `has` mit dem Durchlauf ab jeder Stelle, fuer ein Muster ohne Automaten.
-/// Ein Ansatz beginnt an einem Zeichenanfang, wie im Interpreter: Ein
-/// `str<N>` vorn faende im Zeichen sonst einen frueheren Start, dessen
-/// Spanne um die Bytes davor kuerzer ist.
-fn has_from_every_start(
-    pieces: &[takt_mir::pattern::PatternPiece],
-    text: crate::emit::Reg,
-    into: &Option<crate::captures::Target<'_>>,
-    ctx: &mut Ctx<'_>,
-    m: &mut Module,
-) -> Result<crate::emit::Reg, NotYet> {
-    let _ = ctx;
-    let k = m.next_label();
-    let (head, body, done) = (format!("has{k}"), format!("has{k}_rumpf"), format!("has{k}_fertig"));
-    let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
-    let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-    let start_ptr = m.alloca("i32");
-    m.void_inst(&format!("store i32 0, ptr {start_ptr}"));
-    let hit_ptr = m.alloca("i1");
-    m.void_inst(&format!("store i1 false, ptr {hit_ptr}"));
-    m.void_inst(&format!("br label %{head}"));
-
-    m.label(&head);
-    let start = m.inst(&format!("load i32, ptr {start_ptr}"));
-    // Auch hinter dem letzten Zeichen wird geprueft: Ein leeres Muster
-    // passt am Ende (8.7).
-    let in_text = m.inst(&format!("icmp sle i32 {start}, {len}"));
-    let bisher = m.inst(&format!("load i1, ptr {hit_ptr}"));
-    let open_still = m.inst(&format!("xor i1 {bisher}, true"));
-    let searching = m.inst(&format!("and i1 {in_text}, {open_still}"));
-    m.void_inst(&format!("br i1 {searching}, label %{body}, label %{done}"));
-
-    m.label(&body);
-    let (probe, attempt, next) = (format!("has{k}_zeichen"), format!("has{k}_ansatz"), format!("has{k}_weiter"));
-    let at_end = m.inst(&format!("icmp eq i32 {start}, {len}"));
-    m.void_inst(&format!("br i1 {at_end}, label %{attempt}, label %{probe}"));
-    m.label(&probe);
-    let bytes = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 4"));
-    let byte_p = m.inst(&format!("getelementptr inbounds i8, ptr {bytes}, i32 {start}"));
-    let byte = m.inst(&format!("load i8, ptr {byte_p}"));
-    let high = m.inst(&format!("and i8 {byte}, -64"));
-    let inside = m.inst(&format!("icmp eq i8 {high}, -128"));
-    m.void_inst(&format!("br i1 {inside}, label %{next}, label %{attempt}"));
-    m.label(&attempt);
-    let (ok, _) = crate::captures::walk(pieces, text, into.as_ref(), start, m)?;
-    m.void_inst(&format!("store i1 {ok}, ptr {hit_ptr}"));
-    m.void_inst(&format!("br label %{next}"));
-    m.label(&next);
-    let next_i = m.inst(&format!("add i32 {start}, 1"));
-    m.void_inst(&format!("store i32 {next_i}, ptr {start_ptr}"));
-    m.void_inst(&format!("br label %{head}"));
-
-    m.label(&done);
-    Ok(m.inst(&format!("load i1, ptr {hit_ptr}")))
+    crate::captures::has(pieces, text, cap, into.as_ref(), m)
 }
 
 /// Die Kapazitaet eines Texts im Strom: `N` von `line<N>` und `str<N>`.
@@ -2658,7 +2668,7 @@ fn trigger_hit(
             if kind == takt_mir::expr::MatchKind::Matches {
                 text_matches(pieces, text, &into, ctx, m)
             } else {
-                text_has(pieces, text, text_capacity(elem, ctx), &into, ctx, m)
+                crate::captures::has(pieces, text, text_capacity(elem, ctx), into.as_ref(), m)
             }
         }
     }

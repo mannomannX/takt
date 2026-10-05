@@ -29,7 +29,7 @@
         (var b :bool (.push d 0x55))
         (var c :bool (.push d 0xAA)))
       (send rx_sim (Frame id=0x181 dlc=(as (.len d) u8) data=d))
-      (= k (% (+ k 1) 256)))))
+      (= k (% (paren (+ k 1)) 256)))))
 (scenario "frames cross the sim boundary" every=1ms
   (initial RUN)
   (state RUN

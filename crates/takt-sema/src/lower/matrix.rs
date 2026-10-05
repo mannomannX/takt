@@ -97,7 +97,8 @@ impl Lowerer<'_> {
         }
     }
 
-    /// Pruefung 30 (leere Form) und Pruefung 42 (Lint ab 16, 3.11).
+    /// Pruefung 30 (leere Form; eine Obergrenze gibt es nicht) und Pruefung 42
+    /// (Lint ueber 16 Zeilen oder Spalten, 3.11).
     pub fn mat_shape(&mut self, rows: u32, cols: u32, span: Span) -> Option<()> {
         if rows == 0 || cols == 0 {
             self.error(SC30, span, "eine Matrix hat mindestens eine Zeile und eine Spalte (3.11)");
@@ -178,6 +179,65 @@ impl Lowerer<'_> {
             out.push(Expr::new(ExprKind::Array(lowered), row_ty, row.span));
         }
         Some(Expr::new(ExprKind::Array(out), ty, span))
+    }
+
+    /// Die Elementeinheiten eines Literals `[[e, ..], ..]` ohne Zieltyp, wenn
+    /// es eine Matrix sein muss: gleich lange Zeilen aus Zahlliteralen,
+    /// deren Einheiten nicht alle gleich sind — ein Array haette eine
+    /// Einheit. Die Probe liest nur die Syntax; einen Ausdruck zu senken
+    /// koennte eine Blockinstanz anlegen, und das zweimal.
+    pub fn mat_candidate(&mut self, items: &[ast::Expr]) -> Option<Vec<Vec<Unit>>> {
+        let start = self.diags.len();
+        let mut units = Vec::with_capacity(items.len());
+        for row in items {
+            let ast::ExprKind::Array(cells) = &row.kind else { return None };
+            let mut row_units = Vec::with_capacity(cells.len());
+            for cell in cells {
+                let unit = self.literal_unit(cell);
+                self.diags.truncate(start);
+                row_units.push(unit?);
+            }
+            units.push(row_units);
+        }
+        let n = units.first()?.len();
+        let first = units[0].first()?.clone();
+        let uniform = units.iter().flatten().all(|u| *u == first);
+        (n > 0 && units.iter().all(|r| r.len() == n) && !uniform).then_some(units)
+    }
+
+    /// Die Einheit eines Zahlliterals, auch negiert oder geklammert.
+    fn literal_unit(&mut self, e: &ast::Expr) -> Option<Unit> {
+        match &e.kind {
+            ast::ExprKind::Number { unit: None, .. } => Some(Unit::one()),
+            ast::ExprKind::Number { unit: Some(u), .. } => self.unit_expr(u),
+            ast::ExprKind::Unary { op: ast::UnaryOp::Neg, expr } | ast::ExprKind::Paren(expr) => {
+                self.literal_unit(expr)
+            }
+            _ => None,
+        }
+    }
+
+    /// 3.11, Literal: Ein Literal ohne Zieltyp, dessen Elementeinheiten
+    /// verschieden sind, ist eine Matrix, wenn sie ein aeusseres Produkt
+    /// `r_i * c_j` bilden — in kanonischer Form `c_1 = 1` also
+    /// `R = (u_11, .., u_m1)`, `C = (1, u_12 / u_11, ..)`; sonst Pruefung 34.
+    pub fn mat_literal_untyped(&mut self, items: &[ast::Expr], span: Span) -> Option<Expr> {
+        let units = self.mat_candidate(items)?;
+        let rows: Vec<Unit> = units.iter().map(|r| r[0].clone()).collect();
+        let cols: Vec<Unit> = units[0].iter().map(|u| u.div(&units[0][0])).collect();
+        let outer = units.iter().zip(&rows).all(|(row, r)| row.iter().zip(&cols).all(|(u, c)| *u == r.mul(c)));
+        if !outer {
+            self.error_hint(
+                SC34,
+                span,
+                "die Elementeinheiten des Literals bilden kein aeusseres Produkt `r_i * c_j` (3.11)",
+                "die Einheiten angleichen oder die Matrix mit `mat[R, C]` deklarieren",
+            );
+            return None;
+        }
+        self.mat_shape(rows.len() as u32, cols.len() as u32, span)?;
+        let ty = self.mat_type((rows, cols), span)?;
+        self.mat_literal(items, ty, span)
     }
 
     /// `+`, `-`, `*`, `/` mit einer Matrix (3.11, Pruefungen 30 und 34).

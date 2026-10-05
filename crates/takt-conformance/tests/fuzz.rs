@@ -8,14 +8,21 @@
 //! aufheben.
 //!
 //! **Was er erzeugt, ist absichtlich eng.** Jedes Programm hat eine
-//! Maschine, einen Zustand und eine Zuweisung — nur der *Ausdruck* wird
-//! gewuerfelt. Damit ist jede Abweichung auf einen Ausdruck
+//! Maschine, einen rechnenden Zustand und eine Zuweisung — nur der
+//! *Ausdruck* wird gewuerfelt. Damit ist jede Abweichung auf einen Ausdruck
 //! zurueckzufuehren, statt auf ein Zusammenspiel, das erst zu entwirren
-//! waere.
+//! waere. Die Variablen aendern sich jeden Tick, damit der Vergleich
+//! Laufzeitarithmetik prueft und nicht die Konstantenfaltung.
 //!
-//! Der Generator ist ein xorshift mit festem Startwert: Ein Fehlschlag
-//! ist reproduzierbar, und der Testlauf ist es auch — dieselbe Linie wie
-//! bei den `libtaktm`-Vektoren.
+//! **Faults gehoeren dazu** (13.1 c, 4.1). Ueberlauf, Division durch null,
+//! Schiebebetraege, Umwandlungen und nicht endliche Ergebnisse faulten; der
+//! Fault fuehrt in einen Ruhezustand, der nach einem Tick zurueckkehrt, und
+//! [`compare`] haelt Art und Tick jedes Faults gegeneinander.
+//!
+//! Der Generator ist ein xorshift; der Startwert kommt aus `TAKT_FUZZ_SEED`
+//! (dezimal oder `0x…`), die Rundenzahl aus `TAKT_FUZZ_ROUNDS`, sonst fest.
+//! Ein Fehlschlag nennt beide: Er ist reproduzierbar, und ein naechtlicher
+//! Lauf mit anderem Startwert findet, was der feste nicht trifft.
 
 use takt_conformance::compare;
 
@@ -35,101 +42,135 @@ impl Rng {
     fn below(&mut self, n: u64) -> u64 {
         self.next() % n.max(1)
     }
+
+    fn pick<'a>(&mut self, of: &[&'a str]) -> &'a str {
+        of[self.below(of.len() as u64) as usize]
+    }
 }
 
-/// Ein Ganzzahlausdruck ueber `n` und Konstanten.
-///
-/// Die Konstanten liegen an den Raendern der Darstellung, weil dort die
-/// Fehler sitzen: Ein Ueberlauf an `i32::MAX` ist ein Fault (4.1), und
-/// der Codegen darf ihn nicht wegoptimieren.
+/// Ein Blatt: meist eine Variable oder eine kleine Konstante, sonst ein
+/// Rand der Darstellung — dort sitzen die Fehler, aber ein Ausdruck aus
+/// lauter Raendern faultete nur noch.
+fn leaf<'a>(rng: &mut Rng, vars: &[&'a str], small: &[&'a str], edges: &[&'a str]) -> &'a str {
+    match rng.below(8) {
+        0..=3 => rng.pick(vars),
+        4..=6 => rng.pick(small),
+        _ => rng.pick(edges),
+    }
+}
+
+/// Ein Ganzzahlausdruck (`int`, 64 Bit) ueber `n`, `m` und Konstanten bis
+/// an `i32` und `i64` (4.1): Arithmetik, Division und Rest, Schiebungen,
+/// Bitoperationen, Vergleiche und Umwandlungen.
 fn int_expr(rng: &mut Rng, depth: u32) -> String {
     if depth == 0 {
-        return match rng.below(6) {
-            0 => "n".into(),
-            1 => "0".into(),
-            2 => "1".into(),
-            3 => "7".into(),
-            4 => "100".into(),
-            _ => "3".into(),
-        };
+        let edges =
+            ["2147483647", "(-2147483647 - 1)", "4294967295", "9223372036854775807", "(-9223372036854775807 - 1)"];
+        return leaf(rng, &["n", "m"], &["0", "1", "-1", "3", "7", "100"], &edges).to_string();
     }
     let a = int_expr(rng, depth - 1);
     let b = int_expr(rng, depth - 1);
-    match rng.below(8) {
+    match rng.below(17) {
         0 => format!("({a} + {b})"),
         1 => format!("({a} - {b})"),
         2 => format!("({a} * {b})"),
-        3 => format!("min({a}, {b})"),
-        4 => format!("max({a}, {b})"),
-        5 => format!("({a} if {a} > {b} else {b})"),
-        6 => format!("wrapping_add({a}, {b})"),
-        _ => format!("({a} + 1)"),
+        3 => format!("({a} / {b})"),
+        4 => format!("({a} % {b})"),
+        5 => format!("min({a}, {b})"),
+        6 => format!("max({a}, {b})"),
+        7 => format!("({a} if {a} > {b} else {b})"),
+        8 => format!("wrapping_add({a}, {b})"),
+        9 => format!("({a} << {b})"),
+        10 => format!("({a} >> {b})"),
+        11 => format!("({a} & {b})"),
+        12 => format!("({a} | {b})"),
+        13 => format!("({a} ^ {b})"),
+        14 => format!("(1 if {a} < {b} else 0)"),
+        15 => format!("(({a}) as i32 as int)"),
+        _ => format!("abs({a})"),
     }
 }
 
-/// Ein Fliesskommaausdruck.
+/// Ein Fliesskommaausdruck in der Breite `float` (`f64`) oder `f32`.
 ///
 /// Hier sitzt Satz 9.4.4: Jede Operation ist einzeln gerundet, und eine
 /// andere Klammerung ergibt eine andere Zahl. Die Konstanten sind
 /// absichtlich unrund — `0.1` ist der Fall, an dem sich eine
-/// Dezimalschreibweise verraet.
-fn float_expr(rng: &mut Rng, depth: u32) -> String {
+/// Dezimalschreibweise verraet —, dazu die Raender: der groesste endliche
+/// Wert, der kleinste normale und Subnormale, `-0.0`.
+fn float_expr(rng: &mut Rng, depth: u32, f32: bool) -> String {
     if depth == 0 {
-        return match rng.below(6) {
-            0 => "x".into(),
-            1 => "0.1".into(),
-            2 => "1.0".into(),
-            3 => "3.7".into(),
-            4 => "0.0".into(),
-            _ => "100.0".into(),
+        let (vars, edges): (&[&str], &[&str]) = if f32 {
+            (&["y", "w"], &["3.4028235e38", "1.1754944e-38", "1e-45", "1e-40", "-0.0"])
+        } else {
+            (&["x", "z"], &["1e308", "2.2250738585072014e-308", "5e-324", "1e-310", "-0.0"])
         };
+        return leaf(rng, vars, &["0.1", "1.0", "3.7", "0.0", "100.0"], edges).to_string();
     }
-    let a = float_expr(rng, depth - 1);
-    let b = float_expr(rng, depth - 1);
-    match rng.below(6) {
+    let a = float_expr(rng, depth - 1, f32);
+    let b = float_expr(rng, depth - 1, f32);
+    let width = if f32 { "f32" } else { "float" };
+    match rng.below(11) {
         0 => format!("({a} + {b})"),
         1 => format!("({a} - {b})"),
         2 => format!("({a} * {b})"),
-        3 => format!("min({a}, {b})"),
-        4 => format!("max({a}, {b})"),
-        _ => format!("({a} if {a} > {b} else {b})"),
+        3 => format!("({a} / {b})"),
+        4 => format!("min({a}, {b})"),
+        5 => format!("max({a}, {b})"),
+        6 => format!("({a} if {a} > {b} else {b})"),
+        7 => format!("sqrt({a})"),
+        8 => format!("abs({a})"),
+        9 => format!("(-{a})"),
+        _ => format!("(floor({a}) as {width})"),
     }
 }
 
-/// Ein Programm um einen Fliesskommaausdruck herum.
-fn float_program(expr: &str) -> String {
-    format!(
-        "system:
-    language = 1
-    tick     = 10 ms
-
-         output r : float in -1000000.0..1000000.0 @ hw(\"ui/r\") with safe = 0.0
-
-         machine f:
-    var x : float in 0.0..100.0 = 3.7
-
-    initial RUN
-    state RUN:
-        loop:
-            r = {expr}
-"
-    )
+/// Die Art eines Programms: welche Breite der Ausdruck hat.
+#[derive(Clone, Copy, Debug)]
+enum Kind {
+    Int,
+    Float,
+    F32,
 }
 
-/// Ein Programm um einen Ausdruck herum.
-fn program(expr: &str) -> String {
+/// Ein Programm um einen Ausdruck: Die Variablen laufen jeden Tick weiter,
+/// auch im Ruhezustand, in den ein Fault fuehrt; nach einem Tick rechnet
+/// die Maschine wieder.
+fn program(kind: Kind, expr: &str) -> String {
+    let (ty, safe, vars, step) = match kind {
+        Kind::Int => (
+            "int",
+            "0",
+            "    var n : int in 0..100 = 3\n    var m : int in 0..999 = 500\n",
+            "            n = (n + 37) % 101\n            m = (m * 7 + 3) % 1000\n",
+        ),
+        Kind::Float => (
+            "float",
+            "0.0",
+            "    var x : float in 0.0..100.0 = 3.7\n    var z : float in 0.0..100.0 = 0.5\n",
+            "            x = (x + 13.7) if x < 80.0 else (x - 80.0)\n            z = (z * 1.37) if z < 50.0 else (z - 49.0)\n",
+        ),
+        Kind::F32 => (
+            "f32",
+            "0.0",
+            "    var y : f32 in 0.0..100.0 = 1.5\n    var w : f32 in 0.0..100.0 = 0.5\n",
+            "            y = (y + 13.7) if y < 80.0 else (y - 80.0)\n            w = (w * 1.37) if w < 50.0 else (w - 49.0)\n",
+        ),
+    };
     format!(
         "system:\n    language = 1\n    tick     = 10 ms\n\n\
-         output r : int in -1000000..1000000 @ hw(\"ui/r\") with safe = 0\n\n\
-         machine f:\n    var n : int in 0..100 = 3\n\n    initial RUN\n    state RUN:\n        loop:\n            r = {expr}\n"
+         output r : {ty} @ hw(\"ui/r\") with safe = {safe}\n\n\
+         machine f:\n    fault -> REST\n{vars}\n    initial RUN\n\
+         \x20   state RUN:\n        loop:\n{step}            r = {expr}\n\
+         \x20   state REST:\n        loop:\n{step}        after 10 ms: -> RUN\n"
     )
 }
 
 /// Uebersetzt ein Programm; `None`, wenn das Sema es ablehnt.
 ///
-/// Ablehnungen sind der Normalfall und kein Fehlschlag: Der Generator
-/// wuerfelt auch Ausdruecke, deren Range die Analyse nicht beweisen kann
-/// (3.4), und eine Ablehnung ist dann die richtige Antwort.
+/// Eine Ablehnung ist die richtige Antwort, wenn ein Fehler feststeht —
+/// eine Division durch die Konstante null, ein Schiebebetrag, der nie
+/// passt (3.4) —; dass das nicht der Normalfall ist, sichert die Quote.
 fn compile(src: &str) -> Option<takt_mir::Program> {
     let o = takt_sema::Options {
         policy: takt_diag::Policy::default(),
@@ -144,60 +185,128 @@ fn compile(src: &str) -> Option<takt_mir::Program> {
     out.program
 }
 
-const TICKS: u64 = 5;
+const TICKS: u64 = 12;
+
+/// Eine Einstellung aus der Umgebung: dezimal oder `0x…`, sonst `default`.
+fn setting(name: &str, default: u64) -> u64 {
+    let Ok(text) = std::env::var(name) else { return default };
+    let parsed = match text.strip_prefix("0x") {
+        Some(hex) => u64::from_str_radix(hex, 16),
+        None => text.parse(),
+    };
+    parsed.unwrap_or_else(|e| panic!("{name}={text}: {e}"))
+}
 
 /// **Der Fuzzer der Abnahme.** Erzeugte Programme laufen in beiden
-/// Implementierungen und liefern dieselben Outputs.
+/// Implementierungen und liefern dieselben Outputs und Faults.
 #[test]
 fn generated_programs_agree() {
     let Some(clang) = common::clang() else { return };
-    // Mehrere Startwerte: Ein einzelner trifft immer dieselben Formen,
-    // und die Formen sind das, was hier gesucht wird.
-    let mut rng = Rng(0x2026_0912);
-    let (mut gebaut, mut abgelehnt) = (0, 0);
+    let (seed, rounds) = (setting("TAKT_FUZZ_SEED", 0x2026_0912), setting("TAKT_FUZZ_ROUNDS", 150));
+    eprintln!("TAKT_FUZZ_SEED={seed:#x} TAKT_FUZZ_ROUNDS={rounds}");
+    let mut rng = Rng(seed);
+    let (mut built, mut rejected, mut faulted) = (0u64, Vec::new(), 0u64);
     let mut errors = Vec::new();
 
-    for runde in 0..160 {
-        // Die zweite Haelfte rechnet in Fliesskomma: Dort sitzt Satz
-        // 9.4.4, und dort ist eine Abweichung am schwersten zu finden.
-        let (expr, src) = if runde % 2 == 0 {
-            let e = int_expr(&mut rng, 2 + (runde % 3) as u32);
-            let s = program(&e);
-            (e, s)
-        } else {
-            let e = float_expr(&mut rng, 2 + (runde % 3) as u32);
-            let s = float_program(&e);
-            (e, s)
+    for round in 0..rounds {
+        // Ganzzahl, `f64` und `f32` im Wechsel: Im Fliesskomma sitzt Satz
+        // 9.4.4, in der Ganzzahl die Faults aus 4.1.
+        let kind = [Kind::Int, Kind::Float, Kind::F32][(round % 3) as usize];
+        let depth = 2 + (round % 4) as u32;
+        let expr = match kind {
+            Kind::Int => int_expr(&mut rng, depth),
+            Kind::Float => float_expr(&mut rng, depth, false),
+            Kind::F32 => float_expr(&mut rng, depth, true),
         };
+        let src = program(kind, &expr);
         let Some(p) = compile(&src) else {
-            abgelehnt += 1;
+            rejected.push(format!("{kind:?} `{expr}`"));
             continue;
         };
-        let Some(machine) = p.machines.first().map(|m| m.name.clone()) else { continue };
-        let native = match crate::common::run_native(&clang, &p, &format!("fuzz{runde}"), &machine, TICKS) {
+        let native = match crate::common::run_native_all(&clang, &p, &format!("fuzz{round}"), TICKS) {
             Ok(t) => t,
             Err(e) => {
-                errors.push(format!("`{expr}`: kein nativer Lauf:\n{e}"));
+                errors.push(format!("Runde {round}, `{expr}`: kein nativer Lauf:\n{e}"));
                 continue;
             }
         };
         let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
         let interpreted = match takt_interp::run(&p, &takt_interp::Trace::default(), &options) {
             Ok(r) => r.trace.render(),
-            // Ein Trap ist kein Vergleichsfall: Der Interpreter hat
-            // aufgegeben, und es gibt nichts zu vergleichen.
-            Err(_) => continue,
+            Err(e) => {
+                errors.push(format!("Runde {round}, `{expr}`: der Interpreter bricht ab: {e:?}"));
+                continue;
+            }
         };
-        gebaut += 1;
-        let diffs = compare(&interpreted, &native);
+        built += 1;
+        faulted += u64::from(interpreted.contains(" fault "));
+        let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
+        let diffs = compare(&widened, &native);
         if !diffs.is_empty() {
-            errors.push(format!("`{expr}`:\n  {}", diffs[0]));
+            errors.push(format!(
+                "Runde {round}, {kind:?} `{expr}`: {}\n--- Interpreter ---\n{interpreted}--- nativ ---\n{native}",
+                diffs.iter().take(3).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n")
+            ));
         }
     }
 
-    eprintln!("gebaut: {gebaut}, abgelehnt: {abgelehnt}");
-    assert!(gebaut >= 10, "zu wenige Programme uebersetzt: {gebaut} (abgelehnt: {abgelehnt})");
-    assert!(errors.is_empty(), "{} Abweichungen:\n{}", errors.len(), errors.join("\n"));
+    let tag = format!("TAKT_FUZZ_SEED={seed:#x} TAKT_FUZZ_ROUNDS={rounds}");
+    eprintln!("{tag}: {built} verglichen, davon {faulted} mit Fault, {} abgelehnt", rejected.len());
+    assert!(errors.is_empty(), "{tag}: {} Abweichungen:\n{}", errors.len(), errors.join("\n\n"));
+    // Eine Ablehnung ist die Ausnahme: Abgelehnt werden Ausdruecke mit einem
+    // feststehenden Fault in einem konstanten Teil und Vergleiche, die eine
+    // Konstante in `float` gegen `f32` halten (4.2). Laege die Quote hoeher,
+    // wuerfelte der Generator am Sema vorbei, wie die Haelfte in
+    // Fliesskomma, die bis KON1-017 an der Einrueckung ihres Rahmens
+    // scheiterte.
+    assert!(
+        built * 5 >= rounds * 3,
+        "{tag}: nur {built} von {rounds} Programmen kamen zum Vergleich, abgelehnt etwa {:?}",
+        &rejected[..rejected.len().min(5)]
+    );
+    // Faults gehoeren dazu (13.1 c); ohne sie pruefte der Vergleich ihre
+    // Pfade nicht.
+    assert!(faulted * 10 >= built, "{tag}: nur {faulted} von {built} Programmen faulten");
+}
+
+/// **Ein Schieben um mehr als 31 Bit bleibt 64 Bit breit** (4.1, Lemma
+/// 3.4; gefunden vom Fuzzer, Runde 117 mit dem festen Startwert). Passen
+/// Ergebnis und Operanden in `i32`, rechnet der Codegen schmal; ein
+/// Schiebebetrag ab 32 ist in `i32` aber Gift, waehrend `int` ihn kennt:
+/// `m >> 50` ist fuer `m` in `0..999` null und `3 >> 0` drei, und `n << 40
+/// >> 40` gibt `n` zurueck.
+#[test]
+fn a_shift_by_more_than_31_bits_is_not_narrowed() {
+    let Some(clang) = common::clang() else { return };
+    // Der Schritt rechnet `n` vor `r`: In Tick 0 ist `n` schon 40, `m` 503.
+    for (expr, want) in [("(3 >> (m >> 50))", "3"), ("((n << 40) >> 40)", "40"), ("((m >> 40) + n)", "40")] {
+        let src = program(Kind::Int, expr);
+        let p = compile(&src).unwrap_or_else(|| panic!("`{expr}` uebersetzt nicht"));
+        let interpreted = takt_interp::run(
+            &p,
+            &takt_interp::Trace::default(),
+            &takt_interp::RunOptions { ticks: 1, ..Default::default() },
+        )
+        .expect("Lauf")
+        .trace
+        .render();
+        assert!(
+            interpreted.contains(&format!(
+                "t=0 out r {want}
+"
+            )),
+            "`{expr}`:
+{interpreted}"
+        );
+        let native = common::run_native_all(&clang, &p, "shift_narrow", 1).unwrap_or_else(|e| panic!("{e}"));
+        let diffs = compare(&interpreted, &native);
+        assert!(
+            diffs.is_empty(),
+            "`{expr}`: {diffs:?}
+--- nativ ---
+{native}"
+        );
+    }
 }
 
 mod common;

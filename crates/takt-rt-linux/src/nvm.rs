@@ -37,16 +37,16 @@ pub struct FileNvm {
 
 impl FileNvm {
     /// Oeffnet oder legt die Datei an; ein neuer Speicher ist geloescht
-    /// (`0xFF`), wie ein frischer Flash.
+    /// (`0xFF`), wie ein frischer Flash. Eine kuerzere Datei wird mit
+    /// Geloeschtem verlaengert, nicht geleert: Was in ihr steht, bleibt, und
+    /// das Journal entscheidet, was davon gilt (5.9).
     pub fn open(path: &Path, slot_size: u32) -> std::io::Result<FileNvm> {
         let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
         let want = u64::from(slot_size) * 2;
-        if file.metadata()?.len() < want {
-            file.set_len(0)?;
-            file.seek(SeekFrom::Start(0))?;
-            let blank = vec![0xFFu8; slot_size as usize];
-            file.write_all(&blank)?;
-            file.write_all(&blank)?;
+        let have = file.metadata()?.len();
+        if have < want {
+            file.seek(SeekFrom::Start(have))?;
+            file.write_all(&vec![0xFFu8; usize::try_from(want - have).unwrap_or(0)])?;
             file.sync_all()?;
         }
         let state = Arc::new(AtomicU8::new(IDLE));
@@ -56,8 +56,10 @@ impl FileNvm {
         Ok(FileNvm { file, slot_size, state, job })
     }
 
+    /// Nimmt einen Auftrag nur an, wenn der vorige abgefragt ist: Ein
+    /// ungelesenes `Failed` ginge sonst still verloren.
     fn submit(&mut self, job: Job) -> bool {
-        if self.state.load(Ordering::Acquire) == REQUESTED {
+        if self.state.load(Ordering::Acquire) != IDLE {
             return false;
         }
         if let Ok(mut slot) = self.job.lock() {

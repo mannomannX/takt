@@ -39,3 +39,23 @@ fn the_magnitude_is_not_what_is_checked() {
     let e = compile("param U : u8 = -1\n").expect_err("-1 passt nicht in u8");
     assert!(e.join("\n").contains("passt nicht"), "{e:?}");
 }
+
+/// Grenzwerte (3.1, 3.4): das kleinste Literal einer Breite passt, eins
+/// darunter nicht; dasselbe an der Untergrenze einer Range.
+#[test]
+fn negative_literals_hold_exactly_at_their_bounds() {
+    for ok in
+        ["param A : i16 = -32768\n", "param B : i8 = -128\n", "param C : u8 = 0\n", "param D : int in -100..0 = -100\n"]
+    {
+        compile(ok).unwrap_or_else(|e| panic!("{ok}{e:?}"));
+    }
+    for (bad, want) in [
+        ("param A : i16 = -32769\n", "passt nicht"),
+        ("param B : i8 = -129\n", "passt nicht"),
+        ("param C : u8 = -1\n", "passt nicht"),
+        ("param D : int in -100..0 = -101\n", "Range"),
+    ] {
+        let e = compile(bad).expect_err(bad);
+        assert!(e.len() == 1 && e[0].contains("SC-3") && e[0].contains(want), "{bad}{e:?}");
+    }
+}

@@ -1,0 +1,2 @@
+(native-fn fft256 (x:[256]float) -> [256]float cost={f64:20000 mem:4000} stack=5440)
+(native-fn hmac_sha256 (key:bytes<32> msg:bytes<256>) -> bytes<32> cost=60000 stack=992)

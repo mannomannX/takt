@@ -40,6 +40,11 @@ pub fn previous_run(watchdog_reset: bool, stored: u32) -> u32 {
 /// die kuerzeste schlafen.
 pub const MIN_DEEP_SLEEP_NS: i64 = 1_000_000;
 
+/// Ohne Zeitgeber verlangt mancher Chip trotzdem eine Weckquelle (der C6
+/// unter `esp-hal`); sie steht dann auf dreissig Jahren. Der Vergleicher
+/// des C6 fasst 48 Bit Takte des langsamen RTC-Takts, rund 65 Jahre.
+pub const NO_WAKE_TIMER_US: u64 = 30 * 365 * 86_400 * 1_000_000;
+
 /// Die Weckzeit in Mikrosekunden, aufgerundet: Ein Board weckt nicht vor
 /// der Frist, die das Programm genannt hat.
 pub fn deep_sleep_us(duration_ns: i64) -> u64 {

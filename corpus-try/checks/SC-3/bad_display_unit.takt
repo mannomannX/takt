@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 2.5: `display` nennt eine Einheit gleicher Dimension wie der Traeger;
+# ein Traeger ohne Einheit hat keine.
+
+input  p : float[V] in 0..100 V @ hw("daq/ai0") with max_age = 50 ms, display = bar  # ~ SC-3
+output v : bool                 @ hw("gpio/v")  with safe = false, display = V       # ~ SC-3
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = p > 50 V

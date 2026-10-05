@@ -60,3 +60,123 @@ fn a_tunable_is_no_compile_time_constant() {
     let e = compile(&format!("{HEAD}tunable param N : int in 1..64 = 8\noutput n : int in 0..64 @ hw(\"o/n\") with safe = 0\nmachine m:\n    var buf : bytes<N> = default\n    initial RUN\n    state RUN:\n        loop:\n            n = buf.len\n")).expect_err("Fehler erwartet");
     assert!(e.join("\n").contains("SC-35"), "{e:?}");
 }
+
+/// 12.5: Der Kopf einer Aufzeichnung nennt den Parametervektor zu Beginn
+/// (`start_params`), nicht den am Ende, und ein Replay aus Kopf und
+/// `tune`-Zeilen ergibt denselben Lauf. Der Startwert 3 kommt aus einer
+/// Ueberlagerung, damit der Kopf ihn wirklich tragen muss.
+#[test]
+fn the_header_carries_the_start_values_and_replays() {
+    let p = compile(PROGRAM).expect("uebersetzt");
+    let tunes = "t=3 tune GAIN 5\nt=8 tune GAIN 7\n";
+    let options = RunOptions { ticks: 9, overrides: vec![("GAIN".into(), "3".into())], ..Default::default() };
+    let r = run(&p, &Trace::parse(tunes).expect("Stimulus"), &options).expect("Lauf");
+    assert_eq!(r.start_params, vec![("GAIN".to_string(), "3".to_string())]);
+    assert_eq!(r.params, vec![("GAIN".to_string(), "7".to_string())]);
+
+    let header = takt_interp::record::Header::of(&p, None, &r.start_params, 9);
+    let text = takt_interp::record::Recording { header, inputs: Trace::parse(tunes).expect("Stimulus") }.render();
+    assert!(text.contains("#! param GAIN 3\n") && !text.contains("#! param GAIN 7"), "{text}");
+
+    let rec = takt_interp::record::Recording::parse(&text).expect("lesbar");
+    let again = run(
+        &p,
+        &rec.inputs,
+        &RunOptions {
+            ticks: rec.header.ticks,
+            profile: rec.header.profile.clone(),
+            overrides: rec.header.overrides(),
+            ..Default::default()
+        },
+    )
+    .expect("Replay");
+    let want = r.trace.render();
+    assert!(want.contains("t=0 out y 3"), "der Startwert wirkt:\n{want}");
+    assert_eq!(again.trace.render(), want);
+}
+
+/// Ein Programm mit drei Tunables: Einheit, Ganzzahl, Dauer in `after`.
+const THREE: &str = "\
+system:
+    language = 1
+    tick     = 10 ms
+
+tunable param KP    : float[pct/bar] in 0..10 pct/bar = 0.5 pct/bar
+tunable param LEVEL : int in 0..100 = 2
+tunable param HOLD  : Duration in 20 ms..1 s = 500 ms
+
+output y : float[pct/bar] @ hw(\"o/y\") with safe = 0 pct/bar
+output z : int in 0..100  @ hw(\"o/z\") with safe = 0
+output s : bool           @ hw(\"o/s\") with safe = false
+
+machine m:
+    initial WAIT
+    state WAIT:
+        loop:
+            y = KP
+            z = LEVEL
+        after HOLD: -> DONE
+    state DONE:
+        enter:
+            s = true
+        loop:
+            y = KP
+            z = LEVEL
+";
+
+/// 8.4: Die Grenzen der Range sind gueltig, knapp darueber wird verworfen,
+/// und ein Tunable in `after` wird jeden Tick neu gelesen: `HOLD = 50 ms`
+/// ab Tick 4 laesst den seit Tick 0 laufenden Zustand in Tick 5 enden.
+#[test]
+fn range_bounds_hold_and_after_rereads_its_tunable() {
+    let p = compile(THREE).expect("uebersetzt");
+    let t = trace(
+        &p,
+        "t=2 tune KP 10 pct/bar\nt=2 tune LEVEL 101\nt=3 tune LEVEL 100\nt=3 tune KP 0 pct/bar\nt=4 tune HOLD 50 ms\n",
+        8,
+    )
+    .trace
+    .render();
+    for line in [
+        "t=2 out y 10.0 pct/bar",
+        "t=2 tune LEVEL 101 rejected",
+        "t=3 out z 100",
+        "t=3 out y 0.0 pct/bar",
+        "t=4 tune HOLD 50 ms",
+        "t=5 state m DONE",
+    ] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+}
+
+/// 8.4: Ein `tune` wird gegen Range *und Einheit* validiert; `5 psi` an
+/// einem Tunable in `pct/bar` ist zu verwerfen, nicht als `5 pct/bar` zu
+/// uebernehmen.
+#[test]
+fn a_tune_value_in_a_foreign_unit_is_rejected() {
+    let p = compile(THREE).expect("uebersetzt");
+    let t = trace(&p, "t=1 tune KP 5 psi\n", 3).trace.render();
+    assert!(t.contains("t=1 tune KP") && t.contains("rejected"), "{t}");
+    assert!(!t.contains("out y 5.0"), "{t}");
+}
+
+/// 8.4: Ein Tunable ist keine Compile-Zeit-Konstante, auch nicht als
+/// Zahl der Durchlaeufe von `repeat` (Pruefung 35).
+#[test]
+fn a_tunable_cannot_count_a_repeat() {
+    let e = compile(&format!(
+        "{HEAD}tunable param N : int in 1..64 = 8
+output n : int in 0..64 @ hw(\"o/n\") with safe = 0
+machine m:
+    initial RUN
+    state RUN:
+        sequence:
+            repeat N:
+                n = 2
+                wait 10 ms
+            n = 1
+"
+    ))
+    .expect_err("Fehler erwartet");
+    assert!(e.join("\n").contains("SC-35"), "{e:?}");
+}

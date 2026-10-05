@@ -1,0 +1,7 @@
+(node io1 @hw("ethercat/1") tick=1ms)
+(machine current_ctrl node=io1 every=50us
+  (initial RUN)
+  (state RUN
+    (loop
+      (pass))))
+(input i_u :float[A] @hw("io1/ai0"))

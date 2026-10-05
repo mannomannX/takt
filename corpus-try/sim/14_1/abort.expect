@@ -1,0 +1,2 @@
+t=200 fault hotfire Abort "operator abort" -> SAFE
+t=200 fault pad_model Abort "abort" -> FAULTED

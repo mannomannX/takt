@@ -364,6 +364,18 @@ impl From<Fault> for Trap {
 /// Ergebnis der Auswertung.
 pub type EvalResult<T> = Result<T, Trap>;
 
+impl Value {
+    /// Der Wert, wenn er kein nicht endlicher Gleitkommawert ist (4.1);
+    /// sonst `err`.
+    pub fn finite_or<E>(self, err: E) -> Result<Value, E> {
+        match self {
+            Value::F32(x) if !x.is_finite() => Err(err),
+            Value::F64(x) if !x.is_finite() => Err(err),
+            v => Ok(v),
+        }
+    }
+}
+
 /// Interner Fehler.
 pub fn bug<T>(msg: impl Into<String>) -> EvalResult<T> {
     Err(Trap::Bug(msg.into()))

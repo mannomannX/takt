@@ -1,0 +1,166 @@
+(system
+  (language 1)
+  (tick 1ms))
+(stream words :line<32> capacity=4)
+(output hit :int in (- 1)..66 @sim("o/hit"))
+(output value :int in 0..999 @sim("o/value"))
+(output misses :int in 0..9 @sim("o/misses"))
+(machine feeder
+  (var k :int in 0..70 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (< k 64)
+        (send words "w{k}"))
+      (elif (== k 64)
+        (send words "w5x"))
+      (elif (== k 65)
+        (send words "n{k}"))
+      (elif (== k 66)
+        (send words "w99"))
+      (elif (== k 67)
+        (send words "zz"))
+      (= k (call min (+ k 1) 70)))))
+(machine consumer
+  (var seen_misses :int in 0..9 0)
+  (initial READ)
+  (state READ
+    (enter
+      (= hit (- 1)))
+    (on words matches "w0"
+      (= hit 0))
+    (on words matches "w1"
+      (= hit 1))
+    (on words matches "w2"
+      (= hit 2))
+    (on words matches "w3"
+      (= hit 3))
+    (on words matches "w4"
+      (= hit 4))
+    (on words matches "w5"
+      (= hit 5))
+    (on words matches "w6"
+      (= hit 6))
+    (on words matches "w7"
+      (= hit 7))
+    (on words matches "w8"
+      (= hit 8))
+    (on words matches "w9"
+      (= hit 9))
+    (on words matches "w10"
+      (= hit 10))
+    (on words matches "w11"
+      (= hit 11))
+    (on words matches "w12"
+      (= hit 12))
+    (on words matches "w13"
+      (= hit 13))
+    (on words matches "w14"
+      (= hit 14))
+    (on words matches "w15"
+      (= hit 15))
+    (on words matches "w16"
+      (= hit 16))
+    (on words matches "w17"
+      (= hit 17))
+    (on words matches "w18"
+      (= hit 18))
+    (on words matches "w19"
+      (= hit 19))
+    (on words matches "w20"
+      (= hit 20))
+    (on words matches "w21"
+      (= hit 21))
+    (on words matches "w22"
+      (= hit 22))
+    (on words matches "w23"
+      (= hit 23))
+    (on words matches "w24"
+      (= hit 24))
+    (on words matches "w25"
+      (= hit 25))
+    (on words matches "w26"
+      (= hit 26))
+    (on words matches "w27"
+      (= hit 27))
+    (on words matches "w28"
+      (= hit 28))
+    (on words matches "w29"
+      (= hit 29))
+    (on words matches "w30"
+      (= hit 30))
+    (on words matches "w31"
+      (= hit 31))
+    (on words matches "w32"
+      (= hit 32))
+    (on words matches "w33"
+      (= hit 33))
+    (on words matches "w34"
+      (= hit 34))
+    (on words matches "w35"
+      (= hit 35))
+    (on words matches "w36"
+      (= hit 36))
+    (on words matches "w37"
+      (= hit 37))
+    (on words matches "w38"
+      (= hit 38))
+    (on words matches "w39"
+      (= hit 39))
+    (on words matches "w40"
+      (= hit 40))
+    (on words matches "w41"
+      (= hit 41))
+    (on words matches "w42"
+      (= hit 42))
+    (on words matches "w43"
+      (= hit 43))
+    (on words matches "w44"
+      (= hit 44))
+    (on words matches "w45"
+      (= hit 45))
+    (on words matches "w46"
+      (= hit 46))
+    (on words matches "w47"
+      (= hit 47))
+    (on words matches "w48"
+      (= hit 48))
+    (on words matches "w49"
+      (= hit 49))
+    (on words matches "w50"
+      (= hit 50))
+    (on words matches "w51"
+      (= hit 51))
+    (on words matches "w52"
+      (= hit 52))
+    (on words matches "w53"
+      (= hit 53))
+    (on words matches "w54"
+      (= hit 54))
+    (on words matches "w55"
+      (= hit 55))
+    (on words matches "w56"
+      (= hit 56))
+    (on words matches "w57"
+      (= hit 57))
+    (on words matches "w58"
+      (= hit 58))
+    (on words matches "w59"
+      (= hit 59))
+    (on words matches "w60"
+      (= hit 60))
+    (on words matches "w61"
+      (= hit 61))
+    (on words matches "w62"
+      (= hit 62))
+    (on words matches "w63"
+      (= hit 63))
+    (on words matches "n{v:int}" as e
+      (= hit 64)
+      (= value (% (.v e) 1000)))
+    (on words matches "w{_}"
+      (= hit 65))
+    (on words as e
+      (= hit 66)
+      (= seen_misses (call min (+ seen_misses 1) 9))
+      (= misses seen_misses))))

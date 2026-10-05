@@ -1,0 +1,4 @@
+t=1 cmd pause
+t=3 cmd work
+t=6 cmd pause
+t=8 cmd work

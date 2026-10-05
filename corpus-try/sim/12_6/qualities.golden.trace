@@ -1,0 +1,10 @@
+t=0 state edge_watch WATCH
+t=0 out p_quality 0
+t=0 out raw_valid true
+t=300 alert edge_watch on "raw_p ungueltig: STALE"
+t=300 out raw_valid false
+t=400 alert edge_watch off "raw_p ungueltig: none"
+t=400 out raw_valid true
+t=500 alert edge_watch on "raw_p ungueltig: IMPLAUSIBLE"
+t=500 out raw_valid false
+t=600 verdict-final INCONCLUSIVE

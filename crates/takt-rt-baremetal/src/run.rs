@@ -44,7 +44,8 @@ impl Cadence {
 pub struct Stats {
     /// Geschlafene Ticks (9.9).
     pub slept: u64,
-    /// Ticks ueber der Periode (7.3).
+    /// Ueberlaeufe (7.3): Ticks ueber der Periode und Journal-Vorgaenge ueber
+    /// die Frist.
     pub overruns: u64,
     /// Das Journal hat am Ende geschrieben (5.9).
     pub flushed: bool,
@@ -81,8 +82,6 @@ pub struct Trace<F, L> {
     telemetry: F,
     /// Geschlafene Ticks (9.9).
     slept: u64,
-    /// Ticks ueber der Periode (7.3).
-    overruns: u64,
     line: PhantomData<L>,
 }
 
@@ -96,7 +95,7 @@ where
         // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
         // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
         let time_every = (1_000_000 / tick_ns.max(1)).max(1) as u64;
-        Trace { cadence, next: cadence.every.max(1), time_every, telemetry, slept: 0, overruns: 0, line: PhantomData }
+        Trace { cadence, next: cadence.every.max(1), time_every, telemetry, slept: 0, line: PhantomData }
     }
 
     /// Nach so vielen Ticks endet der Lauf; `0` heisst nie.
@@ -114,7 +113,6 @@ where
         let conformance = self.cadence.conformance();
         let Some(tick) = tick else { return if conformance { Outputs::All } else { Outputs::None } };
         self.slept += tick.slept;
-        self.overruns += u64::from(tick.overrun);
         if conformance
             && tick.k % self.time_every == 0
             && let Some(t) = (self.telemetry)()
@@ -177,7 +175,9 @@ where
     P: Port + 'static,
 {
     let flushed = rt.finish(persist);
-    Stats { slept: rt.sink.slept, overruns: rt.sink.overruns, flushed, next_run: rt.ended() }
+    // Der Kern zaehlt jeden Ueberlauf, auch den eines Journal-Vorgangs, der
+    // in keiner Zeitzeile steht (7.3).
+    Stats { slept: rt.sink.slept, overruns: rt.overrun().count, flushed, next_run: rt.ended() }
 }
 
 /// Die Bilanz als letzte Zeile, dann `takt end`; leert den Ring.
@@ -342,5 +342,125 @@ mod tests {
         let (stats, program) = run_with(u64::MAX, Cadence::of(60, 1));
         assert_eq!((stats.next_run, program.ticks), (None, 60));
         assert!(!program.ended.get());
+    }
+
+    /// Eine Uhr, die das Geraet vorstellt.
+    struct Shared<'a>(&'a Cell<i64>);
+
+    impl Clock for Shared<'_> {
+        fn now(&self) -> i64 {
+            self.0.get()
+        }
+
+        fn wait_until(&mut self, deadline: i64) {
+            self.0.set(self.0.get().max(deadline));
+        }
+    }
+
+    /// Ein Geraet, das den Kern je Vorgang fuenf Perioden anhaelt (12.3).
+    struct Stalling<'a> {
+        nvm: FakeNvm<256>,
+        clock: &'a Cell<i64>,
+    }
+
+    impl Nvm for Stalling<'_> {
+        fn slot_size(&self) -> u32 {
+            self.nvm.slot_size()
+        }
+
+        fn begin_erase(&mut self, slot: u8) -> bool {
+            self.clock.set(self.clock.get() + 5_000_000);
+            self.nvm.begin_erase(slot)
+        }
+
+        fn begin_write(&mut self, slot: u8, offset: u32, bytes: &[u8]) -> bool {
+            self.clock.set(self.clock.get() + 5_000_000);
+            self.nvm.begin_write(slot, offset, bytes)
+        }
+
+        fn poll(&mut self) -> takt_rt_core::NvmState {
+            self.nvm.poll()
+        }
+
+        fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool {
+            self.nvm.read(slot, offset, into)
+        }
+
+        fn blocking_ns(&self) -> Option<i64> {
+            Some(5_000_000)
+        }
+    }
+
+    /// Persistiert seine Tickzahl.
+    struct Counting(u32);
+
+    impl Program for Counting {
+        fn tick(&mut self, _k: u64, _now: i64) {
+            self.0 += 1;
+        }
+
+        fn persist_snapshot(&mut self, out: &mut [u8]) -> usize {
+            out[..4].copy_from_slice(&self.0.to_le_bytes());
+            4
+        }
+    }
+
+    /// **Die Bilanz zaehlt Journal-Vorgaenge ueber die Frist mit** (7.3
+    /// letzter Satz): Unter `alert` ueberzieht kein Schritt, aber jeder
+    /// Vorgang des blockierenden Geraets; `ueberlaeufe` nennt sie.
+    #[test]
+    fn the_balance_counts_journal_overruns() {
+        let now = Cell::new(0);
+        let (mut current, mut stored) = ([0u8; 256], [0u8; 256]);
+        let device = Stalling { nvm: FakeNvm::new(), clock: &now };
+        let mut persist = Persist::new(takt_rt_core::Journal::new(device, 7, 0), &mut current, &mut stored);
+        let trace = Trace::new(Cadence::of(20, 1), 1_000_000, || None::<&'static mut Telemetry<NoLine, 8>>);
+        let mut rt =
+            Runtime::new(Counting(0), Shared(&now), NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Alert);
+        persist.load(&mut rt.program);
+        let stats = run(&mut rt, Some(&mut persist));
+        assert!(persist.journal().writes() > 0);
+        assert!(rt.overrun().count > 0);
+        assert_eq!(stats.overruns, rt.overrun().count, "jeder Ueberlauf steht in der Bilanz");
+    }
+
+    /// Eine Leitung, die alles annimmt und dem Test zeigt.
+    struct Memory<'a>(&'a core::cell::RefCell<([u8; 512], usize)>);
+
+    impl Port for Memory<'_> {
+        fn try_write(&mut self, b: u8) -> bool {
+            let (sent, len) = &mut *self.0.borrow_mut();
+            sent[*len] = b;
+            *len += 1;
+            true
+        }
+    }
+
+    /// **Die Bilanzzeile in ihrer Form** (12.5, 13.8): je Kennzahl ihr Wort
+    /// und ihre Zahl, in dieser Reihenfolge; `gesendet` zaehlt ab `takt
+    /// trace`. Der Wirt liest die Woerter (`board::complete`, die Zaehler
+    /// der Board-Tests); eine Umbenennung faellt hier auf, nicht erst am Board.
+    #[test]
+    fn the_balance_line_names_every_counter() {
+        let line = core::cell::RefCell::new(([0u8; 512], 0));
+        let mut t = Telemetry::<_, 512>::new(Memory(&line));
+        t.write("boot\n");
+        t.mark();
+        t.write("t=0 out x 1\n");
+        let mut overrun = Overrun::new(Policy::Fault);
+        overrun.observe_drift(2_500_000, 1_000_000);
+        overrun.observe(1_500_000, 1_000_000);
+        let stats = Stats { slept: 9, overruns: 3, flushed: true, next_run: None };
+        let journal = JournalStats { writes: 4, failures: 1, erase_ns: 12, program_ns: 5 };
+        report(&mut t, &overrun, &stats, &journal, Some(2048));
+        let (sent, len) = *line.borrow();
+        let text = core::str::from_utf8(&sent[..len]).expect("ASCII");
+        assert_eq!(
+            text,
+            "boot\ntakt trace\r\nt=0 out x 1\n\
+             takt schlief 9 ueberlaeufe 3 verspaetet 1 verloren 2 rueckstand 2500000 ns verworfen 0 gesendet 12 \
+             journal geschrieben 4 fehlgeschlagen 1 flush 1 nvm loeschen 12 ns programmieren 5 ns stack 2048\r\n\
+             takt end\r\n"
+        );
     }
 }

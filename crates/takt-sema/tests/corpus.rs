@@ -1,6 +1,7 @@
-//! Lowering des Korpus: die Beispiele 14.1 bis 14.5 (Abnahme M1, plan.md)
-//! uebersetzen ohne Fehler; alles andere meldet nur Konstrukte spaeterer
-//! Stufen, nie einen Absturz.
+//! Lowering des Korpus: die Beispiele 14.1 bis 14.8 uebersetzen ohne Fehler
+//! (14.1 bis 14.5 waren die Abnahme M1, plan.md), ihre Simulationsprogramme
+//! enthalten sie, das Manifest nennt jede Datei; alles andere meldet nur
+//! Konstrukte spaeterer Stufen, nie einen Absturz.
 
 use std::path::{Path, PathBuf};
 
@@ -37,23 +38,70 @@ fn errors_of(path: &Path) -> Vec<String> {
     out.diagnostics.iter().filter(|d| d.is_error()).map(|d| map.render_line(d)).collect()
 }
 
-/// Die Beispiele der Kernsemantik uebersetzen vollstaendig (Exit M1).
+/// Die Beispiele aus 14 uebersetzen vollstaendig (Exit M1 fuer 14.1 bis
+/// 14.5, seit FB-401 auch 14.6 bis 14.8).
 #[test]
-fn examples_14_1_to_14_5_lower_without_errors() {
-    for name in ["14_1_01", "14_2_01", "14_3_01", "14_4_01", "14_5_01"] {
+fn examples_14_1_to_14_8_lower_without_errors() {
+    for name in ["14_1_01", "14_2_01", "14_3_01", "14_4_01", "14_5_01", "14_6_01", "14_7_01", "14_8_01"] {
         let path = root().join("ref").join(format!("{name}.takt"));
         let errors = errors_of(&path);
         assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));
     }
 }
 
+/// Zeilen der Referenz, die das Simulationsprogramm mit Grund anders
+/// fuehrt: (Beispiel, Zeile, Grund).
+const SIMULATION_DEVIATES: &[(&str, &str, &str)] = &[
+    (
+        "14_2",
+        "machine chamber_model every 100 ms:",
+        "die Strecke rechnet in 1-s-Schritten, sonst endeten die zwei Zyklen nicht in 4400 Ticks",
+    ),
+    (
+        "14_2",
+        "var drive : float[K/s] = (0.05 K/s if heater else 0 K/s) - (0.04 K/s if cooler else 0 K/s)",
+        "dto., 1 K/s",
+    ),
+    ("14_2", "t = t + (drive - leak) * (100 ms).as(s)", "dto."),
+    (
+        "14_6",
+        "input i_dut : samples<float[A], 100> @ hw(\"daq1/ai2\") with rate = 100 kHz",
+        "das Modell liefert 4er-Fenster aus Konstanten",
+    ),
+    ("14_6", "campaign brownout_scan:", "die Kampagne nennt eine Programmdatei; der Golden-Lauf ist ein Lauf"),
+    ("14_6", "program \"supply_interruption.takt\"", "dto."),
+    ("14_6", "sweep BROWNOUT_DELAY = 2 ms..400 ms step 250 us", "dto."),
+    ("14_6", "repeat 2", "dto."),
+    ("14_6", "stop_on fail", "dto."),
+];
+
+/// Jede Zeile eines Beispiels steht in seinem Simulationsprogramm
+/// (`corpus-try/sim/14_x/program.takt`), bis auf Leerraum und Kommentare —
+/// sonst laege der Golden-Trace neben der Referenz statt auf ihr.
+#[test]
+fn the_simulated_examples_contain_their_reference() {
+    let norm = |l: &str| l.split('#').next().unwrap_or_default().split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut failures = Vec::new();
+    for example in ["14_1", "14_2", "14_3", "14_4", "14_5", "14_6", "14_7", "14_8"] {
+        let reference = std::fs::read_to_string(root().join("ref").join(format!("{example}_01.takt"))).expect("ref");
+        let sim = std::fs::read_to_string(root().join("sim").join(example).join("program.takt")).expect("sim");
+        let lines: std::collections::BTreeSet<String> = sim.lines().map(norm).collect();
+        for line in reference.lines().map(norm).filter(|l| !l.is_empty()) {
+            let excused = SIMULATION_DEVIATES.iter().any(|(e, l, _)| *e == example && *l == line);
+            if !lines.contains(&line) && !excused {
+                failures.push(format!("{example}: `{line}` fehlt in sim/{example}/program.takt"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Der Korpus der Kernkonstrukte uebersetzt ebenfalls vollstaendig.
 #[test]
 fn core_corpus_lowers_without_errors() {
-    // `05_streams_and_protocol` fehlt hier: `follows` senkt seit M6, aber
-    // die Datei hat zwei eigene Fehler (`capacity_bytes` unter der
-    // Aktivierungsrate, zwei Schreiber auf `tx_uart`) — ein Feature-Mix,
-    // kein Referenzbeispiel.
+    // Dass jede Korpusdatei genau ihre angemerkten Fehler meldet — auch die
+    // Stroeme und Protokolle aus 05 (FB-378) —, prueft `diagnostics.rs`;
+    // hier stehen nur die Kernkonstrukte.
     for name in ["01_minimal", "03_sequences_and_faults"] {
         let path = root().join(format!("{name}.takt"));
         let errors = errors_of(&path);
@@ -127,4 +175,54 @@ fn no_m2_construct_is_reported_as_a_later_stage() {
         }
     }
     assert!(found.is_empty(), "M2-Konstrukte mit Stufenmeldung:\n{}", found.join("\n"));
+}
+
+/// Nummern, die zwei Korpusdateien tragen, mit Grund. Die Liste schrumpft
+/// nur.
+const SHARED_NUMBERS: &[(&str, &str)] = &[(
+    "13",
+    "13_framing und 13_protocol_analysis stehen unter diesen Namen in Tests von takt-conformance, takt-llvm und takt-cli",
+)];
+
+/// **Jede Korpusdatei hat genau eine Zeile in `manifest.csv`** (KOR-001),
+/// jede Zeile nennt eine vorhandene Datei, und jede Nummer gehoert einer
+/// Datei — ausser den begruendeten in `SHARED_NUMBERS`.
+#[test]
+fn the_manifest_lists_every_corpus_file_once() {
+    let text = std::fs::read_to_string(root().join("manifest.csv")).expect("Manifest");
+    let mut lines = text.lines();
+    let header = lines.next().expect("Kopf");
+    assert!(header.starts_with("Datei,") && header.ends_with(",Suiten"), "{header}");
+    let named: Vec<&str> = lines.map(|l| l.split(',').next().unwrap_or_default()).collect();
+    let mut files: Vec<String> = std::fs::read_dir(root())
+        .expect("Korpus lesbar")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".takt"))
+        .collect();
+    files.sort();
+    let mut failures = Vec::new();
+    for f in &files {
+        match named.iter().filter(|n| **n == f.as_str()).count() {
+            1 => {}
+            0 => failures.push(format!("{f}: keine Zeile")),
+            k => failures.push(format!("{f}: {k} Zeilen")),
+        }
+    }
+    for n in &named {
+        if !files.iter().any(|f| f == n) {
+            failures.push(format!("{n}: Zeile ohne Datei"));
+        }
+    }
+    let mut by_number: std::collections::BTreeMap<&str, Vec<&str>> = Default::default();
+    for f in &files {
+        by_number.entry(f.split('_').next().unwrap_or_default()).or_default().push(f);
+    }
+    for (number, holders) in &by_number {
+        let shared = SHARED_NUMBERS.iter().any(|(n, _)| n == number);
+        if (holders.len() > 1) != shared {
+            failures.push(format!("Nummer {number}: {holders:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

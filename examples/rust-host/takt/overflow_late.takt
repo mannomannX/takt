@@ -1,0 +1,28 @@
+# Ein Ueberlauf in einem inaktiven Tick (8.6, 9.4, KON1-016): `slow`
+# schreitet alle 4 ms und liest `rx` in WAIT nicht. Ab Tick 1 kommen je
+# Tick drei Elemente; das dreizehnte laeuft in Tick 5 ueber, in dem `slow`
+# nicht schreitet. `StreamOverflow` wirkt erst bei der naechsten
+# Aktivierung, nicht in der Abort-Phase dieses Ticks.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+input  rx  : stream<u8>    @ hw("u/rx") with max_rate = 3000 Hz, capacity = 12, overflow = fault
+output got : int in 0..999 @ sim("o/got")
+
+machine slow every 4 ms:
+    var k : int in 0..999 = 0
+
+    initial WAIT
+
+    state WAIT:
+        loop:
+            k = (k + 1) % 1000
+            got = k
+
+        after 40 ms: -> READ
+
+    state READ:
+        on rx as e:
+            got = e.data as int

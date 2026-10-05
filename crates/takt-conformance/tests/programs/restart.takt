@@ -11,9 +11,9 @@ system:
     tick     = 10 ms
 
 input  previous_run : PreviousRun @ hw("sys/previous_run")
-output next_run     : NextRun     @ hw("sys/next_run")    with safe = NONE
-output again        : bool        @ hw("ui/led")          with safe = false
-output previous     : PreviousRun @ hw("test/previous")   with safe = WATCHDOG
+output next_run     : NextRun     @ hw("sys/next_run")  with safe = NONE
+output again        : bool        @ hw("ui/led")        with safe = false
+output previous     : PreviousRun @ hw("test/previous") with safe = WATCHDOG
 
 machine m:
     initial START

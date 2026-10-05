@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 21 (5.5, 7.5): Geplant werden nur skalare Outputs — Bool, Zahl,
+# Enum. Ein Array-Output ist keiner, weder in `at` noch in `pulse`.
+
+output cells : [2] bool @ hw("o/cells[0:2]") with safe = [false, false]
+output flag  : bool     @ hw("o/flag")       with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        enter:
+            at now + 10 ms:
+                cells = [true, true]  # ~ SC-21
+            pulse cells = [true, false] for 20 ms  # ~ SC-21
+            flag = true

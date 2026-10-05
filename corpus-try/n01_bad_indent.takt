@@ -12,4 +12,4 @@ machine bad_indent:
 
     state RUN:
       loop:  # ~ E_INDENT
-	led = true  # ~ E_TAB, P
+	led = true  # ~ E_TAB, P, P

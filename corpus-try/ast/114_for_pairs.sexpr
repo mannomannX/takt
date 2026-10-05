@@ -1,0 +1,26 @@
+(system
+  (language 1)
+  (tick 1ms))
+(output keys :int in 0..100 @hw("o/keys") safe=0)
+(output values :int in 0..100 @hw("o/values") safe=0)
+(machine m
+  (var table :map<int, int, 8> default)
+  (var ok :bool false)
+  (var ks :int in 0..100 0)
+  (var vs :int in 0..100 0)
+  (initial FILL)
+  (state FILL
+    (enter
+      (= ok (.insert table 3 30))
+      (= ok (.insert table 1 10))
+      (= ok (.insert table 2 20)))
+    (when true -> SUM))
+  (state SUM
+    (enter
+      (= ks 0)
+      (= vs 0)
+      (for (k v) in table
+        (= ks (+ ks k))
+        (= vs (+ vs v)))
+      (= keys ks)
+      (= values vs))))

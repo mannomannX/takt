@@ -340,3 +340,179 @@ machine m:
     assert!(awake.contains("t=40 state m SAFE"), "{awake}");
     assert_eq!(slept, 38, "geschlafen wird von Tick 1 bis vor den Abort:\n{asleep}");
 }
+
+/// Neben der schlafenden Maschine liest eine wache denselben Strom: Ihr
+/// `dropped` bleibt 0, denn `dropped[s, m]` zaehlt je Maschine (9.6), und
+/// was die schlafende verwirft, verliert nur sie.
+#[test]
+fn an_awake_reader_of_the_same_stream_drops_nothing() {
+    let p = compile(
+        "\
+input  noise     : stream<u8> @ hw(\"bus/noise\") with capacity = 4, max_rate = 2000 Hz
+output noise_sim : stream<u8> @ sim(\"bus/noise\")
+output lost      : int in 0..999 @ hw(\"o/lost\") with safe = 0
+output kept      : int in 0..999 @ hw(\"o/kept\") with safe = 0
+output count     : int in 0..999 @ hw(\"o/count\") with safe = 0
+
+machine feeder:
+    initial GO
+    state GO:
+        loop:
+            send noise_sim, 1
+
+machine m:
+    initial LISTEN
+
+    state LISTEN:
+        on noise as e:
+            pass
+        after 5 ms: -> SLEEP
+
+    state SLEEP idle:
+        after 10 ms: -> BACK
+
+    state BACK:
+        loop:
+            lost = min(noise.dropped, 999)
+        on noise as e:
+            pass
+
+machine reader:
+    var seen : int in 0..999 = 0
+
+    initial READ
+
+    state READ:
+        loop:
+            kept = min(noise.dropped, 999)
+            count = seen
+        on noise as e:
+            seen = min(seen + 1, 999)
+",
+    );
+    let out = takt_interp::run(&p, &Trace::default(), &RunOptions { ticks: 20, ..Default::default() }).expect("Lauf");
+    let text = out.trace.render();
+    assert!(text.contains("t=15 out lost 9"), "{text}");
+    let kept: Vec<&str> = text.lines().filter(|l| l.contains(" out kept ")).collect();
+    assert_eq!(kept, ["t=0 out kept 0"], "{text}");
+    // Der wache Leser sieht jedes Element: das in Tick k gesendete im
+    // Handler von Tick k + 1, nach dem `loop:`, der `count` schreibt.
+    assert!(text.contains("t=20 out count 19"), "{text}");
+    // Die Zaehler am Puffer selbst (9.6) bleiben stehen.
+    assert!(!text.contains("stream noise"), "{text}");
+}
+
+/// Ein Programm, das im `idle` auf einen Taster oder seine Frist wartet.
+const NAP: &str = "\
+input  wake     : bool @ hw(\"gpio/btn\") with wake = true
+output wake_sim : bool @ sim(\"gpio/btn\") with safe = false
+output led      : bool @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial SLEEP
+    state SLEEP idle:
+        enter:
+            led = false
+        when wake: -> RUN
+        after 50 ms: -> RUN
+    state RUN:
+        enter:
+            led = true
+        after 20 ms: -> SLEEP
+";
+
+/// **Satz 9.9.1 je Weckgrund**: Die Frist von `after`, ein Wake-Input und
+/// das Veralten einer Wake-Quelle (der Guard, der sie liest, faultet) wecken
+/// das schlafende System genau dort, wo der Lauf ohne Schlaf weitergeht —
+/// der Trace ist derselbe. Geschlafen wird in Stuecken bis zum moeglichen
+/// Veralten der Quelle (`max_age` 2 ms, 3.5), also nie ueber einen Wecker.
+#[test]
+fn theorem_9_9_1_holds_for_each_wake_reason() {
+    let p = compile(NAP);
+    for (stimulus, woken) in [
+        ("", "t=50 state m RUN"),
+        ("t=10 in wake true\nt=11 in wake false\n", "t=10 state m RUN"),
+        ("t=30 in wake stale age=100 ms\n", "t=30 fault m SensorFault \"`wake` ungueltig\" -> FAULTED"),
+    ] {
+        let (awake, none) = looped(&p, stimulus, false, 200);
+        let (asleep, slept) = looped(&p, stimulus, true, 200);
+        assert_eq!(none, 0, "{stimulus}");
+        assert_eq!(awake, asleep, "Satz 9.9.1, `{stimulus}`");
+        assert!(awake.contains(woken), "`{woken}`:\n{awake}");
+        assert!(slept > 0, "`{stimulus}`: geschlafen wird");
+    }
+}
+
+/// Konjunkt 1: Solange eine Maschine wach ist, schlaeft das System nicht,
+/// auch wenn die andere im `idle` steht.
+#[test]
+fn one_awake_machine_keeps_the_system_awake() {
+    let p = compile(&format!(
+        "{NAP}
+output n : int in 0..999 @ hw(\"o/n\") with safe = 0
+
+machine busy:
+    var k : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        loop:
+            k = min(k + 1, 999)
+            n = k
+"
+    ));
+    let (awake, _) = looped(&p, "", false, 120);
+    let (asleep, slept) = looped(&p, "", true, 120);
+    assert_eq!(awake, asleep);
+    assert_eq!(slept, 0, "{asleep}");
+}
+
+/// Ein `abort` merkt den Fault fuer die anderen Maschinen vor (`raised`,
+/// 5.4); die Abort-Phase stellt ihn im selben Tick zu, auch einer
+/// schlafenden Maschine, und danach schlaeft das System wie ohne Schlaf.
+#[test]
+fn a_raised_abort_reaches_the_sleeping_machine_in_its_tick() {
+    let p = compile(
+        "\
+output led  : bool @ hw(\"ui/led\")  with safe = false
+output lamp : bool @ hw(\"ui/lamp\") with safe = true
+
+machine boss:
+    fault -> DOWN
+    initial RUN
+
+    state RUN:
+        loop:
+            if time_in_state >= 2 ms:
+                abort \"Halt\"
+
+    state DOWN idle:
+        enter:
+            lamp = false
+        after 30 ms: -> RUN
+
+machine m:
+    fault -> OFF
+    initial WAIT
+
+    state WAIT idle:
+        enter:
+            led = true
+        after 500 ms: -> WAIT
+
+    state OFF idle:
+        enter:
+            led = false
+        after 10 ms: -> WAIT
+",
+    );
+    let (awake, _) = looped(&p, "", false, 60);
+    let (asleep, slept) = looped(&p, "", true, 60);
+    assert_eq!(awake, asleep, "Satz 9.9.1");
+    for line in ["t=2 state boss DOWN", "t=2 state m OFF", "t=12 state m WAIT", "t=32 state boss RUN"] {
+        assert!(awake.contains(line), "`{line}` fehlt:\n{awake}");
+    }
+    // Geschlafen wird nur, wenn beide im `idle` stehen, bis zur naechsten
+    // Frist: 3..11 (OFF -> WAIT in 12), 13..31 (DOWN -> RUN in 32), nach
+    // dem zweiten Abort in 34 dann 35..43 und 45..59 bis zum Ende.
+    assert_eq!(slept, 9 + 19 + 9 + 15, "{asleep}");
+}

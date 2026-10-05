@@ -1,0 +1,29 @@
+# Das vertragstreue Pruefgeraet (12.6, 13.8; GEN-046): Jeder Kanal haelt
+# den Treibervertrag, `takt driver-test --crate crates/takt-driver-probe`
+# besteht. `spike` verlaesst in Tick 3 die Range und springt in Tick 6
+# weiter als `max_slew`; beides zeigt sich nur in der Qualitaet, die das
+# Programm liest (`spike_ok`), nicht als Verstoss des Treibers.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  level    : int in 0..100    @ hw("fair_a/level") with max_slew = 500
+input  spike    : int in 0..100    @ hw("fair_a/spike") with max_slew = 500
+input  rx       : stream<line<16>> @ hw("fair_u/rx")    with max_rate = 100 Hz, capacity = 4
+output o        : bool             @ hw("fair_o/o")     with safe = false
+output level_ok : bool             @ sim("o/level_ok")
+output spike_ok : bool             @ sim("o/spike_ok")
+output lines    : int in 0..100    @ sim("o/lines")
+
+machine watch:
+    initial RUN
+
+    state RUN:
+        loop:
+            level_ok = level.valid
+            spike_ok = spike.valid
+            o = level.or(0) > 41
+
+        on rx as e:
+            lines = min(lines + 1, 100)

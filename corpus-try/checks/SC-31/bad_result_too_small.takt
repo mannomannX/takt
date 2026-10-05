@@ -1,0 +1,7 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-31 (4.5): Der Klartext von `aes_gcm_decrypt` ist so lang wie das
+# Chiffrat; ein Ergebnis von 32 Byte fasst `data` mit 64 Byte nicht.
+native job aes_gcm_decrypt(key: bytes<32>, nonce: bytes<12>, aad: bytes<16>, data: bytes<64>, tag: bytes<16>) -> bytes<32> with cost = 300, stack = 2752, duration = 20 ms, total  # ~ SC-31

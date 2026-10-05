@@ -150,7 +150,7 @@ port uart_ir : UartIntRaw @ mmio(0x60000004)
 port uart_ic : UartIntClr @ mmio(0x60000010)
 
 stream<RxByte> rx_raw with capacity = 64, overflow = fault
-stream<u8> tx_raw with capacity = 256, overflow = fault
+stream<u8> tx_raw with capacity = 1030, overflow = fault  # MAX_ENCODED: ein ganzer COBS-Rahmen je Aktivierung (Pruefung 17)
 
 output rs485_de : bool @ hw("gpio/rs485_de") with safe = false
 
@@ -278,7 +278,7 @@ const MAX_ENCODED : int = 1024 + 5 + 1  # n + ceil(n/254) + Trenner
 # Der Byte-Ring muss die Hoechstlast je Aktivierung fassen (Lemma 9.6.1):
 # `expect_len` sagt, was ueblich ist, `capacity_bytes`, was nie ueberlaeuft.
 stream<bytes<1024>> rx_frames with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
-stream<bytes<1024>> tx_frames with capacity = 8, expect_len = 96, capacity_bytes = 3072, overflow = fault
+stream<bytes<1024>> tx_frames with capacity = 8, expect_len = 96, capacity_bytes = 6144, overflow = fault
 
 # --- reine Funktionen: COBS ---------------------------------------------------
 # `inout` (3.9) macht das In-Place-Schreiben lesbar, ohne die Reinheit
@@ -431,7 +431,7 @@ machine uart_framer follows uart_port:
 
 const HDR_LEN : int = 5  # magic + kind + seq + len(2)
 
-stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, capacity_bytes = 1024, overflow = fault
+stream<bytes<1024>> app_rx with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
 stream<bytes<1024>> app_tx with capacity = 8, expect_len = 96, capacity_bytes = 5120, overflow = fault
 
 param RETRIES     : int in 0..8 = 3
@@ -641,14 +641,14 @@ output link_up    : bool          @ hw("o/link_up") with safe = false
 # ein Frame verlorengeht.
 output d_rx   : int in 0..1_000_000_000 @ hw("o/d_rx")   with safe = 0
 output d_tx   : int in 0..1_000_000_000 @ hw("o/d_tx")   with safe = 0
-output d_ovf  : int in 0..1_000_000 @ hw("o/d_ovf")  with safe = 0
-output d_ferr : int in 0..1_000_000 @ hw("o/d_ferr") with safe = 0
-output d_fin  : int in 0..1_000_000 @ hw("o/d_fin")  with safe = 0
-output d_fout : int in 0..1_000_000 @ hw("o/d_fout") with safe = 0
-output d_dec  : int in 0..1_000_000 @ hw("o/d_dec")  with safe = 0
-output d_long : int in 0..1_000_000 @ hw("o/d_long") with safe = 0
-output d_crc  : int in 0..1_000_000 @ hw("o/d_crc")  with safe = 0
-output d_retx : int in 0..1_000_000 @ hw("o/d_retx") with safe = 0
+output d_ovf  : int in 0..1_000_000     @ hw("o/d_ovf")  with safe = 0
+output d_ferr : int in 0..1_000_000     @ hw("o/d_ferr") with safe = 0
+output d_fin  : int in 0..1_000_000     @ hw("o/d_fin")  with safe = 0
+output d_fout : int in 0..1_000_000     @ hw("o/d_fout") with safe = 0
+output d_dec  : int in 0..1_000_000     @ hw("o/d_dec")  with safe = 0
+output d_long : int in 0..1_000_000     @ hw("o/d_long") with safe = 0
+output d_crc  : int in 0..1_000_000     @ hw("o/d_crc")  with safe = 0
+output d_retx : int in 0..1_000_000     @ hw("o/d_retx") with safe = 0
 
 machine source every 1 s:
     var n : int in 0..999 = 0

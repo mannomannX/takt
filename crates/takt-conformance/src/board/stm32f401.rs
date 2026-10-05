@@ -175,10 +175,10 @@ impl Board for Stm32f401 {
         BRINGUP.build(program, options)
     }
 
-    fn run(&mut self, elf: &Path, _options: &Options) -> Result<String, String> {
+    fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
         let text = self.run_for(elf, TRACE)?;
         if text.contains(super::END) {
-            super::complete(text)
+            super::complete(text, options)
         } else {
             Err(format!("kein `takt end` binnen {} s; gelesen:\n{text}", TRACE.as_secs()))
         }

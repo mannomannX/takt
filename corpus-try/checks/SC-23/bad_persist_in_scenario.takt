@@ -1,0 +1,25 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 23 (5.9): `persist` steht nicht in Szenarien; ein Szenario
+# beschreibt einen Lauf, nicht das Geraet.
+
+input  p     : float[bar] in 0..100 bar @ hw("daq/p")   with max_age = 10 ms
+output valve : bool                     @ hw("o/valve") with safe = false
+output p_sim : float[bar]               @ sim("daq/p")  with safe = 1 bar
+
+machine dut:
+    initial RUN
+    state RUN:
+        loop:
+            valve = p > 5 bar
+
+scenario "counts its runs" every 1 ms:
+    persist var runs : int in 0..99 = 0  # ~ SC-23
+    initial RUN
+    state RUN:
+        sequence:
+            p_sim = 10 bar
+            wait 2 ms
+            verdict pass "done"

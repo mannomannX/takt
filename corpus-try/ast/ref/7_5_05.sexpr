@@ -1,0 +1,9 @@
+(trigger cut_on_erase node=io1 bound=20us
+  (when (matches dut_log "Erasing sector {n:int}"))
+  (then
+    (at (+ (.t event) 250us)
+      (= vbus_en false))))
+(arm cut_on_erase)
+(disarm cut_on_erase)
+(until (as (.fired cut_on_erase) f) timeout=2s)
+(check (.armed cut_on_erase))

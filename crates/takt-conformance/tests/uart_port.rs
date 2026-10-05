@@ -19,6 +19,8 @@ use takt_interp::{CoverKind, Coverage, RunOptions, Trace, Verdict};
 use takt_mir::Program;
 use takt_mir::machine::MachineKind;
 
+mod common;
+
 /// Genug Ticks fuer jedes Szenario; das laengste braucht 325.
 const TICKS: u64 = 1_000;
 
@@ -147,4 +149,41 @@ fn every_reaction_of_the_driver_is_triggered() {
         .find(|i| src[i.span.start as usize..].starts_with("check tx_stalled_for"))
         .expect("Stall-Pruefung");
     assert!(coverage.has(CoverKind::CheckFailed, stall), "die Stall-Pruefung wurde nie verletzt");
+}
+
+/// **Jedes Szenario laeuft nativ wie im Interpreter** (12.10, 13.8;
+/// KON2-030): Overrun, Framing, Parity, Break, Bit-Flip, volle TX-FIFO und
+/// stummer Partner kommen aus dem Modell, der Reset aus dem Stimulus
+/// (`test_uart_c6.stim.trace`); der erzeugte Code mit dem Wirtsrahmen
+/// liefert bis zum Ende jedes Szenarios dieselben Ausgaenge, Faults und
+/// Beobachtungen — `verdict` eingeschlossen.
+#[test]
+fn every_scenario_runs_natively_like_the_interpreter() {
+    let Some(clang) = common::clang() else { return };
+    let program = ported();
+    let stimulus =
+        Trace::parse(&read("crates/takt-bringup-esp32c6/programs/test_uart_c6.stim.trace")).expect("Stimulus");
+    let inputs = takt_conformance::stimulus::Stimulus::from_trace(&stimulus).expect("Stimulus");
+    let tick_of = |l: &str| l.strip_prefix("t=").and_then(|r| r.split(' ').next()?.parse::<u64>().ok());
+    let mut failed = Vec::new();
+    for (name, result) in scenario_runs(&program, &stimulus) {
+        let interpreted = result.trace.render();
+        let last = result.trace.lines.iter().map(|l| l.tick).max().unwrap_or(0);
+        let native =
+            match common::run_native_scenario_with(&clang, &program, &format!("uart_c6_{name}"), &name, TICKS, &inputs)
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    failed.push(format!("{name}: kein nativer Lauf: {e}"));
+                    continue;
+                }
+            };
+        let native: String =
+            native.lines().filter(|l| tick_of(l).is_some_and(|t| t <= last)).map(|l| format!("{l}\n")).collect();
+        let diffs = takt_conformance::compare(&interpreted, &native);
+        if !diffs.is_empty() {
+            failed.push(format!("{name}: {} Abweichungen, etwa {:?}", diffs.len(), &diffs[..diffs.len().min(4)]));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }

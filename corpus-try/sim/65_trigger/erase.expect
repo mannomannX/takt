@@ -1,0 +1,3 @@
+t=3 state ctrl CUT
+t=4 out vbus false
+t=13 state ctrl ARMING

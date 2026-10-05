@@ -1,0 +1,2 @@
+(const OCV :table<float[V], float[pct]> (array (tuple 3.0[V] 0[pct]) (tuple 3.4[V] 10[pct]) (tuple 3.7[V] 50[pct]) (tuple 4.2[V] 100[pct])))
+(var soc (call interp OCV (.min cell_v ())))

@@ -87,6 +87,83 @@ fn no_input_makes_a_function_panic() {
     }
 }
 
+/// INT-026: Die transzendenten Funktionen beider Breiten mit beliebigen
+/// Bitmustern — darin NaN, ±∞, Subnormale und Muster, deren Reduktion die
+/// 256-Bit-Rechnung und die Tabellen bis an ihre Raender fuehrt. Der Test
+/// laeuft im Debug-Profil, wo jeder Ueberlauf einer Ganzzahl und jeder
+/// Index ausserhalb panikt. Ein NaN geht als NaN hinaus.
+#[test]
+fn no_input_makes_a_transcendental_function_panic() {
+    type Unary64 = fn(f64) -> f64;
+    type Unary32 = fn(f32) -> f32;
+    let wide: [(&str, Unary64); 8] = [
+        ("exp", libtaktm::exp_f64),
+        ("log", libtaktm::log_f64),
+        ("sin", libtaktm::sin_f64),
+        ("cos", libtaktm::cos_f64),
+        ("tan", libtaktm::tan_f64),
+        ("asin", libtaktm::asin_f64),
+        ("acos", libtaktm::acos_f64),
+        ("atan", libtaktm::atan_f64),
+    ];
+    let narrow: [(&str, Unary32); 8] = [
+        ("exp", libtaktm::exp_f32),
+        ("log", libtaktm::log_f32),
+        ("sin", libtaktm::sin_f32),
+        ("cos", libtaktm::cos_f32),
+        ("tan", libtaktm::tan_f32),
+        ("asin", libtaktm::asin_f32),
+        ("acos", libtaktm::acos_f32),
+        ("atan", libtaktm::atan_f32),
+    ];
+    let bits = patterns(4_000);
+    // Jeder Exponent beider Breiten, darin die Subnormalen, mit zufaelliger
+    // Mantisse und beiden Vorzeichen: Zufaellige Muster treffen kleine
+    // Betraege und die Naehe von eins sonst kaum.
+    let mut rng = Rng(0x0026_2026);
+    let mut swept = Vec::new();
+    for e in 0..2048u64 {
+        for sign in [0, 1u64 << 63] {
+            let narrow = (e & 0xff) << 23 | (rng.next() & 0x7f_ffff) | (sign >> 32);
+            swept.push(sign | e << 52 | (rng.next() >> 12));
+            swept.push(narrow);
+        }
+    }
+    for &b in bits.iter().chain(&swept) {
+        let (x, y) = (f64::from_bits(b), f32::from_bits(b as u32));
+        for (name, f) in wide {
+            assert!(!x.is_nan() || f(x).is_nan(), "{name}({b:016x})");
+            let _ = f(x);
+        }
+        for (name, f) in narrow {
+            assert!(!y.is_nan() || f(y).is_nan(), "{name}_f32({:08x})", b as u32);
+            let _ = f(y);
+        }
+    }
+    for w in bits.windows(2).step_by(3) {
+        let (a, b) = (f64::from_bits(w[0]), f64::from_bits(w[1]));
+        let (c, d) = (f32::from_bits(w[0] as u32), f32::from_bits(w[1] as u32));
+        let _ = (libtaktm::atan2_f64(a, b), libtaktm::pow_f64(a, b));
+        let _ = (libtaktm::atan2_f32(c, d), libtaktm::pow_f32(c, d));
+    }
+}
+
+/// INT-026, INT-008: `x · num / den` mit beliebigen Bitmustern und
+/// Faktoren von null bis 128 Bit, auch Zaehler oder Nenner null.
+#[test]
+fn no_input_makes_the_unit_scaling_panic() {
+    let bits = patterns(4_000);
+    let mut rng = Rng(0x0308_2026);
+    for &b in &bits {
+        let num = (u128::from(rng.next()) << 64 | u128::from(rng.next())) >> (rng.next() % 129).min(127);
+        let den = (u128::from(rng.next()) << 64 | u128::from(rng.next())) >> (rng.next() % 129).min(127);
+        for (num, den) in [(num, den), (0, den), (num, 0), (u128::MAX, 1), (1, u128::MAX)] {
+            let _ = libtaktm::scale_f64(f64::from_bits(b), num, den);
+            let _ = libtaktm::scale_f32(f32::from_bits(b as u32), num, den);
+        }
+    }
+}
+
 /// `abs` löscht das Vorzeichenbit und sonst nichts — auch bei NaN, wo
 /// die Nutzlast erhalten bleiben muss.
 #[test]

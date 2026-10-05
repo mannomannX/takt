@@ -11,8 +11,9 @@
 //! `#[ignore = "…"]`: Die stehen im Ergebnis als `ignored`.
 //!
 //! **Erwartete Diagnosen je Datei** liest [`expect`], ein Leser fuer alle
-//! Korpora.
+//! Korpora; die Programme selbst zaehlt [`corpus`].
 
+pub mod corpus;
 pub mod expect;
 
 /// Die Umgebungsvariable, die das Fehlen von Werkzeugen erlaubt.

@@ -39,6 +39,7 @@ const ORDER: &str = "Reihenfolge im Zustand: fault/var/instance, initial, enter,
 impl<'t, 's> Parser<'t, 's> {
     /// `machine_decl`
     pub(super) fn parse_machine_decl(&mut self) -> PResult<MachineDecl> {
+        self.cover("machine_decl");
         let start = self.pos;
         let driver = self.eat_kw("driver");
         self.expect_kw("machine")?;
@@ -65,6 +66,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `machine_body`
     pub(super) fn parse_machine_body(&mut self) -> PResult<MachineBody> {
+        self.cover("machine_body");
         let start = self.pos;
         let mut prelude = Vec::new();
         loop {
@@ -135,6 +137,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `persist_decl`
     pub(super) fn parse_persist_decl(&mut self) -> PResult<PersistDecl> {
+        self.cover("persist_decl");
         let start = self.pos;
         self.expect_kw("persist")?;
         self.expect_kw("var")?;
@@ -156,6 +159,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `signal_decl`
     pub(super) fn parse_signal_decl(&mut self) -> PResult<Ident> {
+        self.cover("signal_decl");
         self.expect_kw("signal")?;
         let name = self.ident()?;
         self.expect_newline()?;
@@ -164,6 +168,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `fault_clause`
     pub(super) fn parse_fault_clause(&mut self) -> PResult<Ident> {
+        self.cover("fault_clause");
         self.expect_kw("fault")?;
         self.expect_op("->")?;
         let target = self.upper()?;
@@ -173,6 +178,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `state_decl`
     pub(super) fn parse_state_decl(&mut self) -> PResult<StateDecl> {
+        self.cover("state_decl");
         let start = self.pos;
         self.expect_kw("state")?;
         let name = self.upper()?;
@@ -190,6 +196,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `state_body`; die Reihenfolge der Abschnitte ist fest, Verstoesse werden
     /// gemeldet, der Abschnitt aber trotzdem gelesen.
     pub(super) fn parse_state_body(&mut self) -> PResult<StateBody> {
+        self.cover("state_body");
         let mut body = StateBody::default();
         let mut phase = Phase::Prelude;
         while !self.at(TokenKind::Dedent) && !self.at(TokenKind::Eof) {
@@ -249,8 +256,13 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     fn parse_state_item(&mut self, body: &mut StateBody, phase: Phase) -> PResult<()> {
-        let duplicate =
-            |p: &Self, what: &str| p.error_at(p.tok(), format!("`{what}` ist in diesem Zustand doppelt"), None);
+        self.cover("state_item");
+        let duplicate = |p: &Self, what: &str| {
+            let hint = format!(
+                "beide `{what}` zu einem zusammenfassen; ein Zustand hat jeden Abschnitt einmal (2.3: state_body)"
+            );
+            p.error_at(p.tok(), format!("`{what}` ist in diesem Zustand doppelt"), Some(&hint))
+        };
         match phase {
             Phase::Prelude => {
                 if self.at_kw("fault") {
@@ -306,6 +318,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `enter_block`
     pub(super) fn parse_enter_block(&mut self) -> PResult<Block> {
+        self.cover("enter_block");
         self.expect_word("enter")?;
         self.expect_op(":")?;
         self.parse_action_block()
@@ -313,6 +326,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `exit_block`
     pub(super) fn parse_exit_block(&mut self) -> PResult<Block> {
+        self.cover("exit_block");
         self.expect_word("exit")?;
         self.expect_op(":")?;
         self.parse_action_block()
@@ -320,6 +334,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `loop_block`
     pub(super) fn parse_loop_block(&mut self) -> PResult<Block> {
+        self.cover("loop_block");
         self.expect_word("loop")?;
         self.expect_op(":")?;
         self.parse_block()
@@ -327,6 +342,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `on_handler`
     pub(super) fn parse_on_handler(&mut self) -> PResult<OnHandler> {
+        self.cover("on_handler");
         let start = self.pos;
         self.expect_word("on")?;
         let stream = self.ident()?;
@@ -350,6 +366,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `transition`
     pub(super) fn parse_transition(&mut self) -> PResult<Transition> {
+        self.cover("transition");
         let start = self.pos;
         let trigger = if self.eat_word("when") {
             Trigger::When(self.parse_guard()?)
@@ -365,6 +382,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `guard`: ein Ausdruck (auch `x matches P as m`) oder `s as e` fuer das
     /// naechste Element eines Streams.
     pub(super) fn parse_guard(&mut self) -> PResult<Guard> {
+        self.cover("guard");
         let expr = self.parse_expr()?;
         if self.at_kw("as") {
             self.bump();
@@ -376,6 +394,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `trans_block := goto_stmt NEWLINE | NEWLINE INDENT { stmt } goto_stmt NEWLINE DEDENT`
     fn parse_trans_block(&mut self) -> PResult<(Vec<Stmt>, Ident)> {
+        self.cover("trans_block");
         if self.at_op("->") {
             let target = self.parse_goto_stmt()?;
             self.expect_newline()?;
@@ -411,6 +430,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `sequence_block`
     pub(super) fn parse_sequence_block(&mut self) -> PResult<(Option<Timeout>, Vec<SeqItem>)> {
+        self.cover("sequence_block");
         self.expect_kw("sequence")?;
         // Segment-Default (6.2): `with timeout = d [-> X]`.
         let timeout = if self.eat_kw("with") {
@@ -431,6 +451,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `NEWLINE INDENT { seq_item } DEDENT`
     fn parse_seq_items(&mut self) -> PResult<Vec<SeqItem>> {
+        self.cover("seq_items");
         self.expect_newline()?;
         self.expect_indent()?;
         let mut items = Vec::new();
@@ -450,6 +471,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `seq_item`
     pub(super) fn parse_seq_item(&mut self) -> PResult<SeqItem> {
+        self.cover("seq_item");
         let start = self.pos;
         if self.kind() != TokenKind::Keyword {
             return Ok(SeqItem::Stmt(self.parse_stmt()?));

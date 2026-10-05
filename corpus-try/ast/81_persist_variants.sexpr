@@ -25,5 +25,5 @@
       (elif (== k 3)
         (= c (SPEED v=1.5)))
       (= last c)
-      (= count (% (+ count 1) 1000))
-      (= k (% (+ k 1) 4)))))
+      (= count (% (paren (+ count 1)) 1000))
+      (= k (% (paren (+ k 1)) 4)))))

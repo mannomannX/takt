@@ -11,6 +11,7 @@
 use takt_interp::pattern::has_start;
 use takt_mir::pattern::{CaptureKind, PatternPiece};
 use takt_mir::scan::Scan;
+use takt_mir::types::FloatWidth;
 
 /// xorshift64*, deterministisch.
 struct Rng(u64);
@@ -88,7 +89,7 @@ fn the_automaton_finds_the_earliest_start_of_the_interpreter() {
         bounded += usize::from(worst.is_some());
         for _ in 0..25 {
             let text = line(&mut rng);
-            let want = has_start(&pieces, &text);
+            let want = has_start(&pieces, &text, FloatWidth::F64);
             // Die Kostenanalyse rechnet mit `worst_step`; kein Lauf darf
             // mehr Arbeit an einer Stelle haben.
             let got = scan.trace(text.as_bytes(), |work| {
@@ -120,7 +121,7 @@ fn a_limit_beyond_the_line_changes_nothing() {
     let counted = Scan::of(&pieces, 64).expect("Automat");
     assert!(wide.states() < counted.states());
     for text in ["abc;", "ä;", ";", "abc"] {
-        assert_eq!(wide.first(text.as_bytes()), has_start(&pieces, text), "{text}");
-        assert_eq!(counted.first(text.as_bytes()), has_start(&pieces, text), "{text}");
+        assert_eq!(wide.first(text.as_bytes()), has_start(&pieces, text, FloatWidth::F64), "{text}");
+        assert_eq!(counted.first(text.as_bytes()), has_start(&pieces, text, FloatWidth::F64), "{text}");
     }
 }

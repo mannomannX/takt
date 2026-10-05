@@ -123,12 +123,13 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     };
     write(&e.out.join(format!("{x}.rs")), &takt_frame::embed::rust_module(&module))?;
     write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, bytes, align))?;
+    let sys = drivers.iter().filter(|d| d.kind == takt_frame::drivers::Kind::Sys).count();
     println!(
-        "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}), {} Treiber",
+        "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}), {} Treiber, {sys} sys-Kanaele",
         e.out.display(),
         e.triple,
         e.form.name(),
-        drivers.len()
+        drivers.len() - sys
     );
     Ok(())
 }
@@ -209,8 +210,13 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], bytes: u64, 
         services.push("next_run");
     }
     let _ = writeln!(s, "services = {}", services.join(", "));
-    let symbols: Vec<String> = drivers.iter().map(|d| d.symbol(x)).collect();
-    let _ = writeln!(s, "drivers = {}", symbols.join(", "));
+    // Die Kanaele des Geraets `sys` stellt der Wirt im Trait `Sys`; Treiber
+    // sind sie nicht (12.7, 12.11).
+    let (sys, drivers): (Vec<_>, Vec<_>) = drivers.iter().partition(|d| d.kind == takt_frame::drivers::Kind::Sys);
+    let symbols =
+        |list: &[&takt_frame::drivers::Driver]| list.iter().map(|d| d.symbol(x)).collect::<Vec<_>>().join(", ");
+    let _ = writeln!(s, "drivers = {}", symbols(&drivers));
+    let _ = writeln!(s, "sys = {}", symbols(&sys));
     s
 }
 

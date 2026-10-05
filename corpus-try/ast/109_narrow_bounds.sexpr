@@ -1,0 +1,17 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output up :int in (- 2147483648)..2147483647 @hw("o/up") safe=0)
+(output down :int in (- 2147483648)..2147483647 @hw("o/down") safe=0)
+(output mid :int in (- 2147483648)..2147483647 @hw("o/mid") safe=0)
+(machine m
+  (var a :int in 2147483000..2147483647 2147483000)
+  (var b :int in 0..1000 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= b (call min (+ b 250) 1000))
+      (= up (- (paren (+ a b)) b))
+      (= down (+ (paren (- (- a) b)) b))
+      (= mid (- (/ (paren (+ a a)) 2) b))
+      (= a (call min (+ a 200) 2147483647)))))

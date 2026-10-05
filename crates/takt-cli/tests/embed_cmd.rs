@@ -176,3 +176,254 @@ fn the_rust_example_builds_with_one_call_and_agrees_with_the_interpreter() {
     assert!(run.status.success(), "{}\n{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
     assert!(String::from_utf8_lossy(&run.stdout).contains("the_valve_runs_like_the_interpreter ... ok"));
 }
+
+/// Baut die Lieferform von `valve` und liefert das Verzeichnis.
+fn deliver(name: &str, triple: &str, form: &str) -> PathBuf {
+    let dir = scratch(name);
+    let out = dir.to_str().expect("Pfad");
+    let run = takt(&["build", VALVE, "--emit", "embed", "--target", triple, "--form", form, "--out", out]);
+    assert!(run.status.success(), "{triple} {form}: {}", String::from_utf8_lossy(&run.stderr));
+    dir
+}
+
+fn manifest_value(dir: &Path, key: &str) -> String {
+    let text = std::fs::read_to_string(dir.join("valve.manifest")).expect("Manifest");
+    let prefix = format!("{key} = ");
+    text.lines().find_map(|l| l.strip_prefix(&prefix)).unwrap_or_else(|| panic!("{key} fehlt:\n{text}")).to_string()
+}
+
+/// 12.8 und 12.11: Die Lieferform entsteht fuer jede Zielklasse, nicht nur
+/// fuer den Wirt. Die Bibliothek definiert die Einstiege, und Groesse und
+/// Ausrichtung der Arena im Manifest gelten fuer das Ziel: Der Kopf haelt sie
+/// unter dem C-Compiler dieses Ziels.
+#[test]
+#[cfg_attr(not(target_arch = "x86_64"), ignore = "das Tripel des Wirts ist hier x86-64")]
+fn every_target_class_gets_a_library_with_its_entries_and_arena() {
+    let Some(clang) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
+        return;
+    };
+    let nm = clang.with_file_name(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });
+    for triple in [host_triple(), "thumbv7em-none-eabihf", "riscv32imac-unknown-none-elf"] {
+        let dir = deliver(&format!("takt-embed-target-{triple}"), triple, "logical");
+        let lib = dir.join(if triple.ends_with("-msvc") { "valve.lib" } else { "libvalve.a" });
+        let symbols = Command::new(&nm).arg("--defined-only").arg(&lib).output().expect("llvm-nm");
+        let symbols = String::from_utf8_lossy(&symbols.stdout);
+        let defined: Vec<&str> = symbols.lines().filter_map(|l| l.split_whitespace().last()).collect();
+        for entry in ["valve_init", "valve_tick", "valve_commit", "valve_deadline", "valve_abi_1", "valve_arena_bytes"]
+        {
+            assert!(defined.contains(&entry), "{triple}: `{entry}` fehlt:\n{symbols}");
+        }
+        let (bytes, align) = (manifest_value(&dir, "arena_bytes"), manifest_value(&dir, "arena_align"));
+        let c = dir.join("arena.c");
+        std::fs::write(
+            &c,
+            format!(
+                "#include \"valve.h\"\n_Static_assert(sizeof(struct valve_arena) == {bytes}, \"Groesse\");\n\
+                 _Static_assert(_Alignof(struct valve_arena) == {align}, \"Ausrichtung\");\n"
+            ),
+        )
+        .expect("Quelle");
+        // Das LLVM-Triple und `-march` des Ziels, nicht das Tripel des Wirts.
+        let target = takt_llvm::Target::by_host_triple(triple).expect("bekanntes Tripel");
+        let march: Vec<String> =
+            Some(target.march).filter(|m| !m.is_empty()).map(|m| format!("-march={m}")).into_iter().collect();
+        let mut cmd = Command::new(&clang);
+        let check = Clang::deterministic(&mut cmd)
+            .args(["-fsyntax-only", "-std=c11", "-ffreestanding"])
+            .arg(format!("--target={}", target.triple))
+            .args(&march)
+            .arg("-I")
+            .arg(&dir)
+            .arg(&c)
+            .output()
+            .expect("clang");
+        assert!(check.status.success(), "{triple}: {}", String::from_utf8_lossy(&check.stderr));
+    }
+}
+
+/// 12.11: Jede Form baut und traegt ihr Profil ins Manifest; zwei Laeufe in
+/// verschiedene Verzeichnisse liefern bitgleiche Bibliotheken (11.3), der
+/// Pfad der Ausgabe steht nicht im Objekt.
+#[test]
+fn every_form_builds_with_its_profile_and_two_builds_are_identical() {
+    let Some(_) = takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
+        return;
+    };
+    let triple = "thumbv7em-none-eabihf";
+    for (form, profile) in
+        [("own", "baremetal"), ("interrupt", "shared"), ("poll", "shared"), ("rtos", "shared"), ("linux", "linux_rt")]
+    {
+        let dir = deliver(&format!("takt-embed-form-{form}"), triple, form);
+        assert_eq!((manifest_value(&dir, "form"), manifest_value(&dir, "profile")), (form.into(), profile.into()));
+    }
+    let first = deliver("takt-embed-repro-a", triple, "logical");
+    let second = deliver("takt-embed-repro-b-anderer-pfad", triple, "logical");
+    for file in ["libvalve.a", "valve.h", "valve.rs", "valve.manifest"] {
+        let (a, b) = (std::fs::read(first.join(file)).expect("a"), std::fs::read(second.join(file)).expect("b"));
+        assert!(a == b, "{file} weicht zwischen zwei Laeufen ab");
+    }
+}
+
+/// 12.8 und 12.11: Ein Profil im Programm, das der Form widerspricht, ist
+/// ein Baufehler; unter `logical` hat die Form kein Profil und nichts
+/// widerspricht.
+#[test]
+fn every_profile_against_a_foreign_form_is_refused() {
+    let text = std::fs::read_to_string(root().join(VALVE)).expect("Programm");
+    let cases = [
+        ("baremetal", "interrupt", false),
+        ("baremetal", "poll", false),
+        ("baremetal", "rtos", false),
+        ("shared", "own", false),
+        ("shared", "linux", false),
+        ("linux_rt", "rtos", false),
+        ("baremetal", "own", true),
+        ("shared", "poll", true),
+        ("linux_rt", "logical", true),
+    ];
+    for (profile, form, accepted) in cases {
+        let dir = scratch(&format!("takt-embed-pf-{profile}-{form}"));
+        let src = dir.join("valve.takt");
+        std::fs::write(
+            &src,
+            text.replace("    tick     = 10 ms\n", &format!("    tick     = 10 ms\n    target   = {profile}\n")),
+        )
+        .expect("Programm");
+        let out = dir.join("out");
+        let run = takt(&[
+            "build",
+            src.to_str().expect("Pfad"),
+            "--emit",
+            "embed",
+            "--target",
+            "thumbv7em-none-eabihf",
+            "--form",
+            form,
+            "--out",
+            out.to_str().expect("Pfad"),
+        ]);
+        let err = String::from_utf8_lossy(&run.stderr);
+        if accepted {
+            assert!(run.status.success(), "{profile} unter {form}: {err}");
+        } else {
+            assert!(!run.status.success(), "{profile} unter {form} angenommen");
+            assert!(err.contains(&format!("`{form}`")) && err.contains(profile), "{profile} unter {form}: {err}");
+        }
+    }
+}
+
+/// 5.9 und 12.11: Findet der Codegen fuer eine `persist var` keinen Lesepfad,
+/// startet jeder Lauf still beim Default; der Bau scheitert darum wie bei
+/// einem fehlenden Schritt, statt nur auf stderr zu warnen, das ein
+/// Bauhelfer im Erfolgsfall verschluckt (`vec` hat heute keine Byte-Form).
+#[test]
+fn a_persist_var_without_a_read_path_fails_the_build() {
+    let dir = scratch("takt-embed-persist-vec");
+    let src = dir.join("keeper.takt");
+    std::fs::write(
+        &src,
+        "system:\n    language = 1\n    tick     = 10 ms\n\noutput led : bool @ hw(\"o/led\") with safe = false\n\n\
+         machine m:\n    persist var x : vec<int, 3> = [1, 2, 3]\n\n    initial RUN\n\n    state RUN:\n        loop:\n            led = true\n",
+    )
+    .expect("Programm");
+    let src = src.to_str().expect("Pfad");
+    let ir = dir.join("keeper.ll");
+    let run = takt(&["build", src, "--emit", "ir", "--out", ir.to_str().expect("Pfad")]);
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "ein Bau ohne Lesepfad bestand: {err}");
+    assert!(err.contains("`persist var` ohne Lesepfad"), "{err}");
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_some() {
+        let out = dir.join("out");
+        let run = takt(&[
+            "build",
+            src,
+            "--emit",
+            "embed",
+            "--target",
+            host_triple(),
+            "--form",
+            "logical",
+            "--out",
+            out.to_str().expect("Pfad"),
+        ]);
+        assert!(!run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    }
+}
+
+/// Ein Programm mit dem Geraet `sys` (12.7): `previous_run` stellt der Wirt,
+/// `next_run` fuehrt er aus; dazu ein gewoehnlicher Ausgang.
+const SYS_PROGRAM: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  previous_run : PreviousRun @ hw("sys/previous_run")
+output next_run     : NextRun     @ hw("sys/next_run") with safe = NONE
+output led          : bool        @ hw("ui/led")       with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        enter:
+            led = previous_run.or(NONE) == ENDED
+
+        after 100 ms: -> DONE
+
+    state DONE:
+        enter:
+            next_run = AFTER(delay = 1 s)
+"#;
+
+/// 12.11 (GEN-037): Die Kanaele des Geraets `sys` sind keine Treiber. Das
+/// Manifest nennt sie in einer eigenen Zeile `sys`, die Zeile `drivers` nur
+/// die Treiber, und `next_run` steht unter den Diensten.
+#[test]
+#[cfg_attr(not(target_arch = "x86_64"), ignore = "das Tripel des Wirts ist hier x86-64")]
+fn the_manifest_keeps_sys_channels_apart_from_drivers() {
+    let Some(_) = takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
+        return;
+    };
+    let dir = scratch("takt-embed-sys");
+    let src = dir.join("plant.takt");
+    std::fs::write(&src, SYS_PROGRAM).expect("Programm");
+    let out = dir.join("out");
+    let run = takt(&[
+        "build",
+        src.to_str().expect("Pfad"),
+        "--emit",
+        "embed",
+        "--target",
+        host_triple(),
+        "--form",
+        "logical",
+        "--out",
+        out.to_str().expect("Pfad"),
+    ]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let manifest = std::fs::read_to_string(out.join("plant.manifest")).expect("Manifest");
+    let line = |key: &str| {
+        let prefix = format!("{key} = ");
+        manifest.lines().find_map(|l| l.strip_prefix(&prefix)).unwrap_or_else(|| panic!("{key} fehlt:\n{manifest}"))
+    };
+    assert_eq!(line("drivers"), "plant_out_ui_led, plant_alive_ui", "{manifest}");
+    assert_eq!(line("sys"), "plant_sys_previous_run", "{manifest}");
+    assert_eq!(line("services"), "next_run", "{manifest}");
+}
+
+/// Die Baufehler der Lieferform: eine unbekannte Form nennt die sechs, die es
+/// gibt; ohne `--out` gibt es kein Verzeichnis.
+#[test]
+fn an_unknown_form_and_a_missing_out_are_named() {
+    let run = takt(&["build", VALVE, "--emit", "embed", "--target", host_triple(), "--form", "banana"]);
+    assert!(!run.status.success());
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("--form: `banana` unbekannt; bekannt: own, interrupt, poll, rtos, linux, logical"), "{err}");
+    let run = takt(&["build", VALVE, "--emit", "embed", "--target", host_triple(), "--form", "logical"]);
+    assert!(!run.status.success());
+    let err = String::from_utf8_lossy(&run.stderr);
+    assert!(err.contains("--emit embed schreibt in ein Verzeichnis; `--out VERZEICHNIS` fehlt"), "{err}");
+}

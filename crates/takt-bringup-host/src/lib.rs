@@ -71,21 +71,28 @@ fn line() -> Option<&'static mut Line> {
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
 ///
+/// Ganz, ohne Schranke: Eine still nach 256 Byte gekuerzte Zeile waere ein
+/// Trace, der vom Interpreter abweicht, ohne es zu sagen (RT-038).
+///
 /// # Safety
 ///
-/// Der Rahmen uebergibt einen nullterminierten Zeiger auf statischen Text;
-/// die Schranke haelt einen Zeiger ohne Null auf (4.1, von Hand).
+/// `text` ist null oder ein nullterminierter Text; der Rahmen uebergibt nur
+/// Literale und Namen aus seinen Tabellen.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
     let Some(line) = line() else { return };
-    let mut p = text;
-    for _ in 0..256 {
-        let b = unsafe { *p };
-        if b == 0 {
-            return;
-        }
-        line.write_byte(b);
-        p = unsafe { p.add(1) };
+    if text.is_null() {
+        return;
+    }
+    // SAFETY: siehe oben.
+    let text = unsafe { core::ffi::CStr::from_ptr(text.cast()) };
+    trace_text(text, &mut |b| line.write_byte(b));
+}
+
+/// Jedes Byte eines Texts an `put`.
+fn trace_text(text: &core::ffi::CStr, put: &mut dyn FnMut(u8)) {
+    for &b in text.to_bytes() {
+        put(b);
     }
 }
 
@@ -128,6 +135,20 @@ pub struct PreviousRun;
 impl Input<u32> for PreviousRun {
     fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
         Some(Sample::good(0, now))
+    }
+}
+
+/// Das Geraet hinter `input … @ hw("sys/clock")` (7.4): die Wanduhr des
+/// Wirts in Nanosekunden seit der Unix-Epoche, ausserhalb der Semantik —
+/// dieselbe Auskunft wie `takt_rt_linux::wall_clock_ns` ausserhalb von
+/// Linux. Vor der Epoche weiss der Wirt keine Zeit und liefert nichts.
+#[derive(Debug, Default)]
+pub struct WallClock;
+
+impl Input<i64> for WallClock {
+    fn sample(&mut self, now: i64) -> Option<Sample<i64>> {
+        let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(Sample::good(i64::try_from(since.as_nanos()).ok()?, now))
     }
 }
 
@@ -182,4 +203,17 @@ pub unsafe fn run(drivers: *mut c_void) -> ExitCode {
         line.drain(DRAIN_ROUNDS);
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    /// Eine Zeile ueber 256 Byte kommt ganz an (RT-038).
+    #[test]
+    fn a_long_trace_line_is_not_cut() {
+        let long: Vec<u8> = (0..300u32).map(|i| b'a' + (i % 26) as u8).chain([0]).collect();
+        let text = core::ffi::CStr::from_bytes_with_nul(&long).expect("nullterminiert");
+        let mut got = Vec::new();
+        super::trace_text(text, &mut |b| got.push(b));
+        assert_eq!(got, long[..300]);
+    }
 }

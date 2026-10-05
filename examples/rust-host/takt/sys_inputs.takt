@@ -1,0 +1,23 @@
+# Die Eingaenge des Geraets `sys` stellt der Wirt (12.7, 12.11, GEN-037):
+# Sie stehen im Trait `Sys`, nicht in `Drivers`, und `sys` hat keinen
+# Heartbeat. Die Wanduhr ueberschreitet in Tick 2 fuenf Sekunden.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+input  previous_run : PreviousRun @ hw("sys/previous_run")
+input  wall         : Duration    @ hw("sys/clock")
+input  button       : bool        @ hw("u/button")
+output after_end    : bool        @ sim("o/after_end")
+output late         : bool        @ sim("o/late")
+output pressed      : bool        @ sim("o/pressed")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            after_end = previous_run == ENDED
+            late = wall.or(0 s) > 5 s
+            pressed = button.or(false)

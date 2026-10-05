@@ -1,0 +1,4 @@
+(input i_dut :samples<float[A], 100> @hw("daq1/ai2") rate=100[kHz])
+(check (< (.max i_dut ()) 2[A]))
+(for x in i_dut
+  (alert (> x 1.5[A]) "current spike {x}"))

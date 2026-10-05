@@ -1,0 +1,7 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-31 (4.5): Die Deklaration einer kuratierten Native entspricht ihrer
+# Signatur; `crc16` liefert `u16`, nicht `u32`.
+native fn crc16(b: bytes<8>) -> u32 with cost = 10, stack = 64, total  # ~ SC-31

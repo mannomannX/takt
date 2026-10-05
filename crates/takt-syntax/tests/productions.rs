@@ -8,6 +8,11 @@ use std::path::Path;
 const SUBTEXT: &[&str] =
     &["pattern_text", "pattern_kind", "format_text", "format_spec", "address_text", "address_segment"];
 
+/// Produktionen der Eigenschaften (13.3), die die gewoehnliche Vorrangkette mit
+/// gesetztem `temporal` parst; die Abdeckung zaehlt sie dort unter ihrem Namen.
+const PARSE_ALIASES: &[(&str, &str)] =
+    &[("tprop_and", "and_expr"), ("tprop_not", "not_expr"), ("tprop_atom", "cmp_expr")];
+
 fn read_all(dir: &Path, out: &mut String) {
     for entry in fs::read_dir(dir).expect("Verzeichnis lesbar") {
         let path = entry.expect("Eintrag").path();
@@ -99,11 +104,67 @@ fn every_production_has_a_parser_function() {
             continue;
         }
         count += 1;
-        let wanted = if SUBTEXT.contains(&name) { format!("fn {name}(") } else { format!("fn parse_{name}(") };
+        let target = PARSE_ALIASES.iter().find(|(n, _)| *n == name).map_or(name, |(_, t)| t);
+        let wanted = if SUBTEXT.contains(&name) { format!("fn {name}(") } else { format!("fn parse_{target}(") };
         if !source.contains(&wanted) {
             missing.push(name.to_string());
         }
     }
     assert!(count > 100, "zu wenige Produktionen gelesen: {count}");
     assert!(missing.is_empty(), "Produktionen ohne Funktion: {}", missing.join(", "));
+}
+
+/// Alle `.takt`-Dateien unter `dir`, rekursiv.
+fn takt_below(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in fs::read_dir(dir).expect("Verzeichnis lesbar") {
+        let path = entry.expect("Eintrag").path();
+        if path.is_dir() {
+            takt_below(&path, out);
+        } else if path.extension().is_some_and(|x| x == "takt") {
+            out.push(path);
+        }
+    }
+}
+
+/// Die Eingaben der Fmt-Vektoren aus grammar/format.md (Schnipsel).
+fn format_vector_inputs() -> Vec<String> {
+    let text = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../grammar/format.md")).expect("format.md");
+    text.split("```fmt\n")
+        .skip(1)
+        .filter_map(|block| block.split_once("\n---\n").map(|(input, _)| format!("{input}\n")))
+        .collect()
+}
+
+/// Produktionen, die weder Korpus noch Schnipsel noch Vektoren erreichen.
+/// Eine Ratsche: Verliert eine Produktion ihren letzten Fall, scheitert der
+/// Test; bekommt eine dieser hier einen, faellt sie aus der Liste.
+const UNREACHED: &[&str] = &[];
+
+/// **Jede Produktion hat einen Fall** (plan.md 3): Die Parserfunktion jeder
+/// Produktion aus `takt.ebnf` laeuft beim Parsen von Korpus, Pruefungs- und
+/// Beispielprogrammen, Referenzschnipseln und Formatvektoren mindestens einmal.
+#[test]
+fn every_production_is_reached_by_some_input() {
+    use takt_syntax::parser::productions_of;
+    use takt_syntax::tokenize;
+    let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let mut files = Vec::new();
+    for dir in ["corpus-try", "crates", "examples"] {
+        takt_below(&root.join(dir), &mut files);
+    }
+    let mut hits = std::collections::BTreeSet::new();
+    for path in &files {
+        let src = fs::read_to_string(path).expect("lesbar");
+        let snippet = path.parent().is_some_and(|d| d.ends_with("ref"));
+        hits.extend(productions_of(&tokenize(&src), snippet));
+    }
+    for input in format_vector_inputs() {
+        hits.extend(productions_of(&tokenize(&input), true));
+    }
+    let grammar = fs::read_to_string(root.join("grammar/takt.ebnf")).expect("Grammatik lesbar");
+    let unreached: Vec<String> = production_names(&grammar)
+        .into_iter()
+        .filter(|name| !SUBTEXT.contains(&name.as_str()) && !hits.contains(name.as_str()))
+        .collect();
+    assert_eq!(unreached, UNREACHED, "Produktionen ohne Fall (UNREACHED nachziehen, wenn eine hinzukam)");
 }

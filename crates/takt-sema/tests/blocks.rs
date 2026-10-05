@@ -222,7 +222,8 @@ machine m:
 ",
     )
     .expect_err("step in for");
-    assert!(err.iter().any(|e| e.contains("for")), "{err:?}");
+    assert_eq!(err.len(), 1, "{err:?}");
+    assert!(err[0].contains("[SC-3]") && err[0].contains("kein Aufruf in einer `for`-Schleife"), "{err:?}");
 }
 
 #[test]
@@ -241,7 +242,8 @@ machine m:
 ",
     )
     .expect_err("Instanz als Wert");
-    assert!(!err.is_empty());
+    assert_eq!(err.len(), 1, "{err:?}");
+    assert!(err[0].contains("[SC-3]") && err[0].contains("gefunden `Handle`"), "die Instanz ist kein Wert: {err:?}");
 }
 
 /// Ein Zaehler je Element; `step` liefert den neuen Stand.
@@ -335,4 +337,64 @@ machine consumer:
     ))
     .expect_err("step im Handler");
     assert!(err.iter().any(|e| e.contains("SC-11") && e.contains("Handler")), "{err:?}");
+}
+
+#[test]
+fn a_command_high_in_the_first_tick_is_a_rising_edge() {
+    // 11.4, prelude: `rising` startet mit `last = false`; ein Kommando in
+    // Tick 0 ist darum schon eine Flanke.
+    let trace = simulate(ANON, "t=0 cmd go\n", 3);
+    assert!(trace.contains("t=0 out n 1\n"), "Flanke in Tick 0:\n{trace}");
+    assert!(!trace.contains("out n 2"), "nur eine:\n{trace}");
+}
+
+#[test]
+fn a_falling_edge_counts_only_after_the_command_drops() {
+    let trace = simulate(
+        "
+command go
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    var count : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        loop:
+            if falling(go):
+                count = count + 1
+            n = count
+",
+        "t=2 cmd go\nt=3 cmd go\n",
+        6,
+    );
+    assert!(
+        !trace.contains("t=2 out n") && !trace.contains("t=3 out n"),
+        "kein Zaehlen, solange `go` anliegt:\n{trace}"
+    );
+    assert!(trace.contains("t=4 out n 1\n"), "{trace}");
+    assert!(!trace.contains("out n 2"), "{trace}");
+}
+
+#[test]
+fn integrate_saturates_at_the_negative_limit() {
+    let trace = simulate(
+        "
+output q : float[A*s] @ hw(\"o/q\") with safe = 0 A*s
+
+machine m every 10 ms:
+    var coulomb = integrate[A](limit = 5 A*s)
+    var charge : float[A*s] = 0 A*s
+    initial RUN
+    state RUN:
+        loop:
+            charge = coulomb.step(-2 A, 1 s)
+            q = charge
+",
+        "",
+        40,
+    );
+    assert!(trace.contains("t=0 out q -2.0 "), "erster Schritt:\n{trace}");
+    assert!(trace.contains("t=10 out q -4.0 "), "zweiter Schritt:\n{trace}");
+    assert!(trace.contains("t=20 out q -5.0 "), "untere Saettigung:\n{trace}");
+    assert!(!trace.contains("out q -6"), "unter dem Limit:\n{trace}");
 }

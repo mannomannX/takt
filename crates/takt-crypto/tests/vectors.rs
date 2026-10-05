@@ -87,12 +87,9 @@ fn every_vector_holds() {
     }
     let mut wrong = Vec::new();
     for v in &vectors {
-        // Ohne ihr Feature antwortet eine Funktion mit `Unavailable`, und
-        // das Manifest nennt sie nicht.
-        let Some(got) = evaluate(v) else {
-            assert!(takt_crypto::manifest(&v.fun).is_none(), "Zeile {}: Manifest ohne Feature", v.line);
-            continue;
-        };
+        // Der Test laeuft nur mit allen Features (`required-features`);
+        // eine Funktion, die dann `Unavailable` sagt, ist ein Fehler.
+        let got = evaluate(v).unwrap_or_else(|| panic!("Zeile {}: `{}` ohne Ergebnis", v.line, v.fun));
         assert!(takt_crypto::manifest(&v.fun).is_some(), "Zeile {}: Feature ohne Manifest", v.line);
         if got != v.want {
             wrong.push(format!("Zeile {}: `{}` erwartet {}, erhalten {got}", v.line, v.fun, v.want));
@@ -148,6 +145,73 @@ fn garbage_never_panics() {
         assert_ne!(
             takt_crypto::aes_gcm_decrypt(&key, &nonce, &aad, &data, &tag, &mut out).map(|r| r.is_some()),
             Ok(true)
+        );
+    }
+}
+
+/// Die erste Zeile einer Funktion aus der Spezifikation, die `want` liefert.
+fn first(fun: &str, want: &str) -> Vector {
+    load().into_iter().find(|v| v.fun == fun && v.want == want).unwrap_or_else(|| panic!("kein `{fun}` mit {want}"))
+}
+
+/// INT-032: Ein `none` hinterlaesst in `out` nichts von der Nutzlast —
+/// auch nicht, wenn der Schluessel weder 16 noch 32 Byte hat.
+#[test]
+fn a_refused_decryption_leaves_no_ciphertext_behind() {
+    let data = [0x5Au8; 24];
+    for key_len in [0usize, 15, 16, 24, 31, 32, 33] {
+        let key = vec![7u8; key_len];
+        let mut out = [0u8; 24];
+        let r = takt_crypto::aes_gcm_decrypt(&key, &[1; 12], b"aad", &data, &[2; 16], &mut out);
+        assert_eq!(r, Ok(None), "Schluessel {key_len} Byte: ein falscher Tag oeffnet nichts");
+        assert_eq!(out, [0u8; 24], "Schluessel {key_len} Byte: `out` traegt das Chiffrat");
+    }
+}
+
+/// INT-032: Die Raender von RSASSA-PSS, die ohne privaten Schluessel zu
+/// bilden sind: ein Modulus von 3071 Bit, ein gerader, eine Signatur
+/// gleich dem Modulus und eine knapp darunter.
+#[test]
+fn rsa_refuses_the_edges_of_its_key_and_signature() {
+    let v = first("rsa3072_verify", "1");
+    let (key, digest, sig) = (&v.args[0], &v.args[1], &v.args[2]);
+    assert_eq!(takt_crypto::rsa3072_verify(key, digest, sig), Ok(true), "der Vektor selbst gilt");
+    let mut short = key.clone();
+    short[0] &= 0x7f;
+    assert_eq!(takt_crypto::rsa3072_verify(&short, digest, sig), Ok(false), "3071 Bit");
+    let mut even = key.clone();
+    even[383] &= 0xfe;
+    assert_eq!(takt_crypto::rsa3072_verify(&even, digest, sig), Ok(false), "gerader Modulus");
+    assert_eq!(takt_crypto::rsa3072_verify(key, digest, key), Ok(false), "sig = n");
+    let mut below = key.clone();
+    below[383] -= 1;
+    assert_eq!(takt_crypto::rsa3072_verify(key, digest, &below), Ok(false), "sig = n - 1");
+    let mut other = digest.clone();
+    other[0] ^= 1;
+    assert_eq!(takt_crypto::rsa3072_verify(key, &other, sig), Ok(false), "anderer Digest");
+}
+
+/// INT-032: `r` oder `s` gleich null oder gleich der Gruppenordnung ist
+/// keine Signatur (FIPS 186-5, 6.4.2: 1 <= r, s <= n - 1).
+#[test]
+fn ecdsa_refuses_r_or_s_outside_the_group_order() {
+    const N: [u8; 32] = [
+        0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbc, 0xe6,
+        0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
+    ];
+    let v = first("ecdsa_p256_verify", "1");
+    let key: [u8; 64] = v.args[0].as_slice().try_into().expect("Schluessel");
+    let digest: [u8; 32] = v.args[1].as_slice().try_into().expect("Digest");
+    let sig: [u8; 64] = v.args[2].as_slice().try_into().expect("Signatur");
+    assert_eq!(takt_crypto::ecdsa_p256_verify(&key, &digest, &sig), Ok(true), "der Vektor selbst gilt");
+    for (half, value) in [(0usize, N), (1, N), (0, [0u8; 32]), (1, [0u8; 32])] {
+        let mut bad = sig;
+        bad[32 * half..32 * half + 32].copy_from_slice(&value);
+        assert_eq!(
+            takt_crypto::ecdsa_p256_verify(&key, &digest, &bad),
+            Ok(false),
+            "{} = {value:02x?}",
+            ["r", "s"][half]
         );
     }
 }

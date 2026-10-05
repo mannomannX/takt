@@ -66,7 +66,7 @@
 //! verschiedene Tabellen. Die Zielklasse ist die Ebene, auf der `takt
 //! bench` *berichtet*, nicht die, auf der gemessen wird.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::fns::{CostClass, CostVec, Heavy};
 
@@ -462,6 +462,7 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
     let mut out = Hardware::default();
     let mut current: Option<Section> = None;
     let mut seen_magic = false;
+    let (mut sections, mut keys) = (BTreeSet::new(), BTreeSet::new());
 
     for (i, raw) in text.lines().enumerate() {
         let line_no = i as u32 + 1;
@@ -499,6 +500,12 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
                 line: line_no,
                 message: "unabgeschlossener Abschnitt: `]` fehlt".into(),
             })?;
+            // Ein zweiter Abschnitt gleichen Namens ueberschriebe den ersten
+            // still, Feld fuer Feld.
+            if !sections.insert(name.to_string()) {
+                return Err(ParseError { line: line_no, message: format!("Abschnitt `[{name}]` steht doppelt") });
+            }
+            keys.clear();
             current = Some(section(name, &mut out, line_no)?);
             continue;
         }
@@ -508,6 +515,12 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
             message: format!("weder Abschnitt noch Zuweisung: `{line}`"),
         })?;
         let (key, value) = (key.trim(), value.trim());
+        if !keys.insert(key.to_string()) {
+            return Err(ParseError {
+                line: line_no,
+                message: format!("Schluessel `{key}` steht doppelt im Abschnitt"),
+            });
+        }
         match &current {
             Some(Section::Target(name)) => {
                 let target = out.targets.get_mut(name).expect("Abschnitt angelegt");
@@ -583,6 +596,14 @@ fn number(value: &str, line: u32) -> Result<u64, ParseError> {
     value.parse().map_err(|_| ParseError { line, message: format!("`{value}` ist keine ganze Zahl") })
 }
 
+/// Eine Zahl, die in den Typ ihres Feldes passt (`i64` fuer Nanosekunden,
+/// `u32` fuer Zaehler): `as` braeche sie still um.
+fn field<T: TryFrom<u64>>(value: &str, line: u32) -> Result<T, ParseError> {
+    let n = number(value, line)?;
+    T::try_from(n)
+        .map_err(|_| ParseError { line, message: format!("{n} passt nicht in `{}`", std::any::type_name::<T>()) })
+}
+
 fn boolean(value: &str, line: u32) -> Result<bool, ParseError> {
     match value {
         "true" => Ok(true),
@@ -612,12 +633,12 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
             );
         }
         "t_io" => target.t_io_ps = number(value, line)?,
-        "tick_jitter_ns" => target.tick_jitter_ns = Some(number(value, line)? as i64),
-        "nvm_sector_bytes" => nvm_of(target).sector_bytes = number(value, line)? as u32,
-        "nvm_sectors" => nvm_of(target).sectors = number(value, line)? as u32,
-        "nvm_min_interval" => nvm_of(target).default_min_interval_ns = number(value, line)? as i64,
-        "nvm_erase_ns" => nvm_of(target).erase_ns = Some(number(value, line)? as i64),
-        "nvm_program_ns" => nvm_of(target).program_ns = Some(number(value, line)? as i64),
+        "tick_jitter_ns" => target.tick_jitter_ns = Some(field::<i64>(value, line)?),
+        "nvm_sector_bytes" => nvm_of(target).sector_bytes = field::<u32>(value, line)?,
+        "nvm_sectors" => nvm_of(target).sectors = field::<u32>(value, line)?,
+        "nvm_min_interval" => nvm_of(target).default_min_interval_ns = field::<i64>(value, line)?,
+        "nvm_erase_ns" => nvm_of(target).erase_ns = Some(field::<i64>(value, line)?),
+        "nvm_program_ns" => nvm_of(target).program_ns = Some(field::<i64>(value, line)?),
         "nvm_blocking" => nvm_of(target).blocking = Some(boolean(value, line)?),
         "ram" => target.memory.ram = Some(number(value, line)?),
         "flash" => target.memory.flash = Some(number(value, line)?),
@@ -649,9 +670,9 @@ fn device_key(device: &mut Device, key: &str, value: &str, line: u32) -> Result<
     match key {
         "driver" => device.driver = Some(text(value)),
         "address" => device.address = Some(text(value)),
-        "heartbeat_ns" => device.heartbeat_ns = Some(number(value, line)? as i64),
-        "cycle_ns" => device.cycle_ns = Some(number(value, line)? as i64),
-        "fifo_depth" => device.fifo_depth = Some(number(value, line)? as u32),
+        "heartbeat_ns" => device.heartbeat_ns = Some(field::<i64>(value, line)?),
+        "cycle_ns" => device.cycle_ns = Some(field::<i64>(value, line)?),
+        "fifo_depth" => device.fifo_depth = Some(field::<u32>(value, line)?),
         "byte_rate" => device.byte_rate = Some(number(value, line)?),
         "profile" => device.profile = Some(text(value)),
         _ => {
@@ -685,9 +706,20 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
                 .split_once("..")
                 .ok_or_else(|| ParseError { line, message: format!("`{value}` ist keine Range (`lo..hi`)") })?;
             let parse = |t: &str| {
-                t.trim().parse::<f64>().map_err(|_| ParseError { line, message: format!("`{t}` ist keine Zahl") })
+                t.trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|x| x.is_finite())
+                    .ok_or_else(|| ParseError { line, message: format!("`{t}` ist keine endliche Zahl") })
             };
-            channel.range = Some((parse(lo)?, parse(hi)?));
+            let (lo, hi) = (parse(lo)?, parse(hi)?);
+            if lo > hi {
+                return Err(ParseError {
+                    line,
+                    message: format!("`{value}`: die untere Grenze liegt ueber der oberen"),
+                });
+            }
+            channel.range = Some((lo, hi));
         }
         "safe" => channel.safe = Some(text(value)),
         "device" => channel.device = Some(text(value)),
@@ -696,9 +728,9 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
         "max_rate_hz" => channel.max_rate_hz = Some(number(value, line)?),
         "framing" => channel.framing = Some(text(value)),
         "calibration" => channel.calibration = Some(text(value)),
-        "guard_ns" => channel.guard_ns = Some(number(value, line)? as i64),
-        "jitter_ns" => channel.jitter_ns = Some(number(value, line)? as i64),
-        "latency_ns" => channel.latency_ns = Some(number(value, line)? as i64),
+        "guard_ns" => channel.guard_ns = Some(field::<i64>(value, line)?),
+        "jitter_ns" => channel.jitter_ns = Some(field::<i64>(value, line)?),
+        "latency_ns" => channel.latency_ns = Some(field::<i64>(value, line)?),
         "deep_wake" => channel.deep_wake = Some(boolean(value, line)?),
         "tick_granular" => channel.tick_granular = Some(boolean(value, line)?),
         _ => {
@@ -1049,6 +1081,68 @@ t_io = 120000
         let text = BEISPIEL.replace("takt-hw 1", "takt-hw 99");
         let e = parse(&text).expect_err("abgelehnt");
         assert!(e.message.contains("99"), "{e}");
+    }
+
+    /// SYN-034: Was nicht in sein Feld passt, keine endliche Range ist
+    /// oder doppelt steht, ist ein Fehler mit Zeile — kein still
+    /// umgebrochener Wert (`as i64` machte aus 2^64 - 1 eine -1, `as u32`
+    /// aus 2^32 eine 0) und kein still ueberschriebener.
+    #[test]
+    fn a_value_out_of_its_field_or_a_duplicate_is_refused() {
+        let device = "# takt-hw 1\n[device.uart]\n";
+        let channel = "# takt-hw 1\n[channel adc/ch0]\n";
+        let target = |extra: &str| BEISPIEL.replace("t_io = 120000", &format!("t_io = 1\n{extra}"));
+        let cases = [
+            (format!("{channel}jitter_ns = 18446744073709551615\n"), 3, "jitter_ns ueber i64"),
+            (format!("{channel}guard_ns = 9223372036854775808\n"), 3, "guard_ns ueber i64"),
+            (format!("{device}fifo_depth = 4294967296\n"), 3, "fifo_depth ueber u32"),
+            (format!("{device}heartbeat_ns = 9223372036854775808\n"), 3, "heartbeat_ns ueber i64"),
+            (target("tick_jitter_ns = 9223372036854775808"), 12, "tick_jitter_ns ueber i64"),
+            (target("nvm_sectors = 4294967296"), 12, "nvm_sectors ueber u32"),
+            (format!("{channel}range = nan..1\n"), 3, "nan"),
+            (format!("{channel}range = 0..inf\n"), 3, "inf"),
+            (format!("{channel}range = 5..1\n"), 3, "lo > hi"),
+            (format!("{device}fifo_depth = 4\nfifo_depth = 8\n"), 4, "doppelter Schluessel"),
+            (format!("{device}fifo_depth = 4\n[device.uart]\nbyte_rate = 8\n"), 4, "doppelter Abschnitt"),
+        ];
+        let mut accepted = Vec::new();
+        for (text, line, why) in &cases {
+            match parse(text) {
+                Ok(_) => accepted.push(format!("  {why}")),
+                Err(e) => assert_eq!(e.line, *line, "{why}: {e}"),
+            }
+        }
+        assert!(accepted.is_empty(), "angenommen statt abgelehnt:\n{}", accepted.join("\n"));
+        let ok =
+            parse(&format!("{channel}range = -1.5..2.5\njitter_ns = 9223372036854775807\n")).expect("an der Grenze");
+        assert_eq!(ok.channels["adc/ch0"].jitter_ns, Some(i64::MAX));
+    }
+
+    /// GEN-051: Das Eintragen ist idempotent — ein zweiter Lauf mit denselben
+    /// Werten aendert nichts —, ersetzt einen abweichenden Wert samt
+    /// Kommentar dahinter und traegt Gleitkomma- und Dauerwerte so ein, dass
+    /// sie sich wieder lesen.
+    #[test]
+    fn writing_values_twice_changes_nothing() {
+        let text = "# takt-hw 1\n[channel o/valve]\nsafe = false   # stromlos zu\nrange = 0..1\n";
+        let values = [
+            ("safe", "true".to_string()),
+            ("range", "-1.5..2.5".to_string()),
+            ("jitter_ns", "250000".to_string()),
+            ("guard_ns", "1000000".to_string()),
+        ];
+        let once = with_channel_values(text, "o/valve", &values).expect("lesbar");
+        let twice = with_channel_values(&once, "o/valve", &values).expect("lesbar");
+        assert_eq!(once, twice, "der zweite Lauf aendert die Datei");
+        assert!(once.contains("safe = true   # stromlos zu"), "{once}");
+        assert_eq!(once.matches("safe =").count(), 1, "{once}");
+        let hw = parse(&once).expect("lesbar");
+        let c = hw.channel("o/valve").expect("Kanal");
+        assert_eq!(c.range, Some((-1.5, 2.5)));
+        assert_eq!((c.jitter_ns, c.guard_ns), (Some(250_000), Some(1_000_000)));
+        assert_eq!(c.safe.as_deref(), Some("true"));
+        // Ein Wert, den der Leser ablehnt, kommt nicht zurueck.
+        assert!(with_channel_values(text, "o/valve", &[("range", "2..1".to_string())]).is_err());
     }
 
     /// Ohne Kennung keine Datei.

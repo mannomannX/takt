@@ -15,12 +15,12 @@ output digest : int in 0..1000000 @ hw("bench/digest") with safe = 0
 const WARN : float = 350.0
 
 machine k:
-    var t     : [16] float = default
-    var seed  : u32 = 7
-    var lo    : float = 0.0
-    var hi    : float = 0.0
-    var mean  : float = 0.0
-    var warm  : int in 0..1000000 = 0
+    var t    : [16] float = default
+    var seed : u32 = 7
+    var lo   : float = 0.0
+    var hi   : float = 0.0
+    var mean : float = 0.0
+    var warm : int in 0..1000000 = 0
     initial RUN
     state RUN:
         loop:

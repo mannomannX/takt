@@ -1,0 +1,24 @@
+system:
+    language = 1
+
+# Pruefung 57 (3.9): Auch ein Fliesskommafeld tief in einem Record, einem
+# Array oder einer Enum-Variante nimmt dem Schluessel die Gleichheit; ein
+# Optional ist kein POD.
+
+record Reading:
+    id    : u8
+    value : float
+
+enum Sample: NONE, AT(t: float)
+
+output n : int in 0..8 @ hw("o/n") with safe = 0
+
+machine m:
+    var by_reading : map<Reading, int, 8> = default    # ~ SC-57
+    var by_vector  : map<[2] float, int, 8> = default  # ~ SC-57
+    var by_sample  : map<Sample, int, 8> = default     # ~ SC-57
+    var by_maybe   : map<int?, int, 8> = default       # ~ SC-57
+    initial RUN
+    state RUN:
+        loop:
+            n = 0

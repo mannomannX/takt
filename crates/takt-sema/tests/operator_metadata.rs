@@ -88,3 +88,51 @@ fn metadata_changes_the_program_hash_but_not_the_logic_hash() {
     assert_eq!(logic_hash(&with), logic_hash(&without));
     assert_ne!(program_hash(&with), program_hash(&without));
 }
+
+/// 2.5: `display` ist eine Einheit gleicher Dimension wie der Traeger.
+/// `bar` an einem Kanal in `V` und eine Einheit an einem `bool` sind
+/// Fehler; `mV` an `V` ist erlaubt.
+#[test]
+fn display_needs_a_unit_of_the_same_dimension() {
+    let with_display = |decl: &str| {
+        let src = WITHOUT_META.replace(
+            "input  p : float[V] in 0..100 V @ hw(\"daq/ai0\") with max_age = 50 ms",
+            &format!("input  p : float[V] in 0..100 V @ hw(\"daq/ai0\") with max_age = 50 ms{decl}"),
+        );
+        let out = takt_sema::compile(&src, &Options::default());
+        out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect::<Vec<_>>()
+    };
+    assert!(with_display(", display = mV").is_empty(), "{:?}", with_display(", display = mV"));
+    let e = with_display(", display = bar");
+    assert_eq!(e.len(), 1, "{e:?}");
+    assert!(e[0].contains("SC-3") && e[0].contains("bar"), "{e:?}");
+
+    let src = WITHOUT_META.replace(
+        "output v : bool @ hw(\"gpio/v\") with safe = false",
+        "output v : bool @ hw(\"gpio/v\") with safe = false, display = V",
+    );
+    let out = takt_sema::compile(&src, &Options::default());
+    let e: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert_eq!(e.len(), 1, "{e:?}");
+    assert!(e[0].contains("SC-3") && e[0].contains("display"), "{e:?}");
+}
+
+/// 2.5: Metadaten sind reine Beobachtung — derselbe Trace und dasselbe
+/// Budget mit und ohne sie.
+#[test]
+fn metadata_changes_neither_trace_nor_budget() {
+    let (with, without) = (compile(WITH_META), compile(WITHOUT_META));
+    let stimulus = takt_interp::Trace::parse("t=1 in p 90 V\nt=2 cmd start\n").expect("Stimulus");
+    let run = |p: &Program| {
+        takt_interp::run(p, &stimulus, &takt_interp::RunOptions { ticks: 20, ..Default::default() })
+            .expect("Lauf")
+            .trace
+            .render()
+    };
+    let t = run(&with);
+    assert!(t.contains("state m OPEN"), "{t}");
+    assert_eq!(t, run(&without));
+    let budget = |p: &Program| p.machines.iter().map(|m| m.budget).collect::<Vec<_>>();
+    assert_eq!(budget(&with), budget(&without));
+    assert_eq!(takt_mir::analysis::size::size(&with).total(), takt_mir::analysis::size::size(&without).total());
+}

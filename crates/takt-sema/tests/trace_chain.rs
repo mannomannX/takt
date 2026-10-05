@@ -35,7 +35,7 @@ fn the_chain_is_deterministic_and_bound_to_logic_and_lines() {
     let text = altered.render().replacen("out level 7", "out level 8", 1);
     altered = Trace::parse(&text).expect("lesbar");
     assert_ne!(chain(&altered, &logic), ha, "eine geaenderte Zeile aendert die Kette");
-    let shorter = Trace { lines: a.trace.lines[..a.trace.lines.len() - 1].to_vec() };
+    let shorter = Trace { lines: a.trace.lines[..a.trace.lines.len() - 1].to_vec(), ..Trace::default() };
     assert_ne!(chain(&shorter, &logic), ha, "eine fehlende Zeile aendert die Kette");
 }
 

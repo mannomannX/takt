@@ -18,7 +18,7 @@
   (initial IDLE)
   (state IDLE
     (loop
-      (var next :Pulse? (.peek edges))
+      (var next :Pulse? (.peek edges ()))
       (= peeked (.valid next)))
     (on edges matches (Pulse rising=true) as e
       (= n (+ n 1))

@@ -1,0 +1,2 @@
+t=300 fault hotfire Runtime(Overrun) "Runtime-Fault Overrun" -> SAFE
+t=300 fault pad_model Runtime(Overrun) "Runtime-Fault Overrun" -> FAULTED

@@ -290,9 +290,34 @@ macro_rules! read_field {
 }
 pub(crate) use read_field;
 
+/// Sind die Codes paarweise verschieden, und ist keiner `reserved`? Die
+/// Codecs werten das zur Uebersetzungszeit aus (SYN-029): Ein doppelt
+/// vergebener Code bricht den Build, statt eine Variante oder ein Feld still
+/// zu verdecken — ein Leser faende sonst nur die erste.
+pub const fn distinct(codes: &[u64], reserved: Option<u64>) -> bool {
+    let mut i = 0;
+    while i < codes.len() {
+        if let Some(r) = reserved
+            && codes[i] == r
+        {
+            return false;
+        }
+        let mut j = i + 1;
+        while j < codes.len() {
+            if codes[i] == codes[j] {
+                return false;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Struct-Codec: `codec_struct!(Name { 1 one a, 2 opt b, 3 rep c, 4 meta span })`.
 macro_rules! codec_struct {
     ($name:ident { $($tag:literal $mode:ident $field:ident),* $(,)? }) => {
+        const _: () = assert!(distinct(&[$($tag),*], None), concat!("doppelte Feldnummer in ", stringify!($name)));
         impl Field for $name {
             const WIRE: Wire = Wire::Bytes;
             const NAME: &'static str = stringify!($name);
@@ -302,6 +327,7 @@ macro_rules! codec_struct {
                 w.end(tag);
             }
             fn read(raw: Raw<'_>, r: &Reader) -> Result<Self> {
+                let _depth = r.enter(Self::NAME)?;
                 let n = node(raw, Self::NAME)?;
                 Ok($name { $( $field: read_field!(n, r, $tag, $mode), )* })
             }
@@ -313,6 +339,7 @@ pub(crate) use codec_struct;
 /// Codec eines Enums ohne Nutzlast: Varint der Variantennummer.
 macro_rules! codec_unit_enum {
     ($name:ident { $($tag:literal $variant:ident),* $(,)? }) => {
+        const _: () = assert!(distinct(&[$($tag),*], None), concat!("doppelter Code in ", stringify!($name)));
         impl Field for $name {
             const WIRE: Wire = Wire::Varint;
             const NAME: &'static str = stringify!($name);
@@ -336,6 +363,21 @@ pub(crate) use codec_unit_enum;
 /// `1 Unit`, `2 Tuple(1 one a, 2 opt b)`, `3 Struct { 1 one a, 2 rep b }`.
 macro_rules! codec_enum {
     ($name:ident { $($tag:literal $variant:ident $( ( $($ttag:literal $tmode:ident $tfield:ident),* ) )? $( { $($stag:literal $smode:ident $sfield:ident),* } )? ),* $(,)? }) => {
+        // Feld 0 traegt die Variantennummer; die Felder einer Variante
+        // beginnen darum bei eins.
+        const _: () = {
+            assert!(distinct(&[$($tag),*], None), concat!("doppelte Variantennummer in ", stringify!($name)));
+            $(
+                $( assert!(
+                    distinct(&[$($ttag),*], Some(0)),
+                    concat!("doppelte Feldnummer in ", stringify!($name), "::", stringify!($variant))
+                ); )?
+                $( assert!(
+                    distinct(&[$($stag),*], Some(0)),
+                    concat!("doppelte Feldnummer in ", stringify!($name), "::", stringify!($variant))
+                ); )?
+            )*
+        };
         impl Field for $name {
             const WIRE: Wire = Wire::Bytes;
             const NAME: &'static str = stringify!($name);
@@ -355,13 +397,27 @@ macro_rules! codec_enum {
             }
             #[allow(unused_variables)]
             fn read(raw: Raw<'_>, r: &Reader) -> Result<Self> {
+                let _depth = r.enter(Self::NAME)?;
                 let n = node(raw, Self::NAME)?;
+                // Je Variante eine eigene Funktion: Sonst traegt der Rahmen
+                // dieser Funktion die Zwischenwerte aller Varianten, und
+                // jede Ebene eines geschachtelten Ausdrucks kostete den
+                // Stapel aller Varianten (SYN-031).
                 match read_one::<u64>(&n, r, 0)? {
                     $(
-                        $tag => Ok($name::$variant
-                            $( ( $( read_field!(n, r, $ttag, $tmode) ),* ) )?
-                            $( { $( $sfield: read_field!(n, r, $stag, $smode) ),* } )?
-                        ),
+                        $tag => {
+                            #[inline(never)]
+                            fn variant(
+                                n: &$crate::format::wire::Node<'_>,
+                                r: &$crate::format::wire::Reader,
+                            ) -> Result<$name> {
+                                Ok($name::$variant
+                                    $( ( $( read_field!(n, r, $ttag, $tmode) ),* ) )?
+                                    $( { $( $sfield: read_field!(n, r, $stag, $smode) ),* } )?
+                                )
+                            }
+                            variant(&n, r)
+                        }
                     )*
                     v => Err(FormatError::BadVariant(Self::NAME, v)),
                 }
@@ -370,3 +426,16 @@ macro_rules! codec_enum {
     };
 }
 pub(crate) use codec_enum;
+
+#[cfg(test)]
+mod tests {
+    use super::distinct;
+
+    #[test]
+    fn a_repeated_or_reserved_code_is_not_distinct() {
+        assert!(distinct(&[0, 1, 2], None));
+        assert!(!distinct(&[0, 1, 1], None));
+        assert!(!distinct(&[3, 0], Some(0)));
+        assert!(distinct(&[1, 2], Some(0)) && distinct(&[], Some(0)));
+    }
+}

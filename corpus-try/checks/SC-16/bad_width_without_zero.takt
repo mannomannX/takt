@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: Eine Breite fuellt mit Nullen auf und beginnt darum mit `0`
+# (`{k:08}`); `{k:5}` ist syntaktisch eine Formatangabe, aber keine
+# bekannte.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var k : int in 0..999 = 7
+    initial RUN
+
+    state RUN:
+        loop:
+            log "Zaehler {k:5}"  # ~ SC-16
+            v = true

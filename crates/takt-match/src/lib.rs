@@ -107,11 +107,13 @@ pub fn matches(pieces: &[Piece<'_>], text: &[u8]) -> Option<Match> {
 /// Sucht ein Vorkommen des Musters (`has`, 8.7).
 ///
 /// Die Startpositionen werden der Reihe nach probiert; die erste, an der
-/// der Durchlauf traegt, gewinnt (leftmost). Die Schleife ist durch die
-/// Textlaenge beschraenkt, die ihrerseits durch `N` beschraenkt ist
-/// (3.9) — 4.1 verlangt genau das.
+/// der Durchlauf traegt, gewinnt (leftmost). Angesetzt wird nur an einem
+/// Zeichenanfang oder am Ende (8.7, FB-358), also nie auf einem
+/// UTF-8-Folgebyte `10xxxxxx`. Die Schleife ist durch die Textlaenge
+/// beschraenkt, die ihrerseits durch `N` beschraenkt ist (3.9) — 4.1
+/// verlangt genau das.
 pub fn has(pieces: &[Piece<'_>], text: &[u8]) -> Option<Match> {
-    for start in 0..=text.len() {
+    for start in (0..=text.len()).filter(|&i| text.get(i).is_none_or(|b| b & 0xC0 != 0x80)) {
         if let Some((m, _)) = walk(pieces, text, start as u32) {
             return Some(m);
         }
@@ -134,12 +136,9 @@ fn walk(pieces: &[Piece<'_>], text: &[u8], from: u32) -> Option<(Match, u32)> {
             }
             Piece::Capture(kind) => {
                 let end = take(*kind, &pieces[i + 1..], text, at)?;
-                if out.count as usize >= MAX_CAPTURES {
-                    return None;
-                }
                 // `{_}` bindet nicht (8.7), belegt also keinen Platz.
                 if !matches!(kind, Kind::Any) {
-                    out.spans[out.count as usize] = Span { start: at as u32, end: end as u32 };
+                    *out.spans.get_mut(out.count as usize)? = Span { start: at as u32, end: end as u32 };
                     out.count += 1;
                 }
                 at = end;
@@ -171,12 +170,17 @@ fn is_word(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Laengstes Praefix aus Zeichen der Klasse, hoechstens `max` Zeichen.
-/// Ein leeres Praefix ist kein Treffer — jede Klasse verlangt `{1,…}`.
+/// Der ganze Lauf aus Zeichen der Klasse (8.7): Er endet am ersten Zeichen
+/// ausserhalb oder am Textende. Ein leerer Lauf ist kein Treffer — jede
+/// Klasse verlangt `{1,…}` —, ein Lauf ueber `max` Zeichen auch: Das Muster
+/// bindet nie nur den Anfang einer Zahl oder eines Worts.
 fn bounded(text: &[u8], at: usize, class: fn(u8) -> bool, max: usize) -> Option<usize> {
     let mut end = at;
-    while end < text.len() && end - at < max && class(text[end]) {
+    while end < text.len() && class(text[end]) {
         end += 1;
+        if end - at > max {
+            return None;
+        }
     }
     if end == at { None } else { Some(end) }
 }

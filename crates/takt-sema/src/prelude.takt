@@ -9,32 +9,32 @@ system:
     language = 1
 
 # --- abgeleitete SI-Einheiten (3.2) ------------------------------------
-unit Hz    = 1 1/s
-unit N     = 1 kg*m/s^2
-unit Pa    = 1 N/m^2
-unit J     = 1 N*m
-unit W     = 1 J/s
-unit C     = 1 A*s
-unit V     = 1 W/A
-unit ohm   = 1 V/A
-unit F     = 1 C/V
-unit Wb    = 1 V*s
-unit T     = 1 Wb/m^2
-unit H     = 1 Wb/A
+unit Hz  = 1 1/s
+unit N   = 1 kg*m/s^2
+unit Pa  = 1 N/m^2
+unit J   = 1 N*m
+unit W   = 1 J/s
+unit C   = 1 A*s
+unit V   = 1 W/A
+unit ohm = 1 V/A
+unit F   = 1 C/V
+unit Wb  = 1 V*s
+unit T   = 1 Wb/m^2
+unit H   = 1 Wb/A
 
 # --- weitere Einheiten (3.2) -------------------------------------------
-unit min   = 60 s^1
-unit h     = 3600 s^1
-unit d     = 86400 s^1
-unit bar   = 100000 Pa
-unit psi   = 6894.757293168 Pa
-unit pct   = 0.01
-unit B     = 1
-unit Ah    = 3600 C
-unit Wh    = 3600 J
-unit degC  = affine(K, 273.15)
-unit degR  = 5/9 K
-unit degF  = affine(degR, 459.67)
+unit min  = 60 s^1
+unit h    = 3600 s^1
+unit d    = 86400 s^1
+unit bar  = 100000 Pa
+unit psi  = 6894.757293168 Pa
+unit pct  = 0.01
+unit B    = 1
+unit Ah   = 3600 C
+unit Wh   = 3600 J
+unit degC = affine(K, 273.15)
+unit degR = 5/9 K
+unit degF = affine(degR, 459.67)
 
 # --- offene Enums (2.5) ------------------------------------------------
 enum ArithKind: OVERFLOW, DIV_ZERO, NON_FINITE, DOMAIN, SINGULAR
@@ -116,17 +116,17 @@ const FAST_PIO2_3 : float = 7.54978995489188216e-8
 
 # `sin` oder `cos` auf der reduzierten Stelle, um `shift` Viertel versetzt.
 fn fast_quarter(x: float in -1.0e4..1.0e4, shift: int in 0..1) -> float:
-    var k : int in -6400..6400 = round(x * FAST_2_OVER_PI)
+    var k  : int in -6400..6400 = round(x * FAST_2_OVER_PI)
     var kf : float = k as float
-    var r : float = fma(0.0 - kf, FAST_PIO2_1, x)
+    var r  : float = fma(0.0 - kf, FAST_PIO2_1, x)
     r = fma(0.0 - kf, FAST_PIO2_2, r)
     r = fma(0.0 - kf, FAST_PIO2_3, r)
-    var z : float = r * r
+    var z  : float = r * r
     var ps : float = fma(fma(-1.9515295891e-4, z, 8.3321608736e-3), z, -1.6666654611e-1)
-    var s : float = fma(ps * z, r, r)
+    var s  : float = fma(ps * z, r, r)
     var pc : float = fma(fma(2.443315711809948e-5, z, -1.388731625493765e-3), z, 4.166664568298827e-2)
-    var c : float = fma(pc * z, z, fma(-0.5, z, 1.0))
-    var q : int in 0..3 = ((k + shift) % 4 + 4) % 4
+    var c  : float = fma(pc * z, z, fma(-0.5, z, 1.0))
+    var q  : int in 0..3 = ((k + shift) % 4 + 4) % 4
     return s if q == 0 else (c if q == 1 else (0.0 - s if q == 2 else 0.0 - c))
 
 # `sin(x)` fuer |x| <= 1e4. Absoluter Fehler hoechstens 5e-9 bei
@@ -147,9 +147,9 @@ const FAST_LN2_2 : float = -2.12194440e-4
 # `exp(x)` fuer |x| <= 80. `exp` ist nicht beschraenkt, die Schranke darum
 # relativ: hoechstens 5e-9 bei `float = f64`, 3e-7 bei `float = f32`.
 fn exp_fast(x: float in -80.0..80.0) -> float:
-    var k : int in -116..116 = round(x * FAST_LOG2E)
+    var k  : int in -116..116 = round(x * FAST_LOG2E)
     var kf : float = k as float
-    var r : float = fma(0.0 - kf, FAST_LN2_1, x)
+    var r  : float = fma(0.0 - kf, FAST_LN2_1, x)
     r = fma(0.0 - kf, FAST_LN2_2, r)
     var p : float = 1.9875691500e-4
     p = fma(p, r, 1.3981999507e-3)
@@ -160,7 +160,7 @@ fn exp_fast(x: float in -80.0..80.0) -> float:
     var y : float = fma(p * r, r, r + 1.0)
     # 2^k exakt: Faktoren 2^(2^j) ueber die Bits von |k|, ohne Rundung.
     var base : float = 2.0 if k >= 0 else 0.5
-    var n : int in 0..116 = abs(k)
+    var n    : int in 0..116 = abs(k)
     for j in range(7):
         if ((n >> j) & 1) == 1:
             y = y * base
@@ -177,7 +177,7 @@ const FAST_PI       : float = 3.141592653589793
 # `atan(a)` fuer a >= 0, reduziert auf |t| <= tan(pi/8).
 fn fast_atan(a: float) -> float:
     var base : float = 0.0
-    var t : float = a
+    var t    : float = a
     if a > FAST_TAN_3PI8:
         base = FAST_PIO2
         t = -1.0 / a
@@ -379,7 +379,7 @@ block hold_last[U](max_hold: Duration):
 
 block window_min[U, const N in 1..1024]():
     var buf  : [N] float[U] = default
-    var next : int in 0..N-1 = 0
+    var next : int in 0..N - 1 = 0
     var fill : int in 0..N = 0
     step(x: float[U]) -> float[U]:
         buf[next] = x
@@ -394,7 +394,7 @@ block window_min[U, const N in 1..1024]():
 
 block window_max[U, const N in 1..1024]():
     var buf  : [N] float[U] = default
-    var next : int in 0..N-1 = 0
+    var next : int in 0..N - 1 = 0
     var fill : int in 0..N = 0
     step(x: float[U]) -> float[U]:
         buf[next] = x
@@ -409,7 +409,7 @@ block window_max[U, const N in 1..1024]():
 
 block window_mean[U, const N in 1..1024]():
     var buf  : [N] float[U] = default
-    var next : int in 0..N-1 = 0
+    var next : int in 0..N - 1 = 0
     var fill : int in 0..N = 0
     step(x: float[U]) -> float[U]:
         buf[next] = x
@@ -424,7 +424,7 @@ block window_mean[U, const N in 1..1024]():
 
 block window_rms[U, const N in 1..1024]():
     var buf  : [N] float[U] = default
-    var next : int in 0..N-1 = 0
+    var next : int in 0..N - 1 = 0
     var fill : int in 0..N = 0
     step(x: float[U]) -> float[U]:
         buf[next] = x
@@ -487,7 +487,7 @@ block writer[const N in 1..65536]():
         return ok
     mark() -> int:
         return buf.len
-    patch_u16(m: int in 0..N-1, v: u16):
+    patch_u16(m: int in 0..N - 1, v: u16):
         buf[m] = (v & 0xFF) as u8
         buf[m + 1] = (v >> 8) as u8
     data() -> bytes<N>:
@@ -518,7 +518,7 @@ block qp_box[const N in 1..16](h: mat<N, N>, g: mat<N, 1>,
                                lb: mat<N, 1>, ub: mat<N, 1>,
                                iters: int in 1..MAX_QP_ITERS, tol: float):
     var x    : mat<N, 1> = default
-    var done : bool      = false
+    var done : bool = false
 
     solve():
         # Schrittweite aus der Zeilensummennorm.
@@ -567,7 +567,8 @@ block qp_box[const N in 1..16](h: mat<N, N>, g: mat<N, 1>,
 #   instance flash = flash_model(cmd = flash_cmd, data = flash_data,
 #       status = flash_status_sim, rx = flash_rx_sim,
 #       seed = flash_seed, seed_addr = flash_seed_addr,
-#       sectors = 16, t_erase = 20 ms, t_program = 2 ms, cut_at_byte = 0)
+#       sectors = 16, t_erase = 20 ms, t_program = 2 ms, cut_at_byte = 0,
+#       cut_at_chunk = 0)
 # `seed` und `seed_addr` fuellen den Flash vor dem Test: Ein Szenario stellt
 # `seed_addr` und sendet die Bytes, das Modell schreibt sie sofort ab dieser
 # Adresse (ohne Busy, ohne Zaehlung fuer `cut_at_byte`).
@@ -586,24 +587,33 @@ fn flash_blank() -> bytes<256>:
 # Stromausfall-Injektion: `cut_at_byte > 0` bricht das Programmieren nach
 # so vielen Bytes des Laufs (ueber alle PROGRAM-Kommandos gezaehlt) einmal
 # mit ERROR(1) ab; geschrieben ist, was davor kam, der Rest bleibt
-# geloescht. `data.sent` sind die im Tick gesendeten Bytes (8.8), `cmd`
-# liest das Modell mit Unit-Delay.
-machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: output FlashStatus, rx: output stream<bytes<4096>>, seed: input stream<u8>, seed_addr: input int, sectors: int in 1..4096, t_erase: Duration, t_program: Duration, cut_at_byte: int in 0..1_000_000):
-    var mem     : map<int, bytes<256>, 256> = default
-    var seed_at : int in 0..0xFFFF_FFFF = 0
-    var seeded  : int in 0..0xFFFF_FFFF = 0
-    var addr    : int in 0..0xFFFF_FFFF = 0
-    var size    : int in 0..0xFFFF_FFFF = 0
-    var written : int in 0..0xFFFF_FFFF = 0
-    var total   : int in 0..1_000_000 = 0
-    var cut     : bool = false
-    var cut_done : bool = false
-    var chunk   : bytes<256> = default
-    var page    : bytes<4352> = default
-    var out     : bytes<4096> = default
-    var code    : u8 = 0
-    var op      : int in 0..2 = 0
-    var ok      : bool = false
+# geloescht. ERASE loescht Chunk fuer Chunk ueber `t_erase`; `cut_at_chunk
+# > 0` bricht es nach so vielen geloeschten Chunks des Laufs (ueber alle
+# ERASE-Kommandos gezaehlt) einmal mit ERROR(1) ab: die Chunks davor lesen
+# 0xFF, die ab dem Schnitt behalten ihren Inhalt.
+# `data.sent` sind die im Tick gesendeten Bytes (8.8), `cmd`
+# liest das Modell mit Unit-Delay. Beschrieben sein koennen hoechstens 256
+# Chunks (64 KiB); der naechste faultet das Modell, statt still zu fehlen.
+machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: output FlashStatus, rx: output stream<bytes<4096>>, seed: input stream<u8>, seed_addr: input int, sectors: int in 1..4096, t_erase: Duration, t_program: Duration, cut_at_byte: int in 0..1_000_000, cut_at_chunk: int in 0..1_000_000 = 0):
+    var mem            : map<int, bytes<256>, 256> = default
+    var seed_at        : int in 0..0xFFFF_FFFF = 0
+    var seeded         : int in 0..0xFFFF_FFFF = 0
+    var addr           : int in 0..0xFFFF_FFFF = 0
+    var size           : int in 0..0xFFFF_FFFF = 0
+    var written        : int in 0..0xFFFF_FFFF = 0
+    var total          : int in 0..1_000_000 = 0
+    var cut            : bool = false
+    var cut_done       : bool = false
+    var chunks         : int in 0..16 = 0
+    var due            : int in 0..16 = 0
+    var erased         : int in 0..1_000_000 = 0
+    var erase_cut_done : bool = false
+    var chunk          : bytes<256> = default
+    var page           : bytes<4352> = default
+    var out            : bytes<4096> = default
+    var code           : u8 = 0
+    var op             : int in 0..2 = 0
+    var ok             : bool = false
     initial IDLE
 
     loop:
@@ -614,6 +624,7 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
             chunk = mem.get((seed_at + seeded) / 256).or(flash_blank())
             chunk[(seed_at + seeded) % 256] = x.data
             ok = mem.insert((seed_at + seeded) / 256, chunk)
+            check ok, "flash_model haelt hoechstens 256 beschriebene Chunks (64 KiB)"
             seeded = seeded + 1
 
     state IDLE:
@@ -624,6 +635,7 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
                 case ERASE(s):
                     addr = (s as int) * 4096
                     size = 4096
+                    cut = false
                     op = 0
                 case PROGRAM(a, n):
                     addr = a as int
@@ -648,11 +660,24 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
                 else:
                     -> READING
 
+    # Faellig sind nach `time_in_state` anteilig viele der 16 Chunks, nach
+    # `t_erase` alle.
     state ERASING:
         enter:
             status = BUSY
+            code = 1
+            chunks = 0
+        loop:
+            due = 16 if time_in_state >= t_erase else min(16, (time_in_state * 16) / t_erase)
             for i in range(16):
-                ok = mem.remove(addr / 256 + i)
+                if chunks < due and not cut:
+                    ok = mem.remove(addr / 256 + chunks)
+                    chunks = chunks + 1
+                    erased = min(erased + 1, 1_000_000)
+                    cut = cut_at_chunk > 0 and not erase_cut_done and erased >= cut_at_chunk
+        when cut:
+            erase_cut_done = true
+            -> FAILED
         after t_erase: -> DONE_WAIT
 
     state PROGRAMMING:
@@ -665,6 +690,7 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
                     chunk = mem.get((addr + written) / 256).or(flash_blank())
                     chunk[(addr + written) % 256] = x
                     ok = mem.insert((addr + written) / 256, chunk)
+                    check ok, "flash_model haelt hoechstens 256 beschriebene Chunks (64 KiB)"
                     written = written + 1
                     total = total + 1
                     cut = cut_at_byte > 0 and not cut_done and total >= cut_at_byte

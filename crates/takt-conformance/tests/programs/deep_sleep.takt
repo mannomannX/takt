@@ -8,8 +8,8 @@ system:
     tick     = 10 ms
 
 input  previous_run : PreviousRun @ hw("sys/previous_run")
-output next_run     : NextRun     @ hw("sys/next_run")    with safe = NONE
-output woke         : bool        @ hw("ui/led")          with safe = false
+output next_run     : NextRun     @ hw("sys/next_run") with safe = NONE
+output woke         : bool        @ hw("ui/led")       with safe = false
 
 machine m:
     initial START

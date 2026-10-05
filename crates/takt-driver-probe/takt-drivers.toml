@@ -9,6 +9,12 @@
 "edge_c/rx" = "takt_driver_probe::EdgeCRx"
 "edge_o/o" = "takt_driver_probe::EdgeOO"
 "edge_o" = "takt_driver_probe::EdgeO"
+# Zeile 6, dritter Fall und Dauerversagen (KON1-012): ein Ausgabestrom, der
+# einmal mehr Platz meldet, als er fasst, und ein Ausgang, der nie bestaetigt.
+"edge_t/tx" = "takt_driver_probe::EdgeTTx"
+"edge_t" = "takt_driver_probe::Alive"
+"edge_f/o" = "takt_driver_probe::EdgeFO"
+"edge_f" = "takt_driver_probe::Alive"
 
 # Was `recorded.takt` nicht liest (8.2).
 "edge_r/level" = "takt_driver_probe::EdgeRLevel"
@@ -18,3 +24,22 @@
 "edge_r/frames" = "takt_driver_probe::EdgeRFrames"
 "edge_r/text" = "takt_driver_probe::EdgeRText"
 "edge_r/raw" = "takt_driver_probe::EdgeRRaw"
+
+# Das vertragstreue Pruefgeraet fuer `fair.takt` (GEN-046).
+"fair_a/level" = "takt_driver_probe::FairLevel"
+"fair_a/spike" = "takt_driver_probe::FairSpike"
+"fair_u/rx" = "takt_driver_probe::FairRx"
+"fair_o/o" = "takt_driver_probe::FairO"
+"fair_o" = "takt_driver_probe::FairDevice"
+
+# Ausdrueckliche Stummel (13.8): Adressen, an denen das Pruefgeraet nichts
+# prueft. Ein Pruefstand ohne Geraet fuer eine Adresse baut nicht.
+"o/p_ok" = "takt_driver_probe::Confirmed"
+"o/q_ok" = "takt_driver_probe::Confirmed"
+"o/k_ok" = "takt_driver_probe::Confirmed"
+"o/lines" = "takt_driver_probe::Confirmed"
+"o/sum" = "takt_driver_probe::Confirmed"
+"o/up" = "takt_driver_probe::Confirmed"
+"o/beat" = "takt_driver_probe::Confirmed"
+"o" = "takt_driver_probe::Alive"
+"edge_r/quiet" = "takt_driver_probe::Quiet"

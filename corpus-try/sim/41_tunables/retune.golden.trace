@@ -1,0 +1,16 @@
+t=0 state m RUN
+t=0 out y 2
+t=1 out y 4
+t=2 out y 6
+t=3 tune GAIN 5
+t=3 out y 20
+t=4 out y 25
+t=5 out y 30
+t=6 tune GAIN 200 rejected
+t=6 out y 35
+t=7 out y 40
+t=8 tune GAIN 100
+t=8 out y 900
+t=9 out y 1000
+t=10 out y 1100
+t=10 verdict-final INCONCLUSIVE

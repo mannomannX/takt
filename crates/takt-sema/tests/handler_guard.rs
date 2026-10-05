@@ -75,3 +75,44 @@ machine m:
     assert!(!t.contains("out pending 2"), "{t}");
     assert!(t.contains("t=2 out a 1"), "{t}");
 }
+
+/// Muster, Captures und Guard: Der Guard liest die Captures des Musters;
+/// `false` reicht das Element an den Auffanghandler weiter (8.7).
+const CAPTURES: &str = "
+output big : int in 0..100 @ hw(\"o/big\") with safe = 0
+output rest : int in 0..100 @ hw(\"o/rest\") with safe = 0
+machine m:
+    fault -> SAFE
+    var nb : int in 0..100 = 0
+    var nr : int in 0..100 = 0
+    initial RUN
+    state RUN:
+        on rx matches \"v={n:int}\" as e when GUARD:
+            nb = nb + 1
+            big = nb
+        on rx as e:
+            nr = nr + 1
+            rest = nr
+    state SAFE:
+        loop:
+            big = 99
+";
+
+#[test]
+fn a_guard_reads_the_captures_of_its_pattern() {
+    let p = compile(&format!("{RX}{}", CAPTURES.replace("GUARD", "e.n > 5")));
+    let t = trace(&p, "t=1 in rx \"v=3\"\nt=2 in rx \"v=7\"\nt=3 in rx \"x\"\n", 4);
+    assert!(t.contains("t=1 out rest 1\n"), "3 ist nicht groesser 5: {t}");
+    assert!(t.contains("t=2 out big 1\n"), "7 schon: {t}");
+    assert!(t.contains("t=3 out rest 2\n"), "kein Muster, Auffanghandler: {t}");
+}
+
+#[test]
+fn a_guard_that_faults_takes_the_fault_path() {
+    // Der Guard ist ein Ausdruck wie jeder andere: Seine implizite Pruefung
+    // faultet die Maschine (4.1, 5.3).
+    let p = compile(&format!("{RX}{}", CAPTURES.replace("GUARD", "100 / e.n > 5")));
+    let t = trace(&p, "t=1 in rx \"v=0\"\n", 3);
+    assert!(t.contains("t=1 fault m Arithmetic(DivZero)"), "{t}");
+    assert!(t.contains("t=1 state m SAFE"), "{t}");
+}

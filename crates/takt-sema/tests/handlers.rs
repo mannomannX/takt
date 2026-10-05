@@ -254,40 +254,18 @@ machine reader:
         4,
     );
     // FIRST verarbeitet genau ein Element und wechselt; die restlichen
-    // bleiben im Puffer und werden vom Folgezustand gelesen.
+    // bleiben im Puffer und werden vom Folgezustand gelesen. In Tick 1 ist
+    // SECOND im Eintritts-Tick (Fenster leer), in Tick 2 sieht es die zwei
+    // Reste aus Tick 0 und die drei aus Tick 1: 1 + 5 = 6. Ohne Rest waeren
+    // es 4.
     assert!(trace.contains("t=1 out seen 1\n"), "ein Element, dann Uebergang: {trace}");
-    assert!(trace.contains("t=2 out seen"), "der Rest bleibt erhalten: {trace}");
+    assert!(trace.contains("t=2 out seen 6\n"), "der Rest bleibt erhalten: {trace}");
 }
 
 #[test]
 fn the_window_is_empty_in_the_entry_tick() {
     // 8.7 und 9.6: „`on`-Handler laufen im Entry-Modus nicht (das
     // Stream-Fenster ist dort leer)".
-    let trace = simulate(
-        "\
-stream<u8> q with capacity = 16
-
-output seen : int in 0..99 @ hw(\"o/s\") with safe = 0
-command go
-
-machine writer:
-    initial RUN
-    state RUN:
-        loop:
-            send q, 1
-
-machine reader:
-    var n : int in 0..99 = 0
-    initial IDLE
-    state IDLE:
-        when go: -> ACTIVE
-    state ACTIVE:
-        on q as e:
-            n = n + 1
-            seen = n
-",
-        6,
-    );
     let program = compile(
         "\
 stream<u8> q with capacity = 16
@@ -315,11 +293,37 @@ machine reader:
     let stim = Trace::parse("t=2 cmd go\n").expect("Stimulus");
     let out = run(&program, &stim, &RunOptions { ticks: 6, ..Default::default() }).expect("Lauf");
     let with_go = out.trace.render();
-    let _ = trace;
-    // Im Eintritts-Tick 2 laeuft kein Handler; ab Tick 3 werden die
-    // aufgestauten Elemente verarbeitet.
+    // Im Eintritts-Tick 2 laeuft kein Handler; in Tick 3 werden die
+    // aufgestauten Elemente verarbeitet: gesendet in den Ticks 0 bis 2.
     assert!(!with_go.contains("t=2 out seen"), "kein Handler im Entry-Tick: {with_go}");
-    assert!(with_go.contains("t=3 out seen"), "{with_go}");
+    assert!(with_go.contains("t=3 out seen 3\n"), "{with_go}");
+}
+
+#[test]
+fn a_for_loop_over_a_stream_sees_an_empty_window_in_the_entry_tick() {
+    // 9.6: `windows(m)` ist im Modus ENTRY leer — fuer `for x in s` wie fuer
+    // Handler. Tick 0 ist fuer jede Maschine ein Eintritts-Tick (9.3).
+    let trace = driven(
+        "\
+input rx : stream<u8> @ hw(\"u/rx\") with max_rate = 200 kHz, capacity = 256
+
+output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    var count : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        loop:
+            for x in rx:
+                count = (count + 1) % 100
+            n = count
+",
+        "t=0 in rx 120\nt=0 in rx 121\nt=0 in rx 122\n",
+        3,
+    );
+    assert!(trace.contains("t=0 out n 0\n"), "das Fenster ist im Eintritts-Tick leer: {trace}");
+    assert!(trace.contains("t=1 out n 3\n"), "jedes Element genau einmal: {trace}");
+    assert!(!trace.contains("out n 6"), "kein Element doppelt: {trace}");
 }
 
 #[test]
@@ -401,8 +405,12 @@ machine m:
 ",
         2,
     );
-    // Die Bytes verlassen den Puffer im selben Tick (8.8).
-    let _ = trace;
+    // Die Bytes verlassen den Puffer im selben Tick (8.8): 100 kHz nehmen je
+    // Tick 100 Bytes ab, beide Bytes stehen in Tick 0 im Trace. Ein Strom
+    // traegt kein Latch: Jeder Tick nennt, was er gesendet hat.
+    for t in 0..=2 {
+        assert!(trace.contains(&format!("t={t} out tx [0x41, 0x42]\n")), "Tick {t}: {trace}");
+    }
 }
 
 #[test]
@@ -766,4 +774,250 @@ fn a_machine_level_handler_listens_in_every_state() {
 fn a_machine_level_handler_in_a_machine_with_one_state_compiles() {
     let trace = simulate(&machine_level_reader("    state A:\n        after 1 s: -> A\n"), 2);
     assert!(trace.contains("t=2 out n 2\n"), "{trace}");
+}
+
+/// Ein Schreiber mit `sends` als Rumpf seines `loop:` und ein Leser mit
+/// Periode `every` an einem internen Strom der Kapazitaet `cap`.
+fn writer_and_reader(sends: &str, every: u32, cap: u32) -> String {
+    format!(
+        "\
+input  rx : stream<u8> @ hw(\"u/rx\") with max_rate = 3 kHz, capacity = 3
+output rx_sim : stream<u8> @ sim(\"u/rx\")
+stream<u8> q with capacity = {cap}
+
+output v : bool @ hw(\"o/v\") with safe = false
+
+machine writer:
+    initial RUN
+    state RUN:
+        loop:
+{sends}
+machine reader every {every} ms:
+    initial RUN2
+    state RUN2:
+        on q as e:
+            v = true
+"
+    )
+}
+
+/// Pruefungen 17 und 43 (8.6): `MAXPT * n_m <= CAP` mit MAXPT als
+/// statischer Hoechstzahl der `send` je Aktivierung des Schreibers — eine
+/// Schleife zaehlt mit ihrer Schranke, ein Handler je Element seines
+/// Fensters.
+#[test]
+fn maxpt_counts_the_sends_of_one_activation() {
+    let once = "            send q, 1\n";
+    let three = "            send q, 1\n            send q, 2\n            send q, 3\n";
+    let looped = "            for i in range(3):\n                send q, i as u8\n";
+    let handled = "            pass\n        on rx as e:\n            send q, e.data\n";
+    for (what, sends, every, cap, rejected) in [
+        ("Grenze MAXPT * n_m == CAP", once, 4, 4, false),
+        ("eins darueber", once, 5, 4, true),
+        ("drei send hintereinander", three, 2, 4, true),
+        ("drei send in einer Schleife", looped, 2, 4, true),
+        ("drei send in einer Schleife, Platz genug", looped, 2, 6, false),
+        ("ein send je Element eines Fensters aus drei", handled, 2, 4, true),
+        ("ein send je Element, Platz genug", handled, 2, 6, false),
+    ] {
+        let e = errors(&writer_and_reader(sends, every, cap));
+        assert_eq!(e.contains("[SC-17]"), rejected, "{what}: {e}");
+    }
+}
+
+#[test]
+fn a_stream_guard_leaves_the_elements_after_its_match() {
+    // 8.7: Der Guard setzt `examined` auf das erste passende Element; die
+    // zwei danach bleiben. GOT sieht sie in Tick 2 neben den drei aus
+    // Tick 1: `q.count` ist 5. Haette der Guard alles konsumiert, waere es 3.
+    let trace = simulate(
+        "\
+stream<u8> q with capacity = 16
+
+output st : int in 0..9 @ hw(\"o/st\") with safe = 0
+output left : int in 0..99 @ hw(\"o/left\") with safe = 0
+
+machine writer:
+    initial RUN
+    state RUN:
+        loop:
+            send q, 1
+            send q, 2
+            send q, 3
+
+machine reader:
+    initial WAIT
+    state WAIT:
+        loop:
+            st = 1
+        when q as e: -> GOT
+    state GOT:
+        loop:
+            st = 2
+            left = q.count
+        on q as e:
+            st = 2
+",
+        3,
+    );
+    assert!(trace.contains("t=1 out st 2\n"), "der Guard trifft in Tick 1: {trace}");
+    assert!(trace.contains("t=2 out left 5\n"), "zwei Reste und drei neue: {trace}");
+}
+
+#[test]
+fn handlers_of_parent_and_child_see_the_same_window() {
+    // 9.7: „Handler verschiedener Ebenen sehen dasselbe W"; jedes Element
+    // erreicht den Handler des Elternzustands und den des Kindes.
+    let trace = simulate(
+        "\
+stream<u8> q with capacity = 16
+
+output outer : int in 0..99 @ hw(\"o/outer\") with safe = 0
+output inner : int in 0..99 @ hw(\"o/inner\") with safe = 0
+
+machine writer:
+    initial RUN
+    state RUN:
+        loop:
+            send q, 1
+            send q, 2
+
+machine reader:
+    var a : int in 0..99 = 0
+    var b : int in 0..99 = 0
+    initial PARENT
+    state PARENT:
+        initial CHILD
+        on q as e:
+            a = (a + 1) % 100
+            outer = a
+        state CHILD:
+            on q as e:
+                b = (b + 1) % 100
+                inner = b
+",
+        3,
+    );
+    assert!(trace.contains("t=1 out outer 2\n") && trace.contains("t=1 out inner 2\n"), "{trace}");
+    assert!(trace.contains("t=3 out outer 6\n") && trace.contains("t=3 out inner 6\n"), "{trace}");
+}
+
+#[test]
+fn streams_dispatch_in_the_order_of_their_handlers() {
+    // 9.7: `for s in streams(st) in Deklarationsreihenfolge`. Die Handler auf
+    // `b` stehen zuerst im Zustand, `a` ist zuerst deklariert; der
+    // Interpreter nimmt die Reihenfolge der Handler im Zustand. Welche
+    // Deklaration 9.7 meint, ist offen (Bericht sema_a, SEM1-051).
+    let trace = simulate(
+        "\
+stream<u8> a with capacity = 4
+stream<u8> b with capacity = 4
+
+output order : int in 0..99 @ hw(\"o/order\") with safe = 0
+
+machine writer:
+    initial RUN
+    state RUN:
+        loop:
+            send a, 1
+            send b, 2
+
+machine reader:
+    var trail : int in 0..99 = 0
+    initial RUN2
+    state RUN2:
+        on b as e:
+            trail = (trail * 10 + 2) % 100
+            order = trail
+        on a as e:
+            trail = (trail * 10 + 1) % 100
+            order = trail
+",
+        2,
+    );
+    assert!(trace.contains("t=1 out order 21\n"), "erst `b`, dann `a`: {trace}");
+}
+
+#[test]
+fn every_consumer_sees_every_element_at_its_own_period() {
+    // 9.6: Jeder Konsument hat seinen Cursor; geraeumt wird hinter dem
+    // kleinsten. Der schnelle Leser sieht je Tick ein Element, der langsame
+    // alle drei Ticks drei, und keiner verliert eines.
+    let trace = simulate(
+        "\
+stream<u8> q with capacity = 4
+
+output fast : int in 0..99 @ hw(\"o/fast\") with safe = 0
+output slow : int in 0..99 @ hw(\"o/slow\") with safe = 0
+
+machine writer:
+    initial RUN
+    state RUN:
+        loop:
+            send q, 1
+
+machine quick:
+    var n : int in 0..99 = 0
+    initial RUN2
+    state RUN2:
+        on q as e:
+            n = (n + 1) % 100
+            fast = n
+
+machine lazy every 3 ms:
+    var n : int in 0..99 = 0
+    initial RUN3
+    state RUN3:
+        on q as e:
+            n = (n + 1) % 100
+            slow = n
+",
+        9,
+    );
+    assert!(trace.contains("t=6 out fast 6\n") && trace.contains("t=9 out fast 9\n"), "{trace}");
+    assert!(trace.contains("t=6 out slow 6\n") && trace.contains("t=9 out slow 9\n"), "{trace}");
+    assert!(!trace.contains("fault"), "{trace}");
+}
+
+#[test]
+fn the_consumers_of_a_stream_are_known_statically() {
+    // Pruefung 17: Die Konsumentenmenge steht zur Uebersetzungszeit fest —
+    // jede Maschine mit einem Konstrukt, das das Fenster untersucht. Wer nur
+    // `count` liest, untersucht nichts und ist keiner (8.6).
+    let p = compile(
+        "\
+stream<u8> q with capacity = 8
+
+output a : int in 0..99 @ hw(\"o/a\") with safe = 0
+output b : int in 0..99 @ hw(\"o/b\") with safe = 0
+output c : int in 0..99 @ hw(\"o/c\") with safe = 0
+
+machine source:
+    initial RUN
+    state RUN:
+        loop:
+            send q, 1
+
+machine handled:
+    initial RUN
+    state RUN:
+        on q as e:
+            a = 1
+
+machine looped every 2 ms:
+    initial RUN
+    state RUN:
+        loop:
+            for e in q:
+                b = 1
+
+machine counted:
+    initial RUN
+    state RUN:
+        loop:
+            c = q.count
+",
+    );
+    let names: Vec<&str> = p.streams[0].readers.iter().map(|m| p.machines[m.index()].name.as_str()).collect();
+    assert_eq!(names, ["handled", "looped"]);
 }

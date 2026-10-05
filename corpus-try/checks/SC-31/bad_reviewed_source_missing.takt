@@ -1,0 +1,17 @@
+system:
+    language   = 1
+    tick       = 1 ms
+    tcb_policy = reviewed(my_own)
+
+# Pruefung 31 mit `reviewed` (4.5, v1.2): Der Schluessel ist der Hash der
+# Quelle; ohne lesbare Quelle ist nichts zu pruefen.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+native fn my_own(x: int) -> int from "missing.rs" with cost = 1, stack = 8, total  # ~ SC-31
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = my_own(1)

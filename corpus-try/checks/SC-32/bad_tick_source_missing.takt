@@ -1,0 +1,15 @@
+system:  # ~ SC-32
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 32: Ohne `tick_source` ist die Pruefung nicht entscheidbar, und
+# nicht entscheidbar heisst nicht bestanden (Tabelle 10, Zeile 32).
+
+output led : bool @ hw("ui/led") with safe = false
+
+machine m:
+    initial S
+
+    state S:
+        loop:
+            led = true

@@ -569,6 +569,8 @@ dependencies = [
  "takt-mir",
  "takt-native",
  "takt-prove",
+ "takt-rt-baremetal",
+ "takt-rt-core",
  "takt-sema",
  "takt-testkit",
 ]
@@ -648,6 +650,7 @@ dependencies = [
 name = "takt-llvm"
 version = "0.1.0"
 dependencies = [
+ "libtaktm",
  "takt-diag",
  "takt-match",
  "takt-mir",
@@ -665,6 +668,7 @@ version = "0.1.0"
 dependencies = [
  "takt-diag",
  "takt-native",
+ "takt-sema",
 ]
 
 [[package]]
@@ -684,9 +688,12 @@ dependencies = [
 name = "takt-prove"
 version = "0.1.0"
 dependencies = [
+ "takt-conformance",
  "takt-diag",
  "takt-interp",
+ "takt-llvm",
  "takt-mir",
+ "takt-rt-core",
  "takt-sema",
  "takt-testkit",
 ]

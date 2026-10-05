@@ -18,12 +18,7 @@ use esp_hal::rtc_cntl::{SocResetReason, reset_reason};
 use esp_hal::system::Cpu;
 use esp_hal::time::{Duration, Instant};
 use portable_atomic::{AtomicU32, Ordering};
-use takt_board_support::platform::{ENDED_MARK, RUNNING, deep_sleep_us};
-
-/// Ohne Zeitgeber verlangt `esp-hal` trotzdem eine Weckquelle; der
-/// Zeitgeber steht dann auf dreissig Jahren. Der Vergleicher fasst 48 Bit
-/// Takte des langsamen RTC-Takts, rund 65 Jahre.
-const WITHOUT_TIMER_US: u64 = 30 * 365 * 86_400 * 1_000_000;
+use takt_board_support::platform::{ENDED_MARK, NO_WAKE_TIMER_US, RUNNING, deep_sleep_us};
 
 /// Das Wort des geordneten Endes (12.7), was der vorige Lauf hinterliess.
 #[esp_hal::ram(unstable(rtc_fast, persistent))]
@@ -73,7 +68,7 @@ pub fn deep_sleep(duration_ns: Option<i64>) -> ! {
     ENDED.store(ENDED_MARK, Ordering::Relaxed);
     // SAFETY: Der Lauf ist zu Ende; ausser diesem Aufruf haelt niemand `LPWR`.
     let mut low = LowPower::new(unsafe { LPWR::steal() });
-    let us = duration_ns.map_or(WITHOUT_TIMER_US, deep_sleep_us);
+    let us = duration_ns.map_or(NO_WAKE_TIMER_US, deep_sleep_us);
     low.set_wakeup_deadline(Instant::now() + Duration::from_micros(us));
     low.sleep_deep(RtcSleepConfig::deep())
 }

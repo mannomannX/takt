@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-44 (4.5): Ein Handle gehoert zu genau einer Native, sonst haette
+# `v.result` zwei Typen.
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total
+native job crc32(b: bytes<64>) -> u32 with cost = 1600, stack = 32, duration = 1 ms, total
+
+machine m:
+    var msg : bytes<64> = default
+    initial RUN
+    state RUN:
+        sequence:
+            job v = sha256(msg)
+            job v = crc32(msg)  # ~ SC-44

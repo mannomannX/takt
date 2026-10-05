@@ -2,7 +2,7 @@
   (language 1)
   (tick 1ms))
 (fn fill (src:bytes<8> inout dst:bytes<16>)
-  (.clear dst)
+  (.clear dst ())
   (for i in (range 8)
     (if (>= i (.len src))
       (break))

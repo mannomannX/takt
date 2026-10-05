@@ -25,7 +25,7 @@
           (case 1
             (check (< n 2)))
           (case 2
-            (= small (/ 10 (- turn 2))))
+            (= small (/ 10 (paren (- turn 2)))))
           (case 3
             (= small (* n 3)))
           (case 4

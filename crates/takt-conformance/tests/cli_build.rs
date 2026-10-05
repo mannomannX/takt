@@ -9,27 +9,49 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Der Pfad zur gebauten CLI.
+/// Der Pfad zur gebauten CLI, und sie ist nicht aelter als ihre Quellen.
 ///
 /// `CARGO_BIN_EXE_` gibt es nur fuer Binaries desselben Crates; die CLI
-/// liegt in einem anderen, also wird sie im Zielverzeichnis gesucht.
+/// liegt in einem anderen, also wird sie im Zielverzeichnis gesucht — das
+/// juengste aus `debug` und `release`. Ein Binary, das aelter ist als eine
+/// Quelle des Compilers, baute das Objekt von gestern (FB-193); das ist ein
+/// Fehlschlag mit Namen, kein Bestehen (KON1-031).
 fn cli() -> Option<std::path::PathBuf> {
     let exe = if cfg!(windows) { "takt.exe" } else { "takt" };
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for profile in ["debug", "release"] {
-        let p = here.join("../../target").join(profile).join(exe);
-        if p.exists() {
-            return Some(p);
-        }
-        // Das Zielverzeichnis kann umgelenkt sein.
-        if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
-            let p = Path::new(&dir).join(profile).join(exe);
-            if p.exists() {
-                return Some(p);
-            }
+    let target = std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| here.join("../../target"), Into::into);
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    let found = ["debug", "release"]
+        .iter()
+        .map(|profile| target.join(profile).join(exe))
+        .filter_map(|p| modified(&p).map(|t| (t, p)))
+        .max_by_key(|(t, _)| *t);
+    let (built, path) = found?;
+    let mut sources = Vec::new();
+    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-cli"] {
+        rust_files(&here.join("..").join(krate).join("src"), &mut sources);
+    }
+    if let Some(newer) = sources.iter().find(|f| modified(f).is_some_and(|t| t > built)) {
+        panic!("{} ist aelter als {}; erst `cargo build -p takt-cli` (FB-193)", path.display(), newer.display());
+    }
+    Some(path)
+}
+
+/// Die Rust-Dateien unter `dir`.
+fn rust_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|x| x == "rs") {
+            out.push(path);
         }
     }
-    None
+}
+
+/// Der Maschinentyp eines ELF-Objekts (`e_machine`).
+fn elf_machine(object: &[u8]) -> Option<u16> {
+    (object.get(..4)? == b"\x7fELF").then(|| u16::from_le_bytes([object[18], object[19]]))
 }
 
 fn program() -> String {
@@ -47,7 +69,8 @@ fn every_target_builds_from_the_command_line() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
 
-    for target in ["x86_64", "aarch64", "thumbv7em", "riscv32imac"] {
+    // `e_machine` je Ziel: x86-64, AArch64, ARM, RISC-V.
+    for (target, machine) in [("x86_64", 62), ("aarch64", 183), ("thumbv7em", 40), ("riscv32imac", 243)] {
         let out = dir.join(format!("{target}.o"));
         let result = Command::new(&takt)
             .args(["build", &program(), "--target", target, "--prefix", "timing", "--out"])
@@ -60,9 +83,10 @@ fn every_target_builds_from_the_command_line() {
             String::from_utf8_lossy(&result.stdout),
             String::from_utf8_lossy(&result.stderr)
         );
-        let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-        assert!(size > 0, "{target}: leeres Objekt");
-        eprintln!("{target}: {size} Byte");
+        let object = std::fs::read(&out).unwrap_or_default();
+        assert!(!object.is_empty(), "{target}: leeres Objekt");
+        assert_eq!(elf_machine(&object), Some(machine), "{target}: ein Objekt fuer eine andere Maschine");
+        eprintln!("{target}: {} Byte", object.len());
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -114,6 +138,22 @@ fn the_prefix_comes_from_the_file_name_or_the_option() {
     assert!(!result.status.success(), "`16_timing` ist kein Praefix");
     let msg = String::from_utf8_lossy(&result.stderr);
     assert!(msg.contains("16_timing") && msg.contains("--prefix"), "die Meldung nennt Namen und Ausweg: {msg}");
+
+    // Ueber `--prefix` gilt dasselbe (12.11): `takt` und `takt_` gehoeren den
+    // geteilten Bibliotheken, ein Bezeichner beginnt mit einem Buchstaben;
+    // ein abgelehntes Praefix hinterlaesst kein Objekt.
+    for prefix in ["takt", "takt_x", "9x"] {
+        let out = dir.join(format!("{prefix}.o"));
+        let result = Command::new(&takt)
+            .args(["build", &program(), "--target", "thumbv7em", "--prefix", prefix, "--out"])
+            .arg(&out)
+            .output()
+            .expect("takt build");
+        assert!(!result.status.success(), "`{prefix}` ist kein Praefix");
+        let msg = String::from_utf8_lossy(&result.stderr);
+        assert!(msg.contains(&format!("`{prefix}` ist kein Praefix")), "{prefix}: {msg}");
+        assert!(!out.exists(), "{prefix}: ein abgelehntes Praefix hinterlaesst ein Objekt");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -133,13 +173,23 @@ fn an_unknown_target_is_named() {
     assert!(msg.contains("thumbv7em"), "und die bekannten: {msg}");
 }
 
-/// Ein Programm mit Fehlern bricht ab, statt ein halbes Objekt zu lassen.
+/// Ein Programm mit Fehlern bricht ab, statt ein halbes Objekt zu lassen —
+/// auch mit `--out`: Das Objekt gibt es danach nicht.
 #[test]
 fn a_broken_program_fails_the_build() {
     let Some(takt) = takt_testkit::require("takt-cli", cli(), "`cargo build -p takt-cli`") else { return };
     let src = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-kaputt.takt");
+    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-cli-kaputt.o");
+    let _ = std::fs::remove_file(&out);
     std::fs::write(&src, "system:\n    language = 1\n\nmachine m:\n    initial FEHLT\n").expect("schreiben");
-    let result = Command::new(&takt).arg("build").arg(&src).output().expect("takt build");
+    let result = Command::new(&takt)
+        .arg("build")
+        .arg(&src)
+        .args(["--target", "thumbv7em", "--prefix", "kaputt", "--out"])
+        .arg(&out)
+        .output()
+        .expect("takt build");
     assert!(!result.status.success(), "ein Programm mit Fehlern baut nicht");
+    assert!(!out.exists(), "ein Programm mit Fehlern hinterlaesst ein Objekt");
     let _ = std::fs::remove_file(&src);
 }

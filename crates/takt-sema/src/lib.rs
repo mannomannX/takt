@@ -65,6 +65,18 @@ pub struct Options {
     /// "…"` (8.2), unter dem Pfad, wie er in der Quelle steht; wer
     /// uebersetzt, liest sie neben dem Programm ([`channel_imports`]).
     pub channel_imports: std::collections::BTreeMap<String, String>,
+    /// Der Kern des Bauziels (`--target`), wenn der Bau ihn kennt; sonst
+    /// urteilen die Pruefungen 40 und 41 nach dem Profil (12.8).
+    pub core: Option<Core>,
+}
+
+/// Was die Pruefungen 40 und 41 vom Kern des Ziels wissen muessen (12.8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Core {
+    /// Registerbreite in Bit.
+    pub word_bits: u32,
+    /// Rechnet der Kern `f64` in Hardware?
+    pub f64_hardware: bool,
 }
 
 impl Options {

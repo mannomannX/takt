@@ -33,7 +33,8 @@
 //! takt tcb review DATEI --native NAME --by NAME --date JJJJ-MM-TT [--review DATEI]
 //! ```
 //! Exit-Code 1 bei Fehlern, nicht kanonischen Dateien (`fmt --check`), einem
-//! Golden-Unterschied oder dem Lauf-Verdikt FAIL (13.5).
+//! Golden-Unterschied, dem Lauf-Verdikt FAIL (13.5) und unter `test` und
+//! `campaign` jedem Urteil ausser PASS (13.5, 13.7).
 
 mod embed;
 
@@ -48,6 +49,190 @@ use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
 const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt bench --board NAME (siehe crates/takt-cli/src/main.rs)";
+
+/// Die Schalter je Unterbefehl, genau die, die er liest (11.1): Ein
+/// unbekannter Schalter ist ein Fehler, kein still uebergangener Tippfehler
+/// (`--gloden` liefe sonst ohne Vergleich).
+const FLAGS: &[(&str, &[&str])] = &[
+    (
+        "check",
+        &[
+            "--build",
+            "--certification",
+            "--checks",
+            "--emit",
+            "--format",
+            "--hardware",
+            "--hw-export",
+            "--params-profile",
+            "--profile",
+            "--proof",
+            "--report",
+            "--review",
+            "--target",
+            "--warnings-as-errors",
+        ],
+    ),
+    (
+        "sim",
+        &[
+            "--build",
+            "--emit",
+            "--golden",
+            "--order",
+            "--params-profile",
+            "--profile",
+            "--proof",
+            "--steps",
+            "--stim",
+            "--ticks",
+            "--trace",
+        ],
+    ),
+    (
+        "test",
+        &[
+            "--build",
+            "--coverage",
+            "--emit",
+            "--out",
+            "--params-profile",
+            "--profile",
+            "--proof",
+            "--scenario",
+            "--ticks",
+        ],
+    ),
+    (
+        "campaign",
+        &[
+            "--build",
+            "--emit",
+            "--hardware",
+            "--out",
+            "--params-profile",
+            "--profile",
+            "--proof",
+            "--scenario",
+            "--stim",
+            "--ticks",
+        ],
+    ),
+    (
+        "driver-test",
+        &[
+            "--board",
+            "--build",
+            "--coverage",
+            "--crate",
+            "--emit",
+            "--hardware",
+            "--out",
+            "--params-profile",
+            "--profile",
+            "--proof",
+            "--scenario",
+            "--stim",
+            "--ticks",
+        ],
+    ),
+    (
+        "prove",
+        &[
+            "--build",
+            "--depth",
+            "--emit",
+            "--export",
+            "--out",
+            "--params-profile",
+            "--profile",
+            "--proof",
+            "--save-proof",
+            "--solver",
+            "--timeout",
+        ],
+    ),
+    (
+        "tune",
+        &["--build", "--emit", "--out", "--params-profile", "--profile", "--proof", "--save", "--stim", "--ticks"],
+    ),
+    (
+        "run",
+        &["--build", "--emit", "--params-profile", "--profile", "--proof", "--record", "--stim", "--ticks", "--trace"],
+    ),
+    (
+        "replay",
+        &[
+            "--build",
+            "--emit",
+            "--extract",
+            "--golden",
+            "--machine",
+            "--params-profile",
+            "--profile",
+            "--proof",
+            "--record",
+            "--ticks",
+        ],
+    ),
+    ("verify-trace", &["--record"]),
+    ("timing", &["--tick"]),
+    ("mir", &["--build", "--dump", "--emit", "--hash", "--params-profile", "--profile", "--proof", "--write"]),
+    ("fmt", &["--check", "--edition", "--snippet", "--stdout", "--verify"]),
+    (
+        "build",
+        &[
+            "--build",
+            "--diagnostics",
+            "--drivers",
+            "--emit",
+            "--form",
+            "--hardware",
+            "--instrument",
+            "--out",
+            "--params-profile",
+            "--prefix",
+            "--profile",
+            "--proof",
+            "--target",
+        ],
+    ),
+    (
+        "size",
+        &[
+            "--baseline",
+            "--build",
+            "--certification",
+            "--emit",
+            "--hardware",
+            "--object",
+            "--params-profile",
+            "--profile",
+            "--save-baseline",
+            "--target",
+            "--warnings-as-errors",
+        ],
+    ),
+    ("cost", &["--build", "--certification", "--emit", "--params-profile", "--profile", "--warnings-as-errors"]),
+    ("latency", &["--build", "--certification", "--emit", "--params-profile", "--profile", "--warnings-as-errors"]),
+    ("graph", &["--build", "--certification", "--emit", "--params-profile", "--profile", "--warnings-as-errors"]),
+    ("parse", &["--ast", "--debug", "--snippet"]),
+    ("tokens", &[]),
+    (
+        "tcb",
+        &["--build", "--by", "--date", "--emit", "--native", "--params-profile", "--profile", "--proof", "--review"],
+    ),
+    ("bench", &["--board", "--conformance", "--hardware", "--runs"]),
+];
+
+/// Stapel des Threads, auf dem jeder Unterbefehl laeuft (2.1): Mit hoechstens 64
+/// Ebenen und 256 Knoten je Ausdruck ist die Rekursion jeder Schicht beschraenkt
+/// und der Stapel danach bemessen. Gemessen im Debug-Build (Windows, x86-64):
+/// Sema und Interpreter brauchen fuer einen Ausdruck mit 256 Knoten 6 MiB, mit
+/// 61 Anweisungsebenen darueber die Sema 8 MiB; der Codegen 2 MiB. Das Vierfache
+/// deckt die nicht gemessenen Durchlaeufe (Analysen, Beweis, Kampagne) und die
+/// CLI selbst. Reserviert ist der ganze Stapel, belegt nur, was ein Lauf braucht.
+const STACK: usize = 32 << 20;
 
 struct Args {
     flags: Vec<String>,
@@ -69,8 +254,10 @@ impl Args {
             .or_else(|| self.values.iter().find(|(f, _)| f == flag).map(|(_, v)| v.as_str()))
     }
 
-    /// Zerlegt die Argumentliste: Schalter, ihre Werte und Dateien.
-    fn parse(rest: &[String]) -> Args {
+    /// Zerlegt die Argumentliste eines Unterbefehls: Schalter, ihre Werte und
+    /// Dateien. Ein unbekannter Unterbefehl oder Schalter und ein Schalter ohne
+    /// seinen Wert sind ein Fehler mit Meldung.
+    fn parse(command: &str, rest: &[String]) -> Result<Args, String> {
         const WITH_VALUE: &[&str] = &[
             "--ticks",
             "--native",
@@ -118,15 +305,20 @@ impl Args {
             "--runs",
             "--conformance",
         ];
+        let allowed = FLAGS.iter().find(|(c, _)| *c == command).map(|(_, f)| *f).ok_or_else(|| USAGE.to_string())?;
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
         let mut i = 0;
         while i < rest.len() {
             let a = &rest[i];
             if let Some(name) = a.strip_prefix("--") {
                 let name = format!("--{}", name.split('=').next().unwrap_or_default());
+                if !allowed.contains(&name.as_str()) {
+                    return Err(format!("unbekannter Schalter `{name}`; erlaubt: {}", allowed.join(" ")));
+                }
                 args.flags.push(a.clone());
-                if !a.contains('=') && WITH_VALUE.contains(&name.as_str()) && i + 1 < rest.len() {
-                    args.values.push((name, rest[i + 1].clone()));
+                if !a.contains('=') && WITH_VALUE.contains(&name.as_str()) {
+                    let value = rest.get(i + 1).ok_or_else(|| format!("`{name}` verlangt einen Wert"))?;
+                    args.values.push((name, value.clone()));
                     i += 2;
                     continue;
                 }
@@ -135,18 +327,29 @@ impl Args {
             }
             i += 1;
         }
-        args
+        Ok(args)
     }
 }
 
 fn main() -> ExitCode {
+    takt_syntax::parser::with_stack(STACK, command)
+}
+
+/// Der Unterbefehl aus der Kommandozeile, auf dem bemessenen Stapel.
+fn command() -> ExitCode {
     let mut argv = std::env::args().skip(1);
     let Some(command) = argv.next() else {
         eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
     let rest: Vec<String> = argv.collect();
-    let args = Args::parse(&rest);
+    let args = match Args::parse(&command, &rest) {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("takt {command}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let ok = match command.as_str() {
         "check" => check(&args),
         "sim" => sim(&args),
@@ -187,8 +390,15 @@ fn main() -> ExitCode {
 /// `--conformance` schreibt den Konformitaetsbericht daneben — die Quelle der
 /// Zahlen (13.8). Ohne beide stehen die Zahlen nur in der Ausgabe.
 fn bench(args: &Args) -> bool {
+    let runs = match args.value("--runs").map(str::parse::<u64>) {
+        None => 200,
+        Some(Ok(n)) => n,
+        Some(Err(e)) => {
+            eprintln!("--runs: {e}");
+            return false;
+        }
+    };
     let Some(mut board) = board_of(args, "bench") else { return false };
-    let runs = args.value("--runs").and_then(|r| r.parse().ok()).unwrap_or(200);
     let outcome = match takt_conformance::bench::run(board.as_mut(), runs, |line| eprintln!("  {line}")) {
         Ok(o) => o,
         Err(e) => {
@@ -389,6 +599,16 @@ fn tcb(args: &Args) -> bool {
         eprintln!("takt tcb review: `--native NAME`, `--by NAME` und `--date JJJJ-MM-TT` sind Pflicht");
         return false;
     };
+    // `natives.review` trennt die Felder an Leerraum und kennt `#` als
+    // Kommentar: Was die Zeile zerlegen wuerde, kommt nicht hinein.
+    if by.is_empty() || by.contains(|c: char| c.is_whitespace() || c == '#') {
+        eprintln!("takt tcb review: `--by {by}` ist ein Wort ohne Leerraum und `#`, etwa `anna.berg`");
+        return false;
+    }
+    if !takt_mir::review::is_date(date) {
+        eprintln!("takt tcb review: `--date {date}` ist kein Datum der Form JJJJ-MM-TT");
+        return false;
+    }
     let Some(program) = compile_file(path, args) else { return false };
     let Some(def) = program.natives.iter().find(|n| n.name == native && n.from.is_some()) else {
         eprintln!("{path}: kein Projekt-Native `{native}`");
@@ -746,6 +966,9 @@ fn build(args: &Args) -> bool {
         // Default — ein Typ, den der Codegen noch nicht abbildet (5.9).
         eprintln!("{name}: `persist var` ohne Lesepfad im erzeugten Code — jeder Start beginnt beim Default (5.9)");
     }
+    // 12.11: Was fehlt, scheitert beim Uebersetzen; ein Default, der still an
+    // die Stelle des gespeicherten Werts tritt, ist kein Bau.
+    let complete = lowered.complete() && lowered.without_persist.is_empty();
 
     let emit = args.value("--emit").unwrap_or("obj");
     let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("programm");
@@ -756,7 +979,7 @@ fn build(args: &Args) -> bool {
             match std::fs::write(&out, &lowered.ir) {
                 Ok(()) => {
                     println!("{out}: {} Byte IR fuer {}", lowered.ir.len(), target.name);
-                    lowered.complete()
+                    complete
                 }
                 Err(e) => {
                     eprintln!("{out}: {e}");
@@ -766,7 +989,7 @@ fn build(args: &Args) -> bool {
         }
         "obj" => {
             let out = args.value("--out").map_or_else(|| format!("{stem}.o"), str::to_string);
-            emit_object(&lowered.ir, target, &out) && lowered.complete()
+            emit_object(&lowered.ir, target, &out) && complete
         }
         "consts" | "consts-rs" => {
             let rust = emit == "consts-rs";
@@ -819,7 +1042,7 @@ fn build(args: &Args) -> bool {
                 out: std::path::PathBuf::from(out),
             };
             match embed::embed(&e) {
-                Ok(()) => lowered.complete(),
+                Ok(()) => complete,
                 Err(err) => {
                     eprintln!("takt build --emit embed: {err}");
                     false
@@ -1422,7 +1645,21 @@ fn sema_options(path: &str, src: &str, policy: Policy, args: &Args) -> takt_sema
         .into_iter()
         .filter_map(|file| Some((file.clone(), std::fs::read_to_string(dir.join(&file)).ok()?)))
         .collect();
-    takt_sema::Options { policy, build: build_of(args), profile: profile_of(args), channel_imports }
+    takt_sema::Options {
+        policy,
+        build: build_of(args),
+        profile: profile_of(args),
+        channel_imports,
+        core: core_of(args),
+    }
+}
+
+/// Der Kern des Bauziels aus `--target` (Name oder Triple) fuer die
+/// Pruefungen 40 und 41 (12.8); ohne Angabe urteilen sie nach dem Profil.
+fn core_of(args: &Args) -> Option<takt_sema::Core> {
+    let name = args.value("--target")?;
+    let target = takt_llvm::Target::by_name(name).or_else(|| takt_llvm::Target::by_triple(name))?;
+    Some(takt_sema::Core { word_bits: target.pointer * 8, f64_hardware: target.class.has_f64_hardware() })
 }
 
 fn compile_file(path: &str, args: &Args) -> Option<takt_mir::Program> {
@@ -1439,7 +1676,14 @@ fn compile_file_with(path: &str, args: &Args, policy: Policy) -> Option<takt_mir
     for d in &out.diagnostics {
         eprintln!("{}", map.render(d));
     }
-    if out.has_errors() { None } else { out.program }
+    let program = if out.has_errors() { None } else { out.program }?;
+    // 8.4: Profil und Parameter kommen aus dem Aufruf; was nicht passt, ist
+    // ein Fehler des Aufrufs, nicht des Laufs.
+    if let Err(e) = takt_interp::system::check_params(&program, profile_of(args).as_deref(), &[]) {
+        eprintln!("{path}: {e}");
+        return None;
+    }
+    Some(program)
 }
 
 /// `takt sim`: fuehrt ein Programm mit einem Stimulus aus, schreibt den Trace
@@ -1463,19 +1707,7 @@ fn tune(args: &Args) -> bool {
         eprintln!("--ticks N fehlt");
         return false;
     };
-    let stimulus = match args.value("--stim") {
-        Some(p) => {
-            let Some(text) = read(p) else { return false };
-            match Trace::parse(&text) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("{p}: {e}");
-                    return false;
-                }
-            }
-        }
-        None => Trace::default(),
-    };
+    let Some(stimulus) = stimulus_of(args, &program) else { return false };
     let options = RunOptions { ticks, profile: profile_of(args), ..Default::default() };
     let result = match takt_interp::run(&program, &stimulus, &options) {
         Ok(r) => r,
@@ -1520,19 +1752,7 @@ fn sim(args: &Args) -> bool {
             return false;
         }
     };
-    let stimulus = match args.value("--stim") {
-        Some(p) => {
-            let Some(text) = read(p) else { return false };
-            match Trace::parse(&text) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("{p}: {e}");
-                    return false;
-                }
-            }
-        }
-        None => Trace::default(),
-    };
+    let Some(stimulus) = stimulus_of(args, &program) else { return false };
     let order_seed = match args.value("--order").and_then(|v| v.strip_prefix("random:")) {
         Some(seed) => match seed.parse::<u64>() {
             Ok(n) => Some(n),
@@ -1653,7 +1873,7 @@ fn driver_test(args: &Args) -> bool {
         eprintln!("{path}: keine `driver machine` (12.10)");
         return false;
     }
-    let Some(stimulus) = stimulus_of(args) else { return false };
+    let Some(stimulus) = stimulus_of(args, &program) else { return false };
     let Some((mut ok, coverage)) = scenarios(path, &program, args, &stimulus) else { return false };
     let Some(src) = read(path) else { return false };
     let map = takt_sema::source_map(path.as_str(), src.as_str());
@@ -1693,17 +1913,29 @@ fn scenarios(
         }
         None => 100_000,
     };
-    let scenarios: Vec<String> = program
+    let all: Vec<String> = program
         .machines
         .iter()
         .filter(|m| m.kind == takt_mir::machine::MachineKind::Scenario)
         .map(|m| m.name.clone())
-        .filter(|n| args.value("--scenario").is_none_or(|s| takt_mir::machine::scenario_name(s) == *n))
         .collect();
-    if scenarios.is_empty() {
+    let irreversible = || program.channels.iter().filter(|c| c.attrs.irreversible);
+    if all.is_empty() {
         eprintln!("{path}: kein Szenario (13.6)");
+        // 12.7: Ohne Szenario deckt keines einen irreversiblen Output ab.
+        for c in irreversible() {
+            println!("FAIL: irreversibler Output `{}` von keinem Szenario abgedeckt (12.7)", c.name);
+        }
         return None;
     }
+    let scenarios = match args.value("--scenario") {
+        None => all,
+        Some(s) if all.contains(&takt_mir::machine::scenario_name(s)) => vec![takt_mir::machine::scenario_name(s)],
+        Some(s) => {
+            eprintln!("{path}: kein Szenario `{s}`; vorhanden: {} (13.6)", all.join(", "));
+            return None;
+        }
+    };
     let mut coverage = takt_interp::Coverage::default();
     // 13.4: je Pruefstelle die Szenarien, die sie durchliefen.
     let mut by_scenario: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
@@ -1762,7 +1994,7 @@ fn scenarios(
     if inconclusive > 0 {
         println!("FAIL: {inconclusive} Szenarien ohne Aussage (INCONCLUSIVE gilt nicht als bestanden, 13.5)");
     }
-    for c in program.channels.iter().filter(|c| c.attrs.irreversible) {
+    for c in irreversible() {
         let covered = coverage.hits.keys().any(|(k, _, n)| *k == takt_interp::CoverKind::Irreversible && *n == c.name);
         if !covered {
             println!("FAIL: irreversibler Output `{}` von keinem Szenario abgedeckt (12.7)", c.name);
@@ -2001,12 +2233,12 @@ fn campaign(args: &Args) -> bool {
         }
     }
     let Some(ticks) = ticks_of(args) else { return false };
-    let Some(stimulus) = stimulus_of(args) else { return false };
+    let Some(stimulus) = stimulus_of(args, &program) else { return false };
     let profile = profile_of(args).or_else(|| campaign.profile.map(|p| program.profiles[p.index()].name.clone()));
     let runs = match takt_interp::campaign::runs(&program, campaign) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("{path}: {e:?}");
+            eprintln!("{path}: {e}");
             return false;
         }
     };
@@ -2020,7 +2252,7 @@ fn campaign(args: &Args) -> bool {
         runs.first().map(|r| r.params.iter().map(|(n, _)| n.clone()).collect()).unwrap_or_default();
     let mut rows =
         vec![[vec!["Lauf".to_string()], swept, vec!["Wdh".into(), "Verdikt".into(), "Messwerte".into()]].concat()];
-    let mut fails = 0;
+    let (mut fails, mut passes) = (0, 0);
     let mut stopped = None;
     for run in &runs {
         let options = RunOptions {
@@ -2042,13 +2274,16 @@ fn campaign(args: &Args) -> bool {
         rows.push([vec![run.id.to_string()], values, tail].concat());
         if let Some(dir) = args.value("--out") {
             let file = std::path::Path::new(dir).join(format!("{}-{:03}.trace", campaign.name, run.id));
-            let header = takt_interp::record::Header::of(&program, profile.as_deref(), &result.start_params, ticks);
+            // 12.5: Der Kopf traegt den Speicher, mit dem der Lauf begann.
+            let header = takt_interp::record::Header::of(&program, profile.as_deref(), &result.start_params, ticks)
+                .with_store(&program, &options.nvm);
             let recording = takt_interp::record::Recording { header, inputs: stimulus.clone() }.seal(&result.trace);
             if let Err(e) = std::fs::write(&file, recording.render()) {
                 eprintln!("{}: {e}", file.display());
                 return false;
             }
         }
+        passes += usize::from(result.verdict == Verdict::Pass);
         if result.verdict == Verdict::Fail {
             fails += 1;
             if campaign.stop_on == takt_mir::program::StopOn::Fail {
@@ -2062,7 +2297,14 @@ fn campaign(args: &Args) -> bool {
         Some(id) => println!("abgebrochen nach Lauf {id} von {} (stop_on fail)", runs.len()),
         None => println!("{} Laeufe, {fails} FAIL", runs.len()),
     }
-    fails == 0
+    // 13.7: das Urteil nach 13.5 ueber alle Laeufe; nur PASS besteht.
+    let verdict = match (fails, passes == runs.len()) {
+        (0, true) => Verdict::Pass,
+        (0, false) => Verdict::Inconclusive,
+        _ => Verdict::Fail,
+    };
+    println!("Kampagne: {} (13.7)", verdict.name());
+    verdict == Verdict::Pass
 }
 
 /// Die Messwerte eines Laufs: der letzte Wert je Name (13.5).
@@ -2107,7 +2349,7 @@ fn run_cmd(args: &Args) -> bool {
     };
     let Some(program) = compile_file(path, args) else { return false };
     let Some(ticks) = ticks_of(args) else { return false };
-    let Some(stimulus) = stimulus_of(args) else { return false };
+    let Some(stimulus) = stimulus_of(args, &program) else { return false };
 
     let options = RunOptions { ticks, profile: profile_of(args), order_seed: None, ..Default::default() };
     let result = match takt_interp::run(&program, &stimulus, &options) {
@@ -2118,8 +2360,10 @@ fn run_cmd(args: &Args) -> bool {
         }
     };
     if let Some(out) = args.value("--record") {
+        // 12.5: Der Kopf traegt den Speicher, mit dem der Lauf begann.
         let header =
-            takt_interp::record::Header::of(&program, profile_of(args).as_deref(), &result.start_params, ticks);
+            takt_interp::record::Header::of(&program, profile_of(args).as_deref(), &result.start_params, ticks)
+                .with_store(&program, &options.nvm);
         let recording = takt_interp::record::Recording { header, inputs: stimulus }.seal(&result.trace);
         if let Err(e) = std::fs::write(out, recording.render()) {
             eprintln!("{out}: {e}");
@@ -2192,12 +2436,28 @@ fn replay(args: &Args) -> bool {
     };
     // Die Zahl der Ticks steht im Kopf; `--ticks` darf sie ueberschreiben,
     // um einen Lauf abzukuerzen.
-    let ticks = args.value("--ticks").and_then(|v| v.parse::<u64>().ok()).unwrap_or(recording.header.ticks);
+    let ticks = match args.value("--ticks").map(str::parse::<u64>) {
+        None => recording.header.ticks,
+        Some(Ok(n)) => n,
+        Some(Err(e)) => {
+            eprintln!("--ticks: {e}");
+            return false;
+        }
+    };
+    // 12.5: Der Lauf beginnt mit dem Speicher, den der Kopf nennt.
+    let nvm = match recording.header.store(&program) {
+        Ok(nvm) => nvm,
+        Err(e) => {
+            eprintln!("{record_path}: {e}");
+            return false;
+        }
+    };
     let options = RunOptions {
         ticks,
         profile: recording.header.profile.clone(),
         overrides: recording.header.overrides(),
         only: recording.header.machine.clone(),
+        nvm,
         ..Default::default()
     };
     let result = match takt_interp::run(&program, &recording.inputs, &options) {
@@ -2304,11 +2564,17 @@ fn timing(args: &Args) -> bool {
         }
     };
     let (mut late, mut lost, mut worst_drift, mut worst_took, mut slept) = (0u64, 0i64, 0i64, 0i64, 0u64);
+    let mut overruns = 0u64;
     let mut last_drift = 0i64;
     for (_, took, drift, n) in &times {
         let drift = (*drift).max(0);
         if drift >= period {
             late += 1;
+        }
+        // 7.3: am festen Raster gemessen; ein spaeter Beginn kuerzt die Zeit,
+        // die dem Schritt bis zur naechsten Grenze bleibt.
+        if drift + took > period {
+            overruns += 1;
         }
         if drift > last_drift {
             lost += drift - last_drift;
@@ -2322,6 +2588,7 @@ fn timing(args: &Args) -> bool {
     println!("{path}: {} Ticks mit Zeit", times.len());
     println!("  verspaetete Ticks   {late}");
     println!("  verlorene Perioden  {lost}");
+    println!("  Ueberlaeufe         {overruns}");
     println!("  groesster Rueckstand {worst_drift} ns");
     println!("  laengster Schritt   {worst_took} ns");
     println!("  geschlafene Ticks   {slept}");
@@ -2385,12 +2652,14 @@ fn ticks_of(args: &Args) -> Option<u64> {
     }
 }
 
-/// `--stim` lesen; ohne Angabe ein leerer Stimulus.
-fn stimulus_of(args: &Args) -> Option<Trace> {
+/// `--stim` lesen und gegen das Programm pruefen; ohne Angabe ein leerer
+/// Stimulus. Eine Zeile, die nicht passt, ist ein Fehler der Eingabe mit
+/// ihrer Nummer (SEM2-008), kein interner Fehler des Laufs.
+fn stimulus_of(args: &Args, program: &takt_mir::Program) -> Option<Trace> {
     match args.value("--stim") {
         Some(p) => {
             let text = read(p)?;
-            match Trace::parse(&text) {
+            match takt_interp::read_stimulus(program, &text, None) {
                 Ok(t) => Some(t),
                 Err(e) => {
                     eprintln!("{p}: {e}");

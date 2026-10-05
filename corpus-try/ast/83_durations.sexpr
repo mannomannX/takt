@@ -35,4 +35,4 @@
           (= waited d))
         (case _
           (= waited 0s)))
-      (= k (% (+ k 1) 5)))))
+      (= k (% (paren (+ k 1)) 5)))))

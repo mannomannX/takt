@@ -74,3 +74,118 @@ fn prelude_positions_are_in_their_own_file() {
     let line = p.line_of(prelude_fn.span);
     assert!((1..=prelude_lines).contains(&line), "Zeile {line} von {prelude_lines}");
 }
+
+/// Die weiteren Faelle aus 5.3, je Runde einer: Defaults vor dem ersten
+/// Fault, `expect` ohne Meldung, der Timeout einer Sequenz und ein
+/// Runtime-Fault ohne Stelle (Zeile 0), eine Meldung von genau 128 Byte und
+/// eine von 129 (gekuerzt), ein Fault in einer Funktion des Prelude (die
+/// Zeile zaehlt dort).
+const ROUNDS: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+output kind  : int in 0..99  @ sim(\"o/kind\")
+output line  : int in 0..999 @ sim(\"o/line\")
+output stamp : int in 0..999 @ sim(\"o/stamp\")
+output size  : int in 0..200 @ sim(\"o/size\")
+output spot  : float[V]      @ sim(\"o/spot\")
+
+machine m:
+    var turn : int in 0..9 = 0
+    fault -> REPORT
+    initial NEXT
+
+    state NEXT:
+        enter:
+            kind = 99 if turn > 0 else (1 if last_fault.kind == CHECK_FAILED else 98)
+            line = last_fault.line
+            stamp = last_fault.tick
+            size = last_fault.message.len
+        when turn == 0: -> SAYS_NOTHING
+        when turn == 1: -> TOO_SLOW
+        when turn == 2: -> FULL
+        when turn == 3: -> CUT
+        when turn == 4: -> LIBRARY
+        when turn == 5: -> DRIVEN
+
+    state SAYS_NOTHING:
+        sequence:
+            expect false
+
+    state TOO_SLOW:
+        sequence:
+            until false timeout 20 ms
+
+    state FULL:
+        loop:
+            check false, \"MSG128\"
+
+    state CUT:
+        loop:
+            check false, \"MSG129\"
+
+    state LIBRARY:
+        loop:
+            spot = map_range(1.0 bar, 0.0 bar, 0.0 bar, 0.0 V, 1.0 V)
+
+    state DRIVEN:
+        when false: -> NEXT
+
+    state REPORT:
+        enter:
+            turn = turn + 1
+            match last_fault.kind:
+                case CHECK_FAILED:
+                    kind = 1
+                case EXPECT:
+                    kind = 2
+                case TIMEOUT:
+                    kind = 3
+                case ARITHMETIC(k):
+                    kind = 29
+                case RUNTIME(k):
+                    kind = 13
+                case _:
+                    kind = 98
+            line = last_fault.line
+            stamp = last_fault.tick
+            size = last_fault.message.len
+        when turn < 6: -> NEXT
+";
+
+/// Der Wert von `name` in Tick `t`, auch wenn er sich nicht aenderte.
+fn value_at(trace: &str, t: u64, name: &str) -> Option<i64> {
+    (0..=t).rev().find_map(|u| value(trace, u, name))
+}
+
+#[test]
+fn last_fault_covers_defaults_line_zero_and_the_message_limit() {
+    let src = ROUNDS.replace("MSG128", &"x".repeat(128)).replace("MSG129", &"y".repeat(129));
+    let options = Options { policy: Policy::default(), build: Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(&src, &options);
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    let p = out.program.expect("Programm");
+    let stimulus = Trace::parse("t=14 runtime Overrun\n").expect("Stimulus");
+    let trace = run(&p, &stimulus, &RunOptions { ticks: 16, ..Default::default() }).expect("Lauf").trace.render();
+    let library = takt_sema::PRELUDE
+        .lines()
+        .position(|l| l.contains("return y0 + (y1 - y0) * ((x - x0) / (x1 - x0))"))
+        .expect("map_range im Prelude") as i64
+        + 1;
+    // (Tick, Art, Zeile, Laenge der Nachricht); Tick 0 sind die Defaults.
+    let want = [
+        (0, 1, 0, 0),
+        (1, 2, line_exact(&src, "expect false"), "check verletzt".len()),
+        (5, 3, 0, "TIMEOUT".len()),
+        (7, 1, line_of(&src, "check false, \"xxx"), 128),
+        (9, 1, line_of(&src, "check false, \"yyy"), 128),
+        (11, 29, library, "ARITHMETIC".len()),
+        (14, 13, 0, "RUNTIME".len()),
+    ];
+    for (t, kind, line, size) in want {
+        let got = (value_at(&trace, t, "kind"), value_at(&trace, t, "line"), value_at(&trace, t, "stamp"));
+        assert_eq!(got, (Some(kind), Some(line), Some(t as i64)), "Tick {t}:\n{trace}");
+        assert_eq!(value_at(&trace, t, "size"), Some(size as i64), "Tick {t}:\n{trace}");
+    }
+}

@@ -1,0 +1,17 @@
+# n06 — Ein unbekannter Systemeintrag und ein unbekanntes Attribut sind
+# Parserfehler mit der Liste der bekannten (2.3, 2.5); der Parser faengt
+# sich an der naechsten Zeile und meldet beide.
+
+system:
+    language = 1
+    tick     = 1 ms
+    speed    = 1  # ~ P
+
+output valve : bool @ hw("o/valve") with safe = false, colour = red  # ~ P
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            valve = true

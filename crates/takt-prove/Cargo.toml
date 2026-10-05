@@ -16,6 +16,12 @@ takt-interp = { path = "../takt-interp" }
 # Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).
 takt-testkit = { path = "../takt-testkit" }
 takt-sema = { path = "../takt-sema" }
+# Die Programme der Suite `beweiser` stehen im Manifest des Korpus (FB-378).
+takt-conformance = { path = "../takt-conformance" }
+# Der Interpreter in der Schleife aus 12.1, mit Schlaf (9.9).
+takt-rt-core = { path = "../takt-rt-core" }
+# Interpreter gegen erzeugten Code an kleinen Programmen (Satz 9.4.4).
+takt-llvm = { path = "../takt-llvm" }
 
 [lints]
 workspace = true

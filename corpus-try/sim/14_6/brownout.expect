@@ -1,0 +1,2 @@
+t=149 verify brownout_test ok "supply still present during brownout: 0.0"
+t=741 verdict brownout_test pass "recovered after brownout at 20 ms"

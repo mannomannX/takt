@@ -25,8 +25,10 @@ pub enum Policy {
 /// Die Ueberlauferkennung.
 ///
 /// Sie misst am Tick-Ende (12.2: „Overrun-Erkennung per Zeitstempel am
-/// Tick-Ende"), nicht am Anfang des naechsten: Am Anfang liesse sich ein
-/// ueberlanger Schritt nicht von einer verspaeteten Weckung unterscheiden.
+/// Tick-Ende") gegen das feste Raster `t0 + (k+1)·T0` (7.3): Uebergelaufen
+/// ist ein Tick, dessen Schritt erst nach dem nominalen Beginn des naechsten
+/// endet. Ein verspaeteter Beginn zaehlt mit, sonst summierte sich eine
+/// Verspaetung unbemerkt.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Overrun {
     policy: Policy,
@@ -38,10 +40,12 @@ pub struct Overrun {
     pub late: u64,
     /// Der groesste Rueckstand beim Tickbeginn in Nanosekunden.
     pub worst_drift: i64,
-    /// Perioden, in denen kein Tick beginnen konnte: der Zuwachs des
-    /// Rueckstands, nie das Aufholen.
+    /// Perioden, in denen kein Tick beginnen konnte: die Summe der Zuwaechse
+    /// des Rueckstands, einmal durch T0 geteilt, nie das Aufholen.
     pub lost: u64,
     last_drift: i64,
+    /// Die Summe der Zuwaechse in Nanosekunden.
+    grown: i64,
 }
 
 impl Overrun {
@@ -66,23 +70,26 @@ impl Overrun {
         }
         self.worst_drift = self.worst_drift.max(drift);
         if drift > self.last_drift && tick_ns > 0 {
-            self.lost = self.lost.saturating_add(((drift - self.last_drift) / tick_ns) as u64);
+            self.grown = self.grown.saturating_add(drift - self.last_drift);
+            self.lost = (self.grown / tick_ns) as u64;
         }
         self.last_drift = drift;
     }
 
-    /// Nimmt die Dauer eines Ticks entgegen.
+    /// Nimmt entgegen, wie lange nach dem nominalen Beginn seines Ticks ein
+    /// Schritt endete (`drift + took`); mehr als eine Periode ist ein
+    /// Ueberlauf.
     ///
     /// Die beiden Fragen sind nicht dieselbe: 7.3 protokolliert die
     /// physische Verzoegerung *immer*, aber nur unter `fault` folgt ein
     /// Fault. Ein `bool` fuer beides haette unter `alert` einen Ueberlauf
     /// aus dem Trace verschwinden lassen.
-    pub fn observe(&mut self, took: i64, tick_ns: i64) -> Seen {
-        if took <= tick_ns {
+    pub fn observe(&mut self, elapsed: i64, tick_ns: i64) -> Seen {
+        if elapsed <= tick_ns {
             return Seen { over: false, fault: false };
         }
         self.count = self.count.saturating_add(1);
-        self.worst = self.worst.max(took - tick_ns);
+        self.worst = self.worst.max(elapsed - tick_ns);
         Seen { over: true, fault: self.policy == Policy::Fault }
     }
 }
@@ -115,6 +122,22 @@ mod tests {
         assert_eq!(o.lost, 8);
         assert_eq!(o.late, 7, "sieben Ticks begannen mindestens eine Periode zu spaet");
         assert_eq!(o.worst_drift, 5 * T);
+    }
+
+    /// **Verloren ist die Summe der Zuwaechse, geteilt durch T0** (7.3):
+    /// Waechst der Rueckstand je Tick um eine halbe Periode, sind nach zehn
+    /// Ticks viereinhalb Perioden verloren, abgerundet vier — wie `takt
+    /// timing` rechnet, das die Zuwaechse in Nanosekunden summiert und
+    /// einmal teilt. Ein Abrunden je Zuwachs meldete null.
+    #[test]
+    fn lost_periods_divide_the_summed_growth_once() {
+        let mut o = Overrun::new(Policy::Fault);
+        for k in 0..10 {
+            o.observe_drift(k * T / 2, T);
+        }
+        assert_eq!(o.lost, 4, "Zuwachs 9 * T/2 = 4,5 T");
+        o.observe_drift(5 * T, T);
+        assert_eq!(o.lost, 5, "der naechste Zuwachs um T/2 vollendet die fuenfte Periode");
     }
 
     /// Ein frueher Tick (negativer Rueckstand) ist kein Verlust.

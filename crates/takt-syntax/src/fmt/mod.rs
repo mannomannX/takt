@@ -25,11 +25,11 @@ use crate::token::Tokens;
 use crate::tokenize;
 
 /// Formatiert eine Datei. Bei Tokenizer-, Parser- oder Formatterfehlern bleibt
-/// die Datei unberuehrt und die Fehler werden zurueckgegeben.
+/// die Datei unberuehrt und die Fehler werden zurueckgegeben, mit Stellen in `src`.
 pub fn format(src: &str) -> Result<String, Vec<Diagnostic>> {
-    let src = repair(src);
+    let repaired = repair(src);
     with_deep_stack(|| {
-        let toks = checked_tokens(&src)?;
+        let toks = checked_tokens(&repaired.text)?;
         let (file, errors) = parse_file_here(&toks);
         if !errors.is_empty() {
             return Err(errors);
@@ -38,14 +38,15 @@ pub fn format(src: &str) -> Result<String, Vec<Diagnostic>> {
         e.fmt_file(&file);
         finish(e)
     })
+    .map_err(|errors| repaired.relocate(errors))
 }
 
 /// Formatiert einen Schnipsel (Deklarationen, Zustandsinhalte und Anweisungen
 /// gemischt, siehe `parse_snippet`).
 pub fn format_snippet(src: &str) -> Result<String, Vec<Diagnostic>> {
-    let src = repair(src);
+    let repaired = repair(src);
     with_deep_stack(|| {
-        let toks = checked_tokens(&src)?;
+        let toks = checked_tokens(&repaired.text)?;
         let (items, errors) = parse_snippet_here(&toks);
         if !errors.is_empty() {
             return Err(errors);
@@ -54,16 +55,20 @@ pub fn format_snippet(src: &str) -> Result<String, Vec<Diagnostic>> {
         e.fmt_snippet(&items);
         finish(e)
     })
+    .map_err(|errors| repaired.relocate(errors))
 }
 
 /// `takt fmt --edition`: traegt `language = N` ein, wenn es fehlt (2.5). Das
 /// aendert den Tokenstrom und ist deshalb kein Teil von `format`. Liefert den
 /// neuen, noch nicht formatierten Text, oder `None`, wenn nichts zu tun ist
-/// oder die Datei nicht parst.
+/// oder die Datei nicht parst. Was `format` repariert (BOM, Tabulatoren), ist
+/// im neuen Text schon repariert.
 pub fn insert_edition(src: &str, edition: Edition) -> Option<String> {
     if declared_edition(src).is_some() {
         return None;
     }
+    let src = repair(src).text;
+    let src = src.as_str();
     let toks = tokenize(src);
     if !toks.errors.is_empty() {
         return None;
@@ -77,11 +82,11 @@ pub fn insert_edition(src: &str, edition: Edition) -> Option<String> {
     let (at, text) = match system {
         Some(s) if s.items.iter().any(|i| matches!(i, SystemItem::Language(_))) => return None,
         Some(s) => {
-            // vor den ersten Eintrag des Blocks, auf dessen Zeilenanfang
-            let first = toks
-                .tokens
-                .iter()
-                .find(|t| t.start > s.span.start && t.line > toks.tokens[0].line && !t.kind.is_layout())?;
+            // vor den ersten Eintrag des Blocks, auf dessen Zeilenanfang; der
+            // Block beginnt mit dem Wort `system` an `s.span.start`
+            let system_line = toks.tokens.iter().find(|t| t.start == s.span.start)?.line;
+            let first =
+                toks.tokens.iter().find(|t| t.start > s.span.start && t.line > system_line && !t.kind.is_layout())?;
             let line_start = src[..first.start as usize].rfind('\n').map_or(0, |p| p + 1);
             (line_start, format!("    {entry}\n"))
         }
@@ -99,38 +104,66 @@ pub fn insert_edition(src: &str, edition: Edition) -> Option<String> {
     Some(out)
 }
 
-/// Was `takt fmt` laut lexer.md L9 selbst behebt: die BOM am Dateianfang und
-/// Tabulatoren ausserhalb von Strings (in der Einrueckung je 4 Leerzeichen,
-/// sonst ein Leerzeichen).
-fn repair(src: &str) -> String {
-    let src = src.strip_prefix('\u{feff}').unwrap_or(src);
-    if !src.contains('\t') {
-        return src.to_string();
+/// Ein reparierter Text und je Byte sein Versatz im Original.
+struct Repaired {
+    text: String,
+    /// Versatz im Original je Byte von `text`, dazu einer fuer sein Ende;
+    /// leer, wenn nichts zu reparieren war.
+    origin: Vec<u32>,
+}
+
+impl Repaired {
+    /// Verschiebt die Stellen der Fehler zurueck in das Original, damit sie auf
+    /// die Datei zeigen, die der Nutzer sieht.
+    fn relocate(&self, mut errors: Vec<Diagnostic>) -> Vec<Diagnostic> {
+        let Some(&end) = self.origin.last() else { return errors };
+        let at = |offset: u32| self.origin.get(offset as usize).copied().unwrap_or(end);
+        for d in &mut errors {
+            (d.span.start, d.span.end) = (at(d.span.start), at(d.span.end));
+            for (span, _) in &mut d.notes {
+                (span.start, span.end) = (at(span.start), at(span.end));
+            }
+        }
+        errors
     }
-    let mut out = String::with_capacity(src.len());
-    for line in src.split_inclusive('\n') {
+}
+
+/// Was `takt fmt` laut lexer.md L9 selbst behebt: die BOM am Dateianfang und
+/// Tabulatoren ausserhalb von Strings und Kommentaren (in der Einrueckung je 4
+/// Leerzeichen, sonst ein Leerzeichen). Ein Kommentar bleibt, wie er ist (L1.5, L7).
+fn repair(src: &str) -> Repaired {
+    let body = src.strip_prefix('\u{feff}').unwrap_or(src);
+    if body.len() == src.len() && !src.contains('\t') {
+        return Repaired { text: src.to_string(), origin: Vec::new() };
+    }
+    let mut text = String::with_capacity(src.len());
+    let mut origin = Vec::with_capacity(src.len() + 1);
+    let mut at = (src.len() - body.len()) as u32;
+    for line in body.split_inclusive('\n') {
         let mut in_string = false;
+        let mut in_comment = false;
         let mut escaped = false;
         let mut leading = true;
         for c in line.chars() {
-            match c {
-                '\t' if !in_string => out.push_str(if leading { "    " } else { " " }),
-                '"' if !escaped => {
-                    in_string = !in_string;
-                    leading = false;
-                    out.push(c);
+            if c == '\t' && !in_string && !in_comment {
+                text.push_str(if leading { "    " } else { " " });
+                origin.resize(text.len(), at);
+            } else {
+                match c {
+                    '"' if !escaped && !in_comment => in_string = !in_string,
+                    '#' if !in_string => in_comment = true,
+                    _ => {}
                 }
-                _ => {
-                    if c != ' ' {
-                        leading = false;
-                    }
-                    out.push(c);
-                }
+                leading &= c == ' ';
+                text.push(c);
+                origin.extend((0..c.len_utf8() as u32).map(|i| at + i));
             }
+            at += c.len_utf8() as u32;
             escaped = in_string && c == '\\' && !escaped;
         }
     }
-    out
+    origin.push(at);
+    Repaired { text, origin }
 }
 
 fn checked_tokens(src: &str) -> Result<Tokens<'_>, Vec<Diagnostic>> {

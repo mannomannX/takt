@@ -121,6 +121,7 @@ pub fn binary(op: BinaryOp, a: &Lowered, b: &Lowered, want: &LlvmType, m: &mut M
 }
 
 /// `transpose`, `inv`, `det`, `solve`, `cholesky` (3.11).
+#[deny(clippy::wildcard_enum_match_arm)]
 pub fn op(
     op: MatOp,
     args: &[Expr],

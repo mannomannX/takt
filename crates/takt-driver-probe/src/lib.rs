@@ -21,7 +21,7 @@
 #![no_std]
 
 use takt_board_support::edge_probe;
-use takt_embed::{Device, Input, Output, Piece, Quality, Sample, StreamInput};
+use takt_embed::{Device, Input, Output, Piece, Quality, Sample, StreamInput, StreamOutput};
 
 /// Die Nummer des Ticks, dessen Grenze `now` ist.
 fn tick_of(now: i64) -> u64 {
@@ -178,6 +178,27 @@ impl Output<bool> for EdgeOO {
     }
 }
 
+/// Der Ausgabestrom `edge_t/tx`: meldet in einem Tick mehr freien Platz, als
+/// der Strom fasst ([`edge_probe::TX_OVER_AT`], 12.6 Zeile 6).
+#[derive(Debug, Default)]
+pub struct EdgeTTx;
+
+impl StreamOutput for EdgeTTx {
+    fn free(&mut self, now: i64) -> Option<u32> {
+        Some(edge_probe::tx_free(tick_of(now)))
+    }
+}
+
+/// Der Ausgang `edge_f/o`: bestaetigt nie (Dauerversagen, 12.6 Zeile 6).
+#[derive(Debug, Default)]
+pub struct EdgeFO;
+
+impl<T> Output<T> for EdgeFO {
+    fn write(&mut self, _value: T, now: i64) -> bool {
+        edge_probe::failing_confirms(tick_of(now))
+    }
+}
+
 /// Das Geraet `edge_o` mit seinem Heartbeat.
 #[derive(Debug, Default)]
 pub struct EdgeO;
@@ -227,5 +248,165 @@ pub struct EdgeRMode;
 impl Input<u32> for EdgeRMode {
     fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
         Some(Sample::good(edge_probe::mode(tick_of(now)), now))
+    }
+}
+
+// --- Ausdrueckliche Stummel (13.8, GEN-021) -----------------------------
+//
+// Ein Pruefstand ohne Geraet fuer eine Adresse baut nicht; wo das
+// Pruefgeraet nichts zu pruefen hat, nennt die Verdrahtung einen dieser
+// Typen, und der Stummel steht so in ihr statt still im Rahmen.
+
+/// Ein Ausgang, der jeden Schreibvorgang bestaetigt: `o/p_ok` und die
+/// anderen Anzeigen von `driver_edge.takt`, `o/beat` von `recorded.takt`.
+#[derive(Debug, Default)]
+pub struct Confirmed;
+
+impl<T> Output<T> for Confirmed {
+    fn write(&mut self, _value: T, _now: i64) -> bool {
+        true
+    }
+}
+
+/// Ein Geraet, dessen Heartbeat immer schlaegt: `o`.
+#[derive(Debug, Default)]
+pub struct Alive;
+
+impl Device for Alive {
+    fn alive(&mut self, _now: i64) -> bool {
+        true
+    }
+}
+
+/// Ein Eingang ohne Lieferung: `edge_r/quiet`, den `recorded.hw` ohne
+/// Treiber nennt; er bleibt `Bad` (3.5).
+#[derive(Debug, Default)]
+pub struct Quiet;
+
+impl<T> Input<T> for Quiet {
+    fn sample(&mut self, _now: i64) -> Option<Sample<T>> {
+        None
+    }
+}
+
+// --- Das vertragstreue Pruefgeraet (GEN-046) ----------------------------
+//
+// Dieselben Traits, aber ohne Verstoss: Jede Abtastung kommt gut zur
+// Tickgrenze, jedes Element mit steigender Nummer innerhalb von `MAXPT`,
+// jeder Schreibvorgang wird bestaetigt, der Heartbeat schlaegt. `fair.takt`
+// neben der Verdrahtung liest sie; `takt driver-test --crate` besteht
+// damit. `fair_a/spike` liefert einmal einen Wert ausserhalb der Range und
+// einmal einen Sprung ueber `max_slew`: Die Zeilen 3 und 4 urteilen ueber
+// den Wert, nicht ueber den Treiber (13.8).
+
+/// Der Tick, in dem `fair_a/spike` die Range verlaesst.
+pub const OUT_OF_RANGE_AT: u64 = 3;
+
+/// Der Tick, in dem `fair_a/spike` weiter springt als `max_slew` erlaubt.
+pub const SLEW_AT: u64 = 6;
+
+/// `fair_a/level`: 40 bis 43, je Tick um hoechstens drei.
+#[derive(Debug, Default)]
+pub struct FairLevel;
+
+impl Input<i64> for FairLevel {
+    fn sample(&mut self, now: i64) -> Option<Sample<i64>> {
+        let k = tick_of(now);
+        Some(Sample::good(40 + i64::try_from(k % 4).unwrap_or(0), now))
+    }
+}
+
+/// `fair_a/spike`: 20, ausser 150 in [`OUT_OF_RANGE_AT`] und 90 in [`SLEW_AT`].
+#[derive(Debug, Default)]
+pub struct FairSpike;
+
+impl Input<i64> for FairSpike {
+    fn sample(&mut self, now: i64) -> Option<Sample<i64>> {
+        let value = match tick_of(now) {
+            OUT_OF_RANGE_AT => 150,
+            SLEW_AT => 90,
+            _ => 20,
+        };
+        Some(Sample::good(value, now))
+    }
+}
+
+/// `fair_u/rx`: in jedem geraden Tick eine Zeile, die Nummer vergibt der Rahmen.
+#[derive(Debug, Default)]
+pub struct FairRx(Polls);
+
+impl StreamInput for FairRx {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        self.0.next(|tick, i| (tick % 2 == 0 && i == 0).then_some((&b"fair"[..], None, None)), buf, now)
+    }
+}
+
+/// `fair_o/o`: bestaetigt jeden Schreibvorgang.
+#[derive(Debug, Default)]
+pub struct FairO;
+
+impl Output<bool> for FairO {
+    fn write(&mut self, _value: bool, _now: i64) -> bool {
+        true
+    }
+}
+
+/// Das Geraet `fair_o`: sein Heartbeat schlaegt immer.
+#[derive(Debug, Default)]
+pub struct FairDevice;
+
+impl Device for FairDevice {
+    fn alive(&mut self, _now: i64) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const T: i64 = edge_probe::TICK_NS;
+
+    /// Das vertragstreue Geraet liefert jeden Tick gut zur Tickgrenze; nur
+    /// `spike` verlaesst die Range (Tick 3) und springt (Tick 6).
+    #[test]
+    fn the_fair_devices_keep_the_contract_and_spike_only_in_value() {
+        for k in 0..10i64 {
+            let level = FairLevel.sample(k * T).expect("jeder Tick");
+            assert_eq!((level.quality, level.t), (Quality::Good, k * T));
+            assert!((40..=43).contains(&level.value));
+            let spike = FairSpike.sample(k * T).expect("jeder Tick");
+            let want = match k {
+                3 => 150,
+                6 => 90,
+                _ => 20,
+            };
+            assert_eq!((spike.value, spike.quality), (want, Quality::Good), "Tick {k}");
+        }
+        let mut rx = FairRx::default();
+        let mut buf = [0u8; 17];
+        let lines: usize = (0..10).map(|k| core::iter::from_fn(|| rx.poll(&mut buf, k * T)).count()).sum();
+        assert_eq!(lines, 5, "je geradem Tick eine Zeile, nie zwei");
+        assert!(FairO.write(true, 0) && FairDevice.alive(0));
+    }
+
+    /// `edge_t/tx` ueberfaehrt seinen Puffer genau einmal, `edge_f/o`
+    /// bestaetigt nie.
+    #[test]
+    fn the_output_devices_break_the_contract_as_planned() {
+        let t = edge_probe::TICK_NS;
+        let over = Some(edge_probe::TX_CAPACITY + 1);
+        let at: Option<i64> = (0..16).find(|k| EdgeTTx.free(k * t) == over);
+        assert_eq!(at, Some(edge_probe::TX_OVER_AT as i64));
+        assert_eq!((0..16).filter(|k| EdgeTTx.free(k * t) == over).count(), 1);
+        assert!((0..16).all(|k| !Output::<bool>::write(&mut EdgeFO, true, k * t)));
+    }
+
+    /// Die ausdruecklichen Stummel: bestaetigt, lebendig, ohne Lieferung.
+    #[test]
+    fn the_explicit_stubs_answer_as_their_names_say() {
+        assert!(Output::<bool>::write(&mut Confirmed, true, 0) && Output::<i64>::write(&mut Confirmed, 7, 0));
+        assert!(Alive.alive(0));
+        assert!(Input::<u8>::sample(&mut Quiet, 0).is_none());
     }
 }

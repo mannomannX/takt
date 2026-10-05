@@ -1,0 +1,29 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 44 (4.5): Ein Handle hat seinen Slot aus dem `job`, der es
+# zuweist. Eine Kopie in eine andere Variable hat keinen; ihr `done` ist
+# ein Fehler.
+
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total
+
+output ready : bool @ hw("o/ready") with safe = false
+
+machine m:
+    var msg : bytes<64> = default
+    initial RUN
+
+    state RUN:
+        sequence:
+            job v = sha256(msg)
+            var w = v
+            until w.done timeout 1 s -> FAILED  # ~ SC-44
+            ready = true
+            -> DONE
+
+    state DONE:
+        when false: -> RUN
+
+    state FAILED:
+        when false: -> RUN

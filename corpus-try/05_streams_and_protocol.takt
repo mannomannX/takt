@@ -23,7 +23,7 @@ record Frame layout little:
     payload_len : u8
     payload     : bytes<64> with len = payload_len
 
-stream<Frame> tx_queue with capacity = 8
+stream<Frame> tx_queue with capacity = 25
 
 input  rx_log  : stream<line<256>> @ hw("uart0/rx")   with max_rate = 2000 Hz, framing = lines, overflow = fault, expect_len = 80, capacity_bytes = 512
 input  rx_bus  : stream<bytes<72>> @ hw("can0/rx")    with max_rate = 5000 Hz, capacity = 64

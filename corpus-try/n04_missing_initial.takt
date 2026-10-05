@@ -11,10 +11,7 @@ machine no_initial:
     var counter : int in 0..10 = 0
 
     state RUN:  # ~ P
-        loop:  # ~ P
+        loop:
             led = true
 
-# Der Parser findet nach dem ersten Fehler nicht zurueck und meldet
-# die folgenden Bloecke mit (FB-408); die Deklaration danach traegt
-# die letzte dieser Meldungen.
-command reset  # ~ P
+command reset

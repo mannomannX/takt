@@ -45,6 +45,9 @@ pub fn parse(text: &str) -> Result<Proof, String> {
     for (n, line) in lines.enumerate() {
         let words: Vec<&str> = line.split_whitespace().collect();
         match words.as_slice() {
+            ["program", _] if !proof.program.is_empty() => {
+                return Err(format!("Zeile {}: zweite `program`-Zeile", n + 2));
+            }
             ["program", hash] => proof.program = (*hash).to_string(),
             ["site", start, kind, k] => {
                 let start = start.parse::<u32>().map_err(|e| format!("Zeile {}: Versatz: {e}", n + 2))?;
@@ -92,5 +95,31 @@ mod tests {
         assert!(parse("takt-proof 2\nprogram x\n").is_err());
         assert!(parse("takt-proof 1\nprogram x\nsite 1 magic k=1\n").is_err());
         assert!(parse("takt-proof 1\nsite 1 range k=1\n").is_err());
+    }
+
+    /// SYN-026: Was keine Zeile der Datei ist, lehnt der Leser mit Zeile ab
+    /// — auch eine zweite `program`-Zeile, die sonst die erste ersetzte und
+    /// die Datei an eine andere Quelle bindete.
+    #[test]
+    fn every_malformed_line_is_refused() {
+        let head = "takt-proof 1\nprogram abc\n";
+        let cases = [
+            format!("{head}site 1 range\n"),
+            format!("{head}site 1 range k=1 extra\n"),
+            format!("{head}site x range k=1\n"),
+            format!("{head}site -1 range k=1\n"),
+            format!("{head}site 1 range k=\n"),
+            format!("{head}site 1 range 5\n"),
+            format!("{head}program\n"),
+            format!("{head}program abc def\n"),
+            format!("{head}program def\n"),
+            format!("{head}bogus 1\n"),
+            "takt-proof\nprogram abc\n".to_string(),
+        ];
+        for text in &cases {
+            assert!(parse(text).is_err(), "angenommen: {text:?}");
+        }
+        let ok = format!("# Kommentar\n{head}\nsite 0 range k=0\n");
+        assert_eq!(parse(&ok).map(|p| p.sites.len()), Ok(1), "k = 0 und Versatz 0 sind lesbar");
     }
 }

@@ -42,6 +42,9 @@ pub enum FormatError {
     BadVariant(&'static str, u64),
     /// Wert ausserhalb des Typs (z. B. u8 > 255).
     OutOfRange(&'static str, u32),
+    /// Knoten tiefer geschachtelt, als ein Programm es je wird
+    /// ([`MAX_DEPTH`]): der Knoten, an dem der Leser aufhoerte.
+    TooDeep(&'static str),
 }
 
 impl fmt::Display for FormatError {
@@ -59,6 +62,7 @@ impl fmt::Display for FormatError {
             FormatError::WrongWire(n, t) => write!(f, "{n}: Feld {t} hat die falsche Drahtart"),
             FormatError::BadVariant(n, v) => write!(f, "{n}: unbekannte Variante {v}"),
             FormatError::OutOfRange(n, t) => write!(f, "{n}: Feld {t} ausserhalb des Wertebereichs"),
+            FormatError::TooDeep(n) => write!(f, "{n}: tiefer als {MAX_DEPTH} Knoten geschachtelt"),
         }
     }
 }
@@ -215,7 +219,6 @@ impl<'a> Node<'a> {
         let mut fields = Vec::new();
         while pos < buf.len() {
             let key = get_varint(buf, &mut pos)?;
-            let tag = (key >> 2) as u32;
             let raw = match (key & 3) as u8 {
                 0 => Raw::Varint(get_varint(buf, &mut pos)?),
                 1 => {
@@ -231,7 +234,12 @@ impl<'a> Node<'a> {
                 }
                 w => return Err(FormatError::BadWire(w)),
             };
-            fields.push((tag, raw));
+            // Jede Nummer des Schemas passt in u32; eine groessere ist
+            // unbekannt und wird ueberlesen (W2), statt modulo 2^32 eine
+            // bekannte zu treffen.
+            if let Ok(tag) = u32::try_from(key >> 2) {
+                fields.push((tag, raw));
+            }
         }
         Ok(Node { name, fields })
     }
@@ -262,15 +270,42 @@ impl<'a> Node<'a> {
     }
 }
 
-/// Leser: Stringtabelle des Kopfes.
+/// Die tiefste Schachtelung von Knoten, die ein Leser annimmt. Ein
+/// uebersetzbares Programm bleibt weit darunter (Ausdruecke hoechstens 256
+/// Knoten tief, Bloecke 64, 2.2); eine Datei darueber ist kaputt oder
+/// boeswillig, und der rekursive Leser fiele sonst am Stapel.
+pub const MAX_DEPTH: u32 = 1024;
+
+/// Leser: Stringtabelle des Kopfes und die Tiefe, in der er gerade liest.
 pub struct Reader {
     strings: Vec<String>,
+    depth: std::cell::Cell<u32>,
+}
+
+/// Eine Ebene des Lesers; sie endet, wenn der Wert gelesen ist.
+pub struct Depth<'a>(&'a std::cell::Cell<u32>);
+
+impl Drop for Depth<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.0.get().saturating_sub(1));
+    }
 }
 
 impl Reader {
     /// Leser mit Stringtabelle.
     pub fn new(strings: Vec<String>) -> Self {
-        Reader { strings }
+        Reader { strings, depth: std::cell::Cell::new(0) }
+    }
+
+    /// Steigt in einen Knoten `name` hinab; jenseits von [`MAX_DEPTH`] ein
+    /// Fehler.
+    pub fn enter(&self, name: &'static str) -> Result<Depth<'_>> {
+        let next = self.depth.get() + 1;
+        if next > MAX_DEPTH {
+            return Err(FormatError::TooDeep(name));
+        }
+        self.depth.set(next);
+        Ok(Depth(&self.depth))
     }
 
     /// String zu einer Nummer.

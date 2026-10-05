@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-18 (8.7): Ein Record-Muster vergleicht nur mit konstanten Feldwerten.
+
+record Pulse:
+    rising : bool
+    pin    : u8
+
+input  edges : stream<Pulse> @ hw("gpio/edges") with max_rate = 100 Hz
+output hit   : bool          @ hw("o/hit")      with safe = false
+
+machine m:
+    var want : u8 = 7
+    initial RUN
+
+    state RUN:
+        on edges matches Pulse(pin = want) as e:  # ~ SC-18
+            hit = true

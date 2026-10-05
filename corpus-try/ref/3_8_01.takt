@@ -1,5 +1,5 @@
 enum HeaderErr: MAGIC, SIZE, VERSION
-fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:
+fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:  # ~ SC-2
     var h = ImageHeader.decode(b)
     if not h.valid: return ERR(MAGIC)
     if h.size > 1 MiB: return ERR(SIZE)

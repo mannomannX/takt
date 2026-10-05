@@ -1,0 +1,31 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-10: Zustaende, deren Name ein Glied `DONE` oder `SAFE` hat, sind
+# endgueltig gemeint und brauchen keinen Ausgang.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+command stop
+command halt
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when go: -> DONE
+        when stop: -> SAFE_STOP
+        when halt: -> ALL_DONE
+
+    state DONE:
+        loop:
+            v = true
+
+    state SAFE_STOP:
+        loop:
+            v = false
+
+    state ALL_DONE:
+        loop:
+            v = false

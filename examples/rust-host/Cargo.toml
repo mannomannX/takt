@@ -16,4 +16,4 @@ takt-embed = { path = "../../crates/takt-embed" }
 takt-embed = { path = "../../crates/takt-embed", features = ["build"] }
 
 [dev-dependencies]
-takt-embed = { path = "../../crates/takt-embed", features = ["testing"] }
+takt-embed = { path = "../../crates/takt-embed", features = ["testing", "build"] }

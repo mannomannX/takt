@@ -151,10 +151,13 @@ fn read(loaded: &Loaded<'_>, ty: TypeId, raw: &[u8], endian: Endian) -> Option<V
             let n = uint(raw, endian);
             Some(if width.signed() { Value::Int(sign_extend(n, *width)) } else { Value::UInt(n) })
         }
-        Type::Float { width, .. } => Some(match width {
+        // 3.7: NaN und Inf im Draht sind kein Wert, `decode` liefert `none`.
+        Type::Float { width, .. } => match width {
             FloatWidth::F32 => Value::F32(f32::from_bits(uint(raw, endian) as u32)),
             FloatWidth::F64 => Value::F64(f64::from_bits(uint(raw, endian))),
-        }),
+        }
+        .finite_or(())
+        .ok(),
         Type::Bytes { .. } => Some(Value::Bytes(raw.to_vec())),
         Type::Array { elem, len } => {
             let width = field_size(loaded, *elem)? as usize;

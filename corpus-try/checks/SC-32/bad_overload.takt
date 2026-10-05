@@ -1,0 +1,20 @@
+system:  # ~ SC-32
+    language    = 1
+    tick        = 100 us
+    tick_source = hw("daq/clock")
+
+# Pruefung 32 (7.2): 2000 Gleitkommaadditionen zu je rund 1,19 us passen
+# nicht in 100 us.
+
+output led : bool @ hw("ui/led") with safe = false
+
+machine m:
+    var acc : float = 0.0
+
+    initial S
+
+    state S:
+        loop:
+            for i in range(2000):
+                acc = acc + 1.5
+            led = acc > 0.0

@@ -94,30 +94,137 @@ impl Stimulus {
         Stimulus::Input { tick, channel: channel.to_string(), sample }
     }
 
-    /// Lieferungen, Commands, Aborts und Runtime-Faults aus einem Trace.
-    pub fn from_trace(trace: &takt_interp::Trace) -> Vec<Stimulus> {
+    /// Der Stimulus eines Traces: jede Zeile, die der Interpreter als
+    /// Eingabe nimmt (`apply_stimulus`), ohne eine zu verlieren.
+    ///
+    /// Lieferungen, Commands, angenommene Tunes, Aborts und Runtime-Faults
+    /// werden zu Eingaben. Ein verworfener Tune bleibt wie im Interpreter
+    /// ohne Wirkung, ebenso die Beobachtungszeilen eines Laufs. Eine
+    /// aufgezeichnete Job-Fertigstellung kann der Rahmen nicht nachspielen,
+    /// und eine unbekannte Runtime-Art lehnt der Interpreter ab: beides ist
+    /// ein Fehler, kein stilles Weglassen.
+    pub fn from_trace(trace: &takt_interp::Trace) -> Result<Vec<Stimulus>, String> {
         use takt_interp::trace::LineKind;
         use takt_mir::machine::RuntimeKind;
-        trace
-            .lines
-            .iter()
-            .filter_map(|l| match &l.kind {
+        let mut out = Vec::new();
+        for l in &trace.lines {
+            let tick = l.tick;
+            match &l.kind {
                 LineKind::Input { channel, sample } => {
-                    Some(Stimulus::Input { tick: l.tick, channel: channel.clone(), sample: sample.clone() })
+                    out.push(Stimulus::Input { tick, channel: channel.clone(), sample: sample.clone() });
                 }
-                LineKind::Command { name } => Some(Stimulus::cmd(l.tick, name)),
-                LineKind::Abort => Some(Stimulus::Abort { tick: l.tick }),
+                LineKind::Command { name } => out.push(Stimulus::cmd(tick, name)),
+                LineKind::Tune { name, value, accepted: true } => {
+                    out.push(Stimulus::Tune { tick, name: name.clone(), text: value.clone() });
+                }
+                LineKind::Abort => out.push(Stimulus::Abort { tick }),
                 LineKind::Runtime { kind, output } => {
                     let kind = match kind.as_str() {
                         "Overrun" => RuntimeKind::Overrun,
                         "Driver" => RuntimeKind::Driver,
                         "Hardware" => RuntimeKind::Hardware,
-                        _ => RuntimeKind::Node,
+                        "Node" => RuntimeKind::Node,
+                        other => return Err(format!("t={tick}: Runtime-Fault `{other}` gibt es nicht")),
                     };
-                    Some(Stimulus::Runtime { tick: l.tick, kind, output: output.clone() })
+                    out.push(Stimulus::Runtime { tick, kind, output: output.clone() });
                 }
-                _ => None,
+                LineKind::Job { machine, handle } => {
+                    return Err(format!("t={tick}: `job {machine} {handle} done` kann der Rahmen nicht nachspielen"));
+                }
+                LineKind::Tune { accepted: false, .. }
+                | LineKind::Output { .. }
+                | LineKind::State { .. }
+                | LineKind::Published { .. }
+                | LineKind::Signal { .. }
+                | LineKind::Fault { .. }
+                | LineKind::Log { .. }
+                | LineKind::Alert { .. }
+                | LineKind::Measure { .. }
+                | LineKind::Verify { .. }
+                | LineKind::Verdict { .. }
+                | LineKind::Property { .. }
+                | LineKind::Stream { .. }
+                | LineKind::Driver { .. }
+                | LineKind::Final { .. }
+                | LineKind::End { .. }
+                | LineKind::Persist { .. }
+                | LineKind::Time { .. }
+                | LineKind::Record { .. } => {}
+            }
+        }
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use takt_mir::machine::RuntimeKind;
+
+    fn stimulus(text: &str) -> Result<Vec<Stimulus>, String> {
+        Stimulus::from_trace(&takt_interp::Trace::parse(text).expect("lesbar"))
+    }
+
+    /// Jede Eingabezeile wird eine Eingabe, in ihrer Reihenfolge; Beobachtungen
+    /// und ein verworfener Tune bleiben ohne Wirkung wie im Interpreter.
+    #[test]
+    fn every_input_line_becomes_a_stimulus() {
+        let got = stimulus(
+            "t=1 in rx READY\nt=2 cmd go\nt=3 tune GAIN 5\nt=3 tune GAIN 900 rejected\nt=4 abort\n\
+             t=5 runtime Overrun\nt=6 runtime Driver o\nt=7 runtime Hardware\nt=8 runtime Node\n\
+             t=9 out o 1\nt=9 state m RUN\nt=9 fault m Range \"x\" -> SAFE\nt=9 log m \"x\"\n\
+             t=9 time took=0 drift=0 slept=0\n",
+        )
+        .expect("Stimulus");
+        let kinds: Vec<(u64, String)> = got
+            .iter()
+            .map(|s| {
+                let what = match s {
+                    Stimulus::Input { channel, sample, .. } => format!("in {channel} {:?}", sample.value),
+                    Stimulus::Command { name, .. } => format!("cmd {name}"),
+                    Stimulus::Tune { name, text, .. } => format!("tune {name} {text}"),
+                    Stimulus::Abort { .. } => "abort".into(),
+                    Stimulus::Runtime { kind, output, .. } => format!("runtime {kind:?} {output:?}"),
+                };
+                (s.tick(), what)
             })
-            .collect()
+            .collect();
+        let want: Vec<(u64, String)> = [
+            (1, "in rx Some(\"READY\")"),
+            (2, "cmd go"),
+            (3, "tune GAIN 5"),
+            (4, "abort"),
+            (5, "runtime Overrun None"),
+            (6, "runtime Driver Some(\"o\")"),
+            (7, "runtime Hardware None"),
+            (8, "runtime Node None"),
+        ]
+        .into_iter()
+        .map(|(t, w)| (t, w.to_string()))
+        .collect();
+        assert_eq!(kinds, want);
+        assert!(matches!(got[6], Stimulus::Runtime { kind: RuntimeKind::Hardware, .. }));
+    }
+
+    /// Was der Rahmen nicht nachspielen kann oder der Interpreter ablehnt,
+    /// ist ein Fehler und kein stilles Weglassen.
+    #[test]
+    fn a_line_the_frame_cannot_replay_is_an_error() {
+        assert!(stimulus("t=3 job m h done\n").is_err_and(|e| e.contains("job m h done")));
+        assert!(stimulus("t=3 runtime Brownout\n").is_err_and(|e| e.contains("Brownout")));
+    }
+
+    /// Eine Lieferung mit Wert und Qualitaet liest sich so zurueck, wie der
+    /// Interpreter sie schreibt (`grammar/trace.md`: `t=2 in lox_temp 90 K
+    /// stale age=120 ms`): Wert, Qualitaet und Alter getrennt.
+    #[test]
+    fn a_value_with_its_quality_reads_back_as_written() {
+        let got = stimulus("t=2 in p 12.0 bar stale age=60 ms\n").expect("Stimulus");
+        let Some(Stimulus::Input { sample, .. }) = got.first() else { panic!("{got:?}") };
+        assert_eq!(
+            (sample.value.as_deref(), sample.quality.as_deref(), sample.age.as_deref()),
+            (Some("12.0 bar"), Some("stale"), Some("60 ms")),
+            "{sample:?}"
+        );
     }
 }

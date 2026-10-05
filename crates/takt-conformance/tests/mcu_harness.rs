@@ -14,7 +14,13 @@ use takt_llvm::toolchain::Clang;
 
 mod common;
 
-const KORPUS: [&str; 4] = ["01_minimal.takt", "16_timing.takt", "19_faults.takt", "40_jobs.takt"];
+/// Was fuer die MCU-Ziele binden muss: die Suite `mcu` aus dem Manifest
+/// (FB-378) und die Beispiele, die die Boards fahren.
+fn mcu_corpus() -> Vec<&'static str> {
+    let mut out = takt_conformance::suites::programs("mcu");
+    out.extend(takt_conformance::suites::EXAMPLES);
+    out
+}
 
 fn corpus(name: &str) -> takt_mir::Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
@@ -28,20 +34,73 @@ fn corpus(name: &str) -> takt_mir::Program {
     takt_sema::compile(&src, &options).program.unwrap_or_else(|| panic!("{path}: uebersetzt nicht"))
 }
 
+/// Was ein gebundenes Programm offen lassen darf: was das Board stellt
+/// (KON2-004, KON2-011). Treiber (`app_in_`, `app_out_`, `app_poll_`,
+/// `app_free_`, `app_alive_`, 12.6), die Kanaele `sys/…` des Wirts
+/// (`app_sys_`, 12.7), Trace und Rand der Runtime
+/// (`takt_board_`, `takt_edge_`), Natives und Mathematik aus
+/// `takt-native-abi` (`takt_native_`, `takt_m_`), die Laufzeit des Compilers
+/// (`__…`) und, was C freistehend verlangt (`mem…`) und `compiler-builtins`
+/// fuer die Intrinsics stellt. Kein `malloc`, `calloc`, `realloc`, `free`,
+/// kein `printf` (12.3) — und keine Funktion der ABI, die der Rahmen selbst
+/// stellen muss.
+fn board_provides(symbol: &str) -> bool {
+    const PREFIXES: [&str; 11] = [
+        "app_in_",
+        "app_sys_",
+        "app_out_",
+        "app_poll_",
+        "app_free_",
+        "app_alive_",
+        "takt_board_",
+        "takt_edge_",
+        "takt_native_",
+        "takt_m_",
+        "__",
+    ];
+    const NAMES: [&str; 22] = [
+        "memcpy", "memmove", "memset", "memcmp", "sqrt", "sqrtf", "fma", "fmaf", "fmin", "fminf", "fmax", "fmaxf",
+        "round", "roundf", "trunc", "truncf", "floor", "floorf", "ceil", "ceilf", "fabs", "fabsf",
+    ];
+    PREFIXES.iter().any(|p| symbol.starts_with(p)) || NAMES.contains(&symbol)
+}
+
+/// Die undefinierten Symbole eines Objekts (`llvm-nm -u`, neben clang).
+fn undefined(clang: &std::path::Path, obj: &std::path::Path) -> Result<Vec<String>, String> {
+    let nm = clang.with_file_name(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });
+    let out =
+        std::process::Command::new(&nm).arg("-u").arg(obj).output().map_err(|e| format!("{}: {e}", nm.display()))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.split_whitespace().last())
+        .map(String::from)
+        .collect())
+}
+
 /// Uebersetzt Programm und Rahmen fuer ein Ziel und linkt beides.
 ///
 /// Der Linker laeuft mit `-r` (teilweise Bindung): Ein vollstaendiges
 /// Binary braeuchte Startcode und Linker-Skript, die zum Board gehoeren
-/// und nicht hierher. Was `-r` prueft, ist genau die Frage dieses Tests —
-/// passen die Symbole zusammen?
+/// und nicht hierher. Die teilweise Bindung laesst offene Symbole stehen;
+/// darum haelt die Funktion danach jedes undefinierte Symbol gegen
+/// [`board_provides`]: Eine Funktion der ABI, die der Codegen ruft und der
+/// Rahmen nicht stellt, ein Heap oder `printf` sind ein Fehler mit Namen.
 fn link_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) -> Result<u64, String> {
     let Clang::At(path) = clang else {
         return Err("clang fehlt".into());
     };
+    // Ein Verzeichnis je Aufruf: Die Tests dieses Binarys binden dieselben
+    // Programme nebeneinander (vgl. KON1-007).
+    static LINKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let run = LINKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "takt-mcuh-{}-{}",
+        "takt-mcuh-{}-{}-{}-{run}",
         target.name,
-        name.replace('.', "_")
+        name.replace(['.', '/'], "_"),
+        std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -81,6 +140,10 @@ fn link_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) ->
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
+    let open: Vec<String> = undefined(path, &linked)?.into_iter().filter(|s| !board_provides(s)).collect();
+    if !open.is_empty() {
+        return Err(format!("offen und nicht Sache des Boards: {}", open.join(", ")));
+    }
     let size = std::fs::metadata(&linked).map_err(|e| e.to_string())?.len();
     let _ = std::fs::remove_dir_all(&dir);
     Ok(size)
@@ -88,22 +151,36 @@ fn link_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) ->
 
 /// **Erzeugter Code und Rahmen passen zusammen.**
 ///
-/// Der Linker ist hier der Pruefer: Ein fehlendes Symbol nennt er beim
-/// Namen, und genau das ist die Frage — ruft der Rahmen, was der Codegen
-/// erzeugt, und stellt er bereit, was der Codegen ruft?
+/// Linker und `llvm-nm` sind hier die Pruefer: Ein offenes Symbol, das nicht
+/// das Board stellt, nennt [`link_for`] beim Namen, und genau das ist die
+/// Frage — ruft der Rahmen, was der Codegen erzeugt, und stellt er bereit,
+/// was der Codegen ruft?
+///
+/// Jedes Programm der Suite bindet freistehend (12.3, KON2-011): Rahmen mit
+/// Stroemen, Jobs, Journal, Aufzeichnung und Monitoren, fuer beide
+/// MCU-Ziele, und offen bleibt nur, was das Board stellt — kein Heap, kein
+/// `printf`, keine Funktion der ABI.
 #[test]
 fn the_harness_links_with_the_generated_code() {
     let Some(clang) = common::clang() else { return };
-    let mut errors = Vec::new();
-    for name in KORPUS {
-        let p = corpus(name);
-        for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
-            match link_for(&clang, target, &p, name) {
-                Ok(size) => eprintln!("{name} fuer {}: {size} Byte gebunden", target.name),
-                Err(e) => errors.push(format!("{name} fuer {}: {e}", target.name)),
-            }
+    let names = mcu_corpus();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let errors = std::sync::Mutex::new(Vec::new());
+    std::thread::scope(|s| {
+        for _ in 0..3 {
+            s.spawn(|| {
+                while let Some(name) = names.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                    let p = corpus(name);
+                    for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
+                        if let Err(e) = link_for(&clang, target, &p, name) {
+                            errors.lock().expect("Liste").push(format!("{name} fuer {}: {e}", target.name));
+                        }
+                    }
+                }
+            });
         }
-    }
+    });
+    let errors = errors.into_inner().expect("Liste");
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
 }
 
@@ -194,17 +271,59 @@ fn the_harness_exports_what_the_loop_needs() {
 
 /// Der Rahmen bedient jede Funktion, die der erzeugte Code ruft.
 ///
-/// Die ABI-Liste (`takt-llvm/src/abi.rs`) ist die eine Stelle, an der
-/// beides zusammensteht; sie war schon einmal unvollstaendig (FB-117).
+/// Die Liste ist keine Handliste (KON2-005): Der erzeugte Code deklariert
+/// die Funktionen der Runtime-Schnittstelle (`takt-llvm/src/abi.rs`) im
+/// Kopf jedes Moduls. Je Programm der Boards verlangt der Test fuer jede, die
+/// sein Code ruft, eine *Definition* im Rahmen — nicht nur den Namen, der
+/// auch in einem Kommentar oder Prototyp stuende —, und zusammen rufen die
+/// Programme jede deklarierte. Die Liste war schon einmal unvollstaendig
+/// (FB-117).
 #[test]
 fn the_harness_answers_the_whole_abi() {
+    let mut declared = std::collections::BTreeSet::new();
+    let mut called = std::collections::BTreeSet::new();
+    let mut errors = Vec::new();
+    // Dazu der Port auf `mmio` (68, nicht im Korpus der Boards) und ein
+    // Programm, das `o.jitter` liest.
+    let jitter = program(
+        "system:\n    language = 1\n    tick = 1 ms\n\n\
+         output probe : bool @ hw(\"gpio/loop_out\") with safe = false\n\n\
+         machine m:\n    initial RUN\n    state RUN:\n        loop:\n            probe = probe.jitter > 1 ms\n",
+    );
+    let programs =
+        mcu_corpus().into_iter().map(|name| (name.to_string(), corpus(name))).chain([("jitter".to_string(), jitter)]);
+    for (name, p) in programs {
+        let src = takt_frame::mcu::build(&p).source;
+        let ir = common::ir_for(&p, Target::THUMBV7EM.triple);
+        let abi: Vec<String> = ir
+            .lines()
+            .filter_map(|l| {
+                l.strip_prefix("declare ")?.split_once(" @app_")?.1.split_once('(').map(|(n, _)| n.to_string())
+            })
+            .collect();
+        for f in &abi {
+            if !ir.lines().any(|l| l.contains("call ") && l.contains(&format!("@app_{f}("))) {
+                continue;
+            }
+            called.insert(f.clone());
+            let head = format!("app_{f}(struct app_arena *a");
+            if !src.lines().any(|l| l.contains(&head) && !l.trim_end().ends_with(';')) {
+                errors.push(format!("{name}: `app_{f}` ist im Rahmen nicht definiert, der erzeugte Code ruft es"));
+            }
+        }
+        declared.extend(abi);
+    }
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    // Ein Registerport ist auf der MCU ein `volatile`-Zugriff (12.10); nur der
+    // Wirt ruft dafuer die Runtime (`mcu_codegen.rs`).
+    let host_only = ["mmio_read", "mmio_write"];
+    let uncalled: Vec<&String> = declared.difference(&called).filter(|f| !host_only.contains(&f.as_str())).collect();
+    assert!(uncalled.is_empty(), "kein Programm ruft {uncalled:?}; der Rahmen ist dafuer ungeprueft");
+    for f in host_only {
+        assert!(!called.contains(f), "`app_{f}` ruft die MCU doch");
+    }
     let p = corpus("19_faults.takt");
     let src = takt_frame::mcu::build(&p).source;
-    for name in
-        ["app_now", "app_alert", "app_log", "app_fault", "app_measure", "app_verify", "app_abort", "app_verdict"]
-    {
-        assert!(src.contains(name), "`{name}` fehlt im Rahmen — der erzeugte Code ruft es (abi.rs)");
-    }
     assert!(
         src.contains("offsetof(struct app_arena, fault) == 0"),
         "die Ablagen eines Faults stehen nicht am Anfang der Arena (12.11)"
@@ -221,7 +340,7 @@ fn the_harness_answers_the_whole_abi() {
 fn the_harness_is_freestanding() {
     let p = corpus("16_timing.takt");
     let src = takt_frame::mcu::build(&p).source;
-    for forbidden in ["stdio.h", "printf", "malloc", "stdlib.h"] {
+    for forbidden in ["stdio.h", "printf", "malloc", "calloc", "realloc", "free(", "stdlib.h"] {
         assert!(!src.contains(forbidden), "`{forbidden}` gehoert nicht in einen MCU-Rahmen (12.3)");
     }
     assert!(src.contains("unsigned char image"), "das Prozessabbild steht statisch");
@@ -258,19 +377,17 @@ fn a_hardware_path_becomes_a_driver_call() {
 /// machen — und 8.3 will gerade, dass beide Baeuche dieselbe Logik tragen.
 #[test]
 fn an_unbound_output_needs_no_driver() {
-    let p = corpus("01_minimal.takt");
+    let p = program(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         output led   : bool @ hw(\"ui/led\") with safe = false\n\
+         output model : bool @ sim(\"plant/valve\")\n\n\
+         machine m:\n    initial RUN\n    state RUN:\n        loop:\n            led = true\n            model = true\n",
+    );
     let src = takt_frame::mcu::build(&p).source;
-    let calls = src.lines().filter(|l| l.contains("app_out_")).count();
-    let bound = p
-        .channels
-        .iter()
-        .filter(|c| {
-            c.dir != takt_mir::program::Direction::Input && matches!(c.binding, takt_mir::program::Binding::Hw(_))
-        })
-        .count();
     // Je gebundenem Ausgang eine Deklaration und ein Aufruf; einen
     // Vorgabetreiber gibt es nicht (12.6).
-    assert_eq!(calls, bound * 2, "nur gebundene Ausgaenge bekommen Treiber:\n{src}");
+    assert_eq!(src.lines().filter(|l| l.contains("app_out_ui_led(")).count(), 2, "{src}");
+    assert!(!src.contains("plant_valve"), "der `sim`-Ausgang bekommt keinen Treiber:\n{src}");
 }
 
 /// **Die Adresse wird zu einem Bezeichner, der in C gueltig ist.**
@@ -416,15 +533,48 @@ fn the_harness_does_no_floating_point_arithmetic() {
 /// wurden bisher nur `out`-Zeilen.
 #[test]
 fn every_observation_line_carries_its_tick() {
-    let p = corpus("19_faults.takt");
-    let src = takt_frame::mcu::build(&p).source;
-    for kind in ["alert", "log", "abort", "verify", "verdict", "measure"] {
-        let at = src.find(&format!("takt_board_trace(\"{kind} \")")).unwrap_or_else(|| {
-            panic!("`{kind}` fehlt im Rahmen");
-        });
-        // Die beiden Zeilen davor muessen den Tick schreiben.
-        let davor = &src[at.saturating_sub(120)..at];
-        assert!(davor.contains("takt_board_trace_i64(a->tick)"), "`{kind}` ohne Tickzahl:\n{davor}");
+    // Je Art ein Programm, dessen Rahmen sie schreibt (KON2-009): Faults,
+    // Eigenschaften, die Zaehler der Stroeme, der Treiberrand, die
+    // Aufzeichnung und die Runtime-Faults neben den Beobachtungen aus 5.6.
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/programs");
+    let recorded = {
+        let src = std::fs::read_to_string(format!("{dir}/recorded.takt")).expect("Quelle");
+        let mut options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+        let hw = std::fs::read_to_string(format!("{dir}/recorded.hw")).expect("Konfiguration");
+        options.channel_imports.insert("recorded.hw".to_string(), hw);
+        takt_sema::compile(&src, &options).program.expect("Programm")
+    };
+    let edge = {
+        let src = std::fs::read_to_string(format!("{dir}/driver_edge.takt")).expect("Quelle");
+        let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+        takt_sema::compile(&src, &options).program.expect("Programm")
+    };
+    let cases: [(&str, takt_mir::Program, &[&str]); 4] = [
+        (
+            "19_faults",
+            corpus("19_faults.takt"),
+            &["alert", "log", "abort", "verify", "verdict", "measure", "fault", "runtime Overrun", "runtime Hardware"],
+        ),
+        ("47_monitors", corpus("47_monitors.takt"), &["property"]),
+        ("driver_edge", edge, &["driver", "stream", "runtime Driver"]),
+        ("recorded", recorded, &["rec"]),
+    ];
+    for (name, p, kinds) in cases {
+        let src = takt_frame::mcu::build(&p).source;
+        for kind in kinds {
+            let at = src
+                .find(&format!("takt_board_trace(\"{kind} "))
+                .or_else(|| src.find(&format!("takt_board_trace(\"{kind}\\n")))
+                .unwrap_or_else(|| panic!("{name}: `{kind}` fehlt im Rahmen"));
+            // Die beiden Aufrufe davor schreiben `t=` und den Tick.
+            let before: Vec<&str> = src[..at].lines().rev().skip(1).take(2).map(str::trim).collect();
+            assert!(
+                before.len() == 2
+                    && before[0].starts_with("takt_board_trace_i64(")
+                    && before[1] == "takt_board_trace(\"t=\");",
+                "{name}: `{kind}` ohne Tickzahl davor: {before:?}"
+            );
+        }
     }
 }
 
@@ -499,7 +649,9 @@ fn the_deadline_is_absolute_nanoseconds() {
 /// `after` vergleicht `t_in_state * period * T0` gegen die Dauer (7.2);
 /// `t_in_state` zaehlt also Aktivierungen. Eine erste Fassung teilte nur
 /// durch `T0` und war bei `period = 5` fuenfmal zu gross. Zurueck kommt
-/// die Zahl in Basis-Ticks, weil die Runtime darin springt.
+/// die Zahl in Basis-Ticks ab jetzt, weil die Runtime darin springt: bis zur
+/// naechsten Aktivierung (`now / T0` modulo Periode), dann je verbleibender
+/// Aktivierung eine Periode (FB-429).
 #[test]
 fn a_multirate_deadline_counts_activations() {
     let p = corpus("31_idle_multirate.takt");
@@ -511,8 +663,9 @@ fn a_multirate_deadline_counts_activations() {
     assert!(table.contains("i64 4 }"), "200 ms sind vier");
     let at = ir.find("define internal i64 @m_deadline(").expect("Fristabfrage");
     let dl = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
-    assert!(dl.contains(", i64 5)"), "die Periode geht mit:\n{dl}");
-    assert!(ir.contains("%ticks = mul i64 %best, %period"), "und das Ergebnis geht in Basis-Ticks zurueck");
+    let with_period = |op: &str| dl.lines().any(|l| l.contains(&format!(" = {op} i64 ")) && l.ends_with(", 5"));
+    assert!(dl.contains("@app_now(") && with_period("urem"), "ab jetzt bis zur naechsten Aktivierung:\n{dl}");
+    assert!(with_period("mul"), "je Aktivierung eine Periode in Basis-Ticks:\n{dl}");
 }
 
 /// **Eingaenge vom Board** (12.1 Schritt 2, 12.6).
@@ -640,53 +793,61 @@ fn a_frame_with_inputs_compiles_and_links() {
 #[test]
 fn a_missing_driver_fails_the_link_by_name() {
     let Some(clang) = common::clang_path() else { return };
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-strong-drivers");
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("Verzeichnis");
-    let host = if cfg!(windows) { Target::X86_64_WINDOWS } else { Target::X86_64_LINUX };
-    let p = program(INPUTS);
-    let ll = dir.join("programm.ll");
-    std::fs::write(&ll, common::ir_for(&p, host.triple)).expect("IR");
-    std::fs::write(dir.join("app.h"), takt_frame::mcu::build(&p).header).expect("Kopf");
-    let main = dir.join("main.c");
-    std::fs::write(
-        &main,
-        "#include \"app.h\"\n\
-         void takt_board_trace(const char *line) { (void)line; }\n\
-         void takt_board_trace_i64(long long v) { (void)v; }\n\
-         void takt_board_trace_u64(unsigned long long v) { (void)v; }\n\
-         void takt_board_trace_f64(double v) { (void)v; }\n\
-         void takt_board_trace_hex8(unsigned char v) { (void)v; }\n\
-         static struct app_arena arena;\n\
-         int main(void) { app_init(&arena, 0); app_tick(&arena, 1); app_commit(&arena); return 0; }\n",
-    )
-    .expect("main");
-    let natives = takt_conformance::harness::native_library().expect("Natives");
-    let link = |stubs: bool| {
-        let frame = takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { stubs, ..Default::default() }).source;
-        let c = dir.join(format!("rahmen_{stubs}.c"));
-        std::fs::write(&c, frame).expect("Rahmen");
-        let exe = dir.join(format!("lauf_{stubs}{}", std::env::consts::EXE_SUFFIX));
-        let mut cmd = std::process::Command::new(&clang);
-        let out = Clang::deterministic(&mut cmd)
-            .args(["-Wno-override-module", "-O1"])
-            .args([&ll, &c, &main, &natives])
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .expect("clang");
-        (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned(), exe)
-    };
+    // Skalare und Ausgaenge, dazu Stroeme in beide Richtungen (KON2-004):
+    // Der Rand holt Elemente mit `app_poll_*` und fragt den Platz eines
+    // Ausgabestroms mit `app_free_*`.
+    for (label, src, drivers) in [
+        ("scalars", INPUTS, &["app_in_ui_button", "app_in_adc_temp", "app_out_ui_led", "app_alive_ui"][..]),
+        ("streams", STREAMS, &["app_poll_bus_rx", "app_free_bus_tx"]),
+    ] {
+        let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-mcuh-strong-{label}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("Verzeichnis");
+        let host = if cfg!(windows) { Target::X86_64_WINDOWS } else { Target::X86_64_LINUX };
+        let p = program(src);
+        let ll = dir.join("programm.ll");
+        std::fs::write(&ll, common::ir_for(&p, host.triple)).expect("IR");
+        std::fs::write(dir.join("app.h"), takt_frame::mcu::build(&p).header).expect("Kopf");
+        let main = dir.join("main.c");
+        std::fs::write(
+            &main,
+            "#include \"app.h\"\n\
+             void takt_board_trace(const char *line) { (void)line; }\n\
+             void takt_board_trace_i64(long long v) { (void)v; }\n\
+             void takt_board_trace_u64(unsigned long long v) { (void)v; }\n\
+             void takt_board_trace_f64(double v) { (void)v; }\n\
+             void takt_board_trace_hex8(unsigned char v) { (void)v; }\n\
+             static struct app_arena arena;\n\
+             int main(void) { app_init(&arena, 0); app_tick(&arena, 1); app_commit(&arena); return 0; }\n",
+        )
+        .expect("main");
+        let natives = takt_conformance::harness::native_library().expect("Natives");
+        let link = |stubs: bool| {
+            let frame = takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { stubs, ..Default::default() }).source;
+            let c = dir.join(format!("rahmen_{stubs}.c"));
+            std::fs::write(&c, frame).expect("Rahmen");
+            let exe = dir.join(format!("lauf_{stubs}{}", std::env::consts::EXE_SUFFIX));
+            let mut cmd = std::process::Command::new(&clang);
+            let out = Clang::deterministic(&mut cmd)
+                .args(["-Wno-override-module", "-O1"])
+                .args([&ll, &c, &main, &natives])
+                .arg("-o")
+                .arg(&exe)
+                .output()
+                .expect("clang");
+            (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned(), exe)
+        };
 
-    let (linked, stderr, _) = link(false);
-    assert!(!linked, "ohne Treiber darf das Programm nicht binden");
-    for name in ["app_in_ui_button", "app_in_adc_temp", "app_out_ui_led", "app_alive_ui"] {
-        assert!(stderr.contains(name), "der Linker nennt `{name}` nicht:\n{stderr}");
+        let (linked, stderr, _) = link(false);
+        assert!(!linked, "{label}: ohne Treiber darf das Programm nicht binden");
+        for name in drivers {
+            assert!(stderr.contains(name), "{label}: der Linker nennt `{name}` nicht:\n{stderr}");
+        }
+        let (linked, stderr, exe) = link(true);
+        assert!(linked, "{label}: mit Stummeln bindet es: {stderr}");
+        let run = std::process::Command::new(&exe).status().expect("Lauf");
+        assert!(run.success(), "{label}: der Lauf brach ab: {run}");
     }
-    let (linked, stderr, exe) = link(true);
-    assert!(linked, "mit Stummeln bindet es: {stderr}");
-    let run = std::process::Command::new(&exe).status().expect("Lauf");
-    assert!(run.success(), "der Lauf brach ab: {run}");
 }
 
 /// **Der Rahmen uebersetzt auch, wo `int64_t` ein `long` ist** (12.11).
@@ -702,15 +863,9 @@ fn the_frame_compiles_where_int64_is_long() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
     let mut errors = Vec::new();
-    for name in KORPUS.iter().chain(&[
-        "13_framing.takt",
-        "28_scheduled.takt",
-        "35_persist.takt",
-        "47_monitors.takt",
-        "49_record_streams.takt",
-        "56_idle_timer.takt",
-    ]) {
-        let c = dir.join(name.replace(".takt", ".c"));
+    for name in mcu_corpus() {
+        // `sim/12_7/program.takt` liegt in einem Unterverzeichnis.
+        let c = dir.join(name.replace(".takt", ".c").replace('/', "_"));
         std::fs::write(&c, takt_frame::mcu::build(&corpus(name)).source).expect("Rahmen");
         for target in [Target::X86_64_LINUX, Target::AARCH64_LINUX] {
             let mut cmd = std::process::Command::new(&clang);
@@ -779,10 +934,32 @@ fn the_header_stands_alone_in_strict_c11() {
 #[test]
 fn every_entry_computes_in_the_ieee_environment() {
     let Some(clang) = common::clang_path() else { return };
-    let src = takt_frame::mcu::build(&corpus("91_subnormals.takt")).source;
-    for entry in
-        ["init_with", "tick", "commit", "idle", "deadline", "advance", "persist_snapshot", "persist_restore", "dump"]
-    {
+    // Ein Programm mit Job und Journal, sonst sind `job_work` und die Haken
+    // des Journals Stummel ohne Huelle (KON2-010).
+    let p = program(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 30 ms, total\n\n\
+         output n : int in 0..1000 @ hw(\"o/n\") with safe = 0\n\n\
+         machine m:\n    persist var runs : int in 0..1000 = 0\n    var msg : bytes<64> = default\n    initial RUN\n\
+         \x20   state RUN:\n        enter:\n            job v = sha256(msg)\n        loop:\n\
+         \x20           runs = (runs + 1) % 1000\n            n = runs\n",
+    );
+    let src = takt_frame::mcu::build(&p).source;
+    // Die Einstiege sind die, die `takt-frame` mit `guarded` oder, mit
+    // Eintrittssperre, `locked` huellt; die Liste kommt aus dessen Quelle,
+    // damit ein neuer Einstieg hier ankommt.
+    let frame_src = include_str!("../../takt-frame/src/mcu.rs");
+    let entries: Vec<&str> = ["guarded(", "locked("]
+        .into_iter()
+        .flat_map(|call| frame_src.split(call).skip(1))
+        .filter(|chunk| chunk.trim_start().starts_with("s,"))
+        .filter_map(|chunk| chunk.split('"').nth(3))
+        .filter(|name| name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .collect();
+    for entry in ["init_with", "tick", "commit", "job_work", "persist_snapshot", "persist_restore", "dump"] {
+        assert!(entries.contains(&entry), "`{entry}` huellt `takt-frame` nicht mehr: {entries:?}");
+    }
+    for entry in &entries {
         let wrapped = src.lines().any(|l| {
             l.contains(&format!(" app_{entry}(struct app_arena *a"))
                 && l.contains("takt_fenv_enter()")
@@ -858,6 +1035,23 @@ machine m:
     state RUN:
         loop:
             led = btn.or(false) and t.or(0) > 20
+
+        after 1 s: -> RUN
+";
+
+const STREAMS: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+input  rx : stream<u8> @ hw(\"bus/rx\") with max_rate = 100 Hz, capacity = 8
+output tx : stream<u8> @ hw(\"bus/tx\") with max_rate = 100 Hz, capacity = 8
+
+machine m:
+    initial RUN
+
+    state RUN:
+        on rx as e:
+            send tx, e.data
 
         after 1 s: -> RUN
 ";

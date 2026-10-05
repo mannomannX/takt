@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-2: Ein Programm darf einen Namen der Standardbibliothek verdecken
+# (2.5); die Warnung steht am verdeckenden Namen.
+
+output v : int in 0..9 @ hw("o/v") with safe = 0
+
+fn clamp(x: int, lo: int, hi: int) -> int:  # ~ SC-2
+    return lo if x < lo else (hi if x > hi else x)
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = clamp(12, 0, 9)

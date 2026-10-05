@@ -42,7 +42,7 @@ impl Emitter<'_, '_> {
                 SnippetItem::Exit(b) => self.fmt_exit_block(b),
                 SnippetItem::Loop(b) => self.fmt_loop_block(b),
                 SnippetItem::On(h) => self.fmt_on_handler(h),
-                SnippetItem::Sequence(items) => self.fmt_sequence_block(None, items),
+                SnippetItem::Sequence(timeout, items) => self.fmt_sequence_block(timeout.as_ref(), items),
                 SnippetItem::Transition(t) => self.fmt_transition(t),
                 SnippetItem::State(s) => self.fmt_state_decl(s),
                 SnippetItem::Step(s) => self.fmt_step_decl(s),
@@ -1026,7 +1026,7 @@ impl Emitter<'_, '_> {
         if let Some(Timeout { duration, action }) = timeout {
             self.sp("with");
             self.sp("timeout");
-            self.op("=");
+            self.sp("=");
             self.fmt_duration_expr(duration);
             if let TimeoutAction::Goto(_) = action {
                 self.fmt_goto_stmt();

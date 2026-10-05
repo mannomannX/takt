@@ -288,7 +288,10 @@ fn feature(f: Feature) -> Support {
         | Feature::Recorded
         | Feature::Campaign
         | Feature::Node
-        | Feature::Native => Yes,
+        | Feature::Native
+        | Feature::Label
+        | Feature::Display
+        | Feature::Group => Yes,
         Feature::Tunable => Partial("Tunables gelten als ihr Default (FB-372)"),
         Feature::MachineHandler
         | Feature::StateHandler
@@ -296,7 +299,12 @@ fn feature(f: Feature) -> Support {
         | Feature::HandlerGuard
         | Feature::InputStream
         | Feature::OutputStream
-        | Feature::InternalStream => No("Handler und Stroeme sind nicht kodiert"),
+        | Feature::InternalStream
+        | Feature::FramingRaw
+        | Feature::FramingLines
+        | Feature::FramingCobs
+        | Feature::FramingLengthPrefixed
+        | Feature::FramingFixed => No("Handler und Stroeme sind nicht kodiert"),
         Feature::FaultedTransition => No("Uebergaenge aus FAULTED sind nicht kodiert"),
         Feature::ScopedInstance => No("gescopte Instanzen sind nicht kodiert"),
         Feature::GuardMatch | Feature::GuardNext => No("Guards mit Muster sind nicht kodiert"),

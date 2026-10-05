@@ -466,3 +466,222 @@ fn the_edge_never_upgrades_what_the_driver_reports() {
     assert_eq!(out.readings, vec![Some(1_500)]);
     assert_eq!(e.driver_bad(IN).quality, Quality::Bad);
 }
+
+// --- Zeile 7: Grenzen der Periode (RT-005) ------------------------------
+
+/// **Die Toleranz selbst ist noch in der Toleranz**, ihr Ueberschreiten um
+/// eine Nanosekunde nicht; Toleranz 0 laesst nur die nominale Periode zu.
+#[test]
+fn the_tolerance_of_the_period_is_inclusive() {
+    let mut p = takt_hal::contract::Period::default();
+    assert!(!p.observe(1_100, 1_000, 100, 1), "genau die Toleranz");
+    assert!(!p.observe(900, 1_000, 100, 1), "nach unten ebenso");
+    assert!(p.observe(1_101, 1_000, 100, 1), "eine Nanosekunde darueber");
+    let mut zero = takt_hal::contract::Period::default();
+    assert!(!zero.observe(1_000, 1_000, 0, 1));
+    assert!(zero.observe(1_001, 1_000, 0, 1), "Toleranz 0: jede Abweichung");
+}
+
+/// **`runs = 0` gilt wie 1**, und nach der N-ten Verletzung meldet jede
+/// weitere erneut — `Runtime(Hardware)` je Tick, bis die Periode
+/// zurueckkehrt; danach beginnt die Zaehlung von vorn.
+#[test]
+fn every_violation_after_the_nth_reports_again_until_the_period_returns() {
+    let mut once = takt_hal::contract::Period::default();
+    assert!(once.observe(2_000, 1_000, 100, 0), "runs 0 wie 1");
+    let mut p = takt_hal::contract::Period::default();
+    let seen: Vec<bool> = (0..5).map(|_| p.observe(2_000, 1_000, 100, 3)).collect();
+    assert_eq!(seen, [false, false, true, true, true]);
+    assert!(!p.observe(1_000, 1_000, 100, 3), "zurueck in der Toleranz");
+    assert!(!p.observe(2_000, 1_000, 100, 3), "neu gezaehlt");
+}
+
+// --- Zeile 3 und 4: Ganzzahlen und nicht endliche Werte (RT-021) --------
+
+/// Ein ganzzahliger Wert, wie ein `i64`-Kanal ihn liefert.
+#[derive(Clone, Copy, Debug)]
+struct Int(i64);
+
+impl Scalar for Int {
+    fn as_f64(&self) -> Option<f64> {
+        Some(self.0 as f64)
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        Some(self.0)
+    }
+}
+
+/// **Ganzzahlen werden ganzzahlig gegen ganzzahlige Grenzen geprueft**
+/// (3.4): `2^53 + 1` rundet in `f64` auf `2^53` und laege sonst in der Range.
+#[test]
+fn an_integer_beyond_2_pow_53_is_compared_exactly() {
+    let big = 1i64 << 53;
+    let limits = range(0.0, big as f64);
+    assert_eq!(Gate::default().check(&Int(big), 0, &limits).quality, Quality::Good);
+    let v = Gate::default().check(&Int(big + 1), 0, &limits);
+    assert_eq!((v.quality, v.reason), (Quality::Bad, Some(Reason::OutOfRange)));
+    let low = range(-(big as f64), 0.0);
+    assert_eq!(Gate::default().check(&Int(-big - 1), 0, &low).reason, Some(Reason::OutOfRange));
+    assert_eq!(Gate::default().check(&Int(i64::MAX), 0, &range(0.0, 1e19)).quality, Quality::Good);
+}
+
+/// **NaN und Unendlich sind nie gut** (4.1: `float` kennt nur endliche
+/// Werte; Anhang A, INT-025: wie ein Range-Verstoss): ob mit Range, nur mit
+/// `max_slew` oder ohne Grenzen. Danach misst die Steigung wieder am letzten
+/// endlichen Wert.
+#[test]
+fn a_non_finite_value_is_never_good() {
+    for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for limits in [range(0.0, 10.0), slew(50.0), Limits::default()] {
+            let mut g = Gate::default();
+            g.check(&Num(1.0), 0, &limits);
+            let v = g.check(&Num(x), SEC, &limits);
+            assert_eq!((v.quality, v.reason), (Quality::Bad, Some(Reason::OutOfRange)), "{x} unter {limits:?}");
+        }
+    }
+    let mut g = Gate::default();
+    let limits = Limits { debounce: 1, ..slew(50.0) };
+    g.check(&Num(0.0), 0, &limits);
+    assert_eq!(g.check(&Num(f64::NAN), SEC, &limits).quality, Quality::Suspect);
+    let v = g.check(&Num(1_000.0), 2 * SEC, &limits);
+    assert_eq!(v.reason, Some(Reason::Implausible), "gemessen an 0, nicht an NaN");
+}
+
+// --- Zeilen 1, 2 und 6: Grenzfaelle (RT-022) ----------------------------
+
+/// **Zeile 1 an ihren Grenzen**: `hi` ist drin, `hi + 1` geklemmt,
+/// `hi + tol` geklemmt, `hi + tol + 1` draussen; ebenso unten. Toleranz 0
+/// klemmt nichts, der Default von einem Tick klemmt bis eine Periode daneben.
+#[test]
+fn the_window_at_its_edges() {
+    let w = Window { lo: 1_000, hi: 2_000, tolerance: 300 };
+    let cases = [
+        (2_000, Placement::Inside),
+        (2_001, Placement::Warped(2_000)),
+        (2_300, Placement::Warped(2_000)),
+        (2_301, Placement::Outside),
+        (1_001, Placement::Inside),
+        (1_000, Placement::Warped(1_001)),
+        (701, Placement::Warped(1_001)),
+        (700, Placement::Outside),
+    ];
+    for (t, want) in cases {
+        assert_eq!(w.place(t), want, "t = {t}");
+    }
+    let zero = Window { tolerance: 0, ..w };
+    assert_eq!((zero.place(1_000), zero.place(2_001)), (Placement::Outside, Placement::Outside));
+    let tick = Window::of_tick(2, 1_000, 1_000);
+    assert_eq!((tick.place(1), tick.place(0)), (Placement::Warped(1_001), Placement::Outside), "ein Tick daneben");
+}
+
+/// Das Fenster von Tick 0 liegt vor dem Start, und am Ende des Bereichs
+/// saettigt es, statt umzuschlagen.
+#[test]
+fn the_window_of_tick_zero_and_of_the_last_tick() {
+    assert_eq!(Window::of_tick(0, 1_000, 5), Window { lo: -1_000, hi: 0, tolerance: 5 });
+    let last = Window::of_tick(i64::MAX, 2, 0);
+    assert_eq!((last.lo, last.hi), (i64::MAX - 2, i64::MAX));
+    assert_eq!(last.place(i64::MAX), Placement::Inside);
+}
+
+/// Nach `seq = i64::MAX` gibt es keine lueckenlose Folge mehr.
+#[test]
+fn nothing_follows_the_largest_seq() {
+    let mut t = Track::new(0);
+    assert!(t.element(1_500, i64::MAX - 1, &W).is_ok());
+    assert!(t.element(1_500, i64::MAX, &W).is_ok());
+    assert_eq!(t.element(1_500, i64::MIN + 1, &W), Err(Contract::Sequence), "kein Umschlagen");
+}
+
+/// Ein Zeitstempel, der ueber die Tickgrenze zurueckfaellt, ist eine
+/// Verletzung, auch wenn er im Fenster des neuen Ticks geklemmt wuerde.
+#[test]
+fn a_timestamp_falling_across_a_tick_boundary_breaks_the_contract() {
+    let mut t = Track::new(0);
+    assert!(t.reading(1_900, 0, false, &W).is_ok());
+    let next = Window { lo: 2_000, hi: 3_000, tolerance: 500 };
+    assert_eq!(t.reading(1_800, 0, false, &next), Err(Contract::Timestamp));
+}
+
+/// Ein Programm mit einem Eingabestrom `s` am Geraet `uart` mit `max_rate`
+/// und einem Ausgabestrom `tx` mit `capacity_bytes = 64`.
+fn stream_program(rate: takt_mir::expr::ExprKind, tick: i64) -> Program {
+    let mut p = Program::new(takt_mir::program::Config::new(1, tick));
+    let mut s = channel("s", Direction::Input, "uart/rx");
+    s.attrs.max_rate = Some(takt_mir::expr::Expr::new(rate, takt_mir::TypeId(0), takt_diag::Span::new(0, 0)));
+    p.channels.push(s);
+    let mut tx = channel("tx", Direction::Output, "uart/tx");
+    tx.attrs.capacity_bytes = Some(64);
+    p.channels.push(tx);
+    p
+}
+
+/// **`MAXPT = ceil(max_rate * T0)`** (8.6), auch fuer eine gebrochene Rate:
+/// 2,5 Hz bei einer Sekunde Tick sind drei Elemente, nicht zwei.
+#[test]
+fn maxpt_rounds_up_also_for_a_fractional_rate() {
+    use takt_hal::edge::{maxpt, maxpt_of};
+    use takt_mir::expr::ExprKind;
+    assert_eq!(maxpt(3, SEC / 2), Some(2), "1,5 aufgerundet");
+    assert_eq!(maxpt(2, SEC / 2), Some(1));
+    assert_eq!(maxpt(0, SEC), Some(1), "mindestens eins");
+    assert_eq!(maxpt(u64::MAX, 2), None, "Ueberlauf ist keine Zahl");
+    let p = stream_program(ExprKind::Float(2.5), SEC);
+    assert_eq!(maxpt_of(&p.channels[0], SEC), Some(3));
+    let p = stream_program(ExprKind::Float(0.1), 10 * SEC);
+    assert_eq!(maxpt_of(&p.channels[0], 10 * SEC), Some(1), "0,1 Hz mal 10 s ist genau eins");
+    let p = stream_program(ExprKind::Int(1000), SEC / 1000);
+    assert_eq!(maxpt_of(&p.channels[0], SEC / 1000), Some(1));
+}
+
+/// **`MAXPT` ueber den ganzen Rand** (8.6, Zeile 2): genau `MAXPT`
+/// Elemente sind vertragsgemaess, eines mehr degradiert den Treiber, und
+/// der naechste Tick mit `MAXPT` erholt ihn.
+#[test]
+fn maxpt_holds_through_the_edge_and_recovers() {
+    let p = stream_program(takt_mir::expr::ExprKind::Int(3), SEC);
+    let mut e = edge(&p, SEC);
+    let el = |seq| Element { channel: ChannelId(0), t: 1_500, seq, value: Num(1.0) };
+    let ok = e.contract::<Num>(&[], &[el(0), el(1), el(2)], (1_000, 2_000), &p);
+    assert!(ok.alerts.is_empty(), "{:?}", ok.alerts);
+    let many = e.contract::<Num>(&[], &[el(3), el(4), el(5), el(6)], (1_000, 2_000), &p);
+    assert!(matches!(many.alerts[..], [Alert::DriverDegraded { what: Contract::TooMany, .. }]), "{:?}", many.alerts);
+    assert_eq!(many.elements, vec![None; 4]);
+    let back = e.contract::<Num>(&[], &[el(7)], (1_000, 2_000), &p);
+    assert!(matches!(back.alerts[..], [Alert::DriverRecovered { .. }]), "{:?}", back.alerts);
+}
+
+/// **Mehrere Verletzungen eines Treibers in einem Tick melden die erste**
+/// (Zeile 2: ein Alert je Degradierung), und die Erholung nach einer
+/// Fensterverletzung kommt mit dem naechsten Tick im Fenster.
+#[test]
+fn several_violations_in_one_tick_report_the_first() {
+    let p = program();
+    let mut e = edge(&p, 100);
+    let bad = Reading { quality: Quality::Bad, ..reading(IN, 1_500) };
+    let out = e.contract(&[reading(OTHER, -1_000_000), bad], &[], (1_000, 2_000), &p);
+    assert!(
+        matches!(out.alerts[..], [Alert::DriverDegraded { what: Contract::TimeWindow, .. }]),
+        "nur die erste: {:?}",
+        out.alerts
+    );
+    let back = e.contract(&[reading(OTHER, 2_500)], &[], (2_000, 3_000), &p);
+    assert!(matches!(back.alerts[..], [Alert::DriverRecovered { .. }]), "{:?}", back.alerts);
+}
+
+/// **Zeile 6 ueber `Edge::confirm` mit `capacity_bytes` des Programms**:
+/// Meldet der Treiber mehr freien Platz, als der Puffer hat, ist er
+/// ueberfahren.
+#[test]
+fn a_send_buffer_beyond_its_capacity_faults_through_the_edge() {
+    let p = stream_program(takt_mir::expr::ExprKind::Int(10), SEC);
+    let e = edge(&p, SEC);
+    let tx = ChannelId(1);
+    let w = [(Writing { channel: tx, value: Num(1.0), at: None }, Delivery::Acked)];
+    let mut sim: Sim<Num> = Sim::new();
+    sim.set_free(tx, 64);
+    assert!(e.confirm(&sim, &w, &p).is_empty(), "genau die Kapazitaet");
+    sim.set_free(tx, 65);
+    assert_eq!(e.confirm(&sim, &w, &p), vec![tx]);
+}

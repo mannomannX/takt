@@ -75,6 +75,8 @@ impl Lowerer<'_> {
             ast::ExprKind::Unary { op: ast::UnaryOp::Not, expr } => {
                 Some(TProp::Not(Box::new(self.tprop(expr, unbounded)?)))
             }
+            // `tprop_atom := "(" tprop ")"`: die Klammer ist durchsichtig.
+            ast::ExprKind::Paren(inner) => self.tprop(inner, unbounded),
             _ => {
                 let bool = self.tys.bool;
                 Some(TProp::Atom(self.check(e, bool)?))

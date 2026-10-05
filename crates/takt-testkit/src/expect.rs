@@ -78,21 +78,34 @@ fn marker(text: &str) -> Option<&str> {
 }
 
 /// Was nicht stimmt: erwartete Diagnosen, die fehlen, und Diagnosen, die
-/// niemand erwartet. Zeilen gelten je Code als Menge; eine verlangte
-/// Spalte muss eine Diagnose dieses Codes in dieser Zeile haben.
+/// niemand erwartet. Jede Anmerkung steht fuer genau eine Diagnose
+/// (Mehrfachmenge): Zwei gleiche Meldungen in einer Zeile brauchen zwei
+/// Anmerkungen. Eine verlangte Spalte bindet die Diagnose an dieser Spalte.
 pub fn mismatches(expected: &[Expected], actual: &[Actual]) -> Vec<String> {
-    let mut out = Vec::new();
-    for e in expected {
-        let hit = actual.iter().any(|a| a.line == e.line && a.code == e.code && e.col.is_none_or(|c| c == a.col));
-        if !hit {
-            let at = e.col.map(|c| format!(":{c}")).unwrap_or_default();
-            out.push(format!("erwartet {} in Zeile {}{at}", e.code, e.line));
+    let mut free = vec![true; actual.len()];
+    let mut missing = vec![false; expected.len()];
+    // Erst die Anmerkungen mit Spalte: Eine ohne Spalte soll keine Diagnose
+    // belegen, die eine mit Spalte braucht.
+    let mut order: Vec<usize> = (0..expected.len()).collect();
+    order.sort_by_key(|&i| expected[i].col.is_none());
+    for i in order {
+        let e = &expected[i];
+        let hit = (0..actual.len()).find(|&j| {
+            let a = &actual[j];
+            free[j] && a.line == e.line && a.code == e.code && e.col.is_none_or(|c| c == a.col)
+        });
+        match hit {
+            Some(j) => free[j] = false,
+            None => missing[i] = true,
         }
     }
-    for a in actual {
-        if !expected.iter().any(|e| e.line == a.line && e.code == a.code) {
-            out.push(format!("unerwartet {} in Zeile {}:{}", a.code, a.line, a.col));
-        }
+    let mut out = Vec::new();
+    for (e, _) in expected.iter().zip(&missing).filter(|(_, m)| **m) {
+        let at = e.col.map(|c| format!(":{c}")).unwrap_or_default();
+        out.push(format!("erwartet {} in Zeile {}{at}", e.code, e.line));
+    }
+    for (a, _) in actual.iter().zip(&free).filter(|(_, f)| **f) {
+        out.push(format!("unerwartet {} in Zeile {}:{}", a.code, a.line, a.col));
     }
     out
 }
@@ -118,9 +131,15 @@ mod tests {
         let actual =
             vec![Actual { line: 1, col: 4, code: "SC-1".into() }, Actual { line: 3, col: 1, code: "SC-9".into() }];
         let got = mismatches(&expected, &actual);
+        // Die verrutschte Diagnose steht mit ihrer wirklichen Spalte da.
         assert_eq!(
             got,
-            ["erwartet SC-1 in Zeile 1:3", "erwartet SC-2 in Zeile 2", "unerwartet SC-9 in Zeile 3:1"],
+            [
+                "erwartet SC-1 in Zeile 1:3",
+                "erwartet SC-2 in Zeile 2",
+                "unerwartet SC-1 in Zeile 1:4",
+                "unerwartet SC-9 in Zeile 3:1"
+            ],
             "{got:?}"
         );
     }
@@ -128,7 +147,21 @@ mod tests {
     #[test]
     fn matching_diagnostics_leave_nothing() {
         let expected = expectations("x #~ SC-1, SC-1@2\n");
-        let actual = vec![Actual { line: 1, col: 2, code: "SC-1".into() }];
-        assert!(mismatches(&expected, &actual).is_empty());
+        let actual =
+            vec![Actual { line: 1, col: 5, code: "SC-1".into() }, Actual { line: 1, col: 2, code: "SC-1".into() }];
+        assert!(mismatches(&expected, &actual).is_empty(), "{:?}", mismatches(&expected, &actual));
+    }
+
+    /// Jede Anmerkung steht fuer genau eine Diagnose: Eine Doppelmeldung in
+    /// derselben Zeile faellt auf, ebenso eine fehlende zweite.
+    #[test]
+    fn annotations_count_like_a_multiset() {
+        let one = expectations("x #~ SC-2\n");
+        let twice =
+            vec![Actual { line: 1, col: 1, code: "SC-2".into() }, Actual { line: 1, col: 5, code: "SC-2".into() }];
+        assert_eq!(mismatches(&one, &twice), ["unerwartet SC-2 in Zeile 1:5"]);
+        let two = expectations("x #~ SC-2, SC-2\n");
+        assert!(mismatches(&two, &twice).is_empty());
+        assert_eq!(mismatches(&two, &twice[..1]), ["erwartet SC-2 in Zeile 1"]);
     }
 }

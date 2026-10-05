@@ -177,8 +177,12 @@ fn block(
             let _ = writeln!(p.out, "(assert (= {} {next}))", at(&v.name, k + 1, tag));
         }
     }
+    // `assumption`-Formeln gelten nur, wo ausschliesslich Eigenschaften
+    // gefragt sind (13.3, 3.4).
+    let properties_only = targets.iter().all(|t| matches!(t, Target::Property(_)));
+    let assumed = model.assumed.iter().filter(|_| properties_only);
     for k in 0..=steps {
-        for a in model.assumptions.iter().chain(&model.invariants) {
+        for a in model.assumptions.iter().chain(&model.invariants).chain(assumed.clone()) {
             let t = p.name(a, k, k);
             let _ = writeln!(p.out, "(assert {t})");
         }

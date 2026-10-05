@@ -1,0 +1,5 @@
+t=0 out raw_valid true
+t=100 alert edge_watch on "raw_p ungueltig: OUT_OF_RANGE"
+t=200 out raw_valid true
+t=300 alert edge_watch on "raw_p ungueltig: OUT_OF_RANGE"
+t=400 out raw_valid true

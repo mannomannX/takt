@@ -1,0 +1,11 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-44 (4.5): `job` startet eine `native job`, nichts anderes.
+machine m:
+    var msg : bytes<8> = default
+    initial RUN
+    state RUN:
+        sequence:
+            job v = msg(1)  # ~ SC-44

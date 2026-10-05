@@ -3,6 +3,7 @@
 use takt_syntax::keywords::{
     CAPTURE_NAMES, CONTEXTUAL, KEYWORDS, OPEN_ENUMS, RESERVED, RESERVED_MEMBERS, WRAPPER_ACCESSORS,
 };
+use takt_syntax::{parse_snippet, tokenize};
 
 fn section_2_2() -> String {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../plan/definition.md");
@@ -93,5 +94,68 @@ fn reserved_members_match_reference() {
     assert!(CAPTURE_NAMES.iter().all(|w| RESERVED_MEMBERS.contains(w)));
     for (name, _) in OPEN_ENUMS {
         assert!(name == &"Reason" || text.contains(&format!("`{name}`")), "offenes Enum {name} nicht in 2.5");
+    }
+}
+
+/// L3.2: Jedes reservierte Wort ergibt genau einen Fehler `E_RESERVED` mit dem
+/// Wort, an seiner Stelle und mit Vorschlag.
+#[test]
+fn every_reserved_word_is_refused_at_its_place() {
+    for word in RESERVED {
+        let src = format!("var {word} = 1\n");
+        let toks = tokenize(&src);
+        let codes: Vec<_> = toks.errors.iter().map(|d| d.code).collect();
+        assert_eq!(codes, ["E_RESERVED"], "{word}");
+        let d = &toks.errors[0];
+        assert_eq!((d.span.start, d.span.end), (4, 4 + word.len() as u32), "{word}");
+        assert!(d.message.contains(&format!("`{word}`")), "{word}: {d}");
+        assert!(d.suggestion.is_some(), "{word}");
+    }
+}
+
+/// 2.5: `while` erhaelt eine eigene Meldung mit dem Ausweg.
+#[test]
+fn while_gets_its_own_suggestion() {
+    let wanted = "nicht erlaubt: `for` mit Schranke oder `sequence` mit `until`";
+    assert!(section_2_5().contains(&format!("(„{wanted}\")")), "Wortlaut in 2.5 geaendert");
+    let toks = tokenize("while x:\n");
+    assert_eq!(toks.errors[0].suggestion.as_deref(), Some(wanted));
+    let toks = tokenize("var struct = 1\n");
+    assert_eq!(toks.errors[0].suggestion.as_deref(), Some("anderes Wort waehlen"));
+}
+
+/// 2.5: Ein Schluesselwort ist im ganzen Programm kein Bezeichner. Der Parser
+/// meldet es an der Stelle des Worts, gleich welche Art von Namen dort steht.
+#[test]
+fn a_keyword_is_no_name_of_any_kind() {
+    let cases = [
+        ("var state = 1\n", "state"),
+        ("fn check() -> int:\n    return 1\n", "check"),
+        ("fn f(step: int) -> int:\n    return step\n", "step"),
+        ("record Rec:\n    at : int\n", "at"),
+        ("const unit : int = 1\n", "unit"),
+        ("block every(x: int):\n    step() -> int:\n        return x\n", "every"),
+    ];
+    // Capture-Namen prueft die Teilsprache der Muster (lexer.md L5.5, Vektor `{state:int}`).
+    for (src, word) in cases {
+        let toks = tokenize(src);
+        assert!(toks.errors.is_empty(), "{src}: {:?}", toks.errors);
+        let errors = parse_snippet(&toks).1;
+        let at = src.find(word).expect("Wort im Text") as u32;
+        let first = errors.first().unwrap_or_else(|| panic!("`{src}` angenommen"));
+        assert_eq!(first.span.start, at, "{src}: {first}");
+        assert!(first.message.contains(word), "{src}: {first}");
+    }
+}
+
+/// 2.2: Kontextuelle Woerter bleiben andernorts gewoehnliche Bezeichner.
+#[test]
+fn every_contextual_word_is_a_variable_name() {
+    for word in CONTEXTUAL.iter().filter(|w| w.starts_with(|c: char| c.is_ascii_lowercase())) {
+        let src = format!("var {word} : int = 1\nx = {word} + 1\n");
+        let toks = tokenize(&src);
+        assert!(toks.errors.is_empty(), "{word}: {:?}", toks.errors);
+        let errors = parse_snippet(&toks).1;
+        assert!(errors.is_empty(), "{word}: {errors:?}");
     }
 }

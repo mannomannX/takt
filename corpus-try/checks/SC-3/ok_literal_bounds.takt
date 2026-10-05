@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 3 (3.4): Literale genau auf den Grenzen ihrer Range sind gueltig.
+
+param LIMIT : float[bar] in 0..10 bar = 10 bar
+param LOW   : float[bar] in 0..10 bar = 0 bar
+param STEP  : int in 1..5 = 1
+
+profile FAST:
+    STEP = 5
+
+output o : int in 0..9 @ hw("o/o") with safe = 9
+
+machine m:
+    var n : int in 0..9 = 0
+    var u : int[mV] in 0..100 mV = 100 mV
+    var x : float in -1.0..1.0 = -1.0
+    initial RUN
+    state RUN:
+        loop:
+            o = n

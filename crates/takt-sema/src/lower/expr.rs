@@ -752,7 +752,9 @@ impl Lowerer<'_> {
                     return None;
                 }
                 let args = self.args(&params, args, span)?;
-                Some(Expr::new(ExprKind::NativeCall { native: id, args }, ret, span))
+                // 4.1: NaN und Inf gibt es in der Sprache nicht; liefert ein
+                // Native sie, faultet die Anweisung des Aufrufs (INT-023).
+                Some(self.finite(Expr::new(ExprKind::NativeCall { native: id, args }, ret, span)))
             }
             Entity::Block(_) | Entity::BlockTemplate(_) => self.block_init(callee, generics, args, span),
             Entity::Intrinsic(op) => self.intrinsic(op, args, hint, span),
@@ -1096,13 +1098,23 @@ impl Lowerer<'_> {
         })
     }
 
-    /// `Checked{NonFinite}` um ein Gleitkomma- oder Matrixergebnis (4.2).
+    /// `Checked{NonFinite}` um ein Gleitkomma-, Matrix- oder Arrayergebnis (4.2).
     pub fn finite(&mut self, e: Expr) -> Expr {
-        if !matches!(self.ty(e.ty), Type::Float { .. } | Type::Mat { .. }) {
+        if !self.holds_floats(e.ty) {
             return e;
         }
         let (ty, span) = (e.ty, e.span);
         Expr::new(ExprKind::Checked { expr: Box::new(e), kind: CheckedKind::NonFinite }, ty, span)
+    }
+
+    /// Ein Gleitkommawert, eine Matrix oder ein Array daraus: die Typen,
+    /// deren Endlichkeit `Checked { NonFinite }` prueft (4.1).
+    fn holds_floats(&self, ty: TypeId) -> bool {
+        match self.ty(ty) {
+            Type::Float { .. } | Type::Mat { .. } => true,
+            Type::Array { elem, .. } => self.holds_floats(*elem),
+            _ => false,
+        }
     }
 
     // ------------------------------------------------------------ Zugriffe
@@ -1503,11 +1515,17 @@ impl Lowerer<'_> {
                 };
                 let value = Expr::new(ExprKind::Accessor { base: Box::new(b), accessor, args }, raw, span);
                 // 3.7: `active_low` kehrt den Wert an der Grenze um; der
-                // Traeger bleibt roh.
+                // Traeger bleibt roh. Ein mehrbittiges Feld kehrt nur seine
+                // eigenen Bits um: `bits` liefert `int`, und ein `~` darauf
+                // waere negativ.
                 let value = match (bf.active_low, is_bool) {
                     (true, true) => Expr::new(ExprKind::Unary { op: UnaryOp::Not, expr: Box::new(value) }, raw, span),
                     (true, false) => {
-                        Expr::new(ExprKind::Unary { op: UnaryOp::BitNot, expr: Box::new(value) }, raw, span)
+                        // Bei 64 Bit ist die Maske `-1`, also jedes Bit.
+                        let mask = (u64::MAX >> (63 - (hi - lo))) as i64;
+                        let mask = Expr::new(ExprKind::Int(mask), int, span);
+                        let (lhs, rhs) = (Box::new(value), Box::new(mask));
+                        Expr::new(ExprKind::Binary { op: BinaryOp::BitXor, lhs, rhs }, raw, span)
                     }
                     (false, _) => value,
                 };
@@ -2238,6 +2256,7 @@ impl Lowerer<'_> {
                 Some(Expr::new(ExprKind::Array(out), hint.expect("Hinweis"), span))
             }
             Some(Type::Mat { .. }) => self.mat_literal(items, hint.expect("Hinweis"), span),
+            None if self.mat_candidate(items).is_some() => self.mat_literal_untyped(items, span),
             _ => {
                 let Some(first) = items.first() else {
                     self.error_hint(SC3, span, "Typ eines leeren Arrays nicht ableitbar", "Variable annotieren");
@@ -2384,8 +2403,11 @@ impl Lowerer<'_> {
                 // affinen Punkt ist sie ein Typfehler wie jedes Produkt
                 // (3.2). `-(20 degC)` waere -293.15 K. Ein negatives Literal
                 // wie `-60 degC` bezeichnet dagegen einen Punkt und ist
-                // erlaubt (14.2 schreibt `in -60..200 degC`).
-                if self.affine_type(x.ty) && !is_literal(&x) {
+                // erlaubt (14.2 schreibt `in -60..200 degC`); das faengt der
+                // Zweig oben ab, hier steht nur noch das Negative eines
+                // Punkts, auch eines geklammerten Literals oder einer
+                // Konstanten.
+                if self.affine_type(x.ty) {
                     self.error_hint(SC3, span, "`-` auf einer affinen Einheit (3.2)", "Differenzen in `K` rechnen");
                     return None;
                 }
@@ -2396,7 +2418,15 @@ impl Lowerer<'_> {
                     }
                 }
                 let ty = self.base(x.ty);
-                Some(Expr::new(ExprKind::Unary { op: UnaryOp::Neg, expr: Box::new(x) }, ty, span))
+                let neg = Expr::new(ExprKind::Unary { op: UnaryOp::Neg, expr: Box::new(x) }, ty, span);
+                // 4.1: `-MIN` laeuft ueber, auch bei Dauern; der Knoten steht,
+                // bis die Intervallanalyse ihn wegbeweist (3.4).
+                Some(match self.ty(ty) {
+                    Type::Int { .. } | Type::Duration { .. } => {
+                        Expr::new(ExprKind::Checked { expr: Box::new(neg), kind: CheckedKind::Overflow }, ty, span)
+                    }
+                    _ => neg,
+                })
             }
             ast::UnaryOp::BitNot => {
                 let x = self.expr(expr, hint)?;

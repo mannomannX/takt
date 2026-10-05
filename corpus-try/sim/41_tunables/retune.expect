@@ -1,0 +1,5 @@
+t=3 tune GAIN 5
+t=3 out y 20
+t=6 tune GAIN 200 rejected
+t=8 tune GAIN 100
+t=8 out y 900

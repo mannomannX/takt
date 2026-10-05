@@ -23,6 +23,7 @@ use takt_interp::{Trap, Value, eval_const};
 use takt_mir::expr::{Expr, ExprKind};
 use takt_mir::machine::{Machine, VarDef};
 use takt_mir::program::{Config, Program};
+use takt_mir::stmt::Place;
 use takt_mir::types::{FloatWidth, IntWidth, Type};
 use takt_mir::*;
 use takt_syntax::Edition;
@@ -348,6 +349,9 @@ pub struct Lowerer<'a> {
     pub in_stmt: bool,
     /// Tiefe verschachtelter `for`-Schleifen (5.7: kein `step` darin).
     pub for_depth: u32,
+    /// Gerade wird ein Block gesenkt (5.7): Er liest nur Parameter, Zustand,
+    /// Konstanten und `param`.
+    pub closed_block: bool,
     /// Laufende Nummer anonymer Instanzen.
     pub anon: u32,
     /// Zaehler fuer eindeutige Namen (Instanzen, Segmente).
@@ -414,6 +418,7 @@ impl<'a> Lowerer<'a> {
             pending: Vec::new(),
             in_stmt: false,
             for_depth: 0,
+            closed_block: false,
             anon: 0,
         }
     }
@@ -515,6 +520,16 @@ impl<'a> Lowerer<'a> {
             // Die Ablehnung ist schon gemeldet; jede Verwendung waere nur ihr
             // Echo (FB-407).
             Some(Symbol { entity: Entity::Rejected, .. }) => None,
+            Some(s) if self.closed_block && outside_block(&s.entity) => {
+                self.error_hint(
+                    SC2,
+                    name.span,
+                    format!("`{}` liegt ausserhalb des Blocks (5.7)", name.name),
+                    "ein Block liest nur Parameter, seinen Zustand, Konstanten und `param`; den Wert als Argument \
+                     uebergeben",
+                );
+                None
+            }
             Some(s) => Some(s.entity.clone()),
             // Ein reserviertes Wort meldet der Tokenizer (FB-408).
             None if self.edition.is_reserved(&name.name) => None,
@@ -532,7 +547,10 @@ impl<'a> Lowerer<'a> {
 
     /// Sucht ohne Meldung; eine abgelehnte Deklaration gilt als fehlend.
     pub fn peek(&self, name: &str) -> Option<&Entity> {
-        self.scopes.lookup(name).map(|s| &s.entity).filter(|e| !matches!(e, Entity::Rejected))
+        self.scopes
+            .lookup(name)
+            .map(|s| &s.entity)
+            .filter(|e| !matches!(e, Entity::Rejected) && !(self.closed_block && outside_block(e)))
     }
 
     /// Traegt `name` als abgelehnt ein, wenn seine Deklaration Fehler
@@ -607,6 +625,14 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Der erste `tunable param` in `e` (8.4, Pruefung 35).
+    pub fn first_tunable(&self, e: &Expr) -> Option<ParamId> {
+        match &e.kind {
+            ExprKind::Param(p) if self.program.params[p.index()].tunable => Some(*p),
+            _ => e.children().into_iter().find_map(|c| self.first_tunable(c)),
+        }
+    }
+
     /// Konstante Ganzzahl (Array-Laengen, Kapazitaeten, `range(N)`).
     pub fn const_int(&mut self, e: &ast::Expr) -> Option<i64> {
         // 3.12: eine Konstantenvariable steht in Typen und `range(N)`.
@@ -668,6 +694,25 @@ impl<'a> Lowerer<'a> {
     /// Gilt die Stelle als dominiert?
     pub fn dominated(&self, key: &str) -> bool {
         self.facts.iter().any(|f| f.iter().any(|k| k == key))
+    }
+
+    /// Vergisst nach einer Zuweisung an `target` jedes Fakt ueber dessen
+    /// Variable, ihre Felder und Elemente und jedes, das sie als Index
+    /// liest — in allen Rahmen, denn der neue Wert gilt auch nach dem Zweig.
+    pub fn forget_facts(&mut self, target: &Place) {
+        let mut root = target;
+        let v = loop {
+            match root {
+                Place::Var(v) => break *v,
+                Place::Field(b, _) | Place::Index(b, _) | Place::Index2(b, _, _) => root = b,
+                Place::Output(_) | Place::Port(_) => return,
+            }
+        };
+        let key = format!("var{}", v.0);
+        let (field, element, index) = (format!("{key}."), format!("{key}["), format!("[{key}]"));
+        for frame in &mut self.facts {
+            frame.retain(|k| !(*k == key || k.starts_with(&field) || k.starts_with(&element) || k.contains(&index)));
+        }
     }
 
     /// Fakten aus einer Bedingung (`x.valid`, `r.ok`, `a and b`).
@@ -772,6 +817,42 @@ pub fn run(
         return (None, diags);
     }
     (Some(program), diags)
+}
+
+/// Liegt eine Groesse ausserhalb dessen, was ein Block lesen darf (5.7)?
+/// Er ist geschlossen: Channels, Commands, Stroeme, Maschinen samt ihren
+/// Signalen und Zustaenden und die Zeit der Maschine kommen nur als
+/// Argument hinein; `tick` ist eine Konstante.
+fn outside_block(e: &Entity) -> bool {
+    match e {
+        Entity::Channel(_)
+        | Entity::Command(_)
+        | Entity::Stream(_)
+        | Entity::Machine(_)
+        | Entity::MachineArray(..)
+        | Entity::MachineTemplate(_)
+        | Entity::Signal(_)
+        | Entity::State(_)
+        | Entity::Node(_)
+        | Entity::Trigger(_)
+        | Entity::Port(_)
+        | Entity::Profile(_) => true,
+        Entity::Builtin(b) => !matches!(b, takt_mir::expr::Builtin::Tick),
+        Entity::Const(_)
+        | Entity::Param(..)
+        | Entity::Fn(_)
+        | Entity::FnTemplate(_)
+        | Entity::Native(_)
+        | Entity::Block(_)
+        | Entity::BlockTemplate(_)
+        | Entity::Type(_)
+        | Entity::Enum(_)
+        | Entity::Record(_)
+        | Entity::Unitvec(_)
+        | Entity::Var(..)
+        | Entity::Intrinsic(_)
+        | Entity::Rejected => false,
+    }
 }
 
 /// Parst das Prelude; ein Fehler dort ist ein Fehler des Compilers.

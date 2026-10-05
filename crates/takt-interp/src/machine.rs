@@ -366,7 +366,13 @@ fn guard_value(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, g: &Guard, tic
             // unkonsumiert (8.7).
             Some(stream) => first_match(loaded, env, stream, tick, *binding, |loaded, env, element| {
                 let consts = pattern_consts(loaded, env, pattern, tick)?;
-                Ok(crate::pattern::match_value(pattern, *kind, &element.value, &consts))
+                Ok(crate::pattern::match_value(
+                    pattern,
+                    *kind,
+                    &element.value,
+                    &consts,
+                    loaded.program.config.float_width,
+                ))
             }),
             // Auf einem gewoehnlichen Wert ist der Guard der Musterabgleich
             // selbst (8.7).
@@ -574,7 +580,7 @@ fn match_handler(
         }
         takt_mir::pattern::Pattern::Text { .. } => Vec::new(),
     };
-    Ok(crate::pattern::match_value(pattern, *kind, &element.value, &consts))
+    Ok(crate::pattern::match_value(pattern, *kind, &element.value, &consts, loaded.program.config.float_width))
 }
 
 /// Uebergaenge und Fault-Wald aufloesen (9.3, `resolve_m`).
@@ -810,7 +816,13 @@ pub(crate) fn clear_stepped(vars: &mut [Value]) {
 /// Maschinenvariablen sind vorher gesetzt (`MachineEnv::init_vars`).
 pub fn init(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> Result<(), Trap> {
     let initial = env.machine(loaded).initial;
-    let out = switch(loaded, env, Target::State(initial), tick, false);
+    init_at(loaded, env, initial, tick)
+}
+
+/// Wie `init`, aber in den Zustand `s`: der gemerkte Pfad einer gescopten
+/// Instanz mit `resume` (5.11, 5.12), mit den `enter`-Bloecken der Kette.
+pub fn init_at(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, s: StateId, tick: u64) -> Result<(), Trap> {
+    let out = switch(loaded, env, Target::State(s), tick, false);
     resolve_m(loaded, env, out, tick)
 }
 

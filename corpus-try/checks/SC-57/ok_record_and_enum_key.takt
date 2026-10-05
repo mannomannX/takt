@@ -1,0 +1,24 @@
+system:
+    language = 1
+
+# Pruefung 57 (3.9): Records und Enums aus Ganzzahlen haben Gleichheit und
+# taugen als Schluessel.
+
+record Address:
+    bus     : u8
+    unit_id : u16
+
+enum Kind: ANALOG, DIGITAL(pin: u8)
+
+output n : int in 0..16 @ hw("o/n") with safe = 0
+
+machine m:
+    var by_address : map<Address, int, 8> = default
+    var by_kind    : map<Kind, int, 8> = default
+    var ok         : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            ok = by_address.insert(Address(bus = 1, unit_id = 7), 3)
+            ok = by_kind.insert(DIGITAL(pin = 2), 4)
+            n = by_address.len + by_kind.len

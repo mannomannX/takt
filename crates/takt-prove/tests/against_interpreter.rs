@@ -25,6 +25,18 @@ fn corpus(name: &str) -> Program {
     out.program.expect("Programm")
 }
 
+/// Der Wert eines Outputs als `Val`: Zahlen und Wahrheitswerte wie im
+/// Trace, ein Enum als seine Diskriminante, wie das Modell es haelt.
+fn output_val(p: &Program, channel: &str, text: &str) -> Option<Val> {
+    if let Some(v) = parse_val(text) {
+        return Some(v);
+    }
+    let c = p.channels.iter().find(|c| c.name == channel)?;
+    let takt_mir::types::Type::Enum(e) = p.types.get(c.ty) else { return None };
+    let v = p.enums[e.index()].variants.iter().find(|v| v.name == text.trim())?;
+    Some(Val::Int(v.discriminant))
+}
+
 /// Der Wert einer Trace-Zeile als `Val`.
 fn parse_val(text: &str) -> Option<Val> {
     let first = text.split_whitespace().next()?;
@@ -109,16 +121,23 @@ fn agree(name: &str, stimulus: &str, ticks: u64) {
     // Der Interpreter schreibt Outputs und Zustaende nur bei Aenderung.
     let mut outputs: BTreeMap<String, Val> = BTreeMap::new();
     let mut leaves: BTreeMap<String, String> = BTreeMap::new();
+    let mut compared = 0usize;
     for k in 0..=ticks {
         for l in r.trace.lines.iter().filter(|l| l.tick == k) {
             match &l.kind {
                 LineKind::Output { channel, value } => {
-                    if let Some(v) = parse_val(value) {
-                        outputs.insert(channel.clone(), v);
-                    }
+                    let v = output_val(&p, channel, value);
+                    let v = v.unwrap_or_else(|| panic!("{name} t={k}: `{value}` von `{channel}` hat keinen Wert"));
+                    outputs.insert(channel.clone(), v);
                 }
                 LineKind::State { machine, path } => {
                     leaves.insert(machine.clone(), path.rsplit('.').next().unwrap_or(path).to_string());
+                }
+                // Ein Fault fuehrt im selben Tick in sein Ziel (5.3), auch
+                // wenn das Ziel der Zustand ist, in dem er auftrat.
+                LineKind::Fault { machine, target, .. } => {
+                    let leaf = target.rsplit('.').next().unwrap_or(target).to_string();
+                    leaves.insert(machine.clone(), leaf);
                 }
                 _ => {}
             }
@@ -127,35 +146,54 @@ fn agree(name: &str, stimulus: &str, ticks: u64) {
         for (c, want) in &outputs {
             let got = s[&format!("s.out.{c}")];
             assert!(same(got, *want), "{name} t={k}: Output `{c}`: Modell {got:?}, Interpreter {want:?}");
+            compared += 1;
         }
         for (m, want) in &leaves {
             let Val::Int(code) = s[&format!("s.{m}.leaf")] else { panic!("Blattcode") };
             // Ein Sequenzsegment heisst in der MIR `IGNITION.S0`, im Trace steht der Pfad.
             let got = model.leaf_name(m, code).unwrap_or("?");
             assert_eq!(got.rsplit('.').next(), Some(want.as_str()), "{name} t={k}: Zustand von `{m}`");
+            compared += 1;
         }
     }
+    // Ein Vergleich, der nichts vergleicht, bestaende immer: je Tick
+    // mindestens ein Wert.
+    assert!(compared > usize::try_from(ticks).unwrap_or(usize::MAX), "{name}: nur {compared} Werte verglichen");
 }
 
-#[test]
-fn a_blinker_with_after_and_a_command_agrees() {
-    agree("16_timing.takt", "t=3 cmd go\nt=40 cmd go\n", 60);
+/// Stimulus und Ticks je Programm der Suite `beweiser`.
+fn case(name: &str) -> Option<(String, u64)> {
+    Some(match name {
+        // Ein Blinker mit `after` und einem Command.
+        "16_timing.takt" => ("t=3 cmd go\nt=40 cmd go\n".to_string(), 60),
+        // Ein Range-Fault nimmt in beiden den Fault-Pfad.
+        "19_faults.takt" => (String::new(), 10),
+        // Ein bewachter `check` mit Inputs.
+        "01_minimal.takt" => {
+            let pressure = |k: u32| if (10..20).contains(&k) { 70 } else { 40 };
+            let mut stim: String = (0..=30).map(|k| format!("t={k} in tank_p {} bar\n", pressure(k))).collect();
+            stim.push_str("t=2 cmd start\nt=25 cmd reset\n");
+            (stim, 30)
+        }
+        // Ein Block mit Zustand (5.7): `step` eingebettet, der Zustand in Feldern.
+        "48_contracts.takt" => ((0..=12).map(|k| format!("t={k} in level {}\n", f64::from(k) - 4.0)).collect(), 12),
+        _ => return None,
+    })
 }
 
+/// **Jedes Programm der Suite `beweiser` stimmt mit dem Interpreter
+/// ueberein.** Die Liste steht im Manifest des Korpus (`Suiten`, FB-378),
+/// nicht hier: Ein Programm, das dort in die Suite kommt, braucht hier
+/// einen Fall, sonst scheitert der Test, statt es still auszulassen.
 #[test]
-fn a_range_fault_takes_the_fault_path_in_both() {
-    agree("19_faults.takt", "", 10);
-}
-
-#[test]
-fn a_guarded_check_with_inputs_agrees() {
-    let mut stim = String::new();
-    for k in 0..=30 {
-        let p = if (10..20).contains(&k) { 70 } else { 40 };
-        stim.push_str(&format!("t={k} in tank_p {p} bar\n"));
+fn every_program_of_the_prover_suite_agrees() {
+    let programs = takt_conformance::suites::programs("beweiser");
+    assert!(!programs.is_empty(), "die Suite `beweiser` ist leer");
+    for name in programs {
+        let (stim, ticks) =
+            case(name).unwrap_or_else(|| panic!("`{name}` steht in der Suite `beweiser`, hier fehlt sein Fall"));
+        agree(name, &stim, ticks);
     }
-    stim.push_str("t=2 cmd start\nt=25 cmd reset\n");
-    agree("01_minimal.takt", &stim, 30);
 }
 
 /// 14.1 (der Hotfire-Test der Referenz) mit den Szenarien des Korpus:
@@ -168,16 +206,6 @@ fn the_hotfire_example_agrees_over_its_scenarios() {
         let stim = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
         agree("sim/14_1/program.takt", &stim, 4200);
     }
-}
-
-/// Ein Block mit Zustand (5.7): `step` eingebettet, der Zustand in Feldern.
-#[test]
-fn a_block_step_is_inlined_faithfully() {
-    let mut stim = String::new();
-    for k in 0..=12 {
-        stim.push_str(&format!("t={k} in level {}\n", (k as f64) - 4.0));
-    }
-    agree("48_contracts.takt", &stim, 12);
 }
 
 #[test]

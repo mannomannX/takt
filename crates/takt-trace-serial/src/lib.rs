@@ -80,6 +80,15 @@ impl Reader {
     pub fn preamble(&self) -> Vec<&str> {
         self.lines.iter().filter(|l| tick_of(l).is_none()).map(String::as_str).collect()
     }
+
+    /// Wie viele Bytes das Board laut seiner Bilanzzeile verworfen hat
+    /// (`takt schlief … verworfen N …`); `None` ohne Bilanz.
+    pub fn dropped(&self) -> Option<u64> {
+        let balance = self.lines.iter().rev().find(|l| l.starts_with("takt schlief "))?;
+        let mut words = balance.split_whitespace();
+        words.by_ref().find(|w| *w == "verworfen")?;
+        words.next()?.parse().ok()
+    }
 }
 
 /// Die Tickzahl einer Zeile `t=<n> …`.
@@ -99,6 +108,16 @@ pub enum Error {
         /// Was bis dahin ankam.
         got: usize,
     },
+    /// Der Trace endet vor dem verlangten Tick (13.8).
+    Incomplete {
+        /// Der letzte Tick, der ankam.
+        reached: u64,
+        /// Der verlangte.
+        wanted: u64,
+    },
+    /// Das Board hat laut Bilanz Bytes verworfen; der Trace hat Luecken
+    /// (FB-292).
+    Dropped(u64),
 }
 
 impl std::fmt::Display for Error {
@@ -110,17 +129,26 @@ impl std::fmt::Display for Error {
                 "nach {:.1} s nur {got} Zeilen — sendet das Board? (PA9, 115200 8N1; RESET druecken)",
                 waited.as_secs_f32()
             ),
+            Error::Incomplete { reached, wanted } => {
+                write!(f, "Trace unvollstaendig: er reicht bis Tick {reached} von {wanted}")
+            }
+            Error::Dropped(n) => write!(f, "Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"),
         }
     }
 }
 
-/// Liest, bis `ticks` erreicht sind oder die Zeit abgelaufen ist.
+/// Liest, bis `ticks` Ticks da sind (der letzte ist `ticks - 1`, wie im
+/// Interpreter) oder die Zeit abgelaufen ist.
 ///
 /// **Die Zeitgrenze ist kein Notausgang, sondern die Abbruchbedingung.**
 /// Ein Board, das haengt, sendet nichts mehr; ohne Grenze wartete das
 /// Werkzeug ewig, und in einer Testsuite hiesse das: sie steht. 4.1
 /// verlangt beschraenkte Schleifen fuer Takt-Programme, und dasselbe ist
 /// hier richtig.
+///
+/// **Weniger als verlangt ist ein Fehler, kein kuerzerer Vergleich**: Ein
+/// Board, das bei Tick 5 von 200 verstummt, waere sonst „gleich bis Tick
+/// 5“. Ebenso eine Bilanz mit verworfenen Bytes, wo sie ankam.
 pub fn read_until(port: &mut dyn Read, ticks: u64, limit: Duration) -> Result<Reader, Error> {
     let mut reader = Reader::default();
     let start = Instant::now();
@@ -134,14 +162,18 @@ pub fn read_until(port: &mut dyn Read, ticks: u64, limit: Duration) -> Result<Re
             Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => return Err(Error::Open(e.to_string())),
         }
-        if reader.last_tick().is_some_and(|t| t >= ticks) {
+        if let Some(n) = reader.dropped().filter(|n| *n > 0) {
+            return Err(Error::Dropped(n));
+        }
+        if reader.last_tick().is_some_and(|t| t.saturating_add(1) >= ticks) {
             return Ok(reader);
         }
     }
-    if reader.last_tick().is_none() {
-        return Err(Error::Silent { waited: start.elapsed(), got: reader.lines.len() });
+    match reader.last_tick() {
+        None => Err(Error::Silent { waited: start.elapsed(), got: reader.lines.len() }),
+        Some(reached) if reached.saturating_add(1) < ticks => Err(Error::Incomplete { reached, wanted: ticks }),
+        Some(_) => Ok(reader),
     }
-    Ok(reader)
 }
 
 /// Oeffnet eine serielle Schnittstelle.
@@ -222,7 +254,7 @@ mod tests {
     fn reading_stops_at_the_requested_tick() {
         let data = b"t=0 out led 1\nt=1 out led 0\nt=2 out led 1\n";
         let mut src = &data[..];
-        let r = read_until(&mut src, 1, Duration::from_secs(1)).expect("gelesen");
+        let r = read_until(&mut src, 2, Duration::from_secs(1)).expect("gelesen");
         assert!(r.last_tick().unwrap() >= 1);
     }
 
@@ -235,5 +267,29 @@ mod tests {
         let mut src = &b""[..];
         let e = read_until(&mut src, 10, Duration::from_millis(200)).expect_err("stumm");
         assert!(matches!(e, Error::Silent { .. }), "{e}");
+    }
+
+    /// **Ein Board, das vor dem verlangten Tick verstummt, ist ein Fehler**
+    /// (13.8): Bis Tick 5 von 10 gleich heisst nicht gleich.
+    #[test]
+    fn a_trace_that_stops_early_is_incomplete() {
+        let data = b"t=0 out led 1\nt=3 out led 0\nt=5 out led 1\n";
+        let mut src = &data[..];
+        let e = read_until(&mut src, 10, Duration::from_millis(200)).expect_err("unvollstaendig");
+        assert!(matches!(e, Error::Incomplete { reached: 5, wanted: 10 }), "{e}");
+        assert!(e.to_string().contains("Tick 5 von 10"), "{e}");
+    }
+
+    /// **Verworfene Bytes in der Bilanz sind ein Fehler** (FB-292): Der
+    /// Trace hat dann Luecken, die wie Gleichheit aussehen koennen.
+    #[test]
+    fn dropped_bytes_in_the_balance_are_an_error() {
+        let data = b"t=0 out led 1\ntakt schlief 0 ueberlaeufe 0 verworfen 3 gesendet 40\ntakt end\n";
+        let mut src = &data[..];
+        let e = read_until(&mut src, 5, Duration::from_millis(200)).expect_err("verworfen");
+        assert!(matches!(e, Error::Dropped(3)), "{e}");
+        let clean = b"t=0 out led 1\nt=1 out led 0\ntakt schlief 0 verworfen 0 gesendet 28\ntakt end\n";
+        let mut src = &clean[..];
+        assert!(read_until(&mut src, 1, Duration::from_millis(200)).is_ok());
     }
 }

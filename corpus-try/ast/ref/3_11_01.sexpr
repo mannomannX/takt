@@ -1,0 +1,8 @@
+(var p :mat<2, 2> (array (array 1 0) (array 0 1)))
+(const I2 :mat<2, 2> (array (array 1 0) (array 0 1)))
+(const F :mat<2, 2> (array (array 1 0.01) (array 0 1)))
+(const H :mat<1, 2> (array (array 1 0)))
+(var s :mat<1, 1> (* (* H p) (.transpose H ())))
+(var k (* (* p (.transpose H ())) (.inv s ())))
+(= p (* (paren (- I2 (* k H))) p))
+(var e (index p 0 1))

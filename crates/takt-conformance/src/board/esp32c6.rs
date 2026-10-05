@@ -279,7 +279,7 @@ impl Board for Esp32c6 {
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
         self.download(elf)?;
-        self.capture(elf, options.ticks).and_then(super::complete)
+        self.capture(elf, options.ticks).and_then(|text| super::complete(text, options))
     }
 }
 

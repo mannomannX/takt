@@ -38,6 +38,7 @@ const ITEM_KEYWORDS: &[&str] = &[
 impl<'t, 's> Parser<'t, 's> {
     /// `file := { NEWLINE | import | … | trigger_decl }`
     pub(super) fn parse_file(&mut self) -> File {
+        self.cover("file");
         let mut file = File::default();
         while !self.at(TokenKind::Eof) {
             if self.eat(TokenKind::Newline) {
@@ -48,7 +49,7 @@ impl<'t, 's> Parser<'t, 's> {
                 Ok(item) => file.items.push(item),
                 Err(e) => {
                     self.report(e);
-                    self.recover(start);
+                    self.recover_item(start);
                 }
             }
         }
@@ -60,6 +61,7 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     pub(super) fn parse_item(&mut self) -> PResult<Item> {
+        self.cover("item");
         if self.kind() != TokenKind::Keyword {
             return Err(self.error_at(
                 self.tok(),
@@ -116,6 +118,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `import`
     fn parse_import(&mut self) -> PResult<Import> {
+        self.cover("import");
         let start = self.pos;
         self.expect_kw("import")?;
         if self.at_word("channels") && self.at_word_at(1, "from") {
@@ -136,6 +139,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `system_decl`
     fn parse_system_decl(&mut self) -> PResult<SystemDecl> {
+        self.cover("system_decl");
         let start = self.pos;
         self.expect_kw("system")?;
         self.expect_op(":")?;
@@ -158,6 +162,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `system_item`
     fn parse_system_item(&mut self) -> PResult<SystemItem> {
+        self.cover("system_item");
         if !Self::is_word(self.kind()) {
             return Err(self.error_here("einen Systemeintrag wie `tick = 1 ms`"));
         }
@@ -252,6 +257,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `type_decl`
     fn parse_type_decl(&mut self) -> PResult<TypeDecl> {
+        self.cover("type_decl");
         let start = self.pos;
         self.expect_kw("type")?;
         let name = self.type_ident()?;
@@ -263,6 +269,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `unitvec_decl`
     fn parse_unitvec_decl(&mut self) -> PResult<UnitvecDecl> {
+        self.cover("unitvec_decl");
         let start = self.pos;
         self.expect_kw("unitvec")?;
         let name = self.upper()?;
@@ -279,6 +286,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `enum_decl` (einzeilig oder als Block)
     fn parse_enum_decl(&mut self) -> PResult<EnumDecl> {
+        self.cover("enum_decl");
         let start = self.pos;
         self.expect_kw("enum")?;
         let name = self.type_ident()?;
@@ -307,6 +315,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `variant`
     fn parse_variant(&mut self) -> PResult<Variant> {
+        self.cover("variant");
         let start = self.pos;
         let name = self.upper()?;
         let discriminant = if self.eat_op("=") { Some(self.parse_int_lit()?) } else { None };
@@ -325,6 +334,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `record_decl`
     fn parse_record_decl(&mut self) -> PResult<RecordDecl> {
+        self.cover("record_decl");
         let start = self.pos;
         self.expect_kw("record")?;
         let name = self.type_ident()?;
@@ -368,6 +378,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `record_field := field NEWLINE | IDENT ":" int_type "with" "bits" ":" NEWLINE INDENT { bitfield NEWLINE } DEDENT`
     fn parse_record_field(&mut self) -> PResult<RecordField> {
+        self.cover("record_field");
         let start = self.pos;
         let is_bits = self.at(TokenKind::Ident)
             && self.at_op_at(1, ":")
@@ -398,6 +409,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `field`
     fn parse_field(&mut self) -> PResult<Field> {
+        self.cover("field");
         let start = self.pos;
         let name = if self.at(TokenKind::Wild) {
             let t = self.bump();
@@ -427,6 +439,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `bitfield`
     fn parse_bitfield(&mut self) -> PResult<Bitfield> {
+        self.cover("bitfield");
         let start = self.pos;
         let name = self.ident()?;
         self.expect_op(":")?;
@@ -448,6 +461,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `unit_decl`
     fn parse_unit_decl(&mut self) -> PResult<UnitDecl> {
+        self.cover("unit_decl");
         let start = self.pos;
         self.expect_kw("unit")?;
         let name = self.parse_unit_name()?;
@@ -470,6 +484,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `const_decl`
     fn parse_const_decl(&mut self) -> PResult<ConstDecl> {
+        self.cover("const_decl");
         let start = self.pos;
         self.expect_kw("const")?;
         let name = self.upper()?;
@@ -482,6 +497,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `param_decl`
     fn parse_param_decl(&mut self) -> PResult<ParamDecl> {
+        self.cover("param_decl");
         let start = self.pos;
         let tunable = self.eat_kw("tunable");
         self.expect_kw("param")?;
@@ -497,6 +513,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `profile_decl`
     fn parse_profile_decl(&mut self) -> PResult<ProfileDecl> {
+        self.cover("profile_decl");
         let start = self.pos;
         self.expect_kw("profile")?;
         let name = self.upper()?;
@@ -517,6 +534,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `channel_decl`
     fn parse_channel_decl(&mut self) -> PResult<ChannelDecl> {
+        self.cover("channel_decl");
         let start = self.pos;
         let dir = if self.eat_kw("input") {
             Direction::Input
@@ -536,6 +554,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `stream_decl`
     fn parse_stream_decl(&mut self) -> PResult<StreamDecl> {
+        self.cover("stream_decl");
         let start = self.pos;
         self.expect_kw("stream")?;
         self.expect_op("<")?;
@@ -552,6 +571,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `port_decl`
     fn parse_port_decl(&mut self) -> PResult<PortDecl> {
+        self.cover("port_decl");
         let start = self.pos;
         self.expect_kw("port")?;
         let name = self.ident()?;
@@ -569,6 +589,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `command_decl`
     fn parse_command_decl(&mut self) -> PResult<CommandDecl> {
+        self.cover("command_decl");
         let start = self.pos;
         self.expect_kw("command")?;
         let name = self.ident()?;
@@ -579,6 +600,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `fn_decl`
     fn parse_fn_decl(&mut self) -> PResult<FnDecl> {
+        self.cover("fn_decl");
         let start = self.pos;
         self.expect_kw("fn")?;
         let name = self.ident()?;
@@ -614,6 +636,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `native_decl`
     fn parse_native_decl(&mut self) -> PResult<NativeDecl> {
+        self.cover("native_decl");
         let start = self.pos;
         self.expect_kw("native")?;
         let kind = if self.eat_kw("fn") {
@@ -652,6 +675,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `cost_spec`
     fn parse_cost_spec(&mut self) -> PResult<CostSpec> {
+        self.cover("cost_spec");
         if self.eat_op("{") {
             let mut classes = Vec::new();
             loop {
@@ -671,6 +695,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `cost_class`
     fn parse_cost_class(&mut self) -> PResult<CostClass> {
+        self.cover("cost_class");
         let class = if Self::is_word(self.kind()) {
             match self.text() {
                 "i32" => CostClass::I32,
@@ -691,6 +716,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `block_decl`
     fn parse_block_decl(&mut self) -> PResult<BlockDecl> {
+        self.cover("block_decl");
         let start = self.pos;
         self.expect_kw("block")?;
         let name = self.ident()?;
@@ -718,7 +744,11 @@ impl<'t, 's> Parser<'t, 's> {
                     vars.push(v);
                 } else if self.at_kw("step") && self.at_op_at(1, "(") {
                     if step.is_some() {
-                        return Err(self.error_at(self.tok(), "`step` ist doppelt", None));
+                        return Err(self.error_at(
+                            self.tok(),
+                            "`step` ist doppelt",
+                            Some("ein Block hat ein `step(…)`; weitere Arbeit als Methode `name(…)` schreiben (2.3: block_decl)"),
+                        ));
                     }
                     if !methods.is_empty() {
                         return Err(self.error_at(
@@ -741,7 +771,11 @@ impl<'t, 's> Parser<'t, 's> {
             }
         }
         if step.is_none() && methods.is_empty() {
-            return Err(self.error_at(self.tok(), "ein Block braucht `step(…)` oder eine Methode", None));
+            return Err(self.error_at(
+                self.tok(),
+                "ein Block braucht `step(…)` oder eine Methode",
+                Some("`step(…) -> T:` mit Rumpf ergaenzen (2.3: block_decl)"),
+            ));
         }
         self.expect_dedent()?;
         Ok(BlockDecl { name, generics, params, vars, step, methods, span: self.span_from(start) })
@@ -749,6 +783,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `step_decl`
     pub(super) fn parse_step_decl(&mut self) -> PResult<StepDecl> {
+        self.cover("step_decl");
         let start = self.pos;
         self.expect_kw("step")?;
         let params = self.parse_param_list()?;
@@ -764,6 +799,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `method_decl`
     fn parse_method_decl(&mut self) -> PResult<MethodDecl> {
+        self.cover("method_decl");
         let start = self.pos;
         let name = self.ident()?;
         let params = self.parse_param_list()?;
@@ -775,6 +811,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `instance_decl`
     pub(super) fn parse_instance_decl(&mut self) -> PResult<InstanceDecl> {
+        self.cover("instance_decl");
         let start = self.pos;
         self.expect_kw("instance")?;
         let name = self.ident()?;
@@ -797,6 +834,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `node_decl`
     fn parse_node_decl(&mut self) -> PResult<NodeDecl> {
+        self.cover("node_decl");
         let start = self.pos;
         self.expect_kw("node")?;
         let name = self.ident()?;
@@ -818,15 +856,18 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `property_decl`
     fn parse_property_decl(&mut self) -> PResult<PropertyDecl> {
+        self.cover("property_decl");
         self.parse_property_like(PropertyKind::Property)
     }
 
     /// `assumption_decl` — dieselbe Form wie `property_decl` (13.3).
     fn parse_assumption_decl(&mut self) -> PResult<PropertyDecl> {
+        self.cover("assumption_decl");
         self.parse_property_like(PropertyKind::Assumption)
     }
 
     fn parse_property_like(&mut self, kind: PropertyKind) -> PResult<PropertyDecl> {
+        self.cover("property_like");
         let start = self.pos;
         self.expect_kw(kind.word())?;
         let name = self.ident()?;
@@ -853,6 +894,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `scenario_decl`
     fn parse_scenario_decl(&mut self) -> PResult<ScenarioDecl> {
+        self.cover("scenario_decl");
         let start = self.pos;
         self.expect_kw("scenario")?;
         let name = self.string()?;
@@ -868,6 +910,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `campaign_decl`
     fn parse_campaign_decl(&mut self) -> PResult<CampaignDecl> {
+        self.cover("campaign_decl");
         let start = self.pos;
         self.expect_kw("campaign")?;
         let name = self.ident()?;
@@ -891,6 +934,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `campaign_item`
     fn parse_campaign_item(&mut self) -> PResult<CampaignItem> {
+        self.cover("campaign_item");
         let item = if self.eat_kw("program") {
             CampaignItem::Program(self.string()?)
         } else if self.eat_kw("profile") {
@@ -933,6 +977,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `trigger_decl`
     fn parse_trigger_decl(&mut self) -> PResult<TriggerDecl> {
+        self.cover("trigger_decl");
         let start = self.pos;
         self.expect_kw("trigger")?;
         let name = self.ident()?;

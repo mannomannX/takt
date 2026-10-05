@@ -1,0 +1,25 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-10: `DONE`-artig heisst ein durch `_` getrenntes Glied `DONE` oder
+# `SAFE`; `UNSAFE` und `DONE2` sind es nicht und brauchen einen Ausgang.
+
+output v : bool @ hw("o/v") with safe = false
+command go
+command stop
+
+machine m:
+    initial IDLE
+
+    state IDLE:
+        when go: -> UNSAFE
+        when stop: -> DONE2
+
+    state UNSAFE:  # ~ SC-10
+        loop:
+            v = true
+
+    state DONE2:  # ~ SC-10
+        loop:
+            v = false

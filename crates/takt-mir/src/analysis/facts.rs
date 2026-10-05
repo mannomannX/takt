@@ -199,3 +199,60 @@ impl Facts {
         self.assigned.get(&k).copied().unwrap_or(false)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::domain::Intervals;
+
+    fn var(v: u32) -> Term {
+        Term::Var(v)
+    }
+
+    /// SYN-024: Eine Zuweisung an `v` loescht jede Schranke, die `v` nennt
+    /// — als Variable, als Feld und als Laenge, links wie rechts —, und
+    /// keine andere.
+    #[test]
+    fn forgetting_a_variable_drops_every_bound_that_names_it() {
+        let len = |v| Term::Len(Box::new(var(v)));
+        let field = |v| Term::Field(Box::new(var(v)), 2);
+        let mut f = Facts::entry();
+        f.bound(var(1), len(0), -1);
+        f.bound(field(0), var(2), 5);
+        f.bound(var(3), var(1), 0);
+        f.bound(var(3), var(2), 7);
+        f.forget(VarId(0));
+        assert_eq!(f.difference(&var(1), &len(0)), None, "Laenge");
+        assert_eq!(f.difference(&field(0), &var(2)), None, "Feld");
+        assert_eq!(f.difference(&var(3), &var(1)), Some(0), "fremde Schranke bleibt");
+        f.forget(VarId(1));
+        assert_eq!(f.difference(&var(3), &var(1)), None, "rechts genannt");
+        assert_eq!(f.difference(&var(3), &var(2)), Some(7));
+        // `assign` und `declare` vergessen ebenso.
+        f.assign(VarId(2), Interval::point(4));
+        assert_eq!(f.difference(&var(3), &var(2)), None);
+    }
+
+    /// SYN-024: Nach zwei Zweigen gilt eine Schranke nur, wenn beide sie
+    /// kennen, und dann die schwaechere (das Maximum); eine engere in einem
+    /// Zweig bleibt nicht stehen.
+    #[test]
+    fn a_join_keeps_the_weaker_bound_both_branches_know() {
+        let mut a = Facts::entry();
+        let mut b = Facts::entry();
+        a.bound(var(0), var(1), -3);
+        b.bound(var(0), var(1), -1);
+        a.bound(var(2), var(1), 0);
+        a.assign(VarId(5), Interval::Int { lo: 0, hi: 3 });
+        b.assign(VarId(5), Interval::Int { lo: 10, hi: 12 });
+        let j = Facts::join::<Intervals>(&a, &b);
+        assert_eq!(j.difference(&var(0), &var(1)), Some(-1));
+        assert_eq!(j.difference(&var(2), &var(1)), None, "nur ein Zweig kannte sie");
+        assert_eq!(j.interval(VarId(5)), Interval::Int { lo: 0, hi: 12 });
+        // Ein unerreichbarer Zweig traegt nichts bei.
+        assert_eq!(Facts::join::<Intervals>(&Facts::unreachable(), &a), a);
+        // Eine engere Schranke ersetzt eine weitere, nie umgekehrt.
+        a.bound(var(0), var(1), 4);
+        assert_eq!(a.difference(&var(0), &var(1)), Some(-3));
+    }
+}

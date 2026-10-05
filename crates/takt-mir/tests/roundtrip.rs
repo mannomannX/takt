@@ -25,6 +25,35 @@ fn full_program_round_trips() {
     assert_eq!(again, bytes, "Schreiben ist deterministisch");
 }
 
+/// SYN-029: Jedes uebersetzbare Korpusprogramm geht verlustfrei durch das
+/// Format, und das Schreiben ist deterministisch — nicht nur das
+/// Beispielprogramm.
+#[test]
+fn every_corpus_program_round_trips() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try");
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .expect("corpus-try lesbar")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "takt"))
+        .collect();
+    files.sort();
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let mut done = 0;
+    for path in &files {
+        let src = std::fs::read_to_string(path).expect("lesbar");
+        let out = takt_sema::compile(&src, &options);
+        let Some(p) = out.program.filter(|_| !out.diagnostics.iter().any(|d| d.is_error())) else { continue };
+        let name = path.display();
+        let bytes = write_program(&p, "takt 0.1.0");
+        let (_, back) = read_program(&bytes).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        assert!(back == p, "{name}: das gelesene Programm weicht ab");
+        assert!(write_program(&back, "takt 0.1.0") == bytes, "{name}: Schreiben ist nicht deterministisch");
+        done += 1;
+    }
+    // Weniger heisst: Die Suche ist gebrochen, nicht der Korpus kleiner.
+    assert!(done >= 100, "nur {done} von {} Programmen uebersetzt", files.len());
+}
+
 /// Jede Konstruktion, die der Census kennt, steht im Beispielprogramm; der
 /// Roundtrip prueft sie also alle. Bis hierher stand eine Namensliste als
 /// Teilstring im Debug-Text, und 85 Konstruktionen fehlten unbemerkt

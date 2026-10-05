@@ -22,7 +22,7 @@ impl Mwdt {
     /// laufenden eine neue, und bestaetigt ihn.
     pub fn arm(timeout_ns: i64) -> Mwdt {
         let mut wdt = Wdt::<TIMG0<'static>>::new();
-        let us = u64::try_from(timeout_ns).unwrap_or(0).div_ceil(1_000).max(1);
+        let us = takt_board_support::watchdog::timeout_us(timeout_ns);
         wdt.set_timeout(MwdtStage::Stage0, Duration::from_micros(us));
         wdt.enable();
         wdt.feed();

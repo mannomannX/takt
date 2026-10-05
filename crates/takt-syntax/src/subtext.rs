@@ -4,6 +4,7 @@
 
 use takt_diag::{Diagnostic, Span};
 
+use crate::keywords::{is_keyword, is_reserved};
 use crate::token::{ErrorCode, lex_diagnostic};
 
 /// Baustein eines Formatstrings (3.9).
@@ -178,9 +179,16 @@ pub fn pattern_text(s: &str) -> Result<Vec<PatternPiece>, Diagnostic> {
                 }
                 let (name, kind) =
                     inner.split_once(':').ok_or_else(|| err(ErrorCode::Pattern, open, "{name:kind} erwartet"))?;
-                let name_ok = name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
-                    && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
-                if !name_ok || !pattern_kind(kind) {
+                // Ein IDENT (L3): klein oder `_` vorn, kein Schluesselwort; `_` allein ist WILD.
+                let name_ok = name != "_"
+                    && !is_keyword(name)
+                    && !is_reserved(name)
+                    && name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+                    && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_');
+                if !name_ok {
+                    return Err(err(ErrorCode::Pattern, open, "Name als Bezeichner, kein Schluesselwort"));
+                }
+                if !pattern_kind(kind) {
                     return Err(err(ErrorCode::Pattern, open, "Arten: int hex float word str str<N>"));
                 }
                 out.push(PatternPiece::Capture { name: name.to_string(), kind: kind.to_string() });

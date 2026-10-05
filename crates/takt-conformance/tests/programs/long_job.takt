@@ -17,7 +17,7 @@ fn first(d: bytes<32>) -> u32:
 
 machine m:
     var msg : bytes<4096> = default
-    var d   : bytes<32>   = default
+    var d   : bytes<32> = default
     initial FILL
 
     state FILL:

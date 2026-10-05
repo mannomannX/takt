@@ -512,3 +512,101 @@ fn a_length_prefixed_field_is_as_long_as_its_length_field_says() {
         assert!(trace.contains(want), "encode: `{}` fehlt:\n{trace}", want.trim());
     }
 }
+
+/// Der Partitionseintrag aus 3.7 (`corpus-try/ref/3_7_02.takt`) in einer
+/// Byte-Reihenfolge, dazu ein Record mit `offset`-Luecke und `align`.
+fn partition_program(order: &str) -> String {
+    format!(
+        "\
+enum ImageType layout u8: APP = 0x00, DATA = 0x01, BOOT = 0x02
+record PartitionEntry layout {order}, align = 4:
+    magic   : u16 = 0x50AA
+    kind    : ImageType
+    subtype : u8
+    offset  : u32[B]
+    size    : u32[B]
+    label   : [16] u8
+    flags   : u32 with bits:
+        encrypted : bool at 0
+        readonly  : bool at 1
+        level     : u8 at 4..7
+    _ : [4] u8
+
+record Gapped layout {order}, align = 8:
+    a : u8
+    b : u16 offset = 4
+
+output entry   : [36] u8 @ hw(\"o/entry[0:36]\") with safe = default
+output gap     : [8] u8  @ hw(\"o/gap[0:8]\")    with safe = default
+output sizes   : [2] int in 0..64 @ hw(\"o/sizes[0:2]\") with safe = [0, 0]
+output back    : bool @ hw(\"o/back\") with safe = false
+
+machine m:
+    var e : PartitionEntry = default
+    var g : Gapped = default
+    var eb : [36] u8 = default
+    var gb : [8] u8 = default
+    initial RUN
+    state RUN:
+        loop:
+            e.kind = BOOT
+            e.subtype = 7
+            e.offset = 0x12000 B
+            e.size = 0x8000 B
+            e.label[0] = 0x41
+            e.label[15] = 0x5A
+            e.flags.encrypted = true
+            e.flags.level = 5
+            g.a = 0x11
+            g.b = 0xBEEF
+            var x = e.encode()
+            var y = g.encode()
+            sizes = [x.len, y.len]
+            for i in range(36):
+                eb[i] = x[i]
+            for i in range(8):
+                gb[i] = y[i]
+            entry = eb
+            gap = gb
+            var d = PartitionEntry.decode(x).or(default)
+            var h = Gapped.decode(y).or(default)
+            back = d.kind == BOOT and d.subtype == 7 and d.offset == 0x12000 B and d.size == 0x8000 B and d.label[0] == 0x41 and d.label[15] == 0x5A and d.flags.encrypted and not d.flags.readonly and d.flags.level == 5 and h.a == 0x11 and h.b == 0xBEEF
+"
+    )
+}
+
+/// 3.7: Der Byteplan des Partitionseintrags in beiden Reihenfolgen —
+/// Konstantenfeld, Enum mit Drahtbreite, Einheitenfelder, Array fester
+/// Laenge, Bitfelder im Traegerwort, Padding `_` als Nullen —, eine
+/// `offset`-Luecke aus Nullen und `align` auf die Gesamtlaenge; `decode`
+/// liefert jedes Feld zurueck.
+#[test]
+fn the_partition_entry_of_3_7_round_trips_in_both_byte_orders() {
+    let word = |v: u32, big: bool| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+    for (order, big) in [("little", false), ("big", true)] {
+        let mut entry: Vec<u8> = Vec::new();
+        entry.extend(if big { 0x50AAu16.to_be_bytes() } else { 0x50AAu16.to_le_bytes() });
+        entry.extend([0x02, 7]);
+        entry.extend(word(0x12000, big));
+        entry.extend(word(0x8000, big));
+        let mut label = [0u8; 16];
+        label[0] = 0x41;
+        label[15] = 0x5A;
+        entry.extend(label);
+        entry.extend(word(1 | (5 << 4), big));
+        entry.extend([0; 4]);
+        let b = if big { 0xBEEFu16.to_be_bytes() } else { 0xBEEFu16.to_le_bytes() };
+        let gap = [0x11, 0, 0, 0, b[0], b[1], 0, 0];
+        let list = |bytes: &[u8]| bytes.iter().map(u8::to_string).collect::<Vec<_>>().join(", ");
+
+        let t = simulate(&partition_program(order), 1);
+        for line in [
+            format!("t=0 out entry [{}]\n", list(&entry)),
+            format!("t=0 out gap [{}]\n", list(&gap)),
+            "t=0 out sizes [36, 8]\n".to_string(),
+            "t=0 out back true\n".to_string(),
+        ] {
+            assert!(t.contains(&line), "{order}: `{}` fehlt:\n{t}", line.trim_end());
+        }
+    }
+}

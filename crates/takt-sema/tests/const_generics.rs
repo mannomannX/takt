@@ -182,3 +182,87 @@ machine m:
 ");
     assert!(t_has(&trace(&p, 2), "out n 0"));
 }
+
+const SMALL: &str = "fn total[const N in 1..8](values: [N] int) -> int:
+    var s : int = 0
+    for i in range(N):
+        s = s + values[i]
+    return s
+
+output a : int @ hw(\"o/a\") with safe = 0
+";
+
+/// Ein Programm, das `total` mit einem Argument der Laenge `len` ruft.
+fn calls_total(len: u32, call: &str) -> String {
+    format!(
+        "{SMALL}
+machine m:
+    var x : [{len}] int = default
+    initial RUN
+    state RUN:
+        loop:
+            a = {call}
+"
+    )
+}
+
+#[test]
+fn the_range_of_a_constant_holds_at_its_edges() {
+    // Pruefung 52: 1 und 8 liegen in `1..8`, 9 nicht — abgeleitet wie
+    // explizit.
+    for len in [1, 8] {
+        let p = ok(&calls_total(len, "total(x)"));
+        assert!(p.fns.iter().any(|f| f.name == format!("total[{len}]")), "N = {len}");
+        ok(&calls_total(len, &format!("total[{len}](x)")));
+    }
+    for call in ["total(x)", "total[9](x)"] {
+        let e = errors(&calls_total(9, call));
+        assert!(e.contains("[SC-52]") && e.contains("ausserhalb 1..8"), "{call}: {e}");
+    }
+    let e = errors(&calls_total(1, "total[0](x)"));
+    assert!(e.contains("[SC-52]") && e.contains("ausserhalb 1..8"), "N = 0: {e}");
+}
+
+#[test]
+fn an_explicit_constant_must_match_the_capacity_of_the_argument() {
+    let e = errors(&calls_total(4, "total[3](x)"));
+    assert!(e.contains("[SC-3]") && e.contains("[3] int") && e.contains("[4] int"), "{e}");
+    let e = errors(&format!("const SIZE : int = 5\n{}", calls_total(4, "total[SIZE](x)")));
+    assert!(e.contains("[SC-3]") && e.contains("[5] int"), "{e}");
+}
+
+#[test]
+fn a_malformed_constant_variable_is_rejected_at_the_template() {
+    let e = errors(&calls_total(4, "total(x)").replace("const N in 1..8", "const N in 8..1"));
+    assert!(e.contains("[SC-52]") && e.contains("Untergrenze groesser als Obergrenze"), "{e}");
+    let e = errors(&calls_total(4, "total(x)").replace("const N in 1..8", "const N in 1..8, const N in 1..8"));
+    assert!(e.contains("[SC-52]") && e.contains("Variable `N` doppelt"), "{e}");
+}
+
+#[test]
+fn equal_capacities_share_one_instance_and_a_constant_needs_no_range() {
+    // 3.12: eine MIR-Funktion je Instanz — zwei Aufrufe mit `[4] int` sind
+    // eine, sonst zaehlte das Budget sie doppelt.
+    let p = ok(&format!(
+        "{TOTAL}
+fn count[const N](values: [N] int) -> int:
+    return N
+
+output b : int @ hw(\"o/b\") with safe = 0
+output c : int @ hw(\"o/c\") with safe = 0
+
+machine m:
+    var x : [4] int = [1, 2, 3, 4]
+    var y : [4] int = [4, 4, 4, 4]
+    initial RUN
+    state RUN:
+        loop:
+            b = total(x) + total(y)
+            c = count(x)
+"
+    ));
+    let names: Vec<&str> = p.fns.iter().map(|f| f.name.as_str()).filter(|n| n.starts_with("total[")).collect();
+    assert_eq!(names, ["total[4]"], "eine Instanz");
+    let t = trace(&p, 1);
+    assert!(t.contains("out b 26") && t.contains("out c 4"), "{t}");
+}

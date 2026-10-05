@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46 (3.7): Der Typ eines Bitfelds fasst alle Werte seiner Bits;
+# `u8` fasst keine 12 Bits, `i8` keine 8 vorzeichenlosen.
+
+record Reg layout little:
+    raw : u16 with bits:
+        wide  : u8 at 0..11  # ~ SC-46
+        upper : bool at 15
+    other : u8 with bits:
+        whole : i8 at 0..7  # ~ SC-46
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var r : Reg = default
+    initial RUN
+
+    state RUN:
+        loop:
+            v = r.raw.upper

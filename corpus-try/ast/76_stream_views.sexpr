@@ -17,7 +17,7 @@
   (for i in (range 16)
     (if (>= i (.len b))
       (break))
-    (= acc (% (+ acc (* (as (index b i) int) (+ i 1))) 100000)))
+    (= acc (% (paren (+ acc (* (paren (as (index b i) int)) (paren (+ i 1))))) 100000)))
   (return acc))
 (machine producer
   (var n :int in 0..999 0)
@@ -25,12 +25,12 @@
   (initial RUN)
   (state RUN
     (loop
-      (.clear buf)
-      (var k :int in 0..15 (% (+ (* n 4) 3) 16))
+      (.clear buf ())
+      (var k :int in 0..15 (% (paren (+ (* n 4) 3)) 16))
       (for i in (range 16)
         (if (>= i k)
           (break))
-        (var put (.push buf (as (% (+ n i) 200) u8))))
+        (var put (.push buf (as (paren (% (paren (+ n i)) 200)) u8))))
       (send frames buf)
       (if (== (% n 3) 0)
         (send loose buf))
@@ -49,7 +49,7 @@
       (= first (as (index (.data f) 0) int))
       (= last (as (index (.data f) (- (.len (.data f)) 1)) int))
       (var rest :bytes<16> (slice (.data f) 1 (.len (.data f))))
-      (= total (% (+ total (.len rest)) 100000))
+      (= total (% (paren (+ total (.len rest))) 100000))
       (= tail total)
       (= keep (.data f))
       (= kept (.len keep)))))
@@ -61,6 +61,6 @@
   (state LOOK
     (loop
       (var empty :bytes<16> default)
-      (var p :bytes<16>? (.peek frames))
+      (var p :bytes<16>? (.peek frames ()))
       (= pk (.len (.or p empty))))
     (when true -> WAIT)))

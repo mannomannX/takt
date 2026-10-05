@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-14: Auch `wait` in einer Sequenz wirkt als Vielfaches der Periode.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m every 2 ms:
+    initial A
+
+    state A:
+        sequence:
+            v = true
+            wait 3 ms  # ~ SC-14
+            v = false
+            wait 4 ms
+            -> A

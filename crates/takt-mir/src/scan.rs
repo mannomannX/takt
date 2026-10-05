@@ -514,8 +514,14 @@ impl Pass {
                 _ => fail,
             },
             St::Int { part, neg, digits, .. } => {
-                if b.is_ascii_digit() && digits < 19 {
-                    return go(St::Int { part, signed: false, neg, digits: digits + 1 });
+                // Ein Lauf ueber die Hoechstlaenge trifft nicht; er bindet
+                // nie nur seinen Anfang (8.7, SYN-039).
+                if b.is_ascii_digit() {
+                    return if digits < 19 {
+                        go(St::Int { part, signed: false, neg, digits: digits + 1 })
+                    } else {
+                        fail
+                    };
                 }
                 let check = match (digits, neg) {
                     (19, false) => Check::IntPositive,
@@ -532,8 +538,12 @@ impl Pass {
                 }
                 HexPhase::Start | HexPhase::Prefix => fail,
                 HexPhase::Zero if b == b'x' => go(St::Hex { part, phase: HexPhase::Prefix, digits: 0 }),
-                HexPhase::Zero | HexPhase::Digits if b.is_ascii_hexdigit() && digits < 16 => {
-                    go(St::Hex { part, phase: HexPhase::Digits, digits: digits + 1 })
+                HexPhase::Zero | HexPhase::Digits if b.is_ascii_hexdigit() => {
+                    if digits < 16 {
+                        go(St::Hex { part, phase: HexPhase::Digits, digits: digits + 1 })
+                    } else {
+                        fail
+                    }
                 }
                 HexPhase::Zero | HexPhase::Digits => {
                     let check = if digits == 16 { Check::Hex } else { Check::None };
@@ -542,8 +552,8 @@ impl Pass {
                 }
             },
             St::Word { part, len } => {
-                if (b.is_ascii_alphanumeric() || b == b'_') && len < 64 {
-                    go(St::Word { part, len: len + 1 })
+                if b.is_ascii_alphanumeric() || b == b'_' {
+                    if len < 64 { go(St::Word { part, len: len + 1 }) } else { fail }
                 } else if len == 0 {
                     fail
                 } else {
@@ -614,6 +624,15 @@ mod tests {
         PatternPiece::Capture { name: "x".into(), kind }
     }
 
+    /// SYN-035: Ein Literal der Laenge L ergibt L Zustaende; bei
+    /// `MAX_STATES` ist Schluss, und der Codegen sucht ohne Automaten.
+    #[test]
+    fn the_state_limit_is_exact() {
+        let s = Scan::of(&[text(&"a".repeat(MAX_STATES))], 1 << 16).expect("genau an der Grenze");
+        assert_eq!(s.states(), MAX_STATES);
+        assert!(Scan::of(&[text(&"a".repeat(MAX_STATES + 1))], 1 << 16).is_none(), "ein Zustand zu viel");
+    }
+
     /// Das leere Muster trifft vorn, ein Literal an seinem ersten Vorkommen.
     #[test]
     fn literals_find_their_first_occurrence() {
@@ -647,6 +666,28 @@ mod tests {
         assert_eq!(s.first(b"=7fffffffffffffff"), Some(0));
         assert_eq!(s.first(b"=8000000000000000"), None);
         assert_eq!(s.first(b"=0x8000000000000000"), None);
+    }
+
+    /// 8.7 (SYN-039): Ein Lauf ueber die Hoechstlaenge seiner Klasse trifft
+    /// an dieser Stelle nicht, auch am Musterende — `int` mit 20 Ziffern,
+    /// `hex` mit 17, `word` mit 65 Zeichen. Bis zur Grenze trifft er.
+    #[test]
+    fn a_run_beyond_its_class_bound_is_no_hit() {
+        let any = || PatternPiece::Any;
+        let cases: [(CaptureKind, &str, usize); 3] = [
+            (CaptureKind::Int, "1234567890123456789", 19),
+            (CaptureKind::Hex, "123456789abcdef0", 16),
+            (CaptureKind::Word, "w", 64),
+        ];
+        for (kind, unit, max) in cases {
+            let s = Scan::of(&[any(), text("="), cap(kind.clone())], 256).expect("Automat");
+            let digits: String = unit.chars().cycle().take(max).collect();
+            assert_eq!(s.first(format!("a={digits}").as_bytes()), Some(0), "{kind:?} mit {max}");
+            assert_eq!(s.first(format!("a={digits};").as_bytes()), Some(0), "{kind:?} mit {max} und Rest");
+            let longer: String = unit.chars().cycle().take(max + 1).collect();
+            assert_eq!(s.first(format!("a={longer}").as_bytes()), None, "{kind:?} mit {}", max + 1);
+            assert_eq!(s.first(format!("a={longer};").as_bytes()), None, "{kind:?} mit {} und Rest", max + 1);
+        }
     }
 
     /// `str<N>` zaehlt Bytes, wie der Typ sie fasst (FB-358); ein Faden

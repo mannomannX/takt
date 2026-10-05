@@ -72,7 +72,7 @@ impl Buffer {
     /// `drop_oldest` verwirft von vorn, `fault` lehnt das Element ab.
     pub fn push(&mut self, t: i64, value: Value, bytes: u32, drop_oldest: bool) -> Delivery {
         let over_count = self.items.len() as u32 + 1 > self.cap;
-        let over_bytes = self.bytes + bytes > self.cap_bytes;
+        let over_bytes = self.exceeds(bytes);
         if !(over_count || over_bytes) {
             self.append(t, value, bytes);
             return Delivery::Ok;
@@ -86,7 +86,7 @@ impl Buffer {
             return Delivery::Overflow;
         }
         let mut n = 0;
-        while self.items.len() as u32 + 1 > self.cap || self.bytes + bytes > self.cap_bytes {
+        while self.items.len() as u32 + 1 > self.cap || self.exceeds(bytes) {
             let Some(old) = self.items.pop_front() else { break };
             self.bytes -= old.bytes;
             n += 1;
@@ -94,6 +94,12 @@ impl Buffer {
         self.dropped += n;
         self.append(t, value, bytes);
         Delivery::Dropped(n)
+    }
+
+    /// Sprengt ein Element von `bytes` die Byteschranke? Eine Summe ueber
+    /// `u32::MAX` tut es, statt umzubrechen.
+    fn exceeds(&self, bytes: u32) -> bool {
+        self.bytes.checked_add(bytes).is_none_or(|sum| sum > self.cap_bytes)
     }
 
     fn append(&mut self, t: i64, value: Value, bytes: u32) {

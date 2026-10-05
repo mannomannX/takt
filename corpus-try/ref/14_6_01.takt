@@ -73,7 +73,7 @@ machine brownout_test:
         state CUTTING:
             sequence:
                 wait BROWNOUT_DELAY + 20 ms
-                verify i_dut.max() < 10 mA, "supply still present during brownout: {i_dut.max()}"
+                verify i_dut.max() < (10 mA).to(A), "supply still present during brownout: {i_dut.max()}"
                 wait 500 ms
                 reset_n = false
                 vbus_en = true

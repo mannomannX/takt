@@ -1,4 +1,4 @@
-fn build_response(req: RdmHeader, own: Uid, rt: u8,
+fn build_response(req: RdmHeader, own: Uid, rt: u8,  # ~ SC-2, SC-2
                   pd: bytes<231>, pdl: int in 0..231) -> bytes<264>:
     var out : bytes<264> = default
     out.push(rt)

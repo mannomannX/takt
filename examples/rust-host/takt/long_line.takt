@@ -1,0 +1,21 @@
+# Eine Zeile ueber `line<16>` (3.9, GEN-033): Der Rand kuerzt sie auf
+# sechzehn Bytes, statt sie zu verwerfen oder siebzehn durchzureichen, und
+# der Handler erfaehrt es aus `.truncated` (KON2-028).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  rx   : stream<line<16>> @ hw("u/rx") with max_rate = 100 Hz
+output len  : int in 0..99     @ sim("o/len")
+output same : bool             @ sim("o/same")
+output cut  : bool             @ sim("o/cut")
+
+machine m:
+    initial A
+
+    state A:
+        on rx as l:
+            len = l.text.len
+            same = l.text == "0123456789ABCDEF"
+            cut = l.text.truncated

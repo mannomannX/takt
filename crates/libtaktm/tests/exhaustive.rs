@@ -26,6 +26,13 @@
 //! nach `$CARGO_TARGET_TMPDIR/hard_f32_<funktion>.txt`; die Referenz macht
 //! daraus Vektorzeilen:
 //! `python tools/libtaktm.py round < … >> crates/libtaktm/tests/hard_f32.txt`.
+//!
+//! **Das Protokoll (INT-028).** Ein bestandener Lauf traegt sich mit dem
+//! Fingerabdruck der Implementierung (`elem.rs`, `big.rs`, `table.rs`),
+//! Datum und Commit in `exhaustive_runs.txt` ein. Im gewoehnlichen Lauf
+//! prueft eine Stichprobe jeder Funktion gegen dasselbe Orakel, und die
+//! Annahme des Orakels — die `f64`-Bibliothek der Plattform irrt um weniger
+//! als 16 ulp — wird an den Zufallsvektoren der Referenz gemessen.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -103,7 +110,12 @@ fn judge(name: &str, args: &[u32], ours: f32, theirs: f64, out: &mut Outcome) {
 }
 
 /// Die nahen Faelle muessen in `hard_f32.txt` stehen, mit unserem Ergebnis.
+/// Ein vollstaendiger Lauf (`record`) traegt sich danach in die Ratsche ein.
 fn settle(name: &str, outcome: Outcome) {
+    settle_sample(name, outcome, true);
+}
+
+fn settle_sample(name: &str, outcome: Outcome, record: bool) {
     assert!(outcome.wrong.is_empty(), "{name}: Abweichungen vom Orakel:\n{}", outcome.wrong.join("\n"));
     let hard: HashMap<Vec<u64>, common::Vector> = common::load("hard_f32.txt")
         .into_iter()
@@ -131,6 +143,153 @@ fn settle(name: &str, outcome: Outcome) {
         );
     }
     println!("{name}: {} nahe Faelle, alle in hard_f32.txt", outcome.near.len());
+    if record {
+        record_run(name, outcome.near.len());
+    }
+}
+
+/// Die Dateien, deren Inhalt die Ergebnisse der Funktionen bestimmt.
+const IMPLEMENTATION: [&str; 3] = ["src/elem.rs", "src/big.rs", "src/table.rs"];
+
+fn runs_path() -> String {
+    format!("{}/tests/exhaustive_runs.txt", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// FNV-1a ueber die Implementierung, Zeilenenden vereinheitlicht: Derselbe
+/// Stand gibt unter Windows und Linux denselben Abdruck.
+fn fingerprint() -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for file in IMPLEMENTATION {
+        let path = format!("{}/{file}", env!("CARGO_MANIFEST_DIR"));
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        for b in file.bytes().chain(text.bytes().filter(|b| *b != b'\r')) {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    format!("{h:016x}")
+}
+
+/// Das Datum `JJJJ-MM-TT` (UTC) aus der Systemzeit.
+fn today() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    // Tage seit 1970 nach Jahr, Monat, Tag (proleptisch gregorianisch).
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Der Commit, auf dem der Lauf stand; `?` ohne git.
+fn commit() -> String {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map_or_else(|| "?".into(), |o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Traegt einen bestandenen Lauf ein; ein frueherer derselben Funktion
+/// faellt heraus.
+fn record_run(name: &str, near: usize) {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _guard = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let path = runs_path();
+    let old = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> =
+        old.lines().filter(|l| l.split_whitespace().next() != Some(name)).map(str::to_string).collect();
+    lines.push(format!("{name} {} {near} {} {}", fingerprint(), today(), commit()));
+    lines.sort();
+    let head = "# Erschoepfende Laeufe (exhaustive.rs): Funktion, Fingerabdruck der Implementierung, \
+                nahe Faelle, Datum, Commit.";
+    std::fs::write(&path, format!("{head}\n{}\n", lines.join("\n"))).expect("Ratsche beschreibbar");
+}
+
+/// INT-028: Die Annahme des Orakels, gemessen: Die `f64`-Funktionen der
+/// Plattform liegen an den Zufallsvektoren der Referenz um hoechstens 16 ulp
+/// neben dem korrekt gerundeten Ergebnis — im Bereich der `f32`-Argumente,
+/// den das Orakel bedient.
+#[test]
+fn the_platform_oracle_holds_its_margin() {
+    let ulps = |a: f64, b: f64| (a.to_bits() as i64).wrapping_sub(b.to_bits() as i64).unsigned_abs();
+    let in_range = |x: f64| x == 0.0 || (x.abs() <= f64::from(f32::MAX) && x.abs() >= 1e-45);
+    let mut worst = (0u64, String::new());
+    for v in common::load("random.txt").iter().filter(|v| v.f64) {
+        let a = |i: usize| f64::from_bits(v.args.get(i).copied().unwrap_or(0));
+        let theirs = match v.fun.as_str() {
+            "exp" => a(0).exp(),
+            "log" => a(0).ln(),
+            "sin" => a(0).sin(),
+            "cos" => a(0).cos(),
+            "tan" => a(0).tan(),
+            "asin" => a(0).asin(),
+            "acos" => a(0).acos(),
+            "atan" => a(0).atan(),
+            "atan2" => a(0).atan2(a(1)),
+            "pow" => a(0).powf(a(1)),
+            other => panic!("unbekannte Funktion `{other}`"),
+        };
+        let want = f64::from_bits(v.want);
+        if !v.args.iter().all(|b| in_range(f64::from_bits(*b))) || !want.is_finite() || !in_range(want) {
+            continue;
+        }
+        let d = ulps(theirs, want);
+        if d > worst.0 {
+            worst = (d, v.text.clone());
+        }
+    }
+    assert!(worst.0 <= 16, "die Plattform irrt um {} ulp: {}", worst.0, worst.1);
+}
+
+/// INT-028: Eine Stichprobe jeder Funktion gegen das Orakel, im
+/// gewoehnlichen Lauf — jedes 65 537. Argument und 2^14 Paare. Nahe Faelle
+/// muessen wie im vollen Lauf in `hard_f32.txt` stehen.
+#[test]
+fn a_sample_of_every_function_agrees_with_the_oracle() {
+    type Unary = (&'static str, fn(f32) -> f32, fn(f64) -> f64);
+    type Pair = (&'static str, fn(f32, f32) -> f32, fn(f64, f64) -> f64, fn(&mut u64) -> (u32, u32));
+    let unary: [Unary; 8] = [
+        ("exp", libtaktm::exp_f32, f64::exp),
+        ("log", libtaktm::log_f32, f64::ln),
+        ("sin", libtaktm::sin_f32, f64::sin),
+        ("cos", libtaktm::cos_f32, f64::cos),
+        ("tan", libtaktm::tan_f32, f64::tan),
+        ("asin", libtaktm::asin_f32, f64::asin),
+        ("acos", libtaktm::acos_f32, f64::acos),
+        ("atan", libtaktm::atan_f32, f64::atan),
+    ];
+    for (name, ours, theirs) in unary {
+        let mut out = Outcome::default();
+        for bits in (0..=u32::MAX).step_by(65_537) {
+            let x = f32::from_bits(bits);
+            judge(name, &[bits], ours(x), theirs(f64::from(x)), &mut out);
+        }
+        settle_sample(name, out, false);
+    }
+    let pairs: [Pair; 2] =
+        [("atan2", libtaktm::atan2_f32, f64::atan2, atan2_near), ("pow", libtaktm::pow_f32, f64::powf, pow_near)];
+    for (name, ours, theirs, near) in pairs {
+        let mut out = Outcome::default();
+        let mut state = 0x2026_2808;
+        for k in 0..(1u32 << 14) {
+            let (a, b) = if k % 2 == 0 {
+                let r = next(&mut state);
+                (r as u32, (r >> 32) as u32)
+            } else {
+                near(&mut state)
+            };
+            let (x, y) = (f32::from_bits(a), f32::from_bits(b));
+            judge(name, &[a, b], ours(x, y), theirs(f64::from(x), f64::from(y)), &mut out);
+        }
+        settle_sample(name, out, false);
+    }
 }
 
 /// Alle 2^32 Argumente einer einstelligen Funktion.
@@ -230,20 +389,32 @@ fn exhaustive_atan() {
     unary("atan", libtaktm::atan_f32, f64::atan);
 }
 
+/// Paare fuer `atan2` aus dem Bereich ohne Ueber- und Unterlauf.
+fn atan2_near(s: &mut u64) -> (u32, u32) {
+    let a = ranged(s, -40, 40);
+    (a, ranged(s, -40, 40))
+}
+
+/// Paare fuer `pow`: positive Basen mit beliebigem Exponenten, und jede
+/// vierte eine negative Basis mit ganzzahligem Exponenten (INT-028).
+fn pow_near(s: &mut u64) -> (u32, u32) {
+    let x = ranged(s, -8, 8);
+    if next(s) % 4 == 0 {
+        let n = (next(s) % 81) as i32 - 40;
+        ((x | 0x8000_0000), (n as f32).to_bits())
+    } else {
+        (x & 0x7fff_ffff, ranged(s, -4, 5))
+    }
+}
+
 #[test]
 #[ignore = "10^8 Paare, etwa eine Minute im Release-Profil"]
 fn pairs_atan2() {
-    binary("atan2", libtaktm::atan2_f32, f64::atan2, |s| {
-        let a = ranged(s, -40, 40);
-        (a, ranged(s, -40, 40))
-    });
+    binary("atan2", libtaktm::atan2_f32, f64::atan2, atan2_near);
 }
 
 #[test]
 #[ignore = "10^8 Paare, etwa eine Minute im Release-Profil"]
 fn pairs_pow() {
-    binary("pow", libtaktm::pow_f32, f64::powf, |s| {
-        let x = ranged(s, -8, 8) & 0x7fff_ffff;
-        (x, ranged(s, -4, 5))
-    });
+    binary("pow", libtaktm::pow_f32, f64::powf, pow_near);
 }

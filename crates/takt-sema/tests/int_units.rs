@@ -221,3 +221,80 @@ machine m:
     );
     assert!(e.contains("gleiche Einheiten"), "{e}");
 }
+
+/// 3.2, 4.1 mit exakten Werten: Skalar mal `int[U]`, Division trunkiert
+/// gegen null, `.to` negativer Werte; `i32::MIN` in `uV`, `+` und `*` ueber
+/// die Breite laufen ueber (`Arithmetic(Overflow)`), Division durch null ist
+/// `Arithmetic(DivZero)` — je in ihrer Runde.
+#[test]
+fn integer_units_compute_exact_values_and_fault_by_kind() {
+    let p = ok("output a : int[mV] @ hw(\"o/a\") with safe = 0 mV
+output b : int[mV] @ hw(\"o/b\") with safe = 0 mV
+output c : int[mV] @ hw(\"o/c\") with safe = 0 mV
+output d : int[uV] @ hw(\"o/d\") with safe = 0 uV
+output e : i32[uV] @ hw(\"o/e\") with safe = 0 uV
+
+machine m:
+    fault -> SAFE
+    var v : int[mV] = 5 mV
+    var neg : int[mV] = -7 mV
+    var lo : i32[mV] = -2147483648 mV
+    var hi : i32[mV] = 2147483647 mV
+    var z : int = 0
+    var turn : int in 0..9 = 0
+    initial RUN
+    state RUN:
+        loop:
+            a = 3 * v
+            b = neg / 2
+            c = v / 2
+            d = neg.to(uV)
+            turn = turn + 1
+            if turn == 2:
+                e = lo.to(uV)
+            if turn == 3:
+                var h : i32[mV] = hi + 1 mV
+            if turn == 4:
+                var g : i32[mV] = hi * 2
+            if turn == 5:
+                c = v / z
+    state SAFE:
+        when true: -> RUN
+");
+    let t = trace(&p, 6);
+    for line in ["t=0 out a 15 mV", "t=0 out b -3 mV", "t=0 out c 2 mV", "t=0 out d -7000 uV"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+    let faults: Vec<&str> = t.lines().filter(|l| l.contains(" fault ")).collect();
+    assert_eq!(
+        faults,
+        [
+            "t=1 fault m Arithmetic(Overflow) \"Ueberlauf in i32\" -> SAFE",
+            "t=2 fault m Arithmetic(Overflow) \"Ueberlauf in i32\" -> SAFE",
+            "t=3 fault m Arithmetic(Overflow) \"Ueberlauf in i32\" -> SAFE",
+            "t=4 fault m Arithmetic(DivZero) \"Division durch null\" -> SAFE",
+        ],
+        "{t}"
+    );
+}
+
+/// 3.2: Subtraktion und Vergleich verlangen gleiche Einheiten wie die
+/// Summe.
+#[test]
+fn differences_and_comparisons_need_equal_units() {
+    for (line, want) in [("n = v - w", "passen nicht"), ("f = v < w", "`<` zwischen `int[mV]` und `int[uV]`")] {
+        let e = errors(&format!(
+            "output n : int[mV] @ hw(\"o/n\") with safe = 0 mV
+output f : bool @ hw(\"o/f\") with safe = false
+machine m:
+    var v : int[mV] = 5 mV
+    var w : int[uV] = 5 uV
+    initial RUN
+    state RUN:
+        loop:
+            {line}
+"
+        ));
+        assert!(e.contains("SC-3") && e.contains(want), "{line}: {e}");
+    }
+}

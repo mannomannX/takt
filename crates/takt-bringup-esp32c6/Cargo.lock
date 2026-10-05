@@ -1519,6 +1519,7 @@ dependencies = [
  "esp-bootloader-esp-idf",
  "esp-hal",
  "takt-board-esp32c6",
+ "takt-board-support",
  "takt-conformance",
  "takt-driver-probe",
  "takt-embed",
@@ -1584,6 +1585,7 @@ dependencies = [
  "takt-llvm",
  "takt-mir",
  "takt-native",
+ "takt-rt-core",
 ]
 
 [[package]]

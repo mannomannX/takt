@@ -14,108 +14,88 @@ use takt_mir::program::Program;
 
 mod common;
 
-/// Die Korpusprogramme, die der Codegen vollstaendig senkt.
-const KORPUS: [&str; 92] = [
-    "01_minimal.takt",
-    "20_native.takt",
-    "19_faults.takt",
-    "02_units_and_data.takt",
-    "03_sequences_and_faults.takt",
-    "12_bitfields.takt",
-    "13_framing.takt",
-    "13_protocol_analysis.takt",
-    "14_latency.takt",
-    "15_quality.takt",
-    "16_timing.takt",
-    "17_nested.takt",
-    "18_blocks.takt",
-    "21_fault_targets.takt",
-    "22_faulted_outputs.takt",
-    "23_patterns.takt",
-    "24_send_has.takt",
-    "25_format.takt",
-    "26_samples.takt",
-    "27_every.takt",
-    "28_scheduled.takt",
-    "32_next_run_after.takt",
-    "33_enum_param.takt",
-    "34_next_run_on_start.takt",
-    "35_persist.takt",
-    "36_int_units.takt",
-    "37_follows.takt",
-    "39_sha256.takt",
-    "40_jobs.takt",
-    "41_tunables.takt",
-    "42_map.takt",
-    "43_sent.takt",
-    "46_matrices.takt",
-    "47_monitors.takt",
-    "49_record_streams.takt",
-    "50_clause_words.takt",
-    "51_text_into_bytes.takt",
-    "52_padding_fields.takt",
-    "53_stream_kinds.takt",
-    "54_inout.takt",
-    "55_frames_with_bytes.takt",
-    "56_idle_timer.takt",
-    "57_persist_often.takt",
-    "58_persist_alert.takt",
-    "59_persist_idle.takt",
-    "60_resume.takt",
-    "62_type_generics.takt",
-    "63_scoped_instances.takt",
-    "64_scoped_exit.takt",
-    "68_uart_port.takt",
-    "69_qp_box.takt",
-    "70_padded_record.takt",
-    "71_places.takt",
-    "72_handler_levels.takt",
-    "73_after_levels.takt",
-    "74_instance_index.takt",
-    "75_implicit_checks.takt",
-    "76_stream_views.takt",
-    "77_float_faults.takt",
-    "78_length_guards.takt",
-    "79_byte_literals.takt",
-    "80_payload_variants.takt",
-    "45_journal_cut.takt",
-    "81_persist_variants.takt",
-    "82_scheduled_sleep.takt",
-    "83_durations.takt",
-    "84_defaults.takt",
-    "85_observe_invalid.takt",
-    "86_units.takt",
-    "87_fault_kinds.takt",
-    "88_capture_segments.takt",
-    "89_fault_paths.takt",
-    "90_abort.takt",
-    "91_subnormals.takt",
-    "92_idle_streams.takt",
-    "93_confirmations.takt",
-    "94_float_ranges.takt",
-    "95_boundary_ranges.takt",
-    "96_record_outputs.takt",
-    "97_fast_math.takt",
-    "98_last_fault.takt",
-    "99_exit_fault.takt",
-    "100_dispatch.takt",
-    "101_correct_math.takt",
-    "102_correct_math_f32.takt",
-    "103_math_domains.takt",
-    "104_linear_has.takt",
-    "105_subnormals_f32.takt",
-    "106_machine_handler.takt",
-    "11_foc_drive.takt",
-    "sim/12_7/program.takt",
-    "sim/14_7/program.takt",
-];
+/// Die Programme der Abnahme: die Suite `vergleich` aus dem Manifest
+/// (FB-378) und die Beispiele.
+fn korpus() -> Vec<&'static str> {
+    let mut out = takt_conformance::suites::programs("vergleich");
+    out.extend(takt_conformance::suites::EXAMPLES);
+    out
+}
 
-/// Wie viele Ticks verglichen werden.
-///
-/// Genug, dass jede `after`-Frist des Korpus feuert (die laengste ist
-/// 500 ms bei 10 ms Tick), und wenig genug, dass ein Fehlschlag noch zu
-/// lesen ist.
+/// Wie viele Ticks die Einzeltests vergleichen: genug fuer ihre Fristen,
+/// wenig genug, dass ein Fehlschlag noch zu lesen ist.
 const TICKS: u64 = 60;
+
+/// Die Obergrenze der Tickzahl eines Korpusprogramms (KON1-006): Fristen
+/// darueber (`after 3 s` bei 50 us Tick, `after 7 d`) erreicht der
+/// Vergleich nicht, und `UNFIRED` nennt ihre Transitionen.
+const MAX_TICKS: u64 = 2000;
+
+/// Wie viele Ticks ein Korpusprogramm laeuft (KON1-006): die Summe seiner
+/// statischen Fristen (`after`, `timeout`, `within`, `every`, Dauern in
+/// Ausdruecken) in Ticks und ein Rand, mindestens 60 und hoechstens
+/// [`MAX_TICKS`]. Die Summe statt der laengsten Frist, weil Fristen
+/// hintereinander liegen: `after 200 ms`, dann `until … timeout 500 ms`
+/// erreicht den Timeout-Pfad erst nach 700 ms.
+fn ticks_for(p: &Program) -> u64 {
+    let mut sum = 0i64;
+    for m in &p.machines {
+        takt_mir::visit::for_each_expr_machine(m, &mut |e| {
+            if let takt_mir::expr::ExprKind::Duration(d) = &e.kind {
+                sum = sum.saturating_add((*d).max(0));
+            }
+        });
+    }
+    let ticks = u64::try_from(sum / p.config.tick.max(1)).unwrap_or(u64::MAX);
+    ticks.saturating_add(10).clamp(60, MAX_TICKS)
+}
+
+/// Transitionen eines Korpusprogramms, die im Lauf ohne Eingaben nie feuern
+/// (KON1-006, Coverage aus 13.2): Programm und Zahl. Die Ratsche verlangt die
+/// Zahl genau; feuert eine weitere nicht mehr, ist das ein Befund, feuert
+/// eine mehr, wird die Zahl gesenkt. Der Grund ist fast immer derselbe: Ohne
+/// Stimulus fehlen die Commands und Lieferungen, die sie ausloesen (FB-376);
+/// bei `11_foc_drive` (`after 3 s` bei 50 us) und `sim/14_7` (`after 2 min`,
+/// `after 7 d`) liegen Fristen jenseits von [`MAX_TICKS`].
+const UNFIRED: &[(&str, usize)] = &[
+    ("01_minimal.takt", 3),
+    ("03_sequences_and_faults.takt", 12),
+    ("11_foc_drive.takt", 6),
+    ("12_bitfields.takt", 1),
+    ("14_latency.takt", 1),
+    ("16_timing.takt", 2),
+    ("17_nested.takt", 3),
+    ("18_blocks.takt", 2),
+    ("21_fault_targets.takt", 1),
+    ("40_jobs.takt", 3),
+    ("43_sent.takt", 2),
+    ("45_journal_cut.takt", 14),
+    ("47_monitors.takt", 2),
+    ("49_record_streams.takt", 2),
+    ("50_clause_words.takt", 2),
+    ("53_stream_kinds.takt", 1),
+    ("60_resume.takt", 2),
+    ("62_type_generics.takt", 2),
+    ("63_scoped_instances.takt", 8),
+    ("64_scoped_exit.takt", 1),
+    ("87_fault_kinds.takt", 3),
+    ("88_capture_segments.takt", 3),
+    ("92_idle_streams.takt", 1),
+    ("04_blocks_and_multirate.takt", 3),
+    ("05_streams_and_protocol.takt", 6),
+    ("06_test_harness.takt", 5),
+    ("07_embedded_field.takt", 17),
+    ("30_idle.takt", 1),
+    ("31_idle_multirate.takt", 1),
+    ("38_scenarios.takt", 2),
+    ("61_requirements.takt", 4),
+    ("65_trigger.takt", 2),
+    ("116_sequence_timeout.takt", 2),
+    // Schnitt, Timeouts und Flash-Fehler nur mit `CUT > 0`, also in der Kampagne.
+    ("110_journal_log.takt", 16),
+    ("sim/12_7/program.takt", 4),
+    ("sim/14_7/program.takt", 10),
+];
 
 fn corpus(name: &str) -> Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
@@ -134,39 +114,49 @@ fn corpus(name: &str) -> Program {
 
 /// Fuehrt dasselbe Programm im Interpreter aus.
 fn run_interpreted(p: &Program) -> String {
-    let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
-    match takt_interp::run(p, &takt_interp::Trace::default(), &options) {
-        Ok(r) => r.trace.render(),
-        Err(e) => panic!("Interpreter: {e:?}"),
-    }
+    interpret(p, TICKS).trace.render()
+}
+
+/// Der Lauf des Interpreters ueber `ticks` Ticks ohne Eingaben.
+fn interpret(p: &Program, ticks: u64) -> takt_interp::RunResult {
+    let options = takt_interp::RunOptions { ticks, profile: None, order_seed: None, ..Default::default() };
+    takt_interp::run(p, &takt_interp::Trace::default(), &options).unwrap_or_else(|e| panic!("Interpreter: {e:?}"))
 }
 
 /// **Der virtuelle Schlaf ist unsichtbar** (Satz 9.9.1): Jedes
 /// Korpusprogramm mit einem `idle`-Zustand liefert schlafend denselben
 /// Trace wie der Interpreter, der nie schlaeft — und der Rahmen hat
-/// dabei tatsaechlich geschlafen. Auf dem Wirt, damit `_advance` (9.9)
-/// nicht erst auf dem Board geprueft wird (FB-268, FB-273).
+/// dabei tatsaechlich geschlafen, jedes Programm fuer sich (KON1-036).
+/// Auf dem Wirt, damit `_advance` (9.9) nicht erst auf dem Board geprueft
+/// wird (FB-268, FB-273).
 #[test]
 fn virtual_sleep_is_invisible() {
     let Some(clang) = common::clang() else { return };
     let mut failed = Vec::new();
-    let mut slept = 0;
-    for name in KORPUS {
-        let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
-        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-        if !src.contains(" idle:") {
+    let mut sleepy_programs = 0;
+    for name in korpus() {
+        let p = corpus(name);
+        if !p.machines.iter().any(|m| m.states.iter().any(|s| s.idle)) {
             continue;
         }
-        let p = corpus(name);
-        let native = match common::run_native_sleeping(&clang, &p, name, TICKS) {
+        let ticks = ticks_for(&p);
+        let native = match common::run_native_sleeping(&clang, &p, name, ticks) {
             Ok(t) => t,
             Err(e) => {
                 failed.push(format!("{name}: kein nativer Lauf:\n{e}"));
                 continue;
             }
         };
-        slept += native.lines().filter(|l| l.contains(" slept=")).count();
-        let widened = takt_conformance::run::widen_f32(&run_interpreted(&p), &takt_conformance::run::f32_outputs(&p));
+        // 9.9: Geschlafen wird nur, wenn alle Maschinen `idle` sind; eine
+        // ohne solchen Zustand (ein Modell, ein Zubringer) haelt das System
+        // wach, und `_advance` laeuft dort zu Recht nie.
+        let sleepy = p.machines.iter().all(|m| m.states.iter().any(|s| s.idle));
+        sleepy_programs += usize::from(sleepy);
+        if sleepy && !native.lines().any(|l| l.contains(" slept=")) {
+            failed.push(format!("{name}: jede Maschine kann schlafen, und der Rahmen schlief nie"));
+        }
+        let interpreted = interpret(&p, ticks).trace.render();
+        let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
         let diffs = compare(&widened, &native);
         if !diffs.is_empty() {
             failed.push(format!(
@@ -177,7 +167,45 @@ fn virtual_sleep_is_invisible() {
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
-    assert!(slept > 0, "kein Programm hat geschlafen");
+    assert!(sleepy_programs > 0, "kein Programm, in dem jede Maschine schlafen kann");
+}
+
+/// **Zwei Rahmen desselben Programms bauen nebeneinander** (KON1-007):
+/// `virtual_sleep_is_invisible` und die Abnahme laufen im selben Testbinary
+/// parallel ueber dieselben Programme, der eine schlafend, der andere nicht.
+/// Jeder Lauf baut in seinem eigenen Verzeichnis; teilten sie eines, raeumte
+/// der eine dem anderen die Dateien weg oder ueberschriebe sein Binary.
+#[test]
+fn two_frames_of_the_same_program_build_side_by_side() {
+    let Some(clang) = common::clang() else { return };
+    let name = "56_idle_timer.takt";
+    let p = corpus(name);
+    let start = std::sync::Barrier::new(4);
+    let traces: Vec<(bool, Result<String, String>)> = std::thread::scope(|s| {
+        let runs: Vec<_> = [true, false, true, false]
+            .into_iter()
+            .map(|sleeping| {
+                let (clang, p, start) = (&clang, &p, &start);
+                s.spawn(move || {
+                    start.wait();
+                    let trace = if sleeping {
+                        common::run_native_sleeping(clang, p, name, TICKS)
+                    } else {
+                        common::run_native_all(clang, p, name, TICKS)
+                    };
+                    (sleeping, trace)
+                })
+            })
+            .collect();
+        runs.into_iter().map(|r| r.join().expect("Faden")).collect()
+    });
+    let widened = takt_conformance::run::widen_f32(&run_interpreted(&p), &takt_conformance::run::f32_outputs(&p));
+    for (sleeping, trace) in traces {
+        let trace = trace.unwrap_or_else(|e| panic!("schlafend {sleeping}: kein Lauf:\n{e}"));
+        assert_eq!(trace.contains(" slept="), sleeping, "der Lauf nahm den Rahmen des anderen:\n{trace}");
+        let diffs = compare(&widened, &trace);
+        assert!(diffs.is_empty(), "schlafend {sleeping}: {diffs:?}");
+    }
 }
 
 /// **Ein voller Wake-Strom haelt auch den erzeugten Code wach** (9.9
@@ -199,8 +227,14 @@ fn a_full_wake_window_keeps_the_native_system_awake() {
     let out = takt_sema::compile(src, &options);
     let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
     let stimulus = takt_interp::Trace::parse("t=3 in bell 7\n").expect("Stimulus");
-    let native = common::run_native_sleeping_with(&clang, &p, "wake_window", 30, &Stimulus::from_trace(&stimulus))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_sleeping_with(
+        &clang,
+        &p,
+        "wake_window",
+        30,
+        &Stimulus::from_trace(&stimulus).expect("Stimulus"),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: 30, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
     assert!(interpreted.contains("t=5 out led true"), "{interpreted}");
@@ -246,23 +280,43 @@ fn a_running_job_keeps_the_native_system_awake() {
 }
 
 /// **Die Abnahme.** Interpreter und erzeugter Code liefern dieselben
-/// Outputs (Satz 9.4.4).
+/// Outputs (Satz 9.4.4), jedes Programm so lange, wie seine Fristen
+/// verlangen ([`ticks_for`]); jede Transition feuert dabei, ausser denen,
+/// die [`UNFIRED`] zaehlt.
 #[test]
 fn the_interpreter_and_the_generated_code_agree() {
     let Some(clang) = common::clang() else { return };
     let mut failed = Vec::new();
-    for name in KORPUS {
+    for name in korpus() {
         let p = corpus(name);
+        let ticks = ticks_for(&p);
         // Alle Maschinen, in Schrittordnung (7.2): Ψ-Lesevorgaenge und
         // `follows` gibt es nur zwischen Maschinen.
-        let native = match common::run_native_all(&clang, &p, name, TICKS) {
+        let native = match common::run_native_all(&clang, &p, name, ticks) {
             Ok(t) => t,
             Err(e) => {
                 failed.push(format!("{name}: kein nativer Lauf:\n{e}"));
                 continue;
             }
         };
-        let interpreted = run_interpreted(&p);
+        let result = interpret(&p, ticks);
+        let items = takt_interp::coverage::items(&p);
+        let unfired: Vec<String> = result
+            .coverage
+            .missing(&items)
+            .into_iter()
+            .filter(|i| i.kind == takt_interp::CoverKind::Transition)
+            .map(|i| format!("{} {}", i.machine, i.key))
+            .collect();
+        let allowed = UNFIRED.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
+        if unfired.len() != allowed {
+            failed.push(format!(
+                "{name}: {} Transitionen feuern in {ticks} Ticks nie, `UNFIRED` erwartet {allowed}:\n  {}",
+                unfired.len(),
+                unfired.join("\n  ")
+            ));
+        }
+        let interpreted = result.trace.render();
         // Der Vergleich prueft nur Ausgaenge, die beide Seiten melden; einer,
         // den der Rahmen nie schreibt, fiele sonst durch (FB-305).
         let missing: Vec<String> = common::board::output_names(&interpreted)
@@ -336,6 +390,24 @@ t=40 cmd go
         common::run_native_with(&clang, &p, "eingaben", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+
+    // Der Stimulus wirkt (KON1-015): Jedes `go` schaltet ein, und nach
+    // 200 ms faellt die Lampe zurueck; ohne Stimulus bliebe sie aus. Ein
+    // Rahmen, der Commands nicht setzte, liefe sonst gruen neben einem
+    // Interpreter, der sie ebenso uebersaehe.
+    for line in ["t=3 out led true", "t=23 out led false", "t=40 out led true"] {
+        assert!(
+            interpreted.contains(line),
+            "`{line}` fehlt:
+{interpreted}"
+        );
+    }
+    let quiet = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    assert!(
+        !quiet.contains("out led true"),
+        "ohne Stimulus schaltet nichts:
+{quiet}"
+    );
 
     let diffs = compare(&interpreted, &native);
     assert!(
@@ -551,29 +623,48 @@ t=20 in rx ERR 9999999999999999999
 }
 
 /// Die Formatangaben aus 3.9 im erzeugten Code: `{x}`, `{x:hex}`,
-/// `{x:04}`.
+/// `{x:04}` (KON1-030).
 ///
 /// Sie laufen ueber dieselbe Ziffernrechnung, unterscheiden sich aber in
 /// Basis, Vorzeichen und Fuellung — und jede davon hat einen Rand: die
-/// Null ohne Ziffer, das Minus vor der Zahl, die Fuellung, die kuerzer
-/// ist als die Zahl.
+/// Null, das Minus vor der Zahl und vor der Fuellung, `i64::MIN` (dessen
+/// Betrag kein `i64` ist), `i64::MAX` und die Fuellung, die kuerzer ist als
+/// die Zahl. `hex` zaehlt das Bitmuster (3.9). Der Text je Tick steht hier,
+/// sonst bestuende ein Lauf, in dem beide Seiten dasselbe Falsche schreiben;
+/// `compare` haelt ihn zudem gegen den Interpreter.
 #[test]
 fn the_format_specs_produce_the_expected_text() {
     let Some(clang) = common::clang() else { return };
-    let p = corpus("25_format.takt");
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
-    let native = common::run_native_with(&clang, &p, "format", &machine, 8, &[]).unwrap_or_else(|e| panic!("{e}"));
-    // Der Treiber meldet die Bytes als `out tx [..]` (8.8), also prueft
-    // `compare` sie gegen den Interpreter. Hier steht, *was* dort stehen
-    // muss — sonst waere ein Lauf gruen, in dem beide Seiten dasselbe
-    // Falsche schreiben.
-    for (was, bytes) in [
-        // `d=10 h=a p=0010`
-        ("`{x:hex}` von 10 ist `a`", "0x64, 0x3d, 0x31, 0x30, 0x20, 0x68, 0x3d, 0x61"),
-        // `d=-2 h=fffffffffffffffe …`: hex zaehlt das Bitmuster (3.9).
-        ("`{x:hex}` von -2 ist vorzeichenlos", "0x64, 0x3d, 0x2d, 0x32, 0x20, 0x68, 0x3d, 0x66, 0x66"),
+    let src = "system:\n    language = 1\n    tick     = 10 ms\n\n\
+               output tx : stream<u8> @ hw(\"u/tx\") with max_rate = 100000 Hz, capacity = 256\n\n\
+               machine m:\n    var k : int = 0\n    var i : int in 0..5 = 0\n    initial RUN\n\n\
+               \x20   state RUN:\n        loop:\n\
+               \x20           k = [0, -1, -9223372036854775807 - 1, 123456, -5, 9223372036854775807][i]\n\
+               \x20           send tx, \"d={k} h={k:hex} p={k:04};\"\n\
+               \x20           i = (i + 1) % 6\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let native = common::run_native_all(&clang, &p, "format", 6).unwrap_or_else(|e| panic!("{e}"));
+    let interpreted = interpret(&p, 6).trace.render();
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+    // Der Treiber meldet die Bytes als `out tx [..]` (8.8).
+    let text = |tick: u64| -> String {
+        let head = format!("t={tick} out tx [");
+        let line = native.lines().find(|l| l.starts_with(&head)).unwrap_or_else(|| panic!("t={tick}:\n{native}"));
+        let bytes = line[head.len()..].trim_end_matches(']').split(", ");
+        bytes.filter_map(|b| u8::from_str_radix(b.trim_start_matches("0x"), 16).ok()).map(char::from).collect()
+    };
+    for (tick, want) in [
+        (0, "d=0 h=0 p=0000;"),
+        (1, "d=-1 h=ffffffffffffffff p=-001;"),
+        (2, "d=-9223372036854775808 h=8000000000000000 p=-9223372036854775808;"),
+        (3, "d=123456 h=1e240 p=123456;"),
+        (4, "d=-5 h=fffffffffffffffb p=-005;"),
+        (5, "d=9223372036854775807 h=7fffffffffffffff p=9223372036854775807;"),
     ] {
-        assert!(native.contains(bytes), "{was} — fehlt:\n{native}");
+        assert_eq!(text(tick), want, "t={tick}");
     }
 }
 
@@ -603,6 +694,29 @@ t=8 tune GAIN 7
         .collect();
     let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    // Der Stimulus wirkt (KON1-015): `y = k * GAIN` mit `k` gleich Tick + 1
+    // springt an jeder angenommenen Grenze auf den neuen Faktor, der Wert
+    // 200 ausserhalb der Range bleibt ohne Wirkung. Ohne Stimulus rechnet
+    // der Lauf durchgehend mit 2.
+    for line in ["t=2 out y 6", "t=3 out y 20", "t=6 out y 35", "t=8 out y 63"] {
+        assert!(
+            interpreted.contains(&format!(
+                "{line}
+"
+            )),
+            "`{line}` fehlt:
+{interpreted}"
+        );
+    }
+    let quiet = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    assert!(
+        quiet.contains(
+            "t=8 out y 18
+"
+        ),
+        "ohne Stimulus bleibt GAIN 2:
+{quiet}"
+    );
     let native = common::run_native_with(&clang, &p, "41_tunables.takt", "m", TICKS, &inputs)
         .unwrap_or_else(|e| panic!("41_tunables.takt: {e}"));
     let diffs = compare(&interpreted, &native);
@@ -881,7 +995,7 @@ t=31 runtime Hardware
 ",
     )
     .expect("Stimulus");
-    let inputs = Stimulus::from_trace(&stimulus);
+    let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
     assert_eq!(inputs.len(), 5, "Abort und vier Runtime-Faults");
     let native =
         common::run_native_all_with(&clang, &p, "von_aussen", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
@@ -998,4 +1112,39 @@ machine m:
         diffs.len(),
         diffs.iter().take(8).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n")
     );
+}
+
+/// **Ueber 64 Text-Handler: ohne Produkt-DFA dasselbe Urteil** (8.7, 11.2;
+/// SYN-035): `117_many_text_handlers` hat 66 Muster in einem Zustand, der
+/// Codegen prueft jedes mit eigenem Durchlauf. Der erste passende Handler
+/// nimmt das Element, nativ wie im Interpreter: Tick 1 bis 64 die Handler 0
+/// bis 63, dann `w5x` das allgemeine `w{_}` (65) statt `w5`, `n65` den
+/// Platzhalter (64, Wert 65), `w99` wieder 65 und `zz` den Catch-all (66,
+/// ein Fehlgriff).
+#[test]
+fn more_than_64_text_handlers_judge_like_the_interpreter() {
+    let Some(clang) = common::clang() else { return };
+    let name = "117_many_text_handlers.takt";
+    let p = corpus(name);
+    let interpreted = interpret(&p, 70).trace.render();
+    let at = |tick: u64, output: &str| -> Option<String> {
+        let head = format!("t={tick} out {output} ");
+        interpreted.lines().find_map(|l| l.strip_prefix(&head).map(str::to_string))
+    };
+    for tick in 1..=64u64 {
+        assert_eq!(at(tick, "hit"), Some((tick - 1).to_string()), "Tick {tick}:\n{interpreted}");
+    }
+    for (tick, output, want) in [
+        (65, "hit", "65"),
+        (66, "hit", "64"),
+        (66, "value", "65"),
+        (67, "hit", "65"),
+        (68, "hit", "66"),
+        (68, "misses", "1"),
+    ] {
+        assert_eq!(at(tick, output).as_deref(), Some(want), "t={tick} {output}:\n{interpreted}");
+    }
+    let native = common::run_native_all(&clang, &p, name, 70).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- nativ ---\n{native}");
 }

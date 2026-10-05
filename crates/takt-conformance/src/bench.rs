@@ -682,7 +682,7 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
     let options = Options::timed(LOOP_TICKS);
     let elf = board.build(&frame_path, &options)?;
     let looped = board.run(&elf, &options)?;
-    let (stack_reserve, tick_jitter_ns) = (summary_value(&looped, "stack"), tick_jitter(&looped));
+    let (stack_reserve, tick_jitter_ns) = (crate::board::counter(&looped, "stack"), tick_jitter(&looped));
     log(&format!("Tickschleife: Stack {stack_reserve:?} Byte, Jitter {tick_jitter_ns:?} ns"));
     // Die Natives und die Mathematik zuerst: Ihre Zyklen sagen, welche
     // Funktion die Probe `math` messen muss.
@@ -751,14 +751,6 @@ pub fn natives_on(
         crate::natives::judge(&natives, &crate::natives::parse(&text)?)?,
         crate::math::judge(&math, &crate::math::parse(&text)?)?,
     ))
-}
-
-/// Die Zahl hinter einem Wort der Abschlusszeile (`takt schlief …`).
-fn summary_value(text: &str, label: &str) -> Option<u64> {
-    let line = text.lines().find(|l| l.starts_with("takt schlief "))?;
-    let mut words = line.split_whitespace();
-    words.by_ref().find(|w| *w == label)?;
-    words.next()?.parse().ok()
 }
 
 /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
@@ -872,7 +864,13 @@ impl Outcome {
                 if n.same_result() { "bitgleich" } else { "WEICHEN AB" },
                 n.stack,
                 n.contract,
-                if n.within_contract() { "" } else { "  UEBER DER ZUSAGE" }
+                if n.stack == 0 {
+                    "  STACK NICHT GEMESSEN"
+                } else if n.within_contract() {
+                    ""
+                } else {
+                    "  UEBER DER ZUSAGE"
+                }
             )
         });
         let math = self.math.iter().map(|m| {
@@ -884,7 +882,13 @@ impl Outcome {
                 m.stack,
                 takt_mir::analysis::stack::MATH_STACK,
                 m.cycles,
-                if m.within_contract() { "" } else { "  UEBER DEM VERTRAG" }
+                if m.stack == 0 {
+                    "  STACK NICHT GEMESSEN"
+                } else if m.within_contract() {
+                    ""
+                } else {
+                    "  UEBER DEM VERTRAG"
+                }
             )
         });
         self.kernels
@@ -975,7 +979,7 @@ mod tests {
         let text = "t=1 time took=120 drift=-3 slept=0\nt=2 time took=121 drift=15 slept=0\n\
                     takt schlief 0 ueberlaeufe 0 verspaetet 0 verloren 0 rueckstand 0 ns verworfen 0 journal \
                     geschrieben 0 fehlgeschlagen 0 flush 0 nvm loeschen 0 ns programmieren 0 ns stack 1432\ntakt end\n";
-        assert_eq!(summary_value(text, "stack"), Some(1432));
+        assert_eq!(crate::board::counter(text, "stack"), Some(1432));
         assert_eq!(tick_jitter(text), Some(18));
     }
 

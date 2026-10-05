@@ -23,7 +23,7 @@
     (= speed (* dist per))
     (= uv (.to mv uV))
     (= volts (.to_float mv V))
-    (= raw (as (/ mv 1[mV]) u32))
+    (= raw (as (paren (/ mv (paren 1[mV]))) u32))
     (= flt (.step lp mv tick))
     (= u (.step ctrl (- mv 3300[mV]))))
   (state RUN

@@ -21,7 +21,7 @@
       (for i in (range 1024)
         (if (>= i (.len b))
           (break))
-        (= s (% (+ s (as (index b i) int)) 100)))
+        (= s (% (paren (+ s (paren (as (index b i) int)))) 100)))
       (= sum s))))
 (machine offset
   (var b :bytes<64> default)
@@ -30,13 +30,13 @@
   (state RUN
     (loop
       (if (< (.len b) 8)
-        (var _p (.push b (as (* (.len b) 3) u8))))
+        (var _p (.push b (as (paren (* (.len b) 3)) u8))))
       (var hh (Hdr len=(as k u16)))
-      (if (< (as (.len b) int) (+ (+ HDR (as (.len hh) int)) 2))
+      (if (< (paren (as (.len b) int)) (+ (+ HDR (paren (as (.len hh) int))) 2))
         (= pair (- 1)))
       (else
-        (= pair (+ (* (as (index b (+ HDR (as (.len hh) int))) int) 256) (as (index b (+ (+ HDR (as (.len hh) int)) 1)) int))))
-      (= k (% (+ k 1) 4)))))
+        (= pair (+ (* (paren (as (index b (+ HDR (paren (as (.len hh) int)))) int)) 256) (paren (as (index b (+ (+ HDR (paren (as (.len hh) int))) 1)) int)))))
+      (= k (% (paren (+ k 1)) 4)))))
 (machine counter
   (var b :bytes<64> default)
   (var n :int in 0..64 0)
@@ -44,7 +44,7 @@
   (state RUN
     (loop
       (if (< n 64)
-        (var _p (.push b (as (% n 4) u8)))
+        (var _p (.push b (as (paren (% n 4)) u8)))
         (= n (+ n 1)))
       (var c :int in 1..255 1)
       (for i in (range 1024)
@@ -71,8 +71,8 @@
         (if (>= i (.len b))
           (break))
         (if (== t 3)
-          (.clear b))
-        (= s (% (+ s (as (index b i) int)) 100)))
+          (.clear b ()))
+        (= s (% (paren (+ s (paren (as (index b i) int)))) 100)))
       (= stale s)))
   (state SAFE
     (enter

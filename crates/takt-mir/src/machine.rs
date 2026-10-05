@@ -285,6 +285,20 @@ pub enum SeqItem {
     },
 }
 
+impl SeqItem {
+    /// Wo das Item im Quelltext steht.
+    pub fn span(&self) -> Span {
+        match self {
+            SeqItem::Stmt(s) => s.span,
+            SeqItem::Wait(d) => d.span,
+            SeqItem::Until { span, .. }
+            | SeqItem::Expect { span, .. }
+            | SeqItem::Repeat { span, .. }
+            | SeqItem::Step { span, .. } => *span,
+        }
+    }
+}
+
 /// Die Dauer einer Sequenz bis `done` in Basis-Ticks (6.2): jede Grenze
 /// kostet mindestens einen Tick, `wait d` genau `ceil(d / T0)`, ein
 /// `until` hoechstens seinen `timeout` — ohne ihn ist das Ende offen.

@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# `persist var` nur mit POD-Typ (5.9): Ein Ergebnis `T!E` ist kein POD,
+# so wenig wie ein Strom. Den Strom selbst erreicht Pruefung 23 nicht: Er
+# hat keinen Anfangswert, und `default` scheitert vorher an Pruefung 3.
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine m:
+    persist var last : u8!JobErr = OK(1)  # ~ SC-23
+    initial RUN
+    state RUN:
+        loop:
+            n = 1

@@ -5,7 +5,7 @@
 (output word :u32 @hw("o/word") safe=0)
 (output ready :bool @hw("o/ready") safe=false)
 (fn first (d:bytes<32>) -> u32
-  (return (| (| (| (as (index d 0) u32) (<< (as (index d 1) u32) 8)) (<< (as (index d 2) u32) 16)) (<< (as (index d 3) u32) 24))))
+  (return (| (| (| (paren (as (index d 0) u32)) (paren (<< (paren (as (index d 1) u32)) 8))) (paren (<< (paren (as (index d 2) u32)) 16))) (paren (<< (paren (as (index d 3) u32)) 24)))))
 (machine m
   (var msg :bytes<64> default)
   (var d :bytes<32> default)

@@ -20,8 +20,8 @@
   (state RUN
     (loop
       (send pulses (Pulse rising=true pin=k))
-      (send pulses (Pulse rising=false pin=(+ (.wrap_u8 k) 1)))
-      (= k (+ (.wrap_u8 k) 2)))))
+      (send pulses (Pulse rising=false pin=(+ (.wrap_u8 k ()) 1)))
+      (= k (+ (.wrap_u8 k ()) 2)))))
 (machine waiter
   (var n :int in 0..100 0)
   (initial WAIT)

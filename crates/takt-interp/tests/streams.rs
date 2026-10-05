@@ -4,9 +4,11 @@
 use takt_interp::Value;
 use takt_interp::stream::{Buffer, Delivery, byte_len};
 
-/// Puffer mit reichlich Bytebudget, damit nur die Elementschranke greift.
+/// Puffer mit reichlich Bytebudget, damit nur die Elementschranke greift:
+/// acht Byte je Element, wie ein `int`-Strom sie haette, bei Elementen
+/// von einem Byte.
 fn buffer(cap: u32) -> Buffer {
-    Buffer::new(cap, u32::MAX)
+    Buffer::new(cap, cap * 8)
 }
 
 fn push(b: &mut Buffer, n: i64) -> Delivery {
@@ -178,4 +180,41 @@ fn byte_len_counts_the_content_of_variable_elements() {
     assert_eq!(byte_len(&Value::Str("abc".into())), 3);
     // Elemente fester Groesse zaehlen mindestens ein Byte.
     assert_eq!(byte_len(&Value::Int(7)), 1);
+}
+
+/// INT-014: Ein Strom mit `capacity = 0` nimmt nichts an, unter beiden
+/// Politiken, und vergibt dabei keine Nummer.
+#[test]
+fn a_stream_without_capacity_takes_nothing() {
+    for drop_oldest in [false, true] {
+        let mut b = Buffer::new(0, 16);
+        assert_eq!(b.push(0, Value::Int(1), 1, drop_oldest), Delivery::Overflow, "drop_oldest {drop_oldest}");
+        assert_eq!((b.items.len(), b.end(), b.overflowed, b.dropped), (0, 0, 1, 0), "drop_oldest {drop_oldest}");
+    }
+}
+
+/// INT-014: Ein abgelehntes Element verbraucht keine Folgenummer; die
+/// Folge der angenommenen bleibt lueckenlos (9.6, 12.6 Zeile 2).
+#[test]
+fn a_refused_element_takes_no_sequence_number() {
+    let mut b = buffer(2);
+    push(&mut b, 0);
+    push(&mut b, 1);
+    assert_eq!(push(&mut b, 2), Delivery::Overflow);
+    b.evict(1);
+    assert_eq!(push(&mut b, 3), Delivery::Ok);
+    let seqs: Vec<i64> = b.items.iter().map(|e| e.seq).collect();
+    assert_eq!(seqs, vec![1, 2], "das abgelehnte Element hielt Nummer 2 frei");
+}
+
+/// INT-014: Die Summe der Bytelasten laeuft auch an der Grenze von `u32`
+/// nicht ueber; ein zu grosses Element ist ein Ueberlauf, kein Absturz
+/// (Satz 9.4.2).
+#[test]
+fn the_byte_count_never_wraps() {
+    let mut b = Buffer::new(4, u32::MAX);
+    assert_eq!(b.push(0, Value::Bytes(Vec::new()), u32::MAX - 1, false), Delivery::Ok);
+    assert_eq!(b.push(1, Value::Bytes(Vec::new()), 2, false), Delivery::Overflow);
+    assert_eq!(b.push(2, Value::Bytes(Vec::new()), 2, true), Delivery::Dropped(1));
+    assert_eq!(b.bytes, 2);
 }

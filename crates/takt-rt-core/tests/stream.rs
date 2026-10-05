@@ -197,9 +197,11 @@ fn the_bounds_hold_under_pressure() {
     let (mut d, mut b) = ([Desc::default(); 3], [0u8; 12]);
     let mut r = ring(&mut d, &mut b);
     for k in 0..100u32 {
-        r.push(0, &[(k % 7) as u8, 0, 0], true);
+        r.push(0, &[(k % 7) as u8, 0, 0][..(k % 3 + 1) as usize], true);
         assert!(r.len() <= r.capacity(), "die Elementschranke haelt");
         assert!(r.count(0) <= r.capacity(), "das Fenster ist durch CAP beschraenkt");
+        let bytes: u32 = (0..r.len()).filter_map(|i| r.at(i64::MIN, i)).map(|d| d.len).sum();
+        assert!(bytes as usize <= r.capacity_bytes(), "die Byteschranke haelt: {bytes}");
     }
 }
 

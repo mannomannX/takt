@@ -1,0 +1,15 @@
+(system
+  (language 1)
+  (tick 1ms))
+(unit barg affine bar 1.01325)
+(output absolute :float[bar] @hw("o/absolute") safe=0[bar])
+(output rise :float[bar] @hw("o/rise") safe=0[bar])
+(machine m
+  (var gauge :float[barg] 2[barg])
+  (var first :float[barg] 2[barg])
+  (initial RUN)
+  (state RUN
+    (loop
+      (= absolute (.to gauge bar))
+      (= rise (- gauge first))
+      (= gauge (+ gauge 0.5[bar])))))

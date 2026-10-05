@@ -302,13 +302,18 @@ pub fn driver_of(c: &Channel) -> String {
 /// Ohne `max_rate` gibt es keine Schranke — dann ist die Menge durch die
 /// Kapazitaet begrenzt, und Ueberlauf ist ein anderes, definiertes
 /// Ereignis (8.6), keine Vertragsverletzung.
+///
+/// Eine gebrochene Rate wird nicht vorher abgeschnitten: 2,5 Hz bei einer
+/// Sekunde Tick sind drei Elemente, nicht zwei.
 pub fn maxpt_of(c: &Channel, tick_ns: i64) -> Option<u32> {
-    let hz = match &c.attrs.max_rate.as_ref()?.kind {
-        takt_mir::expr::ExprKind::Int(n) => u64::try_from(*n).ok()?,
-        takt_mir::expr::ExprKind::Float(f) if *f >= 0.0 => *f as u64,
-        _ => return None,
-    };
-    maxpt(hz, tick_ns)
+    match &c.attrs.max_rate.as_ref()?.kind {
+        takt_mir::expr::ExprKind::Int(n) => maxpt(u64::try_from(*n).ok()?, tick_ns),
+        takt_mir::expr::ExprKind::Float(f) if f.is_finite() && *f >= 0.0 && tick_ns >= 0 => {
+            let per_tick = (f * tick_ns as f64 / 1e9).ceil().max(1.0);
+            (per_tick <= f64::from(u32::MAX)).then_some(per_tick as u32)
+        }
+        _ => None,
+    }
 }
 
 /// `MAXPT` aus einer Hoechstrate in Hertz, mindestens eins.

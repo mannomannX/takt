@@ -1,0 +1,4 @@
+(measure boot_time (- (.t m) t_power_on))
+(verify (< (.max i_dut ()) (.to (paren 10[mA]) A)) "supply not off")
+(verdict pass "recovery ok")
+(verdict fail "image corrupted")

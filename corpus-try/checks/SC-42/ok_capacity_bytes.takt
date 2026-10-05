@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 42 (8.6): Mit `capacity_bytes` ist der Puffer ausdruecklich
+# bemessen; `expect_len` aendert ihn nicht, und der Lint schweigt.
+
+input  rx    : stream<line<256>> @ hw("uart0/rx") with max_rate = 100 Hz, framing = lines, expect_len = 80, capacity_bytes = 2048
+output lines : int in 0..999     @ hw("o/lines")  with safe = 0
+
+machine m:
+    var n : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        on rx as l:
+            n = min(n + 1, 999)
+            lines = n

@@ -51,6 +51,7 @@ fn main() {
     // linkt, und sie ist unbrauchbar.
     println!("cargo:rustc-link-arg=-Tlink.x");
     println!("cargo:rustc-link-arg=--nmagic");
+    image_key();
 
     // 4.2, 12.11: die Fliesskomma-Umgebung vor dem Lauf verstellen, als
     // Pruefung, dass jeder Einstieg seine eigene herstellt.
@@ -119,6 +120,19 @@ fn build_takt_program(out: &Path) {
     let reference = bench_reference(out);
     bringup::archive(out, &[&obj, &obj_rahmen, &reference]);
     println!("cargo:rustc-link-arg=--icf=all");
+}
+
+/// Der Schluessel des Baus (KON1-009) als Symbol ins ELF
+/// (`takt_board_support::image_key`): Wer parallel in dasselbe
+/// Zielverzeichnis baut, prueft an seiner Kopie, dass sie die eigene ist.
+/// Ohne `TAKT_IMAGE_KEY` traegt das Abbild keinen.
+fn image_key() {
+    use takt_board_support::image_key::{SYMBOL, valid};
+    println!("cargo:rerun-if-env-changed=TAKT_IMAGE_KEY");
+    if let Ok(key) = env::var("TAKT_IMAGE_KEY") {
+        assert!(valid(&key), "TAKT_IMAGE_KEY: 1 bis 32 Hexziffern erwartet, `{key}` gefunden");
+        println!("cargo:rustc-link-arg=--defsym={SYMBOL}{key}=0");
+    }
 }
 
 /// Die Arena als eigener Abschnitt am Anfang des RAM (12.3, 12.11,

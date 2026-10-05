@@ -94,11 +94,32 @@ fn a_newer_recording_is_refused() {
 #[test]
 fn the_header_carries_no_timestamp_and_no_path() {
     let p = program(QUELLE);
-    let text = Header::of(&p, None, &[], 3).render();
-    assert!(!text.contains("2026"), "ein Zeitstempel: {text}");
+    let text = Header::of(&p, Some("QUAL"), &[("LIMIT".into(), "5".into())], 3).render();
+    // Jede Kopfzeile ist eine, die `Header::render` kennt; keine traegt
+    // eine Uhrzeit oder einen Ort.
+    const KEYS: [&str; 14] = [
+        "takt-aufzeichnung",
+        "edition",
+        "logik",
+        "tick",
+        "ticks",
+        "profil",
+        "target",
+        "param",
+        "runtime",
+        "native",
+        "tcb",
+        "irreversibel",
+        "maschine",
+        "kette",
+    ];
+    for line in text.lines() {
+        let key = line.strip_prefix("#! ").and_then(|l| l.split_whitespace().next());
+        assert!(key.is_some_and(|k| KEYS.contains(&k)), "unbekannte Kopfzeile `{line}`:\n{text}");
+    }
     assert!(!text.contains(":\\") && !text.contains('/'), "ein Pfad: {text}");
     // Zweimal derselbe Kopf.
-    assert_eq!(text, Header::of(&p, None, &[], 3).render());
+    assert_eq!(text, Header::of(&p, Some("QUAL"), &[("LIMIT".into(), "5".into())], 3).render());
 }
 
 /// 12.5 und 4.5: Der Kopf nennt die nativen Funktionen, „damit die
@@ -124,4 +145,95 @@ fn the_header_carries_the_tick_count() {
         Recording { header: Header::of(&p, None, &[], 100), inputs: Trace::parse("t=1 cmd go\n").expect("Stimulus") };
     let gelesen = Recording::parse(&recording.render()).expect("lesbar");
     assert_eq!(gelesen.header.ticks, 100, "die Laenge des Laufs steht im Kopf");
+}
+
+/// Ein Programm mit Parameter, Profil und `persist`-Variable.
+const SETTINGS: &str = "system:\n    language = 1\n    tick     = 10 ms\n\n\
+     param STEP : int in 1..9 = 1\n\n\
+     profile FAST:\n    STEP = 3\n\n\
+     output n : int in 0..999 @ hw(\"o/n\") with safe = 0\n\n\
+     machine count:\n    persist var start : int in 0..99 = 0\n    var k : int in 0..999 = 0\n\n    initial RUN\n\
+     \x20   state RUN:\n        loop:\n            k = min(k + STEP, 999)\n            n = start * 100 + k\n";
+
+/// Wie `takt replay` (takt-cli `replay`) aus der Aufzeichnung allein laeuft.
+fn replay(p: &takt_mir::Program, text: &str) -> String {
+    let rec = Recording::parse(text).expect("lesbar");
+    rec.matches(p).expect("dasselbe Programm");
+    let options = RunOptions {
+        ticks: rec.header.ticks,
+        profile: rec.header.profile.clone(),
+        overrides: rec.header.overrides(),
+        nvm: rec.header.store(p).expect("Speicher des Kopfs"),
+        ..Default::default()
+    };
+    run(p, &rec.inputs, &options).expect("Wiedergabe").trace.render()
+}
+
+/// 12.5: Die Wiedergabe wendet Profil und Parametervektor des Kopfs an —
+/// ohne sie liefe ein anderer Lauf.
+#[test]
+fn replay_applies_the_profile_and_parameters_of_the_header() {
+    let p = program(SETTINGS);
+    let options = RunOptions {
+        ticks: 4,
+        profile: Some("FAST".into()),
+        overrides: vec![("STEP".into(), "5".into())],
+        ..Default::default()
+    };
+    let first = run(&p, &Trace::default(), &options).expect("Lauf");
+    let text =
+        Recording { header: Header::of(&p, Some("FAST"), &first.start_params, 4), inputs: Trace::default() }.render();
+    assert!(text.contains("#! profil FAST\n") && text.contains("#! param STEP 5\n"), "{text}");
+    let want = first.trace.render();
+    assert!(want.contains("t=1 out n 10"), "{want}");
+    assert_eq!(replay(&p, &text), want);
+    let plain = run(&p, &Trace::default(), &RunOptions { ticks: 4, ..Default::default() }).expect("Lauf");
+    assert_ne!(plain.trace.render(), want, "ohne Kopf ein anderer Lauf");
+}
+
+/// 12.5, 5.9: Ein Lauf zeichnet s0 der `persist`-Variablen auf; die
+/// Wiedergabe aus der Aufzeichnung allein reproduziert einen Lauf, der mit
+/// gefuelltem Speicher begann.
+#[test]
+fn replay_reproduces_a_run_that_started_from_a_filled_store() {
+    let p = program(SETTINGS);
+    let key = p.machines.iter().flat_map(|m| &m.persist).map(|pv| pv.type_hash).next().expect("persist");
+    let mut nvm = takt_interp::nvm::Nvm::new();
+    nvm.put(key, takt_interp::Value::Int(7));
+    let first =
+        run(&p, &Trace::default(), &RunOptions { ticks: 3, nvm: nvm.clone(), ..Default::default() }).expect("Lauf");
+    let want = first.trace.render();
+    assert!(want.contains("t=0 out n 701"), "{want}");
+    // `Header::of` kennt nur das Programm; den Speicher traegt der Aufrufer ein.
+    let header = Header::of(&p, None, &first.start_params, 3).with_store(&p, &nvm);
+    let text = Recording { header, inputs: Trace::default() }.render();
+    assert_eq!(replay(&p, &text), want, "die Aufzeichnung traegt s0 nicht:\n{text}");
+}
+
+/// 12.5: Verglichen wird die Logik, nicht die Bindung — dieselbe Logik an
+/// einer anderen Adresse passt zur Aufzeichnung (8.3).
+#[test]
+fn the_same_logic_with_another_binding_matches() {
+    let a = program(QUELLE);
+    let b = program(&QUELLE.replace("hw(\"ui/led\")", "hw(\"panel/lamp\")"));
+    let recording = Recording { header: Header::of(&a, None, &[], 5), inputs: Trace::default() };
+    assert!(recording.matches(&b).is_ok(), "{:?}", recording.matches(&b));
+}
+
+/// 11.3: Eine aeltere Formatversion wird gelesen; Version 1 nannte die
+/// Defaults, die ohnehin gelten, und ueberlagert darum nichts. Eine
+/// abgeschnittene Aufzeichnung ohne Pflichtzeile wird abgelehnt.
+#[test]
+fn an_older_version_reads_and_a_truncated_one_is_refused() {
+    let p = program(SETTINGS);
+    let text = Header::of(&p, None, &[("STEP".into(), "4".into())], 3).render();
+    let old = text
+        .replace(&format!("#! takt-aufzeichnung {}", takt_interp::record::RECORDING_VERSION), "#! takt-aufzeichnung 1");
+    let read = Header::parse(&old).expect("Version 1");
+    assert_eq!((read.version, read.overrides()), (1, Vec::new()));
+    assert_eq!(Header::parse(&text).expect("aktuell").overrides(), [("STEP".to_string(), "4".to_string())]);
+
+    let cut = &text[..text.find("#! tick ").expect("tick")];
+    let e = Header::parse(cut).expect_err("abgeschnitten");
+    assert_eq!(e, "Kopfzeile `#! tick` fehlt");
 }

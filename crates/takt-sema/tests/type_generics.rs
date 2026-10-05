@@ -189,3 +189,143 @@ machine m:
     );
     assert!(e.contains("SC-52") && e.contains("endet nach"), "{e}");
 }
+
+/// Pruefung 52 als Tabelle (Faehigkeit, unpassender Typ): Die Meldung
+/// nennt Variable, Faehigkeit und Typ an der Aufrufstelle.
+#[test]
+fn each_capability_refuses_an_unfitting_type() {
+    for (decl, var, call, want) in [
+        (
+            "record Pair:\n    a : int\n    b : int\n",
+            "var xs : [4] Pair = default",
+            "n = biggest(xs).a",
+            "`T` von `biggest` braucht `ord`, `Pair` hat es nicht",
+        ),
+        ("", "var v : float = 3.0", "n = half(v) > 1.0", "`T` von `half` braucht `integer`, `float` hat es nicht"),
+        ("", "var v : int = 3", "n = root(v) > 1", "`T` von `root` braucht `float`, `int` hat es nicht"),
+        ("", "var v : int? = none", "n = keep(v)", "`T` von `keep` braucht `pod`, `int?` hat es nicht"),
+    ] {
+        let e = errors(&format!(
+            "{BIGGEST}
+fn half[type T: integer](x: T) -> T:
+    return x / 2
+
+fn root[type T: float](x: T) -> T:
+    return x
+
+fn keep[type T: pod](x: T) -> bool:
+    return true
+
+{decl}
+output n : int @ hw(\"o/n\") with safe = 0
+
+machine m:
+    {var}
+    initial RUN
+    state RUN:
+        loop:
+            {call}
+"
+        ));
+        assert!(e.contains("SC-52") && e.contains(want), "{want}:\n{e}");
+    }
+}
+
+/// 3.12: Ein Typparameter kann explizit stehen, auch als einfacher
+/// Typname; widerspricht er dem Argument, ist das ein Typfehler.
+#[test]
+fn an_explicit_simple_type_argument_is_a_type() {
+    let p = ok(&format!(
+        "{BIGGEST}
+output peak : bool @ hw(\"o/peak\") with safe = false
+
+machine m:
+    var xs : [4] bool = default
+    initial RUN
+    state RUN:
+        loop:
+            peak = biggest[bool, 4](xs)
+"
+    ));
+    let names: Vec<&str> = p.fns.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.iter().any(|n| n.contains("biggest[bool, 4]")), "{names:?}");
+    let e = errors(&format!(
+        "{BIGGEST}
+output peak : int in 0..99 @ hw(\"o/peak\") with safe = 0
+
+machine m:
+    var xs : [4] int in 0..99 = default
+    initial RUN
+    state RUN:
+        loop:
+            peak = biggest[u8, 4](xs)
+"
+    ));
+    assert!(e.contains("SC-3") && e.contains("u8"), "{e}");
+}
+
+/// Eine Kette von `k` verschiedenen generischen Funktionen, jede ruft die
+/// naechste mit demselben Typ.
+fn chain(k: usize) -> String {
+    let mut out = String::new();
+    for i in 1..k {
+        out.push_str(&format!("fn g{i}[type T: pod](x: T) -> T:\n    return g{}(x)\n\n", i + 1));
+    }
+    out.push_str(&format!(
+        "fn g{k}[type T: pod](x: T) -> T:\n    return x\n\noutput n : bool @ hw(\"o/n\") with safe = false\n\n\
+         machine m:\n    initial RUN\n    state RUN:\n        loop:\n            n = g1(true)\n"
+    ));
+    out
+}
+
+/// Pruefung 52 verlangt einen azyklischen Instanziierungsgraphen. Die
+/// Tiefe 8 faengt wachsende Argumente ab (`an_instantiation_cycle_is_refused`);
+/// eine endliche Kette verschiedener Funktionen ist kein Zyklus und
+/// uebersetzt, mit acht Gliedern wie mit neun.
+#[test]
+fn a_finite_chain_of_instances_is_no_cycle() {
+    ok(&chain(8));
+    let (p, diags) = compile(&chain(9));
+    assert!(p.is_some(), "neun verschiedene Instanzen sind kein Zyklus:\n{}", diags.join("\n"));
+}
+
+/// Ein Fehler im Rumpf einer Instanz nennt den Typ der Instanz.
+#[test]
+fn an_error_in_the_body_names_the_instance_type() {
+    let e = errors(
+        "
+fn plus_one[type T: pod](x: T) -> T:
+    return x + 1
+
+output n : bool @ hw(\"o/n\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = plus_one(true)
+",
+    );
+    assert!(e.contains("SC-3") && e.contains("zwischen `bool` und `int`"), "{e}");
+}
+
+/// Ein `native` mit Typvariable meldet seine Stufe — und nur sie: Die
+/// abgelehnte Deklaration zieht kein `nicht definiert` nach sich (FB-407).
+#[test]
+fn a_generic_native_reports_its_stage_once() {
+    let src = format!(
+        "{HEAD}native fn crc32[type T: pod](b: T) -> u32 with cost = 1600, stack = 32, total
+output n : u32 @ hw(\"o/n\") with safe = 0
+machine m:
+    var b : bytes<8> = default
+    initial RUN
+    state RUN:
+        loop:
+            n = crc32(b)
+"
+    );
+    let out = takt_sema::compile(&src, &Options::default());
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(out.diagnostics.iter().any(|d| d.stage.is_some()), "{errors:?}");
+}

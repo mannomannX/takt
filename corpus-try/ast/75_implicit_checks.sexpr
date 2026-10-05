@@ -39,7 +39,7 @@
   (state RUN
     (loop
       (= s (<< s k))
-      (= shift (as (>> s 8) int))
+      (= shift (as (paren (>> s 8)) int))
       (= k (+ k 1))))
   (state SAFE
     (enter

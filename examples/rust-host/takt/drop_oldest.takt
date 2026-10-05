@@ -1,0 +1,67 @@
+# Interne Stroeme mit `drop_oldest` (8.6, FB-427): Der Leser liest sechs
+# Ticks lang nicht, der volle Ring verdraengt das aelteste Element, und der
+# Sender faultet nie. Danach liest er drei Ticks lang alles und merkt sich
+# Inhalt und Nummer des letzten Elements. `burst` bekommt je Tick drei
+# Elemente verschiedener Laenge, mehr als er fasst; zwei Leser mit
+# verschiedener Periode sehen, was die Zustellung uebrig laesst.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output sent  : int in 0..999   @ sim("o/sent")
+output seen  : int in 0..999   @ sim("o/seen")
+output last  : int in 0..999   @ sim("o/last")
+output bsum  : int in 0..99999 @ sim("o/bsum")
+output bseq  : int in 0..999   @ sim("o/bseq")
+output tally : int in 0..99999 @ sim("o/tally")
+
+stream<u8> q with capacity = 2, overflow = drop_oldest
+stream<bytes<8>> burst with capacity = 12, capacity_bytes = 96, overflow = drop_oldest
+
+machine producer:
+    var n   : int in 0..999 = 0
+    var buf : bytes<8> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            send q, (n % 200) as u8
+            sent = n
+            for j in range(3):
+                buf.clear()
+                for i in range(8):
+                    if i >= (n + j) % 5 + 1:
+                        break
+                    var put = buf.push(((n * 3 + j + i) % 250) as u8)
+                send burst, buf
+
+machine consumer:
+    initial WAIT
+
+    state WAIT:
+        after 60 ms: -> READ
+
+    state READ:
+        loop:
+            for e in q:
+                seen = e.data as int
+                last = e.seq % 1000
+            for b in burst:
+                bsum = ((b.data.len * 1000) + (b.data[0] as int) * 10 + (b.data[b.data.len - 1] as int) % 10) % 100000
+                bseq = b.seq % 1000
+
+        after 30 ms: -> WAIT
+
+machine counter every 40 ms:
+    var c : int in 0..99999 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            for b in burst:
+                c = (c + b.data.len) % 100000
+            tally = c

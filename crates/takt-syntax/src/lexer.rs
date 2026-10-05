@@ -155,16 +155,18 @@ impl Lexer<'_> {
             }
             p += 1;
         }
+        // L1.5: Auch die Einrueckung einer Leer- oder Kommentarzeile steht
+        // ausserhalb von String und Kommentar.
+        if let Some(at) = tab_at {
+            self.error(ErrorCode::Tab, at, "");
+        }
         if p >= content_end {
             self.add_trivia(TriviaKind::BlankLine, line_start, content_end);
             return;
         }
         if b[p] == b'#' {
-            self.add_trivia(TriviaKind::Comment, p, content_end);
+            self.comment(p, content_end);
             return;
-        }
-        if let Some(at) = tab_at {
-            self.error(ErrorCode::Tab, at, "");
         }
         // L2.2: eine Zeile hinter einem haengenden Trennzeichen und eine
         // Zeile, die mit einem verbindenden Zeichen beginnt, setzen die
@@ -192,7 +194,7 @@ impl Lexer<'_> {
                     p + 1
                 }
                 b'#' => {
-                    self.add_trivia(TriviaKind::Comment, p, content_end);
+                    self.comment(p, content_end);
                     break;
                 }
                 b'"' => self.scan_string(p, content_end),
@@ -212,6 +214,15 @@ impl Lexer<'_> {
         }
     }
 
+    /// Ein Kommentar bis zum Zeilenende (L1.4). Tabulator und Nicht-ASCII sind
+    /// darin erlaubt, ein einzelnes `\r` nicht (L1.2 kennt keine Ausnahme).
+    fn comment(&mut self, start: usize, content_end: usize) {
+        self.add_trivia(TriviaKind::Comment, start, content_end);
+        for at in (start..content_end).filter(|&i| self.bytes[i] == b'\r') {
+            self.error(ErrorCode::Cr, at, "");
+        }
+    }
+
     /// Beginnt die Zeile mit einem Zeichen, das nur *zwischen* zwei
     /// Operanden stehen kann? `-` und `~` sind ausgenommen, weil sie auch
     /// Vorzeichen sind (2.3, `unary`) und eine neue Zeile eroeffnen koennen.
@@ -226,8 +237,9 @@ impl Lexer<'_> {
             return true;
         }
         if INFIX1.contains(&b[p]) {
-            // `.` vor einer Ziffer ist ein Zahlfehler, keine Fortsetzung.
-            return b[p] != b'.' || p + 1 >= content_end || !b[p + 1].is_ascii_digit();
+            // `.` vor einer Ziffer ist ein Zahlfehler, `..` eroeffnet ein
+            // Bereichsmuster; beides setzt nicht fort.
+            return b[p] != b'.' || p + 1 >= content_end || !(b[p + 1].is_ascii_digit() || b[p + 1] == b'.');
         }
         // Wortoperatoren und das anhaengende `with` einer Deklaration.
         let mut e = p;
@@ -291,13 +303,18 @@ impl Lexer<'_> {
                     q += 1;
                     break;
                 }
+                // Ein Backslash am Zeilenende laesst den String offen: `E_STRING`.
                 b'\\' => {
-                    if q + 1 >= content_end || !matches!(b[q + 1], b'\\' | b'"' | b'n' | b't' | b'r' | b'0') {
+                    if q + 1 < content_end && !matches!(b[q + 1], b'\\' | b'"' | b'n' | b't' | b'r' | b'0') {
                         self.error(ErrorCode::Escape, q, "");
                         q += 1;
                     } else {
                         q += 2;
                     }
+                }
+                b'\r' => {
+                    self.error(ErrorCode::Cr, q, "");
+                    q += 1;
                 }
                 _ => q += 1,
             }
@@ -310,6 +327,8 @@ impl Lexer<'_> {
         let b = self.bytes;
         let mut q = start;
         let mut kind = TokenKind::Int;
+        // Ein Literal meldet hoechstens einen Fehler; was danach kommt, ist Folge.
+        let clean = self.errors.len();
         if b[q] == b'0' && q + 1 < content_end && matches!(b[q + 1], b'x' | b'b' | b'o') {
             let base = b[q + 1];
             kind = match base {
@@ -360,10 +379,10 @@ impl Lexer<'_> {
                 }
             }
         }
-        if b[q - 1] == b'_' {
+        if self.errors.len() == clean && b[q - 1] == b'_' {
             self.error(ErrorCode::Number, q - 1, "Unterstrich am Ende");
         }
-        if q < content_end {
+        if self.errors.len() == clean && q < content_end {
             let c = b[q];
             if c.is_ascii_alphabetic() {
                 if kind == TokenKind::Int && q - start == 1 && b[start] == b'0' && matches!(c, b'X' | b'B' | b'O') {

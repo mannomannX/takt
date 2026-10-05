@@ -1,0 +1,4 @@
+t=1 state boot SELFTEST.S0
+t=6 out confirm true
+t=7 state boot RUN
+t=37 end now

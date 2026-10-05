@@ -52,7 +52,7 @@ pub trait Scalar {
 /// Grenzen selbst ganzzahlig sind, ist dieser Vergleich der genauere.
 pub fn within<S: Scalar>(v: &S, lo: f64, hi: f64) -> bool {
     if let (Some(x), true) = (v.as_i64(), integral(lo) && integral(hi)) {
-        return (x as f64) >= lo && (x as f64) <= hi;
+        return lo as i64 <= x && x <= hi as i64;
     }
     match v.as_f64() {
         Some(x) => x >= lo && x <= hi,
@@ -60,8 +60,9 @@ pub fn within<S: Scalar>(v: &S, lo: f64, hi: f64) -> bool {
     }
 }
 
-/// Ist `x` eine ganze Zahl? Wie `x.fract() == 0.0`, das `core` nicht hat;
-/// NaN und die Unendlichen sind es nicht.
+/// Ist `x` eine ganze Zahl im Bereich von `i64`? Wie `x.fract() == 0.0`,
+/// das `core` nicht hat; NaN, die Unendlichen und Grenzen jenseits von
+/// `i64` sind es nicht.
 fn integral(x: f64) -> bool {
     x == (x as i64) as f64
 }
@@ -160,7 +161,14 @@ impl Gate {
     /// Die Reihenfolge ist nicht beliebig: Ein Wert weit ausserhalb der
     /// Range verletzt fast immer auch die Steigung, und `OutOfRange` ist
     /// die praezisere Auskunft.
+    ///
+    /// Ein nicht endlicher Wert verletzt immer die Range, auch ohne
+    /// deklarierte: `float` kennt nur endliche Werte (4.1), und was es in der
+    /// Sprache nicht gibt, kommt nicht als `Good` hinein (Anhang A, INT-025).
     fn violation<S: Scalar>(&self, v: &S, now: i64, limits: &Limits) -> Option<Reason> {
+        if v.as_f64().is_some_and(|x| !x.is_finite()) {
+            return Some(Reason::OutOfRange);
+        }
         if let Some((lo, hi)) = limits.range
             && !within(v, lo, hi)
         {

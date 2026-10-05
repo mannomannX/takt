@@ -1,0 +1,44 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-2 (13.6): Ein Szenarioname besteht aus Buchstaben, Ziffern, `_` und
+# Leerzeichen; mit `_` statt Leerraum gleicht er keiner anderen Maschine.
+
+input  p     : float[bar] in 0..100 bar @ hw("daq/p")   with max_age = 10 ms
+output valve : bool                     @ hw("o/valve") with safe = false
+output p_sim : float[bar]               @ sim("daq/p")  with safe = 1 bar
+
+machine dut:
+    initial RUN
+    state RUN:
+        loop:
+            valve = p > 5 bar
+
+scenario "p > 5 bar" every 1 ms:  # ~ SC-2
+    initial RUN
+    state RUN:
+        sequence:
+            p_sim = 10 bar
+            verdict pass "done"
+
+scenario "a b" every 1 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            p_sim = 10 bar
+            verdict pass "done"
+
+scenario "a_b" every 1 ms:  # ~ SC-2
+    initial RUN
+    state RUN:
+        sequence:
+            p_sim = 10 bar
+            verdict pass "done"
+
+scenario "dut" every 1 ms:  # ~ SC-2
+    initial RUN
+    state RUN:
+        sequence:
+            p_sim = 10 bar
+            verdict pass "done"

@@ -17,7 +17,7 @@
   (initial RUN)
   (state RUN
     (loop
-      (= k (% (+ k 1) 100))
+      (= k (% (paren (+ k 1)) 100))
       (var r (call make (as k i64)))
       (= hi (/ (call pick r) 4294967296))
       (= lo (% (call pick r) 4294967296))

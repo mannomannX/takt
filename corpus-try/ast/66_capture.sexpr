@@ -9,7 +9,7 @@
   (initial ARMING)
   (state ARMING
     (on wave as w
-      (= dip (.min (.samples (.data w))))
-      (= peak (.max (.samples (.data w))))
+      (= dip (.min (.samples (.data w)) ()))
+      (= peak (.max (.samples (.data w)) ()))
       (= count (+ (.pre (.data w)) (.post (.data w)))))
     (after 1s -> ARMING)))

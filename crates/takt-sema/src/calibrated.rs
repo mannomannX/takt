@@ -40,14 +40,16 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
 
     // Prüfung 32 verlangt zweierlei: die Ungleichung *und* dass
     // `tick_source` in der Hardware-Konfiguration steht. Das Zweite ist
-    // unabhängig von der Kalibrierung und wird darum zuerst geprüft.
+    // unabhängig von der Kalibrierung und wird darum zuerst geprüft; ob die
+    // Adresse dort steht, prüft `check_bindings`. Nicht entscheidbar heißt
+    // nicht bestanden (Tabelle 10, Zeile 32).
     if p.config.tick_source.is_none() {
         out.push(
-            Diagnostic::new(
-                Severity::Warning,
+            Diagnostic::error(
                 SC32,
                 span,
-                "`tick_source` fehlt; Prüfung 32 verlangt sie in der Hardware-Konfiguration (7.1)".to_string(),
+                "Prüfung 32 ist nicht entscheidbar: `tick_source` fehlt; sie verlangt die Tickquelle in der \
+                 Hardware-Konfiguration (7.1)",
             )
             .with_suggestion("`system: tick_source = hw(\"…\")` nennt die Quelle, aus der der Tick kommt".to_string()),
         );
@@ -132,13 +134,17 @@ fn journal_blocking(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic>
     if !takt_mir::persist::any(p) {
         return Vec::new();
     }
+    // Nicht entscheidbar heißt nicht bestanden (Tabelle 10, Zeile 32).
     let undecidable = |what: &str| {
         vec![
-            Diagnostic::new(
-                Severity::Warning,
+            Diagnostic::error(
                 SC32,
                 span,
-                format!("`persist` auf `{}`, aber {what} fehlt in der Hardware-Konfiguration (8.10)", target.name),
+                format!(
+                    "Prüfung 32 ist nicht entscheidbar: `persist` auf `{}`, aber {what} fehlt in der \
+                     Hardware-Konfiguration (8.10)",
+                    target.name
+                ),
             )
             .with_suggestion(
                 "ob das Journal den Tick anhält, ist damit nicht entscheidbar; `nvm_blocking`, `nvm_erase_ns` und \
@@ -201,16 +207,25 @@ fn memory_budget(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let size = takt_mir::analysis::size::size(p).with_hardware(target);
     let note = if size.has_open() { " (offene Posten nicht gezählt, die Summe ist eine Untergrenze)" } else { "" };
+    // Pruefung 12: Die Stack-Schranke ist ein Posten dieser Summe, kein
+    // eigenes Budget; die Meldung nennt ihren Anteil.
+    let stack: u64 = size
+        .items
+        .iter()
+        .filter(|i| i.origin != takt_mir::analysis::size::Origin::Open && i.name.starts_with("Stack"))
+        .map(|i| i.bytes)
+        .sum();
     for (what, have, limit) in
         [("RAM", size.ram_total(), target.memory.ram), ("Flash", size.flash_total(), target.memory.flash)]
     {
         let Some(limit) = limit else { continue };
         if have > limit {
+            let share = if what == "RAM" && stack > 0 { format!(", davon Stack {stack} Byte") } else { String::new() };
             out.push(
                 Diagnostic::error(
                     SC39,
                     span,
-                    format!("{what}: {have} Byte gerechnet, das Ziel `{}` hat {limit}{note}", target.name),
+                    format!("{what}: {have} Byte gerechnet{share}, das Ziel `{}` hat {limit}{note}", target.name),
                 )
                 .with_suggestion(
                     "`takt size` nennt die Posten; Kapazitäten verkleinern, `expect_len` setzen oder `float = f32` \
@@ -233,6 +248,21 @@ fn memory_budget(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
 pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let tick = p.config.tick;
+    // Pruefung 32: die Tickquelle steht in der Konfiguration (7.1). Die
+    // Stelle ist wie bei [`check`] der Dateianfang, wo `system:` steht.
+    if let Some(source) = &p.config.tick_source {
+        let address = source.text();
+        if !takt_mir::sys::is_sys(&address) && hw.channel(&address).is_none() {
+            out.push(
+                Diagnostic::error(
+                    SC32,
+                    Span::new(0, 0),
+                    format!("`tick_source = hw(\"{address}\")`: die Konfiguration kennt `{address}` nicht (7.1)"),
+                )
+                .with_suggestion(format!("`[channel {address}]` eintragen oder die Tickquelle im Programm ändern")),
+            );
+        }
+    }
     for c in &p.channels {
         let Binding::Hw(addr) = &c.binding else { continue };
         let address = addr.text();

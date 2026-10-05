@@ -123,6 +123,12 @@ fn read_field(
         }
         Some(Type::Float { width: fw, .. }) => {
             let raw = load_int(buf, at, width, endian, m);
+            // 3.7: NaN und Inf im Draht sind kein Wert (INT-025): Der
+            // Exponent besteht aus lauter Einsen.
+            let mask = if *fw == FloatWidth::F32 { "2139095040" } else { "9218868437227405312" };
+            let exponent = m.inst(&format!("and i{} {raw}, {mask}", width * 8));
+            let finite = m.inst(&format!("icmp ne i{} {exponent}, {mask}", width * 8));
+            valid.push(finite.to_string());
             let as_float = m.inst(&format!(
                 "bitcast i{} {raw} to {}",
                 width * 8,

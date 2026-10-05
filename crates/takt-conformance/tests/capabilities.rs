@@ -75,7 +75,6 @@ const UNUSED: &[(&str, &[&str])] = &[
         &[
             "Expr(Armed)",
             "Unary(BitNot)",
-            "Builtin(TimeInState)",
             "Intrinsic(Ceil)",
             "Intrinsic(Rotl)",
             "Intrinsic(Rotr)",
@@ -96,6 +95,17 @@ const UNUSED: &[(&str, &[&str])] = &[
             "Accessor(Truncated)",
             "Stmt(Skip)",
             "Feature(Node)",
+        ],
+    ),
+    (
+        "nur in Programmen, die die Sema ablehnt (08_reserved_future, 10_nuances, checks/SC-3); ein \
+         uebersetzbares Korpusprogramm fehlt (KOR-006)",
+        &[
+            "Feature(FramingCobs)",
+            "Feature(FramingLengthPrefixed)",
+            "Feature(FramingFixed)",
+            "Feature(Display)",
+            "Feature(Group)",
         ],
     ),
 ];
@@ -165,6 +175,26 @@ fn compile(path: &Path) -> Option<Program> {
         let out = takt_sema::compile(&src, &options);
         if out.diagnostics.iter().any(|d| d.is_error()) { None } else { out.program }
     })
+}
+
+/// **Ein `{x:float}` im Guard-Muster traegt der Codegen nicht, und seine
+/// Tabelle sagt es** (GEN-014): Der Codegen lehnt den Schritt ab wie beim
+/// Handler-Muster, also steht `Feature(GuardMatch)` auf `teilweise` und
+/// nicht auf `ja`. Kein Korpusprogramm hat ein solches Muster, darum prueft
+/// [`every_table_tells_the_truth_about_its_component`] es nicht.
+#[test]
+fn a_float_capture_in_a_guard_is_partial_in_the_table() {
+    let src = "system:\n    language = 1\n    tick     = 10 ms\n\n\
+               input  rx : stream<line<16>> @ hw(\"u/rx\") with max_rate = 100 Hz\n\
+               output y  : int in 0..9      @ hw(\"o/y\") with safe = 0\n\n\
+               machine m:\n    initial A\n    state A:\n        when rx matches \"t={x:float}\": -> B\n\
+               \x20   state B:\n        enter:\n            y = 1\n";
+    let out = takt_sema::compile(src, &Options { build: Build::Sim, ..Default::default() });
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    assert!(census(&p).contains(&Construct::Feature(takt_mir::census::Feature::GuardMatch)));
+    assert!(codegen_rejects(&p).is_some_and(|r| r.contains("float")), "{:?}", codegen_rejects(&p));
+    let support = takt_llvm::support::support(Construct::Feature(takt_mir::census::Feature::GuardMatch));
+    assert!(!matches!(support, Support::Yes), "die Tabelle des Codegens verschweigt die Grenze: {support:?}");
 }
 
 /// **Die Wahrheit der Tabellen.** Keine Tabelle verspricht weniger, als

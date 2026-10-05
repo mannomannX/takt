@@ -13,9 +13,12 @@
 //! zur Laenge fuenf aus einem Alphabet, das jede Klasse und jeden
 //! Sonderfall beruehrt (Vorzeichen, `0x`, Klassenende, Folgeliteral).
 
+mod oracle;
+
 use takt_interp::pattern::{match_has, match_text};
 use takt_mir::dfa::{Entry, build, extracts};
 use takt_mir::pattern::{CaptureKind, PatternPiece};
+use takt_mir::types::FloatWidth;
 
 fn text(s: &str) -> PatternPiece {
     PatternPiece::Text(s.into())
@@ -59,18 +62,26 @@ fn patterns() -> Vec<Vec<PatternPiece>> {
 
 /// Alle Texte bis zur Laenge fuenf ueber `a 1 0 x - :`.
 fn texts() -> Vec<String> {
-    const ALPHABET: [char; 6] = ['a', '1', '0', 'x', '-', ':'];
+    texts_over(&['a', '1', '0', 'x', '-', ':'], 5)
+}
+
+/// Alle Texte bis zur Laenge `len` ueber `alphabet`.
+fn texts_over(alphabet: &[char], len: usize) -> Vec<String> {
     let mut out = vec![String::new()];
     let mut layer = vec![String::new()];
-    for _ in 0..5 {
-        layer = layer.iter().flat_map(|t| ALPHABET.iter().map(move |c| format!("{t}{c}"))).collect();
+    for _ in 0..len {
+        layer = layer.iter().flat_map(|t| alphabet.iter().map(move |c| format!("{t}{c}"))).collect();
         out.extend(layer.iter().cloned());
     }
     out
 }
 
 fn interpreter(pieces: &[PatternPiece], has: bool, line: &str) -> bool {
-    if has { match_has(pieces, line).is_some() } else { match_text(pieces, line).is_some() }
+    if has {
+        match_has(pieces, line, FloatWidth::F64).is_some()
+    } else {
+        match_text(pieces, line, FloatWidth::F64).is_some()
+    }
 }
 
 /// Das Urteil des Codegens: der Automat, bei Platzhaltern bestaetigt vom
@@ -86,6 +97,8 @@ fn bounded(pieces: &[PatternPiece]) -> bool {
 }
 
 fn check(pieces: &[PatternPiece], has: bool, line: &str, automat: bool, exact: bool, what: &str) {
+    // Der Interpreter selbst gegen `takt-match`, Urteil und Werte (SYN-040).
+    oracle::agree(pieces, line, has);
     let durchlauf = interpreter(pieces, has, line);
     assert!(automat || !durchlauf, "`{line}`: der Automat verfehlt einen Treffer ({what}, {pieces:?}, has {has})");
     if exact {
@@ -167,5 +180,43 @@ fn the_value_range_is_left_to_the_extraction() {
     let pieces = vec![text("v"), cap(CaptureKind::Int)];
     let dfa = build(&[Entry { pieces: &pieces, has: false }]).expect("Automat");
     assert_eq!(dfa.run(b"v9999999999999999999"), 1);
-    assert!(match_text(&pieces, "v9999999999999999999").is_none());
+    assert!(match_text(&pieces, "v9999999999999999999", FloatWidth::F64).is_none());
+}
+
+/// INT-016: Das Alphabet um `+ . e A` und ein Mehrbytezeichen erweitert,
+/// dazu Muster mit `float` und Literale mit Umlaut — bis zur Laenge vier.
+#[test]
+fn every_pattern_agrees_on_a_wider_alphabet() {
+    use CaptureKind::{Float, Hex, Int, Word};
+    let lines = texts_over(&['a', '1', '0', 'x', '-', ':', '+', '.', 'e', 'A', '\u{e4}'], 4);
+    let mut all = patterns();
+    all.extend([
+        vec![cap(Float)],
+        vec![text("a"), cap(Float), text(":")],
+        vec![cap(Float), text("x")],
+        vec![text("\u{e4}"), cap(Int)],
+        vec![cap(Word), text("\u{e4}")],
+        vec![PatternPiece::Any, text("\u{e4}"), PatternPiece::Any],
+        vec![text("+"), cap(Hex)],
+        vec![cap(CaptureKind::Str(2)), text("\u{e4}")],
+    ]);
+    let mut decided = 0;
+    for pieces in &all {
+        for has in [false, true] {
+            let Some(dfa) = build(&[Entry { pieces, has }]) else {
+                // Ohne Automaten (Pruefung 18 verbietet das Muster nicht,
+                // der Codegen lehnt `float` ab) bleibt der Vergleich mit
+                // dem Orakel.
+                for line in &lines {
+                    oracle::agree(pieces, line, has);
+                }
+                continue;
+            };
+            for line in &lines {
+                check(pieces, has, line, dfa.run(line.as_bytes()) == 1, !bounded(pieces), "breit");
+                decided += 1;
+            }
+        }
+    }
+    assert!(decided > 0, "kein Muster hatte einen Automaten");
 }

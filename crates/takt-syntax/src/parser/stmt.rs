@@ -7,13 +7,7 @@ use crate::token::TokenKind;
 impl<'t, 's> Parser<'t, 's> {
     /// `block := NEWLINE INDENT stmt { stmt } DEDENT | simple_stmt NEWLINE`
     pub(super) fn parse_block(&mut self) -> PResult<Block> {
-        self.enter()?;
-        let result = self.parse_block_inner();
-        self.leave();
-        result
-    }
-
-    fn parse_block_inner(&mut self) -> PResult<Block> {
+        self.cover("block");
         let start = self.pos;
         if self.eat(TokenKind::Newline) {
             self.expect_indent()?;
@@ -38,11 +32,13 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `action_block := block` (die Einschraenkungen aus 5.5 prueft die Semantik)
     pub(super) fn parse_action_block(&mut self) -> PResult<Block> {
+        self.cover("action_block");
         self.parse_block()
     }
 
     /// `stmt := simple_stmt NEWLINE | if_stmt | for_stmt | match_stmt | at_stmt | every_stmt`
     pub(super) fn parse_stmt(&mut self) -> PResult<Stmt> {
+        self.cover("stmt");
         let start = self.pos;
         if self.kind() == TokenKind::Keyword {
             let kind = match self.text() {
@@ -51,6 +47,13 @@ impl<'t, 's> Parser<'t, 's> {
                 "match" => Some(self.parse_match_stmt()?),
                 "at" => Some(StmtKind::At(self.parse_at_stmt()?)),
                 "every" => Some(self.parse_every_stmt()?),
+                "elif" | "else" => {
+                    return Err(self.error_at(
+                        self.tok(),
+                        format!("`{}` ohne vorangehendes `if`", self.text()),
+                        Some("`elif` und `else` folgen direkt auf den Block eines `if` derselben Einrueckung (2.3: if_stmt)"),
+                    ));
+                }
                 _ => None,
             };
             if let Some(kind) = kind {
@@ -64,6 +67,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `simple_stmt`
     pub(super) fn parse_simple_stmt(&mut self) -> PResult<Stmt> {
+        self.cover("simple_stmt");
         let start = self.pos;
         if self.at_op("->") {
             let target = self.parse_goto_stmt()?;
@@ -124,6 +128,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// `assign := lvalue ( "=" | "+=" | "-=" | "*=" | "/=" ) expr`; die linke
     /// Seite ist bereits als Ausdruck gelesen und wird auf ihre Form geprueft.
     fn parse_assign(&mut self, target: Expr, op: AssignOp) -> PResult<StmtKind> {
+        self.cover("assign");
         if !self.parse_lvalue(&target) {
             return Err(self.error_at(
                 self.tok(),
@@ -138,6 +143,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `var_decl := [ "pub" ] "var" IDENT [ ":" type ] "=" expr`
     pub(super) fn parse_var_decl(&mut self) -> PResult<VarDecl> {
+        self.cover("var_decl");
         let start = self.pos;
         let public = self.eat_kw("pub");
         self.expect_kw("var")?;
@@ -150,6 +156,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `if_stmt`
     fn parse_if_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("if_stmt");
         self.expect_kw("if")?;
         let cond = self.parse_expr()?;
         self.expect_op(":")?;
@@ -175,6 +182,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `for_stmt`
     fn parse_for_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("for_stmt");
         self.expect_kw("for")?;
         let target = if self.eat_op("(") {
             let a = self.ident()?;
@@ -202,6 +210,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `match_stmt`
     fn parse_match_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("match_stmt");
         self.expect_kw("match")?;
         let subject = self.parse_expr()?;
         self.expect_op(":")?;
@@ -231,6 +240,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `case_pattern`
     fn parse_case_pattern(&mut self) -> PResult<CasePattern> {
+        self.cover("case_pattern");
         if self.eat(TokenKind::Wild) {
             return Ok(CasePattern::Wild);
         }
@@ -262,6 +272,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `at_stmt := "at" duration_expr ":" action_block`
     pub(super) fn parse_at_stmt(&mut self) -> PResult<AtStmt> {
+        self.cover("at_stmt");
         let start = self.pos;
         self.expect_kw("at")?;
         let time = self.parse_duration_expr()?;
@@ -272,6 +283,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `every_stmt`
     fn parse_every_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("every_stmt");
         self.expect_kw("every")?;
         let period = self.parse_duration_expr()?;
         self.expect_op(":")?;
@@ -281,6 +293,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `check_stmt`
     fn parse_check_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("check_stmt");
         self.expect_kw("check")?;
         let cond = self.parse_expr()?;
         let message = if self.eat_op(",") { Some(self.string()?) } else { None };
@@ -293,6 +306,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `alert_stmt`
     fn parse_alert_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("alert_stmt");
         self.expect_kw("alert")?;
         let cond = self.parse_expr()?;
         self.expect_op(",")?;
@@ -304,12 +318,14 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `log_stmt`
     fn parse_log_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("log_stmt");
         self.expect_kw("log")?;
         Ok(StmtKind::Log(self.string()?))
     }
 
     /// `send_stmt`
     fn parse_send_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("send_stmt");
         self.expect_kw("send")?;
         let stream = self.ident()?;
         self.expect_op(",")?;
@@ -319,6 +335,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `pulse_stmt`
     fn parse_pulse_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("pulse_stmt");
         self.expect_kw("pulse")?;
         let output = self.ident()?;
         self.expect_op("=")?;
@@ -330,12 +347,14 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `cancel_stmt`
     fn parse_cancel_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("cancel_stmt");
         self.expect_kw("cancel")?;
         Ok(StmtKind::Cancel(self.ident()?))
     }
 
     /// `measure_stmt`
     fn parse_measure_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("measure_stmt");
         self.expect_kw("measure")?;
         let name = self.ident()?;
         self.expect_op("=")?;
@@ -345,6 +364,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `job_stmt`
     fn parse_job_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("job_stmt");
         self.expect_kw("job")?;
         let handle = self.ident()?;
         self.expect_op("=")?;
@@ -355,6 +375,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `arm_stmt`
     fn parse_arm_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("arm_stmt");
         let arm = self.eat_kw("arm");
         if !arm {
             self.expect_kw("disarm")?;
@@ -364,6 +385,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `verify_stmt`
     fn parse_verify_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("verify_stmt");
         self.expect_kw("verify")?;
         let cond = self.parse_expr()?;
         self.expect_op(",")?;
@@ -374,6 +396,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `verdict_stmt`
     fn parse_verdict_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("verdict_stmt");
         self.expect_kw("verdict")?;
         let pass = if self.eat_kw("pass") {
             true
@@ -388,18 +411,21 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `raise_stmt`
     fn parse_raise_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("raise_stmt");
         self.expect_kw("raise")?;
         Ok(StmtKind::Raise(self.ident()?))
     }
 
     /// `goto_stmt := "->" UPPER_IDENT`
     pub(super) fn parse_goto_stmt(&mut self) -> PResult<Ident> {
+        self.cover("goto_stmt");
         self.expect_op("->")?;
         self.upper()
     }
 
     /// `abort_stmt`
     fn parse_abort_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("abort_stmt");
         self.expect_kw("abort")?;
         let message = if self.at(TokenKind::Str) { Some(self.string()?) } else { None };
         Ok(StmtKind::Abort(message))
@@ -407,6 +433,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `return_stmt`
     fn parse_return_stmt(&mut self) -> PResult<StmtKind> {
+        self.cover("return_stmt");
         self.expect_kw("return")?;
         Ok(StmtKind::Return(self.parse_expr()?))
     }

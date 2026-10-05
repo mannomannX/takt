@@ -11,7 +11,9 @@
 //! D_detect  = n_m                 Perioden-Ticks; schlimmster Fall ist,
 //!                                 dass die Bedingung kurz nach der
 //!                                 Aktivierung von m wahr wird (1.3)
-//! D_confirm = ceil(d / P_m)       nur bei `check … for d` (5.6)
+//! D_confirm = n_m · (max(1,       nur bei `check … for d` (5.6): die
+//!             ceil(d / P_m)) − 1) weiteren verletzten Auswertungen, je
+//!                                 n_m Basis-Ticks nach der vorigen
 //! D_fault   = Fault-Wechsel ab    Ticks im Fault-Wald bis zu einem
 //!             dem Ziel der Stelle stabilen Ziel, ueber Fault-Ziele und
 //!                                 `check … -> X` (5.3,
@@ -54,7 +56,8 @@ pub struct Site {
     pub kind: SiteKind,
     /// `n_m`: Ticks bis zur naechsten Auswertung (1.3).
     pub detect: u64,
-    /// `ceil(d / P_m)`: Ticks der Bestaetigungszeit (5.6).
+    /// `n_m · (max(1, ceil(d / P_m)) − 1)`: Basis-Ticks der Bestaetigung
+    /// nach der erkennenden Auswertung (5.6).
     pub confirm: u64,
     /// Ticks im Fault-Wald bis zu einem stabilen Ziel (5.3).
     pub fault: u64,
@@ -240,7 +243,7 @@ fn collect(p: &Program, id: MachineId, m: &Machine, out: &mut Vec<Site>) {
             state: None,
             kind,
             detect: period,
-            confirm: confirm_ticks(confirm, period_ns),
+            confirm: confirm_ticks(confirm, period, period_ns),
             fault: m.fault_switches(None, own_target(target, m.fault_target)),
             within,
             span,
@@ -255,7 +258,7 @@ fn collect(p: &Program, id: MachineId, m: &Machine, out: &mut Vec<Site>) {
                 state: Some(sid),
                 kind,
                 detect: period,
-                confirm: confirm_ticks(confirm, period_ns),
+                confirm: confirm_ticks(confirm, period, period_ns),
                 fault: m.fault_switches(Some(sid), own_target(target, m.fault_target_of(sid))),
                 within,
                 span,
@@ -283,14 +286,18 @@ fn own_target(target: Option<Target>, inherited: FaultTarget) -> FaultTarget {
     }
 }
 
-/// `ceil(d / P_m)` in Ticks. Eine Bestaetigungszeit, die kein Literal ist,
-/// zaehlt als 0 — sie steht dann nicht in der MIR, und die Schranke waere
-/// geraten statt gerechnet.
-fn confirm_ticks(confirm: Option<i64>, period_ns: i128) -> u64 {
+/// `n_m · (max(1, ceil(d / P_m)) − 1)` in Basis-Ticks (9.4.5, SYN-027): Der
+/// Zaehler loest bei der `ceil(d / P_m)`-ten verletzten Auswertung aus; die
+/// erste zaehlt schon `D_detect`, jede weitere liegt `n_m` Basis-Ticks nach
+/// der vorigen. Eine Bestaetigungszeit, die kein Literal ist, zaehlt als 0 —
+/// sie steht dann nicht in der MIR, und die Schranke waere geraten statt
+/// gerechnet.
+fn confirm_ticks(confirm: Option<i64>, period: u64, period_ns: i128) -> u64 {
     match confirm {
         Some(d) if d > 0 && period_ns > 0 => {
             let d = i128::from(d);
-            u64::try_from((d + period_ns - 1) / period_ns).unwrap_or(u64::MAX)
+            let evaluations = u64::try_from((d + period_ns - 1) / period_ns).unwrap_or(u64::MAX).max(1);
+            period.saturating_mul(evaluations - 1)
         }
         _ => 0,
     }

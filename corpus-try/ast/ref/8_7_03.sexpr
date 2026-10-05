@@ -1,0 +1,7 @@
+(state UPDATING
+  (on dut_log matches "Erasing sector {n:int}" as m
+    (measure erase_sector (.n m)))
+  (on dut_log has "CRC mismatch" as ev
+    (verdict fail "CRC error during update: {ev.text}"))
+  (on dut_log as ev
+    (log "{ev.t}: {ev.text}")))

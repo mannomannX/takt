@@ -26,13 +26,6 @@ use takt_llvm::toolchain::Clang;
 
 mod common;
 
-/// Korpusprogramme, die fuer die MCU uebersetzen muessen.
-///
-/// Dieselben, die `targets.rs` fuer x86-64 und aarch64 fuehrt — was auf
-/// der Box uebersetzt, muss es auch auf dem Chip.
-const KORPUS: [&str; 5] =
-    ["01_minimal.takt", "02_units_and_data.takt", "16_timing.takt", "19_faults.takt", "20_native.takt"];
-
 fn corpus(name: &str) -> takt_mir::Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
@@ -90,7 +83,7 @@ fn compile_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str)
 fn the_corpus_compiles_for_both_mcu_targets() {
     let Some(clang) = common::clang() else { return };
     let mut errors = Vec::new();
-    for name in KORPUS {
+    for name in takt_conformance::suites::programs("mcu") {
         let p = corpus(name);
         for target in [Target::THUMBV7EM, Target::RISCV32IMAC] {
             match compile_for(&clang, target, &p, name) {
@@ -111,8 +104,8 @@ fn the_corpus_compiles_for_the_32_bit_class_with_f64() {
     let target = Target::ARMV7_LINUX;
     assert_eq!(target.class, Class::Linux32F64);
     assert!(!target.is_bare_metal() && target.class.has_f64_hardware());
-    let errors: Vec<String> = KORPUS
-        .iter()
+    let errors: Vec<String> = takt_conformance::suites::programs("mcu")
+        .into_iter()
         .filter_map(|name| compile_for(&clang, target, &corpus(name), name).err().map(|e| format!("{name}: {e}")))
         .collect();
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
@@ -124,17 +117,23 @@ fn the_corpus_compiles_for_the_32_bit_class_with_f64() {
 /// andere, waere Bit-Gleichheit eine Aussage ueber mehrere Programme statt
 /// ueber Uebersetzungen desselben. Der Unterschied darf allein im
 /// Triple stehen — und genau das prueft der Vergleich, indem er es
-/// herausrechnet.
+/// herausrechnet. Ueber jedes Korpusprogramm, das die Sema annimmt
+/// (KON2-012); bei Registerports zaehlt die IR vor ihren Helfern, deren
+/// Form am Ziel haengt (`ports_differ_only_in_their_helpers`).
 #[test]
 fn every_target_gets_the_same_ir() {
-    let p = corpus("16_timing.takt");
-    let mut reference: Option<(String, &str)> = None;
-    for target in Target::ALL {
-        let ir = common::ir_for(&p, target.triple).replace(target.triple, "<triple>");
-        match &reference {
-            None => reference = Some((ir, target.name)),
-            Some((first, first_name)) => {
-                assert_eq!(&ir, first, "{} weicht von {first_name} ab", target.name);
+    let programs = common::corpus_programs();
+    assert!(programs.len() >= 90, "zu wenige Korpusprogramme: {}", programs.len());
+    for (name, p) in programs {
+        let mut reference: Option<(String, &str)> = None;
+        for target in Target::ALL {
+            let ir = common::ir_for(&p, target.triple).replace(target.triple, "<triple>");
+            let ir = ir.split_once(takt_llvm::mmio::HEADER).map_or(ir.clone(), |(program, _)| program.to_string());
+            match &reference {
+                None => reference = Some((ir, target.name)),
+                Some((first, first_name)) => {
+                    assert!(&ir == first, "{name}: {} weicht von {first_name} ab", target.name);
+                }
             }
         }
     }

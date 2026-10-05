@@ -103,17 +103,84 @@ fn a_generous_wcet_passes() {
     assert!(d.iter().all(|d| d.code != "SC-12"), "{d:?}");
 }
 
-/// **Ohne `tick_source` meldet Prüfung 32 das ausdrücklich.**
+/// **Ohne `tick_source` meldet Prüfung 32 einen Fehler.**
 ///
 /// Sie verlangt zweierlei — die Ungleichung *und* dass die Tickquelle in
 /// der Hardware-Konfiguration steht (7.1). Das Zweite ist unabhängig von
-/// der Kalibrierung.
+/// der Kalibrierung, und nicht entscheidbar heißt nicht bestanden
+/// (Tabelle 10, Zeile 32).
 #[test]
 fn a_missing_tick_source_is_reported() {
     let p = compile(&KOPF.replace("    tick_source = hw(\"sys/clock\")\n", ""));
     let d = takt_sema::calibrated::check(&p, &ziel(), Span::new(0, 0));
     let w = d.iter().find(|d| d.code == "SC-32").expect("SC-32 meldet");
-    assert!(format!("{w}").contains("tick_source"), "{w}");
+    assert!(w.is_error(), "{w}");
+    assert!(format!("{w}").contains("`tick_source` fehlt"), "{w}");
+}
+
+/// Die Bindungen eines Programms gegen eine Konfiguration mit einem Kanal.
+fn bindings_with_clock(tick_source: &str, channel: &str) -> Vec<takt_diag::Diagnostic> {
+    let p = compile(&KOPF.replace("sys/clock", tick_source));
+    let config =
+        format!("# takt-hw 4\n[channel ui/led]\ndirection = output\n\n[channel {channel}]\ndirection = input\n");
+    let hw = hardware::parse(&config).expect("lesbar");
+    takt_sema::calibrated::check_bindings(&p, &hw).into_iter().filter(|d| d.code == "SC-32").collect()
+}
+
+/// **Die Tickquelle muss in der Konfiguration stehen** (Pruefung 32, 7.1):
+/// Eine Adresse, die die Konfiguration nicht kennt, ist ein Fehler, der sie
+/// nennt; das eingebaute Geraet `sys` kennt jede Konfiguration (12.7).
+#[test]
+fn a_tick_source_missing_from_the_configuration_is_an_error() {
+    let d = bindings_with_clock("daq/clock", "daq/other");
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].is_error() && d[0].message.contains("`daq/clock`"), "{d:?}");
+    assert!(bindings_with_clock("daq/clock", "daq/clock").is_empty());
+    assert!(bindings_with_clock("sys/clock", "daq/other").is_empty(), "`sys` ist eingebaut");
+}
+
+/// Die Last einer Maschine mit einer Schleife aus `n` Gleitkommaadditionen.
+fn adder(name: &str, n: u32) -> String {
+    format!(
+        "machine {name}:\n    var acc : float = 0.0\n\n    initial S\n\n    state S:\n        loop:\n            \
+         for i in range({n}):\n                acc = acc + 1.5\n"
+    )
+}
+
+/// **Die Last ist die Summe ueber die Maschinen** (7.2: `Peak = Σ_m B_m`):
+/// Zwei Maschinen, die einzeln in den Tick passen, passen zusammen nicht.
+#[test]
+fn two_machines_that_fit_alone_can_overload_the_tick_together() {
+    let fits = |src: &str| sc32(&compile(&format!("{KOPF}{src}")), &ziel()).iter().all(|d| !d.is_error());
+    // 5000 Additionen zu je rund 1,19 µs: gut 6 ms von 10 ms je Maschine.
+    assert!(fits(&adder("a", 5000)), "eine Maschine passt");
+    assert!(fits(&adder("b", 5000)), "die andere auch");
+    let both = sc32(&compile(&format!("{KOPF}{}\n{}", adder("a", 5000), adder("b", 5000))), &ziel());
+    assert!(both.iter().any(|d| d.is_error() && d.message.contains("passt nicht")), "{both:?}");
+}
+
+/// **Gescopte Instanzen in exklusiven Zustaenden zaehlen mit ihrem
+/// Maximum** (5.11, 9.4.3): Sie laufen nie zugleich. Stehen beide im
+/// selben Zustand, zaehlt die Summe.
+#[test]
+fn scoped_instances_in_exclusive_states_count_with_their_maximum() {
+    let program = |second: &str| {
+        format!(
+            "{KOPF}output a : bool @ hw(\"o/a\") with safe = false\n\
+             output b : bool @ hw(\"o/b\") with safe = false\n\
+             input  mode : int in 0..1 @ sim(\"i/mode\")\n\n\
+             machine heavy(o: output bool):\n    var acc : float = 0.0\n\n    initial S\n\n    state S:\n        \
+             loop:\n            for i in range(5000):\n                acc = acc + 1.5\n            o = acc > 0.0\n\n\
+             machine ctrl:\n    initial FIRST\n\n    state FIRST:\n        instance p = heavy(o = a)\n{second}\n        \
+             when mode == 1: -> SECOND\n\n    state SECOND:\n        when mode == 0: -> FIRST\n"
+        )
+    };
+    let exclusive =
+        program("").replace("    state SECOND:\n", "    state SECOND:\n        instance q = heavy(o = b)\n\n");
+    let d = sc32(&compile(&exclusive), &ziel());
+    assert!(d.iter().all(|d| !d.is_error()), "exklusiv: das Maximum passt: {d:?}");
+    let together = sc32(&compile(&program("        instance q = heavy(o = b)\n")), &ziel());
+    assert!(together.iter().any(|d| d.is_error() && d.message.contains("passt nicht")), "{together:?}");
 }
 
 /// **Eine unvollständige Tabelle urteilt nicht, sondern nennt die Lücke.**
@@ -228,14 +295,92 @@ fn a_blocking_journal_under_alert_is_a_warning() {
     assert!(d[0].message.contains("Overrun-Alert"), "{}", d[0].message);
 }
 
-/// Ein XIP-Ziel ohne `nvm_blocking` ist nicht entscheidbar; ein Ziel, das
-/// nicht blockiert, meldet nichts.
+/// Ein XIP-Ziel ohne `nvm_blocking` ist nicht entscheidbar, und nicht
+/// entscheidbar heisst nicht bestanden: ein Fehler, der den Schluessel
+/// nennt (Tabelle 10, Zeile 32). Ein Ziel, das nicht blockiert, meldet
+/// nichts.
 #[test]
 fn a_missing_nvm_blocking_on_a_xip_target_is_undecidable() {
     let p = compile(&format!("{KOPF}{PERSIST}"));
     let d = sc32(&p, &blockierendes_ziel(None));
     assert_eq!(d.len(), 1, "{d:?}");
-    assert!(d[0].message.contains("nicht") || d[0].message.contains("fehlt"), "{}", d[0].message);
+    assert!(d[0].is_error(), "{d:?}");
+    assert!(d[0].message.contains("nicht entscheidbar") && d[0].message.contains("`nvm_blocking`"), "{}", d[0].message);
     assert!(sc32(&p, &blockierendes_ziel(Some(false))).is_empty());
     assert!(sc32(&p, &ziel()).is_empty(), "ohne iram und ohne NVM kein Urteil");
+}
+
+/// Pruefung 32 rundet die Perioden auf: 200 ms plus zweimal 5,5 ms sind
+/// 211 ms, bei 10 ms Tick also 22 Perioden, nicht 21.
+#[test]
+fn the_journal_periods_round_up() {
+    let mut target = blockierendes_ziel(Some(true));
+    target.nvm.as_mut().expect("NVM").program_ns = Some(5_500_000);
+    let d = sc32(&compile(&format!("{KOPF}{PERSIST}")), &target);
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].message.contains("22 Perioden") && d[0].message.contains("211 ms"), "{}", d[0].message);
+}
+
+/// Was eine Aktivierung samt Fault-Pfad auf dem Ziel kostet, in ns
+/// aufgerundet, und was die Aktivierung allein kostet.
+fn activation_ns(p: &takt_mir::Program, t: &Target) -> (u64, u64) {
+    let b = p.machines.iter().find(|m| m.name == "m").and_then(|m| m.budget).expect("Budget");
+    let ns = |ps: u64| ps.div_ceil(1000);
+    (ns(t.c_target.duration_ps(b.activation + b.fault_path)), ns(t.c_target.duration_ps(b.activation)))
+}
+
+/// Eine Maschine mit billigem Schritt und teurem Fault-Ziel.
+fn costly_fault(wcet_ns: u64, every: &str) -> String {
+    format!(
+        "{KOPF}machine m{every} with budget = {{wcet = {wcet_ns} ns}}:\n    fault -> SAFE\n    \
+         var acc : float = 0.0\n    var a : int in 0..9 = 1\n\n    initial S\n\n    state S:\n        loop:\n            \
+         check a < 9, \"zu gross\"\n            led = true\n\n    state SAFE:\n        enter:\n            \
+         for i in range(200):\n                acc = acc + 1.5\n            led = acc > 0.0\n"
+    )
+}
+
+fn sc12(p: &takt_mir::Program, t: &Target) -> Vec<takt_diag::Diagnostic> {
+    takt_sema::calibrated::check(p, t, Span::new(0, 0)).into_iter().filter(|d| d.code == "SC-12").collect()
+}
+
+/// **`wcet` gilt fuer Aktivierung und Fault-Pfad, je Aktivierung, ohne
+/// `T_IO`** (7.2, 9.4.3): Ein `wcet`, das nur den Schritt deckt, verfehlt
+/// das Budget; genau die Summe besteht, eine Nanosekunde weniger nicht —
+/// auch bei `every 100 ms` und bei einem `T_IO` fast so gross wie der Tick.
+#[test]
+fn a_declared_wcet_covers_the_fault_path_per_activation_without_t_io() {
+    let target = ziel();
+    let (full, step) = activation_ns(&compile(&costly_fault(1_000_000, "")), &target);
+    assert!(full > step + 100_000, "der Fault-Pfad ist teuer: {full} gegen {step} ns");
+    let judged = |wcet: u64, every: &str, t: &Target| sc12(&compile(&costly_fault(wcet, every)), t);
+    let d = judged(step + 1000, "", &target);
+    assert!(d.iter().any(|d| d.is_error() && d.message.contains("je Aktivierung")), "nur der Schritt: {d:?}");
+    assert!(judged(full, "", &target).is_empty(), "genau die Summe besteht");
+    assert!(!judged(full - 1, "", &target).is_empty(), "eine Nanosekunde zu wenig");
+    assert!(judged(full, " every 100 ms", &target).is_empty(), "je Aktivierung, nicht je Tick");
+    assert!(!judged(full - 1, " every 100 ms", &target).is_empty());
+    let mut slow_io = target.clone();
+    slow_io.t_io_ps = 9_990_000_000;
+    assert!(judged(full, "", &slow_io).is_empty(), "`T_IO` geht nicht ein");
+}
+
+/// **Die Stack-Schranke ist ein Posten der RAM-Summe** (Pruefung 12 und 39,
+/// 12.3): Ohne den Stack der nativen Funktion passt das Programm, mit ihm
+/// nicht; die Meldung nennt den Stackanteil.
+#[test]
+fn the_stack_bound_counts_towards_the_ram_limit() {
+    let p = compile(&format!(
+        "{KOPF}native fn crc32(b: bytes<16>) -> u32 with cost = {{native: 50}}, stack = 4096, total\n\n\
+         machine m:\n    var b : bytes<16> = default\n    var c : u32 = 0\n\n    initial S\n\n    state S:\n        \
+         loop:\n            c = crc32(b)\n            led = c > 0\n"
+    ));
+    let mut target = ziel();
+    let total = takt_mir::analysis::size::size(&p).with_hardware(&target).ram_total();
+    target.memory.ram = Some(total - 2048);
+    let d: Vec<_> =
+        takt_sema::calibrated::check(&p, &target, Span::new(0, 0)).into_iter().filter(|d| d.code == "SC-39").collect();
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(d[0].is_error() && d[0].message.contains("davon Stack 4096 Byte"), "{}", d[0].message);
+    target.memory.ram = Some(total);
+    assert!(takt_sema::calibrated::check(&p, &target, Span::new(0, 0)).iter().all(|d| d.code != "SC-39"));
 }

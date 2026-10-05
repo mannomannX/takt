@@ -10,5 +10,5 @@ driver machine uart0 every 10 ms:
     initial RUN
     state RUN:
         loop:
-            busy = uart_st.flags.tx_full  # sofortiges Registerlesen
+            busy = uart_st.flags.tx_full  # sofortiges Registerlesen  # ~ SC-2
             uart_st.flags.oflow = true    # sofortiges Registerschreiben

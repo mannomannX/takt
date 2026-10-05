@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 17 (5.10): `wake` steht an Inputs und Commands; ein Output weckt
+# niemanden.
+
+output v : bool @ hw("o/v") with safe = false, wake = true  # ~ SC-17
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = true

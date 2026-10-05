@@ -20,12 +20,16 @@
 #      linkt, und sie tut am Board nichts.
 #   4. Die rechnende Haelfte laeuft auf dem Wirt mit ihren Tests. Sie ist
 #      der Grund, warum die Ausnahme klein ist.
+#
+# Keine Pruefung faellt still weg: Fehlt ein Werkzeug oder eine
+# Binaerdatei, endet das Skript mit Fehler, statt am Schluss „alles
+# geprueft“ zu melden (RT-037).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 targets=(thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
-cores=(takt-rt-core takt-rt-baremetal)
+cores=(takt-rt-core takt-rt-baremetal takt-rt-rtos)
 
 for t in "${targets[@]}"; do
     if ! rustup target list --installed | grep -qx "$t"; then
@@ -65,27 +69,37 @@ echo "== 3. Die Bring-up-Programme, von aussen gebaut"
 cargo build --release --target thumbv7em-none-eabihf \
     --manifest-path crates/takt-bringup-stm32f401/Cargo.toml "$@"
 
-# Die Probe: Liegt die Vektortabelle dort, wo der Bootloader sie erwartet?
-# `takt-flash-weact --dry-run` prueft Stackzeiger und Resetvektor, ohne
-# ein Board anzufassen.
 # Das Zielverzeichnis kann umgelenkt sein (`CARGO_TARGET_DIR`, oder in
 # `.cargo/config.toml` des Nutzers); `cargo metadata` weiss, wohin.
 target_dir="$(cargo metadata --format-version 1 --no-deps 2>/dev/null |
     sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-# `takt` ist das Binary mit dem Takt-Programm; die anderen drei tragen
-# keines und saegen die Frage nicht, um die es hier geht.
-bin="${target_dir:-target}/thumbv7em-none-eabihf/release/takt"
 sysroot="$(rustc --print sysroot)"
 host="$(rustc -vV | sed -n 's/^host: //p')"
-objcopy="$sysroot/lib/rustlib/$host/bin/llvm-objcopy"
-if [ -f "$bin" ] && { [ -x "$objcopy" ] || [ -x "$objcopy.exe" ]; }; then
-    tmp="$(mktemp -t takt-bringup-XXXXXX)"
-    "$objcopy" -O binary "$bin" "$tmp"
-    cargo run -q -p takt-flash-weact --bin takt-flash-weact -- "$tmp" --dry-run
-    rm -f "$tmp"
-else
-    echo "  (Abbildpruefung uebersprungen: Binaerdatei oder llvm-objcopy fehlt)"
-fi
+
+# Ein Werkzeug aus `llvm-tools`; fehlt es, ist das ein Fehler, keine
+# uebersprungene Pruefung.
+llvm_tool() {
+    local tool="$sysroot/lib/rustlib/$host/bin/$1"
+    if [ -x "$tool" ] || [ -x "$tool.exe" ]; then
+        echo "$tool"
+    else
+        echo "FEHLER: $1 fehlt — mit 'rustup component add llvm-tools' nachruesten" >&2
+        exit 1
+    fi
+}
+objcopy="$(llvm_tool llvm-objcopy)"
+nm="$(llvm_tool llvm-nm)"
+
+# Das Binary mit dem Takt-Programm eines Bring-ups; die anderen tragen
+# keines und saegen die Frage nicht, um die es hier geht.
+binary_of() {
+    local bin="${target_dir:-target}/$1/release/takt"
+    if [ ! -f "$bin" ]; then
+        echo "FEHLER: $bin fehlt nach dem Bau" >&2
+        exit 1
+    fi
+    echo "$bin"
+}
 
 # **Traegt das Binary wirklich das Programm aus `takt.toml`?**
 #
@@ -93,20 +107,33 @@ fi
 # Default zurueck, und das Ergebnis lief korrekt und blieb dabei dunkel —
 # das Programm hing an einem Kommando, das auf dem Board niemand sendet
 # (FB-141). Von aussen sah es aus wie ein Defekt. Die Maschine steht als
-# Symbol im Binary, also ist die Frage in einer Zeile zu beantworten.
-nm="$sysroot/lib/rustlib/$host/bin/llvm-nm"
-toml="crates/takt-bringup-stm32f401/takt.toml"
-konfiguriert="$(grep -o 'program *= *"[^"]*"' "$toml" | cut -d'"' -f2)"
-if [ -f "$bin" ] && { [ -x "$nm" ] || [ -x "$nm.exe" ]; } && [ -n "$konfiguriert" ]; then
-    maschine="$(grep -o '^machine [A-Za-z_][A-Za-z0-9_]*' \
-        "crates/takt-bringup-stm32f401/$konfiguriert" | head -1 | cut -d' ' -f2)"
+# Symbol im Binary, also ist die Frage in einer Zeile zu beantworten — fuer
+# jedes Bring-up.
+program_in_binary() {
+    local bringup="$1" bin="$2" konfiguriert maschine
+    konfiguriert="$(grep -o 'program *= *"[^"]*"' "$bringup/takt.toml" | cut -d'"' -f2)"
+    if [ -z "$konfiguriert" ]; then
+        echo "FEHLER: $bringup/takt.toml nennt kein Programm" >&2
+        exit 1
+    fi
+    maschine="$(grep -o '^machine [A-Za-z_][A-Za-z0-9_]*' "$bringup/$konfiguriert" | head -1 | cut -d' ' -f2)"
     if [ -n "$maschine" ] && "$nm" "$bin" 2>/dev/null | grep -q "${maschine}_step"; then
         echo "  Programm im Binary: $maschine (aus $konfiguriert)"
     else
-        echo "  FEHLER: ${maschine}_step fehlt im Binary — gebaut wurde ein anderes Programm." >&2
+        echo "  FEHLER: ${maschine}_step fehlt in $bin — gebaut wurde ein anderes Programm." >&2
         exit 1
     fi
-fi
+}
+
+# Die Probe: Liegt die Vektortabelle dort, wo der Bootloader sie erwartet?
+# `takt-flash-weact --dry-run` prueft Stackzeiger, Resetvektor und Groesse,
+# ohne ein Board anzufassen.
+bin="$(binary_of thumbv7em-none-eabihf)"
+tmp="$(mktemp -t takt-bringup-XXXXXX)"
+"$objcopy" -O binary "$bin" "$tmp"
+cargo run -q -p takt-flash-weact --bin takt-flash-weact -- "$tmp" --dry-run
+rm -f "$tmp"
+program_in_binary crates/takt-bringup-stm32f401 "$bin"
 
 echo
 echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
@@ -119,15 +146,24 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
     cd crates/takt-mcu-program
     cargo clippy --target riscv32imac-unknown-none-elf "$@" -- -D warnings
 )
-# Die Einstiege der Natives fuer beide Ziele und als Bibliothek des Wirts.
+# Die Einstiege der Natives fuer beide Ziele und als Bibliothek des Wirts,
+# mit jedem Job; ihre Puffervertraege mit Tests auf dem Wirt (FB-397) —
+# ohne `host`, dessen Panic-Handler der statischen Bibliothek gehoert.
 (
     cd crates/takt-native-abi
     for t in "${targets[@]}"; do
         cargo clippy --target "$t" "$@" -- -D warnings
     done
-    cargo clippy --features host,ecdsa "$@" -- -D warnings
+    cargo clippy --features host,ecdsa,rsa,aes-gcm "$@" -- -D warnings
+    cargo clippy --all-targets --features ecdsa,rsa,aes-gcm "$@" -- -D warnings
+    cargo test --features ecdsa,rsa,aes-gcm "$@"
 )
 cargo build --release --target riscv32imac-unknown-none-elf     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
+program_in_binary crates/takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
+# Der MCU-Rahmen auf dem Wirt (13.8, `takt driver-test --crate`): eigener
+# Workspace wie die Bring-ups, mit demselben Programm wie das F401.
+TAKT_PROGRAM="$(pwd)/corpus-try/29_heartbeat.takt" \
+    cargo clippy --all-targets --manifest-path crates/takt-bringup-host/Cargo.toml "$@" -- -D warnings
 # Takt als Baustein in Rust (12.11): die Traits fuer beide Ziele, Bauhelfer
 # und Testhilfe auf dem Wirt mit ihren Tests.
 (
@@ -144,4 +180,5 @@ echo "== 5. Die rechnende Haelfte auf dem Wirt"
 cargo test -p takt-board-support -p takt-flash-weact "$@"
 
 echo
-echo "Alles gebaut und geprueft."
+echo "Gebaut und geprueft: Kerne (${cores[*]}) fuer ${targets[*]}, beide Board-Crates, beide Bring-ups mit"
+echo "Abbild- und Programmpruefung, Natives mit Tests, takt-embed, takt-bringup-host, die rechnende Haelfte."

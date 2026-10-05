@@ -54,6 +54,8 @@ t=0 in pairs 0x0102
 t=1 in p 6 t=15000000
 # Zeile 1, zweiter Fall: jenseits der Toleranz -> wie Zeile 2, ganz `adc`
 t=2 in p 7 t=-50000000
+# `dio` liefert im selben Tick vertragsgemaess: Zeile 2 trifft es nicht
+t=2 in k 7
 # Erholung: `adc` liefert wieder vertragsgemaess
 t=3 in q 8
 t=4 in p 9
@@ -72,7 +74,30 @@ t=9 in pairs 0x0304
 t=10 in k 1 t=95000000
 t=11 in k 2 t=94000000
 t=12 in k 3
+# Zeile 2 (KON1-012): Qualitaet `Bad` mit Wert, dann wieder vertragsgemaess
+t=13 in k 4 bad
+t=14 in k 5
+# Zeile 2: das Alter passt nicht zur Zeit, `t - age` faellt (148 ms, 145 ms)
+t=15 in q 6 age=2 ms
+t=16 in q 7 age=15 ms
+t=17 in q 8
+# Zeile 2: `seq` doppelt, weiter, rueckwaerts, weiter
+t=17 in rx \"d\" seq=15
+t=18 in rx \"e\" seq=16
+t=19 in rx \"f\" seq=12
+t=20 in rx \"g\" seq=13
+# Zeile 5: ein Byte zu wenig fuer `Pair`
+t=17 in pairs 0x05
+# Zeile 1, Fenstergrenzen: `t = t_k` gilt, `t = t_(k-1)` liegt knapp davor
+t=21 in p 10 t=210000000
+t=22 in p 11 t=210000000
+t=23 in p 12
+# Zeile 5: eine Zeile ueber `line<16>` kommt gekuerzt an, kein Verstoss
+t=23 in rx \"0123456789ABCDEFGHIJ\" seq=14
 ";
+
+/// So viele Ticks laufen beide Seiten: einer nach dem letzten Fall.
+const TICKS: u64 = 25;
 
 fn program() -> Program {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
@@ -84,7 +109,7 @@ fn program() -> Program {
 
 fn interpreted() -> String {
     let stimulus = Trace::parse(STIMULUS).expect("Stimulus");
-    let options = RunOptions { ticks: 14, ..Default::default() };
+    let options = RunOptions { ticks: TICKS, ..Default::default() };
     takt_interp::run(&program(), &stimulus, &options).expect("Lauf").trace.render()
 }
 
@@ -109,6 +134,16 @@ fn every_contract_violation_shows_in_the_golden_trace() {
             "t=9 stream pairs dropped=0 overflowed=0 malformed=1",
             "t=11 driver dio degraded timestamp",
             "t=12 driver dio recovered",
+            "t=13 driver dio degraded flags",
+            "t=14 driver dio recovered",
+            "t=16 driver adc degraded flags",
+            "t=17 driver adc recovered",
+            "t=17 driver uart degraded seq",
+            "t=17 stream pairs dropped=0 overflowed=0 malformed=2",
+            "t=18 driver uart recovered",
+            "t=19 driver uart degraded seq",
+            "t=20 driver uart recovered",
+            "t=22 driver adc warped p",
         ],
         "{trace}"
     );
@@ -128,18 +163,27 @@ fn a_degraded_driver_takes_all_its_inputs_down() {
     assert!(at(2).contains(&"t=2 out q_ok false"), "q liefert nicht und faellt doch: {trace}");
     assert!(at(3).contains(&"t=3 out q_ok true"), "{trace}");
     assert!(at(4).contains(&"t=4 out p_ok true"), "{trace}");
-    assert!(!trace.contains("out k_ok false\nt=2"), "`dio` bleibt unberuehrt");
+    // Zeile 2 trifft nur diesen Treiber: `dio` liefert in Tick 2 frisch und
+    // bleibt vom Herunterziehen bis zur Erholung von `adc` gueltig. Es faellt
+    // erst, wenn sein Wert altert, und mit seinem eigenen Verstoss in Tick
+    // 11 — ohne diesen Anker bestuende die Zusicherung auch fuer einen
+    // Ausgang, der nie im Trace steht.
+    for tick in 2..=4 {
+        assert!(!at(tick).iter().any(|l| l.contains(" k_ok false")), "`dio` faellt in Tick {tick}: {trace}");
+    }
+    assert!(at(11).contains(&"t=11 out k_ok false"), "{trace}");
 }
 
-/// Verworfene Elemente kommen nicht an: `x` (Luecke) und `1 2 3` (MAXPT)
-/// fehlen, `a y z` zaehlen; vom Paar-Strom nur die beiden guten.
+/// Verworfene Elemente kommen nicht an: `x` (Luecke), `1 2 3` (MAXPT), `d`
+/// (doppelt) und `f` (rueckwaerts) fehlen, `a y z e g` und die gekuerzte
+/// lange Zeile zaehlen; vom Paar-Strom nur die beiden guten.
 #[test]
 fn rejected_elements_are_not_delivered() {
     let trace = interpreted();
     let last = |name: &str| {
         trace.lines().rfind(|l| l.contains(&format!(" out {name} "))).map(|l| l.rsplit(' ').next().unwrap_or(""))
     };
-    assert_eq!(last("lines"), Some("3"), "{trace}");
+    assert_eq!(last("lines"), Some("6"), "{trace}");
     assert_eq!(last("sum"), Some("10"), "1+2 und 3+4: {trace}");
 }
 
@@ -161,8 +205,9 @@ fn a_stimulus_without_timestamps_keeps_the_contract() {
 fn the_native_frame_judges_like_the_interpreter() {
     let Some(clang) = common::clang() else { return };
     let p = program();
-    let inputs = Stimulus::from_trace(&Trace::parse(STIMULUS).expect("Stimulus"));
-    let native = common::run_native_all_with(&clang, &p, "treiberrand", 14, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let inputs = Stimulus::from_trace(&Trace::parse(STIMULUS).expect("Stimulus")).expect("Stimulus");
+    let native =
+        common::run_native_all_with(&clang, &p, "treiberrand", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let interpreted = interpreted();
     let diffs = compare(&interpreted, &native);
     assert!(

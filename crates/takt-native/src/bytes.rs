@@ -171,6 +171,13 @@ impl<'a> Cursor<'a> {
     }
 }
 
+/// Ein Gleitkommawert in Little-Endian ist endlich, wenn sein Exponent
+/// (`mask`) nicht aus lauter Einsen besteht.
+fn finite(bytes: &[u8], mask: u64) -> Option<()> {
+    let bits = bytes.iter().rev().fold(0u64, |acc, b| (acc << 8) | u64::from(*b));
+    (bits & mask != mask).then_some(())
+}
+
 /// Liest einen Wert der Gestalt unter `s` aus `d`; `None`, wenn es keiner
 /// ist.
 fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
@@ -180,8 +187,11 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
     match s.u8()? {
         shape::BOOL => (d.u8()? <= 1).then_some(()),
         shape::INT => d.take(usize::from(s.u8()?)).map(drop),
-        shape::F32 => d.take(4).map(drop),
-        shape::F64 | shape::DURATION => d.take(8).map(drop),
+        // 5.9, 3.7: NaN und Inf sind keine kanonische Form; ihr Exponent
+        // besteht aus lauter Einsen.
+        shape::F32 => finite(d.take(4)?, 0x7F80_0000),
+        shape::F64 => finite(d.take(8)?, 0x7FF0_0000_0000_0000),
+        shape::DURATION => d.take(8).map(drop),
         shape::ENUM => {
             let variants = s.u16()?;
             let disc = d.i64()?;
@@ -212,7 +222,8 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
         shape::CAPTURE => {
             let n = s.u32()?;
             // 8.9: Kopf `t: i64, pre: u32, post: u32, rate: f64`.
-            d.take(8 + 4 + 4 + 8)?;
+            d.take(8 + 4 + 4)?;
+            finite(d.take(8)?, 0x7FF0_0000_0000_0000)?;
             repeat(s, d, n, depth)
         }
         shape::BYTES => {

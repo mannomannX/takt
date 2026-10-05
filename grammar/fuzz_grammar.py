@@ -32,6 +32,14 @@ import check_grammar as cg  # noqa: E402
 import parse_corpus as pc  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def takt(*args):
+    """Der Aufruf von takt: das Binaer aus `TAKT`, wenn gesetzt (ein cargo-Test
+    reicht sein eigenes herein), sonst `cargo run`."""
+    exe = os.environ.get("TAKT")
+    return [exe, *args] if exe else ["cargo", "run", "-q", "-p", "takt-cli", "--", *args]
+
 BATCH = 120
 
 # Produktionen, in denen "<" … ">" einen Typ klammert (wie im Orakel).
@@ -654,8 +662,32 @@ def run_parse(paths, snippet):
     return result
 
 
+def without_parens(tree):
+    """Der Baum ohne die Klammerknoten `(paren X)`: Die S-Expression zeigt
+    Klammern seit SYN-014, die Klammer-Fassung setzt aber absichtlich welche.
+    Verglichen wird darum die Struktur ohne sie."""
+    out, i = [], 0
+    while (j := tree.find("(paren ", i)) >= 0:
+        out.append(tree[i:j])
+        k = start = j + len("(paren ")
+        depth, quoted = 1, False
+        while depth:
+            c = tree[k]
+            if c == '"' and tree[k - 1] != "\\":
+                quoted = not quoted
+            elif not quoted and c == "(":
+                depth += 1
+            elif not quoted and c == ")":
+                depth -= 1
+            k += 1
+        out.append(without_parens(tree[start:k - 1]))
+        i = k
+    out.append(tree[i:])
+    return "".join(out)
+
+
 def parse_chunk(chunk, snippet, result):
-    cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "parse", "--ast"]
+    cmd = takt("parse", "--ast")
     if snippet:
         cmd.append("--snippet")
     r = subprocess.run(cmd + chunk, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
@@ -693,7 +725,7 @@ def run_check(paths):
     Diagnosen ohne Panik)."""
     result = {}
     for path in paths:
-        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "check", "--format", "line", path]
+        cmd = takt("check", "--format", "line", path)
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
         if r.returncode not in (0, 1):
             result[path] = (False, "check abgestuerzt: " + (r.stderr.strip().splitlines() or ["keine Ausgabe"])[-1])
@@ -709,7 +741,7 @@ def run_sim(paths, ticks):
     Fehler melden (Satz 9.4.2)."""
     problems = {}
     for path in paths:
-        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "sim", path, "--ticks", str(ticks)]
+        cmd = takt("sim", path, "--ticks", str(ticks))
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=ROOT)
         if r.returncode not in (0, 1):
             last = (r.stderr.strip().splitlines() or ["keine Ausgabe"])[-1]
@@ -736,7 +768,7 @@ def run_fmt(paths, snippet, verify):
     """fmt --verify: Pfad -> Meldung; ohne verify formatiert in place."""
     problems = {}
     for chunk in batches(paths):
-        cmd = ["cargo", "run", "-q", "-p", "takt-cli", "--", "fmt"]
+        cmd = takt("fmt")
         if verify:
             cmd.append("--verify")
         if snippet:
@@ -858,7 +890,7 @@ def main(argv):
             if not ok:
                 problems.append(f"Parser lehnt Fassung {v} ab: {info}")
             else:
-                trees[v] = info
+                trees[v] = without_parens(info)
             if not args.no_oracle and paths[v] not in oracle_ok:
                 problems.append(f"Orakel lehnt Fassung {v} ab")
             if paths[v] in fmt_problems:
@@ -867,7 +899,7 @@ def main(argv):
                 problems.append(f"Lauf, Fassung {v}: {sim_problems[paths[v]]}")
         if len(set(trees.values())) > 1:
             # einzeln nachpruefen, damit kein Stapelartefakt gemeldet wird
-            single = {v: run_parse([paths[v]], snippet)[paths[v]][1] for v in trees}
+            single = {v: without_parens(run_parse([paths[v]], snippet)[paths[v]][1]) for v in trees}
             differing = [v for v in VARIANTS if v in single and single[v] != single.get("c")]
             if differing:
                 problems.append(f"Baum weicht ab in Fassung(en) {', '.join(differing)}")

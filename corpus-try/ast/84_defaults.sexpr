@@ -46,7 +46,7 @@
           (= kind 2)))
       (match (.mode (index slots 2))
         (case SLOW
-          (= mode (+ 3 (as (.n (index slots 2)) u32))))
+          (= mode (+ 3 (paren (as (.n (index slots 2)) u32)))))
         (case FAST
           (= mode 4)))
       (match r

@@ -1,0 +1,70 @@
+# Der Byte-Ring eines internen Stroms laeuft um (8.6, 9.6, KON2-026):
+# Elemente von ein bis acht Byte, `capacity_bytes` so knapp, wie Pruefung 17
+# es zulaesst, ein Leser, der alle 30 ms liest und dazwischen 50 ms pausiert.
+# `tight` faultet den Sender beim Ueberlauf, `rolling` verdraengt das
+# aelteste Element; beide Ringe laufen mehrfach um.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output seen_a : int in 0..99999 @ sim("o/seen_a")
+output seen_b : int in 0..99999 @ sim("o/seen_b")
+output sent_a : int in 0..999   @ sim("o/sent_a")
+
+stream<bytes<8>> tight with capacity = 6, capacity_bytes = 24, overflow = fault
+stream<bytes<8>> rolling with capacity = 6, capacity_bytes = 48, overflow = drop_oldest
+
+machine feed_a every 20 ms:
+    var n   : int in 0..999 = 0
+    var buf : bytes<8> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            buf.clear()
+            for i in range(8):
+                if i >= n % 8 + 1:
+                    break
+                var put = buf.push(((n * 7 + i) % 250) as u8)
+            send tight, buf
+            sent_a = n
+
+machine feed_b:
+    var n   : int in 0..999 = 0
+    var buf : bytes<8> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            n = (n + 1) % 1000
+            for j in range(2):
+                buf.clear()
+                for i in range(8):
+                    if i >= (n + j * 3) % 8 + 1:
+                        break
+                    var put = buf.push(((n * 5 + j + i) % 250) as u8)
+                send rolling, buf
+
+machine reader every 30 ms:
+    var a : int in 0..99999 = 0
+    var b : int in 0..99999 = 0
+
+    initial READ
+
+    state WAIT:
+        after 50 ms: -> READ
+
+    state READ:
+        loop:
+            for e in tight:
+                a = (a * 31 + e.data.len * 1000 + (e.data[0] as int) + (e.seq % 100)) % 100000
+            for e in rolling:
+                b = (b * 31 + e.data.len * 1000 + (e.data[e.data.len - 1] as int) + (e.seq % 100)) % 100000
+            seen_a = a
+            seen_b = b
+
+        after 60 ms: -> WAIT

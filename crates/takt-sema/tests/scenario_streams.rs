@@ -74,3 +74,59 @@ scenario \"one\":
     );
     assert_eq!(codes(&src), ["SC-43"]);
 }
+
+/// 13.6: Nur das gewaehlte Szenario laeuft. Mit `one` kommt genau das
+/// Element 1 beim Leser an, mit `two` genau die 2; das andere Szenario
+/// sendet nichts.
+#[test]
+fn only_the_chosen_scenario_sends() {
+    let src = format!(
+        "{HEAD}output last : int in 0..9 @ hw(\"o/last\") with safe = 0
+
+machine spy:
+    initial RUN
+    state RUN:
+        on line as e:
+            last = e.data as int
+
+scenario \"one\":
+    initial RUN
+    state RUN:
+        sequence:
+            send line, 1
+            wait 20 ms
+            verdict pass \"one\"
+
+scenario \"two\":
+    initial RUN
+    state RUN:
+        sequence:
+            send line, 2
+            wait 20 ms
+            verdict pass \"two\"
+"
+    );
+    let options = takt_sema::Options {
+        policy: Policy::default(),
+        build: takt_sema::Build::Sim,
+        profile: None,
+        ..Default::default()
+    };
+    let p = takt_sema::compile(&src, &options).program.expect("Programm");
+    for (name, value) in [("one", 1), ("two", 2)] {
+        let r = takt_interp::run(
+            &p,
+            &takt_interp::Trace::default(),
+            &takt_interp::RunOptions { ticks: 10, scenario: Some(name.into()), ..Default::default() },
+        )
+        .expect("Lauf");
+        let t = r.trace.render();
+        assert_eq!(r.verdict, takt_interp::Verdict::Pass, "{name}:\n{t}");
+        let seen: Vec<&str> = t.lines().filter(|l| l.contains(" out n ") || l.contains(" out last ")).collect();
+        assert_eq!(
+            seen,
+            ["t=0 out n 0", "t=0 out last 0", "t=1 out n 1", &format!("t=1 out last {value}")],
+            "{name}:\n{t}"
+        );
+    }
+}

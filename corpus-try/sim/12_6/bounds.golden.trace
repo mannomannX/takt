@@ -1,0 +1,12 @@
+t=0 state edge_watch WATCH
+t=0 out p_quality 0
+t=0 out raw_valid true
+t=100 alert edge_watch on "raw_p ungueltig: OUT_OF_RANGE"
+t=100 out raw_valid false
+t=200 alert edge_watch off "raw_p ungueltig: none"
+t=200 out raw_valid true
+t=300 alert edge_watch on "raw_p ungueltig: OUT_OF_RANGE"
+t=300 out raw_valid false
+t=400 alert edge_watch off "raw_p ungueltig: none"
+t=400 out raw_valid true
+t=600 verdict-final INCONCLUSIVE

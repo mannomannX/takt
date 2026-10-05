@@ -202,10 +202,14 @@ impl Jobs for ThreadJobs {
         if state != DONE && state != FAILED {
             return 0;
         }
+        // Ein Ergebnis, das nicht passt, kommt nicht gekuerzt an; seine
+        // Laenge sagt es dem Aufrufer (`Jobs::take`).
         let n = match s.result.lock() {
             Ok(mut r) if state == DONE => {
-                let n = r.len().min(into.len());
-                into[..n].copy_from_slice(&r[..n]);
+                if let Some(to) = into.get_mut(..r.len()) {
+                    to.copy_from_slice(&r);
+                }
+                let n = r.len();
                 r.clear();
                 n
             }

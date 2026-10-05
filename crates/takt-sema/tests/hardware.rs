@@ -109,9 +109,22 @@ fn an_older_file_still_reads() {
 
 #[test]
 fn an_unknown_section_or_key_is_an_error() {
-    assert!(hardware::parse("# takt-hw 3\n[gadget.x]\n").is_err());
-    assert!(hardware::parse("# takt-hw 3\n[channel a/b]\ncolour = red\n").is_err());
-    assert!(hardware::parse("# takt-hw 3\n[channel a/b]\ndirection = sideways\n").is_err());
+    // Je Fehler die Zeile, in der er steht, und was die Meldung nennt.
+    for (text, line, want) in [
+        ("# takt-hw 3\n\n[gadget.x]\n", 3, "unbekannter Abschnitt `gadget.x`; bekannt: `target.<name>`"),
+        (
+            "# takt-hw 3\n[channel a/b]\ndirection = input\ncolour = red\n",
+            4,
+            "unbekannter Schluessel `colour`; bekannt: direction, raw",
+        ),
+        ("# takt-hw 3\n[target.x]\ncolour = red\n", 3, "unbekannter Schluessel `colour`; bekannt: cost_model, core_hz"),
+        ("# takt-hw 3\n[device.d]\ncolour = red\n", 3, "unbekannter Schluessel `colour`; bekannt: driver, address"),
+        ("# takt-hw 3\n[channel a/b]\ndirection = sideways\n", 3, "`sideways` ist keine Richtung (input, output)"),
+    ] {
+        let e = hardware::parse(text).expect_err(text);
+        assert_eq!(e.line, line, "{text}{}", e.message);
+        assert!(e.message.starts_with(want), "{text}{}", e.message);
+    }
 }
 
 #[test]
@@ -266,4 +279,116 @@ fn the_corpus_configuration_matches_the_heartbeat_program() {
     assert!(diags.iter().all(|d| !d.is_error()), "{:?}", codes(&diags));
     let diags = check(&p, cfg.target("thumbv7em").expect("Ziel"), Span::default());
     assert!(!codes(&diags).iter().any(|c| c.contains("SC-39")), "{:?}", codes(&diags));
+}
+
+/// Grenzwerte der Pruefungen 28, 60 und 39 (Tabelle 10): genau gleich
+/// besteht, einen Schritt daneben nicht.
+#[test]
+fn the_calibrated_checks_hold_at_their_boundaries() {
+    let p = compile(PROGRAM);
+    let has = |diags: &[takt_diag::Diagnostic], code: &str, text: &str| {
+        codes(diags).iter().any(|c| c.starts_with(code) && c.contains(text))
+    };
+
+    // 28: Anforderung 100 us, gemessen genau 100 us.
+    let equal = check_bindings(&p, &hw(&CONFIG.replace("jitter_ns = 50000", "jitter_ns = 100000")));
+    assert!(!has(&equal, "SC-28", ""), "{:?}", codes(&equal));
+
+    // 28: Ohne `tick_granular` wirkt `at` tick-granular, sobald der
+    // gemessene Jitter den Tick erreicht — eine Warnung ab genau T0.
+    let at = compile(
+        &PROGRAM
+            .replace("            pwm = 0.5", "            at now + 5 ms:\n                pwm = 0.5")
+            .replace(", jitter = 100 us", ""),
+    );
+    let reach = check_bindings(&at, &hw(&CONFIG.replace("jitter_ns = 50000", "jitter_ns = 1000000")));
+    let warned: Vec<&takt_diag::Diagnostic> = reach.iter().filter(|d| d.code == "SC-28").collect();
+    assert_eq!(warned.len(), 1, "{:?}", codes(&reach));
+    assert!(!warned[0].is_error() && warned[0].message.contains("1000000 ns ≥ Tick 1000000 ns"), "{:?}", codes(&reach));
+    let below = check_bindings(&at, &hw(&CONFIG.replace("jitter_ns = 50000", "jitter_ns = 999999")));
+    assert!(!has(&below, "SC-28", ""), "{:?}", codes(&below));
+
+    // 60: Die Range des Programms liegt nur unten ausserhalb der Geraete-Range.
+    let low = check_bindings(&p, &hw(&CONFIG.replace("range = 0..250", "range = 10..250")));
+    assert!(has(&low, "SC-60", "`p` verlangt 0..250, das Gerät liefert 10..250"), "{:?}", codes(&low));
+
+    // 60: Die Skalierung steckt in der Einheit (3.2): `u16[mV]` an einem
+    // Kanal, den die Konfiguration in `V` fuehrt.
+    let scaled = compile(
+        &PROGRAM
+            .replace(
+                "input  p   : float[bar] in 0..250 bar @ hw(\"daq1/ai0\") with max_age = 200 ms",
+                "input  p   : u16[mV] @ hw(\"daq1/ai0\") with max_age = 200 ms",
+            )
+            .replace("v = p > 100 bar", "v = p > 100 mV"),
+    );
+    let volts = check_bindings(&scaled, &hw(&CONFIG.replace("unit = bar\nrange = 0..250", "unit = V")));
+    assert!(has(&volts, "SC-60", "bindet `[mV]`, die Konfiguration führt `V`"), "{:?}", codes(&volts));
+
+    // 39: genau so viel RAM und Flash, wie gerechnet, besteht; ein Byte
+    // weniger nicht, je Speicher. Flash belegt ohne Objektdatei nur das
+    // `persist`-Journal: zwei Sektoren der Konfiguration.
+    let kept = compile(&PROGRAM.replace("machine m:\n", "machine m:\n    persist var c : int in 0..99 = 0\n"));
+    let journal = CONFIG.replace("flash = 262144", "flash = 262144\nnvm_sector_bytes = 4096\nnvm_sectors = 2");
+    let cfg = hw(&journal);
+    let size = takt_mir::analysis::size::size(&kept).with_hardware(cfg.target("thumbv7em").expect("Ziel"));
+    let (ram, flash) = (size.ram_total(), size.flash_total());
+    assert_eq!(flash, 8192, "zwei Sektoren je 4096 Byte");
+    let judged = |ram: u64, flash: u64| {
+        let text = journal
+            .replace("ram = 65536", &format!("ram = {ram}"))
+            .replace("flash = 262144", &format!("flash = {flash}"));
+        let cfg = hw(&text);
+        check(&kept, cfg.target("thumbv7em").expect("Ziel"), Span::default())
+    };
+    let exact = judged(ram, flash);
+    assert!(!has(&exact, "SC-39", ""), "{:?}", codes(&exact));
+    let short_ram = judged(ram - 1, flash);
+    assert!(has(&short_ram, "SC-39", &format!("RAM: {ram} Byte gerechnet")), "{:?}", codes(&short_ram));
+    let short_flash = judged(ram, flash - 1);
+    assert!(has(&short_flash, "SC-39", &format!("Flash: {flash} Byte gerechnet")), "{:?}", codes(&short_flash));
+}
+
+/// Die Gate-Zeilen 39 und 59 (8.10, 13.4): ohne Kalibrierung nicht
+/// entscheidbar, mit ihr geurteilt; ohne Speichergrenzen im Ziel nicht
+/// entscheidbar; ohne gepollten Treiber nicht anwendbar, mit ihm ohne
+/// Konfiguration nicht entscheidbar und mit ihr gerechnet.
+#[test]
+fn the_gate_judges_rows_39_and_59() {
+    use takt_sema::calibrated::{Gate, gate, polling};
+    let of = |rows: &[(u32, Gate)], n: u32| rows.iter().find(|(k, _)| *k == n).map(|(_, g)| g.clone()).expect("Zeile");
+    let p = compile(PROGRAM);
+    let bare = gate(&p, None, None, &[]);
+    assert_eq!(
+        of(&bare, 39),
+        Gate::Undecidable("keine Kalibrierung (`--hardware`, `--target`), keine Speichergrenzen".to_string())
+    );
+    assert_eq!(of(&bare, 59), Gate::NotApplicable("keine gepollte `driver machine`"));
+
+    let judged = |config: &str| {
+        let cfg = hw(config);
+        let target = cfg.target("thumbv7em").expect("Ziel");
+        let diags = check(&p, target, Span::default());
+        of(&gate(&p, Some(target), Some(&cfg), &diags), 39)
+    };
+    assert_eq!(judged(CONFIG), Gate::Ok);
+    assert!(matches!(judged(&CONFIG.replace("ram = 65536", "ram = 16")), Gate::Violated(m) if m.starts_with("RAM:")));
+    assert_eq!(
+        judged(&CONFIG.replace("ram = 65536\nflash = 262144\n", "")),
+        Gate::Undecidable("das Ziel nennt weder `ram` noch `flash`".to_string())
+    );
+
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/checks/SC-59");
+    let src = std::fs::read_to_string(format!("{dir}/ok_polling_fits.takt")).expect("lesbar");
+    let options = Options { policy: Policy::default(), build: Build::Hw, profile: None, ..Default::default() };
+    let driver = takt_sema::compile(&src, &options).program.expect("Programm");
+    assert_eq!(
+        of(&gate(&driver, None, None, &[]), 59),
+        Gate::Undecidable("keine Hardware-Konfiguration (`--hardware`)".to_string())
+    );
+    let cfg = hardware::parse(&std::fs::read_to_string(format!("{dir}/hardware.hw")).expect("lesbar"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let target = cfg.targets.values().next();
+    let diags = polling(&driver, &cfg, target);
+    assert_eq!(of(&gate(&driver, target, Some(&cfg), &diags), 59), Gate::Ok, "{:?}", codes(&diags));
 }

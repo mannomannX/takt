@@ -90,14 +90,90 @@ fn a_negative_narrow_integer_survives_sign_extension() {
 fn a_float_keeps_its_bit_pattern() {
     // 4.2 verlangt bitgleiche Ergebnisse; ein Roundtrip, der rundet,
     // waere eine zweite Rundungsquelle.
+    // Verglichen wird ueber `to_bits`: `PartialEq` haelt `-0.0` fuer `0.0`.
     let p = with_var("", "persist var k : float = 0.0");
     let ty = only_type(&p);
-    for f in [0.0f64, -0.0, 1.5, f64::MIN, f64::MAX, f64::INFINITY] {
-        roundtrip(&p, ty, &Value::F64(f));
+    let subnormal = f64::from_bits(1);
+    for f in [0.0f64, -0.0, 1.5, f64::MIN, f64::MAX, subnormal, -subnormal] {
+        let bytes = encode(&p, &Value::F64(f), ty).expect("kodierbar");
+        assert_eq!(bytes, f.to_bits().to_le_bytes(), "{f:e}: die Bytes sind das Bitmuster");
+        let Ok(Value::F64(back)) = decode(&p, &bytes, ty) else { panic!("{f:e}: dekodierbar") };
+        assert_eq!(back.to_bits(), f.to_bits(), "{f:e}: Bitmuster nach dem Roundtrip");
     }
-    let bytes = encode(&p, &Value::F64(f64::NAN), ty).expect("kodierbar");
-    let back = decode(&p, &bytes, ty).expect("dekodierbar");
-    assert!(matches!(back, Value::F64(f) if f.is_nan()), "NaN geht verloren");
+    // 5.9 (INT-025): `float` kennt nur endliche Werte; das Bitmuster von
+    // Inf oder NaN ist keine gueltige Byteform.
+    for f in [f64::INFINITY, f64::NEG_INFINITY, f64::from_bits(0x7ff8_0000_dead_beef)] {
+        assert!(decode(&p, &f.to_bits().to_le_bytes(), ty).is_err(), "{f:e}: keine Byteform");
+    }
+}
+
+#[test]
+fn an_f32_keeps_its_bit_pattern_in_four_bytes() {
+    let src = format!(
+        "{}\
+output n : int in 0..9 @ hw(\"o/n\") with safe = 0
+
+machine m:
+    persist var k : float = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            n = 1
+",
+        HEAD.replace("tick = 1 ms\n", "tick = 1 ms\n    float = f32\n")
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let p = takt_sema::compile(&src, &options).program.expect("Programm");
+    let ty = only_type(&p);
+    let subnormal = f32::from_bits(1);
+    for f in [0.0f32, -0.0, 1.5, f32::MIN, f32::MAX, subnormal, -subnormal] {
+        let bytes = encode(&p, &Value::F32(f), ty).expect("kodierbar");
+        assert_eq!(bytes, f.to_bits().to_le_bytes(), "{f:e}: vier Byte Bitmuster");
+        let Ok(Value::F32(back)) = decode(&p, &bytes, ty) else { panic!("{f:e}: dekodierbar") };
+        assert_eq!(back.to_bits(), f.to_bits(), "{f:e}: Bitmuster nach dem Roundtrip");
+    }
+    for f in [f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7fc0_beef)] {
+        assert!(decode(&p, &f.to_bits().to_le_bytes(), ty).is_err(), "{f:e}: keine Byteform");
+    }
+}
+
+#[test]
+fn the_extreme_integers_keep_their_bytes() {
+    let p = with_var("", "persist var k : int = 0");
+    let ty = only_type(&p);
+    assert_eq!(roundtrip(&p, ty, &Value::Int(i64::MIN)), i64::MIN.to_le_bytes());
+    assert_eq!(roundtrip(&p, ty, &Value::Int(i64::MAX)), i64::MAX.to_le_bytes());
+    let p = with_var("", "persist var k : u64 = 0");
+    let ty = only_type(&p);
+    assert_eq!(roundtrip(&p, ty, &Value::UInt(u64::MAX)), u64::MAX.to_le_bytes());
+    let p = with_var("", "persist var k : u8 = 0");
+    let ty = only_type(&p);
+    assert_eq!(roundtrip(&p, ty, &Value::UInt(255)), [255]);
+}
+
+#[test]
+fn a_vec_length_above_the_capacity_is_rejected() {
+    let p = with_var("", "persist var k : vec<u8, 2> = default");
+    let ty = only_type(&p);
+    assert_eq!(decode(&p, &[2, 0, 0, 0, 1, 2], ty), Ok(Value::Vec(vec![Value::UInt(1), Value::UInt(2)])));
+    assert_eq!(decode(&p, &[3, 0, 0, 0, 1, 2, 3], ty), Err(Error::Malformed));
+}
+
+#[test]
+fn a_length_prefix_beyond_the_remaining_bytes_is_rejected() {
+    let p = with_var("", "persist var k : bytes<8> = default");
+    let ty = only_type(&p);
+    assert_eq!(decode(&p, &[4, 0, 0, 0, 1, 2], ty), Err(Error::Malformed));
+    assert_eq!(decode(&p, &[0xff, 0xff, 0xff, 0xff], ty), Err(Error::Malformed));
+}
+
+#[test]
+fn an_enum_variant_without_its_field_bytes_is_rejected() {
+    let p = with_var("enum Cmd: NONE, ERASE(sector: u32)\n", "persist var k : Cmd = NONE");
+    let ty = only_type(&p);
+    let mut bytes = encode(&p, &Value::Enum { variant: 1, fields: vec![Value::UInt(5)] }, ty).expect("kodierbar");
+    bytes.truncate(8);
+    assert_eq!(decode(&p, &bytes, ty), Err(Error::Malformed), "Diskriminante ohne `sector`");
 }
 
 #[test]

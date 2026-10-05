@@ -11,7 +11,7 @@
     (loop
       (send s "abc")
       (send s "n={k}")
-      (= k (% (+ k 1) 10)))))
+      (= k (% (paren (+ k 1)) 10)))))
 (machine reader
   (initial RUN)
   (state RUN

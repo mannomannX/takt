@@ -197,7 +197,7 @@ pub fn lex_diagnostic(code: ErrorCode, span: Span, detail: &str) -> Diagnostic {
         (_, false) => format!("{}: {detail}", code.describe()),
     };
     let suggestion = if code == ErrorCode::Reserved && detail == "while" {
-        "nicht erlaubt: for mit Schranke oder sequence mit until"
+        "nicht erlaubt: `for` mit Schranke oder `sequence` mit `until`"
     } else {
         code.suggestion()
     };

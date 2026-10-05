@@ -55,6 +55,10 @@ pub fn reading(channel: Scalar, tick: u64) -> Option<(i64, Option<i64>)> {
         (K, 10) => (1, Some(95_000_000)),
         (K, 11) => (2, Some(94_000_000)),
         (K, 12) => (3, None),
+        // Zeile 1, Fenstergrenzen (KON1-012): `t = t_k` liegt im Fenster
+        // (t_(k-1), t_k], `t = t_(k-1)` knapp davor, in der Toleranz.
+        (P, 13) => (10, Some(130_000_000)),
+        (Q, 14) => (11, Some(130_000_000)),
         _ => return None,
     })
 }
@@ -93,9 +97,17 @@ pub fn element(stream: Stream, tick: u64, i: usize) -> Option<(&'static [u8], i6
         // Zeile 2: drei Elemente bei `MAXPT = 200 Hz * 10 ms = 2`.
         (Lines, 7) => &[(b"1", 12), (b"2", 13), (b"3", 14)],
         (Lines, 8) => &[(b"z", 15)],
+        // Zeile 2 (KON1-012): dieselbe Nummer noch einmal, dann die naechste
+        // als Zeile ueber `line<16>` (3.9: gekuerzt, kein Verstoss), dann eine
+        // rueckwaerts.
+        (Lines, 13) => &[(b"d", 15)],
+        (Lines, 14) => &[(b"0123456789ABCDEFGHIJ", 16)],
+        (Lines, 15) => &[(b"f", 12)],
         (Pairs, 0) => &[(&[1, 2], 0)],
         // Zeile 5: ein Byte zu viel fuer `Pair`, dann ein gutes.
         (Pairs, 9) => &[(&[1, 2, 3], 1), (&[3, 4], 2)],
+        // Zeile 5 (KON1-012): ein Byte zu wenig fuer `Pair`.
+        (Pairs, 13) => &[(&[5], 3)],
         _ => &[],
     };
     all.get(i).copied()
@@ -115,6 +127,27 @@ pub fn alive(tick: u64) -> bool {
 /// Die Ticks, in denen der Rahmen fuer `o` `Runtime(Driver)` erhebt: je
 /// einer nach dem gescheiterten Commit.
 pub const DRIVER_FAULTS: [u64; 2] = [4, 9];
+
+/// Die Kapazitaet des Ausgabestroms an `edge_t/tx`, wie das Programm sie
+/// deklarieren muss (`capacity = 64`, 8.8).
+pub const TX_CAPACITY: u32 = 64;
+
+/// Der Tick, in dem `edge_t/tx` mehr freien Platz meldet, als der Strom
+/// fasst (12.6 Zeile 6, dritter Fall: der Sendepuffer ist ueberfahren).
+pub const TX_OVER_AT: u64 = 12;
+
+/// Der freie Platz, den `edge_t/tx` beim Commit in Tick `tick` meldet: der
+/// ganze Puffer, ausser in [`TX_OVER_AT`] einer mehr.
+pub fn tx_free(tick: u64) -> u32 {
+    if tick == TX_OVER_AT { TX_CAPACITY + 1 } else { TX_CAPACITY }
+}
+
+/// Bestaetigt der Ausgang `edge_f/o` den Schreibvorgang? Nie: Sein Besitzer
+/// bekommt nach jedem Commit `Runtime(Driver)`, bis er in `FAULTED` steht
+/// (12.6 Zeile 6, Dauerversagen).
+pub fn failing_confirms(_tick: u64) -> bool {
+    false
+}
 
 /// `edge_r/level` (`i32`) in Tick `tick`, ein Kanal, den `recorded.takt`
 /// nicht liest (8.2): Wert und Qualitaet (3 ist `Bad`); in Tick 3 liefert
@@ -200,5 +233,7 @@ mod tests {
         assert_eq!(reading(Scalar::P, 2), Some((7, Some(-50_000_000))));
         assert!(!confirms(3) && !alive(8));
         assert_eq!(DRIVER_FAULTS, [4, 9]);
+        assert_eq!((tx_free(TX_OVER_AT - 1), tx_free(TX_OVER_AT)), (TX_CAPACITY, TX_CAPACITY + 1));
+        assert!((0..16).all(|k| !failing_confirms(k)));
     }
 }

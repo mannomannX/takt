@@ -1,0 +1,2 @@
+t=0 state loop_test RUN
+t=200 verdict-final INCONCLUSIVE

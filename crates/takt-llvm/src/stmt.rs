@@ -67,6 +67,9 @@ pub struct Ctx<'a> {
     pub end: Option<String>,
     /// In einer `loop:`-Funktion: wahr im Entry-Tick, wo `->` nicht wirkt.
     pub entry_reg: Option<Reg>,
+    /// Der Block laeuft im Modus ENTRY (9.3), auch wenn er im Schritt steht:
+    /// die Aktionen eines Uebergangs, `exit:` und `enter:` eines Wechsels.
+    pub entry_mode: bool,
     /// Die Fault-Pfade, die am Ende der Funktion entstehen: je Quelle einer
     /// (5.3, [`FaultFrom`]).
     pub fault_paths: Vec<FaultFrom>,
@@ -96,6 +99,7 @@ impl<'a> Ctx<'a> {
             loops: Vec::new(),
             end: None,
             entry_reg: None,
+            entry_mode: false,
             fault_paths: Vec::new(),
             fault_suffix: "",
             fault: None,
@@ -162,6 +166,16 @@ impl<'a> Ctx<'a> {
         m.next_label()
     }
 
+    /// Ob das Fenster der Stroeme hier leer ist: im Modus ENTRY (9.6). Fest
+    /// in Eintritt, `exit:`, `enter:` und den Aktionen eines Uebergangs, in
+    /// einer `loop:`-Funktion ihr Entry-Register; `None`, wo es offen ist.
+    pub fn window_closed(&self) -> Option<String> {
+        if self.entry_mode || self.end.is_none() {
+            return Some("true".to_string());
+        }
+        self.entry_reg.map(|r| r.to_string())
+    }
+
     /// Die Variablenabbildung dieser Maschine.
     pub fn vars(&self) -> StateVars<'a> {
         StateVars {
@@ -173,6 +187,7 @@ impl<'a> Ctx<'a> {
             program: self.program,
             machine_index: self.machine_index,
             fault: self.fault.clone(),
+            window_closed: self.window_closed(),
         }
     }
 
@@ -275,6 +290,8 @@ pub struct StateVars<'a> {
     pub machine_index: u32,
     /// Ein Fault-Ziel ausserhalb des Schritts (`Ctx::fault`).
     pub fault: Option<String>,
+    /// Ob das Fenster der Stroeme leer ist (`Ctx::window_closed`).
+    pub window_closed: Option<String>,
 }
 
 impl StateVars<'_> {
@@ -357,6 +374,10 @@ impl Vars for StateVars<'_> {
 
     fn machine_index(&self) -> Option<u32> {
         Some(self.machine_index)
+    }
+
+    fn window_closed(&self) -> Option<String> {
+        self.window_closed.clone()
     }
 
     fn trigger_slots(&self, t: takt_mir::TriggerId, m: &mut Module) -> Option<(Reg, Reg)> {
@@ -533,6 +554,7 @@ pub fn stmt(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     r
 }
 
+#[deny(clippy::wildcard_enum_match_arm)]
 fn stmt_here(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     match &s.kind {
         StmtKind::Assign { target, value } => assign(target, value, ctx, m),
@@ -613,8 +635,43 @@ fn stmt_here(s: &Stmt, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> 
             m.void_inst(&format!("store i1 {on}, ptr {armed}"));
             Ok(())
         }
-        other => Err(NotYet { what: crate::scope::stmt_name(other) }),
+        StmtKind::Skip(stream) => skip(*stream, ctx, m),
+        // `return` steht nur in Funktionen (`fns.rs`).
+        StmtKind::Return(_) => Err(NotYet { what: "`return` in einer Maschine" }),
     }
+}
+
+/// `s.skip()` (8.6): untersucht das ganze Fenster und verwirft es — der
+/// Cursor rueckt hinter dessen letztes Element, wie im Interpreter. Im
+/// Modus ENTRY ist das Fenster leer (9.6).
+fn skip(stream: takt_mir::expr::StreamRef, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    if ctx.entry_mode {
+        return Ok(());
+    }
+    let p = ctx.program;
+    let elem = crate::stream::element(p, stream).ok_or(NotYet { what: "Elementtyp eines Stroms" })?;
+    let sid = crate::stream::number(stream).ok_or(NotYet { what: "Strom ohne feste Nummer" })?;
+    let vars = ctx.vars();
+    let (cur_ptr, ex_ptr) = vars.stream_slots(stream, m).ok_or(NotYet { what: "Cursor eines Stroms" })?;
+    let buf = crate::stream::scratch(p, elem, m)?;
+    let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
+    let n =
+        m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
+    let n = crate::stream::window_count(n, vars.window_closed(), m);
+    let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
+    let k = m.next_label();
+    let (read, done) = (format!("skip{k}_lesen"), format!("skip{k}_fertig"));
+    m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
+    m.label(&read);
+    let last = m.inst(&format!("sub i32 {n}, 1"));
+    let seq = m.inst(&format!(
+        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {last}, ptr {buf})",
+        m.runtime(crate::stream::Streams::AT)
+    ));
+    crate::stream::note_examined(ex_ptr, seq, m);
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    Ok(())
 }
 
 /// `job v = f(args)` (4.5): Die Argumente gehen als Folge kanonischer
@@ -982,8 +1039,25 @@ fn for_each(
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
-    let takt_mir::stmt::ForVars::One(var) = vars else {
-        return Err(NotYet { what: "`for` mit zwei Variablen (`map`)" });
+    let var = match vars {
+        takt_mir::stmt::ForVars::One(var) => var,
+        takt_mir::stmt::ForVars::Pair(k, v) => {
+            let vars = ctx.vars();
+            let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese `map`" })?;
+            let slot = crate::expr::place_of(iter, &want, ctx.program, m, &vars)?;
+            let (kp, _) = place(&Place::Var(*k), ctx, m)?;
+            let (vp, _) = place(&Place::Var(*v), ctx, m)?;
+            let n = ctx.next_label(m);
+            let program = ctx.program;
+            return pairs_loop(iter.ty, &slot, (kp, vp), n, program, m, &mut |m, end_at, pass| {
+                ctx.breaks.push(end_at.to_string());
+                ctx.loops.push((pass.to_string(), LlvmType::Int(32), map_cap(iter.ty, program)));
+                let result = block(body, ctx, m);
+                ctx.loops.pop();
+                ctx.breaks.pop();
+                result
+            });
+        }
     };
     match &iter.kind {
         takt_mir::expr::ExprKind::Input { channel, .. } => {
@@ -1012,6 +1086,7 @@ fn for_window(
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n =
         m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
+    let n = crate::stream::window_count(n, ctx.window_closed(), m);
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
     let direct = crate::stream::direct(ctx.program, elem);
@@ -1120,6 +1195,68 @@ fn items_loop(
     Ok(())
 }
 
+/// `for (k, v) in m` (3.9): die belegten Slots einer `map` in ihrer
+/// Reihenfolge, wie der Interpreter sie durchlaeuft (`Value::Map`, die
+/// Sondierordnung von `takt_native::map`); Schluessel und Wert aus ihrer
+/// kanonischen Form in die Schleifenvariablen. Den Rumpf senkt der Rufer.
+fn pairs_loop(
+    map: takt_mir::TypeId,
+    slot: &str,
+    (key_ptr, value_ptr): (Reg, Reg),
+    k: u32,
+    p: &takt_mir::program::Program,
+    m: &mut Module,
+    body: &mut dyn FnMut(&mut Module, &str, &str) -> Result<(), NotYet>,
+) -> Result<(), NotYet> {
+    let Some(takt_mir::types::Type::Map { key, value, cap }) = p.types.list.get(map.index()).cloned() else {
+        return Err(NotYet { what: "`for (k, v)` ausserhalb einer `map`" });
+    };
+    let (kw, vw) = crate::persist::map_widths(p, key, value)?;
+    let width = 1 + kw + vw;
+    let i_ptr = m.alloca("i32");
+    m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+    let (head, used, fill, next, end_at) = (
+        format!("paare{k}"),
+        format!("paare{k}_slot"),
+        format!("paare{k}_rumpf"),
+        format!("paare{k}_weiter"),
+        format!("paare{k}_ende"),
+    );
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&head);
+    let i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let go_on = m.inst(&format!("icmp slt i32 {i}, {cap}"));
+    m.void_inst(&format!("br i1 {go_on}, label %{used}, label %{end_at}"));
+    m.label(&used);
+    let off = m.inst(&format!("mul i32 {i}, {width}"));
+    let at = m.inst(&format!("getelementptr inbounds i8, ptr {slot}, i32 {off}"));
+    let tag = m.inst(&format!("load i8, ptr {at}"));
+    let full = m.inst(&format!("icmp eq i8 {tag}, 1"));
+    m.void_inst(&format!("br i1 {full}, label %{fill}, label %{next}"));
+    m.label(&fill);
+    let kp = m.inst(&format!("getelementptr inbounds i8, ptr {at}, i32 1"));
+    crate::persist::decode_canonical(p, key, kp, key_ptr, m)?;
+    let vp = m.inst(&format!("getelementptr inbounds i8, ptr {at}, i32 {}", 1 + kw));
+    crate::persist::decode_canonical(p, value, vp, value_ptr, m)?;
+    body(m, &end_at, &i_ptr.to_string())?;
+    m.void_inst(&format!("br label %{next}"));
+    m.label(&next);
+    let cur = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let n = m.inst(&format!("add i32 {cur}, 1"));
+    m.void_inst(&format!("store i32 {n}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&end_at);
+    Ok(())
+}
+
+/// Die Zahl der Slots einer `map`: die Schranke ihrer Schleife.
+fn map_cap(map: takt_mir::TypeId, p: &takt_mir::program::Program) -> Option<u32> {
+    match p.types.list.get(map.index()) {
+        Some(takt_mir::types::Type::Map { cap, .. }) => Some(*cap),
+        _ => None,
+    }
+}
+
 /// `for x in a` in einer Funktion (4.4).
 fn fn_for_each<V: Slots>(
     vars: &takt_mir::stmt::ForVars,
@@ -1128,8 +1265,22 @@ fn fn_for_each<V: Slots>(
     ctx: &mut FnCtx<'_, V>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
-    let takt_mir::stmt::ForVars::One(var) = vars else {
-        return Err(NotYet { what: "`for` mit zwei Variablen (`map`)" });
+    let var = match vars {
+        takt_mir::stmt::ForVars::One(var) => var,
+        takt_mir::stmt::ForVars::Pair(k, v) => {
+            let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese `map`" })?;
+            let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?;
+            let (kp, _) = ctx.vars.slot(*k, m).ok_or(NotYet { what: "Schleifenvariable" })?;
+            let (vp, _) = ctx.vars.slot(*v, m).ok_or(NotYet { what: "Schleifenvariable" })?;
+            let n = ctx.next_label(m);
+            let program = ctx.program;
+            return pairs_loop(iter.ty, &slot, (kp, vp), n, program, m, &mut |m, end_at, _| {
+                ctx.breaks.push(end_at.to_string());
+                let result = fn_block(body, ctx, m);
+                ctx.breaks.pop();
+                result
+            });
+        }
     };
     let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese Sammlung" })?;
     let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?;
@@ -1184,6 +1335,7 @@ fn fn_for<V: Slots>(
 }
 
 /// `x = e`: Wert berechnen, in den Speicherort schreiben.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn assign(target: &Place, value: &Expr, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
     // 12.10: Ein Portzugriff geschieht sofort und in Programmreihenfolge,
@@ -2072,11 +2224,17 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
                 for v in values {
                     let lo = lower_expr(&v.lo, ctx.program, m, &vars)?;
                     let hit = match &v.hi {
-                        // `case a..b`: einschliesslich beider Grenzen.
+                        // `case a..b`: einschliesslich beider Grenzen,
+                        // verglichen nach der Vorzeichenart des Subjekts.
                         Some(hi) => {
                             let h = lower_expr(hi, ctx.program, m, &vars)?;
-                            let a = m.inst(&format!("icmp sge {} {}, {}", disc.ty, disc.value, lo.value));
-                            let b = m.inst(&format!("icmp sle {} {}, {}", disc.ty, disc.value, h.value));
+                            let (ge, le) = if crate::expr::int_is_signed(subject.ty, ctx.program) {
+                                ("sge", "sle")
+                            } else {
+                                ("uge", "ule")
+                            };
+                            let a = m.inst(&format!("icmp {ge} {} {}, {}", disc.ty, disc.value, lo.value));
+                            let b = m.inst(&format!("icmp {le} {} {}, {}", disc.ty, disc.value, h.value));
                             m.inst(&format!("and i1 {a}, {b}")).to_string()
                         }
                         None => m.inst(&format!("icmp eq {} {}, {}", disc.ty, disc.value, lo.value)).to_string(),

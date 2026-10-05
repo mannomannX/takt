@@ -1,0 +1,5 @@
+(loop
+  (check (< tank_p LIMIT))
+  (if (.valid lox_temp)
+    (alert (> lox_temp 100[K]) "LOX warm"))
+  (var t (.or lox_temp 90[K])))

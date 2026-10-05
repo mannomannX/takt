@@ -9,6 +9,8 @@ rust-version.workspace = true
 [dependencies]
 takt-diag = { path = "../takt-diag" }
 takt-mir = { path = "../takt-mir" }
+# Der Versatz affiner Einheiten als Konstante, gerundet wie im Interpreter (3.2).
+libtaktm = { path = "../libtaktm" }
 
 [lints]
 workspace = true

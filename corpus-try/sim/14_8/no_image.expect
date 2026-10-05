@@ -1,0 +1,3 @@
+t=4 state bootloader SLOT_FAILED
+t=25 state bootloader HALT
+t=25 end on_start

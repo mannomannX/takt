@@ -26,7 +26,7 @@
   (return (* x k)))
 (fn pick [type T:ord] (a:T b:T) -> T
   (return (if (> a b) a b)))
-(property never_both monitor (always (not (and vbus_en beacon))))
+(property never_both monitor (always (not (paren (and vbus_en beacon)))))
 (property settles (always (implies trip_in (stable[100ms] (not vbus_en)))))
 (trigger cut_on_sector node=io1 bound=20us
   (when (matches raw_log "SECTOR {n:int}"))

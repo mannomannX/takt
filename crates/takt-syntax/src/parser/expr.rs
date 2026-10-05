@@ -1,37 +1,38 @@
 //! Ausdruecke: die Vorrangkette aus `takt.ebnf` (expr bis primary) und die
 //! Eigenschaftsausdruecke aus 13.3.
 
-use super::{PResult, Parser};
+use super::{PResult, Parser, tree_depth};
 use crate::ast::*;
 use crate::token::TokenKind;
 
 impl<'t, 's> Parser<'t, 's> {
     /// `expr := or_expr [ "if" or_expr "else" expr ]`
     pub(super) fn parse_expr(&mut self) -> PResult<Expr> {
+        self.cover("expr");
         self.enter()?;
-        let result = self.parse_expr_inner();
-        self.leave();
-        result
-    }
-
-    fn parse_expr_inner(&mut self) -> PResult<Expr> {
         let start = self.pos;
         let then = self.parse_or_expr()?;
-        if self.at_kw("if") {
+        let expr = if self.at_kw("if") {
             self.bump();
             let cond = self.parse_or_expr()?;
             self.expect_kw("else")?;
-            let otherwise = self.parse_expr()?;
-            return Ok(Expr {
+            // Der `else`-Zweig ist eine Ebene (2.1).
+            let otherwise = self.deeper(Self::parse_expr)?;
+            Expr {
                 kind: ExprKind::Conditional {
                     then: Box::new(then),
                     cond: Box::new(cond),
                     otherwise: Box::new(otherwise),
                 },
                 span: self.span_from(start),
-            });
-        }
-        Ok(then)
+            }
+        } else {
+            then
+        };
+        // Ketten pruefen ihre Tiefe Glied fuer Glied; hier alles andere, was
+        // einen Knoten ueber seine Teile setzt (2.1).
+        self.within_tree(tree_depth(&expr), start)?;
+        Ok(expr)
     }
 
     fn binary(&self, start: usize, op: BinaryOp, lhs: Expr, rhs: Expr) -> Expr {
@@ -40,11 +41,14 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `or_expr := and_expr { "or" and_expr }`
     pub(super) fn parse_or_expr(&mut self) -> PResult<Expr> {
+        self.cover("or_expr");
         self.chain(Self::parse_and_expr, |p| p.eat_kw("or").then_some(BinaryOp::Or), Self::parse_and_expr, Self::binary)
     }
 
     /// `and_expr := not_expr { "and" not_expr }`
     fn parse_and_expr(&mut self) -> PResult<Expr> {
+        // In einer Eigenschaft ist das die Produktion `tprop_and` (13.3).
+        self.cover(if self.temporal { "tprop_and" } else { "and_expr" });
         self.chain(
             Self::parse_not_expr,
             |p| p.eat_kw("and").then_some(BinaryOp::And),
@@ -55,6 +59,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `not_expr := "not" not_expr | cmp_expr`
     fn parse_not_expr(&mut self) -> PResult<Expr> {
+        self.cover(if self.temporal { "tprop_not" } else { "not_expr" });
         let start = self.pos;
         if self.eat_kw("not") {
             let inner = self.deeper(Self::parse_not_expr)?;
@@ -68,6 +73,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `cmp_expr := bitor_expr [ cmpop bitor_expr ] | bitor_expr ( "matches" | "has" ) pattern [ "as" IDENT ]`
     fn parse_cmp_expr(&mut self) -> PResult<Expr> {
+        self.cover(if self.temporal { "tprop_atom" } else { "cmp_expr" });
         let start = self.pos;
         let lhs = self.parse_bitor_expr()?;
         let kind = if self.at_kw("matches") {
@@ -116,24 +122,28 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `bitor_expr := bitxor_expr { "|" bitxor_expr }`
     fn parse_bitor_expr(&mut self) -> PResult<Expr> {
+        self.cover("bitor_expr");
         let op = |p: &mut Self| p.eat_op("|").then_some(BinaryOp::BitOr);
         self.chain(Self::parse_bitxor_expr, op, Self::parse_bitxor_expr, Self::binary)
     }
 
     /// `bitxor_expr := bitand_expr { "^" bitand_expr }`
     fn parse_bitxor_expr(&mut self) -> PResult<Expr> {
+        self.cover("bitxor_expr");
         let op = |p: &mut Self| p.eat_op("^").then_some(BinaryOp::BitXor);
         self.chain(Self::parse_bitand_expr, op, Self::parse_bitand_expr, Self::binary)
     }
 
     /// `bitand_expr := shift_expr { "&" shift_expr }`
     fn parse_bitand_expr(&mut self) -> PResult<Expr> {
+        self.cover("bitand_expr");
         let op = |p: &mut Self| p.eat_op("&").then_some(BinaryOp::BitAnd);
         self.chain(Self::parse_shift_expr, op, Self::parse_shift_expr, Self::binary)
     }
 
     /// `shift_expr := add_expr { ( "<<" | ">>" ) add_expr }`; `>>` sind zwei anliegende `>`.
     fn parse_shift_expr(&mut self) -> PResult<Expr> {
+        self.cover("shift_expr");
         let op = |p: &mut Self| {
             if p.at_op("<<") {
                 p.bump();
@@ -151,6 +161,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `add_expr := mul_expr { ( "+" | "-" ) mul_expr }`
     fn parse_add_expr(&mut self) -> PResult<Expr> {
+        self.cover("add_expr");
         let op = |p: &mut Self| {
             let op = if p.at_op("+") {
                 BinaryOp::Add
@@ -167,6 +178,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `mul_expr := unary { ( "*" | "/" | "%" ) unary }`
     fn parse_mul_expr(&mut self) -> PResult<Expr> {
+        self.cover("mul_expr");
         let op = |p: &mut Self| {
             let op = if p.at_op("*") {
                 BinaryOp::Mul
@@ -185,6 +197,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `unary := "-" unary | "~" unary | cast_expr`
     fn parse_unary(&mut self) -> PResult<Expr> {
+        self.cover("unary");
         let start = self.pos;
         let op = if self.at_op("-") {
             Some(UnaryOp::Neg)
@@ -203,6 +216,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `cast_expr := postfix [ "as" scalar_type ]`; `as` vor einem anderen Wort ist eine Bindung.
     fn parse_cast_expr(&mut self) -> PResult<Expr> {
+        self.cover("cast_expr");
         let start = self.pos;
         let expr = self.parse_postfix()?;
         if self.at_kw("as") {
@@ -218,53 +232,54 @@ impl<'t, 's> Parser<'t, 's> {
     }
 
     /// `postfix := primary { "." member [ "(" [ args ] ")" ] | "[" expr [ ".." expr ] "]" | "[" expr "," expr "]" }`
+    /// Kettenglieder sind keine Ebene (2.1); die Klammern eines Index oder
+    /// Aufrufs zaehlen ueber den Tokenstrom.
     pub(super) fn parse_postfix(&mut self) -> PResult<Expr> {
-        let mut links = 0;
-        let result = self.postfix_links(&mut links);
-        for _ in 0..links {
-            self.leave();
-        }
-        result
-    }
-
-    /// Die Glieder von [`Self::parse_postfix`]; jedes ist eine Ebene des
-    /// Baums und zaehlt gegen `MAX_DEPTH` (2.1).
-    fn postfix_links(&mut self, links: &mut u32) -> PResult<Expr> {
+        self.cover("postfix");
         let start = self.pos;
         let mut expr = self.parse_primary()?;
+        let mut depth = tree_depth(&expr);
         loop {
-            if self.at_op(".") || self.at_op("[") {
-                self.enter()?;
-                *links += 1;
-            }
-            if self.eat_op(".") {
+            let at = self.pos;
+            // Die Tiefe der Teile neben der Basis.
+            let beside = if self.eat_op(".") {
                 let name = self.parse_member()?;
                 let args = if self.at_op("(") { Some(self.parse_arg_list()?) } else { None };
+                let beside = args.iter().flatten().map(|a| tree_depth(&a.value)).max().unwrap_or(0);
                 expr =
                     Expr { kind: ExprKind::Member { base: Box::new(expr), name, args }, span: self.span_from(start) };
+                beside
             } else if self.at_op("[") {
                 self.bump();
                 let first = self.plain(Self::parse_expr)?;
+                let mut beside = tree_depth(&first);
                 let kind = if self.eat_op("..") {
                     let to = self.plain(Self::parse_expr)?;
+                    beside = beside.max(tree_depth(&to));
                     ExprKind::Slice { base: Box::new(expr), from: Box::new(first), to: Box::new(to) }
                 } else if self.eat_op(",") {
                     let col = self.plain(Self::parse_expr)?;
+                    beside = beside.max(tree_depth(&col));
                     ExprKind::Index2 { base: Box::new(expr), row: Box::new(first), col: Box::new(col) }
                 } else {
                     ExprKind::Index { base: Box::new(expr), index: Box::new(first) }
                 };
                 self.expect_op("]")?;
                 expr = Expr { kind, span: self.span_from(start) };
+                beside
             } else {
                 break;
-            }
+            };
+            // Jedes Glied der Kette ist ein Knoten (2.1).
+            depth = 1 + depth.max(beside);
+            self.within_tree(depth, at)?;
         }
         Ok(expr)
     }
 
     /// `member := IDENT | KEYWORD`
     fn parse_member(&mut self) -> PResult<Ident> {
+        self.cover("member");
         if matches!(self.kind(), TokenKind::Ident | TokenKind::Keyword) {
             let t = self.bump();
             Ok(self.ident_of(t))
@@ -275,6 +290,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `primary`
     fn parse_primary(&mut self) -> PResult<Expr> {
+        self.cover("primary");
         let start = self.pos;
         let kind = match self.kind() {
             TokenKind::Int | TokenKind::Hex | TokenKind::Bin | TokenKind::Oct | TokenKind::Float => {
@@ -397,6 +413,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `generic_args := "[" generic_arg { "," generic_arg } "]"`
     fn parse_generic_args(&mut self) -> PResult<Vec<GenericArg>> {
+        self.cover("generic_args");
         self.expect_op("[")?;
         let args = self.plain(|p| {
             let mut args = vec![p.parse_generic_arg()?];
@@ -416,6 +433,7 @@ impl<'t, 's> Parser<'t, 's> {
     /// ist ein Typ, vor `*`, `/`, `^` eine Einheit (`KiB/s`); ein Name vor `?` oder `!`
     /// eine Typvariable mit Huelle.
     fn parse_generic_arg(&mut self) -> PResult<GenericArg> {
+        self.cover("generic_arg");
         let type_words = ["bytes", "vec", "line", "stream", "samples", "table", "mat", "map"];
         let next_is = |p: &Self, ops: &[&str]| ops.iter().any(|op| p.at_op_at(1, op));
         let unit_candidate = match self.kind() {
@@ -449,15 +467,19 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `tprop := tprop_implies`
     pub(super) fn parse_tprop(&mut self) -> PResult<Expr> {
+        self.cover("tprop");
         let was = self.temporal;
         self.temporal = true;
+        let start = self.pos;
         let result = self.parse_tprop_implies();
         self.temporal = was;
-        result
+        // Wie `parse_expr`: auch eine Eigenschaft ist hoechstens `MAX_TREE` tief (2.1).
+        result.and_then(|e| self.within_tree(tree_depth(&e), start).map(|()| e))
     }
 
     /// `tprop_implies := tprop_or { "implies" tprop_or }`
     fn parse_tprop_implies(&mut self) -> PResult<Expr> {
+        self.cover("tprop_implies");
         let join = |p: &Self, start, (), lhs, rhs| Expr {
             kind: ExprKind::Implies { lhs: Box::new(lhs), rhs: Box::new(rhs) },
             span: p.span_from(start),
@@ -468,29 +490,16 @@ impl<'t, 's> Parser<'t, 's> {
     /// `tprop_or`, `tprop_and`, `tprop_not`: mit gesetztem `temporal` sind Temporal-
     /// operatoren Primaerausdruecke, also uebernimmt die gewoehnliche Vorrangkette bis
     /// `cmp_expr` (`tprop_atom`); die Bedingungsform gibt es in Eigenschaften nicht.
+    /// `and_expr`, `not_expr` und `cmp_expr` zaehlen dort als `tprop_and`,
+    /// `tprop_not` und `tprop_atom`.
     fn parse_tprop_or(&mut self) -> PResult<Expr> {
+        self.cover("tprop_or");
         self.parse_or_expr()
     }
 
-    /// `tprop_and := tprop_not { "and" tprop_not }`
-    #[allow(dead_code)]
-    fn parse_tprop_and(&mut self) -> PResult<Expr> {
-        self.parse_and_expr()
-    }
-
-    /// `tprop_not := "not" tprop_not | tprop_atom`
-    #[allow(dead_code)]
-    fn parse_tprop_not(&mut self) -> PResult<Expr> {
-        self.parse_not_expr()
-    }
-
-    /// `tprop_atom`: Temporaloperator mit Fenster und Klammer, oder ein Ausdruck.
-    #[allow(dead_code)]
-    fn parse_tprop_atom(&mut self) -> PResult<Expr> {
-        self.parse_cmp_expr()
-    }
-
+    /// `tprop_atom` mit Temporaloperator: Fenster und Klammer.
     fn parse_tprop_atom_kind(&mut self) -> PResult<ExprKind> {
+        self.cover("tprop_atom");
         let op = match self.text() {
             "always" => TemporalOp::Always,
             "never" => TemporalOp::Never,
@@ -515,7 +524,8 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `lvalue := IDENT { "." member | "[" expr "]" | "[" expr "," expr "]" }`:
     /// prueft die Form eines bereits geparsten Ausdrucks.
-    pub(super) fn parse_lvalue(&self, expr: &Expr) -> bool {
+    pub(super) fn parse_lvalue(&mut self, expr: &Expr) -> bool {
+        self.cover("lvalue");
         match &expr.kind {
             ExprKind::Ident(_) => true,
             ExprKind::Member { base, args: None, .. } => self.parse_lvalue(base),

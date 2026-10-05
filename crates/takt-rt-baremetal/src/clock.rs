@@ -80,8 +80,16 @@ impl<T: TickSource, F: FnMut()> Clock for TimerClock<T, F> {
     /// **Die Arbeit vor dem Schlaf, nicht nach dem Wecken** (FB-296): Der
     /// Tick an der Frist beginnt, sobald er da ist, statt erst nach dem
     /// Nachfuellen der Leitung.
+    ///
+    /// **Das erste Ereignis an oder nach der Frist** (FB-317): Liegt sie
+    /// zwischen zwei Ereignissen, weil die Schleife zwischen ihnen begann,
+    /// kaeme das Ereignis davor zu frueh, und `drift` waere um die Phase zu
+    /// klein.
     fn wait_until(&mut self, deadline: i64) {
-        let target = if self.nominal_ns > 0 { u64::try_from(deadline / self.nominal_ns).unwrap_or(0) } else { 0 };
+        let target = match u64::try_from(self.nominal_ns) {
+            Ok(period) if period > 0 => u64::try_from(deadline).unwrap_or(0).div_ceil(period),
+            _ => 0,
+        };
         while self.timer.ticks() < target {
             (self.idle)();
             self.timer.wait_event(target);
@@ -255,5 +263,67 @@ mod tests {
         // Die Schleife schlief drei virtuelle Ticks: Frist von 2 auf 5 ms.
         clock.wait_until(5 * MS);
         assert_eq!(clock.timer.waits.get(), 4, "die Uhr wartet die geschlafenen Perioden wirklich ab");
+    }
+
+    /// Ein Timer mit feiner Zeit: Ereignisse alle `period_ns`, die Uhr
+    /// dazwischen beliebig, etwa beim Start zwischen zwei Ereignissen.
+    struct Phased {
+        now: Cell<i64>,
+        period_ns: i64,
+    }
+
+    impl TickSource for Phased {
+        fn ticks(&self) -> u64 {
+            (self.now.get() / self.period_ns) as u64
+        }
+
+        fn last_period_ns(&self) -> i64 {
+            self.period_ns
+        }
+
+        fn now_ns(&self) -> i64 {
+            self.now.get()
+        }
+
+        fn wait_event(&mut self, target: u64) {
+            let next = (self.ticks() + 1) as i64 * self.period_ns;
+            if self.ticks() < target {
+                self.now.set(next);
+            }
+        }
+    }
+
+    /// **`wait_until` kehrt nie vor der Frist zurueck** (7.3, `Clock`):
+    /// Liegt die Frist zwischen zwei Ereignissen — die Schleife begann
+    /// zwischen ihnen —, wartet die Uhr auf das erste Ereignis danach, nicht
+    /// auf das davor. Sonst begaenne jeder Tick um die Startphase zu frueh,
+    /// und `drift` waere um sie zu klein (FB-317).
+    #[test]
+    fn the_clock_never_returns_before_the_deadline() {
+        let start = MS * 47 / 100;
+        let timer = Phased { now: Cell::new(start), period_ns: MS };
+        let mut clock = TimerClock::new(timer, MS);
+        for k in 1..5 {
+            let deadline = start + k * MS;
+            clock.wait_until(deadline);
+            assert!(clock.now() >= deadline, "Frist {deadline}, zurueck bei {}", clock.now());
+            assert_eq!(clock.now() - deadline, MS - start, "der Rueckstand ist die Phase bis zum Ereignis");
+        }
+        clock.wait_until(5 * MS);
+        assert_eq!(clock.now(), 5 * MS, "eine Frist auf einem Ereignis wartet genau bis zu ihm");
+    }
+
+    /// Eine Tickquelle, deren Periode von der nominalen abweicht: Gewartet
+    /// wird auf Ereignisse, nicht auf Zeit; den Rueckstand sieht die Schleife
+    /// als `drift`, und `tick_period` meldet die gemessene Periode (7.1).
+    #[test]
+    fn a_slow_tick_source_shows_in_the_drift_not_in_the_wait() {
+        let slow = MS + MS / 100;
+        let timer = FakeTimer { count: Cell::new(0), period_ns: slow, ..FakeTimer::default() };
+        let mut clock = TimerClock::new(timer, MS);
+        clock.wait_until(100 * MS);
+        assert_eq!(clock.timer.waits.get(), 100, "hundert Ereignisse");
+        assert_eq!(clock.now() - 100 * MS, MS, "hundert Perioden zu je 10 us zu lang");
+        assert_eq!(clock.tick_period(), Some(slow));
     }
 }

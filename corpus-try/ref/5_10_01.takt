@@ -6,7 +6,7 @@ machine field_device:
     initial STANDBY
 
     state STANDBY idle:
-        enter: led = 0
-        when button matches Edge(rising = true) as e: -> SELFTEST
-        when charger: -> SELFTEST
-        after 7 d: -> SELFTEST
+        enter: led = 0                                             # ~ SC-2
+        when button matches Edge(rising = true) as e: -> SELFTEST  # ~ SC-8
+        when charger: -> SELFTEST                                  # ~ SC-8
+        after 7 d: -> SELFTEST                                     # ~ SC-8

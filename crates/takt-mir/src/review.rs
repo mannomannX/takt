@@ -98,6 +98,9 @@ pub fn parse(text: &str) -> Result<Review, ParseError> {
         if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(ParseError { line: i as u32 + 1, message: format!("`{hash}` ist kein SHA-256 in Hex") });
         }
+        if !is_date(date) {
+            return Err(ParseError { line: i as u32 + 1, message: format!("`{date}` ist kein Datum JJJJ-MM-TT") });
+        }
         out.insert(Entry {
             native: native.to_string(),
             hash: hash.to_ascii_lowercase(),
@@ -108,8 +111,36 @@ pub fn parse(text: &str) -> Result<Review, ParseError> {
     Ok(out)
 }
 
+/// `JJJJ-MM-TT` mit Monat 1 bis 12 und Tag 1 bis 31 (`Entry::date`), wie
+/// `takt tcb review --date` es annimmt.
+pub fn is_date(text: &str) -> bool {
+    let number = |s: &str| s.bytes().all(|b| b.is_ascii_digit()).then(|| s.parse::<u32>().ok()).flatten();
+    let parts: Vec<&str> = text.split('-').collect();
+    matches!(parts[..], [y, m, d] if y.len() == 4 && m.len() == 2 && d.len() == 2
+        && number(y).is_some()
+        && number(m).is_some_and(|m| (1..=12).contains(&m))
+        && number(d).is_some_and(|d| (1..=31).contains(&d)))
+}
+
 /// Der Hash einer Quelldatei, wie ihn die Datei fuehrt.
 pub fn hash_of(source: &[u8]) -> String {
     let Hash256(bytes) = sha256(source);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SEM2-047: Das Datum einer Zeile ist `JJJJ-MM-TT` mit Monat 1 bis 12
+    /// und Tag 1 bis 31.
+    #[test]
+    fn a_date_has_its_form() {
+        for ok in ["2026-09-22", "2024-02-29", "2026-12-31", "2026-01-01"] {
+            assert!(is_date(ok), "{ok}");
+        }
+        for bad in ["22.09.2026", "2026-00-10", "2026-13-01", "2026-1-01", "2026-01-00", "2026-01-32", "+026-01-01"] {
+            assert!(!is_date(bad), "{bad}");
+        }
+    }
 }

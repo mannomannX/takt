@@ -94,7 +94,21 @@ machine m:
     let program = compile(body);
     let stim = Trace::parse("t=2 cmd stop\n").expect("Stimulus");
     let out = run(&program, &stim, &RunOptions { ticks: 6, ..Default::default() }).expect("Lauf terminiert");
-    assert!(out.trace.render().contains("Abort"), "{}", out.trace.render());
+    let text = out.trace.render();
+    // Der Abort fuehrt nach L1, dessen Eintritt faultet nach L2, und L2 ohne
+    // eigenes Ziel und ohne Maschinenziel endet in FAULTED — alles im Tick
+    // des Aborts (5.2 Schritt 5, 5.3).
+    let tick: Vec<&str> = text.lines().filter(|l| l.starts_with("t=2 ")).collect();
+    assert_eq!(
+        tick,
+        [
+            "t=2 fault m Abort \"operator\" -> L1",
+            "t=2 fault m CheckFailed \"in L1\" -> L2",
+            "t=2 fault m CheckFailed \"in L2\" -> FAULTED",
+            "t=2 state m FAULTED",
+        ],
+        "{text}"
+    );
 }
 
 /// Ein Programm mit allen Faultquellen, die M1 kennt: Range, Arithmetik,
@@ -204,6 +218,91 @@ fn theorem_9_4_1_order_independence_under_random_stimuli() {
             );
         }
     }
+}
+
+/// Drei Maschinen, die einander lesen: `pub var`, Signal und Zustand ueber
+/// `follows` (frisch) und ohne (Unit-Delay), dazu ein Abort, der alle
+/// trifft, und Faults in zwei Maschinen. Dieselben Eingaenge wie
+/// `FAULT_SOURCES`, damit `random_stimulus` passt.
+const COUPLED: &str = "\
+input  p      : float[bar] in 0..100 bar @ hw(\"d/p\")
+output p_sim  : float[bar]               @ sim(\"d/p\")
+input  n      : int in 0..1000           @ hw(\"d/n\")
+output n_sim  : int                      @ sim(\"d/n\")
+output level  : int in 0..2000 @ hw(\"o/level\")  with safe = 0
+output lagged : int in 0..2000 @ hw(\"o/lagged\") with safe = 0
+output high   : bool           @ hw(\"o/high\")   with safe = false
+output pinged : bool           @ hw(\"o/pinged\") with safe = false
+command go
+command stop
+
+machine plant:
+    fault -> SAFE
+    pub var x : int in 0..2000 = 0
+    signal ping
+    initial LOW
+    state LOW:
+        loop:
+            if stop:
+                abort \"operator\"
+            x = n
+        when x >= 500: -> HIGH
+    state HIGH:
+        enter:
+            raise ping
+        loop:
+            x = n + 1000
+            check p < 90 bar, \"druck {p}\"
+        when go: -> LOW
+    state SAFE:
+        when go: -> LOW
+
+machine ctrl follows plant:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        loop:
+            level = plant.x
+            high = plant.state == HIGH
+            pinged = plant.ping
+            check plant.x < 1500, \"zu hoch\"
+    state SAFE:
+        when go: -> RUN
+
+machine watch:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        loop:
+            lagged = plant.x
+    state SAFE:
+        when go: -> RUN
+";
+
+/// Satz 9.4.1 ueber Maschinengrenzen: Die Reihenfolge der Schritte aendert
+/// weder, was `ctrl` frisch, noch was `watch` verzoegert liest, noch die
+/// Zustellung des Aborts.
+#[test]
+fn theorem_9_4_1_holds_for_coupled_machines() {
+    let program = compile(COUPLED);
+    let mut seen = [false; 4];
+    for seed in [3u64, 31, 313, 3131] {
+        let stim = Trace::parse(&random_stimulus(seed, 150)).expect("Stimulus");
+        let base = run(&program, &stim, &RunOptions { ticks: 150, ..Default::default() }).expect("Lauf").trace.render();
+        for (i, needle) in
+            ["pub plant x", "signal plant ping", "fault watch Abort", "fault ctrl CheckFailed"].iter().enumerate()
+        {
+            seen[i] |= base.contains(needle);
+        }
+        for order in [7u64, 77, 777] {
+            let other = run(&program, &stim, &RunOptions { ticks: 150, order_seed: Some(order), ..Default::default() })
+                .expect("Lauf")
+                .trace
+                .render();
+            assert_eq!(other, base, "Seed {seed}, Reihenfolge {order}");
+        }
+    }
+    assert_eq!(seen, [true; 4], "die Stimuli treffen jede Kopplung");
 }
 
 #[test]
@@ -379,15 +478,22 @@ machine m:
         after 20 ms: -> SLEEP
 ",
     );
-    let out =
-        run(&p, &Trace::default(), &RunOptions { ticks: 200, profile: None, order_seed: None, ..Default::default() })
-            .expect("Lauf");
-    let text = out.trace.render();
-    let wechsel: Vec<&str> = text.lines().filter(|l| l.contains(" out led ")).collect();
     // Der Interpreter schreibt nur Aenderungen (9.3): In `idle` gibt es
-    // zwischen Eintritt und Frist keine.
-    assert!(wechsel.len() < 20, "zu viele Aenderungen fuer einen Schlafzustand:\n{}", wechsel.join("\n"));
-    assert!(text.contains("t=0 out led false"), "der Eintritt schreibt einmal:\n{text}");
+    // zwischen Eintritt und Frist keine. Ohne Stimulus weckt die Frist nach
+    // 50 Ticks, mit dem Taster in Tick 10 der Taster.
+    for (stimulus, want) in [
+        ("", &["t=0 false", "t=50 true", "t=70 false", "t=120 true", "t=140 false", "t=190 true"][..]),
+        (
+            "t=10 in wake true\nt=11 in wake false\n",
+            &["t=0 false", "t=10 true", "t=30 false", "t=80 true", "t=100 false", "t=150 true", "t=170 false"],
+        ),
+    ] {
+        let stim = Trace::parse(stimulus).expect("Stimulus");
+        let text = run(&p, &stim, &RunOptions { ticks: 200, ..Default::default() }).expect("Lauf").trace.render();
+        let changes: Vec<String> =
+            text.lines().filter(|l| l.contains(" out led ")).map(|l| l.replace(" out led ", " ")).collect();
+        assert_eq!(changes, want, "{stimulus}:\n{text}");
+    }
 }
 
 /// Ein `idle`-Zustand verwirft Nicht-Wake-Stroeme, statt ueberzulaufen
@@ -703,4 +809,166 @@ machine m:
     let l = takt_mir::analysis::latency::latency(&p);
     let site = l.sites.iter().find(|s| s.state == run).expect("die Stelle in RUN");
     assert_eq!(site.fault, 4, "RUN -> X -> Y -> SAFE -> FAULTED: {site:?}");
+}
+
+/// Lemma 3.4 an den Grenzen von i32 (`corpus-try/109_narrow_bounds.takt`):
+/// Die Verengung greift, die Zwischenwerte liegen jenseits von i32, und der
+/// Interpreter rechnet `up = a`, `down = -a`, `mid = a - b` exakt. Ob der
+/// erzeugte Code mit seiner Darstellung dasselbe liefert, prueft der
+/// Differenzvergleich in `takt-conformance`, sobald 109 in seinem Korpus
+/// steht; der Interpreter liest `repr` nicht (SEM2-011).
+#[test]
+fn lemma_3_4_holds_at_the_bounds_of_i32() {
+    let src = include_str!("../../../corpus-try/109_narrow_bounds.takt");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    let annotated = takt_mir::analysis::narrow::narrow(&mut p.clone());
+    assert!(annotated.0 > 0, "die Verengung greift: {annotated:?}");
+    let t = run(&p, &Trace::default(), &RunOptions { ticks: 4, ..Default::default() }).expect("Lauf").trace.render();
+    let (mut a, mut b) = (2_147_483_000i64, 0i64);
+    for tick in 0..=4 {
+        b = (b + 250).min(1000);
+        for (name, want) in [("up", a), ("down", -a), ("mid", a - b)] {
+            assert!(t.contains(&format!("t={tick} out {name} {want}\n")), "Tick {tick}, {name} = {want}:\n{t}");
+        }
+        a = (a + 200).min(i64::from(i32::MAX));
+    }
+}
+
+/// Ein Zufallswert fuer den Typ `ty` in Literalschreibweise (T2): meist in
+/// der Range, manchmal knapp oder weit daneben und negativ; `None`, wenn der
+/// Generator den Typ nicht kennt.
+fn random_value(p: &Program, ty: takt_mir::TypeId, rng: &mut Rng) -> Option<String> {
+    use takt_mir::types::{Const, Type};
+    let bound = |c: &Const| match c {
+        Const::Int(i) => *i as f64,
+        Const::Float(f) => *f,
+        Const::Duration(d) => *d as f64,
+        Const::Bool(b) => f64::from(u8::from(*b)),
+    };
+    let pick = |lo: f64, hi: f64, rng: &mut Rng| match rng.below(6) {
+        0 => lo,
+        1 => hi,
+        2 => lo - 1.0,
+        3 => hi + 1.0,
+        4 => -((rng.below(1_000_000)) as f64),
+        _ => lo + (hi - lo) * (rng.below(1001) as f64 / 1000.0),
+    };
+    let unit = |u: &Option<takt_mir::UnitId>| u.map(|u| format!(" {}", p.units[u.index()].name)).unwrap_or_default();
+    match p.types.get(ty) {
+        Type::Bool => Some(if rng.below(2) == 0 { "true" } else { "false" }.to_string()),
+        Type::Int { unit: u, range, .. } => {
+            let (lo, hi) = range.as_ref().map_or((-1000.0, 1000.0), |r| (bound(&r.lo), bound(&r.hi)));
+            Some(format!("{}{}", pick(lo, hi, rng).round() as i64, unit(u)))
+        }
+        Type::Float { unit: u, range, .. } => {
+            let (lo, hi) = range.as_ref().map_or((-1.0e6, 1.0e6), |r| (bound(&r.lo), bound(&r.hi)));
+            Some(format!("{:?}{}", pick(lo, hi, rng), unit(u)))
+        }
+        Type::Duration { .. } => Some(format!("{} ms", rng.below(5000))),
+        Type::Enum(e) => {
+            let def = &p.enums[e.index()];
+            let v = &def.variants[rng.below(def.variants.len() as u64) as usize];
+            v.fields.is_empty().then(|| v.name.clone())
+        }
+        Type::Line { cap } | Type::Str { cap } => {
+            let n = rng.below(u64::from(*cap).min(12) + 1);
+            Some(format!("\"{}\"", (0..n).map(|_| (b'a' + rng.below(26) as u8) as char).collect::<String>()))
+        }
+        Type::Bytes { cap } => {
+            let n = rng.below(u64::from(*cap).min(16) + 1);
+            Some(format!("0x{}", (0..n).map(|_| format!("{:02x}", rng.below(256))).collect::<String>()))
+        }
+        Type::Array { elem, len } | Type::Samples { elem, len } => {
+            let n = if matches!(p.types.get(ty), Type::Samples { .. }) {
+                rng.below(u64::from(*len) + 1)
+            } else {
+                u64::from(*len)
+            };
+            let items: Option<Vec<String>> = (0..n).map(|_| random_value(p, *elem, rng)).collect();
+            Some(format!("[{}]", items?.join(", ")))
+        }
+        _ => None,
+    }
+}
+
+/// Ein Zufallsstimulus aus den Deklarationen: Werte und Qualitaeten je
+/// Input (Stromelemente als Element), Commands, dazu Operator-Abort.
+fn corpus_stimulus(p: &Program, seed: u64, ticks: u64) -> String {
+    use takt_mir::program::Direction;
+    use takt_mir::types::Type;
+    let mut rng = Rng(seed | 1);
+    let mut out = String::new();
+    for t in 0..=ticks {
+        for c in p.channels.iter().filter(|c| c.dir == Direction::Input) {
+            // Ein Strom liefert Elemente, keine Qualitaeten (8.6).
+            let (elem, stream) = match p.types.get(c.ty) {
+                Type::Stream(e) => (*e, true),
+                _ => (c.ty, false),
+            };
+            let line = match rng.below(8) {
+                0 if !stream => {
+                    format!("bad reason={}", ["Driver", "OutOfRange", "Implausible"][rng.below(3) as usize])
+                }
+                1 if !stream => format!("stale age={} ms", rng.below(200)),
+                0..=3 => continue,
+                _ => match random_value(p, elem, &mut rng) {
+                    // Nur, was als Wert lesbar ist: Ein Fehler des Generators
+                    // ist kein Fehler des Interpreters.
+                    Some(v) if takt_interp::trace::parse_value(&v, elem, p).is_ok() => v,
+                    _ => continue,
+                },
+            };
+            out.push_str(&format!("t={t} in {} {line}\n", c.name));
+        }
+        for cmd in &p.commands {
+            if rng.below(10) == 0 {
+                out.push_str(&format!("t={t} cmd {}\n", cmd.name));
+            }
+        }
+        if rng.below(40) == 0 {
+            out.push_str(&format!("t={t} abort\n"));
+        }
+    }
+    out
+}
+
+/// **Satz 9.4.2 ueber den Korpus** (SEM2-013): Fuer jedes Korpusprogramm,
+/// das im Sim-Build uebersetzt, und Zufallseingaben aus seinen
+/// Deklarationen — Werte in, an und jenseits der Range, negative Werte,
+/// Qualitaeten, Stromelemente, Commands, Aborts — existiert der Trace ohne
+/// internen Fehler. NaN und Inf sind keine Werte der Sprache (4.1); ein
+/// Stimulus mit ihnen ist unlesbar und gehoert nicht hierher.
+#[test]
+fn theorem_9_4_2_holds_for_random_inputs_over_the_corpus() {
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try"));
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(root)
+        .expect("Korpus lesbar")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "takt"))
+        .collect();
+    files.sort();
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let mut ran = 0;
+    let mut failures = Vec::new();
+    for path in &files {
+        let src = std::fs::read_to_string(path).expect("lesbar");
+        let out = takt_sema::compile(&src, &options);
+        let Some(p) = out.program.filter(|_| !out.diagnostics.iter().any(|d| d.is_error())) else { continue };
+        ran += 1;
+        for seed in [11u64, 222, 3333, 44444, 555555] {
+            let text = corpus_stimulus(&p, seed, 80);
+            let stim = Trace::parse(&text).unwrap_or_else(|e| panic!("{}: Stimulus {seed}: {e}", path.display()));
+            match run(&p, &stim, &RunOptions { ticks: 80, ..Default::default() }) {
+                Ok(_) => {}
+                Err(Trap::Bug(msg)) => failures.push(format!("{} (Seed {seed}): {msg}", path.display())),
+                Err(Trap::Fault(f)) => {
+                    failures.push(format!("{} (Seed {seed}): Fault entkommen: {f:?}", path.display()))
+                }
+            }
+        }
+    }
+    assert!(ran > 80, "nur {ran} Programme liefen");
+    assert!(failures.is_empty(), "{} Laeufe mit internem Fehler:\n{}", failures.len(), failures.join("\n"));
 }

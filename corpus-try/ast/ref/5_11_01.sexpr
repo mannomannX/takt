@@ -1,0 +1,4 @@
+(state RUNNING
+  (instance pump pump_ctrl cmd=pump_cmd out=pump_valve)
+  (instance fans [i in 0..4] fan_ctrl setpoint=(index fan_sp i) out=(index fan_pwm i))
+  (instance pid resume loop_ctrl setpoint=loop_sp out=loop_out))

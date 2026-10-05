@@ -1,0 +1,42 @@
+# 108 — `solve` und `cholesky` am Rand (3.11): Die Matrix wird im Lauf
+# singulaer, und `solve` faultet `Arithmetic(Singular)` in genau dem Tick;
+# `cholesky` einer indefiniten Matrix ist `none` und faellt auf die
+# Einheitsmatrix zurueck. Der Differenzvergleich haelt den erzeugten Code
+# an beidem fest.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output x0    : float       @ hw("o/x0")    with safe = 0
+output x1    : float       @ hw("o/x1")    with safe = 0
+output l10   : float       @ hw("o/l10")   with safe = 0
+output pd    : bool        @ hw("o/pd")    with safe = true
+output phase : int in 0..9 @ hw("o/phase") with safe = 0
+
+const I2         : mat<2, 2> = [[1, 0], [0, 1]]
+const INDEFINITE : mat<2, 2> = [[1, 2], [2, 1]]
+
+machine m:
+    fault -> SAFE
+    var k : float = 4.0
+    initial RUN
+
+    state RUN:
+        enter:
+            phase = 1
+        loop:
+            # det = 4 + k - 4 = k: 3, 2, 1, dann 0.
+            k = k - 1.0
+            var a : mat<2, 2> = [[1.0, 2.0], [2.0, 4.0 + k]]
+            var x = solve(a, [[1.0], [3.0]])
+            x0 = x[0, 0]
+            x1 = x[1, 0]
+            var c = INDEFINITE.cholesky()
+            pd = c.valid
+            l10 = c.or(I2)[1, 0]
+
+    state SAFE:
+        enter:
+            phase = 2
+            x0 = 7.0

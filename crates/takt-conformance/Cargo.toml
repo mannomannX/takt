@@ -21,6 +21,8 @@ takt-sema = { path = "../takt-sema" }
 # Die Boards am Host (`board`): der Trace kommt ueber USB-Serial-JTAG
 # (ESP32-C6) oder einen Adapter an USART1 (STM32F401).
 serialport = { version = "4", default-features = false, optional = true }
+# Der Schluessel im ELF eines Bring-ups (`image_key`, KON1-009).
+takt-board-support = { path = "../takt-board-support", optional = true }
 
 [dev-dependencies]
 # Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).
@@ -29,12 +31,16 @@ takt-testkit = { path = "../takt-testkit" }
 takt-prove = { path = "../takt-prove" }
 # Die Folge des Pruefgeraets, das der Bring-up fuer den Treiberrand stellt.
 takt-board-support = { path = "../takt-board-support" }
+# Das Journal mit Stromausfall (`FakeNvm`) gegen den erzeugten Restore (KON2-022).
+takt-rt-core = { path = "../takt-rt-core" }
+# Die Bilanzzeile der Bring-ups (`report`) gegen den Leser des Wirts (RT-035).
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 
 [features]
 # Die Bring-ups binden nur den C-Rahmen (`mcu`) in ihr Bauskript und
 # lassen die Boards am Host mitsamt der seriellen Schnittstelle weg.
 default = ["board"]
-board = ["dep:serialport"]
+board = ["dep:serialport", "dep:takt-board-support"]
 
 [lints]
 workspace = true

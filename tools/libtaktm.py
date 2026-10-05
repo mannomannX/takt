@@ -12,6 +12,21 @@ Drei Aufrufe, alle nur mit der Standardbibliothek (`decimal`, `fractions`):
   python tools/libtaktm.py random SEED ANZAHL > crates/libtaktm/tests/random.txt
       ANZAHL Zufallsvektoren je Funktion und Breite.
 
+  python tools/libtaktm.py hard SEED VERSUCHE BEHALTEN > crates/libtaktm/tests/hard_f64.txt
+      Je f64-Funktion und Kandidatenfamilie die BEHALTEN von VERSUCHE
+      Argumenten, deren Wert am naechsten an einem Mittelpunkt liegt.
+
+  python tools/libtaktm.py unrounded SEED ANZAHL > crates/libtaktm/tests/unrounded.txt
+      Je einstelliger f64-Funktion ANZAHL ungerundete Werte auf 256 Bit, gegen
+      die `elem.rs` die Schranke 2^-240 vor der Rundung misst.
+
+  python tools/libtaktm.py fma SEED ANZAHL > crates/libtaktm/tests/fma.txt
+      ANZAHL Tripel je Breite fuer `fma` (4.2), exakt mit Bruechen; dazu
+      f32-Faelle, in denen ein f64-Zwischenergebnis doppelt rundete.
+
+  python tools/libtaktm.py scale SEED ANZAHL > crates/libtaktm/tests/scale.txt
+      ANZAHL Vektoren je Breite fuer `x * num / den` (3.2), exakt mit Bruechen.
+
 Die Referenz ist von der Implementierung unabhaengig: Dezimalarithmetik statt
 Ganzzahl-Gleitkomma, andere Reduktionen, keine Tabellen. Sie rundet erst, wenn
 das Fehlerintervall um ihren Naeherungswert keine Rundungsgrenze enthaelt, und
@@ -619,6 +634,11 @@ def random_args(rng, fun, width):
     big = 1023 if width == "f64" else 127
     tiny = -1074 if width == "f64" else -149
     r = lambda lo, hi, neg=None: random_float(rng, width, lo, hi, neg)  # noqa: E731
+    # Kleine Argumente bis in die Subnormalen (INT-027): Dort ist das
+    # Ergebnis nahe am Argument (oder an eins), und die Reihe muss bis zum
+    # letzten Bit stimmen.
+    if fun in ("sin", "cos", "tan", "atan", "asin", "acos") and rng.random() < 0.25:
+        return [r(tiny, -40)]
     if fun == "exp":
         if rng.random() < 0.2:
             return [r(-60, -1)]
@@ -673,6 +693,304 @@ def random_vectors(seed, count):
     return "\n".join(lines) + "\n"
 
 
+# ------------------------------------------------- schwere f64-Faelle (4.2)
+
+
+def midpoint_distance(fun, args, width):
+    """Abstand des exakten Werts zum naechsten Mittelpunkt zweier
+    Gleitkommazahlen, in Einheiten der letzten Stelle; None ohne Wert."""
+    if domain_error(fun, args) or special(fun, args, width) is not None:
+        return None
+    p, emin, _, _ = FORMATS[width]
+    value, _ = evaluate(fun, args, 45)
+    a = abs(Fraction(value))
+    if a == 0:
+        return None
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    if Fraction(2) ** e > a:
+        e -= 1
+    elif Fraction(2) ** (e + 1) <= a:
+        e += 1
+    t = a / Fraction(2) ** (max(e, emin) - p + 1)
+    return abs(t - t.numerator // t.denominator - Fraction(1, 2))
+
+
+def ulp_steps(x, steps):
+    """x und seine Nachbarn bis `steps` Stellen weiter, als f64."""
+    bits = to_bits(x, "f64")
+    return [from_bits(bits + k, "f64") for k in range(-steps, steps + 1) if 0 <= bits + k < 0x7FF0000000000000]
+
+
+def crossings(fun):
+    """Argumente, an denen das erste Glied hinter dem Argument (oder hinter
+    eins) genau eine ungerade Zahl halber Stellen ausmacht: Dort liegt der
+    exakte Wert am dichtesten an einem Mittelpunkt, naeher als 2^-50 Stellen."""
+    out = []
+    with localcontext() as ctx:
+        ctx.prec = 60
+        if fun in ("sin", "asin", "tan", "atan"):
+            # |f(x) - x| = x^3 / c mit c = 6 (sin, asin) oder 3 (tan, atan);
+            # in der Binade [2^e, 2^(e+1)) ist eine Stelle 2^(e-52).
+            c = Decimal(6) if fun in ("sin", "asin") else Decimal(3)
+            for e in range(-28, -22):
+                for j in range(4):
+                    x = (c * (2 * j + 1) * Decimal(2) ** (e - 53)) ** (Decimal(1) / 3)
+                    if Decimal(2) ** e <= x < Decimal(2) ** (e + 1):
+                        out += ulp_steps(float(x), 2)
+        elif fun == "cos":
+            # 1 - cos x = x^2 / 2; unter eins ist eine Stelle 2^-53.
+            for j in range(6):
+                out += ulp_steps(float((Decimal(2 * j + 1) * Decimal(2) ** -53).sqrt()), 2)
+        elif fun == "exp":
+            # exp x = 1 + x + ...; ueber eins ist eine Stelle 2^-52, darunter 2^-53.
+            for j in range(6):
+                out += ulp_steps(math.ldexp(2 * j + 1, -53), 2)
+                out += [-x for x in ulp_steps(math.ldexp(2 * j + 1, -54), 2)]
+    return [[x] for x in out]
+
+
+def hard_families(rng, fun):
+    """Kandidaten je Funktion: die Kreuzungen aus `crossings` als feste
+    Liste, dazu Zufallsargumente aus dem Definitionsbereich."""
+    f = lambda lo, hi, neg=None: from_bits(random_float(rng, "f64", lo, hi, neg), "f64")  # noqa: E731
+    families = {}
+    fixed = crossings(fun)
+    if fixed:
+        families["kreuzung"] = fixed
+    if fun == "exp":
+        families["bereich"] = lambda: [f(-10, 9)]
+    elif fun == "log":
+        families["nahe eins"] = lambda: [1 + math.ldexp(rng.randint(-(1 << 30), 1 << 30), -52)]
+        families["bereich"] = lambda: [f(-1000, 1000, False)]
+    elif fun in ("sin", "cos", "tan", "atan"):
+        families["bereich"] = lambda: [f(-5, 20)]
+    elif fun in ("asin", "acos"):
+        families["bereich"] = lambda: [f(-30, -1)]
+    elif fun == "atan2":
+        families["bereich"] = lambda: [f(-20, 20), f(-20, 20)]
+    else:
+        families["nahe eins"] = lambda: [1 + math.ldexp(rng.randint(1, 1 << 30), -52), f(10, 30)]
+        families["bereich"] = lambda: [f(-4, 4, False), f(-4, 6)]
+    return families
+
+
+def hard_vectors(seed, tries, keep):
+    rng = random.Random(seed)
+    lines = []
+    worst = Fraction(0)
+    for fun in FUNCTIONS:
+        for family, draw in hard_families(rng, fun).items():
+            scored = []
+            for args in draw if isinstance(draw, list) else (draw() for _ in range(tries)):
+                d = midpoint_distance(fun, args, "f64")
+                if d is not None:
+                    scored.append((d, args))
+            scored.sort(key=lambda s: s[0])
+            for d, args in scored[:keep]:
+                worst = max(worst, d)
+                bits = [to_bits(a, "f64") for a in args]
+                want = reference(fun, args, "f64")
+                text = " ".join(f"{b:016x}" for b in bits)
+                lines.append(f"f64 {fun}: {text} -> {want:016x}")
+    bound = -math.floor(math.log2(worst)) if worst > 0 else 0
+    head = [
+        "# Schwere f64-Faelle: je Funktion und Familie die Argumente, deren exakter Wert",
+        f"# am naechsten an einem Mittelpunkt liegt (alle naeher als 2^-{bound} Stellen; die",
+        "# Kreuzungen kleiner Argumente naeher als 2^-40), aus",
+        f"# `python tools/libtaktm.py hard {seed} {tries} {keep}`; Referenz in Dezimalarithmetik.",
+    ]
+    return "\n".join(head + lines) + "\n"
+
+
+# ------------------------------------------- ungerundete Werte (INT-027)
+
+UNROUNDED = ["exp", "log", "sin", "cos", "tan", "asin", "acos", "atan"]
+
+
+def big_words(value):
+    """(-1)^neg * 0.m * 2^exp mit 256 Bit Mantisse m, abgeschnitten; die
+    Woerter von m, das niedrigste zuerst, wie `Big<4>` in big.rs."""
+    q = Fraction(value)
+    neg = q < 0
+    a = -q if neg else q
+    e = a.numerator.bit_length() - a.denominator.bit_length()
+    while Fraction(2) ** e <= a:
+        e += 1
+    while Fraction(2) ** (e - 1) > a:
+        e -= 1
+    scaled = a * Fraction(2) ** (256 - e)
+    m = scaled.numerator // scaled.denominator
+    words = [(m >> (64 * i)) & ((1 << 64) - 1) for i in range(4)]
+    return neg, e, words
+
+
+def unrounded_vectors(seed, count):
+    rng = random.Random(seed)
+    lines = [
+        "# Die ungerundeten f64-Werte (256 Bit, abgeschnitten) aus",
+        f"# `python tools/libtaktm.py unrounded {seed} {count}`: <funktion> <x> -> <neg> <exp> <w0> <w1> <w2> <w3>,",
+        "# Wert = (-1)^neg * 0.w3w2w1w0 * 2^exp. Referenz in Dezimalarithmetik, Fehler unter 2^-300.",
+    ]
+    for fun in UNROUNDED:
+        made = 0
+        while made < count:
+            (x,) = random_args(rng, fun, "f64")
+            fx = from_bits(x, "f64")
+            if domain_error(fun, [fx]) or special(fun, [fx], "f64") is not None or abs(fx) >= 2048 and fun == "exp":
+                continue
+            if fun in ("asin", "acos") and abs(fx) >= 1:
+                continue
+            prec = 130
+            while True:
+                value, eps = evaluate(fun, [fx], prec)
+                if eps < Decimal(2) ** -300:
+                    break
+                prec *= 2
+            neg, e, words = big_words(value)
+            text = " ".join(f"{w:016x}" for w in words)
+            lines.append(f"{fun} {x:016x} -> {int(neg)} {e} {text}")
+            made += 1
+    return "\n".join(lines) + "\n"
+
+
+# ------------------------------------------------- Einheitenumrechnung (3.2)
+
+# Faktoren aus der Praxis: bar -> psi und zurueck, degF, Vorsaetze.
+UNIT_FACTORS = [
+    (100000 * 10**9, 6894757293168),
+    (6894757293168, 100000 * 10**9),
+    (5, 9),
+    (9, 5),
+    (1, 1000),
+    (1000, 1),
+    (3, 10),
+    (1, 3),
+    (1, 1),
+]
+
+
+def random_factor(rng):
+    """Ein Bruch mit Zaehler und Nenner von 1 bis 128 Bit."""
+    if rng.random() < 0.3:
+        return rng.choice(UNIT_FACTORS)
+    num = rng.getrandbits(rng.randint(1, 128)) or 1
+    den = rng.getrandbits(rng.randint(1, 128)) or 1
+    return num, den
+
+
+def scale_args(rng, width):
+    p, emin, emax, _ = FORMATS[width]
+    choice = rng.random()
+    if choice < 0.15:
+        # Gleichstand: ungerade Mantisse mal drei hat genau p + 1 Bit.
+        m = rng.randrange((1 << (p - 1)) + 1, (1 << (p + 1)) // 3, 2)
+        e = rng.randint(emin, emax - p - 2)
+        x = round_exact(Fraction(m) * Fraction(2) ** (e - p + 1), width)
+        return x, 3, rng.choice([1, 2, 4])
+    if choice < 0.3:
+        # Nahe am Ueberlauf und im subnormalen Bereich.
+        e = rng.choice([rng.randint(emax - 140, emax), rng.randint(emin - p, emin + 140)])
+        num, den = random_factor(rng)
+        return random_float(rng, width, e, e), num, den
+    num, den = random_factor(rng)
+    return random_float(rng, width, emin - p + 1, emax), num, den
+
+
+def scale_vectors(seed, count):
+    rng = random.Random(seed)
+    lines = [
+        "# x * num / den, korrekt gerundet (3.2, Einheitenumrechnung), erzeugt mit",
+        f"# `python tools/libtaktm.py scale {seed} {count}`; Referenz exakt mit Bruechen.",
+        "# <breite> scale: <x> <num> <den> -> <ergebnis>, Zaehler und Nenner dezimal.",
+    ]
+    for width in ("f64", "f32"):
+        digits = 16 if width == "f64" else 8
+        for _ in range(count):
+            x, num, den = scale_args(rng, width)
+            want = round_exact(Fraction(from_bits(x, width)) * Fraction(num, den), width)
+            lines.append(f"{width} scale: {x:0{digits}x} {num} {den} -> {want:0{digits}x}")
+    return "\n".join(lines) + "\n"
+
+
+# --------------------------------------------------------------- fma (4.2)
+
+
+def fma_exact(a, b, c, width):
+    """a * b + c mit einer Rundung; die Null traegt das Vorzeichen nach
+    IEEE 754-2019 6.3: negativ nur, wenn a * b und c beide -0 sind."""
+    fa, fb, fc = (from_bits(v, width) for v in (a, b, c))
+    q = Fraction(fa) * Fraction(fb) + Fraction(fc)
+    if q == 0:
+        product_negative = (math.copysign(1, fa) * math.copysign(1, fb)) < 0
+        both = product_negative and math.copysign(1, fc) < 0 and fc == 0 and fa * fb == 0
+        return special_bits("zero", both, width)
+    return round_exact(q, width)
+
+
+def fma_args(rng, width):
+    p, emin, emax, _ = FORMATS[width]
+    r = lambda lo, hi, neg=None: random_float(rng, width, lo, hi, neg)  # noqa: E731
+    choice = rng.random()
+    if choice < 0.25:
+        # Ausloeschung: c ist das negierte gerundete Produkt, das Ergebnis
+        # der exakte Rundungsfehler von a * b.
+        a, b = r(-30, 30), r(-30, 30)
+        prod = round_exact(Fraction(from_bits(a, width)) * Fraction(from_bits(b, width)), width)
+        return a, b, prod ^ (1 << (FORMATS[width][3] - 1))
+    if choice < 0.4:
+        # Subnormale Ergebnisse.
+        half = (emin - p) // 2
+        return r(half - 4, half + 4), r(half - 4, half + 4), r(emin - p + 1, emin)
+    if choice < 0.5:
+        # Ueberlauf und Grenze des groessten Werts.
+        top = emax // 2 + 1
+        return r(top - 2, top), r(top - 2, top), r(emax - 2, emax)
+    if choice < 0.6:
+        # a * b = -c exakt, auch mit Nullen: das Vorzeichen der Null.
+        zero = special_bits("zero", rng.random() < 0.5, width)
+        a = rng.choice([r(-4, 4), zero])
+        b = rng.choice([r(-4, 4), special_bits("zero", rng.random() < 0.5, width)])
+        exact = Fraction(from_bits(a, width)) * Fraction(from_bits(b, width))
+        c = round_exact(-exact, width) if exact != 0 else special_bits("zero", rng.random() < 0.5, width)
+        return a, b, c
+    return r(-60, 60), r(-60, 60), r(-60, 60)
+
+
+def double_rounded(a, b, c):
+    """f32-fma ueber ein f64-Zwischenergebnis: zwei Rundungen."""
+    fa, fb, fc = (from_bits(v, "f32") for v in (a, b, c))
+    wide = round_exact(Fraction(fa) * Fraction(fb) + Fraction(fc), "f64")
+    return to_bits(from_bits(wide, "f64"), "f32") if not math.isinf(from_bits(wide, "f64")) else None
+
+
+def fma_vectors(seed, count):
+    rng = random.Random(seed)
+    lines = [
+        "# a * b + c mit einer Rundung (4.2 fma), erzeugt mit",
+        f"# `python tools/libtaktm.py fma {seed} {count}`; Referenz exakt mit Bruechen.",
+    ]
+    for width in ("f64", "f32"):
+        digits = 16 if width == "f64" else 8
+        for _ in range(count):
+            a, b, c = fma_args(rng, width)
+            want = fma_exact(a, b, c, width)
+            lines.append(f"{width} fma: {a:0{digits}x} {b:0{digits}x} {c:0{digits}x} -> {want:0{digits}x}")
+    # f32-Faelle, in denen ein f64-Zwischenergebnis doppelt rundet:
+    # (1 + 2^-i)(1 + 2^-j) mit i + j = 24 liegt genau auf einem Mittelpunkt
+    # von f32, und ein c unter der halben Stelle von f64 kippt ihn.
+    for i in range(1, 24):
+        for k in (54, 61, 75):
+            for sign in (1, -1):
+                s = rng.randint(-20, 20)
+                a = to_bits(math.ldexp(1 + 2.0**-i, s), "f32") | (rng.getrandbits(1) << 31)
+                b = to_bits(1 + 2.0 ** -(24 - i), "f32")
+                c = to_bits(math.copysign(math.ldexp(1.0, s - k), sign * (-1 if a >> 31 else 1)), "f32")
+                want = fma_exact(a, b, c, "f32")
+                if double_rounded(a, b, c) not in (None, want):
+                    lines.append(f"f32 fma: {a:08x} {b:08x} {c:08x} -> {want:08x}")
+    return "\n".join(lines) + "\n"
+
+
 def round_lines(stream):
     out = []
     for raw in stream:
@@ -702,6 +1020,14 @@ def main():
         sys.stdout.write(round_lines(sys.stdin))
     elif len(sys.argv) == 4 and sys.argv[1] == "random":
         sys.stdout.write(random_vectors(int(sys.argv[2]), int(sys.argv[3])))
+    elif len(sys.argv) == 4 and sys.argv[1] == "unrounded":
+        sys.stdout.write(unrounded_vectors(int(sys.argv[2]), int(sys.argv[3])))
+    elif len(sys.argv) == 5 and sys.argv[1] == "hard":
+        sys.stdout.write(hard_vectors(int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])))
+    elif len(sys.argv) == 4 and sys.argv[1] == "fma":
+        sys.stdout.write(fma_vectors(int(sys.argv[2]), int(sys.argv[3])))
+    elif len(sys.argv) == 4 and sys.argv[1] == "scale":
+        sys.stdout.write(scale_vectors(int(sys.argv[2]), int(sys.argv[3])))
     else:
         sys.exit(__doc__)
 

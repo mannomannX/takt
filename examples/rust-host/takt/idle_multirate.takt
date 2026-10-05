@@ -1,0 +1,40 @@
+# Schlaf ueber Maschinen mit eigener Periode (9.9, 7.2, FB-429): Die Frist
+# zaehlt Basis-Ticks ab jetzt bis zur Aktivierung, an der `after` feuert,
+# und ein Vorruecken um n behaelt den Rest von n / Periode. `slow` laeuft
+# alle 50 ms, `odd` alle 30 ms mit Phase 20 ms; beide schlafen ueber ihre
+# `idle`-Zustaende, die Schlaflaengen sind kein Vielfaches der einen oder
+# der anderen Periode, und beide wechseln dort, wo sie es ohne Schlaf
+# taeten.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output led  : bool @ sim("o/led")  with safe = false
+output lamp : bool @ sim("o/lamp") with safe = false
+
+machine slow every 50 ms:
+    initial SLEEP
+
+    state SLEEP idle:
+        enter:
+            led = false
+        after 500 ms: -> RUN
+
+    state RUN:
+        enter:
+            led = true
+        after 200 ms: -> SLEEP
+
+machine odd every 30 ms phase 20 ms:
+    initial SLEEP
+
+    state SLEEP idle:
+        enter:
+            lamp = false
+        after 250 ms: -> RUN
+
+    state RUN:
+        enter:
+            lamp = true
+        after 70 ms: -> SLEEP

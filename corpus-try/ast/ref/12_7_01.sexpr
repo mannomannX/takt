@@ -1,0 +1,2 @@
+(input previous_run :PreviousRun @hw("sys/previous_run"))
+(output next_run :NextRun @hw("sys/next_run") safe=NONE)

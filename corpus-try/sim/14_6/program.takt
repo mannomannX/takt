@@ -2,12 +2,12 @@ system:
     language = 1
     tick     = 1 ms
 
-output vbus_set : float[V] in 0..6 V     @ hw("psu/vset")     with safe = 0 V
-output vbus_en  : bool                   @ hw("psu/enable")   with safe = false
-output reset_n  : bool                   @ hw("gpio/dut_rst") with safe = false  # low = Reset aktiv
-input  i_dut    : samples<float[A], 4>   @ hw("daq1/ai2")     with rate = 4 kHz
-input  dut_log  : stream<line<256>>      @ hw("uart0/rx")     with max_rate = 2000 Hz, framing = lines, overflow = fault
-output dut_tx   : stream<u8>             @ hw("uart0/tx")     with max_rate = 11520 Hz, capacity = 256
+output vbus_set : float[V] in 0..6 V   @ hw("psu/vset")     with safe = 0 V
+output vbus_en  : bool                 @ hw("psu/enable")   with safe = false
+output reset_n  : bool                 @ hw("gpio/dut_rst") with safe = false  # low = Reset aktiv
+input  i_dut    : samples<float[A], 4> @ hw("daq1/ai2")     with rate = 4 kHz  # 14.6: 100 Samples; das Modell liefert 4er-Fenster aus Konstanten
+input  dut_log  : stream<line<256>>    @ hw("uart0/rx")     with max_rate = 2000 Hz, framing = lines, overflow = fault
+output dut_tx   : stream<u8>           @ hw("uart0/tx")     with max_rate = 11520 Hz, capacity = 256
 
 command start
 command reset
@@ -111,7 +111,6 @@ machine brownout_test:
             reset_n = false
         when reset: -> IDLE
 
-
 # --- Simulationsmodell (8.3) -------------------------------------------
 # Plant-Modelle sind gewoehnliche Maschinen: sie schreiben `sim`-Outputs und
 # lesen die `hw`-Outputs des Steuerprogramms mit Unit-Delay. Das UART-Modell
@@ -121,8 +120,8 @@ machine brownout_test:
 
 # Pruefung 20 summiert die Hoechstlaengen aller erreichbaren `send` je
 # Aktivierung, auch ueber einander ausschliessende Zustaende (8.8).
-output dut_log_sim : stream<line<256>>      @ sim("uart0/rx") with capacity = 1280
-output i_dut_sim   : samples<float[A], 4>   @ sim("daq1/ai2")
+output dut_log_sim : stream<line<256>>    @ sim("uart0/rx") with capacity = 1280
+output i_dut_sim   : samples<float[A], 4> @ sim("daq1/ai2")
 
 # Der Treiber liefert je Tick ein Sample-Fenster (8.9); das Modell liefert
 # einen konstanten Strom je Betriebszustand.

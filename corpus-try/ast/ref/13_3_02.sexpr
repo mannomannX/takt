@@ -1,0 +1,1 @@
+(assumption slew_is_physical monitor (always (< (call abs (- tank_p (.prev tank_p))) 5[bar])))

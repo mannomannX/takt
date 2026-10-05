@@ -319,3 +319,213 @@ machine m:
     let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
     assert!(matches!(sites[0].verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {:?}", sites[0]);
 }
+
+/// Ein Eingang bis 100, eine Variable bis 60, die ihn uebernimmt; die
+/// Annahme beschraenkt ihn auf unter 50.
+fn assumed(with_assumption: bool) -> Program {
+    let assumption = if with_assumption { "assumption small: always(x < 50)\n" } else { "" };
+    compile(&format!(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input x : int in 0..100 @ hw(\"i/x\")
+output y : int @ hw(\"o/y\") with safe = 0
+
+machine m:
+    var v : int in 0..60 = 0
+    initial RUN
+    state RUN:
+        loop:
+            v = x
+            y = v
+
+{assumption}property below: always(x < 50)
+"
+    ))
+}
+
+/// INT-021: 13.3 — eine Annahme beschraenkt die Beweisverpflichtung einer
+/// Eigenschaft, nicht die Typsicherheit (3.4 lehnt `assume` ab). Unter
+/// `always(x < 50)` waere die Range-Pruefung von `v` unerreichbar; ohne
+/// sie ist sie es nicht, und nur das darf in eine Beweisdatei.
+#[test]
+fn an_assumption_does_not_prove_a_check_away() {
+    let Some(solver) = solver() else { return };
+    let p = assumed(true);
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
+    assert!(!matches!(site.verdict, CheckVerdict::Unreachable { .. }), "unter der Annahme bewiesen: {site:?}");
+    let (sites, _) = classify_compositional(&p, Some(&model), 3, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
+    assert!(!matches!(site.verdict, CheckVerdict::Unreachable { .. }), "unter der Annahme bewiesen: {site:?}");
+}
+
+/// INT-021: Dieselbe Eigenschaft ist mit der Annahme bewiesen, ohne sie
+/// verletzt; der Bericht nennt die Annahme als solche.
+#[test]
+fn an_assumption_proves_what_it_assumes_and_nothing_without_it() {
+    let Some(solver) = solver() else { return };
+    let p = assumed(true);
+    let reports = prove(&encode(&p).expect("kodierbar"), &p, 3, &solver, 60).expect("Solver laeuft");
+    let below = reports.iter().find(|r| r.name == "below").expect("below");
+    assert!(matches!(below.verdict, Verdict::Proven { .. }), "{below:?}");
+    let small = reports.iter().find(|r| r.name == "small").expect("die Annahme steht im Bericht");
+    assert!(small.assumption, "{small:?}");
+    let p = assumed(false);
+    let reports = prove(&encode(&p).expect("kodierbar"), &p, 3, &solver, 60).expect("Solver laeuft");
+    let below = reports.iter().find(|r| r.name == "below").expect("below");
+    assert!(matches!(below.verdict, Verdict::Violated { .. }), "{below:?}");
+}
+
+/// INT-020: Ein Pfad zu einer impliziten Pruefung gilt erst als
+/// bestaetigt, wenn der Interpreter an *dieser* Stelle faultet — nicht an
+/// irgendeiner Stelle derselben Art in derselben Maschine.
+///
+/// `a` liegt hinter einem `u8`-Shift: Der Interpreter wickelt `16 << 4`
+/// auf null, das Modell rechnet heute ohne Umbruch 16 (FB-386, M11
+/// Schritt 26) und findet so einen Pfad, den kein Lauf geht. `c` faultet
+/// in jedem Lauf nach sechs Ticks; dieser Fault darf den Pfad von `a`
+/// nicht bestaetigen.
+#[test]
+fn a_path_is_confirmed_only_by_its_own_site() {
+    let Some(solver) = solver() else { return };
+    let src = "system:
+    language = 1
+    tick     = 10 ms
+
+output y : int @ hw(\"o/y\") with safe = 0
+
+machine m:
+    var x : u8 = 16
+    var a : int in 0..14 = 0
+    var c : int in 0..5 = 0
+    initial RUN
+    state RUN:
+        loop:
+            a = ((x << 4) >> 4) as int
+            c = c + 1
+            y = a + c
+";
+    let p = compile(src);
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 8, &solver, 60).expect("Solver laeuft");
+    let line = src.find("a = ((x").expect("Zeile von a");
+    let next = line + src[line..].find('\n').expect("Zeilenende");
+    let a = sites
+        .iter()
+        .find(|s| s.kind == "range" && (line..next).contains(&(s.start as usize)))
+        .unwrap_or_else(|| panic!("keine Range-Stelle an `a`: {sites:?}"));
+    assert!(matches!(a.verdict, CheckVerdict::Undecided { .. }), "der Fault von `c` bestaetigte `a`: {a:?}");
+}
+
+/// Ein Solver, der auf jede Frage `word` antwortet: `unknown` oder
+/// `timeout`, wie z3 und cvc5 es tun, wenn sie aufgeben.
+fn answering(word: &str) -> Solver {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-prove-{word}"));
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let path = if cfg!(windows) {
+        let p = dir.join("solver.cmd");
+        std::fs::write(&p, format!("@echo off\r\necho {word}\r\n")).expect("Skript");
+        p
+    } else {
+        let p = dir.join("solver.sh");
+        std::fs::write(&p, format!("#!/bin/sh\necho {word}\n")).expect("Skript");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("ausfuehrbar");
+        }
+        p
+    };
+    Solver::At(path)
+}
+
+/// INT-020: Was der Solver nicht entscheidet, bleibt offen — eine
+/// Pruefstelle unentschieden, eine Eigenschaft unbewiesen, und der Grund
+/// nennt sein Wort.
+#[test]
+fn an_undecided_answer_leaves_sites_and_properties_open() {
+    let p = corpus_with("01_minimal.takt", "property never_vents: never(vent)");
+    let model = encode(&p).expect("kodierbar");
+    for word in ["unknown", "timeout"] {
+        let solver = answering(word);
+        assert!(solver.works(), "das Skript antwortet auf `--version`");
+        let sites = classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+        assert!(
+            matches!(&sites[0].verdict, CheckVerdict::Undecided { reason } if reason.contains(word)),
+            "{word}: {:?}",
+            sites[0]
+        );
+        let reports = prove(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+        assert!(
+            matches!(&reports[0].verdict, Verdict::Unproven { reason } if reason.contains(word)),
+            "{word}: {:?}",
+            reports[0]
+        );
+    }
+}
+
+/// Zwei Indexpruefungen am selben Anfang: `g[i][j]` prueft `j` am
+/// aeusseren und `i` am inneren Zugriff, und beide beginnen bei `g`.
+const SHARED_START: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+input i : int in 0..5 @ hw(\"i/i\")
+input j : int in 0..3 @ hw(\"i/j\")
+output y : int @ hw(\"o/y\") with safe = 0
+
+machine m:
+    var g : [3] [3] int = default
+    initial RUN
+    state RUN:
+        loop:
+            y = g[i][j]
+";
+
+/// Wie viele Indexpruefungen die MIR noch traegt.
+fn index_nodes(p: &Program) -> usize {
+    let mut n = 0;
+    for m in &p.machines {
+        takt_mir::visit::for_each_expr_machine(m, &mut |e| {
+            n += usize::from(matches!(
+                e.kind,
+                takt_mir::expr::ExprKind::Checked { kind: takt_mir::expr::CheckedKind::Index { .. }, .. }
+            ));
+        });
+    }
+    n
+}
+
+/// SYN-025: Der Schluessel einer Stelle ist (Anfang, Art). Zwei
+/// Pruefungen gleicher Art am selben Anfang sind darum ueberall eine
+/// Stelle: im Bericht (`takt check --checks`), in der Beweisdatei und im
+/// Beweiser (Feuern als Oder, `encode.rs`). Festgehalten ist, dass eine
+/// handgeschriebene Stelle beide Pruefungen auslaesst; ein Schluessel mit
+/// dem Ende der Spanne waere eindeutig, aenderte aber das Format der
+/// Beweisdatei (11.3). Der Beweiser selbst kodiert Arrays heute nicht.
+#[test]
+fn a_site_names_every_check_of_its_kind_at_its_start() {
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let before = takt_sema::compile(SHARED_START, &options);
+    let p = before.program.as_ref().expect("Programm");
+    assert_eq!(index_nodes(p), 2, "zwei Indexpruefungen in der MIR");
+    assert_eq!(
+        before.report.checks.get("Index").copied(),
+        Some(1),
+        "eine Stelle im Bericht: {:?}",
+        before.report.checks
+    );
+    let start = SHARED_START.find("g[i][j]").expect("Stelle") as u32;
+    let hash = takt_mir::review::hash_of(SHARED_START.as_bytes());
+    let proof = parse(&render(&hash, &[Site { start, kind: "index".into(), k: 1 }])).expect("Beweisdatei");
+    let after = takt_sema::compile_with(SHARED_START, &options, Some(&proof));
+    assert!(!after.has_errors(), "{:?}", after.diagnostics);
+    assert_eq!(
+        index_nodes(after.program.as_ref().expect("Programm")),
+        0,
+        "beide Pruefungen am Anfang {start} fielen weg"
+    );
+}

@@ -6,7 +6,7 @@ system:
     language = 1
     tick     = 10 ms
 
-output valve : bool @ hw("tank/valve") with safe = false
+output valve : bool           @ hw("tank/valve") with safe = false
 output fills : int in 0..1000 @ sim("tank/fills")
 
 machine filler:

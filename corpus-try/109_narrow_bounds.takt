@@ -1,0 +1,28 @@
+# 109 — Verengung an den Grenzen von i32 (3.4, Lemma 3.4): Die Ranges der
+# Variablen passen in i32, die Zwischenwerte nicht. Der erzeugte Code darf
+# die Darstellung nur so schmal waehlen, dass jede Zwischenrechnung stimmt;
+# der Differenzvergleich haelt ihn gegen den Interpreter (i64).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output up   : int in -2147483648..2147483647 @ hw("o/up")   with safe = 0
+output down : int in -2147483648..2147483647 @ hw("o/down") with safe = 0
+output mid  : int in -2147483648..2147483647 @ hw("o/mid")  with safe = 0
+
+machine m:
+    var a : int in 2147483000..2147483647 = 2147483000
+    var b : int in 0..1000 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            b = min(b + 250, 1000)
+            # a + b liegt ueber i32::MAX, das Ergebnis wieder darin.
+            up = (a + b) - b
+            # -a - b liegt unter i32::MIN.
+            down = (-a - b) + b
+            # Die Summe zweier grosser Werte, halbiert.
+            mid = (a + a) / 2 - b
+            a = min(a + 200, 2147483647)

@@ -106,3 +106,63 @@ machine m:
     .expect_err("Fehler erwartet");
     assert!(e.join("\n").contains("SC-57"), "{e:?}");
 }
+
+/// Drei Schluessel mit derselben Hash-Position `h <= 5` in einer Map mit 8
+/// Slots: Die Kette belegt `h`, `h + 1`, `h + 2` ohne Umlauf.
+fn colliding_keys() -> [i64; 3] {
+    let pos = |k: i64| takt_native::map::fnv1a(&k.to_le_bytes()) as usize % 8;
+    (0..6)
+        .find_map(|h| {
+            let keys: Vec<i64> = (1..100).filter(|k| pos(*k) == h).take(3).collect();
+            <[i64; 3]>::try_from(keys).ok()
+        })
+        .expect("drei kollidierende Schluessel unter 100")
+}
+
+/// 3.9: lineare Sondierung, Entfernen per Rueckwaertsverschiebung. Wer aus
+/// der Mitte einer Kette entfernt, findet das Ende weiter (`get`), die
+/// Iteration sieht es im freigewordenen Slot, `len` zaehlt zwei, und ein
+/// zweites `remove` desselben Schluessels ist `false`.
+#[test]
+fn removing_from_the_middle_of_a_chain_keeps_it_closed() {
+    let [a, b, c] = colliding_keys();
+    let p = ok(&format!(
+        "
+output n      : int in 0..8 @ hw(\"o/n\") with safe = 0
+output tail   : int in 0..1000 @ hw(\"o/tail\") with safe = 0
+output order  : int in 0..1000000 @ hw(\"o/order\") with safe = 0
+output first  : bool @ hw(\"o/first\") with safe = false
+output second : bool @ hw(\"o/second\") with safe = true
+output lost   : bool @ hw(\"o/lost\") with safe = true
+machine m:
+    var seen : map<int, int, 8> = default
+    var ok   : bool = false
+    var acc  : int in 0..1000000 = 0
+    initial RUN
+    state RUN:
+        enter:
+            ok = seen.insert({a}, 1)
+            ok = seen.insert({b}, 2)
+            ok = seen.insert({c}, 3)
+            first = seen.remove({b})
+            second = seen.remove({b})
+            n = seen.len
+            tail = seen.get({c}).or(0)
+            lost = seen.get({b}).valid
+            for (k, v) in seen:
+                acc = acc * 100 + k
+            order = acc
+"
+    ));
+    let t = trace(&p, 1);
+    for line in [
+        "t=0 out n 2".to_string(),
+        "t=0 out tail 3".to_string(),
+        format!("t=0 out order {}", a * 100 + c),
+        "t=0 out first true".to_string(),
+        "t=0 out second false".to_string(),
+        "t=0 out lost false".to_string(),
+    ] {
+        assert!(t.contains(&line), "`{line}` fehlt ({a}, {b}, {c}):\n{t}");
+    }
+}

@@ -5,8 +5,9 @@
 //! gemacht: Der Trace ist die Zusage, der Zustand ein Diagnosewerkzeug.
 //! Dazu die Faults je Tick nach Maschine und Art (FB-330): Zwei Wege, die
 //! im selben Tick aus verschiedenen Gruenden faulten, fielen an den
-//! Outputs nicht auf — beide stehen danach auf `safe`. Ebenso die Alerts
-//! und die Zaehler der Stroeme (8.6, FB-361).
+//! Outputs nicht auf — beide stehen danach auf `safe`. Ebenso die Alerts,
+//! die Zaehler der Stroeme (8.6, FB-361) und die Beobachtungen `log`,
+//! `measure`, `verify`, `verdict`, `property` und `end` (13.5, 13.3, 12.7).
 //!
 //! **Was nicht verglichen wird, und warum das dasteht.** Der Testrahmen
 //! ist keine Runtime (siehe `harness`): Er hat keine Treiber, also keine
@@ -194,8 +195,9 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
             }
         }
     }
-    // Faults nur, soweit beide Traces reichen: Ein Lauf, der frueher
-    // endet, hat die spaeteren nicht verpasst, sondern nicht erreicht.
+    // Faults und Beobachtungen nur, soweit beide Traces reichen: Ein Lauf,
+    // der frueher endet, hat die spaeteren nicht verpasst, sondern nicht
+    // erreicht.
     let horizon = last_tick(interpreter).min(last_tick(native));
     let (fa, fb) = (faults(interpreter), faults(native));
     let fault_ticks: std::collections::BTreeSet<u64> =
@@ -219,27 +221,130 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
             out.push(Difference { tick, output: "alert".into(), interpreter: render(x), native: render(y) });
         }
     }
-    let (sa, sb) = (stream_counters(interpreter), stream_counters(native));
-    let stream_ticks: std::collections::BTreeSet<u64> =
-        sa.keys().chain(sb.keys()).copied().filter(|t| Some(*t) <= horizon).collect();
-    for tick in stream_ticks {
-        let (x, y) = (sa.get(&tick), sb.get(&tick));
-        if x != y {
-            let render = |v: Option<&Vec<String>>| v.map_or(String::new(), |v| v.join(", "));
-            out.push(Difference { tick, output: "stream".into(), interpreter: render(x), native: render(y) });
+    for (output, a, b) in [
+        ("stream", stream_counters(interpreter), stream_counters(native)),
+        ("observation", observations(interpreter), observations(native)),
+    ] {
+        let ticks: std::collections::BTreeSet<u64> =
+            a.keys().chain(b.keys()).copied().filter(|t| Some(*t) <= horizon).collect();
+        for tick in ticks {
+            let (x, y) = (a.get(&tick), b.get(&tick));
+            if x != y {
+                let render = |v: Option<&Vec<String>>| v.map_or(String::new(), |v| v.join(", "));
+                out.push(Difference { tick, output: output.into(), interpreter: render(x), native: render(y) });
+            }
         }
     }
     out
 }
 
 /// Zeigt ein Trace etwas, das [`compare`] vergleicht: Ausgaenge, Faults,
-/// Alerts, Zaehler der Stroeme?
+/// Alerts, Zaehler der Stroeme, Beobachtungen?
 fn observed(trace: &str) -> bool {
     trace.lines().any(|l| {
         let mut w = l.split_whitespace();
         w.next().is_some_and(|t| t.strip_prefix("t=").is_some_and(|k| k.parse::<u64>().is_ok()))
-            && matches!(w.next(), Some("out" | "fault" | "alert" | "stream"))
+            && matches!(
+                w.next(),
+                Some(
+                    "out"
+                        | "fault"
+                        | "alert"
+                        | "stream"
+                        | "log"
+                        | "measure"
+                        | "verify"
+                        | "verdict"
+                        | "property"
+                        | "assumption"
+                        | "end"
+                )
+            )
     })
+}
+
+/// Die Beobachtungszeilen eines Traces (5.6, 12.7, 13.3, 13.5): je Tick
+/// Art und Ausgang, sortiert.
+///
+/// Der Interpreter nennt Maschine und Text, der erzeugte Code Nummer der
+/// Maschine und Stelle (`log <m> <stelle>`); gemeinsam ist beiden, was im
+/// Tick geschah: wie viele `log`, welche `measure`-Werte, welche `verify`
+/// und `verdict` mit welchem Ausgang, welche Verletzung an welcher Position
+/// (`property`, `assumption`) und welches Ende eines Laufs (`end`).
+///
+/// Nicht verglichen werden `end scenario` (das Ende waehlt der Interpreter,
+/// der Rahmen laeuft die Ticks zu Ende), `abort` (der Interpreter schreibt
+/// die Anweisung nicht, ihre Wirkung zeigen die Faults), `persist` (die
+/// Boards schreiben die Zeile nicht, `persist_native.rs` haelt sie
+/// gegeneinander), `job`, `signal` und `verdict-final` (der erzeugte Code
+/// schreibt sie nicht).
+fn observations(trace: &str) -> BTreeMap<u64, Vec<String>> {
+    let mut out: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+    for line in trace.lines() {
+        let Some(rest) = line.strip_prefix("t=") else { continue };
+        let Some((tick, rest)) = rest.split_once(' ') else { continue };
+        let Ok(tick) = tick.parse::<u64>() else { continue };
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        // Eine Maschine nennt der erzeugte Code mit ihrer Nummer, der
+        // Interpreter mit ihrem Namen, und der beginnt nie mit einer Ziffer.
+        let native = words.get(1).is_some_and(|m| m.parse::<i64>().is_ok());
+        let key = match words.as_slice() {
+            ["log", ..] => "log".to_string(),
+            ["verify", _, _, ok] if native => format!("verify {}", if *ok == "1" { "ok" } else { "fail" }),
+            ["verify", _, ok, ..] => format!("verify {ok}"),
+            ["verdict", _, _, pass] if native => format!("verdict {}", if *pass == "1" { "pass" } else { "fail" }),
+            ["verdict", _, pass, ..] => format!("verdict {pass}"),
+            ["measure", _, _, "bits", bits] if native => {
+                format!(
+                    "measure {}",
+                    bits.parse::<i64>().map_or_else(|_| bits.to_string(), |b| measured(f64::from_bits(b as u64)))
+                )
+            }
+            ["measure", _, _, value, unit] if !native => match nanoseconds(value, unit) {
+                Some(ns) => format!("measure {}", measured(ns as f64)),
+                None => format!("measure {}", value.parse::<f64>().map_or_else(|_| value.to_string(), measured)),
+            },
+            ["measure", _, _, value, ..] => {
+                format!("measure {}", value.parse::<f64>().map_or_else(|_| value.to_string(), measured))
+            }
+            ["property", _, at] if native => format!("property {at}"),
+            ["property" | "assumption", _, "violated", at] => format!("property {at}"),
+            ["end", "scenario"] => continue,
+            ["end", word] => format!("end {word}"),
+            _ => continue,
+        };
+        out.entry(tick).or_default().push(key);
+    }
+    for v in out.values_mut() {
+        v.sort();
+    }
+    out
+}
+
+/// Eine Dauer, wie der Interpreter sie schreibt (`82 ms`, T2: in ihrer
+/// groessten ganzzahligen Einheit), in Nanosekunden — der Groesse, die der
+/// erzeugte Code als `double` meldet. Ganzzahlig gerechnet, damit kein
+/// zweiter Rundungsweg vor dem bitweisen Vergleich steht; `None` fuer eine
+/// andere Einheit, deren Zahl beide Seiten gleich schreiben.
+fn nanoseconds(value: &str, unit: &str) -> Option<i64> {
+    let factor: i64 = match unit {
+        "ns" => 1,
+        "us" => 1_000,
+        "ms" => 1_000_000,
+        "s" => 1_000_000_000,
+        "min" => 60_000_000_000,
+        "h" => 3_600_000_000_000,
+        "d" => 86_400_000_000_000,
+        _ => return None,
+    };
+    value.parse::<i64>().ok()?.checked_mul(factor)
+}
+
+/// Ein gemessener Wert als sein Bitmuster: Der Interpreter schreibt ihn in
+/// seiner kuerzesten Form mit Einheit, der Wirtsrahmen mit `%.17g`, die
+/// Boards als Bits (Satz 9.4.4 verlangt dasselbe Bit).
+fn measured(v: f64) -> String {
+    format!("{:#018x}", v.to_bits())
 }
 
 /// Die erste Zeile eines Traces, fuer die Meldung einer leeren Seite.
@@ -497,6 +602,94 @@ mod tests {
         assert!(compare(interpreted, "t=3 alert m on\nt=5 alert m off\nt=6 alert m on invalid\n").is_empty());
         assert_eq!(compare(interpreted, "t=3 alert m on\nt=6 alert m on invalid\n").len(), 1);
         assert_eq!(compare(interpreted, "t=3 alert m on\nt=5 alert m off\nt=6 alert m on\n").len(), 1);
+    }
+
+    /// Ein Fault vergleicht sich nach Tick, Maschine und Art (FB-330): Jede
+    /// davon anders, oder die Zeile nur auf einer Seite, ist eine Abweichung.
+    #[test]
+    fn a_fault_differs_by_kind_machine_tick_and_side() {
+        let want = "t=0 out a 1\nt=4 fault m Range \"x\" -> SAFE\nt=9 out a 2\n";
+        assert!(compare(want, "t=0 out a 1\nt=4 fault m Range\nt=9 out a 2\n").is_empty());
+        for native in [
+            "t=0 out a 1\nt=4 fault m Overflow\nt=9 out a 2\n",
+            "t=0 out a 1\nt=4 fault n Range\nt=9 out a 2\n",
+            "t=0 out a 1\nt=5 fault m Range\nt=9 out a 2\n",
+            "t=0 out a 1\nt=9 out a 2\n",
+            "t=0 out a 1\nt=4 fault m Range\nt=4 fault n Range\nt=9 out a 2\n",
+        ] {
+            let d = compare(want, native);
+            assert!(d.iter().any(|d| d.output == "fault"), "{native:?}: {d:?}");
+        }
+    }
+
+    /// Die Zaehler eines Stroms vergleichen sich je Tick (8.6, FB-361):
+    /// `dropped`, `overflowed` und `malformed` einzeln, und eine Zeile nur
+    /// auf einer Seite.
+    #[test]
+    fn a_stream_counter_differs_in_each_field_and_side() {
+        let want = "t=0 out a 1\nt=3 stream rx dropped=1 overflowed=0 malformed=2\nt=9 out a 2\n";
+        assert!(compare(want, want).is_empty());
+        for counters in [
+            "dropped=2 overflowed=0 malformed=2",
+            "dropped=1 overflowed=1 malformed=2",
+            "dropped=1 overflowed=0 malformed=3",
+        ] {
+            let native = format!("t=0 out a 1\nt=3 stream rx {counters}\nt=9 out a 2\n");
+            assert!(compare(want, &native).iter().any(|d| d.output == "stream"), "{counters}");
+        }
+        assert!(compare(want, "t=0 out a 1\nt=9 out a 2\n").iter().any(|d| d.output == "stream"));
+        assert!(compare("t=0 out a 1\nt=9 out a 2\n", want).iter().any(|d| d.output == "stream"));
+    }
+
+    /// Faults, Alerts und Zaehler zaehlen nur, soweit beide Traces reichen:
+    /// Ein Lauf, der frueher endet, hat die spaeteren nicht verpasst. Ob er
+    /// zu frueh endet, prueft der Rahmen, der die Tickzahl kennt (KON1-010).
+    #[test]
+    fn faults_count_up_to_the_shorter_horizon() {
+        let want = "t=0 out a 1\nt=4 fault m Range\n";
+        assert!(compare(want, "t=0 out a 1\nt=3 out a 1\n").is_empty());
+        assert_eq!(compare(want, "t=0 out a 1\nt=4 out a 1\n").len(), 1);
+    }
+
+    /// Jede Beobachtung vergleicht sich je Tick nach Art und Ausgang
+    /// (13.5, 13.3, 12.7): der Interpreter mit Maschine und Text, der
+    /// Wirtsrahmen und die Boards mit Nummern und Stelle.
+    #[test]
+    fn every_observation_compares_by_tick_kind_and_outcome() {
+        let base = "t=0 out a 1\nt=9 out a 2\n";
+        for (interpreted, native, other) in [
+            ("t=2 log m \"hallo welt\"", "t=2 log 0 7", "t=3 log 0 7"),
+            ("t=2 verify m ok \"p > 0\"", "t=2 verify 0 3 1", "t=2 verify 0 3 0"),
+            ("t=2 verify m fail \"p > 0\"", "t=2 verify 1 3 0", "t=2 verify 1 3 1"),
+            ("t=2 verdict s pass", "t=2 verdict 2 0 1", "t=2 verdict 2 0 0"),
+            ("t=2 verdict s fail \"zu spaet\"", "t=2 verdict 2 0 0", "t=2 verdict 2 0 1"),
+            ("t=2 measure m level 0.5 bar", "t=2 measure 0 1 0.5", "t=2 measure 0 1 0.25"),
+            ("t=2 measure m level 0.5 bar", "t=2 measure 0 1 bits 4602678819172646912", "t=2 measure 0 1 bits 0"),
+            ("t=2 measure m level <invalid>", "t=2 measure 0 1 <invalid>", "t=2 measure 0 1 0"),
+            // Eine Dauer schreibt der Interpreter mit Einheit, der Rahmen in ns.
+            ("t=2 measure m wait 82 ms", "t=2 measure 0 1 82000000", "t=2 measure 0 1 82"),
+            ("t=2 measure m wait 82 ms", "t=2 measure 0 1 bits 4725275336332279808", "t=2 measure 0 1 bits 0"),
+            ("t=2 measure m wait -3 s", "t=2 measure 0 1 -3000000000", "t=2 measure 0 1 -3"),
+            ("t=7 property disarms violated 2", "t=7 property 0 2", "t=7 property 0 3"),
+            ("t=7 assumption rare violated 7", "t=7 property 1 7", "t=8 property 1 7"),
+            ("t=5 end deep_sleep", "t=5 end deep_sleep", "t=5 end restart"),
+        ] {
+            let want = format!("{base}{interpreted}\n");
+            assert!(compare(&want, &format!("{base}{native}\n")).is_empty(), "{interpreted} gegen {native}");
+            let d = compare(&want, &format!("{base}{other}\n"));
+            assert!(d.iter().any(|d| d.output == "observation"), "{interpreted} gegen {other}: {d:?}");
+            let d = compare(&want, base);
+            assert!(d.iter().any(|d| d.output == "observation"), "{interpreted} nur im Interpreter: {d:?}");
+            let d = compare(base, &format!("{base}{native}\n"));
+            assert!(d.iter().any(|d| d.output == "observation"), "{native} nur nativ: {d:?}");
+        }
+    }
+
+    /// Das Ende eines Szenarios waehlt der Interpreter (13.6); der Rahmen
+    /// laeuft weiter, und das ist keine Abweichung.
+    #[test]
+    fn the_end_of_a_scenario_is_the_interpreters() {
+        assert!(compare("t=0 out a 1\nt=4 end scenario\n", "t=0 out a 1\nt=4 out a 1\n").is_empty());
     }
 
     /// Eine Dauer traegt ihre Einheit auf beiden Seiten; eine Groesse nur

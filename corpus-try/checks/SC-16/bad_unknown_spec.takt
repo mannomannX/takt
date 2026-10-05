@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: `x` ist keine Formatangabe; erlaubt sind `hex`, `.N`, `0N`.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var k : int in 0..100 = 3
+    var f : float[bar] = 2.5 bar
+    var q : vec<int, 4> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            log "Zaehler {k:x}"  # ~ SC-16
+            v = true

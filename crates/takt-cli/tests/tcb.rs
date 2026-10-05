@@ -94,3 +94,61 @@ fn an_allowlist_program_needs_no_review_file() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
     assert!(!dir.join("natives.review").exists());
 }
+
+fn review(dir: &Path, native: &str, by: &str, date: &str) -> Output {
+    takt(dir, &["tcb", "review", "p.takt", "--native", native, "--by", by, "--date", date])
+}
+
+/// Die Review-Datei ist durch Leerraum getrennt und kennt `#` als Kommentar:
+/// Ein Pruefername mit Leerzeichen oder `#` und ein Datum ausser
+/// `JJJJ-MM-TT` werden abgelehnt, statt eine Zeile zu schreiben, an der jeder
+/// spaetere Lauf scheitert.
+#[test]
+fn a_review_refuses_a_name_or_date_the_file_cannot_hold() {
+    let dir = project("bad-fields");
+    for (by, date, message) in [
+        ("anna berg", "2026-09-22", "--by"),
+        ("anna#1", "2026-09-22", "--by"),
+        ("anna", "22.09.2026", "--date"),
+        ("anna", "2026-13-01", "--date"),
+    ] {
+        let out = review(&dir, "crc_custom", by, date);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{by} {date} angenommen");
+        assert!(stderr.contains(message), "{by} {date}: {stderr}");
+        assert!(!dir.join("natives.review").exists(), "{by} {date}: Datei geschrieben");
+    }
+}
+
+/// Ein Review gilt nur einer Native, die das Programm mit Quelle deklariert,
+/// und einer Quelle, die es gibt.
+#[test]
+fn a_review_needs_a_declared_native_and_its_source() {
+    let dir = project("missing");
+    let out = review(&dir, "gibtsnicht", "anna", "2026-09-22");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("kein Projekt-Native `gibtsnicht`"));
+    std::fs::remove_file(dir.join("crypto.rs")).expect("Quelle entfernen");
+    let out = review(&dir, "crc_custom", "anna", "2026-09-22");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("`crypto.rs` ist nicht lesbar"));
+    assert!(!dir.join("natives.review").exists());
+}
+
+/// Ein zweites Review derselben Quelle ersetzt das erste; eine geaenderte
+/// Quelle bekommt eine eigene Zeile neben der alten.
+#[test]
+fn a_second_review_of_the_same_source_replaces_the_first() {
+    let dir = project("twice");
+    assert!(review(&dir, "crc_custom", "anna", "2026-09-22").status.success());
+    assert!(review(&dir, "crc_custom", "ben", "2026-09-23").status.success());
+    let file = std::fs::read_to_string(dir.join("natives.review")).expect("natives.review");
+    let lines: Vec<&str> = file.lines().filter(|l| l.starts_with("crc_custom ")).collect();
+    assert_eq!(lines.len(), 1, "{file}");
+    assert!(lines[0].ends_with(" ben 2026-09-23"), "{file}");
+    std::fs::write(dir.join("crypto.rs"), "pub fn crc_custom(_b: &[u8]) -> u16 { 1 }\n").expect("Quelle");
+    assert!(review(&dir, "crc_custom", "cleo", "2026-09-24").status.success());
+    let file = std::fs::read_to_string(dir.join("natives.review")).expect("natives.review");
+    assert_eq!(file.lines().filter(|l| l.starts_with("crc_custom ")).count(), 2, "{file}");
+    assert!(takt(&dir, &["check", "p.takt"]).status.success());
+}

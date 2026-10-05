@@ -660,6 +660,9 @@ impl<'p> Walk<'p> {
                             _ => Interval::Top,
                         }
                     }
+                    // `-x` roh: `expr` klemmte `-MIN` auf den Typ, und die
+                    // Pruefung gaelte als bewiesen.
+                    ExprKind::Unary { op: UnaryOp::Neg, expr } => -self.expr(expr, f),
                     _ => self.expr(inner, f),
                 };
                 let b = self.width_of(node.ty).map_or(Interval::Top, width_bounds);

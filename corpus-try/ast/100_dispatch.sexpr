@@ -14,19 +14,19 @@
     (on rx matches "code {c:int}" as e when (and (>= (.c e) 0) (< (.c e) 500))
       (= which 1)
       (= value (.c e))
-      (= seen (% (+ seen 1) 100)))
+      (= seen (% (paren (+ seen 1)) 100)))
     (on rx has "ERR {n:int}" as e
       (= which 2)
       (= value (% (.n e) 1000))
-      (= seen (% (+ seen 1) 100)))
+      (= seen (% (paren (+ seen 1)) 100)))
     (on rx has "WARN"
       (= which 3)
-      (= seen (% (+ seen 1) 100)))
+      (= seen (% (paren (+ seen 1)) 100)))
     (on rx matches "{_}:{k:word}" as e
       (= which 4)
       (= value (.len (.k e)))
-      (= seen (% (+ seen 1) 100)))
+      (= seen (% (paren (+ seen 1)) 100)))
     (on rx as e
       (= which 5)
-      (= seen (% (+ seen 1) 100)))
+      (= seen (% (paren (+ seen 1)) 100)))
     (after 1s -> A)))

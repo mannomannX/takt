@@ -23,8 +23,13 @@ output y     : float         @ hw(\"y\")     with safe = 0.0
 /// Der Trace des Interpreters, wenn der erzeugte Code denselben liefert;
 /// `None` ohne clang.
 fn agree(body: &str, name: &str) -> Option<String> {
+    agree_with(HEAD, body, name)
+}
+
+/// Wie [`agree`], mit eigenem Kopf (Breite von `float`, Ausgaenge).
+fn agree_with(head: &str, body: &str, name: &str) -> Option<String> {
     let path = common::clang_path()?;
-    let src = format!("{HEAD}{body}");
+    let src = format!("{head}{body}");
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let out = takt_sema::compile(&src, &options);
     assert!(!out.has_errors(), "{name}: {:?}", out.diagnostics);
@@ -89,4 +94,40 @@ fn a_finite_chain_writes_its_value() {
     let Some(t) = agree(&program(vars, "-(a * b) + a / b"), "chain_finite") else { return };
     assert!(t.contains("t=1 out y -11.25"), "{t}");
     assert!(t.contains("t=1 out probe 2"), "{t}");
+}
+
+/// **Jeder Gebrauch prueft, in beiden Breiten** (4.1, 4.2; KON2-019): Ein
+/// nicht endlicher Wert faultet am Vergleich, an der Umwandlung, am Argument
+/// eines Aufrufs und eines Natives, am Divisor `-0.0`, an `0/0` und an `-inf`;
+/// ein frueher ausgewerteter Fault anderer Art in derselben Anweisung geht
+/// vor. Je Zeile Interpreter gegen nativ und die Art des Faults.
+#[test]
+fn every_use_checks_finiteness_in_both_widths() {
+    let cases: [(&str, &str, &str); 9] = [
+        ("compare", "y = 1.0 if a * b > c else 0.0", "Arithmetic(NonFinite)"),
+        ("round", "probe = round(a * b)", "Arithmetic(NonFinite)"),
+        ("call", "y = twice(a * b)", "Arithmetic(NonFinite)"),
+        ("sqrt", "y = sqrt(a * b)", "Arithmetic(NonFinite)"),
+        ("negative_zero", "y = c / nz", "Arithmetic(NonFinite)"),
+        ("zero_by_zero", "y = z / z", "Arithmetic(NonFinite)"),
+        ("minus_inf", "y = -(a * b) + c", "Arithmetic(NonFinite)"),
+        ("earlier_int", "probe = 10 / k + round(a * b)", "Arithmetic(DivZero)"),
+        ("earlier_float", "probe = round(a * b) + 10 / k", "Arithmetic(NonFinite)"),
+    ];
+    for (width, big) in [("f32", "1e30"), ("f64", "1e300")] {
+        let head = HEAD.replace("float    = f32", &format!("float    = {width}"));
+        let vars = format!(
+            "    var a : float = {big}\n    var b : float = {big}\n    var c : float = 1.0\n    var z : float = 0.0\n\
+             \x20   var nz : float = -0.0\n    var k : int in 0..9 = 0\n"
+        );
+        for (name, statement, kind) in cases {
+            let (assign, expr) = statement.split_once(" = ").expect("Zuweisung");
+            let body = program(&vars, expr)
+                .replace(&format!("            y = {expr}\n"), &format!("            {assign} = {expr}\n"));
+            let body = format!("fn twice(x: float) -> float:\n    return x * 2.0\n\n{body}");
+            let Some(t) = agree_with(&head, &body, &format!("nonfinite_{width}_{name}")) else { return };
+            assert!(t.contains(&format!("t=1 fault m {kind}")), "{width} {name}: `{statement}`:\n{t}");
+            assert!(t.contains("t=1 out probe 9"), "{width} {name}: der Fault fuehrt nach SAFE:\n{t}");
+        }
+    }
 }

@@ -55,6 +55,7 @@ mod elem;
 mod exact;
 #[cfg(feature = "std")]
 pub mod mat;
+mod scale;
 mod table;
 
 use big::{F32, F64};
@@ -64,6 +65,7 @@ pub use exact::{
     trunc_f64,
 };
 pub use exact::{copysign_f32, copysign_f64, fabs_f32, fabs_f64};
+pub use scale::{scale_f32, scale_f64};
 
 /// Eine Funktion der Bibliothek, unabhaengig von der Breite.
 ///

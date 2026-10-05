@@ -5,9 +5,9 @@
 
 use std::fmt::Write as _;
 
-use takt_mir::TypeId;
 use takt_mir::program::Program;
-use takt_mir::types::Type;
+use takt_mir::types::{FloatWidth, Type};
+use takt_mir::{TypeId, UnitId};
 
 use crate::value::{Quality, Reason, Sample, Value};
 
@@ -119,6 +119,11 @@ pub struct SampleText {
 pub struct Trace {
     /// Die Zeilen.
     pub lines: Vec<TraceLine>,
+    /// Die Elemente der internen Stroeme, wie sie zugestellt wurden, als
+    /// `in`-Zeilen mit Zeitstempel und Folgenummer des Schreibers (12.5):
+    /// nicht Teil des Golden-Trace, aber der Scheibe einer Maschine, die
+    /// den Strom liest (`machine_slice`).
+    pub internal: Vec<TraceLine>,
 }
 
 impl Trace {
@@ -133,7 +138,7 @@ impl Trace {
             let parsed = parse_line(line).map_err(|e| format!("Zeile {}: {e}", i + 1))?;
             lines.push(parsed);
         }
-        Ok(Trace { lines })
+        Ok(Trace { lines, internal: Vec::new() })
     }
 
     /// Schreibt den Trace.
@@ -156,7 +161,7 @@ impl Trace {
     }
 }
 
-fn parse_line(line: &str) -> Result<TraceLine, String> {
+pub(crate) fn parse_line(line: &str) -> Result<TraceLine, String> {
     let mut it = line.splitn(2, ' ');
     let head = it.next().unwrap_or_default();
     let rest = it.next().unwrap_or_default().trim();
@@ -348,11 +353,51 @@ fn split_first(s: &str) -> (&str, &str) {
     }
 }
 
+/// Ein Text in Anfuehrungszeichen, wie `{:?}` ihn schreibt, und der Rest
+/// dahinter. Die Escapes sind die von `{:?}`: `\\`, `\"`, `\'`, `\n`,
+/// `\t`, `\r`, `\0` und `\u{…}` — ein Text mit `"` oder Zeilenende
+/// bliebe sonst nicht eine Zeile (T1).
 fn parse_quoted(s: &str) -> Result<(String, &str), String> {
     let s = s.trim_start();
-    let rest = s.strip_prefix('"').ok_or_else(|| format!("Anfuehrungszeichen erwartet, `{s}` gefunden"))?;
-    let end = rest.find('"').ok_or("schliessendes Anfuehrungszeichen fehlt")?;
-    Ok((rest[..end].to_string(), &rest[end + 1..]))
+    let body = s.strip_prefix('"').ok_or_else(|| format!("Anfuehrungszeichen erwartet, `{s}` gefunden"))?;
+    let mut out = String::new();
+    let mut chars = body.char_indices();
+    while let Some((i, c)) = chars.next() {
+        match c {
+            '"' => return Ok((out, &body[i + 1..])),
+            '\\' => {
+                let escaped = match chars.next().map(|(_, e)| e) {
+                    Some('\\') => '\\',
+                    Some('"') => '"',
+                    Some('\'') => '\'',
+                    Some('n') => '\n',
+                    Some('t') => '\t',
+                    Some('r') => '\r',
+                    Some('0') => '\0',
+                    Some('u') => {
+                        let rest = &body[i + 2..];
+                        let digits = rest
+                            .strip_prefix('{')
+                            .and_then(|r| r.split_once('}'))
+                            .map(|(d, _)| d)
+                            .ok_or_else(|| format!("`\\u{{…}}` erwartet in `{s}`"))?;
+                        let c = u32::from_str_radix(digits, 16)
+                            .ok()
+                            .and_then(char::from_u32)
+                            .ok_or_else(|| format!("`\\u{{{digits}}}` ist kein Zeichen"))?;
+                        for _ in 0..digits.len() + 2 {
+                            chars.next();
+                        }
+                        c
+                    }
+                    other => return Err(format!("unbekanntes Escape `\\{}` in `{s}`", other.unwrap_or(' '))),
+                };
+                out.push(escaped);
+            }
+            c => out.push(c),
+        }
+    }
+    Err("schliessendes Anfuehrungszeichen fehlt".into())
 }
 
 fn parse_sample(s: &str) -> Result<SampleText, String> {
@@ -397,7 +442,9 @@ fn parse_sample(s: &str) -> Result<SampleText, String> {
             in_age = false;
         } else {
             in_age = false;
-            if matches!(word, "bad" | "stale" | "suspect") && words.is_empty() {
+            // Die Qualitaet steht vor oder hinter dem Wert (T2: `90 K stale
+            // age=120 ms`); ein Text in Anfuehrungszeichen ist nie eine.
+            if matches!(word, "bad" | "stale" | "suspect") {
                 quality = Some(word.to_string());
             } else {
                 words.push(word);
@@ -471,25 +518,28 @@ pub(crate) fn render_line(line: &TraceLine) -> String {
             format!("t={t} tune {name} {value}{}", if *accepted { "" } else { " rejected" })
         }
         LineKind::Job { machine, handle } => format!("t={t} job {machine} {handle} done"),
+        // Texte stehen wie `str`-Werte (T2): in Anfuehrungszeichen mit den
+        // Escapes von `{:?}`, damit `"` und Zeilenenden die Zeile nicht
+        // zerreissen.
         LineKind::Fault { machine, kind, message, target } => {
-            format!("t={t} fault {machine} {kind} \"{message}\" -> {target}")
+            format!("t={t} fault {machine} {kind} {message:?} -> {target}")
         }
-        LineKind::Log { machine, text } => format!("t={t} log {machine} \"{text}\""),
+        LineKind::Log { machine, text } => format!("t={t} log {machine} {text:?}"),
         LineKind::Stream { name, dropped, overflowed, malformed } => {
             format!("t={t} stream {name} dropped={dropped} overflowed={overflowed} malformed={malformed}")
         }
         LineKind::Driver { name, event } => format!("t={t} driver {name} {event}"),
         LineKind::Alert { machine, on, text } => {
-            format!("t={t} alert {machine} {} \"{text}\"", if *on { "on" } else { "off" })
+            format!("t={t} alert {machine} {} {text:?}", if *on { "on" } else { "off" })
         }
         LineKind::Measure { machine, name, value } => format!("t={t} measure {machine} {name} {value}"),
         LineKind::Verify { machine, ok, text } => {
-            format!("t={t} verify {machine} {} \"{text}\"", if *ok { "ok" } else { "fail" })
+            format!("t={t} verify {machine} {} {text:?}", if *ok { "ok" } else { "fail" })
         }
         LineKind::Verdict { machine, pass, text } => {
             let verdict = if *pass { "pass" } else { "fail" };
             match text {
-                Some(t2) => format!("t={t} verdict {machine} {verdict} \"{t2}\""),
+                Some(t2) => format!("t={t} verdict {machine} {verdict} {t2:?}"),
                 None => format!("t={t} verdict {machine} {verdict}"),
             }
         }
@@ -604,17 +654,48 @@ pub fn value_text(v: &Value, ty: TypeId, p: &Program) -> String {
     }
 }
 
-/// Fliesskomma stets mit Dezimalpunkt (T2).
+/// Ein `f64` als Text (3.9, T2): die kuerzeste Ziffernfolge, die beim
+/// Zuruecklesen denselben Wert ergibt, immer mit Dezimalpunkt; ab dem
+/// Betrag `1e16` und unter `1e-5` in Exponentform (`1.0e30`, `1.5e-7`), so
+/// dass hoechstens 24 Zeichen entstehen.
 pub fn float_text(x: f64) -> String {
-    if x == x.trunc() && x.abs() < 1e15 { format!("{x:.1}") } else { format!("{x}") }
+    if exponent_form(x, F64_BIG) { with_point(format!("{x:e}")) } else { with_point(format!("{x}")) }
 }
 
-/// Ein `f32` als Text. Die Erweiterung nach f64 vor dem Drucken zeigte die
-/// Ziffern der f64-Darstellung (`0.1f32` wurde `0.10000000149011612`); Rust
-/// druckt einen `f32` als kuerzeste Ziffernfolge, die ihn eindeutig
-/// bestimmt, und genau die gehoert in Trace und Ausgabe (4.1).
+/// Ein `f32` als Text, nach derselben Regel mit der Grenze `1e7` und
+/// hoechstens 16 Zeichen. Gedruckt wird der `f32` selbst: Die Erweiterung
+/// nach f64 zeigte die Ziffern der f64-Darstellung (`0.1f32` wurde
+/// `0.10000000149011612`).
 pub fn float32_text(x: f32) -> String {
-    if x == x.trunc() && x.abs() < 1e15 { format!("{x:.1}") } else { format!("{x}") }
+    if exponent_form(f64::from(x), F32_BIG) { with_point(format!("{x:e}")) } else { with_point(format!("{x}")) }
+}
+
+/// Ab diesem Betrag waeren die Stellen vor dem Punkt nicht mehr
+/// signifikant (3.9): `f64`.
+pub const F64_BIG: f64 = 1e16;
+/// Dasselbe fuer `f32`.
+pub const F32_BIG: f64 = 1e7;
+
+/// Steht `x` in Exponentform (3.9)? Ab `big` und unter `1e-5`, nie die Null.
+pub fn exponent_form(x: f64, big: f64) -> bool {
+    let a = x.abs();
+    a.is_finite() && (a >= big || (a > 0.0 && a < 1e-5))
+}
+
+/// Rust schreibt einen ganzzahligen Wert und eine ganzzahlige Mantisse ohne
+/// Punkt (`1e30`, `100`); die Textform traegt immer einen (`1.0e30`).
+fn with_point(text: String) -> String {
+    let (mantissa, exponent) = match text.split_once('e') {
+        Some((m, e)) => (m, Some(e)),
+        None => (text.as_str(), None),
+    };
+    if mantissa.contains('.') || !mantissa.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()) {
+        return text;
+    }
+    match exponent {
+        Some(e) => format!("{mantissa}.0e{e}"),
+        None => format!("{mantissa}.0"),
+    }
 }
 
 /// Abtastung aus der Textform (T2).
@@ -631,7 +712,13 @@ pub fn sample_from_text(text: &SampleText, ty: TypeId, p: &Program) -> Result<Sa
         Some(other) => return Err(format!("unbekannte Qualitaet `{other}`")),
     };
     let reason = match text.reason.as_deref() {
-        None => (quality == Quality::Bad).then_some(Reason::Driver),
+        // Ohne `reason=` traegt eine ungueltige Lieferung den Grund ihrer
+        // Qualitaet (3.5): `stale` ist `STALE`, `bad` kommt vom Treiber.
+        None => match quality {
+            Quality::Bad => Some(Reason::Driver),
+            Quality::Stale => Some(Reason::Stale),
+            Quality::Good | Quality::Suspect => None,
+        },
         Some("Stale") => Some(Reason::Stale),
         Some("OutOfRange") => Some(Reason::OutOfRange),
         Some("Implausible") => Some(Reason::Implausible),
@@ -655,16 +742,27 @@ pub fn parse_value(text: &str, ty: TypeId, p: &Program) -> Result<Value, String>
             "false" => Ok(Value::Bool(false)),
             _ => Err(format!("`true` oder `false` erwartet, `{text}` gefunden")),
         },
-        Type::Int { width, .. } => {
-            let number = text.split_whitespace().next().unwrap_or(text);
+        // Ein Wert, der nicht in die Breite passt, ist keiner dieses Typs:
+        // `as` kuerzte ihn still, der Rahmen schriebe ein anderes Bitmuster.
+        Type::Int { width, unit, .. } => {
+            let number = number_in(text, *unit, p)?;
             let v: i128 =
                 number.replace('_', "").parse().map_err(|_| format!("Ganzzahl erwartet, `{text}` gefunden"))?;
+            let (lo, hi) = crate::arith::bounds(*width);
+            if !(lo..=hi).contains(&v) {
+                return Err(format!("`{text}` passt nicht in `{}`", crate::arith::name(*width)));
+            }
             Ok(Value::int(*width, v))
         }
-        Type::Float { width, .. } => {
-            let number = text.split_whitespace().next().unwrap_or(text);
-            let v: f64 = number.parse().map_err(|_| format!("Zahl erwartet, `{text}` gefunden"))?;
-            Ok(Value::float(*width, v))
+        // 4.1: NaN und die Unendlichen gibt es in der Sprache nicht. Gelesen
+        // wird in der Breite des Typs: der Umweg ueber f64 rundete zweimal.
+        Type::Float { width, unit, .. } => {
+            let number = number_in(text, *unit, p)?;
+            let v = match width {
+                FloatWidth::F64 => number.parse::<f64>().ok().filter(|x| x.is_finite()).map(Value::F64),
+                FloatWidth::F32 => number.parse::<f32>().ok().filter(|x| x.is_finite()).map(Value::F32),
+            };
+            v.ok_or_else(|| format!("endliche Zahl erwartet, `{text}` gefunden (4.1)"))
         }
         Type::Duration { .. } => Ok(Value::Duration(parse_duration(text)?)),
         Type::Enum(e) => {
@@ -690,12 +788,28 @@ pub fn parse_value(text: &str, ty: TypeId, p: &Program) -> Result<Value, String>
             };
             Ok(Value::Enum { variant: variant as u32, fields })
         }
-        Type::Str { .. } | Type::Line { .. } => {
-            let s = text.trim_matches('"').to_string();
-            Ok(match p.types.get(ty) {
-                Type::Line { .. } => Value::Line { text: s, truncated: false },
-                _ => Value::Str(s),
-            })
+        // Ein Text steht wie `value_text` ihn schreibt, in Anfuehrungszeichen
+        // mit Escapes. Eine `line` kuerzt der Rand auf `N` Bytes und setzt
+        // `.truncated` (3.9); ein `str<N>` hat diesen Rand nicht.
+        Type::Str { cap } | Type::Line { cap } => {
+            let s = if text.starts_with('"') {
+                match parse_quoted(text)? {
+                    (s, "") => s,
+                    (_, rest) => return Err(format!("nach dem Text steht noch `{rest}`")),
+                }
+            } else {
+                text.to_string()
+            };
+            let cap = *cap as usize;
+            match p.types.get(ty) {
+                Type::Line { .. } if s.len() > cap => {
+                    let cut = (0..=cap).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0);
+                    Ok(Value::Line { text: s[..cut].to_string(), truncated: true })
+                }
+                Type::Line { .. } => Ok(Value::Line { text: s, truncated: false }),
+                _ if s.len() > cap => Err(format!("`{text}` ist laenger als {cap} Bytes")),
+                _ => Ok(Value::Str(s)),
+            }
         }
         Type::Optional(inner) => {
             if text == "none" {
@@ -762,6 +876,30 @@ pub fn parse_value(text: &str, ty: TypeId, p: &Program) -> Result<Value, String>
             Ok(Value::Record(fields.collect::<Result<Vec<_>, _>>()?))
         }
         other => Err(format!("Wert vom Typ {other:?} kann der Trace nicht lesen")),
+    }
+}
+
+/// Die Zahl eines Literals mit Einheit (2.3). Einheiten sind nominal (3.2):
+/// `5 psi` ist kein Wert vom Typ `float[bar]`, denn umgerechnet wird nur
+/// ausdruecklich. Ohne Einheit gilt die des Typs.
+fn number_in<'t>(text: &'t str, unit: Option<UnitId>, p: &Program) -> Result<&'t str, String> {
+    let (number, written) = split_first(text);
+    let declared = unit.and_then(|u| p.units.get(u.index())).map(|u| u.name.as_str());
+    match (written.trim(), declared) {
+        ("", _) => Ok(number),
+        (w, Some(d)) if w == d => Ok(number),
+        (w, d) => {
+            Err(format!("`{text}`: Einheit `{w}`, erwartet {} (3.2)", d.map_or("keine".into(), |d| format!("`{d}`"))))
+        }
+    }
+}
+
+/// Ob die Einheit eines Zahlentexts zum Typ passt: keine oder die
+/// deklarierte (3.2). Andere Typen lesen ihre Einheit selbst.
+pub(crate) fn unit_fits(text: &str, ty: TypeId, p: &Program) -> bool {
+    match p.types.get(ty) {
+        Type::Int { unit, .. } | Type::Float { unit, .. } => number_in(text.trim(), *unit, p).is_ok(),
+        _ => true,
     }
 }
 

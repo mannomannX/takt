@@ -1,0 +1,21 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 55 (7.5): `when` eines Triggers ist ein Muster ueber einem
+# Strom; `s as e` nimmt ein Element und ist keins.
+
+input  dut_log : stream<line<64>> @ sim("dut/log") with capacity = 8, max_rate = 200 Hz
+output vbus    : bool             @ hw("o/vbus")   with safe = true
+
+trigger cut:  # ~ SC-55
+    when dut_log as e
+    then at now + 20 ms: vbus = false
+    bound 5 ms
+
+machine ctrl:
+    initial IDLE
+
+    state IDLE:
+        enter:
+            arm cut

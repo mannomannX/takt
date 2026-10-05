@@ -1,0 +1,30 @@
+# Ein Ueberlauf, der einen Leser in FAULTED trifft (9.3, 9.6, KON2-027):
+# Der Fault bleibt vorgemerkt, solange die Maschine in FAULTED steht, und
+# trifft sie, sobald sie es verlaesst. Der Check scheitert in Tick 3; ab
+# Tick 6 kommt je Tick ein Element, das dritte laeuft ueber.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+input  rx     : stream<u8>    @ hw("u/rx") with max_rate = 1000 Hz, capacity = 2, overflow = fault
+input  resume : bool          @ hw("u/resume")
+output got    : int in 0..999 @ sim("o/got")
+output n      : int in 0..999 @ sim("o/n")
+
+machine reader:
+    var k : int in 0..999 = 0
+
+    initial READ
+
+    state READ:
+        loop:
+            k = (k + 1) % 1000
+            n = k
+            check k != 3
+
+        on rx as e:
+            got = e.data as int
+
+    state FAULTED:
+        when resume.or(false): -> READ

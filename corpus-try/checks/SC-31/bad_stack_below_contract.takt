@@ -1,0 +1,7 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-31 (4.5): Der `stack`-Vertrag einer kuratierten Native liegt nicht
+# unter ihrem gemessenen Bedarf (13.8).
+native fn sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 512, total  # ~ SC-31

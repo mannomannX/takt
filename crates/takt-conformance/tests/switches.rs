@@ -706,3 +706,171 @@ machine m:
     };
     assert!(trace.contains("t=0 state m FAULTED"), "HOLD faultet nach FAULTED:\n{trace}");
 }
+
+/// **Ein Fault im Guard nimmt den Fault-Pfad** (9.3, 5.3; KON2-031): Der
+/// `when`-Ausdruck teilt durch null; statt des Uebergangs kommt das
+/// Fault-Ziel, in beiden Implementierungen.
+#[test]
+fn a_fault_in_a_guard_takes_the_fault_path() {
+    let body = "\
+machine m:
+    fault -> SAFE
+    var k : int in 0..9 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            probe = 1
+        when 100 / k > 1: -> NEXT
+
+    state NEXT:
+        enter:
+            probe = 2
+
+    state SAFE:
+        enter:
+            probe = 9
+";
+    let Some(trace) = agree(body, "switch_guard_fault", 3) else { return };
+    assert!(trace.contains("fault m Arithmetic(DivZero)"), "{trace}");
+    assert_eq!(probe_at(&trace, 1), "9", "der Guard faultet in Tick 1, dem ersten mit Uebergaengen:\n{trace}");
+}
+
+/// Ein Elternzustand mit einem Guard ueber eine Variable, die von Anfang an
+/// wahr ist, und ein Kind mit zwei immer wahren Guards.
+const GUARDS: &str = "\
+machine m:
+    var armed : bool = true
+    initial P
+
+    state P:
+        initial C
+        when armed: -> OUTER
+
+        state C:
+            enter:
+                probe = 1
+            when true: -> FIRST
+            when true: -> SECOND
+
+    state OUTER:
+        enter:
+            probe = 10
+
+    state FIRST:
+        enter:
+            probe = 20
+
+    state SECOND:
+        enter:
+            probe = 30
+";
+
+/// **Mehrere wahre Guards: aussen zuerst** (9.3 Schritt 2; KON2-031): Der
+/// Elternzustand und sein Kind haben je einen wahren Guard; es gewinnt der
+/// des Elternzustands.
+#[test]
+fn the_outer_guard_wins() {
+    let Some(trace) = agree(GUARDS, "switch_outer_first", 3) else { return };
+    assert_eq!(probe_at(&trace, 1), "10", "der Guard des Elternzustands gewinnt:\n{trace}");
+}
+
+/// **Mehrere wahre Guards eines Zustands: der erste der Quelle** (9.3 Schritt
+/// 2; KON2-031). Ist der Guard des Elternzustands falsch, gewinnt von den
+/// beiden wahren Guards des Kindes der erste.
+#[test]
+fn the_first_true_guard_in_source_wins() {
+    let inner = GUARDS.replace("when armed: -> OUTER", "when not armed: -> OUTER");
+    let Some(trace) = agree(&inner, "switch_source_order", 3) else { return };
+    assert_eq!(probe_at(&trace, 1), "20", "der erste Guard des Kindes gewinnt:\n{trace}");
+}
+
+/// **Ein Wechsel zwischen Vettern verschiedener Teilbaeume verlaesst innen
+/// nach aussen und betritt aussen nach innen, ueber je zwei Ebenen** (9.3,
+/// Lemma 9.3.1; KON2-031). Jeder Block haengt seine Ziffer an `trail`; die
+/// Folge der Ziffern ist die Reihenfolge der Bloecke.
+#[test]
+fn a_switch_between_cousins_exits_inside_out_and_enters_outside_in() {
+    let body = "\
+output trail : int in 0..99999999 @ hw(\"trail\") with safe = 0
+
+machine m:
+    var t : int in 0..9999999 = 0
+    initial A
+
+    state A:
+        initial A1
+        exit:
+            t = t * 10 + 3
+            trail = t
+
+        state A1:
+            initial A11
+            exit:
+                t = t * 10 + 2
+                trail = t
+
+            state A11:
+                when true: -> B11
+                exit:
+                    t = t * 10 + 1
+                    trail = t
+
+    state B:
+        initial B1
+        enter:
+            t = t * 10 + 4
+            trail = t
+
+        state B1:
+            initial B11
+            enter:
+                t = t * 10 + 5
+                trail = t
+
+            state B11:
+                enter:
+                    t = t * 10 + 6
+                    trail = t
+                    probe = 1
+";
+    let Some(trace) = agree(body, "switch_cousins", 3) else { return };
+    let last = trace.lines().filter_map(|l| l.strip_prefix("t=1 out trail ")).next_back().map(str::to_string);
+    assert_eq!(last.as_deref(), Some("123456"), "exit 1, 2, 3, dann enter 4, 5, 6:\n{trace}");
+}
+
+/// **Der Eintritt setzt `every` und die Dauer eines `check … for` zurueck**
+/// (5.8, 9.3; KON2-031). Ein Zustand, der jede Millisekunde wieder betreten
+/// wird, zaehlt mit `every 3 ms` nie, und ein `check` mit `for 3 ms` faultet
+/// nie, obwohl seine Bedingung immer falsch ist; ohne Wiedereintritt zaehlt
+/// und faultet beides.
+#[test]
+fn an_entry_resets_every_and_the_duration_of_a_check() {
+    let body = "\
+output fired : int in 0..1000 @ hw(\"fired\") with safe = 0
+
+machine m:
+    fault -> HALT
+    var n : int in 0..1000 = 0
+    initial R
+
+    state R:
+        loop:
+            every 3 ms:
+                n = n + 1
+                fired = n
+            check probe > 5, \"never\" for 3 ms
+        after 1 ms: -> R
+
+    state HALT:
+        enter:
+            probe = 9
+";
+    let Some(trace) = agree(body, "switch_reset_every", 12) else { return };
+    assert!(!trace.contains(" fault "), "der Wiedereintritt setzt die Dauer zurueck:\n{trace}");
+    let fired = trace.lines().filter_map(|l| l.split_once(" out fired ")).map(|(_, v)| v.to_string()).next_back();
+    assert_eq!(fired.as_deref(), Some("0"), "`every` beginnt mit jedem Eintritt neu:\n{trace}");
+    let steady = body.replace("        after 1 ms: -> R\n", "        after 100 ms: -> R\n");
+    let Some(trace) = agree(&steady, "switch_no_reset_every", 12) else { return };
+    assert!(trace.contains("fault m CheckFailed"), "ohne Wiedereintritt laeuft die Dauer ab:\n{trace}");
+}

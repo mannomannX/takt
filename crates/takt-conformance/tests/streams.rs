@@ -74,10 +74,64 @@ fn elements_reach_the_edge_with_their_numbering() {
 #[test]
 fn an_overlong_element_is_truncated_not_dropped() {
     let p = with_bounds("");
-    let f = harness_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
-    let f = feed(&f);
-    assert!(f.contains(", 16, 10000000LL, "), "auf `line<16>` gekuerzt:\n{f}");
-    assert!(!f.contains("\\x58"), "das abgeschnittene `X` geht nicht an den Rand");
+    let c = harness_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
+    let f = feed(&c);
+    // Wie auf dem Board kommt die ganze Zeile an den Rand; er kuerzt auf
+    // `line<16>` und merkt es fuer `.truncated` (KON2-028).
+    assert!(f.contains("\\x58\\x58\\x58\\x58\", 20, 10000000LL, "), "ungekuerzt an den Rand:\n{f}");
+    assert!(c.contains("_Bool cut = v->len > 16;"), "der Rand kuerzt auf `line<16>`");
+}
+
+/// Ein Programm mit einem Textstrom `line<16>`, dessen Handler `body`
+/// rechnet; die Ausgaenge `len`, `same` und `cut`.
+fn line_program(body: &str) -> Program {
+    program_of(&format!(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         input  rx   : stream<line<16>> @ hw(\"u/rx\") with max_rate = 100 Hz\n\
+         output len  : int in 0..99     @ sim(\"o/len\")\n\
+         output same : bool             @ sim(\"o/same\")\n\
+         output cut  : bool             @ sim(\"o/cut\")\n\n\
+         machine m:\n    initial A\n\n    state A:\n        on rx as l:\n{body}"
+    ))
+}
+
+/// Laeuft `p` mit dem Element von 20 Zeichen in Tick 1 und einem kurzen in
+/// Tick 3 in beiden Implementierungen; liefert den Trace des Interpreters.
+fn overlong_run(p: &Program, name: &str) -> Option<String> {
+    let clang = common::clang()?;
+    let stimulus =
+        takt_interp::Trace::parse("t=1 in rx \"0123456789ABCDEFXXXX\"\nt=3 in rx \"abc\"\n").expect("Stimulus");
+    let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
+    let native = common::run_native_all_with(&clang, p, name, 4, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
+    let interpreted = takt_interp::run(p, &stimulus, &options).expect("Lauf").trace.render();
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+    Some(interpreted)
+}
+
+/// 3.9 im Lauf (KON2-028): Ein Element mit 20 Zeichen auf `line<16>` kommt
+/// gekuerzt an, nicht verworfen — der Handler laeuft und sieht die ersten 16
+/// Zeichen —, eines, das passt, ganz. In beiden Implementierungen gleich.
+#[test]
+fn an_overlong_element_arrives_truncated_like_in_the_interpreter() {
+    let p = line_program("            len = l.text.len\n            same = l.text == \"0123456789ABCDEF\"\n");
+    let Some(interpreted) = overlong_run(&p, "ueberlang") else { return };
+    for line in ["t=1 out len 16", "t=1 out same true", "t=3 out len 3", "t=3 out same false"] {
+        assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
+    }
+}
+
+/// Der Handler erfaehrt, dass gekuerzt wurde (3.9: `line<N>` traegt
+/// `.truncated`): wahr fuer das Element von 20 Zeichen, falsch fuer das
+/// kurze — in beiden Implementierungen.
+#[test]
+fn the_truncation_of_a_line_element_reaches_the_handler() {
+    let p = line_program("            len = l.text.len\n            cut = l.text.truncated\n");
+    let Some(interpreted) = overlong_run(&p, "ueberlang_markiert") else { return };
+    for line in ["t=1 out cut true", "t=3 out cut false"] {
+        assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
+    }
 }
 
 /// 8.6: Beide Schranken stehen am Ring, `capacity` und `capacity_bytes`;
@@ -116,7 +170,7 @@ fn a_reader_that_falls_behind_overflows_the_ring() {
         let stimulus =
             takt_interp::Trace::parse("t=1 in rx \"a\"\nt=1 in rx \"b\"\nt=2 in rx \"c\"\nt=3 in rx \"d\"\n")
                 .expect("Stimulus");
-        let inputs = Stimulus::from_trace(&stimulus);
+        let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
         let native = common::run_native_all_with(&clang, &p, &format!("ueberlauf-{policy}"), 5, &inputs)
             .unwrap_or_else(|e| panic!("{e}"));
         let options = takt_interp::RunOptions { ticks: 5, ..Default::default() };
@@ -163,7 +217,7 @@ fn the_counters_of_a_stream_are_the_interpreters() {
          t=2 in pairs 0x0506\nt=2 in rx \"c\"\nt=3 in pairs 0x010203\n",
     )
     .expect("Stimulus");
-    let inputs = Stimulus::from_trace(&stimulus);
+    let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
     let native = common::run_native_all_with(&clang, &p, "zaehler", 5, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: 5, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
@@ -209,6 +263,47 @@ fn count_without_a_handler_reads_the_whole_buffer() {
     let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
     for line in ["t=1 out pending 1", "t=3 out pending 0"] {
         assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
+    }
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
+/// **Im Modus ENTRY ist das Fenster leer, nativ wie im Interpreter** (9.6,
+/// 9.3; SEM1-049): `for x in rx` laeuft in `enter:`, im `loop:` des
+/// Eintritts-Ticks und in `exit:`/`enter:` eines Wechsels nicht, und
+/// `rx.count` ist dort 0. Die drei Elemente aus Tick 0 sieht darum erst
+/// Tick 1, zusammen mit den zwei neuen; der Wechsel in Tick 1 laeuft wieder
+/// im Modus ENTRY, und das Element aus Tick 2 sieht niemand mehr.
+#[test]
+fn the_window_is_empty_in_entry_mode_on_both_sides() {
+    let Some(clang) = common::clang() else { return };
+    let p = program_of(
+        "system:\n    language = 1\n    tick     = 1 ms\n\n\
+         input  rx : stream<u8> @ hw(\"u/rx\") with max_rate = 200 kHz, capacity = 256\n\
+         output n  : int in 0..99 @ hw(\"o/n\") with safe = 0\n\
+         output k  : int in 0..99 @ hw(\"o/k\") with safe = 0\n\
+         output e  : int in 0..99 @ hw(\"o/e\") with safe = 0\n\n\
+         machine m:\n    var seen : int in 0..99 = 0\n    initial RUN\n\n    state RUN:\n\
+         \x20       enter:\n            for x in rx:\n                seen = (seen + 1) % 99\n\
+         \x20           n = min(rx.count, 98) + 1\n\
+         \x20       loop:\n            for x in rx:\n                seen = (seen + 1) % 99\n\
+         \x20           k = seen + 1\n\
+         \x20       when seen >= 5: -> NEXT\n\
+         \x20       exit:\n            for x in rx:\n                seen = (seen + 1) % 99\n\n\
+         \x20   state NEXT:\n        enter:\n            e = min(rx.count, 98) + 1\n\
+         \x20           for x in rx:\n                seen = (seen + 1) % 99\n\
+         \x20       loop:\n            k = seen + 1\n",
+    );
+    let stimulus =
+        takt_interp::Trace::parse("t=0 in rx 1\nt=0 in rx 2\nt=0 in rx 3\nt=1 in rx 4\nt=1 in rx 5\nt=2 in rx 6\n")
+            .expect("Stimulus");
+    let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
+    let native = common::run_native_all_with(&clang, &p, "entry_window", 4, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    for line in ["t=0 out n 1", "t=0 out k 1", "t=1 out k 6", "t=1 out e 1"] {
+        assert!(interpreted.contains(line), "Interpreter ohne `{line}`:\n{interpreted}");
+        assert!(native.contains(line), "nativ ohne `{line}`:\n{native}");
     }
     let diffs = compare(&interpreted, &native);
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");

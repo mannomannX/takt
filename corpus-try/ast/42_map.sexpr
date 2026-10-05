@@ -15,6 +15,6 @@
       (= ok (.insert seen (% (* k 7) 10) k))
       (= full (not ok))
       (if (== (% k 3) 0)
-        (= ok (.remove seen (% (* (- k 2) 7) 10))))
+        (= ok (.remove seen (% (* (paren (- k 2)) 7) 10))))
       (= n (.len seen))
       (= found (.or (.get seen 7) 0)))))

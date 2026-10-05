@@ -2,19 +2,12 @@
 //! Damit ist der Korpus zugleich der Golden-Test des Formatters.
 
 use takt_syntax::{format, format_snippet};
+use takt_testkit::corpus;
 
 #[test]
 fn corpus_is_canonical() {
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try");
-    let mut files: Vec<_> = std::fs::read_dir(root)
-        .expect("Korpus lesbar")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "takt"))
-        .filter(|p| !p.file_name().and_then(|n| n.to_str()).unwrap_or_default().starts_with("n0"))
-        .collect();
-    files.sort();
     let mut failures = Vec::new();
-    for path in files {
+    for path in corpus::programs() {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
         let src = std::fs::read_to_string(&path).expect("lesbar");
         match format(&src) {
@@ -98,12 +91,48 @@ fn check_corpora_are_canonical() {
             }
         }
     }
-    assert!(
-        failures.is_empty(),
-        "{}",
-        failures.join(
-            "
-"
-        )
-    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Auch die Programme ausserhalb des Korpus sind kanonisch: Bring-ups,
+/// Mess- und Testprogramme, Beispiele, `feedback/`. Eine Datei, die von Hand
+/// ausgerichtet wurde, faellt sonst erst beim naechsten `takt fmt` auf.
+#[test]
+fn every_program_outside_the_corpus_is_canonical() {
+    let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let mut files = Vec::new();
+    // Nur die Quellverzeichnisse; der Korpus hat seine eigenen Tests, und
+    // was im Wurzelverzeichnis liegt (`out/`, Notizen), ist nicht eingecheckt.
+    let mut dirs: Vec<_> = ["crates", "examples", "feedback"].iter().map(|d| root.join(d)).collect();
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("Verzeichnis").flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if path.is_dir() {
+                // Bauverzeichnisse sind keine Quelle.
+                if !(name.starts_with('.') || name.starts_with("target")) {
+                    dirs.push(path);
+                }
+            } else if name.ends_with(".takt") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    assert!(!files.is_empty(), "keine Programme gefunden");
+    let mut failures = Vec::new();
+    for path in &files {
+        let shown = path.strip_prefix(&root).unwrap_or(path).display().to_string().replace('\\', "/");
+        let src = std::fs::read_to_string(path).expect("lesbar");
+        match format(&src) {
+            Ok(out) if out == src => {}
+            Ok(out) => {
+                let line = src.lines().zip(out.lines()).position(|(a, b)| a != b).map_or(0, |i| i + 1);
+                failures
+                    .push(format!("{shown}: nicht kanonisch ab Zeile {line} (cargo run -p takt-cli -- fmt {shown})"));
+            }
+            Err(e) => failures.push(format!("{shown}: {}", e[0])),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

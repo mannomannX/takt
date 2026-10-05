@@ -69,3 +69,124 @@ fn a_driver_crate_is_judged_by_the_edge_on_the_host() {
     }
     assert!(stdout.contains("Verstoesse gegen den Treibervertrag (12.6)") && stdout.ends_with("FAIL\n"), "{stdout}");
 }
+
+/// Ein Treiber mit Geraetemodell (12.10), dessen Szenario jede Reaktion
+/// ausloest: zwei Zustaende, zwei Transitionen, ein Handler.
+const DEVICE: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+record Regs layout little:
+    flags : u8 with bits:
+        full  : bool at 0 ro
+        clear : bool at 1 w1c
+
+record RegsModel layout little:
+    flags : u8 with bits:
+        full  : bool at 0
+        clear : bool at 1
+
+port regs : Regs @ mmio(0x60000000)
+
+output regs_r : RegsModel        @ sim("mmio/0x60000000/r")
+input  regs_w : stream<bytes<4>> @ sim("mmio/0x60000000/w") with capacity = 8, max_rate = 200 Hz
+
+output busy : bool @ hw("o/busy") with safe = false
+
+driver machine dev:
+    initial IDLE
+
+    state IDLE:
+        loop:
+            busy = false
+
+        on regs_w as w:
+            busy = true
+
+        when regs.flags.full: -> FULL
+
+    state FULL:
+        loop:
+            busy = true
+            regs.flags.clear = true
+
+        when not regs.flags.full: -> IDLE
+
+scenario "fills":
+    initial RUN
+
+    state RUN:
+        sequence:
+            regs_r.flags.full = true
+            wait 30 ms
+            regs_r.flags.full = false
+            wait 30 ms
+            verdict pass "voll und leer"
+"#;
+
+/// Das Programm, nach `edit` abgewandelt, in einem eigenen Verzeichnis.
+fn device(name: &str, edit: impl Fn(&str) -> String) -> PathBuf {
+    let dir =
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-driver-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let file = dir.join("device.takt");
+    std::fs::write(&file, edit(DEVICE)).expect("Programm");
+    file
+}
+
+/// Eine Abwandlung des Programms.
+type Edit = dyn Fn(&str) -> String;
+
+/// 13.8: bestanden ist der Treiber nur, wenn kein Szenario scheitert und
+/// jeder Zustand, jede Transition und jeder Handler erreicht ist. Je
+/// Bedingung eine Variante, die genau sie verletzt.
+#[test]
+fn every_condition_of_passing_fails_the_driver_on_its_own() {
+    let pass = device("pass", str::to_string);
+    let out = takt(&["driver-test", pass.to_str().expect("Pfad")]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        stdout.contains("Treiber dev: Zustaende 2/2, Transitionen 2/2, Checks 0/0 (0 verletzt), Handler 1/1"),
+        "{stdout}"
+    );
+    let cases: [(&str, &Edit, &[&str], &str); 4] = [
+        ("fail", &|p| p.replace("verdict pass", "verdict fail"), &[], "fills: FAIL"),
+        (
+            "handler",
+            &|p| p.replace("            regs.flags.clear = true\n", ""),
+            &[],
+            "FAIL: 1 Reaktionen des Treibers von keinem Szenario ausgeloest (13.8)",
+        ),
+        (
+            "state",
+            &|p| p.replace("regs_r.flags.full = true", "regs_r.flags.full = false"),
+            &[],
+            "FAIL: 4 Reaktionen des Treibers von keinem Szenario ausgeloest (13.8)",
+        ),
+        ("inconclusive", &str::to_string, &["--ticks", "2"], "fills: INCONCLUSIVE"),
+    ];
+    for (name, edit, extra, line) in cases {
+        let file = device(name, edit);
+        let path = file.to_str().expect("Pfad");
+        let out = takt(&[&["driver-test", path][..], extra].concat());
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(!out.status.success(), "{name} bestand:\n{stdout}");
+        assert!(stdout.contains(line), "{name}: {line}\n{stdout}");
+        let _ = std::fs::remove_dir_all(file.parent().expect("Verzeichnis"));
+    }
+    let _ = std::fs::remove_dir_all(pass.parent().expect("Verzeichnis"));
+}
+
+/// `--crate` nennt ein Verzeichnis mit `takt-drivers.toml` (12.6); fehlt das
+/// eine oder das andere, sagt der Fehler, was fehlt.
+#[test]
+fn a_driver_crate_needs_a_directory_with_its_wiring() {
+    let program = "crates/takt-conformance/tests/programs/driver_edge.takt";
+    let none = takt(&["driver-test", "--crate", "gibtsnicht", program, "--ticks", "4"]);
+    let stderr = String::from_utf8_lossy(&none.stderr);
+    assert!(!none.status.success() && stderr.contains("takt driver-test: gibtsnicht:"), "{stderr}");
+    let unwired = takt(&["driver-test", "--crate", "crates/takt-diag", program, "--ticks", "4"]);
+    let stderr = String::from_utf8_lossy(&unwired.stderr);
+    assert!(!unwired.status.success() && stderr.contains("keine Verdrahtung `takt-drivers.toml` (12.6)"), "{stderr}");
+}

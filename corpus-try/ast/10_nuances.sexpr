@@ -36,7 +36,7 @@
   (.push b x))
 (fn parse (b:bytes<8>) -> u16!ParseErr
   (var r (call reader b))
-  (var v (.u16_le r))
+  (var v (.u16_le r ()))
   (if (not (.valid v))
     (return (ERR SHORT)))
   (return (OK v)))
@@ -72,7 +72,7 @@
         (log "reason {age_src.reason}"))
       (var opt :int? none)
       (var cast (as wide int))
-      (var wrapped (.wrap_u8 word))
+      (var wrapped (.wrap_u8 word ()))
       (var sat (.saturating_add cast 1))
       (var w2 (.wrapping_add cast 1))
       (var f (call fma 1.0 2.0 3.0))
@@ -89,8 +89,8 @@
       (var rem (% cast 3))
       (var sl (slice buf 0 4))
       (var sol (call solve g (array 1[K] 2[K])))
-      (var ch (.cholesky g))
-      (.clear buf)
+      (var ch (.cholesky g ()))
+      (.clear buf ())
       (.insert m 1 2)
       (.remove m 1)
       (for x in vals
@@ -101,7 +101,7 @@
         (log "cap {cap.s}"))
       (if (has name "b")
         (log "has b"))
-      (.reset t)
+      (.reset t ())
       (var tb (.step t true))
       (log "count {tb:08}")
       (match cast

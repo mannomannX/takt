@@ -1,0 +1,4 @@
+t=8 state ctrl SECOND
+t=12 out c true
+t=14 state ctrl FIRST
+t=18 out a true

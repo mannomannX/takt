@@ -1,0 +1,4 @@
+t=2 state hotfire ARMED.IGNITION.S0
+t=3201 state hotfire ARMED.SHUTDOWN
+t=3401 state hotfire ARMED.DONE
+t=3600 state hotfire ARMED.IDLE

@@ -97,7 +97,7 @@
       (= flash_cmd NONE))
     (loop
       (if (and (== flash_status IDLE) (< done_bytes IMAGE_SIZE))
-        (= flash_cmd (READ addr=(as (/ done_bytes 1[B]) u32) size=256))))
+        (= flash_cmd (READ addr=(as (paren (/ done_bytes (paren 1[B]))) u32) size=256))))
     (on flash_rx as chunk
       (= ctx (call sha256_update ctx (.data chunk)))
       (+= done_bytes 256[B])

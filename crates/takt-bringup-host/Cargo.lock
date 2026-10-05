@@ -378,6 +378,10 @@ version = "0.1.0"
 [[package]]
 name = "takt-embed"
 version = "0.1.0"
+dependencies = [
+ "takt-native-abi",
+ "takt-rt-core",
+]
 
 [[package]]
 name = "takt-frame"
@@ -388,6 +392,7 @@ dependencies = [
  "takt-llvm",
  "takt-mir",
  "takt-native",
+ "takt-rt-core",
 ]
 
 [[package]]
@@ -428,7 +433,6 @@ name = "takt-mcu-program"
 version = "0.1.0"
 dependencies = [
  "takt-native-abi",
- "takt-rt-baremetal",
  "takt-rt-core",
 ]
 

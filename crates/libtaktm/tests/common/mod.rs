@@ -52,6 +52,7 @@ pub fn apply(v: &Vector) -> Option<u64> {
         (true, "atan") => wide(libtaktm::atan_f64(a(0))),
         (true, "atan2") => wide(libtaktm::atan2_f64(a(0), a(1))),
         (true, "pow") => wide(libtaktm::pow_f64(a(0), a(1))),
+        (true, "fma") => wide(libtaktm::fma_f64(a(0), a(1), a(2))),
         (false, "exp") => narrow(libtaktm::exp_f32(b(0))),
         (false, "log") => narrow(libtaktm::log_f32(b(0))),
         (false, "sin") => narrow(libtaktm::sin_f32(b(0))),
@@ -62,6 +63,7 @@ pub fn apply(v: &Vector) -> Option<u64> {
         (false, "atan") => narrow(libtaktm::atan_f32(b(0))),
         (false, "atan2") => narrow(libtaktm::atan2_f32(b(0), b(1))),
         (false, "pow") => narrow(libtaktm::pow_f32(b(0), b(1))),
+        (false, "fma") => narrow(libtaktm::fma_f32(b(0), b(1), b(2))),
         _ => None,
     }
 }

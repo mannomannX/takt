@@ -104,3 +104,30 @@ fn the_table_is_rectangular() {
     assert_eq!(dfa.table.len(), dfa.states() * dfa.class_count as usize, "die Tabelle ist rechteckig");
     assert!(dfa.table.iter().all(|s| usize::from(*s) < dfa.states()), "jeder Uebergang zeigt in die Tabelle");
 }
+
+/// SYN-035: 64 Muster passen in die Maske, das letzte traegt Bit 63; ein
+/// 65. Muster hat kein Bit mehr, und der Dispatch prueft dann jeden Handler
+/// einzeln.
+#[test]
+fn sixty_four_patterns_fit_and_a_sixty_fifth_does_not() {
+    let names: Vec<[PatternPiece; 1]> = (0..65).map(|i| [text(&format!("p{i}"))]).collect();
+    let entries: Vec<Entry<'_>> = names.iter().map(|p| matches(p)).collect();
+    let dfa = build(&entries[..64]).expect("64 Muster");
+    assert_eq!(dfa.run(b"p63"), 1 << 63);
+    assert_eq!(dfa.run(b"p0"), 1);
+    assert!(build(&entries).is_none(), "65 Muster");
+    assert!(build(&[]).is_none(), "ohne Muster kein Automat");
+}
+
+/// SYN-035: Die Grenze von `MAX_STATES` gilt genau: Ein Literal der Laenge
+/// L ergibt L + 2 Zustaende (Anfang, je Zeichen einer, Abweisung).
+#[test]
+fn the_state_limit_is_exact() {
+    let at = |len: usize| [text(&"a".repeat(len))];
+    let limit = takt_mir::dfa::MAX_STATES;
+    let p = at(limit - 2);
+    let dfa = build(&[matches(&p)]).expect("genau an der Grenze");
+    assert_eq!(dfa.table.len() / dfa.class_count as usize, limit);
+    let p = at(limit - 1);
+    assert!(build(&[matches(&p)]).is_none(), "ein Zustand zu viel");
+}

@@ -13,7 +13,7 @@
     (loop
       (alert (call above p 80[bar]) "pressure high")
       (log "pressure {p}")
-      (measure level (/ p 1[bar]))
+      (measure level (/ p (paren 1[bar])))
       (verify (< p 90[bar]) "pressure within limits")
       (= n (call min (+ n 1) 100))
       (= count n))

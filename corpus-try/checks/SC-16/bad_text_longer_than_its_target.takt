@@ -1,0 +1,35 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: Die Hoechstlaenge eines Texts passt in das Element, an das er geht;
+# gekuerzt wird nie. `hello` braucht 5 Bytes, `k={k}` bis zu 8.
+
+stream<line<4>> short with capacity = 4
+stream<bytes<4>> raw with capacity = 4
+stream<line<32>> wide with capacity = 4
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine talker:
+    var k : int in 0..99999 = 3
+    var s : str<4> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            send short, "hello"  # ~ SC-16
+            send raw, "k={k}"    # ~ SC-16
+            send wide, "k={k}"
+            s = "hello"  # ~ SC-3
+
+machine listener:
+    initial RUN
+
+    state RUN:
+        on short as a:
+            n = 1
+        on raw as b:
+            n = 2
+        on wide as c:
+            n = 3

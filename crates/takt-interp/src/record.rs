@@ -33,8 +33,12 @@ use crate::trace::{LineKind, Trace};
 /// wendet ihn an; Version 1 nannte die Defaults. Version 3: Eine
 /// `in`-Zeile traegt den Zeitstempel der Lieferung (`t=`) und ein
 /// Stromelement seine Folgenummer (`seq=`), der Golden-Trace die Zeile
-/// `driver` (12.6); ohne die Angaben gilt, was Version 2 meinte.
-pub const RECORDING_VERSION: u16 = 3;
+/// `driver` (12.6); ohne die Angaben gilt, was Version 2 meinte. Version 4:
+/// `#! polling-unchecked <maschine>` nennt jede Maschine, deren Polling
+/// ungeprueft freigegeben ist (Pruefung 59), und `#! persist <hex>` traegt
+/// s0 der `persist`-Variablen in der Form des Journals (5.9, 12.5); ohne die
+/// Zeilen gilt ein leerer Speicher, wie Version 3 ihn meinte.
+pub const RECORDING_VERSION: u16 = 4;
 
 /// Der Kopf einer Aufzeichnung (12.5, 11.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +92,12 @@ pub struct Header {
     pub machine: Option<String>,
     /// Kettenende der Hashkette ueber den Trace des Laufs (12.5, A3).
     pub chain: Option<String>,
+    /// Maschinen, deren Polling ungeprueft freigegeben ist (Pruefung 59):
+    /// Ihre Schranke ist eine Zusage des Autors, keine Rechnung.
+    pub polling_unchecked: Vec<String>,
+    /// s0 der `persist`-Variablen (12.5) als Hex der Journal-Nutzlast
+    /// (`Nvm::snapshot`); `None` fuer einen leeren Speicher.
+    pub persist: Option<String>,
 }
 
 impl Header {
@@ -108,7 +118,30 @@ impl Header {
             irreversible: p.channels.iter().filter(|c| c.attrs.irreversible).map(|c| c.name.clone()).collect(),
             machine: None,
             chain: None,
+            polling_unchecked: p.machines.iter().filter(|m| m.polling_unchecked).map(|m| m.name.clone()).collect(),
+            persist: None,
         }
+    }
+
+    /// Traegt s0 der `persist`-Variablen ein (12.5): den Speicher, mit dem
+    /// der Lauf begann.
+    pub fn with_store(mut self, p: &Program, nvm: &crate::nvm::Nvm) -> Header {
+        self.persist = (!nvm.is_empty()).then(|| nvm.snapshot(p).iter().map(|b| format!("{b:02x}")).collect());
+        self
+    }
+
+    /// Der Speicher, mit dem der aufgezeichnete Lauf begann (12.5); leer,
+    /// wenn der Kopf keinen nennt.
+    pub fn store(&self, p: &Program) -> Result<crate::nvm::Nvm, String> {
+        let mut nvm = crate::nvm::Nvm::new();
+        if let Some(hex) = &self.persist {
+            let digit = |i: usize| hex.get(i..i + 2).and_then(|d| u8::from_str_radix(d, 16).ok());
+            let bytes: Option<Vec<u8>> =
+                (hex.len() % 2 == 0).then(|| (0..hex.len()).step_by(2).map(digit).collect()).flatten();
+            let bytes = bytes.ok_or_else(|| format!("`#! persist {hex}` ist kein Hex"))?;
+            nvm.from_program_payload(p, &bytes);
+        }
+        Ok(nvm)
     }
 
     /// Der Kopf als Text; jede Zeile beginnt mit `#!`.
@@ -144,6 +177,12 @@ impl Header {
         for o in &self.irreversible {
             let _ = writeln!(out, "#! irreversibel {o}");
         }
+        for m in &self.polling_unchecked {
+            let _ = writeln!(out, "#! polling-unchecked {m}");
+        }
+        if let Some(s) = &self.persist {
+            let _ = writeln!(out, "#! persist {s}");
+        }
         if let Some(m) = &self.machine {
             let _ = writeln!(out, "#! maschine {m}");
         }
@@ -159,8 +198,11 @@ impl Header {
         if self.version >= 2 { self.params.clone() } else { Vec::new() }
     }
 
-    /// Liest einen Kopf; `None`, wenn keine Kopfzeile dasteht.
-    pub fn parse(text: &str) -> Option<Header> {
+    /// Liest einen Kopf (11.3). Version, Edition, Logik-Hash, Tick und
+    /// Tickzahl muessen dastehen, jede Kopfzeile ausser den Listen hoechstens
+    /// einmal, jeder Parameter einmal und mit Wert: Ein Kopf, der still
+    /// Nullen einsetzt, spielte einen anderen Lauf ab als den aufgezeichneten.
+    pub fn parse(text: &str) -> Result<Header, String> {
         let mut h = Header {
             version: 0,
             edition: 0,
@@ -176,28 +218,46 @@ impl Header {
             irreversible: Vec::new(),
             machine: None,
             chain: None,
+            polling_unchecked: Vec::new(),
+            persist: None,
         };
-        let mut seen = false;
+        let mut seen: Vec<&str> = Vec::new();
         for line in text.lines() {
             let Some(rest) = line.trim_start().strip_prefix("#!") else { continue };
             let mut w = rest.split_whitespace();
             let Some(key) = w.next() else { continue };
             let value = w.next().unwrap_or("");
+            let single = !matches!(key, "param" | "runtime" | "native" | "tcb" | "irreversibel" | "polling-unchecked");
+            if single && seen.contains(&key) {
+                return Err(format!("Kopfzeile `{key}` steht doppelt"));
+            }
+            seen.push(key);
+            let number = |what: &str| format!("`#! {key}` erwartet {what}, `{value}` gefunden");
             match key {
                 "takt-aufzeichnung" => {
-                    h.version = value.parse().unwrap_or(0);
-                    seen = true;
+                    h.version = value.parse().ok().filter(|v| *v >= 1).ok_or_else(|| number("eine Version ab 1"))?;
                 }
-                "edition" => h.edition = value.parse().unwrap_or(0),
+                "edition" => h.edition = value.parse().map_err(|_| number("eine Zahl"))?,
                 "logik" => h.logic = value.to_string(),
-                "tick" => h.tick = value.parse().unwrap_or(0),
-                "ticks" => h.ticks = value.parse().unwrap_or(0),
+                "tick" => h.tick = value.parse().ok().filter(|t| *t > 0).ok_or_else(|| number("Nanosekunden"))?,
+                "ticks" => h.ticks = value.parse().map_err(|_| number("eine Zahl"))?,
                 "profil" => h.profile = Some(value.to_string()),
                 "target" => h.target = Some(value.to_string()),
                 "irreversibel" => h.irreversible.push(value.to_string()),
+                "polling-unchecked" => h.polling_unchecked.push(value.to_string()),
+                "persist" => h.persist = Some(value.to_string()),
                 "maschine" => h.machine = Some(value.to_string()),
                 "kette" => h.chain = Some(value.to_string()),
-                "param" => h.params.push((value.to_string(), w.collect::<Vec<_>>().join(" "))),
+                "param" => {
+                    let literal = w.collect::<Vec<_>>().join(" ");
+                    if value.is_empty() || literal.is_empty() {
+                        return Err(format!("`#! param {value}` ohne Wert"));
+                    }
+                    if h.params.iter().any(|(n, _)| n == value) {
+                        return Err(format!("Parameter `{value}` steht doppelt"));
+                    }
+                    h.params.push((value.to_string(), literal));
+                }
                 "runtime" => {
                     let rest: Vec<&str> = w.collect();
                     h.runtime.push(if rest.is_empty() {
@@ -211,7 +271,18 @@ impl Header {
                 _ => {}
             }
         }
-        seen.then_some(h)
+        if !seen.contains(&"takt-aufzeichnung") {
+            return Err("kein Kopf: erwartet `#! takt-aufzeichnung <version>`".into());
+        }
+        for key in ["edition", "logik", "tick", "ticks"] {
+            if !seen.contains(&key) {
+                return Err(format!("Kopfzeile `#! {key}` fehlt"));
+            }
+        }
+        if h.logic.is_empty() {
+            return Err("`#! logik` ohne Hash".into());
+        }
+        Ok(h)
     }
 }
 
@@ -266,7 +337,7 @@ impl Recording {
 
     /// Liest eine Aufzeichnung.
     pub fn parse(text: &str) -> Result<Recording, String> {
-        let header = Header::parse(text).ok_or("kein Kopf: erwartet `#! takt-aufzeichnung <version>`")?;
+        let header = Header::parse(text)?;
         if header.version > RECORDING_VERSION {
             return Err(format!(
                 "Aufzeichnung der Version {} ist neuer als diese Fassung ({RECORDING_VERSION}); \
@@ -328,7 +399,9 @@ impl Recording {
 
 /// Die Scheibe einer Maschine (12.5, A2a): der Stimulus und alles, was
 /// sie von fremden Maschinen liest — deren Outputs, Zustaende, `pub var`
-/// und Signale aus dem Trace des Gesamtlaufs. `only` spielt sie allein ab.
+/// und Signale aus dem Trace des Gesamtlaufs, dazu die Elemente der
+/// internen Stroeme, die sie liest und eine andere schreibt, wie Elemente
+/// eines Eingangsstroms. `only` spielt sie allein ab.
 ///
 /// Sie gilt ab Tick 0; ein Ausschnitt ab Tick k braeuchte einen
 /// Zustands-Schnappschuss der Maschine (plan/m6.md 7).
@@ -353,8 +426,15 @@ pub fn machine_slice(p: &Program, recording: &Recording, trace: &Trace, m: Machi
             lines.push(line.clone());
         }
     }
+    for line in &trace.internal {
+        let LineKind::Input { channel, .. } = &line.kind else { continue };
+        let foreign = p.streams.iter().any(|s| s.name == *channel && s.readers.contains(&m) && s.writer != Some(m));
+        if foreign {
+            lines.push(line.clone());
+        }
+    }
     lines.sort_by_key(|l| l.tick);
-    Recording { header, inputs: Trace { lines } }
+    Recording { header, inputs: Trace { lines, internal: Vec::new() } }
 }
 
 /// Die Zeilen einer Maschine im Trace: ihre Outputs und Beobachtungen.
@@ -379,7 +459,7 @@ pub fn machine_lines(p: &Program, trace: &Trace, m: MachineId) -> Trace {
         })
         .cloned()
         .collect();
-    Trace { lines }
+    Trace { lines, internal: Vec::new() }
 }
 
 fn is_stream(p: &Program, ty: takt_mir::TypeId) -> bool {

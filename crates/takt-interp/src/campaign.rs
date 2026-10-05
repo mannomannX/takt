@@ -20,13 +20,49 @@ pub struct Run {
     pub params: Vec<(String, String)>,
 }
 
+/// Warum eine Kampagne keinen Laufraum hat.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CampaignError {
+    /// Ein Sweep ohne Wert, etwa ein Bereich mit `lo > hi`: Der Laufraum
+    /// ist leer, und eine Kampagne ohne Lauf haette nichts geprueft (13.7).
+    Empty {
+        /// Die Kampagne.
+        campaign: String,
+        /// Der Parameter des leeren Sweeps.
+        param: String,
+    },
+    /// Die Auswertung eines Sweeps scheiterte.
+    Trap(Trap),
+}
+
+impl From<Trap> for CampaignError {
+    fn from(t: Trap) -> Self {
+        CampaignError::Trap(t)
+    }
+}
+
+impl std::fmt::Display for CampaignError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CampaignError::Empty { campaign, param } => write!(
+                f,
+                "Kampagne `{campaign}`: der Sweep ueber `{param}` hat keinen Wert, der Laufraum ist leer (13.7)"
+            ),
+            CampaignError::Trap(trap) => write!(f, "{trap:?}"),
+        }
+    }
+}
+
 /// Der Laufraum: kartesisches Produkt der Sweeps mal `repeat`, erster
-/// Sweep aussen, Wiederholungen innen.
-pub fn runs(p: &Program, c: &Campaign) -> Result<Vec<Run>, Trap> {
+/// Sweep aussen, Wiederholungen innen. Er ist nie leer.
+pub fn runs(p: &Program, c: &Campaign) -> Result<Vec<Run>, CampaignError> {
     let mut vectors: Vec<Vec<(String, String)>> = vec![Vec::new()];
     for sweep in &c.sweeps {
         let (param, values) = sweep_values(p, sweep)?;
         let def = &p.params[param.index()];
+        if values.is_empty() {
+            return Err(CampaignError::Empty { campaign: c.name.clone(), param: def.name.clone() });
+        }
         let texts: Vec<String> = values.iter().map(|v| crate::trace::value_text(v, def.ty, p)).collect();
         vectors = vectors
             .iter()

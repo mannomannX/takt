@@ -19,5 +19,5 @@
     (when clear -> RESET))
   (state RESET
     (enter
-      (.reset c))
+      (.reset c ()))
     (when tick_up -> RUN)))

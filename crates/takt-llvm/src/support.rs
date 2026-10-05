@@ -289,7 +289,6 @@ fn feature(f: Feature) -> Support {
         | Feature::HandlerGuard
         | Feature::After
         | Feature::GuardExpr
-        | Feature::GuardMatch
         | Feature::GuardNext
         | Feature::TargetState
         | Feature::TargetFaulted
@@ -318,7 +317,21 @@ fn feature(f: Feature) -> Support {
         | Feature::Port
         | Feature::Recorded
         | Feature::Campaign
-        | Feature::Node => Yes,
+        | Feature::Node
+        | Feature::Label
+        | Feature::Display
+        | Feature::Group => Yes,
+        // Die Rahmung schneidet der Rand der Runtime (8.6, 12.6); der
+        // erzeugte Code sieht nur die fertigen Elemente.
+        Feature::FramingRaw
+        | Feature::FramingLines
+        | Feature::FramingCobs
+        | Feature::FramingLengthPrefixed
+        | Feature::FramingFixed => Yes,
         Feature::HandlerPattern => Partial("kein `{x:float}` im Handler-Muster"),
+        // Text nach Fliesskomma waere eine zweite Rundungsquelle neben der
+        // des Interpreters (4.2, `captures.rs`); der Guard teilt die Grenze
+        // des Handlers (GEN-014).
+        Feature::GuardMatch => Partial("kein `{x:float}` im Guard-Muster"),
     }
 }

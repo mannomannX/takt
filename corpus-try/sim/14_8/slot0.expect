@@ -1,0 +1,3 @@
+t=7 state bootloader VERIFY.S0
+t=128 state bootloader JUMP
+t=128 end on_start

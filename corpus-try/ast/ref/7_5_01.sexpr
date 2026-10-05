@@ -1,0 +1,4 @@
+(at (+ (.t m) BROWNOUT_DELAY)
+  (= vbus_en false))
+(pulse reset_n false for=20us)
+(cancel vbus_en)

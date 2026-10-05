@@ -10,9 +10,10 @@ Autors; er normiert Leerraum, Einrückung, Spaltenausrichtung, Kommentarabstand 
 Eine Datei mit Tokenizer- oder Parserfehlern bleibt unverändert.
 
 Garantien: `tokens(format(s))` gleicht `tokens(s)` in Art und Text (Dauern mit einem
-Leerzeichen), `parse(format(s))` gleicht `parse(s)`, `format(format(s)) == format(s)`, und die
-Kommentare bleiben als Multimenge erhalten. Die Tests dazu: `tests/format_vectors.rs` (die
-Vektoren dieser Datei), `tests/format_roundtrip.rs`, `tests/format_canonical.rs`.
+Leerzeichen), `parse(format(s))` gleicht `parse(s)`, `format(format(s)) == format(s)`, und
+jeder Kommentar bleibt mit unverändertem Text vor demselben Token (lexer.md L7). Die Tests dazu:
+`tests/format_vectors.rs` (die Vektoren dieser Datei), `tests/format_roundtrip.rs`,
+`tests/format_canonical.rs`; `fmt::verify` prüft die Garantien je Datei.
 
 ## Notation der Vektoren
 
@@ -21,8 +22,9 @@ werden als Schnipsel gelesen (`format_snippet`); die Ausgabe muss zusätzlich ka
 
 ## F1 Zeilen und Einrückung
 
-- Zeilenenden `\n`; keine BOM; keine Tabulatoren (die Einrückung wird neu erzeugt); kein
-  Leerraum am Zeilenende; genau ein Zeilenende am Dateiende; keine Leerzeile am Dateianfang.
+- Zeilenenden `\n`; keine BOM; keine Tabulatoren außerhalb von Strings und Kommentaren (die
+  Einrückung wird neu erzeugt; Strings und Kommentare bleiben, L1.5); kein Leerraum am
+  Zeilenende; genau ein Zeilenende am Dateiende; keine Leerzeile am Dateianfang.
 - 4 Leerzeichen je Blockstufe.
 - Zeilenumbrüche innerhalb von Klammern sind Fortsetzungszeilen des Autors und bleiben. Ihre
   Einrückung: die Spalte hinter der öffnenden Klammer; stand die Klammer am Zeilenende, die
@@ -73,6 +75,22 @@ block win[U, const N in 1..8](k: float[U] = 1 V):
     var s : float[U] = 0 V
     step(x: float[U]) -> float[U]:
         return x
+```
+
+Der Segment-Default einer Sequenz (6.2) gehört zum Kopf, auch als eigener Schnipsel:
+
+```fmt
+sequence  with timeout=5 s->X:
+    wait 1 s
+state A:
+    sequence with timeout=2 s:
+        wait 1 s
+---
+sequence with timeout = 5 s -> X:
+    wait 1 s
+state A:
+    sequence with timeout = 2 s:
+        wait 1 s
 ```
 
 ## F3 Leerraum in Ausdrücken

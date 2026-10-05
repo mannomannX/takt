@@ -52,6 +52,26 @@ binary! {
     takt_m_pow_f32 = pow_f32: f32;
 }
 
+/// `libtaktm::scale_f64` fuer den erzeugten Code: `x · num / den`, korrekt
+/// gerundet (3.2, `x.to(U)`; INT-008). Die Faktoren sind `u128` und kommen
+/// in zwei Haelften, weil die C-ABI `u128` nicht auf jedem Ziel gleich
+/// uebergibt.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_m_scale_f64(x: f64, num_lo: u64, num_hi: u64, den_lo: u64, den_hi: u64) -> f64 {
+    libtaktm::scale_f64(x, wide(num_lo, num_hi), wide(den_lo, den_hi))
+}
+
+/// `libtaktm::scale_f32` fuer den erzeugten Code, wie [`takt_m_scale_f64`].
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_m_scale_f32(x: f32, num_lo: u64, num_hi: u64, den_lo: u64, den_hi: u64) -> f32 {
+    libtaktm::scale_f32(x, wide(num_lo, num_hi), wide(den_lo, den_hi))
+}
+
+/// Ein `u128` aus seinen zwei Haelften.
+fn wide(lo: u64, hi: u64) -> u128 {
+    (u128::from(hi) << 64) | u128::from(lo)
+}
+
 /// Ein Einstieg, wie ihn das Messprogramm der Boards ruft: ueber den Zeiger,
 /// also genau die Funktion, die auch der erzeugte Code ruft.
 #[derive(Clone, Copy)]

@@ -6,6 +6,7 @@
 //! (Warnungen eskalieren, Zertifizierungsmodus) wirkt beim Sammeln, nicht in der
 //! Pruefung.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::panic::Location;
 
@@ -233,7 +234,8 @@ impl Sink {
     /// (Code, Position, Meldung) nur einmal, etwa aus Instanzen einer Vorlage.
     pub fn sorted(mut self) -> Vec<Diagnostic> {
         self.diagnostics.sort_by_key(|d| (d.span.file.0, d.span.start));
-        self.diagnostics.dedup_by(|a, b| a.code == b.code && a.span == b.span && a.message == b.message);
+        let mut seen = HashSet::new();
+        self.diagnostics.retain(|d| seen.insert((d.code, d.span, d.message.clone())));
         self.diagnostics
     }
 }
@@ -288,7 +290,9 @@ impl SourceMap {
         let offset = (span.start as usize).min(f.text.len());
         let line = f.line_starts.partition_point(|&s| s as usize <= offset);
         let line_start = f.line_starts[line - 1] as usize;
-        let col = f.text.get(line_start..offset).map_or(offset - line_start, |s| s.chars().count()) + 1;
+        let rel = offset - line_start;
+        // Ein Anfang mitten in einem Mehrbytezeichen zaehlt als dieses Zeichen.
+        let col = f.text[line_start..].char_indices().take_while(|&(i, c)| i + c.len_utf8() <= rel).count() + 1;
         (line as u32, col as u32)
     }
 
@@ -415,5 +419,94 @@ mod tests {
         let out = sink.sorted();
         assert_eq!(out.len(), 3);
         assert_eq!(out[0].span, Span::new(1, 2));
+    }
+
+    #[test]
+    fn sorted_drops_duplicates_that_are_not_neighbours() {
+        // Zwei Instanzen einer Vorlage melden A und B an denselben Stellen.
+        let mut sink = Sink::new(Policy::default());
+        for _ in 0..2 {
+            sink.report(Diagnostic::error("SC-3", Span::new(5, 6), "a"));
+            sink.report(Diagnostic::error("SC-7", Span::new(5, 6), "b"));
+        }
+        let out = sink.sorted();
+        let shown: Vec<_> = out.iter().map(|d| (d.code, d.message.as_str())).collect();
+        assert_eq!(shown, [("SC-3", "a"), ("SC-7", "b")], "Reihenfolge der Meldung bleibt");
+    }
+
+    #[test]
+    fn a_column_inside_a_multibyte_char_is_the_column_of_that_char() {
+        let map = SourceMap::single("a.takt", "\tvar näme = 1\nnext\n");
+        assert_eq!(map.line_col(Span::new(7, 8)), (1, 7), "zweites Byte von ä");
+        assert_eq!(map.line_col(Span::new(8, 9)), (1, 8), "m hinter ä");
+        let crlf = SourceMap::single("a.takt", "a = 1\r\nbä = 2\r\n");
+        assert_eq!(crlf.line_col(Span::new(7, 8)), (2, 1));
+        assert_eq!(crlf.line_col(Span::new(10, 11)), (2, 3), "Spalte in Zeichen auch nach CRLF");
+        assert_eq!(crlf.line_text(FileId(0), 1), "a = 1");
+        // Die BOM ist ein Zeichen (L1.2 zaehlt Zeichen) und nimmt Spalte 1 ein.
+        let bom = SourceMap::single("a.takt", "\u{feff}x = 1\n");
+        assert_eq!(bom.line_col(Span::new(3, 4)), (1, 2));
+        let reversed = Span::new(5, 2);
+        assert_eq!(map.line_col(reversed), (1, 6), "der Anfang zaehlt");
+        assert!(map.render(&Diagnostic::error("P", reversed, "x")).contains("  | \t    ^\n"));
+    }
+
+    #[test]
+    fn notes_in_another_file_and_the_stage_are_rendered() {
+        let mut map = SourceMap::new();
+        let main = map.add("main.takt", "import lib\nx = f()\n");
+        let lib = map.add("lib.takt", "fn f() -> int:\n    return 1\n");
+        let d = Diagnostic::error("SC-9", Span::new(15, 18), "Aufruf ab v1.1")
+            .with_note(Span::new(3, 4), "hier deklariert")
+            .with_stage(Stage::V1_1)
+            .with_suggestion("Stufe heben")
+            .in_file(main);
+        // in_file setzt die Datei auch an der Notiz; die zweite Datei kommt per Hand.
+        assert_eq!(d.notes[0].0.file, main);
+        let d = Diagnostic { notes: vec![(Span { file: lib, start: 3, end: 4 }, "hier deklariert".into())], ..d };
+        assert_eq!(
+            map.render(&d),
+            "error[SC-9]: Aufruf ab v1.1\n \
+             --> main.takt:2:5\n  |\n2 | x = f()\n  |     ^^^\n \
+             --> lib.takt:1:4\n  |\n1 | fn f() -> int:\n  |    ^ hier deklariert\n  \
+             = ab v1.1\n  = Vorschlag: Stufe heben\n"
+        );
+        assert_eq!(map.render_line(&d), "main.takt:2:5: error[SC-9]: Aufruf ab v1.1 (Stufe heben)");
+    }
+
+    #[test]
+    fn sorted_orders_by_file_before_offset() {
+        let mut sink = Sink::new(Policy::default());
+        sink.report(Diagnostic::error("SC-1", Span { file: FileId(1), start: 0, end: 1 }, "b"));
+        sink.report(Diagnostic::error("SC-1", Span { file: FileId(0), start: 9, end: 10 }, "a"));
+        let files: Vec<_> = sink.sorted().iter().map(|d| d.span.file.0).collect();
+        assert_eq!(files, [0, 1]);
+    }
+
+    #[test]
+    fn only_warnings_escalate_under_every_policy() {
+        let policies = [
+            Policy::default(),
+            Policy { warnings_as_errors: true, ..Default::default() },
+            Policy { certification: true, ..Default::default() },
+            Policy { tested: true, ..Default::default() },
+            Policy { warnings_as_errors: true, certification: true, tested: true },
+        ];
+        // Erwartete Schwere je Politik fuer (Schwere, Code).
+        use Severity::{Error as E, Note as N, Warning as W};
+        let table = [
+            (N, "SC-49", [N, N, N, N, N]),
+            (N, "SC-13", [N, N, N, N, N]),
+            (E, "SC-14", [E, E, E, E, E]),
+            (W, "SC-14", [W, E, W, W, E]),
+            (W, "SC-49", [W, E, E, W, E]),
+            (W, "SC-13", [W, E, W, E, E]),
+        ];
+        for (severity, code, want) in table {
+            for (policy, want) in policies.iter().zip(want) {
+                let d = Diagnostic::new(severity, code, Span::new(0, 0), "x");
+                assert_eq!(policy.apply(d).severity, want, "{severity:?} {code} unter {policy:?}");
+            }
+        }
     }
 }

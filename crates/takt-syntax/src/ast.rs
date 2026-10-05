@@ -1681,7 +1681,8 @@ pub enum SnippetItem {
     Exit(Block),
     Loop(Block),
     On(OnHandler),
-    Sequence(Vec<SeqItem>),
+    /// `sequence [with timeout = d [-> X]]:` mit Segment-Default (6.2).
+    Sequence(Option<Timeout>, Vec<SeqItem>),
     Transition(Transition),
     State(StateDecl),
     Step(StepDecl),

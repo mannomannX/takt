@@ -241,7 +241,7 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
 
     /// Meldet einen Fault als Beobachtung.
     pub fn observe_fault(&mut self, f: &Fault, target: String) {
-        self.out.push(Observation::Fault { kind: f.kind, message: f.message.clone(), target });
+        self.out.push(Observation::Fault { kind: f.kind, message: f.message.clone(), target, span: f.span });
     }
 
     /// `last_fault` als Recordwert (5.3).
@@ -381,10 +381,13 @@ impl Outer for MachineEnv<'_, '_> {
 
     fn job_start(&mut self, handle: VarId, value: Option<Value>, due: u64) -> EvalResult<()> {
         let slot = self.job_slot(handle)?;
-        // 4.5: Eine Aufzeichnung ersetzt den Tick des Modells.
-        let (id, tick) = (self.id, self.tick);
+        // 4.5: Eine Aufzeichnung ersetzt den Tick des Modells, aber nur ein
+        // Job, der seine Dauer ueberschritt, wird aufgezeichnet: Was vor
+        // `due` steht, gehoert nicht zu diesem Lauf, sondern zu einem
+        // frueheren auf demselben Handle oder zu keinem.
+        let id = self.id;
         let recorded =
-            self.image.job_records.iter().filter(|(m, s, t)| *m == id && *s == slot && *t >= tick).map(|r| r.2).min();
+            self.image.job_records.iter().filter(|(m, s, t)| *m == id && *s == slot && *t >= due).map(|r| r.2).min();
         let due = recorded.unwrap_or(due);
         self.state.jobs.get_mut(slot).ok_or_else(|| Trap::Bug(format!("Job-Slot {slot} fehlt")))?.start(value, due);
         Ok(())
@@ -766,6 +769,12 @@ pub struct Sim<'p> {
     /// Die Aktivitaet steht vor jedem Schritt fest (5.11), der Vergleich
     /// mit diesem Stand liefert Ein- und Austritt.
     pub active_scoped: Vec<bool>,
+    /// Je gescopte Instanz mit `resume` das Blatt beim letzten regulaeren
+    /// Austritt (5.11, 5.12); der Wiedereintritt betritt es statt `initial`.
+    pub resumed: Vec<Option<takt_mir::StateId>>,
+    /// Die zugestellten Elemente der internen Stroeme als `in`-Zeilen
+    /// (`Trace::internal`, 12.5).
+    pub internal: Vec<crate::trace::TraceLine>,
 }
 
 /// Laufende Maschinen in Deklarationsreihenfolge (5.8, 13.6).
@@ -842,7 +851,10 @@ impl<'p> Sim<'p> {
         scenario: Option<MachineId>,
     ) -> Result<Sim<'p>, Trap> {
         let loaded = Loaded::load(program).map_err(|d| Trap::Bug(format!("{d}")))?;
-        let params = eval_params(&loaded, profile, overrides)?;
+        let params = eval_params(&loaded, profile, overrides).map_err(|e| match e {
+            ParamError::Input(message) => Trap::Bug(message),
+            ParamError::Trap(trap) => trap,
+        })?;
         let outputs = eval_safe_outputs(&loaded, &params)?;
         let image = Image::new(program, outputs, params);
         let states = program.machines.iter().map(MachineState::new).collect();
@@ -852,6 +864,7 @@ impl<'p> Sim<'p> {
             schedule::order_with(program, scenario).unwrap_or_else(|_| schedule::runnable_with(program, scenario));
         let scoped = takt_mir::machine::scoped_instances(program);
         let active_scoped = vec![false; scoped.len()];
+        let resumed = vec![None; scoped.len()];
         Ok(Sim {
             loaded,
             states,
@@ -864,6 +877,8 @@ impl<'p> Sim<'p> {
             nvm: Nvm::new(),
             scoped,
             active_scoped,
+            resumed,
+            internal: Vec::new(),
             trigger_cursors: vec![0; program.triggers.len()],
         })
     }
@@ -998,6 +1013,17 @@ impl<'p> Sim<'p> {
             let drop_oldest = matches!(def.overflow, Overflow::DropOldest);
             let mut dropped = 0;
             for (t, value, bytes) in pending {
+                let seq = self.image.stream_bufs[i].end();
+                let sample = crate::trace::SampleText {
+                    value: Some(crate::trace::value_text(&value, def.elem, program)),
+                    quality: None,
+                    reason: None,
+                    age: None,
+                    t: Some(t),
+                    seq: Some(seq),
+                };
+                let kind = crate::trace::LineKind::Input { channel: def.name.clone(), sample };
+                self.internal.push(crate::trace::TraceLine { tick: self.tick, kind });
                 match self.image.stream_bufs[i].push(t, value, bytes, drop_oldest) {
                     Delivery::Ok => {}
                     Delivery::Overflow => return bug(format!("Stream `{}` laeuft beim Zustellen ueber", def.name)),
@@ -1245,7 +1271,13 @@ impl<'p> Sim<'p> {
         for element in window {
             seen = Some(element.seq);
             let consts = trigger_consts(&self.loaded, &mut env, pattern, self.tick)?;
-            if let Some(caps) = crate::pattern::match_value(pattern, *kind, &element.value, &consts) {
+            if let Some(caps) = crate::pattern::match_value(
+                pattern,
+                *kind,
+                &element.value,
+                &consts,
+                self.loaded.program.config.float_width,
+            ) {
                 found = Some((element, caps));
                 break;
             }
@@ -1307,37 +1339,54 @@ impl<'p> Sim<'p> {
             if now == self.active_scoped[i] {
                 continue;
             }
-            let (owner, si) = self.scoped[i].clone();
-            let inst = si.machine;
+            let owner = self.scoped[i].0;
             if now {
-                self.enter_scoped(inst, tick_ns)?;
+                self.enter_scoped(i, tick_ns)?;
             } else {
                 let faulted = self.states[owner.index()].faulted
                     || self.states[owner.index()].last_fault.as_ref().is_some_and(|f| f.tick == self.tick);
-                self.leave_scoped(inst, faulted, tick_ns)?;
+                self.leave_scoped(i, faulted, tick_ns)?;
             }
             self.active_scoped[i] = now;
         }
         Ok(())
     }
 
-    /// Eine gescopte Instanz betreten (5.11): frischer Zustand, Variablen,
-    /// `initial`. Sie schreitet ab dem naechsten Tick.
-    fn enter_scoped(&mut self, inst: MachineId, tick_ns: i64) -> Result<(), Trap> {
+    /// Die gescopte Instanz `i` betreten (5.11): frischer Zustand,
+    /// Variablen, `initial` — oder bei `resume` das gemerkte Blatt (5.12).
+    /// `persist`-Variablen behalten ihren Wert: Sie liegen in Sigma und
+    /// ueberdauern jeden Zustandswechsel (5.9, 11.5). Sie schreitet ab dem
+    /// naechsten Tick.
+    fn enter_scoped(&mut self, i: usize, tick_ns: i64) -> Result<(), Trap> {
         let program = self.loaded.program;
-        self.states[inst.index()] = MachineState::new(&program.machines[inst.index()]);
+        let inst = self.scoped[i].1.machine;
+        let def = &program.machines[inst.index()];
+        let old = std::mem::replace(&mut self.states[inst.index()], MachineState::new(def));
         let mut out = Vec::new();
         let mut env =
             MachineEnv::new(&self.loaded, inst, &mut self.states[inst.index()], &mut self.image, &mut out, tick_ns);
         env.init_vars(&self.loaded, self.tick)?;
-        machine::init(&self.loaded, &mut env, self.tick)?;
+        for pv in &def.persist {
+            if let (Some(slot), Some(v)) = (env.state.vars.get_mut(pv.var.index()), old.vars.get(pv.var.index())) {
+                *slot = v.clone();
+            }
+        }
+        match self.resumed[i].take() {
+            Some(leaf) => {
+                env.state.saved = old.saved;
+                machine::init_at(&self.loaded, &mut env, leaf, self.tick)?;
+            }
+            None => machine::init(&self.loaded, &mut env, self.tick)?,
+        }
         self.observations.extend(out.into_iter().map(|o| (inst, o)));
         self.publish_one(inst);
         Ok(())
     }
 
-    /// Eine gescopte Instanz verlassen (5.11).
-    fn leave_scoped(&mut self, inst: MachineId, by_fault: bool, tick_ns: i64) -> Result<(), Trap> {
+    /// Die gescopte Instanz `i` verlassen (5.11).
+    fn leave_scoped(&mut self, i: usize, by_fault: bool, tick_ns: i64) -> Result<(), Trap> {
+        let (inst, resume) = (self.scoped[i].1.machine, self.scoped[i].1.resume);
+        let leaf = self.states[inst.index()].leaf();
         let mut out = Vec::new();
         if !by_fault {
             let mut env =
@@ -1353,7 +1402,21 @@ impl<'p> Sim<'p> {
         out.extend(safe);
         self.observations.extend(out.into_iter().map(|o| (inst, o)));
         self.publish_one(inst);
-        self.states[inst.index()] = MachineState::new(&self.loaded.program.machines[inst.index()]);
+        // 5.11: „sched, Jobs und Trigger von inst werden verworfen" — ein
+        // geplanter Wert ueberschriebe sonst `safe` waehrend der Pause.
+        let program = self.loaded.program;
+        let def = &program.machines[inst.index()];
+        self.image.cancel_all_scheduled(&def.layout.output_queues);
+        let old = std::mem::replace(&mut self.states[inst.index()], MachineState::new(def));
+        // Die Werte bleiben stehen, bis der Wiedereintritt sie initialisiert:
+        // `persist` gehoert weiter zur kanonischen Form (5.9).
+        self.states[inst.index()].vars = old.vars;
+        // 5.12: Mit `resume` bleibt die Konfiguration, ausser nach einem
+        // Fault-Uebergang des Besitzers.
+        if resume && !by_fault {
+            self.resumed[i] = leaf;
+            self.states[inst.index()].saved = old.saved;
+        }
         Ok(())
     }
 
@@ -1537,7 +1600,37 @@ impl<'p> Sim<'p> {
 
 /// Parameterwerte: Defaults, dann Profil (8.4).
 /// Defaults, dann das Profil, dann die Ueberlagerung (8.4, 13.7).
-fn eval_params(loaded: &Loaded<'_>, profile: Option<&str>, overrides: &[(String, String)]) -> Result<Vec<Value>, Trap> {
+/// Warum der Parametervektor eines Laufs nicht entsteht.
+enum ParamError {
+    /// Die Eingabe passt nicht zum Programm: ein unbekanntes Profil, ein
+    /// Profilwert oder eine Ueberlagerung ausserhalb der Range (8.4, KOR-011).
+    Input(String),
+    /// Die Auswertung selbst scheiterte.
+    Trap(Trap),
+}
+
+impl From<Trap> for ParamError {
+    fn from(t: Trap) -> Self {
+        ParamError::Trap(t)
+    }
+}
+
+/// Prueft Profil und Ueberlagerungen eines Laufs gegen das Programm, bevor
+/// er beginnt: Was hier scheitert, ist eine Eingabe des Nutzers (8.4), kein
+/// Fehler des Interpreters (KOR-011).
+pub fn check_params(program: &Program, profile: Option<&str>, overrides: &[(String, String)]) -> Result<(), String> {
+    match eval_params(&Loaded::borrow(program), profile, overrides) {
+        Ok(_) => Ok(()),
+        Err(ParamError::Input(message)) => Err(message),
+        Err(ParamError::Trap(trap)) => Err(format!("{trap:?}")),
+    }
+}
+
+fn eval_params(
+    loaded: &Loaded<'_>,
+    profile: Option<&str>,
+    overrides: &[(String, String)],
+) -> Result<Vec<Value>, ParamError> {
     let p = loaded.program;
     let mut env = crate::ConstEnv::new(p.config.tick);
     let mut ctx = Ctx::new(loaded, &mut env, 0);
@@ -1547,17 +1640,17 @@ fn eval_params(loaded: &Loaded<'_>, profile: Option<&str>, overrides: &[(String,
     }
     if let Some(name) = profile {
         let Some(prof) = p.profiles.iter().find(|x| x.name == name) else {
-            return bug(format!("Profil `{name}` gibt es nicht"));
+            return Err(ParamError::Input(format!("Profil `{name}` gibt es nicht")));
         };
         for (id, value) in &prof.assignments {
             let v = ctx.eval(value)?;
             let ty = p.params[id.index()].ty;
             if let Some(range) = range_of(loaded, ty) {
                 if !crate::eval::in_range(&v, &range) {
-                    return bug(format!(
+                    return Err(ParamError::Input(format!(
                         "Profil `{name}`: Wert von `{}` ausserhalb der Range (8.4)",
                         p.params[id.index()].name
-                    ));
+                    )));
                 }
             }
             out[id.index()] = v;
@@ -1565,12 +1658,12 @@ fn eval_params(loaded: &Loaded<'_>, profile: Option<&str>, overrides: &[(String,
     }
     for (name, text) in overrides {
         let Some(i) = p.params.iter().position(|q| q.name == *name) else {
-            return bug(format!("Parameter `{name}` gibt es nicht"));
+            return Err(ParamError::Input(format!("Parameter `{name}` gibt es nicht")));
         };
-        let v = crate::trace::parse_value(text, p.params[i].ty, p).map_err(Trap::Bug)?;
+        let v = crate::trace::parse_value(text, p.params[i].ty, p).map_err(ParamError::Input)?;
         if let Some(range) = range_of(loaded, p.params[i].ty) {
             if !crate::eval::in_range(&v, &range) {
-                return bug(format!("`{name} = {text}` liegt ausserhalb der Range (8.4)"));
+                return Err(ParamError::Input(format!("`{name} = {text}` liegt ausserhalb der Range (8.4)")));
             }
         }
         out[i] = v;

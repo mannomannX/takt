@@ -1,0 +1,3 @@
+t=10 state battery_cycle CYCLING.S0
+t=1820 state battery_cycle CYCLING.S0
+t=4210 state battery_cycle CYCLING.S4

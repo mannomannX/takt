@@ -41,13 +41,11 @@ pub const SC47: &str = "SC-47";
 /// je Eintritt (Sequenz-`var`, Captures). Pruefung 6 ist die allgemeine
 /// Regel.
 ///
-/// Der Code steht, ist aber derzeit nicht ausloesbar: `VarDef::init` ist nur
-/// an einer Stelle `None` — der Musterbindung in `lower/pattern.rs` —, und
-/// jeden Lesezugriff darauf faengt schon Pruefung 6 ab. Ein Sequenz-`var`
-/// ohne Initialisierer, der zweite Fall der Regel, ist grammatisch gar nicht
-/// schreibbar (2.3: `var_decl` verlangt `=`). Erst wenn die Grammatik ihn
-/// zulaesst, bekommt 25 einen eigenen Fall; bis dahin haelt
-/// `tests/analysis.rs` den Grund fest.
+/// Ausgeloest wird sie von einem Capture, das ein weicher Timeout uebergeht
+/// (corpus-try/checks/SC-25/bad_capture_after_soft_timeout.takt). Ein
+/// Sequenz-`var` ohne Initialisierer, der zweite Fall der Regel, ist
+/// grammatisch nicht schreibbar (2.3: `var_decl` verlangt `=`);
+/// `tests/analysis.rs` haelt das fest.
 pub const SC25: &str = "SC-25";
 /// Maschinenregeln.
 pub const SC8: &str = "SC-8";
@@ -367,22 +365,8 @@ impl Lowerer<'_> {
             let cap_bytes = match self.program.channels[i].attrs.capacity_bytes {
                 Some(n) => u64::from(n),
                 None => {
-                    // 8.6: Default `capacity * N`, mit `expect_len` statt N,
-                    // wenn deklariert — dann warnt der Compiler einmal.
-                    let per = match self.program.channels[i].attrs.expect_len {
-                        Some(n) => {
-                            // Pruefung 42, zweite Klausel: die Annahme
-                            // schwaecht Lemma 9.6.1 (8.6).
-                            self.warn_hint(
-                                SC42,
-                                span,
-                                format!("`expect_len = {n}` an `{name}`: Lemma 9.6.1 gilt nur unter dieser Annahme"),
-                                "mittlere Laenge ueber `capacity` Elemente hoechstens `expect_len` (8.6)",
-                            );
-                            u64::from(n)
-                        }
-                        None => u64::from(elem_bytes),
-                    };
+                    let expect = self.program.channels[i].attrs.expect_len;
+                    let per = self.assumed_len(expect, u64::from(elem_bytes), &name, span);
                     let n = (cap.saturating_mul(per)).clamp(1, u64::from(u32::MAX)) as u32;
                     self.program.channels[i].attrs.capacity_bytes = Some(n);
                     u64::from(n)
@@ -401,7 +385,8 @@ impl Lowerer<'_> {
             let cap_bytes = match self.program.streams[i].capacity_bytes {
                 Some(n) => u64::from(n),
                 None => {
-                    let per = self.program.streams[i].expect_len.map_or(elem_bytes, u64::from);
+                    let expect = self.program.streams[i].expect_len;
+                    let per = self.assumed_len(expect, elem_bytes, &name, span);
                     let n = (cap.saturating_mul(per)).clamp(1, u64::from(u32::MAX)) as u32;
                     self.program.streams[i].capacity_bytes = Some(n);
                     u64::from(n)
@@ -412,6 +397,22 @@ impl Lowerer<'_> {
             let maxpt = self.max_sends(StreamRef::Internal(StreamId(i as u32)));
             self.check_maxpt(&name, span, maxpt, &periods, Caps { cap, cap_bytes, elem_bytes });
         }
+    }
+
+    /// 8.6: Bytes je Element fuer den Default `capacity_bytes`, mit
+    /// `expect_len` statt N, wenn deklariert. Pruefung 42, zweite Klausel:
+    /// Nur `expect_len < N` schwaecht Lemma 9.6.1, dann warnt der Compiler.
+    fn assumed_len(&mut self, expect: Option<u32>, elem_bytes: u64, name: &str, span: Span) -> u64 {
+        let Some(n) = expect else { return elem_bytes };
+        if u64::from(n) < elem_bytes {
+            self.warn_hint(
+                SC42,
+                span,
+                format!("`expect_len = {n}` an `{name}`: Lemma 9.6.1 gilt nur unter dieser Annahme"),
+                "mittlere Laenge ueber `capacity` Elemente hoechstens `expect_len` (8.6)",
+            );
+        }
+        u64::from(n)
     }
 
     /// Pruefung 17: `MAXPT * n_m <= CAP` je Konsument, dazu die Byte-Variante
@@ -457,36 +458,152 @@ impl Lowerer<'_> {
     }
 
     /// Statische Hoechstzahl von `send` auf einen Stream je Aktivierung des
-    /// Schreibers (8.6, Pruefung 43).
+    /// Schreibers (8.6, Pruefung 43): eine Schleife mit ihrer Schranke, ein
+    /// Handler je Element seines Fensters (8.7), von zwei Zweigen der
+    /// teurere.
     fn max_sends(&self, target: StreamRef) -> u64 {
-        let count = |stmts: &[Stmt]| {
-            let mut n = 0u64;
-            walk_stmts(stmts, 0, &mut |s, _| {
-                if let StmtKind::Send { stream, .. } = &s.kind
-                    && *stream == target
-                {
-                    n += 1;
-                }
-            });
-            n
-        };
+        self.max_sends_of(target, &mut Vec::new())
+    }
+
+    /// `max_sends` mit den Stroemen, deren Hoechstzahl gerade entsteht: Ein
+    /// Zyklus ueber Handler rechnet mit der Kapazitaet.
+    fn max_sends_of(&self, target: StreamRef, open: &mut Vec<StreamRef>) -> u64 {
+        open.push(target);
         let mut worst = 0u64;
         for m in &self.program.machines {
             if matches!(m.kind, MachineKind::Template) {
                 continue;
             }
+            let period = u64::from(m.period.max(1));
             let mut n = 0u64;
-            for_each_block(m, &mut |b| n += count(&b.stmts));
+            for_each_block_in(m, &mut |b, handler| {
+                if !handler {
+                    n = n.saturating_add(self.sends_in(&b.stmts, target, period, open));
+                }
+            });
+            for h in m.handlers.iter().chain(m.states.iter().flat_map(|s| &s.handlers)) {
+                let each = self.sends_in(&h.body.stmts, target, period, open);
+                if each > 0 {
+                    n = n.saturating_add(self.stream_window(h.stream, period, open).saturating_mul(each));
+                }
+            }
             // 6.2: Eine Sequenz laeuft je Tick ein Segment; ihre `send`
             // zaehlen je Segment, nicht in der Summe (FB-186).
             for s in &m.states {
                 if let Some(seq) = &s.sequence {
-                    n += segment_sends(&seq.items, &count);
+                    let mut count = |stmts: &[Stmt]| self.sends_in(stmts, target, period, open);
+                    n = n.saturating_add(segment_sends(&seq.items, &mut count));
                 }
             }
             worst = worst.max(n);
         }
+        open.pop();
         worst.max(1)
+    }
+
+    /// `send` auf `target` in einem Durchlauf von `stmts` einer Maschine
+    /// der Periode `period`.
+    fn sends_in(&self, stmts: &[Stmt], target: StreamRef, period: u64, open: &mut Vec<StreamRef>) -> u64 {
+        let mut n = 0u64;
+        for s in stmts {
+            let here = match &s.kind {
+                StmtKind::Send { stream, .. } => u64::from(*stream == target),
+                StmtKind::If { then, otherwise, .. } => {
+                    let a = self.sends_in(&then.stmts, target, period, open);
+                    a.max(self.sends_in(&otherwise.stmts, target, period, open))
+                }
+                StmtKind::Match { arms, .. } => {
+                    let mut most = 0u64;
+                    for a in arms {
+                        most = most.max(self.sends_in(&a.body.stmts, target, period, open));
+                    }
+                    most
+                }
+                // Die Sema senkt `range(N)` immer auf ein Literal (stmt.rs).
+                StmtKind::ForRange { count, body, .. } => {
+                    let trips = match count.kind {
+                        ExprKind::Int(n) => u64::try_from(n).unwrap_or(0),
+                        _ => u64::MAX,
+                    };
+                    single_pass(body, trips).saturating_mul(self.sends_in(&body.stmts, target, period, open))
+                }
+                StmtKind::ForEach { iter, body, .. } => match self.sends_in(&body.stmts, target, period, open) {
+                    0 => 0,
+                    each => single_pass(body, self.iterations(iter, period, open)).saturating_mul(each),
+                },
+                StmtKind::Every { body, .. } | StmtKind::At { body, .. } => {
+                    self.sends_in(&body.stmts, target, period, open)
+                }
+                StmtKind::Assign { .. }
+                | StmtKind::Check { .. }
+                | StmtKind::Goto(_)
+                | StmtKind::Abort { .. }
+                | StmtKind::Return(_)
+                | StmtKind::Cancel(_)
+                | StmtKind::Skip(_)
+                | StmtKind::Raise(_)
+                | StmtKind::Job { .. }
+                | StmtKind::Break
+                | StmtKind::Observe(_)
+                | StmtKind::Arm { .. }
+                | StmtKind::MethodCall { .. }
+                | StmtKind::Pass => 0,
+            };
+            n = n.saturating_add(here);
+        }
+        n
+    }
+
+    /// Durchlaeufe von `for x in iter`: das Fenster eines Stroms, sonst die
+    /// Kapazitaet des Behaelters (9.4.3).
+    fn iterations(&self, iter: &Expr, period: u64, open: &mut Vec<StreamRef>) -> u64 {
+        let stream = match &iter.kind {
+            ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
+            ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
+            ExprKind::Var(v) => Some(StreamRef::Var(*v)),
+            _ => None,
+        };
+        match (self.program.types.get(iter.ty), stream) {
+            (Type::Stream(_), Some(s)) => self.stream_window(s, period, open),
+            (Type::Array { len, .. } | Type::Samples { len, .. }, _) => u64::from(*len),
+            (
+                Type::Vec { cap, .. }
+                | Type::Bytes { cap }
+                | Type::Map { cap, .. }
+                | Type::Str { cap }
+                | Type::Line { cap },
+                _,
+            ) => u64::from(*cap),
+            _ => u64::MAX,
+        }
+    }
+
+    /// Hoechstens so viele Elemente sieht ein Konsument der Periode
+    /// `period` in seinem Fenster: die Kapazitaet, und nach Lemma 9.6.1
+    /// nicht mehr, als zwischen zwei Aktivierungen eintreffen
+    /// (`MAXPT_s * n_m`) — ein Ueberlauf darueber ist der Fault des Stroms.
+    fn stream_window(&self, s: StreamRef, period: u64, open: &mut Vec<StreamRef>) -> u64 {
+        let p = &self.program;
+        let tick = u64::try_from(p.config.tick).unwrap_or(0);
+        let internal = |i: StreamId| p.streams.get(i.index()).map_or(u64::MAX, |d| u64::from(d.capacity));
+        let (capacity, maxpt) = match s {
+            StreamRef::Channel(c) => {
+                let cap = p.channels.get(c.index()).and_then(|c| c.attrs.capacity).map_or(u64::MAX, u64::from);
+                let rate = self.rate_hz(c.index()).map(|r| ceil_div(r.saturating_mul(tick), 1_000_000_000).max(1));
+                (cap, rate)
+            }
+            StreamRef::Internal(i) => {
+                let sends = (!open.contains(&s)).then(|| self.max_sends_of(s, open));
+                (internal(i), sends)
+            }
+            StreamRef::Fired(t) => (p.triggers.get(t.index()).map_or(u64::MAX, |d| internal(d.fired)), None),
+            // Ein Strom als Parameter: hoechstens das groesste Fenster.
+            StreamRef::Var(_) => {
+                let channels = p.channels.iter().filter_map(|c| c.attrs.capacity).map(u64::from);
+                (channels.chain(p.streams.iter().map(|d| u64::from(d.capacity))).max().unwrap_or(u64::MAX), None)
+            }
+        };
+        maxpt.map_or(capacity, |m| capacity.min(m.saturating_mul(period)))
     }
 
     /// Pruefungen 40 und 41 (3.4, 4.2): zwei Hinweise, die nur auf schmalen
@@ -494,16 +611,20 @@ impl Lowerer<'_> {
     /// mit der kalibrierten Tabelle (13.8); bis dahin nennt der Lint die
     /// Stelle und den Ausweg.
     fn performance_lints(&mut self) {
-        // 12.8: `baremetal` laeuft auf MCUs. `linux_rt` und `shared` sagen
-        // ueber die Breite nichts, also schweigt der Lint dort.
-        let narrow_core = matches!(self.program.config.runtime_profile(), Some(RuntimeProfile::Baremetal));
-        if !narrow_core {
-            return;
-        }
+        // 12.8: Kennt der Bau den Kern (`--target`), gilt er. Sonst das
+        // Profil: `baremetal` laeuft auf MCUs, `linux_rt` und `shared` sagen
+        // ueber den Kern nichts, also schweigen die Lints dort.
+        let (narrow_core, f64_in_software) = match self.options.core {
+            Some(core) => (core.word_bits <= 32, !core.f64_hardware),
+            None => {
+                let mcu = matches!(self.program.config.runtime_profile(), Some(RuntimeProfile::Baremetal));
+                (mcu, mcu)
+            }
+        };
         let mut diags = Vec::new();
 
         // 41: eine programmweite Entscheidung, also eine Meldung.
-        if self.program.config.float_width == takt_mir::types::FloatWidth::F64 {
+        if f64_in_software && self.program.config.float_width == takt_mir::types::FloatWidth::F64 {
             // Eine programmweite Entscheidung hat keine Stelle im Text.
             let span = takt_diag::Span::default();
             diags.push(
@@ -513,30 +634,32 @@ impl Lowerer<'_> {
         }
 
         // 40: `int` ohne Range in einer Schleife bleibt 64 Bit (3.4).
-        for m in &self.program.machines {
-            if matches!(m.kind, MachineKind::Template) {
-                continue;
+        if narrow_core {
+            for m in &self.program.machines {
+                if matches!(m.kind, MachineKind::Template) {
+                    continue;
+                }
+                for_each_stmt_ctx(m, &mut |s, depth| {
+                    if depth == 0 {
+                        return;
+                    }
+                    let StmtKind::Assign { target: Place::Var(v), .. } = &s.kind else { return };
+                    let Some(def) = m.vars.get(v.index()) else { return };
+                    if !matches!(self.program.types.list.get(def.ty.index()), Some(Type::Int { width, range: None, .. }) if width.bits() == 64)
+                    {
+                        return;
+                    }
+                    let name = def.name.clone();
+                    diags.push(
+                        Diagnostic::warning(
+                            SC40,
+                            s.span,
+                            format!("`{name}` hat keine Range und bleibt in einer Schleife 64 Bit"),
+                        )
+                        .with_suggestion("mit `in a..b` deklarieren; der Compiler rechnet dann in 32 Bit (3.4)"),
+                    );
+                });
             }
-            for_each_stmt_ctx(m, &mut |s, depth| {
-                if depth == 0 {
-                    return;
-                }
-                let StmtKind::Assign { target: Place::Var(v), .. } = &s.kind else { return };
-                let Some(def) = m.vars.get(v.index()) else { return };
-                if !matches!(self.program.types.list.get(def.ty.index()), Some(Type::Int { width, range: None, .. }) if width.bits() == 64)
-                {
-                    return;
-                }
-                let name = def.name.clone();
-                diags.push(
-                    Diagnostic::warning(
-                        SC40,
-                        s.span,
-                        format!("`{name}` hat keine Range und bleibt in einer Schleife 64 Bit"),
-                    )
-                    .with_suggestion("mit `in a..b` deklarieren; der Compiler rechnet dann in 32 Bit (3.4)"),
-                );
-            });
         }
         self.diags.extend(diags);
     }
@@ -779,18 +902,9 @@ impl Lowerer<'_> {
                     );
                 }
             }
-            // 7.5: `when` liest nur das Ereignis, Konstanten und Parameter.
-            if let takt_mir::machine::Guard::Match {
-                pattern: takt_mir::pattern::Pattern::Record { fields, .. }, ..
-            } = &t.guard
-            {
-                if fields.iter().any(|(_, e)| reads_state(e)) {
-                    diags.push(
-                        Diagnostic::error(SC55, t.span, format!("`when` von `{}` liest Zustand (7.5)", t.name))
-                            .with_suggestion("knotenlokal heisst: das Ereignis, Konstanten und Parameter".to_string()),
-                    );
-                }
-            }
+            // 7.5: `when` liest nur das Ereignis und Konstanten. Das sichert
+            // schon die Senkung des Musters: Ein Record-Muster vergleicht
+            // nur mit konstanten Feldwerten (8.7, Pruefung 18).
         }
         // 7.5: `armed` ist Zustand *einer* Maschine.
         let mut armers: HashMap<TriggerId, Vec<(String, Span)>> = HashMap::new();
@@ -841,8 +955,7 @@ impl Lowerer<'_> {
             }
             for pv in &m.persist {
                 let v = &m.vars[pv.var.index()];
-                // Noch nicht erreichbar: Szenarien sind selbst v1.1-gestuft
-                // (SC-26), und die Stufenmeldung stoppt vor den MIR-Pruefungen.
+                // corpus-try/checks/SC-23/bad_persist_in_scenario.takt.
                 if m.kind == MachineKind::Scenario {
                     diags.push(
                         Diagnostic::error(SC23, v.span, format!("`persist var {}` in einem Szenario", v.name))
@@ -1237,7 +1350,12 @@ impl Lowerer<'_> {
                     StmtKind::MethodCall { target: Some(t), .. } => output_of(t),
                     _ => None,
                 };
-                if let Some(c) = target {
+                // Schreibt ein Szenario einen Output ohne `sim`-Bindung,
+                // meldet das `check_scenarios`; als zweiter Schreiber waere
+                // es dieselbe Stelle ein zweites Mal.
+                let foreign = m.kind == MachineKind::Scenario
+                    && target.is_some_and(|c| !matches!(self.program.channels[c.index()].binding, Binding::Sim(_)));
+                if let Some(c) = target.filter(|_| !foreign) {
                     if seen.insert(c) {
                         writers.entry(c).or_default().push((MachineId(mi as u32), s.span));
                     }
@@ -1396,12 +1514,10 @@ impl Lowerer<'_> {
                 let mut targets = Vec::new();
                 collect_targets(&self.program, m, id, &mut targets);
                 let leaf = s.children.is_empty();
-                if leaf
-                    && targets.is_empty()
-                    && s.sequence.is_none()
-                    && !s.name.contains("DONE")
-                    && !s.name.contains("SAFE")
-                {
+                // Tabelle 10, Zeile 10: `DONE`-artig ist ein Name mit einem
+                // durch `_` getrennten Glied `DONE` oder `SAFE`.
+                let final_name = s.name.split('_').any(|part| part == "DONE" || part == "SAFE");
+                if leaf && targets.is_empty() && s.sequence.is_none() && !final_name {
                     diags.push(
                         Diagnostic::warning(SC10, s.span, format!("Zustand `{}` hat keinen Ausgang", s.name))
                             .with_suggestion("`when`/`after` ergaenzen, wenn er nicht endgueltig ist"),
@@ -1529,14 +1645,34 @@ impl Lowerer<'_> {
         if self.options.build != crate::Build::Hw {
             return;
         }
-        let read = self.read_channels();
+        // Benutzt heisst benutzt von einer Maschine des HW-Builds: Szenarien
+        // und Plant-Modelle, die `sim`-Outputs schreiben, gehoeren nicht dazu
+        // (8.3, 12.7).
+        let p = &self.program;
+        let in_build: Vec<bool> = p
+            .machines
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let model = p
+                    .channels
+                    .iter()
+                    .any(|c| c.owner == Some(MachineId(i as u32)) && matches!(c.binding, Binding::Sim(_)));
+                m.kind != MachineKind::Scenario && !model
+            })
+            .collect();
+        let mut read = self.trigger_reads();
+        for (_, m) in p.machines.iter().enumerate().filter(|(i, _)| in_build[*i]) {
+            read.extend(channels_read_by(m));
+        }
         let diags: Vec<Diagnostic> = self
             .program
             .channels
             .iter()
             .enumerate()
             .filter(|(i, c)| {
-                matches!(c.binding, Binding::None) && (c.owner.is_some() || read.contains(&ChannelId(*i as u32)))
+                let written = c.owner.is_some_and(|m| in_build[m.index()]);
+                matches!(c.binding, Binding::None) && (written || read.contains(&ChannelId(*i as u32)))
             })
             .map(|(_, c)| {
                 Diagnostic::error(SC13, c.span, format!("Channel `{}` ohne Bindung im Hardware-Build benutzt", c.name))
@@ -1588,23 +1724,17 @@ impl Lowerer<'_> {
 
     /// Die Channels, die eine Maschine oder ein Trigger liest.
     fn read_channels(&self) -> HashSet<ChannelId> {
-        let mut read: HashSet<ChannelId> = HashSet::new();
+        let mut read = self.trigger_reads();
         for m in &self.program.machines {
-            for_each_expr_machine(m, &mut |e| {
-                if let ExprKind::Input { channel, .. } = &e.kind {
-                    read.insert(*channel);
-                }
-            });
-            // Ein Handler nennt seinen Strom nicht als Ausdruck; wer ihn liest,
-            // steht in `Layout::cursors` (9.6).
-            for r in &m.layout.cursors {
-                if let StreamRef::Channel(c) = r {
-                    read.insert(*c);
-                }
-            }
+            read.extend(channels_read_by(m));
         }
-        // 7.5: Ein Trigger liest seinen Quellstrom und schreibt die
-        // Outputs seines `then` — beides ohne Maschine.
+        read
+    }
+
+    /// 7.5: Ein Trigger liest seinen Quellstrom und schreibt die Outputs
+    /// seines `then` — beides ohne Maschine.
+    fn trigger_reads(&self) -> HashSet<ChannelId> {
+        let mut read = HashSet::new();
         for t in &self.program.triggers {
             if let takt_mir::machine::Guard::Match { subject, .. } = &t.guard {
                 if let ExprKind::Input { channel, .. } = &subject.kind {
@@ -2054,7 +2184,7 @@ fn has_cycle(i: usize, edges: &[Vec<FnId>], state: &mut [u8]) -> bool {
 
 /// Das Maximum der `send` eines Segments (6.2): Grenzen sind `wait`,
 /// `until`, eine Anweisung mit `->` und das Ende eines `repeat`-Koerpers.
-fn segment_sends(items: &[SeqItem], count: &dyn Fn(&[Stmt]) -> u64) -> u64 {
+fn segment_sends(items: &[SeqItem], count: &mut dyn FnMut(&[Stmt]) -> u64) -> u64 {
     let (mut best, mut cur) = (0u64, 0u64);
     for item in items {
         match item {
@@ -2084,6 +2214,29 @@ fn segment_sends(items: &[SeqItem], count: &dyn Fn(&[Stmt]) -> u64) -> u64 {
         }
     }
     best.max(cur)
+}
+
+/// Die Channels, die eine Maschine liest: als Ausdruck oder, bei einem
+/// Handler, ueber ihren Cursor (`Layout::cursors`, 9.6).
+fn channels_read_by(m: &Machine) -> HashSet<ChannelId> {
+    let mut read = HashSet::new();
+    for_each_expr_machine(m, &mut |e| {
+        if let ExprKind::Input { channel, .. } = &e.kind {
+            read.insert(*channel);
+        }
+    });
+    for r in &m.layout.cursors {
+        if let StreamRef::Channel(c) = r {
+            read.insert(*c);
+        }
+    }
+    read
+}
+
+/// Durchlaeufe einer Schleife mit Schranke `bound`: Endet ihr Rumpf mit
+/// `break`, laeuft sie hoechstens einmal.
+fn single_pass(body: &Block, bound: u64) -> u64 {
+    if matches!(body.stmts.last().map(|s| &s.kind), Some(StmtKind::Break)) { bound.min(1) } else { bound }
 }
 
 /// Wo ein Programm `next_run = ON_WAKE` schreibt (12.7); `None`, wenn
@@ -2251,36 +2404,51 @@ fn delay_of(time: &Expr) -> Option<i64> {
         ExprKind::Checked { expr, .. } => expr.as_ref(),
         _ => time,
     };
-    let ExprKind::Binary { op: takt_mir::expr::BinaryOp::Add, lhs, rhs } = &time.kind else { return None };
+    let ExprKind::Binary { op, lhs, rhs } = &time.kind else { return None };
     // `event` ist ein Record, `.t` darum ein Feld — kein `Accessor::T`.
     let is_event_t = |e: &Expr| {
         matches!(&e.kind, ExprKind::Field { base, .. }
             if matches!(base.kind, ExprKind::Builtin(takt_mir::expr::Builtin::Event)))
     };
     let (a, b) = (lhs.as_ref(), rhs.as_ref());
-    let d = if is_event_t(a) {
-        b
-    } else if is_event_t(b) {
-        a
-    } else {
-        return None;
+    let (d, sign) = match op {
+        BinaryOp::Add if is_event_t(a) => (b, 1),
+        BinaryOp::Add if is_event_t(b) => (a, 1),
+        // `event.t - d` liegt `d` vor dem Ereignis.
+        BinaryOp::Sub if is_event_t(a) => (b, -1),
+        _ => return None,
     };
     match &d.kind {
-        ExprKind::Duration(ns) => Some(*ns),
+        ExprKind::Duration(ns) => ns.checked_mul(sign),
         _ => None,
     }
 }
 
-/// Liest ein Ausdruck Zustand? (7.5: `when` ist knotenlokal.)
-fn reads_state(e: &Expr) -> bool {
-    let mut found = false;
-    walk_expr(e, &mut |x| {
-        if matches!(
-            x.kind,
-            ExprKind::Var(_) | ExprKind::Published { .. } | ExprKind::StateOf(_) | ExprKind::Signal { .. }
-        ) {
-            found = true;
-        }
-    });
-    found
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Build, Options};
+
+    /// Pruefung 23 (5.9): Zwei `persist`-Variablen mit demselben Schluessel
+    /// teilten sich einen Journaleintrag. Der Schluessel ist ein Hash aus
+    /// Maschine, Variable und Typ; gleich wird er nur durch eine Kollision,
+    /// darum setzt der Test ihn von Hand.
+    #[test]
+    fn two_persist_vars_with_the_same_key_are_an_error() {
+        let src = "system:\n    language = 1\n    tick = 1 ms\n\noutput n : int in 0..9 @ hw(\"o/n\") with safe = 0\n\n\
+                   machine m:\n    persist var a : u8 = 0\n    persist var b : u8 = 0\n    initial RUN\n    state RUN:\n        \
+                   loop:\n            n = 1\n";
+        let options = Options { build: Build::Sim, ..Default::default() };
+        let mut program = crate::compile(src, &options).program.expect("Programm");
+        let m = program.machines.iter_mut().find(|m| m.name == "m").expect("m");
+        assert_ne!(m.persist[0].type_hash, m.persist[1].type_hash, "ohne Kollision verschieden");
+        m.persist[1].type_hash = m.persist[0].type_hash;
+        let edition = takt_syntax::Edition::from_number(1).expect("Edition 1");
+        let mut lo = Lowerer::new(program.config.clone(), edition, &options);
+        lo.program = program;
+        lo.check_persist();
+        let found: Vec<String> = lo.diags.iter().map(|d| format!("{d}")).collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("[SC-23]") && found[0].contains("`m.b` und `m.a` teilen denselben"), "{found:?}");
+    }
 }

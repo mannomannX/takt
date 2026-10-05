@@ -1,0 +1,7 @@
+(machine bms
+  (persist cycle_count :int in 0..100000 0 min_interval=10s)
+  (persist last_test :SelftestResult (SelftestResult passed=false code=0 r_int=0[mohm]))
+  (initial RUN)
+  (state RUN
+    (loop
+      (pass))))

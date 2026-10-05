@@ -3,3 +3,4 @@
 # liest beide.
 
 "sys/previous_run" = "takt_bringup_host::PreviousRun"
+"sys/clock" = "takt_bringup_host::WallClock"

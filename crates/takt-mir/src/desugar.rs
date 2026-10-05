@@ -46,7 +46,7 @@ pub fn desugar_machine(types: &mut TypeTable, m: &mut Machine, tick_ns: i64) -> 
                 )
                 .with_suggestion("die Sequenz in einen eigenen Kindzustand legen (6.2)"));
             }
-            m.states[i].sequence_ticks = Some(ticks_of(&seq.items, m.period, tick_ns));
+            m.states[i].sequence_ticks = Some(ticks_of(&seq.items, m.period, tick_ns, types));
             Builder::new(types, m, StateId(i as u32), seq.done).run(seq)?;
         }
         i += 1;
@@ -54,10 +54,12 @@ pub fn desugar_machine(types: &mut TypeTable, m: &mut Machine, tick_ns: i64) -> 
     Ok(())
 }
 
-/// Ziel eines Uebergangs waehrend des Aufbaus: das naechste Segment oder fest.
+/// Ziel eines Uebergangs waehrend des Aufbaus: das naechste Segment, ein
+/// Segment nach seiner Nummer — auch eines, das erst entsteht — oder fest.
 #[derive(Clone, Copy)]
 enum SegTarget {
     Next,
+    Seg(usize),
     Fixed(Target),
 }
 
@@ -92,6 +94,7 @@ fn push_after_expect(seg: &mut Seg, s: Stmt) {
 
 struct Builder<'a> {
     m: &'a mut Machine,
+    types: &'a TypeTable,
     parent: StateId,
     done: VarId,
     segs: Vec<Seg>,
@@ -103,6 +106,9 @@ struct Builder<'a> {
     /// Die Sequenz hat den Zustand mit `->` verlassen; kein Haltesegment noetig.
     left: bool,
     expect_count: u32,
+    /// Wo das naechste Segment beginnt: beim Item, das es eroeffnet, sonst
+    /// bei der Sequenz (GEN-043).
+    at: Span,
     bool_ty: TypeId,
     int_ty: TypeId,
 }
@@ -113,6 +119,7 @@ impl<'a> Builder<'a> {
         let int_ty = types.intern(Type::Int { width: IntWidth::I64, unit: None, range: None });
         Builder {
             m,
+            types,
             parent,
             done,
             segs: Vec::new(),
@@ -121,15 +128,18 @@ impl<'a> Builder<'a> {
             closed: true,
             left: false,
             expect_count: 0,
+            at: Span::default(),
             bool_ty,
             int_ty,
         }
     }
 
     fn run(mut self, seq: Sequence) -> Result<(), Diagnostic> {
+        self.at = seq.items.first().map_or(seq.span, SeqItem::span);
         self.open();
         self.items(&seq.items)?;
         if self.closed && !self.left {
+            self.at = seq.span;
             self.open();
         }
         self.finish(seq.span);
@@ -145,6 +155,7 @@ impl<'a> Builder<'a> {
         let parent_name = self.m.states[self.parent.index()].name.clone();
         let mut state = State::new(format!("{parent_name}.S{i}"), Some(self.parent));
         state.step_name = self.pending_name.take();
+        state.span = self.at;
         let id = self.m.add_state(state);
         self.segs.push(Seg {
             id,
@@ -175,14 +186,24 @@ impl<'a> Builder<'a> {
     }
 
     /// Setzt die `Next`-Ziele des letzten Segments auf ein festes Ziel
-    /// (Verschmelzung eines unbedingten `->` mit `wait`/`until`, 6.2).
+    /// (Verschmelzung eines unbedingten `->` mit `wait`/`until`, 6.2) — und
+    /// mit ihnen jedes Ziel, das auf das Segment zeigt, das nun nicht mehr
+    /// entsteht (der Ausgang eines leeren `repeat`).
     fn fuse(&mut self, target: Target) -> bool {
+        let coming = self.segs.len();
         let Some(last) = self.segs.last_mut() else { return false };
         let mut fused = false;
         for t in &mut last.transitions {
             if matches!(t.target, SegTarget::Next) {
                 t.target = SegTarget::Fixed(target);
                 fused = true;
+            }
+        }
+        if fused {
+            for t in self.segs.iter_mut().flat_map(|s| &mut s.transitions) {
+                if matches!(t.target, SegTarget::Seg(k) if k == coming) {
+                    t.target = SegTarget::Fixed(target);
+                }
             }
         }
         fused
@@ -198,6 +219,7 @@ impl<'a> Builder<'a> {
     }
 
     fn item(&mut self, item: &SeqItem) -> Result<(), Diagnostic> {
+        self.at = item.span();
         match item {
             SeqItem::Stmt(s) => self.stmt(s),
             SeqItem::Wait(d) => {
@@ -339,17 +361,49 @@ impl<'a> Builder<'a> {
 
     /// `repeat n:` → Koerper in eigenen Segmenten; nach dem letzten Segment
     /// `when k + 1 < n: k += 1; -> S_first` sonst `k = 0; -> S_after`.
+    ///
+    /// Eine Zahl, die null sein kann (ein `param` mit `0` in seiner Range),
+    /// laesst den Koerper dann aus (SYN-032, wie `for` ueber `range(0)`): Ein
+    /// Eintrittssegment prueft vorher `when n < 1: -> S_after`, sonst
+    /// `when true: -> S_first`. Ein Literal und eine Zahl, deren Range bei
+    /// eins oder darueber beginnt, behalten ihre Form ([`at_least_one`]).
     fn repeat(&mut self, count: Expr, counter: VarId, body: &[SeqItem], span: Span) -> Result<(), Diagnostic> {
-        if !self.closed && !self.cur_is_empty() {
+        let skip = if at_least_one(&count, self.types) {
+            if !self.closed && !self.cur_is_empty() {
+                let always = self.lit_bool(true, span);
+                self.cur().transitions.push(Proto {
+                    trigger: TransTrigger::When(Guard::Expr(always)),
+                    actions: Vec::new(),
+                    target: SegTarget::Next,
+                    span,
+                });
+                self.close();
+            }
+            None
+        } else {
+            // Das offene Segment ist der Eintritt; ist keines offen, ein neues.
+            let entry = self.segs.len() - usize::from(!self.closed);
+            let one = Expr::new(ExprKind::Int(1), self.int_ty, span);
+            let none = self.binary(BinaryOp::Lt, count.clone(), one, self.bool_ty, span);
             let always = self.lit_bool(true, span);
-            self.cur().transitions.push(Proto {
+            let seg = self.cur();
+            // Das Ziel des Auslassens steht erst nach dem Koerper fest.
+            seg.transitions.push(Proto {
+                trigger: TransTrigger::When(Guard::Expr(none)),
+                actions: Vec::new(),
+                target: SegTarget::Next,
+                span,
+            });
+            let skip = seg.transitions.len() - 1;
+            seg.transitions.push(Proto {
                 trigger: TransTrigger::When(Guard::Expr(always)),
                 actions: Vec::new(),
                 target: SegTarget::Next,
                 span,
             });
             self.close();
-        }
+            Some((entry, skip))
+        };
         let first = self.cur().id;
         self.items(body)?;
         let k = self.var(counter, self.int_ty, span);
@@ -373,6 +427,13 @@ impl<'a> Builder<'a> {
         seg.transitions.push(again);
         seg.transitions.push(leave);
         self.close();
+        // Ausgelassen wird in das Segment hinter dem `repeat`, das als
+        // naechstes entsteht — oder, verschmilzt ein `->` mit dem Ausgang,
+        // dorthin (`fuse`).
+        if let Some((entry, skip)) = skip {
+            let after = self.segs.len();
+            self.segs[entry].transitions[skip].target = SegTarget::Seg(after);
+        }
         Ok(())
     }
 
@@ -473,6 +534,7 @@ impl<'a> Builder<'a> {
                     target: match p.target {
                         SegTarget::Fixed(t) => t,
                         SegTarget::Next => Target::State(ids[i + 1]),
+                        SegTarget::Seg(k) => Target::State(ids[k]),
                     },
                     kind: TransKind::Weak,
                     span: p.span,
@@ -539,6 +601,21 @@ fn check_no_goto(s: &Stmt) -> Result<(), Diagnostic> {
     }
 }
 
+/// Ist die Zahl eines `repeat` sicher mindestens eins? Ein Literal ueber
+/// null, oder ein Ausdruck, dessen Range — bewiesen oder aus dem Typ, etwa
+/// `param N : int in 1..10` — bei eins oder darueber beginnt. Nur eine Zahl,
+/// die null sein kann, braucht den Eintritt, der den Koerper auslaesst.
+fn at_least_one(count: &Expr, types: &TypeTable) -> bool {
+    let from_one = |r: &Option<crate::types::Range>| matches!(r, Some(r) if matches!(r.lo, crate::types::Const::Int(lo) if lo >= 1));
+    match count.kind {
+        ExprKind::Int(n) => n > 0,
+        _ => {
+            from_one(&count.range)
+                || matches!(types.list.get(count.ty.index()), Some(Type::Int { range, .. }) if from_one(range))
+        }
+    }
+}
+
 /// Die Dauer einer Sequenz in Basis-Ticks (6.2, FB-129).
 ///
 /// Segmente enden an `wait`, `until`, an einer Anweisung mit `->` und
@@ -546,16 +623,24 @@ fn check_no_goto(s: &Stmt) -> Result<(), Diagnostic> {
 /// kostet eine Aktivierung. Ein `->` unmittelbar nach `wait`/`until`
 /// verschmilzt mit deren Uebergang. Ein `repeat` mit Literal laeuft
 /// `n`-mal, sonst bleibt das Ende offen.
-fn ticks_of(items: &[SeqItem], period: u32, tick_ns: i64) -> SequenceTicks {
+fn ticks_of(items: &[SeqItem], period: u32, tick_ns: i64, types: &TypeTable) -> SequenceTicks {
     let act = u64::from(period.max(1));
+    // Eine Dauer, die kein Literal ist (`wait BURN_DURATION`), kennt die
+    // Sequenz nicht: mindestens eine Aktivierung, das Ende offen.
     let ticks = |e: &Expr| match e.kind {
-        ExprKind::Duration(ns) if ns > 0 => (ns as u64).div_ceil((tick_ns.max(1) as u64) * act).max(1) * act,
-        _ => act,
+        ExprKind::Duration(ns) if ns > 0 => {
+            let t = (ns as u64).div_ceil((tick_ns.max(1) as u64).saturating_mul(act)).max(1).saturating_mul(act);
+            (t, Some(t))
+        }
+        ExprKind::Duration(_) => (act, Some(act)),
+        _ => (act, None),
     };
     let mut acc = SequenceTicks { min: 0, max: Some(0) };
+    // Gesaettigt, und eine obere Schranke ueber u64 ist keine: Ein `repeat`
+    // mit grosser Zahl panickte sonst im Debug-Bau.
     let add = |acc: &mut SequenceTicks, lo: u64, hi: Option<u64>| {
-        acc.min += lo;
-        acc.max = acc.max.zip(hi).map(|(a, b)| a + b);
+        acc.min = acc.min.saturating_add(lo);
+        acc.max = acc.max.zip(hi).and_then(|(a, b)| a.checked_add(b));
     };
     let mut after_wait = false;
     for item in items {
@@ -568,35 +653,124 @@ fn ticks_of(items: &[SeqItem], period: u32, tick_ns: i64) -> SequenceTicks {
                 after_wait = false;
             }
             SeqItem::Wait(d) => {
-                let t = ticks(d);
-                add(&mut acc, t, Some(t));
+                let (lo, hi) = ticks(d);
+                add(&mut acc, lo, hi);
                 after_wait = true;
             }
             SeqItem::Until { timeout, .. } => {
-                add(&mut acc, act, timeout.as_ref().map(|t| ticks(&t.duration)));
+                add(&mut acc, act, timeout.as_ref().and_then(|t| ticks(&t.duration).1));
                 after_wait = true;
             }
             SeqItem::Expect { .. } => {}
             SeqItem::Repeat { count, body, .. } => {
-                let inner = ticks_of(body, period, tick_ns);
+                let inner = ticks_of(body, period, tick_ns, types);
                 let n = match count.kind {
                     ExprKind::Int(n) if n > 0 => Some(n as u64),
                     _ => None,
                 };
                 // Der Ruecksprung ist eine schwache Transition: je Durchlauf ein Tick.
                 let per = inner.min.max(act);
-                add(&mut acc, per, n.and_then(|n| inner.max.map(|m| n * m.max(act))));
-                if let Some(n) = n {
-                    acc.min += per * (n - 1);
+                match n {
+                    Some(n) => {
+                        add(&mut acc, per, inner.max.and_then(|m| n.checked_mul(m.max(act))));
+                        acc.min = acc.min.saturating_add(per.saturating_mul(n - 1));
+                    }
+                    None if at_least_one(count, types) => add(&mut acc, per, None),
+                    // Eine Zahl, die null sein kann, verlangt keinen Durchlauf;
+                    // der Eintritt kostet seinen Uebergang (SYN-032).
+                    None => add(&mut acc, act, None),
                 }
                 after_wait = false;
             }
             SeqItem::Step { body, .. } => {
-                let inner = ticks_of(body, period, tick_ns);
+                let inner = ticks_of(body, period, tick_ns, types);
                 add(&mut acc, inner.min, inner.max);
                 after_wait = false;
             }
         }
     }
     acc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ids::ParamId;
+
+    const MS: i64 = 1_000_000;
+
+    fn dur(ns: i64) -> Expr {
+        Expr::new(ExprKind::Duration(ns), TypeId(0), Span::default())
+    }
+
+    fn param() -> Expr {
+        Expr::new(ExprKind::Param(ParamId(0)), TypeId(0), Span::default())
+    }
+
+    fn until(timeout: Option<Expr>) -> SeqItem {
+        SeqItem::Until {
+            guard: Guard::Expr(Expr::new(ExprKind::Bool(true), TypeId(0), Span::default())),
+            timeout: timeout.map(|duration| Timeout { duration, action: TimeoutAction::Fault }),
+            span: Span::default(),
+        }
+    }
+
+    fn repeat(count: Expr, body: Vec<SeqItem>) -> SeqItem {
+        SeqItem::Repeat { count, counter: VarId(0), body, span: Span::default() }
+    }
+
+    fn int(n: i64) -> Expr {
+        Expr::new(ExprKind::Int(n), TypeId(0), Span::default())
+    }
+
+    fn of(items: &[SeqItem]) -> (u64, Option<u64>) {
+        let t = ticks_of(items, 1, MS, &TypeTable::default());
+        (t.min, t.max)
+    }
+
+    /// SYN-033: Eine Dauer, die kein Literal ist (`wait BURN_DURATION`, ein
+    /// `param`), kennt die Sequenz nicht: Das Ende ist offen, nicht eine
+    /// Aktivierung. Ein `repeat` mit grosser Zahl rechnet gesaettigt, statt
+    /// im Debug-Bau zu panicken.
+    #[test]
+    fn an_unknown_duration_leaves_the_end_open() {
+        assert_eq!(of(&[SeqItem::Wait(dur(25 * MS))]), (25, Some(25)));
+        assert_eq!(of(&[SeqItem::Wait(param())]), (1, None), "wait mit Param");
+        assert_eq!(of(&[until(Some(dur(10 * MS)))]), (1, Some(10)));
+        assert_eq!(of(&[until(Some(param()))]), (1, None), "until mit Param als Timeout");
+        assert_eq!(of(&[until(None)]), (1, None), "until ohne Timeout");
+        assert_eq!(of(&[repeat(int(3), vec![SeqItem::Wait(dur(2 * MS))])]), (6, Some(6)));
+        assert_eq!(of(&[repeat(param(), vec![SeqItem::Wait(dur(2 * MS))])]), (1, None), "repeat mit Param, auch null");
+        let huge = of(&[repeat(int(i64::MAX), vec![SeqItem::Wait(dur(i64::MAX))])]);
+        assert_eq!(huge, (u64::MAX, None), "gesaettigt statt uebergelaufen");
+        // `->` direkt nach `wait` verschmilzt mit dessen Uebergang.
+        let goto = SeqItem::Stmt(Stmt::new(StmtKind::Goto(crate::machine::Target::State(StateId(0))), Span::default()));
+        assert_eq!(of(&[SeqItem::Wait(dur(3 * MS)), goto]), (3, Some(3)));
+    }
+
+    /// GEN-043: Ein Abschnittszustand traegt die Spanne des Items, das ihn
+    /// eroeffnet, das Haltesegment hinter dem letzten Item die der Sequenz.
+    /// Ohne Spanne nennt `Nicht erreicht` die Zeile 1 statt der Stelle.
+    #[test]
+    fn every_segment_starts_at_the_item_that_opens_it() {
+        let at = |start: u32| Span { start, end: start + 4, ..Span::default() };
+        let expect = |start| SeqItem::Expect {
+            cond: Expr::new(ExprKind::Bool(true), TypeId(0), at(start)),
+            message: None,
+            req: None,
+            span: at(start),
+        };
+        let wait = |start| SeqItem::Wait(Expr::new(ExprKind::Duration(MS), TypeId(0), at(start)));
+        let mut m = Machine::new("m");
+        let burn = m.add_state(State::new("BURN", None));
+        let items = vec![expect(10), wait(20), expect(30), wait(40)];
+        m.states[burn.index()].sequence = Some(Sequence { items, done: VarId(0), span: at(2) });
+        desugar_machine(&mut TypeTable::default(), &mut m, MS).expect("Sequenz");
+        let segs: Vec<(&str, u32)> = m.states[burn.index()]
+            .children
+            .iter()
+            .map(|c| (m.states[c.index()].name.as_str(), m.states[c.index()].span.start))
+            .collect();
+        assert_eq!(segs, [("BURN.S0", 10), ("BURN.S1", 30), ("BURN.S2", 2)]);
+    }
 }

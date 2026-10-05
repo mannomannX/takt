@@ -1,0 +1,13 @@
+(enum HeaderErr
+  (MAGIC)
+  (SIZE)
+  (VERSION))
+(fn parse_header (b:bytes<4096> min_version:u32) -> ImageHeader!HeaderErr
+  (var h (.decode ImageHeader b))
+  (if (not (.valid h))
+    (return (ERR MAGIC)))
+  (if (> (.size h) 1[MiB])
+    (return (ERR SIZE)))
+  (if (< (.version h) min_version)
+    (return (ERR VERSION)))
+  (return (OK h)))

@@ -30,6 +30,11 @@ pub struct Lowered {
 /// verboten sind (2.5).
 const RESERVED: &[&str] = &["t", "seq", "text", "data"];
 
+/// 8.7: Ein Muster bindet hoechstens 16 Platzhalter; `{_}` zaehlt nicht
+/// mit. Dieselbe Zahl wie `takt_match::MAX_CAPTURES`, die feste Groesse
+/// eines Treffers auf dem Target.
+const MAX_CAPTURES: usize = 16;
+
 impl Lowerer<'_> {
     /// `pattern` aus dem Syntaxbaum, mit Pruefung 18.
     pub fn pattern(&mut self, p: &ast::Pattern, subject: Option<TypeId>, span: Span) -> Option<Lowered> {
@@ -67,6 +72,16 @@ impl Lowerer<'_> {
     /// Pruefung 18: Wohlgeformtheit und Mehrdeutigkeit (8.7).
     fn check_pattern(&mut self, pieces: &[PatternPiece], span: Span) -> Option<()> {
         let mut ok = true;
+        let bound = pieces.iter().filter(|p| matches!(p, PatternPiece::Capture { .. })).count();
+        if bound > MAX_CAPTURES {
+            self.error_hint(
+                SC18,
+                span,
+                format!("das Muster bindet {bound} Platzhalter, hoechstens {MAX_CAPTURES} (8.7)"),
+                "Stellen ohne Wert als `{_}` schreiben, das zaehlt nicht mit",
+            );
+            ok = false;
+        }
         for (i, piece) in pieces.iter().enumerate() {
             let next = pieces.get(i + 1);
             match piece {
@@ -162,8 +177,11 @@ impl Lowerer<'_> {
                 continue;
             };
             // 8.7: nur konstante Feldwerte; der Vergleich ist eine endliche
-            // Konjunktion von Gleichheiten und damit total.
-            let Some(folded) = self.fold(expr) else {
+            // Konjunktion von Gleichheiten und damit total. Einen nicht
+            // konstanten Wert meldet diese Pruefung selbst, nicht `fold`
+            // ein zweites Mal; ein faultender konstanter meldet `fold`.
+            let constant = !matches!(takt_interp::eval_const(&self.program, &expr), Err(takt_interp::Trap::Bug(_)));
+            let Some(folded) = constant.then(|| self.fold(expr)).flatten() else {
                 self.error_hint(
                     SC18,
                     value.span,

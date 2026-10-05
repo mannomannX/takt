@@ -133,28 +133,26 @@ pub fn display(v: &Value, spec: Option<&str>, ty: TypeId, ctx: &Ctx<'_, '_>) -> 
 /// f64: sonst erschienen die Ziffern der f64-Darstellung (4.1).
 fn float32(x: f32, spec: Option<&str>) -> String {
     match spec {
-        Some(s) if s.starts_with('.') => format!("{:.prec$}", x, prec = s[1..].parse().unwrap_or(0)),
-        _ => {
-            if x == x.trunc() && x.abs() < 1e15 {
-                format!("{x:.1}")
-            } else {
-                format!("{x}")
-            }
-        }
+        Some(s) if s.starts_with('.') => fixed(f64::from(x), s[1..].parse().unwrap_or(0), true),
+        _ => crate::trace::float32_text(x),
     }
 }
 
 fn float(x: f64, spec: Option<&str>) -> String {
     match spec {
-        Some(s) if s.starts_with('.') => format!("{:.prec$}", x, prec = s[1..].parse().unwrap_or(0)),
-        _ => {
-            if x == x.trunc() && x.abs() < 1e15 {
-                format!("{x:.1}")
-            } else {
-                format!("{x}")
-            }
-        }
+        Some(s) if s.starts_with('.') => fixed(x, s[1..].parse().unwrap_or(0), false),
+        _ => crate::trace::float_text(x),
     }
+}
+
+/// `{x:.N}` (3.9): N Nachkommastellen, korrekt gerundet, in der Form der
+/// Textdarstellung — ab `1e16` (`f32`: `1e7`) und unter `1e-5` als
+/// Exponent (`1.000e30`). So braucht ein `f64` hoechstens 18 + N Zeichen,
+/// ein `f32` 9 + N. `narrow` waehlt die Grenze des `f32`, dessen Wert hier
+/// exakt als `f64` steht.
+pub fn fixed(x: f64, prec: usize, narrow: bool) -> String {
+    let big = if narrow { crate::trace::F32_BIG } else { crate::trace::F64_BIG };
+    if crate::trace::exponent_form(x, big) { format!("{x:.prec$e}") } else { format!("{x:.prec$}") }
 }
 
 /// Formatstring rendern: Platzhalter auswerten, Faults werden `<invalid>`,

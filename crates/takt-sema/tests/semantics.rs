@@ -843,8 +843,9 @@ machine m:
     let result = run(&program, &stim, &RunOptions { ticks: 1, ..Default::default() }).expect("Lauf");
     let trace = result.trace.render();
     // 9007199791611905 as f32 == 9007200328482816, kuerzeste Darstellung
-    // 9007200000000000; doppelt gerundet waere es 9007199254740992.
-    assert!(trace.contains("\"9007200000000000\""), "{trace}");
+    // 9007200000000000, ab 1e7 in Exponentform (3.9); doppelt gerundet
+    // waere es 9007199254740992 (`9.007199e15`).
+    assert!(trace.contains("\"9.0072e15\""), "{trace}");
 }
 
 #[test]
@@ -1288,4 +1289,283 @@ fn a_fault_in_exit_is_handled_from_the_common_ancestor() {
     assert!(trace.contains("t=2 fault m RangeFault"), "{trace}");
     assert!(trace.contains("-> RECOVER\n"), "Fault-Ziel von WORK, nicht SAFE: {trace}");
     assert!(!trace.contains("out mark 42"), "`exit:` des nie betretenen Ziels lief: {trace}");
+}
+
+/// Die Zeilen von `trace`, die mit `t=<tick> ` beginnen, ohne Verdikt.
+fn lines_of(trace: &str, tick: u64) -> Vec<&str> {
+    let prefix = format!("t={tick} ");
+    trace.lines().filter(|l| l.starts_with(&prefix) && !l.contains("verdict-final")).collect()
+}
+
+/// 5.2 Schritt 2: Outer-first — die Transition des Elternzustands geht der
+/// des Kindes vor, beide sind im selben Tick wahr.
+#[test]
+fn the_outer_transition_wins_over_the_inner() {
+    let body = "\
+command go
+output o : int in 0..9 @ hw(\"o/o\") with safe = 0
+machine m:
+    initial P
+    state P:
+        initial C
+        when go: -> Q
+        state C:
+            when go: -> D
+        state D:
+            enter:
+                o = 1
+    state Q:
+        enter:
+            o = 2
+";
+    let trace = simulate(body, "t=2 cmd go\n", 4);
+    assert_eq!(lines_of(&trace, 2), ["t=2 state m Q", "t=2 out o 2"], "{trace}");
+}
+
+/// 5.3: Ein Zustand ohne eigenes Fault-Ziel erbt das seines Elternzustands.
+#[test]
+fn a_child_inherits_the_fault_target_of_its_parent() {
+    let body = "\
+output o : int in 0..9 @ hw(\"o/o\") with safe = 0
+machine m:
+    initial P
+    state P:
+        fault -> SAFE
+        initial C
+        state C:
+            loop:
+                check time_in_state < 2 ms, \"c\"
+    state SAFE:
+        enter:
+            o = 3
+";
+    let trace = simulate(body, "", 4);
+    assert_eq!(
+        lines_of(&trace, 2),
+        ["t=2 fault m CheckFailed \"c\" -> SAFE", "t=2 state m SAFE", "t=2 out o 3"],
+        "{trace}"
+    );
+}
+
+/// 5.3: `check … -> X` ueberschreibt das Fault-Ziel fuer genau diesen Check.
+#[test]
+fn a_check_with_its_own_target_goes_there() {
+    let body = "\
+output o : int in 0..9 @ hw(\"o/o\") with safe = 0
+machine m:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        loop:
+            check time_in_state < 2 ms, \"eigen\" -> OWN
+    state OWN:
+        enter:
+            o = 4
+    state SAFE:
+        enter:
+            o = 5
+";
+    let trace = simulate(body, "", 4);
+    assert_eq!(
+        lines_of(&trace, 2),
+        ["t=2 fault m CheckFailed \"eigen\" -> OWN", "t=2 state m OWN", "t=2 out o 4"],
+        "{trace}"
+    );
+}
+
+/// 5.2 Schritt 4: Im Entry-Modus ist `-> ZIEL` wirkungslos; erst der
+/// naechste Tick nimmt den Uebergang.
+#[test]
+fn a_goto_in_the_entry_tick_has_no_effect() {
+    let body = "\
+command go
+output o : int in 0..9 @ hw(\"o/o\") with safe = 0
+machine m:
+    initial A
+    state A:
+        when go: -> B
+    state B:
+        enter:
+            o = 1
+        loop:
+            -> C
+    state C:
+        enter:
+            o = 2
+";
+    let trace = simulate(body, "t=1 cmd go\n", 4);
+    assert_eq!(lines_of(&trace, 1), ["t=1 state m B", "t=1 out o 1"], "{trace}");
+    assert_eq!(lines_of(&trace, 2), ["t=2 state m C", "t=2 out o 2"], "{trace}");
+}
+
+/// 5.2 Schritt 5, 5.3: In `FAULTED` sind Operator-Abort und Runtime-Fault
+/// wirkungslos — die Outputs stehen schon auf `safe`.
+#[test]
+fn abort_and_runtime_faults_do_nothing_in_faulted() {
+    let body = "\
+output o : int in 0..9 @ hw(\"o/o\") with safe = 0
+machine m:
+    initial RUN
+    state RUN:
+        enter:
+            o = 1
+        loop:
+            check time_in_state < 2 ms, \"weg\"
+";
+    let trace = simulate(body, "t=4 abort\nt=5 runtime Overrun\n", 7);
+    assert_eq!(
+        lines_of(&trace, 2),
+        ["t=2 fault m CheckFailed \"weg\" -> FAULTED", "t=2 state m FAULTED", "t=2 out o 0"],
+        "{trace}"
+    );
+    for t in 3..=7 {
+        assert!(lines_of(&trace, t).is_empty(), "Tick {t}:\n{trace}");
+    }
+}
+
+/// 5.4, zweiter Teil des Abort-Latch: Ein Operator-Abort im Fault-Ziel
+/// eines Aborts ist wirkungslos; nach einer normalen Transition wirkt der
+/// naechste wieder.
+#[test]
+fn the_abort_latch_releases_after_a_normal_transition() {
+    let body = "\
+output a : int in 0..9 @ hw(\"o/a\") with safe = 0
+command stop
+command back
+
+machine one:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        enter:
+            a = 1
+        loop:
+            if stop:
+                abort \"operator\"
+    state SAFE:
+        enter:
+            a = 2
+        when back: -> RUN
+";
+    let trace = simulate(body, "t=1 cmd stop\nt=2 abort\nt=3 cmd back\nt=4 abort\n", 6);
+    assert_eq!(
+        lines_of(&trace, 1),
+        ["t=1 fault one Abort \"operator\" -> SAFE", "t=1 state one SAFE", "t=1 out a 2"],
+        "{trace}"
+    );
+    assert!(lines_of(&trace, 2).is_empty(), "der Latch haelt den Abort ab:\n{trace}");
+    assert_eq!(lines_of(&trace, 3), ["t=3 state one RUN", "t=3 out a 1"], "{trace}");
+    assert_eq!(
+        lines_of(&trace, 4),
+        ["t=4 fault one Abort \"operator abort\" -> SAFE", "t=4 state one SAFE", "t=4 out a 2"],
+        "{trace}"
+    );
+    assert!(!trace.contains("FAULTED"), "{trace}");
+}
+
+/// 5.6: Eine erfuellte Auswertung setzt den Bestaetigungszaehler zurueck.
+/// Zwei verletzte Ticks, ein erfuellter, dann drei verletzte: Der Fault
+/// kommt erst nach den drei.
+#[test]
+fn a_fulfilled_evaluation_resets_the_confirmation_counter() {
+    let body = "\
+input  p     : float[bar] in 0..100 bar @ hw(\"d/p\")
+output p_sim : float[bar]               @ sim(\"d/p\")
+output x     : int                      @ hw(\"o/x\") with safe = 0
+
+machine m:
+    fault -> SAFE
+    initial RUN
+    state RUN:
+        loop:
+            check p < 50 bar, \"druck\" for 3 ms
+    state SAFE:
+        loop: pass
+";
+    let stim = "t=0 in p 10 bar\nt=1 in p 80 bar\nt=2 in p 80 bar\nt=3 in p 10 bar\n\
+                t=4 in p 80 bar\nt=5 in p 80 bar\nt=6 in p 80 bar\nt=7 in p 80 bar\n";
+    let trace = simulate(body, stim, 8);
+    let faults: Vec<&str> = trace.lines().filter(|l| l.contains(" fault ")).collect();
+    assert_eq!(faults, ["t=6 fault m CheckFailed \"druck\" -> SAFE"], "{trace}");
+}
+
+#[test]
+fn a_period_that_is_no_multiple_of_the_tick_acts_as_the_next_multiple() {
+    // 7.2, Pruefung 14: `every 2500 us` bei 1 ms Tick warnt und laeuft als
+    // `every 3 ms` — Aktivierungen in Tick 0, 3, 6.
+    let trace = simulate(
+        "output n : int in 0..99 @ hw(\"o/n\") with safe = 0
+
+machine m every 2500 us:
+    var k : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        loop:
+            k = k + 1
+            n = k
+",
+        "",
+        7,
+    );
+    for line in ["t=0 out n 1\n", "t=3 out n 2\n", "t=6 out n 3\n"] {
+        assert!(trace.contains(line), "`{line}` fehlt:\n{trace}");
+    }
+    for t in [1, 2, 4, 5] {
+        assert!(!trace.contains(&format!("t={t} out n")), "Tick {t} ist keine Aktivierung:\n{trace}");
+    }
+}
+
+/// 7.5: `pulse o = v for d` stellt nach `d` den Latch von *vor* dem
+/// Statement wieder her — sonst endete der Puls nie —, und `cancel`
+/// verwirft die geplante Abschaltung (`corpus-try/107_cancel_and_pulse.takt`).
+#[test]
+fn a_pulse_ends_and_cancel_drops_the_plan() {
+    let src =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/107_cancel_and_pulse.takt"))
+            .expect("Quelle");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let p = takt_sema::compile(&src, &options).program.expect("Programm");
+    let trace =
+        run(&p, &Trace::default(), &RunOptions { ticks: 20, ..Default::default() }).expect("Lauf").trace.render();
+    let seen: Vec<&str> =
+        trace.lines().filter(|l| l.contains(" out reset_n ") || l.contains(" out vbus_en ")).collect();
+    assert_eq!(
+        seen,
+        [
+            "t=0 out reset_n true",
+            "t=0 out vbus_en true",
+            "t=1 out reset_n false",
+            "t=3 out reset_n true",
+            "t=10 out reset_n false",
+            "t=12 out reset_n true",
+            "t=15 out vbus_en false",
+            "t=18 out vbus_en true",
+            "t=19 out reset_n false",
+        ],
+        "{trace}"
+    );
+}
+
+/// 3.5: Eine Lieferung mit Qualitaet `stale` ist ungueltig, und `x.reason`
+/// nennt den Grund `STALE` — wie `bad` ohne Grund `DRIVER` nennt. Das Alter
+/// 250 ms liegt ueber `max_age`, der Messzeitpunkt (300 - 250 ms) faellt
+/// nicht hinter den der Lieferung davor (12.6, Zeile 2).
+#[test]
+fn a_stale_delivery_reads_as_stale() {
+    let body = "\
+input  p     : float[bar] in 0..250 bar @ hw(\"d/p\") with max_age = 200 ms
+output why   : Reason @ hw(\"o/why\") with safe = DRIVER
+output valid : bool   @ hw(\"o/valid\") with safe = false
+
+machine m every 100 ms:
+    initial RUN
+    state RUN:
+        loop:
+            valid = p.valid
+            why = p.reason.or(OUT_OF_RANGE) if not p.valid else IMPLAUSIBLE
+";
+    let trace = simulate(body, "t=0 in p 10 bar\nt=300 in p stale age=250 ms\n", 300);
+    assert!(trace.contains("t=0 out valid true"), "{trace}");
+    assert!(trace.contains("t=300 out valid false"), "{trace}");
+    assert!(trace.contains("t=300 out why STALE"), "{trace}");
 }

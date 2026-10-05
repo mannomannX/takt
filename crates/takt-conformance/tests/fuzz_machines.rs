@@ -155,7 +155,7 @@ fn generated_machines_agree() {
     // weil ein Fuzzer, der seinen Fund nicht mehr trifft, ihn nicht mehr
     // bewacht.
     let mut rng = Rng(0x2026_0914);
-    let (mut built, mut rejected, mut not_lowered) = (0, 0, 0);
+    let (mut built, mut rejected) = (0, 0);
     let mut errors = Vec::new();
 
     for round in 0..120 {
@@ -172,14 +172,9 @@ fn generated_machines_agree() {
         let native = match common::run_native(&clang, &p, &name, &machine, TICKS) {
             Ok(t) => t,
             Err(e) => {
-                // Ein Konstrukt, das der Codegen nicht senkt, ist kein
-                // Fehlschlag — er meldet es, und `NotYet` ist eine
-                // ehrliche Auskunft. Gezaehlt wird es trotzdem: Waere
-                // die Zahl hoch, pruefte der Fuzzer wenig.
-                if e.contains("undefined symbol") || e.contains("nicht aufgeloest") {
-                    not_lowered += 1;
-                    continue;
-                }
+                // Jedes Programm, das die Sema annimmt, senkt der Codegen ganz
+                // (KON1-018): Eine Luecke laesst `ir_for` scheitern, ein
+                // fehlendes Symbol den Bau.
                 errors.push(format!("Runde {round}: baut nicht:\n{e}\n--- Quelle ---\n{src}"));
                 continue;
             }
@@ -206,7 +201,7 @@ fn generated_machines_agree() {
         }
     }
 
-    eprintln!("{built} verglichen, {rejected} abgelehnt, {not_lowered} nicht gesenkt");
+    eprintln!("{built} verglichen, {rejected} abgelehnt");
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
     // Ein Fuzzer, der nichts baut, prueft nichts. Die Schranke ist
     // grosszuegig — sie faengt den Fall, dass der Generator nur noch

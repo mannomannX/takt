@@ -1,0 +1,7 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-31 (4.5): Die Kryptographie passt in keinen Tick; `rsa3072_verify`
+# ist ein Job.
+native fn rsa3072_verify(key: bytes<384>, digest: bytes<32>, sig: bytes<384>) -> bool with cost = 900, stack = 10464, total  # ~ SC-31

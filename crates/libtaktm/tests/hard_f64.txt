@@ -1,0 +1,148 @@
+# Schwere f64-Faelle: je Funktion und Familie die Argumente, deren exakter Wert
+# am naechsten an einem Mittelpunkt liegt (alle naeher als 2^-10 Stellen; die
+# Kreuzungen kleiner Argumente naeher als 2^-40), aus
+# `python tools/libtaktm.py hard 2910 3000 8`; Referenz in Dezimalarithmetik.
+f64 exp: bc90000000000000 -> 3ff0000000000000
+f64 exp: 3c9fffffffffffff -> 3ff0000000000000
+f64 exp: 3ca0000000000000 -> 3ff0000000000001
+f64 exp: 3cb7ffffffffffff -> 3ff0000000000002
+f64 exp: bc8fffffffffffff -> 3ff0000000000000
+f64 exp: 3c9ffffffffffffe -> 3ff0000000000000
+f64 exp: bcc6000000000002 -> 3feffffffffffffa
+f64 exp: bcb4000000000001 -> 3feffffffffffffd
+f64 exp: 40158ac837578a86 -> 406b47381d0d2acb
+f64 exp: 3fd2e70b7f5e29ff -> 3ff57f61b448c94d
+f64 exp: c07e382e0a4592c3 -> 1455b77823fc699c
+f64 exp: 3fbda2ba1072bcde -> 3ff1f6b4f65df7dc
+f64 exp: bfe2e6cc75d154b4 -> 3fe1b9fdb1e77b34
+f64 exp: bf9859c6e6a27e38 -> 3fef3f7e1172ebf7
+f64 exp: bff1860c201900e0 -> 3fd567db295a1f49
+f64 exp: 400cb4affc5c3cea -> 404215be1c1e940c
+f64 log: 3fefffffae49df64 -> be846d884114c261
+f64 log: 3ff000002c8d5036 -> 3e8646a7fbfc79e9
+f64 log: 3ff0000038557831 -> 3e8c2abbe6e9fbfb
+f64 log: 3fefffffc58c6ab6 -> be7d39cabfb127cb
+f64 log: 3ff0000013a9e498 -> 3e73a9e48beaba98
+f64 log: 3ff000000d594c3d -> 3e6ab2986edcf1c1
+f64 log: 3fefffffc1384bb4 -> be7f63da44caae66
+f64 log: 3fefffff941f9fc8 -> be8af8183b75557e
+f64 log: 2e5dd47957328cc4 -> c0685b06cc471470
+f64 log: 38a05cec2873f923 -> c05444d9b3b4b7fe
+f64 log: 5e082025ae3bd568 -> 4074dd0819abb9e6
+f64 log: 2f29b4119160a498 -> c0673f711bf90e62
+f64 log: 4d240494d2c72a03 -> 40624f4c89c7ca7b
+f64 log: 26c57f71cacb9bb1 -> c07170afecd8d924
+f64 log: 06d581571c2e6cfd -> c083c9ed3097bc2b
+f64 log: 340e30f2ad49a771 -> c060783260b026c9
+f64 sin: 3e57137449123ef6 -> 3e57137449123ef6
+f64 sin: 3e68db9cb7511e9e -> 3e68db9cb7511e9b
+f64 sin: 3e57137449123ef7 -> 3e57137449123ef6
+f64 sin: 3e64f747439b348b -> 3e64f747439b3489
+f64 sin: 3e57137449123ef5 -> 3e57137449123ef5
+f64 sin: 3e57137449123ef8 -> 3e57137449123ef7
+f64 sin: 3e6bcee70ebe7eca -> 3e6bcee70ebe7ec6
+f64 sin: 3e64f747439b348a -> 3e64f747439b3489
+f64 sin: 4008792b753998c5 -> 3fb513de6c4d5752
+f64 sin: 3fd1da33f53ff333 -> 3fd19f2a70ebbbf9
+f64 sin: c092118eb81877f4 -> bfd1e36550929c58
+f64 sin: 4014e90ec58bb962 -> bfebd89adb5e6c56
+f64 sin: c03dbf1a44b2c36e -> 3fefd82eaf29b511
+f64 sin: c121e47819ff79a4 -> 3fd43ddc4f5d6fdc
+f64 sin: c00d26a619093236 -> 3fdecfa74a67605f
+f64 sin: 40f28d011ef4676a -> 3feff0eef6e57482
+f64 cos: 3e46a09e667f3bcd -> 3fefffffffffffff
+f64 cos: 3e46a09e667f3bcc -> 3ff0000000000000
+f64 cos: 3e62c2fc595456a7 -> 3feffffffffffffb
+f64 cos: 3e594c583ada5b53 -> 3feffffffffffffd
+f64 cos: 3e46a09e667f3bce -> 3fefffffffffffff
+f64 cos: 3e53988e1409212f -> 3feffffffffffffe
+f64 cos: 3e46a09e667f3bcb -> 3ff0000000000000
+f64 cos: 3e53988e1409212e -> 3fefffffffffffff
+f64 cos: c13597a8ba4ad0b4 -> 3feab99c79d79334
+f64 cos: 4111963617ac620b -> 3fe32dd0c3443a07
+f64 cos: c0e9e6fa75567eb5 -> 3fdca55b018cf416
+f64 cos: bfb7475803022cf5 -> 3fefde279ddd4cee
+f64 cos: 40456bf93e66c8e3 -> 3fdacc6c159fdf0a
+f64 cos: bfea8e50666df841 -> 3fe5995aa07a5d75
+f64 cos: 4110d8e182214d73 -> bfe3c4725f037c7a
+f64 cos: 4091bc1fa6293beb -> bfe37d2c62816eb2
+f64 tan: 3e4d12ed0af1a27f -> 3e4d12ed0af1a280
+f64 tan: 3e5250bfe1b082f5 -> 3e5250bfe1b082f6
+f64 tan: 3e4d12ed0af1a27e -> 3e4d12ed0af1a27e
+f64 tan: 3e5a6a58d55e307b -> 3e5a6a58d55e307c
+f64 tan: 3e5250bfe1b082f4 -> 3e5250bfe1b082f4
+f64 tan: 3e4d12ed0af1a280 -> 3e4d12ed0af1a281
+f64 tan: 3e5f51a62037e954 -> 3e5f51a62037e956
+f64 tan: 3e4d12ed0af1a27d -> 3e4d12ed0af1a27d
+f64 tan: 40f3ab0b53dc6213 -> 3ff21fb59704e512
+f64 tan: c12ae463d1531fb2 -> bff3415259f4df50
+f64 tan: 4013a9d10101dbf1 -> c013639b664d44cc
+f64 tan: bfa5b5fba09f2989 -> bfa5b9510c36a522
+f64 tan: 404648477f822efe -> 3fe5131b15ec3920
+f64 tan: 40f1f0aa94b1c97c -> 3ff0c737af7bb06b
+f64 tan: 40baba13ba8f30bc -> bfd49f970dfb97c3
+f64 tan: 40143cd76d14dbe8 -> c0061ebcf6c0b0d3
+f64 asin: 3e57137449123ef6 -> 3e57137449123ef7
+f64 asin: 3e64f747439b3489 -> 3e64f747439b348a
+f64 asin: 3e57137449123ef5 -> 3e57137449123ef5
+f64 asin: 3e57137449123ef7 -> 3e57137449123ef8
+f64 asin: 3e57137449123ef4 -> 3e57137449123ef4
+f64 asin: 3e57137449123ef8 -> 3e57137449123ef9
+f64 asin: 3e68db9cb7511e9c -> 3e68db9cb7511e9f
+f64 asin: 3e64f747439b348a -> 3e64f747439b348c
+f64 asin: bf86d0c21d36b79c -> bf86d0e10b4f7283
+f64 asin: 3f2fc17133930215 -> 3f2fc17138c94d05
+f64 asin: bf18e284b3335987 -> bf18e284b3d3df08
+f64 asin: 3f7e49dda5579e66 -> 3f7e49efbc8d202b
+f64 asin: 3fb1201539b0345d -> 3fb1235bfdf3324f
+f64 asin: bf9eb02c666c6c35 -> bf9eb15992ff3416
+f64 asin: be91e0343541587c -> be91e034354158b8
+f64 asin: 3ef458403e15a69e -> 3ef458403e1b2217
+f64 acos: be26267e272d58cf -> 3ff921fb54f5610a
+f64 acos: 3fb31af67e5eebb2 -> 3ff7f0031912a8dc
+f64 acos: bf5e3a6cb3ba3a8f -> 3ff92989efb9099d
+f64 acos: 3e86fefdf563409f -> 3ff921fb2646312e
+f64 acos: 3e79a37585c6cb41 -> 3ff921fb3aa0b792
+f64 acos: bf29e8cf08a3f2a8 -> 3ff922ca9abc88dd
+f64 acos: 3ea259332458d8f0 -> 3ff921fac17a93f5
+f64 acos: 3e82b3260c632fd4 -> 3ff921fb2edde100
+f64 atan: 3e60a402fcc79299 -> 3e60a402fcc79297
+f64 atan: 3e4d12ed0af1a27f -> 3e4d12ed0af1a27f
+f64 atan: 3e5250bfe1b082f5 -> 3e5250bfe1b082f5
+f64 atan: 3e63bacd6561ff5f -> 3e63bacd6561ff5d
+f64 atan: 3e5f51a62037e957 -> 3e5f51a62037e954
+f64 atan: 3e4d12ed0af1a280 -> 3e4d12ed0af1a27f
+f64 atan: 3e5a6a58d55e307d -> 3e5a6a58d55e307b
+f64 atan: 3e661246d6ad9af0 -> 3e661246d6ad9aec
+f64 atan: c10f69dba57d3328 -> bff921f74125ee49
+f64 atan: bfdb8cad444cb234 -> bfda03e31a928dbd
+f64 atan: c02a8ddcd742236a -> bff7ee0fbbad8d77
+f64 atan: 40a45a8c50642738 -> 3ff92068d8dede6e
+f64 atan: c1044e2dd8826211 -> bff921f50681e2d3
+f64 atan: c081a087837277bc -> bff91ab85f34f20e
+f64 atan: c132176cc6045345 -> bff921fa71dc97d4
+f64 atan: 4089cebba8f62edb -> 3ff91d059fb64858
+f64 atan2: 3ec6e483e8a78d50 c0f6909f27923be2 -> 400921fb54432960
+f64 atan2: 3f4cdb5693d85ad3 bee2bca92b3df3e0 -> 3ff94b893bb17f99
+f64 atan2: c08a239ed37dc208 3f4b93f794f585bf -> bff921fa462caf0d
+f64 atan2: bfc3bbfa9c6603e5 c0e1f3e959ba6997 -> c00921f921757865
+f64 atan2: c018d6e9548c7e98 41313b533bad36e9 -> bed7105f0a7a1300
+f64 atan2: c0bd5c506bb05a39 40e2a6444e8abc4d -> bfc8df216a1d18d8
+f64 atan2: 409f1ec1487e314f c0a663df09ed3449 -> 4004462b5d75fea6
+f64 atan2: c116ca4652d6f14e 409a71837784a06c -> bff90f6ac5096b8c
+f64 pow: 3ff000001bd7352b c0e48430b4bc80be -> 3fefdc60dbd0e164
+f64 pow: 3ff0000020fa037a c0cf756f712c40ed -> 3fefefce7e30e90e
+f64 pow: 3ff000000500d8d4 c1928148d98e0564 -> 3fce201b1d1364b5
+f64 pow: 3ff000002c575c80 c119265767e394d0 -> 3fede4f76cbcb4f3
+f64 pow: 3ff00000207191ef 41d112252bd5af4d -> 4c6b057cb3766c49
+f64 pow: 3ff00000098b6658 412866f81d13287a -> 3ff07620090609f9
+f64 pow: 3ff0000024e1c6cc c19ef8290eeab904 -> 3e530e4d10b0f729
+f64 pow: 3ff0000022af62cc c0c70d74cf6297b8 -> 3feff3841da4e270
+f64 pow: 3fc11d0c60a304e3 c04d483c60ad96d1 -> 4a9018e9817f416a
+f64 pow: 3fd33408d2eebd10 3fdad345b709b928 -> 3fe3520db49d9a4e
+f64 pow: 3fc61af8f9e7102c bfd0f772e8907e24 -> 3ff97ca6dccb09ec
+f64 pow: 403a22394619d99a bfc7f9ccec904035 -> 3fe15da04e7f9064
+f64 pow: 40086a74be53833f 402b30ac2c1c05ef -> 414d8a3a597fa872
+f64 pow: 3fe0412d7ce4f47e c05f1671504636d3 -> 4786eb1adb2ab68c
+f64 pow: 3feee65f1e4004b7 bfc48e67800070da -> 3ff01713a9a4c405
+f64 pow: 3ff76fd9665d7c32 3fc964129b9eb4f4 -> 3ff14232cde93626

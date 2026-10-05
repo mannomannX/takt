@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 35 (8.4): Ein Tunable aendert sich im Lauf; die Zahl der
+# Durchlaeufe von `repeat` steht fest.
+tunable param N : int in 1..64 = 8
+
+output n : int in 0..64 @ hw("o/n") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        sequence:
+            repeat N:  # ~ SC-35
+                n = 2
+                wait 10 ms
+            n = 1

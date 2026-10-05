@@ -1,0 +1,58 @@
+(system
+  (tick 1ms))
+(enum ValveCmd
+  (CLOSED)
+  (OPEN))
+(input tank_p :float[bar] in 0..100[bar] @hw("daq1/ai0") max_age=5ms)
+(input chamber_p :float[bar] in 0..300[bar] @hw("daq1/ai1") max_age=5ms)
+(input lox_temp :float[K] in 50..400[K] @hw("daq1/tc0") max_age=100ms)
+(output fuel_main :ValveCmd @hw("plc1/do0") safe=CLOSED)
+(output lox_main :ValveCmd @hw("plc1/do1") safe=CLOSED)
+(output igniter :bool @hw("plc1/do2") safe=false)
+(command start)
+(command abort_test)
+(command reset)
+(param CHAMBER_LIMIT :float[bar] in 100..300[bar] 250[bar])
+(param IGNITION_P :float[bar] in 5..100[bar] 20[bar])
+(param BURN_DURATION :Duration 3s)
+(param MIN_TANK_P :float[bar] in 10..90[bar] 30[bar])
+(machine hotfire
+  (fault -> SAFE)
+  (initial ARMED)
+  (loop
+    (if abort_test
+      (abort "operator abort")))
+  (state ARMED
+    (initial IDLE)
+    (loop
+      (check (< chamber_p CHAMBER_LIMIT) "chamber overpressure {chamber_p}")
+      (alert (> lox_temp 100[K]) "LOX warming"))
+    (state IDLE
+      (loop
+        (alert (and start (<= tank_p MIN_TANK_P)) "start refused: tank pressure {tank_p}"))
+      (when (and start (> tank_p MIN_TANK_P)) -> IGNITION
+        (log "starting hotfire")))
+    (state IGNITION
+      (sequence
+        (= fuel_main OPEN)
+        (wait 150ms)
+        (= igniter true)
+        (until (> chamber_p IGNITION_P) timeout=500ms)
+        (= lox_main OPEN)
+        (check (> chamber_p IGNITION_P) "flameout")
+        (wait BURN_DURATION)
+        (-> SHUTDOWN)))
+    (state SHUTDOWN
+      (enter
+        (= lox_main CLOSED)
+        (= igniter false))
+      (after 200ms -> DONE
+        (= fuel_main CLOSED)))
+    (state DONE
+      (when reset -> IDLE)))
+  (state SAFE
+    (enter
+      (= fuel_main CLOSED)
+      (= lox_main CLOSED)
+      (= igniter false))
+    (when (and reset (< chamber_p 2[bar])) -> IDLE)))

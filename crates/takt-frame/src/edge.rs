@@ -300,8 +300,20 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], deli
     let _ = writeln!(s, "    const struct takt_edge_value *v = &a->edge_v[j];");
     let _ = writeln!(s, "    switch (d->channel) {{");
     for slot in &layout.inputs {
-        let (Some((c, e)), Some(_)) = (gate_of(p, &slot.name), c_type(&slot.ty, slot.signed)) else { continue };
+        let Some((c, e)) = gate_of(p, &slot.name) else { continue };
         let _ = writeln!(s, "    case {c}: {{ /* {} */", slot.name);
+        if c_type(&slot.ty, slot.signed).is_none() {
+            // Ein Array oder Record kommt am Rand nur als Qualitaet an
+            // (`bad`, 12.6); seinen Wert stellt die Bindung (8.3).
+            let _ = writeln!(s, "        if (!v->has_value) {{");
+            let _ =
+                writeln!(s, "            a->image[{}] = v->quality; a->image[{}] = v->reason;", e.quality, e.reason);
+            let _ = writeln!(s, "            *(long long *)(a->image + {}) = v->age;", e.age);
+            let _ = writeln!(s, "        }}");
+            let _ = writeln!(s, "        break;");
+            let _ = writeln!(s, "    }}");
+            continue;
+        }
         let _ = writeln!(s, "        unsigned verdict = 0;");
         let _ = writeln!(s, "        if (v->has_value && v->kind != 0)");
         let _ = writeln!(
@@ -341,10 +353,31 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], deli
                 "        if (!takt_edge_decodes(g_shape_{c}, (unsigned)sizeof g_shape_{c}, v->bytes, (unsigned)v->len, 1)) {{ a->int_malformed[takt_int_slot({c})]++; break; }}"
             );
         }
-        let _ = writeln!(
-            s,
-            "        int r = takt_int_deliver(a, takt_int_slot({c}), v->bytes, v->len, d->at, {drop_oldest});"
-        );
+        // 3.9: Eine Zeile ueber `line<N>` kuerzt der Rand auf N und merkt es
+        // fuer `.truncated` (KON2-028); Text und Bytes ohne Flag kuerzt schon
+        // das Abtasten.
+        let line = match p.types.list.get(ch.ty.index()) {
+            Some(Type::Stream(elem)) => match p.types.list.get(elem.index()) {
+                Some(Type::Line { cap }) => Some(*cap),
+                _ => None,
+            },
+            _ => None,
+        };
+        match line {
+            Some(n) => {
+                let _ = writeln!(s, "        _Bool cut = v->len > {n};");
+                let _ = writeln!(
+                    s,
+                    "        int r = takt_int_deliver(a, takt_int_slot({c}), v->bytes, cut ? {n} : v->len, d->at, {drop_oldest}, cut);"
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    s,
+                    "        int r = takt_int_deliver(a, takt_int_slot({c}), v->bytes, v->len, d->at, {drop_oldest}, 0);"
+                );
+            }
+        }
         // 9.6, `Sim::overflow_channel`: Der Ueberlauf faultet jeden Leser,
         // der nicht schlaeft (oder den der Strom weckt) und noch keinen
         // Fault vorgemerkt hat.

@@ -56,12 +56,12 @@
 (tunable-param TARGET_SPEED :float[1/s] in (- 800)..800[1/s] 200[1/s])
 (tunable-param MAX_IQ :float[A] in 1..35[A] 25[A])
 (fn clamp [U] (x:float[U] lo:float[U] hi:float[U]) -> float[U]
-  (return (if (< x lo) lo (if (> x hi) hi x))))
+  (return (if (< x lo) lo (paren (if (> x hi) hi x)))))
 (fn clamp_scalar (x:float lo:float hi:float) -> float
-  (return (if (< x lo) lo (if (> x hi) hi x))))
+  (return (if (< x lo) lo (paren (if (> x hi) hi x)))))
 (fn clarke (iu:float[A] iv:float[A]) -> AlphaBetaCurrent
   (var ialpha iu)
-  (var ibeta (* (+ iu (* 2.0 iv)) 0.577350269))
+  (var ibeta (* (paren (+ iu (* 2.0 iv))) 0.577350269))
   (return (AlphaBetaCurrent alpha=ialpha beta=ibeta)))
 (fn park (ab:AlphaBetaCurrent theta:float) -> DqCurrent
   (var s (call sin_fast theta))
@@ -83,10 +83,10 @@
   (= vmax (if (> vmax vc) vmax vc))
   (var vmin (if (< va vb) va vb))
   (= vmin (if (< vmin vc) vmin vc))
-  (var vmid (* 0.5 (+ vmax vmin)))
-  (var du_raw (+ 0.5 (/ (- va vmid) vbus)))
-  (var dv_raw (+ 0.5 (/ (- vb vmid) vbus)))
-  (var dw_raw (+ 0.5 (/ (- vc vmid) vbus)))
+  (var vmid (* 0.5 (paren (+ vmax vmin))))
+  (var du_raw (+ 0.5 (paren (/ (paren (- va vmid)) vbus))))
+  (var dv_raw (+ 0.5 (paren (/ (paren (- vb vmid)) vbus))))
+  (var dw_raw (+ 0.5 (paren (/ (paren (- vc vmid)) vbus))))
   (var du (call clamp_scalar du_raw 0.0 1.0))
   (var dv (call clamp_scalar dv_raw 0.0 1.0))
   (var dw (call clamp_scalar dw_raw 0.0 1.0))
@@ -144,9 +144,9 @@
     (state RUNNING
       (enter
         (= driver_state CLOSED_LOOP)
-        (.reset pi_d)
-        (.reset pi_q)
-        (.reset pi_speed)
+        (.reset pi_d ())
+        (.reset pi_q ())
+        (.reset pi_speed ())
         (= target_iq_internal 0[A]))
       (loop
         (every 1ms

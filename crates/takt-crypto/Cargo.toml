@@ -20,5 +20,12 @@ crypto-bigint = { version = "0.5.5", default-features = false, optional = true }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa"], optional = true }
 takt-native = { path = "../takt-native" }
 
+# Die Vektoren pruefen die Rechnung; ohne Feature antwortete jede Funktion
+# mit `Unavailable`, und der Test bestuende, ohne etwas zu pruefen
+# (INT-031). `cargo test -p takt-crypto --all-features` faehrt ihn.
+[[test]]
+name = "vectors"
+required-features = ["ecdsa", "rsa", "aes-gcm"]
+
 [lints]
 workspace = true

@@ -1,0 +1,23 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46 (3.7): Ein Traeger mit `w0c`-Feld wird nicht als Ganzes
+# geschrieben, sonst entstuende Lese-Modifiziere-Schreibe ueber die Hintertuer.
+
+record Ctl layout little:
+    flags : u8 with bits:
+        start : bool at 0 wo
+        done  : bool at 1 w0c
+        mode  : u8 at 2..3
+        spare : u8 at 4..7 rsvd
+
+output ctl : Ctl  @ hw("o/ctl") with safe = default
+output f   : bool @ hw("o/f")   with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            ctl.flags = 0  # ~ SC-46

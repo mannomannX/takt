@@ -1,0 +1,25 @@
+# NaN und Inf in einem Stromelement sind keine gueltige Byteform (5.9,
+# 8.6, INT-025): Der Rand zaehlt sie unter `malformed` und verwirft sie wie
+# einen Range-Verstoss; nur endliche Werte kommen an.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+record Reading:
+    level : float
+
+input  rx    : stream<Reading>        @ hw("u/rx") with max_rate = 1000 Hz, capacity = 4
+output last  : float in -100.0..100.0 @ sim("o/last")
+output count : int in 0..99           @ sim("o/count")
+
+machine m:
+    var n : int in 0..99 = 0
+
+    initial READ
+
+    state READ:
+        on rx as e:
+            n = (n + 1) % 100
+            count = n
+            last = e.data.level

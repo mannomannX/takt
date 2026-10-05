@@ -1,0 +1,33 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# `for (k, v) in m` (Census ForPair): eine Map in Slot-Reihenfolge, die
+# Summe der Schluessel und der Werte (3.9).
+
+output keys   : int in 0..100 @ hw("o/keys")   with safe = 0
+output values : int in 0..100 @ hw("o/values") with safe = 0
+
+machine m:
+    var table : map<int, int, 8> = default
+    var ok    : bool = false
+    var ks    : int in 0..100 = 0
+    var vs    : int in 0..100 = 0
+    initial FILL
+
+    state FILL:
+        enter:
+            ok = table.insert(3, 30)
+            ok = table.insert(1, 10)
+            ok = table.insert(2, 20)
+        when true: -> SUM
+
+    state SUM:
+        enter:
+            ks = 0
+            vs = 0
+            for (k, v) in table:
+                ks = ks + k
+                vs = vs + v
+            keys = ks
+            values = vs

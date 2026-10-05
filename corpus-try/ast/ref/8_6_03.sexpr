@@ -1,0 +1,11 @@
+(stream update_q :UpdateMsg capacity=16)
+(machine receiver
+  (initial RUN)
+  (state RUN
+    (on can_rx as f
+      (send update_q (UpdateMsg kind=CHUNK data=(.data (.data f)))))))
+(machine flasher
+  (initial RUN)
+  (state RUN
+    (on update_q as m
+      (log "update chunk {m.seq}"))))

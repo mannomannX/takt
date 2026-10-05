@@ -25,14 +25,43 @@ pub fn encode(p: &Program, v: &Value, ty: TypeId) -> Result<Vec<u8>, Error> {
 /// sein Typ, passt nicht zu ihm.
 pub fn decode(p: &Program, bytes: &[u8], ty: TypeId) -> Result<Value, Error> {
     let mut d = Decoder::new(bytes);
-    let v = read(p, ty, &mut d, 0)?;
+    let v = read(p, ty, &mut d, 0, Form::Canonical)?;
     if d.is_empty() { Ok(v) } else { Err(Error::Malformed) }
+}
+
+/// Liest das Ergebnis einer Native (4.5): ein Rechenergebnis, keine
+/// Byteform von aussen. NaN und Inf bleiben darum Werte; den Fault an der
+/// Anweisung stellt der `Checked{NonFinite}`-Knoten um den Aufruf (4.1).
+pub fn decode_result(p: &Program, bytes: &[u8], ty: TypeId) -> Result<Value, Error> {
+    let mut d = Decoder::new(bytes);
+    let v = read(p, ty, &mut d, 0, Form::Result)?;
+    if d.is_empty() { Ok(v) } else { Err(Error::Malformed) }
+}
+
+/// Woher die Bytes kommen, die `read` liest.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Form {
+    /// Die kanonische Byteform von aussen (5.9): NaN und Inf sind ungueltig.
+    Canonical,
+    /// Das Ergebnis einer Native: jeder Gleitkommawert gilt.
+    Result,
+}
+
+/// Die Endlichkeit eines gelesenen Werts nach seiner Herkunft.
+trait Finite: Sized {
+    fn finite_in(self, form: Form) -> Result<Self, Error>;
+}
+
+impl Finite for Value {
+    fn finite_in(self, form: Form) -> Result<Value, Error> {
+        if form == Form::Result { Ok(self) } else { self.finite_or(Error::Malformed) }
+    }
 }
 
 /// Liest einen Wert aus einem Slot fester Groesse (plan/m6.md 2.2): vorn
 /// die kanonische Form, dahinter Fuellbytes bis `max_size`.
 pub fn decode_slot(p: &Program, bytes: &[u8], ty: TypeId) -> Result<Value, Error> {
-    read(p, ty, &mut Decoder::new(bytes), 0)
+    read(p, ty, &mut Decoder::new(bytes), 0, Form::Canonical)
 }
 
 fn write(p: &Program, v: &Value, ty: TypeId, out: &mut Encoder, depth: u32) -> Result<(), Error> {
@@ -148,7 +177,7 @@ fn write(p: &Program, v: &Value, ty: TypeId, out: &mut Encoder, depth: u32) -> R
     Ok(())
 }
 
-fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Value, Error> {
+fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32, form: Form) -> Result<Value, Error> {
     if depth > 32 {
         return Err(Error::NotPod);
     }
@@ -159,8 +188,13 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             let n = d.int(*width)?;
             if width.signed() { Value::Int(n) } else { Value::UInt(n as u64) }
         }
-        Type::Float { width: FloatWidth::F32, .. } => Value::F32(f32::from_bits(d.float(FloatWidth::F32)? as u32)),
-        Type::Float { width: FloatWidth::F64, .. } => Value::F64(f64::from_bits(d.float(FloatWidth::F64)?)),
+        // 5.9, 3.7: NaN und Inf sind keine kanonische Form (INT-025).
+        Type::Float { width: FloatWidth::F32, .. } => {
+            Value::F32(f32::from_bits(d.float(FloatWidth::F32)? as u32)).finite_in(form)?
+        }
+        Type::Float { width: FloatWidth::F64, .. } => {
+            Value::F64(f64::from_bits(d.float(FloatWidth::F64)?)).finite_in(form)?
+        }
         Type::Duration { .. } => Value::Duration(d.duration()?),
         Type::Enum(e) => {
             let def = p.enums.get(e.index()).ok_or(Error::NotPod)?;
@@ -168,7 +202,7 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             let index = def.variants.iter().position(|v| v.discriminant == disc).ok_or(Error::Malformed)?;
             let mut fields = Vec::with_capacity(def.variants[index].fields.len());
             for f in &def.variants[index].fields {
-                fields.push(read(p, f.ty, d, depth + 1)?);
+                fields.push(read(p, f.ty, d, depth + 1, form)?);
             }
             Value::Enum { variant: index as u32, fields }
         }
@@ -176,14 +210,14 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             let def = p.records.get(r.index()).ok_or(Error::NotPod)?;
             let mut fields = Vec::with_capacity(def.fields.len());
             for f in &def.fields {
-                fields.push(read(p, f.ty, d, depth + 1)?);
+                fields.push(read(p, f.ty, d, depth + 1, form)?);
             }
             Value::Record(fields)
         }
         Type::Array { elem, len } => {
             let mut items = Vec::with_capacity(*len as usize);
             for _ in 0..*len {
-                items.push(read(p, *elem, d, depth + 1)?);
+                items.push(read(p, *elem, d, depth + 1, form)?);
             }
             Value::Array(items)
         }
@@ -193,10 +227,10 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             let t = Value::Duration(d.duration()?);
             let pre = Value::Int(i64::from(d.len(u32::MAX)?));
             let post = Value::Int(i64::from(d.len(u32::MAX)?));
-            let rate = Value::F64(f64::from_bits(d.float(takt_mir::types::FloatWidth::F64)?));
+            let rate = Value::F64(f64::from_bits(d.float(takt_mir::types::FloatWidth::F64)?)).finite_in(form)?;
             let mut items = Vec::with_capacity(*len as usize);
             for _ in 0..*len {
-                items.push(read(p, *elem, d, depth + 1)?);
+                items.push(read(p, *elem, d, depth + 1, form)?);
             }
             Value::Record(vec![t, pre, post, rate, Value::Array(items)])
         }
@@ -215,7 +249,7 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             let n = d.len(*cap)?;
             let mut items = Vec::with_capacity(n as usize);
             for _ in 0..n {
-                items.push(read(p, *elem, d, depth + 1)?);
+                items.push(read(p, *elem, d, depth + 1, form)?);
             }
             Value::Vec(items)
         }
@@ -225,10 +259,10 @@ fn read(p: &Program, ty: TypeId, d: &mut Decoder<'_>, depth: u32) -> Result<Valu
             for _ in 0..*cap {
                 if d.bool()? {
                     let at = d.position();
-                    let k = read(p, *key, d, depth + 1)?;
+                    let k = read(p, *key, d, depth + 1, form)?;
                     d.raw(klen.saturating_sub(d.position() - at))?;
                     let at = d.position();
-                    let val = read(p, *value, d, depth + 1)?;
+                    let val = read(p, *value, d, depth + 1, form)?;
                     d.raw(vlen.saturating_sub(d.position() - at))?;
                     slots.push(Some((k, val)));
                 } else {

@@ -12,29 +12,41 @@
 /// Die Schedulingklasse des Tick-Threads (12.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scheduling {
-    /// `SCHED_FIFO` oder `SCHED_RR`: Echtzeit, wie 12.2 verlangt.
+    /// `SCHED_FIFO`: Echtzeit, wie 12.2 verlangt.
     Realtime {
-        /// Die Prioritaet.
+        /// Die Echtzeitprioritaet (1 bis 99).
+        priority: i32,
+    },
+    /// `SCHED_RR`: Echtzeit mit Zeitscheiben unter gleicher Prioritaet.
+    RoundRobin {
+        /// Die Echtzeitprioritaet (1 bis 99).
         priority: i32,
     },
     /// `SCHED_OTHER`: der gewoehnliche Scheduler. Der Lauf ist gueltig,
     /// die Zeitgarantie nicht.
     Normal,
-    /// Nicht ermittelbar (kein Linux, oder `/proc` nicht lesbar).
+    /// `SCHED_BATCH`: gewoehnlich, fuer Hintergrundlast; keine Zeitgarantie.
+    Batch,
+    /// `SCHED_IDLE`: nur, wenn sonst nichts laeuft; keine Zeitgarantie.
+    Idle,
+    /// Nicht ermittelbar (kein Linux, `/proc` nicht lesbar, unbekannte Policy).
     Unknown,
 }
 
 impl Scheduling {
     /// Traegt diese Klasse die Zeitgarantie aus 12.2?
     pub fn is_realtime(self) -> bool {
-        matches!(self, Scheduling::Realtime { .. })
+        matches!(self, Scheduling::Realtime { .. } | Scheduling::RoundRobin { .. })
     }
 
     /// Der Name fuer den Lauf-Header.
     pub fn name(self) -> &'static str {
         match self {
             Scheduling::Realtime { .. } => "fifo",
+            Scheduling::RoundRobin { .. } => "rr",
             Scheduling::Normal => "other",
+            Scheduling::Batch => "batch",
+            Scheduling::Idle => "idle",
             Scheduling::Unknown => "unbekannt",
         }
     }
@@ -149,13 +161,16 @@ pub fn prepare(_cpu: Option<usize>) -> Guarantee {
 /// Betriebskonfiguration wie `isolcpus` daneben.
 ///
 /// Feld 41 von `/proc/self/stat` ist die Policy (`sched(7)`): 0 ist
-/// `SCHED_OTHER`, 1 `SCHED_FIFO`, 2 `SCHED_RR`. Feld 18 ist die
-/// Echtzeitprioritaet.
+/// `SCHED_OTHER`, 1 `SCHED_FIFO`, 2 `SCHED_RR`, 3 `SCHED_BATCH`, 5
+/// `SCHED_IDLE`. Feld 40 ist die Echtzeitprioritaet; Feld 18 (`priority`)
+/// waere unter Echtzeit `-1 - rt_priority`.
 #[cfg(target_os = "linux")]
 fn scheduling() -> Scheduling {
-    let Ok(stat) = std::fs::read_to_string("/proc/self/stat") else {
-        return Scheduling::Unknown;
-    };
+    std::fs::read_to_string("/proc/self/stat").map_or(Scheduling::Unknown, |stat| scheduling_of(&stat))
+}
+
+/// Die Schedulingklasse aus dem Text von `/proc/<pid>/stat` (`proc(5)`).
+pub fn scheduling_of(stat: &str) -> Scheduling {
     // Der Prozessname steht in Klammern und darf Leerzeichen enthalten;
     // gezaehlt wird darum ab der schliessenden Klammer.
     let Some(rest) = stat.rfind(')').map(|i| &stat[i + 1..]) else {
@@ -165,10 +180,13 @@ fn scheduling() -> Scheduling {
     // Nach der Klammer ist Feld 0 der Zustand, also Feld n der
     // (n + 3)-te des Formats.
     let policy = fields.get(38).and_then(|s| s.parse::<u32>().ok());
-    let priority = fields.get(15).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+    let priority = fields.get(37).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
     match policy {
-        Some(1 | 2) => Scheduling::Realtime { priority },
         Some(0) => Scheduling::Normal,
+        Some(1) => Scheduling::Realtime { priority },
+        Some(2) => Scheduling::RoundRobin { priority },
+        Some(3) => Scheduling::Batch,
+        Some(5) => Scheduling::Idle,
         _ => Scheduling::Unknown,
     }
 }

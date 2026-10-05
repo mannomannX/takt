@@ -11,8 +11,8 @@
   (initial A)
   (state A
     (loop
-      (= lo (.min xs))
-      (= hi (.max xs))
-      (= avg (.mean xs))
-      (= quad (.rms xs))
+      (= lo (.min xs ()))
+      (= hi (.max xs ()))
+      (= avg (.mean xs ()))
+      (= quad (.rms xs ()))
       (= n (.count xs)))))

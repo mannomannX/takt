@@ -22,8 +22,10 @@
 //! still eine andere Zahl zu schreiben; dieselbe Entscheidung wie bei
 //! `{x:float}` in `takt-match` und `captures.rs`.
 
+use takt_mir::TypeId;
 use takt_mir::pattern::{Format, FormatPiece};
 use takt_mir::program::Program;
+use takt_mir::types::Type;
 
 use crate::emit::{Module, Reg};
 use crate::expr::NotYet;
@@ -53,7 +55,12 @@ pub fn render(
             FormatPiece::Text(t) => text(t.as_bytes(), buffer, at_ptr, cap, m),
             FormatPiece::Expr { expr, spec } => {
                 let value_of = crate::expr::lower(expr, p, m, vars)?;
-                number(&value_of, spec.as_deref(), buffer, at_ptr, cap, m)?;
+                let out = Out { buffer, at_ptr, cap };
+                match p.types.list.get(expr.ty.index()) {
+                    Some(Type::Duration { .. }) => duration(&value_of.value, &out, m),
+                    Some(Type::Enum(e)) => variant_name(&value_of, *e, p, &out, m)?,
+                    _ => number(&value_of, spec.as_deref(), expr.ty, p, buffer, at_ptr, cap, m)?,
+                }
             }
         }
     }
@@ -81,10 +88,88 @@ fn text(bytes: &[u8], buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
     }
 }
 
-/// Ein Ausdruck als Text (3.9).
+/// Wohin ein Baustein schreibt: Puffer, Schreibstelle, Kapazitaet.
+struct Out {
+    buffer: Reg,
+    at_ptr: Reg,
+    cap: u32,
+}
+
+/// Eine Dauer wie der Interpreter sie schreibt (`takt_mir::dump::duration`):
+/// in der groessten Einheit, in der sie ganzzahlig ist, null als `0 ns`.
+fn duration(ns: &str, out: &Out, m: &mut Module) {
+    const UNITS: [(&str, i64); 6] = [
+        ("d", 86_400_000_000_000),
+        ("h", 3_600_000_000_000),
+        ("min", 60_000_000_000),
+        ("s", 1_000_000_000),
+        ("ms", 1_000_000),
+        ("us", 1_000),
+    ];
+    let k = m.next_label();
+    let done = format!("dauer{k}_fertig");
+    let nonzero = m.inst(&format!("icmp ne i64 {ns}, 0"));
+    for (i, (name, factor)) in UNITS.iter().enumerate() {
+        let (hit, next) = (format!("dauer{k}_{i}"), format!("dauer{k}_{i}_sonst"));
+        let rest = m.inst(&format!("srem i64 {ns}, {factor}"));
+        let whole = m.inst(&format!("icmp eq i64 {rest}, 0"));
+        let take = m.inst(&format!("and i1 {nonzero}, {whole}"));
+        m.void_inst(&format!("br i1 {take}, label %{hit}, label %{next}"));
+        m.label(&hit);
+        let q = m.inst(&format!("sdiv i64 {ns}, {factor}"));
+        digits(&q.to_string(), 10, true, true, out.buffer, out.at_ptr, out.cap, m);
+        text(format!(" {name}").as_bytes(), out.buffer, out.at_ptr, out.cap, m);
+        m.void_inst(&format!("br label %{done}"));
+        m.label(&next);
+    }
+    digits(ns, 10, true, true, out.buffer, out.at_ptr, out.cap, m);
+    text(b" ns", out.buffer, out.at_ptr, out.cap, m);
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+}
+
+/// Ein Enum ohne Felder als Name seiner Variante, wie im Interpreter
+/// (3.7); die Diskriminante waere eine Zahl, die das Programm nie schrieb.
+fn variant_name(
+    value_of: &crate::expr::Lowered,
+    e: takt_mir::EnumId,
+    p: &Program,
+    out: &Out,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let def = p.enums.get(e.index()).ok_or(NotYet { what: "Enum" })?;
+    if def.variants.iter().any(|v| !v.fields.is_empty()) {
+        return Err(NotYet { what: "Enum mit Feldern in einem Formatstring" });
+    }
+    let LlvmType::Int(bits) = value_of.ty else { return Err(NotYet { what: "Diskriminante" }) };
+    let k = m.next_label();
+    let done = format!("variante{k}_fertig");
+    let Some((last, others)) = def.variants.split_last() else { return Err(NotYet { what: "leeres Enum" }) };
+    for (i, v) in others.iter().enumerate() {
+        let (hit, next) = (format!("variante{k}_{i}"), format!("variante{k}_{i}_sonst"));
+        let is = m.inst(&format!("icmp eq i{bits} {}, {}", value_of.value, v.discriminant));
+        m.void_inst(&format!("br i1 {is}, label %{hit}, label %{next}"));
+        m.label(&hit);
+        text(v.name.as_bytes(), out.buffer, out.at_ptr, out.cap, m);
+        m.void_inst(&format!("br label %{done}"));
+        m.label(&next);
+    }
+    // Eine andere Diskriminante gibt es nicht: Das Sema laesst nur die
+    // Varianten zu.
+    text(last.name.as_bytes(), out.buffer, out.at_ptr, out.cap, m);
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&done);
+    Ok(())
+}
+
+/// Ein Ausdruck als Text (3.9). Die Vorzeichenart kommt aus dem Typ:
+/// Ein `u8` 200 ist `200` und `c8`, nicht `-56` und `ffffffffffffffc8`.
+#[allow(clippy::too_many_arguments)]
 fn number(
     value_of: &crate::expr::Lowered,
     spec: Option<&str>,
+    ty: TypeId,
+    p: &Program,
     buffer: Reg,
     at_ptr: Reg,
     cap: u32,
@@ -96,6 +181,7 @@ fn number(
     let LlvmType::Int(bits) = value_of.ty else {
         return Err(NotYet { what: "zusammengesetzter Wert in einem Formatstring" });
     };
+    let signed = crate::expr::int_is_signed(ty, p);
     // Auf i64 bringen; die Ziffernrechnung laeuft einheitlich darauf.
     let v = match bits {
         64 => value_of.value.clone(),
@@ -113,15 +199,18 @@ fn number(
             m.label(&done);
             return Ok(());
         }
-        n => m.inst(&format!("sext i{n} {} to i64", value_of.value)).to_string(),
+        n => {
+            let widen = if signed { "sext" } else { "zext" };
+            m.inst(&format!("{widen} i{n} {} to i64", value_of.value)).to_string()
+        }
     };
     match spec {
         Some("hex") => digits(&v, 16, false, false, buffer, at_ptr, cap, m),
         Some(s) if s.starts_with('0') => {
             let width: u32 = s.parse().unwrap_or(0);
-            digits_padded(&v, width, buffer, at_ptr, cap, m);
+            digits_padded(&v, width, signed, buffer, at_ptr, cap, m);
         }
-        None => digits(&v, 10, true, true, buffer, at_ptr, cap, m),
+        None => digits(&v, 10, signed, signed, buffer, at_ptr, cap, m),
         Some(_) => return Err(NotYet { what: "Formatangabe" }),
     }
     Ok(())
@@ -219,12 +308,13 @@ fn digits(v: &str, base: u32, signed: bool, with_sign: bool, buffer: Reg, at_ptr
 /// Die Nullen kommen vor die Ziffern, also muss ihre Zahl vorher
 /// feststehen: erst zaehlen, wie viele Stellen die Zahl hat, dann die
 /// Differenz fuellen, dann die Ziffern schreiben.
-fn digits_padded(v: &str, width: u32, buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
-    let places = digit_count(v, m);
+fn digits_padded(v: &str, width: u32, signed: bool, buffer: Reg, at_ptr: Reg, cap: u32, m: &mut Module) {
+    let places = digit_count(v, signed, m);
     let k = m.next_label();
     // Das Vorzeichen steht vor den Nullen: `{x:04}` von -2 ist `-002`,
-    // wie der Interpreter es schreibt (FB-172).
-    let neg = m.inst(&format!("icmp slt i64 {v}, 0"));
+    // wie der Interpreter es schreibt (FB-172). Ohne Vorzeichen gibt es
+    // keins, auch nicht ueber `i64::MAX`.
+    let neg = if signed { m.inst(&format!("icmp slt i64 {v}, 0")) } else { m.inst("and i1 false, false") };
     let (minus, ohne) = (format!("br{k}_minus"), format!("br{k}_ohne"));
     m.void_inst(&format!("br i1 {neg}, label %{minus}, label %{ohne}"));
     m.label(&minus);
@@ -246,33 +336,39 @@ fn digits_padded(v: &str, width: u32, buffer: Reg, at_ptr: Reg, cap: u32, m: &mu
     m.void_inst(&format!("store i32 {i3}, ptr {i_ptr}"));
     m.void_inst(&format!("br label %{head}"));
     m.label(&done);
-    digits(v, 10, true, false, buffer, at_ptr, cap, m);
+    digits(v, 10, signed, false, buffer, at_ptr, cap, m);
 }
 
 /// Wie viele Zeichen die Dezimaldarstellung braucht, das Vorzeichen
 /// eingerechnet.
-fn digit_count(v: &str, m: &mut Module) -> Reg {
+fn digit_count(v: &str, signed: bool, m: &mut Module) -> Reg {
     let k = m.next_label();
     let (head, body, done) = (format!("sz{k}"), format!("sz{k}_rumpf"), format!("sz{k}_fertig"));
-    let neg = m.inst(&format!("icmp slt i64 {v}, 0"));
+    let neg = if signed { m.inst(&format!("icmp slt i64 {v}, 0")) } else { m.inst("and i1 false, false") };
     let n_ptr = m.alloca("i32");
     let start_at = m.inst(&format!("select i1 {neg}, i32 1, i32 0"));
     m.void_inst(&format!("store i32 {start_at}, ptr {n_ptr}"));
-    // Wie in `ziffern` negativ rechnen: `i64::MIN` hat keinen Betrag.
-    let umgekehrt = m.inst(&format!("sub i64 0, {v}"));
-    let start = m.inst(&format!("select i1 {neg}, i64 {v}, i64 {umgekehrt}"));
+    // Wie in `ziffern` vorzeichenbehaftet negativ rechnen: `i64::MIN` hat
+    // keinen Betrag. Ohne Vorzeichen zaehlt das Bitmuster selbst.
+    let start = if signed {
+        let umgekehrt = m.inst(&format!("sub i64 0, {v}"));
+        m.inst(&format!("select i1 {neg}, i64 {v}, i64 {umgekehrt}"))
+    } else {
+        m.inst(&format!("add i64 {v}, 0"))
+    };
     let rest_ptr = m.alloca("i64");
     m.void_inst(&format!("store i64 {start}, ptr {rest_ptr}"));
     m.void_inst(&format!("br label %{head}"));
 
     m.label(&head);
     let rest = m.inst(&format!("load i64, ptr {rest_ptr}"));
-    let go_on = m.inst(&format!("icmp slt i64 {rest}, 0"));
+    let go_on =
+        if signed { m.inst(&format!("icmp slt i64 {rest}, 0")) } else { m.inst(&format!("icmp ne i64 {rest}, 0")) };
     m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
 
     m.label(&body);
     let r = m.inst(&format!("load i64, ptr {rest_ptr}"));
-    let q = m.inst(&format!("sdiv i64 {r}, 10"));
+    let q = if signed { m.inst(&format!("sdiv i64 {r}, 10")) } else { m.inst(&format!("udiv i64 {r}, 10")) };
     m.void_inst(&format!("store i64 {q}, ptr {rest_ptr}"));
     let n = m.inst(&format!("load i32, ptr {n_ptr}"));
     let n1 = m.inst(&format!("add i32 {n}, 1"));

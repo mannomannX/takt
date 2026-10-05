@@ -12,11 +12,22 @@
 //! Rechnungen von hier benutzen statt eigene zu haben.
 
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
 
-/// Der Pfad zum Board-Crate, vom Manifest dieses Crates aus.
-fn board_src() -> &'static Path {
-    Path::new("../takt-board-stm32f401/src")
+/// Die Quellverzeichnisse aller Board-Crates (`crates/takt-board-*` ausser
+/// diesem), vom Manifest dieses Crates aus.
+fn board_sources() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = fs::read_dir("..")
+        .expect("crates/")
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.starts_with("takt-board-") && name != "takt-board-support"
+        })
+        .map(|e| e.path().join("src"))
+        .collect();
+    out.sort();
+    out
 }
 
 /// **Dieses Crate bleibt frei von Hardware-Abhaengigkeiten.**
@@ -44,32 +55,42 @@ fn the_computing_half_has_no_hardware_dependencies() {
     }
 }
 
-/// **Das Board-Crate rechnet nicht selbst.**
+/// **Kein Board-Crate rechnet selbst.**
 ///
 /// Die vier Groessen, an denen ein stiller Zeitfehler entsteht —
 /// Nanosekunden je Zaehlschritt, Prescaler, Zyklenumrechnung,
 /// Zaehlerueberlauf — duerfen dort nicht noch einmal stehen. Der Test
-/// sucht die Zahlen, an denen man sie erkennt.
+/// sucht die Zahlen, an denen man sie erkennt, in jedem Board-Crate; die
+/// beiden, die es gibt, muessen da sein — ein fehlendes waere ein
+/// stilles Bestehen.
 #[test]
 fn the_register_half_does_not_compute_time_itself() {
-    let Ok(entries) = fs::read_dir(board_src()) else {
-        // Das Board-Crate ist nicht Teil jeder Arbeitskopie; fehlt es,
-        // ist nichts zu bewachen.
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
-        let src = fs::read_to_string(&path).expect("lesbar");
-        let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect();
-        assert!(
-            !code.contains("1_000_000_000 /"),
-            "{}: rechnet Nanosekunden selbst — das gehoert nach `takt-board-support`, wo es getestet wird",
-            path.display()
-        );
+    let sources = board_sources();
+    for board in ["takt-board-esp32c6", "takt-board-stm32f401"] {
+        assert!(sources.iter().any(|s| s.parent().is_some_and(|p| p.ends_with(board))), "{board} fehlt");
     }
+    let mut found = Vec::new();
+    for dir in &sources {
+        for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())).flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let src = fs::read_to_string(&path).expect("lesbar");
+            for (n, line) in src.lines().enumerate().filter(|(_, l)| !l.trim_start().starts_with("//")) {
+                for pattern in ["1_000_000_000 /", "/ 1_000", "* 1_000", "div_ceil(1_000"] {
+                    if line.contains(pattern) {
+                        found.push(format!("{}:{}: `{pattern}` in `{}`", path.display(), n + 1, line.trim()));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "Zeitrechnung im Board-Crate — sie gehoert nach `takt-board-support`, wo sie getestet wird:\n{}",
+        found.join("\n")
+    );
 }
 
 /// Die Rechnungen, die das Board-Crate braucht, sind alle oeffentlich.

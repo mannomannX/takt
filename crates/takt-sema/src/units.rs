@@ -464,7 +464,7 @@ pub fn rational_from_text(text: &str) -> Option<Rational> {
     if neg {
         num = -num;
     }
-    let scale = exp - frac_part.len() as i32;
+    let scale = exp.checked_sub(i32::try_from(frac_part.len()).ok()?)?;
     if scale >= 0 {
         rat_reduce(num.checked_mul(10i128.checked_pow(scale as u32)?)?, 1)
     } else {
@@ -537,6 +537,35 @@ mod tests {
         assert_eq!(rational_from_text("-0.5"), Some(Rational { num: -1, den: 2 }));
         assert_eq!(rat_pow(Rational { num: 1, den: 1000 }, -1), Some(Rational::int(1000)));
         assert_eq!(rat_pow(Rational::int(10), 2), Some(Rational::int(100)));
+    }
+
+    #[test]
+    fn unreadable_or_unrepresentable_text_has_no_rational() {
+        // 3.2: Ein Faktor ist exakt oder keiner; was nicht in `i128` passt,
+        // ist `None`, nie ein Ueberlauf.
+        for text in ["1.2.3", "", "e3", "-", "1e", "0x", "1e40", "1e-40", "1.5e-2147483648", "1e2147483647"] {
+            assert_eq!(rational_from_text(text), None, "`{text}`");
+        }
+        assert_eq!(rat_pow(Rational::int(0), -1), None, "1/0");
+        assert_eq!(rat_pow(Rational::int(0), 0), Some(Rational::int(1)));
+    }
+
+    #[test]
+    fn a_prefix_needs_a_prefixable_unit() {
+        let (mut p, mut u) = setup();
+        u.declare(
+            &mut p,
+            "rpm",
+            [0, 0, -1, 0, 0, 0, 0],
+            Rational { num: 1, den: 60 },
+            None,
+            false,
+            false,
+            Span::default(),
+        )
+        .unwrap();
+        assert!(u.lookup(&mut p, "rpm").is_some());
+        assert!(u.lookup(&mut p, "krpm").is_none(), "`rpm` nimmt keinen Praefix");
     }
 
     #[test]

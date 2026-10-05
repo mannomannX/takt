@@ -73,3 +73,25 @@ fn the_same_input_gives_the_same_result() {
         }
     }
 }
+
+/// INT-024: Zufallslaengen bis 4096 Byte mit mehreren Startwerten, und je
+/// Argument ein eigener Block — nicht dreimal derselbe, sonst bleiben
+/// Laengen- und Inhaltskombinationen ungeprueft.
+#[test]
+fn random_lengths_and_contents_never_panic() {
+    for seed in [1u64, 0x2026_1004, 0xDEAD_BEEF, 0x0123_4567_89AB_CDEF] {
+        let mut rng = Rng(seed);
+        for _ in 0..60 {
+            let blocks: Vec<Vec<u8>> = (0..1 + rng.next() % 3)
+                .map(|_| {
+                    let len = (rng.next() % 4097) as usize;
+                    (0..len).map(|_| rng.next() as u8).collect()
+                })
+                .collect();
+            let args: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+            for f in Native::ALL {
+                let _ = takt_native::call(f, &args);
+            }
+        }
+    }
+}

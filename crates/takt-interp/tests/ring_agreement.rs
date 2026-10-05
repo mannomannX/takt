@@ -20,7 +20,26 @@ fn elem(k: u8) -> (Value, [u8; 1]) {
     (Value::UInt(u64::from(k)), [k])
 }
 
-/// Vergleicht, was beide ueber ihr Fenster sagen.
+/// Die Bytes eines Elements, wie der Ring sie haelt: ein `u8` als ein
+/// Byte, `bytes` als sich selbst.
+fn content(v: &Value) -> Vec<u8> {
+    match v {
+        Value::UInt(k) => vec![*k as u8],
+        Value::Bytes(b) => b.clone(),
+        other => panic!("kein Testelement: {other:?}"),
+    }
+}
+
+/// Die Lieferung des Interpreters in der Schreibweise des Rings.
+fn as_ring(d: IDelivery) -> RDelivery {
+    match d {
+        IDelivery::Ok => RDelivery::Ok,
+        IDelivery::Overflow => RDelivery::Overflow,
+        IDelivery::Dropped(n) => RDelivery::Dropped(n),
+    }
+}
+
+/// Vergleicht, was beide ueber ihr Fenster sagen, bis auf den Inhalt.
 fn same(b: &Buffer, r: &Ring<'_>, cursor: i64, step_of: &str) {
     assert_eq!(b.count(cursor), r.count(cursor), "{step_of}: `s.count` weicht ab");
     assert_eq!(b.items.len(), r.len(), "{step_of}: die Zahl der Elemente weicht ab");
@@ -33,6 +52,10 @@ fn same(b: &Buffer, r: &Ring<'_>, cursor: i64, step_of: &str) {
         let d = r.at(cursor, i).unwrap_or_else(|| panic!("{step_of}: Element {i} fehlt im Ring"));
         assert_eq!(e.seq, d.seq, "{step_of}: `seq` von Element {i}");
         assert_eq!(e.t, d.t, "{step_of}: `.t` von Element {i}");
+        assert_eq!(e.bytes, d.len, "{step_of}: Laenge von Element {i}");
+        let mut out = vec![0u8; d.len as usize];
+        assert_eq!(r.read(d, &mut out), out.len(), "{step_of}: Element {i} liest sich nicht ganz");
+        assert_eq!(out, content(&e.value), "{step_of}: Inhalt von Element {i}");
     }
     assert!(r.at(cursor, window.len()).is_none(), "{step_of}: der Ring hat ein Element zu viel");
 }
@@ -130,11 +153,7 @@ fn a_long_mixed_run_agrees_at_every_step() {
                 let (v, bytes) = elem((step_of % 251) as u8);
                 let a = b.push(i64::from(step_of), v, 1, true);
                 let c = r.push(i64::from(step_of), &bytes, true);
-                assert_eq!(
-                    matches!(a, IDelivery::Ok),
-                    matches!(c, RDelivery::Ok),
-                    "Schritt {step_of}: die Lieferung weicht ab"
-                );
+                assert_eq!(as_ring(a), c, "Schritt {step_of}: die Lieferung weicht ab");
             }
             2 => {
                 // Der Konsument sieht ein Element an: „untersucht heisst
@@ -161,7 +180,7 @@ fn an_element_larger_than_the_byte_ring_overflows_without_dropping() {
     let (mut b, (mut d, mut by)) = pair(4, 8);
     let mut r = Ring::new(&mut d[..4], &mut by[..8]);
     for k in 0..3u8 {
-        let a = b.push(i64::from(k), Value::UInt(u64::from(k)), 2, true);
+        let a = b.push(i64::from(k), Value::Bytes(vec![k, k]), 2, true);
         let c = r.push(i64::from(k), &[k, k], true);
         assert_eq!(a == IDelivery::Ok, c == RDelivery::Ok, "Schritt {k}");
     }
@@ -183,11 +202,46 @@ fn drop_oldest_with_variable_lengths_agrees() {
         let data = vec![k as u8; len];
         let a = b.push(k as i64, Value::Bytes(data.clone()), len as u32, true);
         let c = r.push(k as i64, &data, true);
-        assert_eq!(
-            matches!(a, IDelivery::Dropped(_)),
-            matches!(c, RDelivery::Dropped(_)),
-            "Schritt {k}: das Verdraengen weicht ab"
-        );
+        assert_eq!(as_ring(a), c, "Schritt {k}: das Verdraengen weicht ab");
         same(&b, &r, 0, &format!("nach Element {k}"));
+    }
+}
+
+/// INT-002: Eine lange Folge mit Elementen jeder Laenge von 0 bis eins
+/// ueber die Byteschranke, unter beiden Politiken: Lieferung samt Zahl,
+/// Fenster und Inhalt stimmen nach jedem Schritt ueberein.
+#[test]
+fn a_long_run_with_variable_lengths_agrees_under_both_policies() {
+    const CAP: u32 = 5;
+    const CAPB: u32 = 16;
+    for drop_oldest in [false, true] {
+        let (mut b, (mut d, mut by)) = pair(CAP, CAPB);
+        let mut r = Ring::new(&mut d[..CAP as usize], &mut by[..CAPB as usize]);
+        let mut cursor = 0i64;
+        let mut x: u32 = 2024;
+        for step_of in 0..2000u32 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12345);
+            let pick = x >> 16;
+            match pick % 5 {
+                0..=2 => {
+                    let len = (pick / 5) % (CAPB + 2);
+                    let data: Vec<u8> = (0..len).map(|i| (step_of as u8).wrapping_add(i as u8)).collect();
+                    let a = b.push(i64::from(step_of), Value::Bytes(data.clone()), len, drop_oldest);
+                    let c = r.push(i64::from(step_of), &data, drop_oldest);
+                    assert_eq!(as_ring(a), c, "Schritt {step_of} ({len} Byte, drop_oldest {drop_oldest})");
+                }
+                3 => {
+                    if let Some(e) = r.at(cursor, 0) {
+                        cursor = e.seq + 1;
+                    }
+                }
+                _ => {
+                    b.evict(cursor);
+                    r.evict(cursor);
+                }
+            }
+            same(&b, &r, cursor, &format!("Schritt {step_of}, drop_oldest {drop_oldest}"));
+        }
+        assert!(b.overflowed + b.dropped > 0, "die Folge erreicht keine Schranke");
     }
 }

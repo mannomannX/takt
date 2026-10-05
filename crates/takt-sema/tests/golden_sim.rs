@@ -1,6 +1,7 @@
-//! Golden-Traces der Beispiele 14.1 bis 14.5: jedes Szenario aus
+//! Golden-Traces der Beispiele: jedes Szenario aus
 //! `corpus-try/sim/manifest.csv` laeuft mit seinem Stimulus und muss den
-//! aufgezeichneten Trace zeichengleich erzeugen. Jeder Lauf wird zusaetzlich
+//! aufgezeichneten Trace zeichengleich erzeugen; die Zeilen aus
+//! `<szenario>.expect` stehen von Hand daneben. Jeder Lauf wird zusaetzlich
 //! mit permutierter Schrittreihenfolge wiederholt (Satz 9.4.1).
 //!
 //! `UPDATE_GOLDEN=1 cargo test -p takt-sema --test golden_sim` schreibt die
@@ -62,7 +63,10 @@ fn split_csv(line: &str) -> Vec<String> {
 
 /// Uebersetzt das Programm eines Beispiels.
 fn program(example: &str, profile: Option<&str>) -> takt_mir::Program {
-    let path = root().join(example).join("program.takt");
+    // Ein Beispiel ohne eigenes `program.takt` ist ein Korpusprogramm
+    // (`corpus-try/<beispiel>.takt`); sein Verzeichnis traegt nur die Faelle.
+    let own = root().join(example).join("program.takt");
+    let path = if own.exists() { own } else { root().join("..").join(format!("{example}.takt")) };
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let options = Options {
         policy: Policy::default(),
@@ -86,6 +90,27 @@ fn scenario_machine(p: &takt_mir::Program, case: &str) -> Option<String> {
         .map(|m| m.name.clone())
 }
 
+/// Die Laufeinstellungen eines Falls: dieselben fuer den Golden-Lauf und
+/// fuer die permutierten Laeufe (Satz 9.4.1 gilt fuer *diesen* Lauf).
+fn options_of(case: &Case, p: &takt_mir::Program, order_seed: Option<u64>) -> RunOptions {
+    RunOptions {
+        ticks: case.ticks,
+        profile: case.profile.clone(),
+        order_seed,
+        scenario: scenario_machine(p, &case.scenario),
+        ..Default::default()
+    }
+}
+
+/// Der Stimulus eines Falls. Ein Lauf ohne Eingaben hat eine Datei mit
+/// einem Kommentar statt keiner: Eine fehlende Datei ist ein Fehler, kein
+/// leerer Stimulus (KOR-031).
+fn stimulus_text(case: &Case) -> String {
+    let path = root().join(&case.example).join(format!("{}.stim.trace", case.scenario));
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e} (ohne Eingaben: eine Datei mit `# Leer mit Absicht: …`)", path.display()))
+}
+
 #[test]
 fn golden_traces_match() {
     let update = std::env::var("UPDATE_GOLDEN").is_ok();
@@ -93,21 +118,13 @@ fn golden_traces_match() {
     assert!(cases.len() >= 12, "zu wenige Szenarien: {}", cases.len());
     for case in &cases {
         let dir = root().join(&case.example);
-        let stim_path = dir.join(format!("{}.stim.trace", case.scenario));
         let golden_path = dir.join(format!("{}.golden.trace", case.scenario));
-        let stim_text = std::fs::read_to_string(&stim_path).unwrap_or_default();
-        let stimulus = Trace::parse(&stim_text).unwrap_or_else(|e| panic!("{}: {e}", stim_path.display()));
+        let stimulus = Trace::parse(&stimulus_text(case))
+            .unwrap_or_else(|e| panic!("{}/{}: Stimulus: {e}", case.example, case.scenario));
 
         let p = program(&case.example, case.profile.as_deref());
-        let options = RunOptions {
-            ticks: case.ticks,
-            profile: case.profile.clone(),
-            order_seed: None,
-            scenario: scenario_machine(&p, &case.scenario),
-            ..Default::default()
-        };
-        let result =
-            run(&p, &stimulus, &options).unwrap_or_else(|e| panic!("{}/{}: {e:?}", case.example, case.scenario));
+        let result = run(&p, &stimulus, &options_of(case, &p, None))
+            .unwrap_or_else(|e| panic!("{}/{}: {e:?}", case.example, case.scenario));
         let text = result.trace.render();
 
         assert_eq!(result.verdict.name(), case.verdict, "{}/{}: Verdikt weicht ab", case.example, case.scenario);
@@ -124,35 +141,19 @@ fn golden_traces_match() {
 
 #[test]
 fn step_order_does_not_change_any_golden_trace() {
-    // Satz 9.4.1: der Trace ist eine Funktion der Inputs, nicht der Reihenfolge.
+    // Satz 9.4.1: der Trace ist eine Funktion der Inputs, nicht der
+    // Reihenfolge — verglichen mit dem Golden-Trace, mit derselben
+    // Szenario-Maschine wie dort.
     for case in cases() {
         let dir = root().join(&case.example);
-        let stim_text = std::fs::read_to_string(dir.join(format!("{}.stim.trace", case.scenario))).unwrap_or_default();
+        let stim_text = stimulus_text(&case);
         let stimulus = Trace::parse(&stim_text).expect("Stimulus lesbar");
+        let golden_path = dir.join(format!("{}.golden.trace", case.scenario));
+        let golden = std::fs::read_to_string(&golden_path).unwrap_or_else(|e| panic!("{}: {e}", golden_path.display()));
         let p = program(&case.example, case.profile.as_deref());
-        let base = run(
-            &p,
-            &stimulus,
-            &RunOptions { ticks: case.ticks, profile: case.profile.clone(), order_seed: None, ..Default::default() },
-        )
-        .expect("Lauf")
-        .trace
-        .render();
         for seed in [3u64, 17, 9001] {
-            let permuted = run(
-                &p,
-                &stimulus,
-                &RunOptions {
-                    ticks: case.ticks,
-                    profile: case.profile.clone(),
-                    order_seed: Some(seed),
-                    ..Default::default()
-                },
-            )
-            .expect("Lauf")
-            .trace
-            .render();
-            assert_eq!(permuted, base, "{}/{}: Reihenfolge {seed} aendert den Trace", case.example, case.scenario);
+            let permuted = run(&p, &stimulus, &options_of(&case, &p, Some(seed))).expect("Lauf").trace.render();
+            assert_eq!(permuted, golden, "{}/{}: Reihenfolge {seed} aendert den Trace", case.example, case.scenario);
         }
     }
 }
@@ -170,8 +171,55 @@ fn every_golden_trace_round_trips() {
 
 #[test]
 fn a_failing_run_reports_fail() {
-    // 13.5: ein Fault, der sein Ziel erreicht, macht den Lauf FAIL.
-    let failing = cases().iter().filter(|c| c.verdict == "FAIL").count();
+    // 13.5: FAIL heisst ein Fault hat sein Ziel erreicht, ein `verify` ist
+    // verletzt, ein `verdict fail` oder eine Eigenschaft ist gebrochen. Jeder
+    // FAIL-Lauf des Manifests nennt seinen Grund im Trace; kein anderer Lauf
+    // endet mit FAIL.
+    let cases = cases();
+    let failing = cases.iter().filter(|c| c.verdict == "FAIL").count();
     assert!(failing >= 5, "zu wenige FAIL-Szenarien: {failing}");
-    assert_ne!(Verdict::Fail.name(), Verdict::Pass.name());
+    let reason = |line: &str| {
+        line.contains(" fault ")
+            || line.contains(" verify ") && line.contains(" fail ")
+            || line.contains(" verdict ") && line.contains(" fail")
+            || line.contains(" violated ")
+    };
+    for case in &cases {
+        let stim_text = stimulus_text(case);
+        let stimulus = Trace::parse(&stim_text).expect("Stimulus lesbar");
+        let p = program(&case.example, case.profile.as_deref());
+        let result = run(&p, &stimulus, &options_of(case, &p, None)).expect("Lauf");
+        let text = result.trace.render();
+        let fails = result.verdict == Verdict::Fail;
+        assert_eq!(fails, case.verdict == "FAIL", "{}/{}: {:?}", case.example, case.scenario, result.verdict);
+        if fails {
+            assert!(text.lines().any(reason), "{}/{}: FAIL ohne Grund im Trace:\n{text}", case.example, case.scenario);
+        }
+    }
+}
+
+/// **Jedes Szenario zeigt, was sein Manifest beschreibt** (KOR-031): Die
+/// Zeilen aus `<szenario>.expect` stehen in dieser Reihenfolge im
+/// Golden-Trace. Den Trace schreibt `UPDATE_GOLDEN`; die Erwartung steht von
+/// Hand daneben und faellt auf, wenn ein neuer Golden-Trace die
+/// beschriebene Aussage verliert.
+#[test]
+fn every_scenario_shows_its_expected_lines() {
+    for case in cases() {
+        let dir = root().join(&case.example);
+        let expect_path = dir.join(format!("{}.expect", case.scenario));
+        let expected =
+            std::fs::read_to_string(&expect_path).unwrap_or_else(|e| panic!("{}: {e}", expect_path.display()));
+        let golden_path = dir.join(format!("{}.golden.trace", case.scenario));
+        let golden = std::fs::read_to_string(&golden_path).unwrap_or_else(|e| panic!("{}: {e}", golden_path.display()));
+        let mut lines = golden.lines();
+        for want in expected.lines().filter(|l| !l.trim().is_empty()) {
+            assert!(
+                lines.any(|l| l == want),
+                "{}/{}: `{want}` fehlt oder steht nicht in dieser Reihenfolge",
+                case.example,
+                case.scenario
+            );
+        }
+    }
 }

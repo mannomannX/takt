@@ -59,6 +59,10 @@ pub const REPORTS_PER_SECTOR: usize = SECTOR / PAYLOAD;
 /// sein muss — siehe [`check`].
 pub const APP_ORIGIN: u32 = 0x0800_4000;
 
+/// Das Ende des Flash: 256 KiB des STM32F401CC, wie `memory.x` des
+/// Bring-ups (`LENGTH = 240K` ab [`APP_ORIGIN`]).
+pub const APP_END: u32 = 0x0804_0000;
+
 /// Die Kennung, mit der jeder Befehl beginnt.
 pub const MAGIC: [u8; 6] = *b"WeAct:";
 
@@ -151,6 +155,15 @@ pub fn check(image: &[u8]) -> Result<(), ImageError> {
     if reset % 2 == 0 {
         return Err(ImageError::ResetNotThumb(reset));
     }
+    let room = (APP_END - APP_ORIGIN) as usize;
+    if image.len() > room {
+        return Err(ImageError::TooLarge(image.len()));
+    }
+    // Das Abbild reicht bis `APP_ORIGIN + len`; der Einsprung (ohne das
+    // Thumb-Bit) muss ein Halbwort darin sein.
+    if u64::from(reset - 1) + 2 > u64::from(APP_ORIGIN) + image.len() as u64 {
+        return Err(ImageError::ResetBeyondImage(reset));
+    }
     Ok(())
 }
 
@@ -165,6 +178,10 @@ pub enum ImageError {
     ResetBeforeApp(u32),
     /// Der Resetvektor ist gerade; der Cortex-M erwartet Thumb.
     ResetNotThumb(u32),
+    /// Der Resetvektor zeigt hinter das Abbild.
+    ResetBeyondImage(u32),
+    /// Das Abbild ist groesser als der Anwendungsbereich (Byte).
+    TooLarge(usize),
 }
 
 impl core::fmt::Display for ImageError {
@@ -180,6 +197,14 @@ impl core::fmt::Display for ImageError {
                  wuerde im Bootloaderbereich landen. `memory.x` pruefen."
             ),
             ImageError::ResetNotThumb(r) => write!(f, "Resetvektor {r:#010x} ist gerade; Thumb verlangt ungerade"),
+            ImageError::ResetBeyondImage(r) => {
+                write!(f, "Resetvektor {r:#010x} zeigt hinter das Abbild; ist es vollstaendig?")
+            }
+            ImageError::TooLarge(n) => write!(
+                f,
+                "Abbild mit {n} Byte passt nicht in den Anwendungsbereich ({} Byte ab {APP_ORIGIN:#010x})",
+                APP_END - APP_ORIGIN
+            ),
         }
     }
 }
@@ -289,5 +314,26 @@ mod tests {
     #[test]
     fn a_short_image_is_refused() {
         assert_eq!(check(&[0u8; 4]), Err(ImageError::TooShort));
+    }
+
+    /// **Ein Resetvektor hinter dem Abbild wird abgelehnt**: Er zeigte in
+    /// geloeschten Flash oder in ein altes Programm, und das Board liefe
+    /// in die Irre. Der letzte Halbwort-Platz im Abbild geht noch.
+    #[test]
+    fn a_reset_vector_beyond_the_image_is_refused() {
+        let mut v = good_image(1024);
+        v[4..8].copy_from_slice(&(APP_ORIGIN + 1024 + 1).to_le_bytes());
+        assert_eq!(check(&v), Err(ImageError::ResetBeyondImage(APP_ORIGIN + 1025)));
+        v[4..8].copy_from_slice(&(APP_ORIGIN + 1022 + 1).to_le_bytes());
+        assert_eq!(check(&v), Ok(()));
+    }
+
+    /// **Ein Abbild, das nicht in den Anwendungsbereich passt, wird
+    /// abgelehnt**, bevor der Bootloader den Rest still abschneidet.
+    #[test]
+    fn an_image_larger_than_the_flash_is_refused() {
+        let room = (APP_END - APP_ORIGIN) as usize;
+        assert_eq!(check(&good_image(room)), Ok(()));
+        assert_eq!(check(&good_image(room + 1)), Err(ImageError::TooLarge(room + 1)));
     }
 }

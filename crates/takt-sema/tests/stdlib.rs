@@ -226,3 +226,103 @@ machine m every 10 ms:
     let last = t.lines().rev().find(|l| l.contains("out u ")).expect("Ausgabe");
     assert!(last.ends_with("out u 10000 mpct"), "{last}");
 }
+
+/// Die Bloecke des Codeblocks in 11.4 mit den Methoden, die er nennt:
+/// das Segment nach dem Kopf, Namen vor `(`, getrennt durch ` / `.
+/// Klammerbemerkungen (`(3.9; take(n) … offen …)`) und Kommentare nennen
+/// keine Methode.
+fn block_methods_of_11_4() -> Vec<(String, Vec<String>)> {
+    let reference = include_str!("../../../plan/definition.md");
+    let start = reference.find("### 11.4 ").expect("11.4");
+    let block = &reference[start..];
+    let block = &block[block.find("```\n").expect("Codeblock") + 4..];
+    let block = &block[..block.find("```").expect("Ende des Codeblocks")];
+    let ident = |s: &str| -> String { s.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect() };
+    let mut out = Vec::new();
+    for line in block.lines() {
+        let Some(rest) = line.strip_prefix("block ") else { continue };
+        let line = rest.split('#').next().unwrap_or_default();
+        let mut segments = line.split("  ").map(str::trim).filter(|s| !s.is_empty() && !s.starts_with('('));
+        let head = segments.next().unwrap_or_default();
+        let methods: Vec<String> = segments
+            .flat_map(|seg| seg.split(" / "))
+            .filter(|part| {
+                ident(part.trim()).len() < part.trim().len() && part.trim()[ident(part.trim()).len()..].starts_with('(')
+            })
+            .map(|part| ident(part.trim()))
+            .collect();
+        for name in head.split(" / ").map(|b| ident(b.trim())) {
+            out.push((name, methods.clone()));
+        }
+    }
+    out
+}
+
+/// Die Methoden eines Blocks im Prelude: Zeilen `    name(` in seinem Rumpf.
+fn prelude_methods(block: &str) -> Vec<String> {
+    let prelude = include_str!("../src/prelude.takt");
+    let mut lines = prelude.lines().skip_while(|l| {
+        !l.strip_prefix("block ")
+            .and_then(|r| r.strip_prefix(block))
+            .is_some_and(|r| r.starts_with('[') || r.starts_with('('))
+    });
+    assert!(lines.next().is_some(), "`block {block}` fehlt im Prelude");
+    lines
+        .take_while(|l| l.is_empty() || l.starts_with(' '))
+        .filter_map(|l| l.strip_prefix("    ").filter(|r| !r.starts_with(' ')))
+        .filter_map(|r| r.split_once('(').map(|(name, _)| name.to_string()))
+        .filter(|name| name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .collect()
+}
+
+/// **Jede Methode, die 11.4 einem Block gibt, hat er im Prelude.**
+#[test]
+fn every_block_method_of_11_4_exists() {
+    let blocks = block_methods_of_11_4();
+    assert!(blocks.len() > 20, "der Codeblock wird nicht gelesen: {blocks:?}");
+    assert!(blocks.iter().any(|(b, m)| b == "writer" && m.contains(&"patch_u16".to_string())), "{blocks:?}");
+    let mut missing = Vec::new();
+    for (block, methods) in &blocks {
+        let have = prelude_methods(block);
+        for m in methods {
+            if !have.contains(m) {
+                missing.push(format!("{block}.{m} (im Prelude: {have:?})"));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "11.4 nennt, der Prelude hat nicht:\n{}", missing.join("\n"));
+}
+
+/// Das `dt` der Bloecke liegt in `tick..1 h` (Prelude): ein Literal
+/// daneben ist ein Fehler, ein Wert daneben zur Laufzeit ein `RangeFault`.
+#[test]
+fn dt_outside_tick_to_one_hour_is_refused() {
+    for dt in ["0 ms", "2 h"] {
+        let src = format!(
+            "{HEAD}output y : float[V] @ hw(\"o/y\") with safe = 0 V
+machine m:
+    var f = lowpass[V](tau = 10 ms)
+    initial RUN
+    state RUN:
+        loop:
+            y = f.step(1 V, {dt})
+"
+        );
+        let out = takt_sema::compile(&src, &Options::default());
+        let e: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+        assert!(e.len() == 1 && e[0].contains("SC-3") && e[0].contains("Dauer ausserhalb der Range"), "{dt}: {e:?}");
+    }
+    let p = compile(
+        "output y : float[V] @ hw(\"o/y\") with safe = 0 V
+machine m:
+    var f = lowpass[V](tau = 10 ms)
+    var d : Duration = 0 ms
+    initial RUN
+    state RUN:
+        loop:
+            y = f.step(1 V, d)
+",
+    );
+    let t = trace(&p, "", 1);
+    assert!(t.contains("t=0 fault m RangeFault \"0 ns ausserhalb der Range\""), "{t}");
+}

@@ -1,0 +1,8 @@
+t=0 state ctrl ARMING
+t=0 out dip 0.0 V
+t=0 out peak 0.0 V
+t=0 out count 0
+t=2 out dip 0.5 V
+t=2 out peak 3.0 V
+t=2 out count 4
+t=6 verdict-final INCONCLUSIVE

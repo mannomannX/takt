@@ -1,0 +1,115 @@
+(system
+  (tick 1ms)
+  (target baremetal)
+  (float f32))
+(native-fn sha256_init () -> Sha256Ctx cost=8 stack=320)
+(native-fn sha256_update (ctx:Sha256Ctx chunk:bytes<4096>) -> Sha256Ctx cost={i32:130000} stack=544)
+(native-fn sha256_final (ctx:Sha256Ctx) -> bytes<32> cost=3600 stack=640)
+(native-job ecdsa_p256_verify (key:bytes<64> digest:bytes<32> sig:bytes<64>) -> bool cost=300 stack=5600 duration=120ms)
+(enum HeaderErr
+  (MAGIC)
+  (SIZE)
+  (VERSION))
+(record ImageHeader layout=little
+  (magic: u8 = 0xE9)
+  (version: u32)
+  (size: u32)
+  (entry: u32)
+  (hash: bytes<32>)
+  (sig: bytes<64>))
+(record BootKeys
+  (pubkey: bytes<64>)
+  (min_version: u32))
+(input flash_status :FlashStatus @hw("flash/status") max_age=10ms)
+(input flash_rx :stream<bytes<4096>> @hw("flash/rx") max_rate=200[Hz] capacity=2)
+(output flash_cmd :FlashCmd @hw("flash/cmd") safe=NONE)
+(input keys :BootKeys @hw("boot/keys"))
+(input confirmed :[2]bool @hw("boot/confirmed"))
+(output slot :u8 @hw("boot/slot") safe=0)
+(output next_run :NextRun @hw("sys/next_run") safe=NONE)
+(const SLOT_BASE :[2]u32 (array 0x10000 0x110000))
+(const HEADER_LEN :u32 109)
+(param MAX_TRIALS :int in 1..5 3)
+(fn parse_header (b:bytes<4096> min_version:u32) -> ImageHeader!HeaderErr
+  (var h (.decode ImageHeader b))
+  (if (not (.valid h))
+    (return (ERR MAGIC)))
+  (if (> (.size h) 1048576)
+    (return (ERR SIZE)))
+  (if (< (.version h) min_version)
+    (return (ERR VERSION)))
+  (return (OK h)))
+(machine bootloader
+  (fault -> HALT)
+  (persist trials :[2]int in 0..5 (array 0 0))
+  (persist active :int in 0..1 0)
+  (var idx :int in 0..1 0)
+  (var hdr :ImageHeader!HeaderErr (ERR MAGIC))
+  (var img :ImageHeader default)
+  (var ctx :Sha256Ctx (call sha256_init))
+  (var done :u32 0)
+  (initial SELECT)
+  (state SELECT
+    (enter
+      (= idx active)
+      (for i in (range 2)
+        (if (.or (index confirmed i) false)
+          (= (index trials i) 0)))
+      (if (and (>= (index trials idx) MAX_TRIALS) (< (index trials (- 1 idx)) MAX_TRIALS))
+        (= idx (- 1 idx)))
+      (if (< (index trials idx) 5)
+        (+= (index trials idx) 1)))
+    (when (<= (index trials idx) MAX_TRIALS) -> READ_HEADER)
+    (when true -> HALT))
+  (state READ_HEADER
+    (enter
+      (= flash_cmd (READ addr=(index SLOT_BASE idx) size=4096)))
+    (when (as flash_rx c) -> CHECK_HEADER
+      (= hdr (call parse_header (.data c) (.min_version keys)))
+      (= flash_cmd NONE))
+    (after 50ms -> SLOT_FAILED))
+  (state CHECK_HEADER
+    (when (.ok hdr) -> HASHING
+      (= img hdr)
+      (= ctx (call sha256_init))
+      (= done 0))
+    (when true -> SLOT_FAILED
+      (log "slot {idx}: bad header ({hdr.err})")))
+  (state HASHING
+    (loop
+      (if (and (== flash_status IDLE) (< done (.size img)))
+        (= flash_cmd (READ addr=(+ (+ (index SLOT_BASE idx) HEADER_LEN) done) size=(call min 4096 (- (.size img) done))))))
+    (on flash_rx as c
+      (= ctx (call sha256_update ctx (.data c)))
+      (+= done (as (.len (.data c)) u32))
+      (= flash_cmd NONE))
+    (when (>= done (.size img)) -> VERIFY)
+    (after 5s -> SLOT_FAILED))
+  (state VERIFY
+    (fault -> SLOT_FAILED)
+    (sequence
+      (var digest (call sha256_final ctx))
+      (expect (== digest (.hash img)) "hash mismatch in slot {idx}")
+      (job v ecdsa_p256_verify key=(.pubkey keys) digest=digest sig=(.sig img))
+      (until (.done v) timeout=500ms -> SLOT_FAILED)
+      (expect (.or (.result v) false) "signature invalid in slot {idx}")
+      (-> JUMP)))
+  (state JUMP
+    (enter
+      (= active idx)
+      (log "booting slot {idx}, version {img.version}")
+      (= slot (as (paren (+ idx 1)) u8))
+      (= next_run ON_START)))
+  (state SLOT_FAILED
+    (enter
+      (= flash_cmd NONE)
+      (log "slot {idx} unusable"))
+    (when (< (index trials (- 1 idx)) MAX_TRIALS) -> READ_HEADER
+      (= idx (- 1 idx))
+      (if (< (index trials idx) 5)
+        (+= (index trials idx) 1)))
+    (when true -> HALT))
+  (state HALT
+    (enter
+      (log "no bootable image")
+      (= next_run ON_START))))

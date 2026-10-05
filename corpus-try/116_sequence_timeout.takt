@@ -1,0 +1,28 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# `sequence with timeout = d -> X` (Census SequenceTimeout, FB-13): jedes
+# `until` ohne eigenes `timeout` erbt den Segment-Default; das zweite
+# wartet auf k >= 100, das erst nach 20 ms kaeme, und laeuft in Tick 24 nach SLOW.
+
+output phase : int in 0..9 @ hw("o/phase") with safe = 0
+
+machine m:
+    var k : int in 0..100 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            if k < 100:
+                k += 1
+        sequence with timeout = 20 ms -> SLOW:
+            phase = 1
+            until k >= 5
+            phase = 2
+            until k >= 100
+            phase = 3
+
+    state SLOW:
+        enter:
+            phase = 9

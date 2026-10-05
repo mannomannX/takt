@@ -2,25 +2,11 @@
 //! gleicher Baum, idempotent, Kommentare erhalten, nicht mehr Leerzeilen, und
 //! eine zerknitterte Variante formatiert zum selben Ergebnis.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use takt_syntax::fmt::verify;
 use takt_syntax::{TokenKind, format, format_snippet, tokenize};
-
-fn corpus_root() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try"))
-}
-
-fn takt_files(dir: &Path, positive_only: bool) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
-        .expect("Verzeichnis lesbar")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "takt"))
-        .filter(|p| !positive_only || !p.file_name().and_then(|n| n.to_str()).unwrap_or_default().starts_with("n0"))
-        .collect();
-    files.sort();
-    files
-}
+use takt_testkit::corpus;
 
 /// Zerknittert eine Datei, ohne Tokens oder Bedeutung zu aendern: doppelter
 /// Leerraum zwischen Tokens, verschobene Fortsetzungszeilen, Kommentare ohne
@@ -108,7 +94,7 @@ fn check(path: &Path, snippet: bool, failures: &mut Vec<String>) {
 #[test]
 fn corpus_roundtrips() {
     let mut failures = Vec::new();
-    for path in takt_files(&corpus_root(), true) {
+    for path in corpus::programs() {
         check(&path, false, &mut failures);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -117,7 +103,7 @@ fn corpus_roundtrips() {
 #[test]
 fn reference_snippets_roundtrip() {
     let mut failures = Vec::new();
-    let files = takt_files(&corpus_root().join("ref"), false);
+    let files = corpus::takt_files(&corpus::root().join("ref"));
     assert!(files.len() > 30);
     for path in files {
         check(&path, true, &mut failures);
@@ -129,4 +115,45 @@ fn reference_snippets_roundtrip() {
 fn broken_input_is_left_alone() {
     assert!(format("machine m:\n    state A:\n        pass\n").is_err());
     assert!(format("x = 1\ty\n").is_err());
+}
+
+/// Alle `.takt`-Dateien unter `dir`, rekursiv und sortiert.
+fn takt_files_below(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    for path in entries {
+        if path.is_dir() {
+            takt_files_below(&path, out);
+        } else if path.extension().is_some_and(|x| x == "takt") {
+            out.push(path);
+        }
+    }
+}
+
+/// Die Rundreise gilt fuer jedes Programm im Repository, nicht nur fuer den
+/// Korpus: Pruefungs-Korpora, Simulationen, Konformitaets-, Bringup- und
+/// Beispielprogramme. Ausgenommen ist nur, was einen Syntaxfehler ankuendigt
+/// (`#~ E_…`, `P` oder `SC-50` fuer ein reserviertes Wort).
+#[test]
+fn every_other_program_roundtrips() {
+    let workspace = corpus::root().join("..");
+    let mut files = Vec::new();
+    for dir in ["corpus-try/checks", "corpus-try/sim", "crates", "examples"] {
+        takt_files_below(&workspace.join(dir), &mut files);
+    }
+    assert!(files.len() > 200, "zu wenige Programme: {}", files.len());
+    let mut failures = Vec::new();
+    for path in files {
+        let src = std::fs::read_to_string(&path).expect("lesbar");
+        let syntax_error = takt_testkit::expect::expectations(&src)
+            .iter()
+            .any(|e| e.code == "P" || e.code == "SC-50" || e.code.starts_with("E_"));
+        if !syntax_error && let Err(e) = verify(&src, false) {
+            failures.push(format!("{}: {e}", path.strip_prefix(&workspace).unwrap_or(&path).display()));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

@@ -53,6 +53,10 @@ impl Reason {
 #[derive(Clone, Debug, Default)]
 pub struct Nvm {
     entries: HashMap<u64, Value>,
+    /// Eintraege, deren Bytes keine kanonische Form ihres Typs sind: Sie
+    /// sind vorhanden und ungueltig, nicht fehlend (5.9). Die Bytes bleiben,
+    /// damit eine Aufzeichnung genau diesen Speicher wiedergibt (12.5).
+    undecodable: HashMap<u64, Vec<u8>>,
 }
 
 impl Nvm {
@@ -63,6 +67,7 @@ impl Nvm {
 
     /// Legt einen Wert ab.
     pub fn put(&mut self, type_hash: u64, value: Value) {
+        self.undecodable.remove(&type_hash);
         self.entries.insert(type_hash, value);
     }
 
@@ -73,16 +78,44 @@ impl Nvm {
 
     /// Leer?
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.undecodable.is_empty()
     }
 
     /// Holt den Wert fuer eine `persist`-Variable und prueft ihn (5.9).
     pub fn load(&self, p: &Program, type_hash: u64, ty: TypeId) -> (Load, Option<Value>) {
+        if self.undecodable.contains_key(&type_hash) {
+            return (Load::Reset(Reason::Shape), None);
+        }
         let Some(v) = self.entries.get(&type_hash) else { return (Load::Absent, None) };
         match validate(p, v, ty) {
             Ok(()) => (Load::Loaded, Some(v.clone())),
             Err(r) => (Load::Reset(r), None),
         }
+    }
+
+    /// Der ganze Speicher als Nutzlast in der Form des Journals, nach
+    /// Typ-Hash sortiert: s0 fuer den Kopf einer Aufzeichnung (12.5).
+    /// `from_program_payload` liest ihn zurueck. Ein Wert, den sein Typ
+    /// nicht kodiert, steht ohne Bytes da und laedt wieder als ungueltig.
+    pub fn snapshot(&self, p: &Program) -> Vec<u8> {
+        let types: HashMap<u64, TypeId> = persist_types(p);
+        let mut all: Vec<(u64, Vec<u8>)> = self
+            .entries
+            .iter()
+            .map(|(h, v)| {
+                let bytes = types.get(h).and_then(|ty| crate::bytes::encode(p, v, *ty).ok()).unwrap_or_default();
+                (*h, bytes)
+            })
+            .chain(self.undecodable.iter().map(|(h, b)| (*h, b.clone())))
+            .collect();
+        all.sort_by_key(|(h, _)| *h);
+        let mut out = Vec::new();
+        for (hash, bytes) in all {
+            out.extend_from_slice(&hash.to_le_bytes());
+            out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            out.extend_from_slice(&bytes);
+        }
+        out
     }
 
     /// Die Nutzlast eines Journal-Slots aus dem Programmzustand.
@@ -106,20 +139,18 @@ impl Nvm {
     /// Liest eine Journal-Nutzlast in den Speicher; die Typen kommen aus
     /// dem Programm.
     pub fn from_program_payload(&mut self, p: &Program, bytes: &[u8]) {
-        let types: HashMap<u64, TypeId> = p
-            .machines
-            .iter()
-            .flat_map(|m| m.persist.iter().map(|pv| (pv.type_hash, m.vars[pv.var.index()].ty)))
-            .collect();
-        self.from_payload(p, bytes, &types);
+        self.from_payload(p, bytes, &persist_types(p));
     }
 
     /// Liest eine Journal-Nutzlast in den Speicher.
     ///
     /// Ein Eintrag, dessen Typ-Hash kein Programm mehr kennt, wird
     /// uebersprungen — genau die Wirkung, die der Hash haben soll. Ein
-    /// verstuemmelter Rest beendet das Lesen, ohne das Bisherige zu
-    /// verwerfen: Der CRC hat den Eintrag schon bestaetigt.
+    /// Eintrag, dessen Bytes sich nicht dekodieren lassen (`bool`-Byte 2,
+    /// fremde Diskriminante), ist dagegen ungueltig: Default plus
+    /// `PersistReset` (5.9), wie im erzeugten Restore. Ein verstuemmelter
+    /// Rest beendet das Lesen, ohne das Bisherige zu verwerfen: Der CRC hat
+    /// den Eintrag schon bestaetigt.
     pub fn from_payload(&mut self, p: &Program, bytes: &[u8], types: &HashMap<u64, TypeId>) {
         let mut at = 0;
         while at + 12 <= bytes.len() {
@@ -129,12 +160,24 @@ impl Nvm {
             let Some(slice) = bytes.get(at..at + len) else { return };
             at += len;
             if let Some(ty) = types.get(&hash) {
-                if let Ok(v) = crate::bytes::decode(p, slice, *ty) {
-                    self.entries.insert(hash, v);
+                match crate::bytes::decode(p, slice, *ty) {
+                    Ok(v) => {
+                        self.undecodable.remove(&hash);
+                        self.entries.insert(hash, v);
+                    }
+                    Err(_) => {
+                        self.entries.remove(&hash);
+                        self.undecodable.insert(hash, slice.to_vec());
+                    }
                 }
             }
         }
     }
+}
+
+/// Typ-Hash und Typ jeder `persist`-Variablen des Programms.
+fn persist_types(p: &Program) -> HashMap<u64, TypeId> {
+    p.machines.iter().flat_map(|m| m.persist.iter().map(|pv| (pv.type_hash, m.vars[pv.var.index()].ty))).collect()
 }
 
 /// Passt ein gespeicherter Wert zu seinem Typ? Nur POD-Typen; alles andere
@@ -165,6 +208,16 @@ fn validate(p: &Program, v: &Value, ty: TypeId) -> Result<(), Reason> {
             let is32 = matches!(v, Value::F32(_));
             if is32 != (*width == takt_mir::types::FloatWidth::F32) {
                 return Err(Reason::Shape);
+            }
+            // 5.9: NaN und Inf sind keine gueltige Byteform, auch ohne Range;
+            // sonst kaeme ein nicht endlicher Wert in die Sprache (4.1).
+            let finite = match v {
+                Value::F32(x) => x.is_finite(),
+                Value::F64(x) => x.is_finite(),
+                _ => false,
+            };
+            if !finite {
+                return Err(Reason::Range);
             }
             ranged(v, range)
         }

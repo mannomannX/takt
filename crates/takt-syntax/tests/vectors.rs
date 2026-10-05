@@ -1,10 +1,13 @@
 //! Fuehrt die Testvektoren aus grammar/lexer.md aus.
 //!
 //! Notation (siehe lexer.md, Einleitung): `"eingabe" => TOKENS`, `!` markiert
-//! Fehlervektoren, `~` zwischen Tokens verlangt das Flag *anliegend*.
+//! Fehlervektoren, `~` zwischen Tokens verlangt das Flag *anliegend*, `_` das
+//! Gegenteil; `@zeile:spalte` hinter einem Token oder Fehlercode verlangt dessen
+//! Stelle. Ein Fehlervektor nennt alle Fehler der Eingabe in Reihenfolge, auf
+//! Wunsch gefolgt von `=> TOKENS`, der Folge trotz der Fehler (L9).
 
 use takt_syntax::subtext::{FormatPiece, PatternPiece, address_text, format_text, pattern_text};
-use takt_syntax::{TokenKind, tokenize};
+use takt_syntax::{SourceMap, TokenKind, Tokens, tokenize};
 
 struct Vector {
     block: String,
@@ -23,6 +26,8 @@ fn load() -> Vec<Vector> {
     while i < lines.len() {
         if lines[i].trim() == "```" && i + 1 < lines.len() && lines[i + 1].starts_with("vectors") {
             let block = lines[i + 1].trim().to_string();
+            let opened = i + 2;
+            let before = vectors.len();
             i += 2;
             while i < lines.len() && lines[i].trim() != "```" {
                 if let Some(v) = parse_vector(&block, i + 1, lines[i]) {
@@ -30,6 +35,7 @@ fn load() -> Vec<Vector> {
                 }
                 i += 1;
             }
+            assert!(vectors.len() > before, "lexer.md:{opened}: Block {block} ohne Vektor");
         }
         i += 1;
     }
@@ -37,6 +43,8 @@ fn load() -> Vec<Vector> {
     vectors
 }
 
+/// Liest eine Zeile eines Vektorblocks. Jede nicht leere Zeile muss ein Vektor
+/// sein: Ein Tippfehler soll scheitern, nicht still einen Vektor loeschen.
 fn parse_vector(block: &str, line: usize, raw: &str) -> Option<Vector> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -46,10 +54,10 @@ fn parse_vector(block: &str, line: usize, raw: &str) -> Option<Vector> {
         Some(r) => (true, r),
         None => (false, raw),
     };
-    let rest = rest.strip_prefix('"')?;
+    let rest = rest.strip_prefix('"').unwrap_or_else(|| panic!("lexer.md:{line}: keine Vektorzeile: {raw}"));
     let (input, after) = decode_input(rest);
-    let expected = after.trim_start().strip_prefix("=>").expect("=> fehlt").trim().to_string();
-    Some(Vector { block: block.to_string(), line, negative, input, expected })
+    let expected = after.trim_start().strip_prefix("=>").unwrap_or_else(|| panic!("lexer.md:{line}: => fehlt"));
+    Some(Vector { block: block.to_string(), line, negative, input, expected: expected.trim().to_string() })
 }
 
 /// Liest den Eingabetext bis zum schliessenden Anfuehrungszeichen und loest die
@@ -102,11 +110,27 @@ fn decode_expected_text(s: &str) -> String {
     decode_escapes(s)
 }
 
-/// Ein erwartetes Element: Art, Text und ob das naechste Token anliegen muss.
+/// Ein erwartetes Element: Art, Text, ob das naechste Token anliegen muss
+/// (`~` ja, `_` nein, sonst ungeprueft) und die Stelle.
 struct Item {
     kind: String,
     text: Option<String>,
-    joint_next: bool,
+    joint_next: Option<bool>,
+    at: Option<(u32, u32)>,
+}
+
+/// Trennt eine Stelle `@zeile:spalte` vom Ende eines Elements ab. Ein `@`
+/// in Klammern (`STRING(a@b)`) und der Operator `@` selbst bleiben.
+fn split_at(piece: &str) -> (&str, Option<(u32, u32)>) {
+    if let Some(i) = piece.rfind('@')
+        && i > 0
+        && (piece[..i].ends_with(')') || !piece[..i].contains('('))
+        && let Some((l, c)) = piece[i + 1..].split_once(':')
+        && let (Ok(l), Ok(c)) = (l.parse(), c.parse())
+    {
+        return (&piece[..i], Some((l, c)));
+    }
+    (piece, None)
 }
 
 /// Zerlegt die Erwartung an Leerraum, aber nicht innerhalb von Klammern
@@ -146,10 +170,11 @@ fn parse_items(expected: &str) -> Vec<Item> {
     let mut items = Vec::new();
     for group in split_groups(expected) {
         let group = group.as_str();
-        if group == "~" {
-            items.push(Item { kind: "OP".into(), text: Some("~".into()), joint_next: false });
+        if let ("~", at) = split_at(group) {
+            items.push(Item { kind: "OP".into(), text: Some("~".into()), joint_next: None, at });
             continue;
         }
+        // Stuecke mit dem Zeichen, das auf sie folgt (`~` oder `_`).
         let mut pieces = Vec::new();
         let mut depth = 0;
         let mut current = String::new();
@@ -163,23 +188,21 @@ fn parse_items(expected: &str) -> Vec<Item> {
                     depth -= 1;
                     current.push(c);
                 }
-                '~' if depth == 0 => pieces.push(std::mem::take(&mut current)),
+                '~' | '_' if depth == 0 => pieces.push((std::mem::take(&mut current), Some(c == '~'))),
                 _ => current.push(c),
             }
         }
-        pieces.push(current);
-        let n = pieces.len();
-        for (k, piece) in pieces.into_iter().enumerate() {
+        pieces.push((current, None));
+        for (piece, joint_next) in pieces {
+            let (piece, at) = split_at(&piece);
             let (kind, text) = match piece.find('(') {
                 Some(p) if piece.ends_with(')') && piece[..p].bytes().all(|b| b.is_ascii_uppercase() || b == b'_') => {
                     (piece[..p].to_string(), Some(piece[p + 1..piece.len() - 1].to_string()))
                 }
-                _ if matches!(piece.as_str(), "NEWLINE" | "INDENT" | "DEDENT" | "WILD" | "ANY") => {
-                    (piece.clone(), None)
-                }
-                _ => ("OP".to_string(), Some(piece.clone())),
+                _ if matches!(piece, "NEWLINE" | "INDENT" | "DEDENT" | "WILD" | "ANY") => (piece.to_string(), None),
+                _ => ("OP".to_string(), Some(piece.to_string())),
             };
-            items.push(Item { kind, text, joint_next: k + 1 < n });
+            items.push(Item { kind, text, joint_next, at });
         }
     }
     items
@@ -211,31 +234,51 @@ fn kind_name(kind: TokenKind) -> &'static str {
 
 fn check_main(v: &Vector) -> Result<(), String> {
     let toks = tokenize(&v.input);
-    if v.negative {
-        let (want_code, want_detail) = match v.expected.split_once('(') {
+    let map = SourceMap::single("", v.input.as_str());
+    let found = || toks.errors.iter().map(|e| format!("{}@{:?}", e.code, map.line_col(e.span))).collect::<Vec<_>>();
+    // L9: Jeder Fehler nennt einen Vorschlag.
+    if let Some(e) = toks.errors.iter().find(|e| e.suggestion.is_none()) {
+        return Err(format!("Fehler ohne Vorschlag: {e}"));
+    }
+    if !v.negative {
+        if let Some(e) = toks.errors.first() {
+            return Err(format!("unerwarteter Fehler: {e}"));
+        }
+        return check_tokens(&toks, &v.input, &v.expected);
+    }
+    let (errors, rest) = match v.expected.split_once("=>") {
+        Some((e, r)) => (e.trim(), Some(r.trim())),
+        None => (v.expected.as_str(), None),
+    };
+    let wanted = split_groups(errors);
+    if wanted.len() != toks.errors.len() {
+        return Err(format!("{} Fehler erwartet, erhalten {:?}", wanted.len(), found()));
+    }
+    for (want, got) in wanted.iter().zip(&toks.errors) {
+        let (want, at) = split_at(want);
+        let (code, detail) = match want.split_once('(') {
             Some((c, d)) => (c, Some(d.trim_end_matches(')'))),
-            None => (v.expected.as_str(), None),
+            None => (want, None),
         };
-        let first = toks.errors.first().ok_or_else(|| format!("erwartet {want_code}, aber kein Fehler"))?;
-        if first.code != want_code {
-            return Err(format!("erwartet {want_code}, erhalten {}", first));
+        let place = map.line_col(got.span);
+        if got.code != code || detail.is_some_and(|d| !got.message.contains(d)) || at.is_some_and(|a| a != place) {
+            return Err(format!("erwartet {want} {at:?}, erhalten {got} {place:?}"));
         }
-        if let Some(d) = want_detail {
-            if !first.message.contains(d) {
-                return Err(format!("erwartet {want_code}({d}), erhalten {}", first));
-            }
-        }
-        return Ok(());
     }
-    if let Some(e) = toks.errors.first() {
-        return Err(format!("unerwarteter Fehler: {e}"));
+    match rest {
+        Some(rest) => check_tokens(&toks, &v.input, rest),
+        None => Ok(()),
     }
-    let items = parse_items(&v.expected);
+}
+
+/// Vergleicht die Tokenfolge (ohne `Eof`) mit der Erwartung.
+fn check_tokens(toks: &Tokens<'_>, input: &str, expected: &str) -> Result<(), String> {
+    let items = parse_items(expected);
     let mut actual: Vec<_> = toks.tokens.iter().filter(|t| t.kind != TokenKind::Eof).collect();
     // Notation: Ohne Zeilenende in der Eingabe darf das NEWLINE aus L1.3 in der
     // Erwartung entfallen.
     let expects_newline = items.last().is_some_and(|it| it.kind == "NEWLINE");
-    if !v.input.ends_with('\n') && !expects_newline && actual.last().is_some_and(|t| t.kind == TokenKind::Newline) {
+    if !input.ends_with('\n') && !expects_newline && actual.last().is_some_and(|t| t.kind == TokenKind::Newline) {
         actual.pop();
     }
     let show = |list: Vec<String>| list.join(" ");
@@ -273,16 +316,25 @@ fn check_main(v: &Vector) -> Result<(), String> {
                 toks.text(t)
             ));
         }
-        if item.joint_next && !t.joint {
-            return Err(format!("{}({}) muss anliegen; Folge: {actual_shown}", kind, toks.text(t)));
+        if item.joint_next.is_some_and(|j| j != t.joint) {
+            let how = if t.joint { "darf nicht anliegen" } else { "muss anliegen" };
+            return Err(format!("{}({}) {how}; Folge: {actual_shown}", kind, toks.text(t)));
+        }
+        if item.at.is_some_and(|at| at != (t.line, t.col)) {
+            return Err(format!("{}({}) steht an {}:{}; Folge: {actual_shown}", kind, toks.text(t), t.line, t.col));
         }
     }
     Ok(())
 }
 
 fn check_sub(v: &Vector) -> Result<(), String> {
-    let actual: Result<Vec<String>, &str> = match v.block.as_str() {
-        "vectors-format" => format_text(&v.input).map_err(|e| e.code).map(|ps| {
+    // Fehler als `CODE@spalte`, die Spalte ab 1 im Stringinhalt.
+    let shown = |e: takt_syntax::Diagnostic| {
+        assert!(e.suggestion.is_some(), "Fehler ohne Vorschlag: {e}");
+        format!("{}@{}", e.code, e.span.start + 1)
+    };
+    let actual: Result<Vec<String>, String> = match v.block.as_str() {
+        "vectors-format" => format_text(&v.input).map_err(shown).map(|ps| {
             ps.into_iter()
                 .map(|p| match p {
                     FormatPiece::Text(t) => format!("TEXT({t})"),
@@ -291,7 +343,7 @@ fn check_sub(v: &Vector) -> Result<(), String> {
                 })
                 .collect()
         }),
-        "vectors-pattern" => pattern_text(&v.input).map_err(|e| e.code).map(|ps| {
+        "vectors-pattern" => pattern_text(&v.input).map_err(shown).map(|ps| {
             ps.into_iter()
                 .map(|p| match p {
                     PatternPiece::Text(t) => format!("TEXT({t})"),
@@ -300,7 +352,7 @@ fn check_sub(v: &Vector) -> Result<(), String> {
                 })
                 .collect()
         }),
-        "vectors-address" => address_text(&v.input).map_err(|e| e.code).map(|segs| {
+        "vectors-address" => address_text(&v.input).map_err(shown).map(|segs| {
             let mut out = Vec::new();
             for s in segs {
                 out.push(format!("SEG({})", s.name));
@@ -313,7 +365,8 @@ fn check_sub(v: &Vector) -> Result<(), String> {
         other => return Err(format!("unbekannter Block {other}")),
     };
     match (v.negative, actual) {
-        (true, Err(code)) if code == v.expected => Ok(()),
+        // Ohne `@spalte` in der Erwartung zaehlt nur der Code.
+        (true, Err(got)) if got == v.expected || got.split('@').next() == Some(v.expected.as_str()) => Ok(()),
         (true, Err(code)) => Err(format!("erwartet {}, erhalten {}", v.expected, code)),
         (true, Ok(pieces)) => Err(format!("erwartet {}, erhalten {}", v.expected, pieces.join(" "))),
         (false, Err(code)) => Err(format!("unerwarteter Fehler {}", code)),

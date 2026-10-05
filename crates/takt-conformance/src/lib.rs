@@ -34,6 +34,7 @@ mod ports;
 pub mod report;
 pub mod run;
 pub mod stimulus;
+pub mod suites;
 pub mod wire;
 
 pub use harness::Harness;

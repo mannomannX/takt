@@ -5,6 +5,7 @@
 //! direkt, damit Spezifikation und Implementierung nicht auseinanderlaufen.
 
 pub mod ast;
+pub mod census;
 pub mod edition;
 pub mod fmt;
 pub mod keywords;

@@ -1,0 +1,8 @@
+(output flash_cmd :FlashCmd @hw("flash/cmd") safe=NONE)
+(output flash_data :stream<u8> @hw("flash/tx") max_rate=4[MHz] capacity=4096)
+(input flash_status :FlashStatus @hw("flash/status") max_age=10ms)
+(input flash_rx :stream<bytes<4096>> @hw("flash/rx") max_rate=200[Hz] capacity=2)
+(sequence
+  (= flash_cmd (ERASE sector=n))
+  (until (== flash_status DONE) timeout=200ms -> FLASH_FAULT)
+  (= flash_cmd NONE))

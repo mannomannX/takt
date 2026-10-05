@@ -125,3 +125,39 @@ fn a_fault_disarms_the_triggers_of_its_machine() {
     assert!(t.contains("fault ctrl CheckFailed"), "kein Fault:\n{t}");
     assert!(!t.contains("out vbus false"), "der Trigger feuerte nach dem Fault:\n{t}");
 }
+
+/// 5.3, 7.5: Das Ereignis in Tick 2 plant `vbus = false` fuer Tick 4 in
+/// die Warteschlange des Besitzers. Ein Fault-Uebergang in Tick 3 — der
+/// Eintritt in `CUT` scheitert — leert sie, und das Fault-Ziel schreibt
+/// `vbus` nicht: Der veraltete Schreibvorgang darf nie ankommen.
+#[test]
+fn a_fault_drops_an_already_planned_trigger_output() {
+    let src = PROGRAM
+        .replace("machine ctrl:\n", "machine ctrl:\n    fault -> SAFE\n")
+        .replace(
+            "            phase = 2\n",
+            "            phase = 2\n\n        loop:\n            check false, \"sofort\"\n",
+        )
+        .replace(
+            "        after 100 ms: -> ARMING\n",
+            "        after 100 ms: -> ARMING\n\n    state SAFE:\n        enter:\n            phase = 7\n",
+        );
+    let t = trace(&src, "t=2 in dut_log Erasing sector 7\n", 10);
+    for line in ["t=3 fault ctrl CheckFailed \"sofort\" -> SAFE", "t=3 out phase 7"] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+    assert!(!t.contains("out vbus false"), "der geplante Schreibvorgang kam an:\n{t}");
+}
+
+/// 7.5: Nach `CUT` (100 ms) kehrt `ctrl` nach `ARMING` zurueck und
+/// armiert neu; ein zweites Ereignis nach Tick 13 feuert wieder, mit
+/// seinen eigenen Captures.
+#[test]
+fn a_rearmed_trigger_fires_again() {
+    let t = trace(PROGRAM, "t=2 in dut_log Erasing sector 7\nt=15 in dut_log Erasing sector 9\n", 20);
+    for line in
+        ["t=3 out n_out 7", "t=3 state ctrl CUT", "t=13 state ctrl ARMING", "t=16 out n_out 9", "t=16 state ctrl CUT"]
+    {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+}

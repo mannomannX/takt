@@ -14,8 +14,8 @@
   (state RUN
     (loop
       (var r :Reg (Reg byte=k word=0x0102))
-      (var e (.encode r))
+      (var e (.encode r ()))
       (= width (.len e))
       (= first (as (index e 0) int))
       (= last (as (index e 5) int))
-      (= k (+ (.wrap_u8 k) 1)))))
+      (= k (+ (.wrap_u8 k ()) 1)))))

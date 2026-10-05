@@ -95,6 +95,12 @@ pub trait Vars {
         None
     }
 
+    /// Ob das Fenster der Stroeme leer ist (9.6, Modus ENTRY): ein `i1`
+    /// oder `None`, wo es offen ist.
+    fn window_closed(&self) -> Option<String> {
+        None
+    }
+
     /// `armed` und Cursor eines Triggers im Zustand seines Besitzers (7.5).
     fn trigger_slots(&self, _t: takt_mir::TriggerId, _m: &mut Module) -> Option<(crate::emit::Reg, crate::emit::Reg)> {
         None
@@ -198,6 +204,7 @@ pub fn lower(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<L
     r
 }
 
+#[deny(clippy::wildcard_enum_match_arm)]
 fn lower_here(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
     // `interp` steht vor der Typbestimmung: Sein erstes Argument ist eine
     // Tabelle, und `table<A, B>` hat keine Darstellung als Wert — die
@@ -264,7 +271,25 @@ fn lower_here(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<
         // Element aus `undef` heraus (3.9).
         ExprKind::Array(items) => match p.types.get(e.ty) {
             Type::Bytes { .. } => bytes_literal(items, &want, p, m, vars),
-            _ => record(items, &want, p, m, vars),
+            Type::Bool
+            | Type::Int { .. }
+            | Type::Float { .. }
+            | Type::Duration { .. }
+            | Type::Enum(_)
+            | Type::Record(_)
+            | Type::Array { .. }
+            | Type::Vec { .. }
+            | Type::Str { .. }
+            | Type::Line { .. }
+            | Type::Samples { .. }
+            | Type::Table { .. }
+            | Type::Mat { .. }
+            | Type::Map { .. }
+            | Type::Optional(_)
+            | Type::Result { .. }
+            | Type::Stream(_)
+            | Type::Capture { .. }
+            | Type::Handle(_) => record(items, &want, p, m, vars),
         },
         // Eine Stuetzstelle ist ein Paar (3.9); sie steht nur in einer
         // Tabelle, und `interp` liest sie dort unmittelbar.
@@ -281,7 +306,14 @@ fn lower_here(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<
         ExprKind::Checked { expr, kind } => checked_expr(expr, kind, &want, p, m, vars),
         ExprKind::MatOp { op, args } => crate::matrix::op(*op, args, &want, p, m, vars),
         ExprKind::Index2 { base, row, col } => crate::matrix::index(base, row, col, &want, p, m, vars),
-        other => Err(NotYet { what: node_name(other) }),
+        // Kein Wert fuer sich: Ein Paar steht nur in einer Tabelle, ein
+        // Block wird eingebettet, ein Format nur in `log` und Meldungen,
+        // ein Strom und ein Mustervergleich nur in Handlern und Guards.
+        other @ (ExprKind::Tuple(..)
+        | ExprKind::BlockInit { .. }
+        | ExprKind::Format(_)
+        | ExprKind::Stream(_)
+        | ExprKind::Matches { .. }) => Err(NotYet { what: node_name(other) }),
     }
 }
 
@@ -695,6 +727,20 @@ fn access(
             let wide = m.inst(&format!("sext i32 {r} to {want}"));
             Ok(Lowered { value: wide.to_string(), ty: want.clone() })
         }
+        // `.truncated` eines `line<N>` (3.9): sein drittes Feld.
+        Accessor::Truncated => match &x.ty {
+            LlvmType::Struct(fields) if fields.len() == 3 => {
+                let r = m.inst(&format!("extractvalue {} {}, 2", x.ty, x.value));
+                Ok(Lowered { value: r.to_string(), ty: LlvmType::Int(1) })
+            }
+            _ => Err(NotYet { what: "`.truncated` ausserhalb eines `line<N>`" }),
+        },
+        // `.starts_with(t)`, `.contains(t)` auf Text (3.9): bytewise, wie
+        // `str::starts_with` und `str::contains` im Interpreter.
+        Accessor::StartsWith | Accessor::Contains => {
+            let needle = arg(0, m)?;
+            text_find(&x, &needle, which == Accessor::StartsWith, m)
+        }
         // Reduktionen ueber ein Feld (8.9): `min`, `max`, `mean`, `rms`,
         // `count`, `last`. Sie stehen in `reduce`, weil sie zusammen
         // gehoeren und eine gemeinsame Zusage tragen — die Reihenfolge
@@ -704,6 +750,66 @@ fn access(
             None => Err(NotYet { what: crate::scope::accessor_name(which) }),
         },
     }
+}
+
+/// Ob der Text `hay` mit `needle` beginnt (`prefix`) oder es enthaelt,
+/// beides `{ i32 len, [N x i8], … }`. Eine Schleife ueber die Ansaetze, je
+/// Ansatz ueber die Bytes von `needle`; ein leeres `needle` trifft immer.
+fn text_find(hay: &Lowered, needle: &Lowered, prefix: bool, m: &mut Module) -> Result<Lowered, NotYet> {
+    let (LlvmType::Struct(_), LlvmType::Struct(_)) = (&hay.ty, &needle.ty) else {
+        return Err(NotYet { what: "Textsuche ausserhalb von Text" });
+    };
+    let k = m.next_label();
+    let (h, n) = (m.alloca(&hay.ty), m.alloca(&needle.ty));
+    m.void_inst(&format!("store {} {}, ptr {h}", hay.ty, hay.value));
+    m.void_inst(&format!("store {} {}, ptr {n}", needle.ty, needle.value));
+    let hlen = m.inst(&format!("extractvalue {} {}, 0", hay.ty, hay.value));
+    let nlen = m.inst(&format!("extractvalue {} {}, 0", needle.ty, needle.value));
+    let hb = m.inst(&format!("getelementptr inbounds {}, ptr {h}, i32 0, i32 1", hay.ty));
+    let nb = m.inst(&format!("getelementptr inbounds {}, ptr {n}, i32 0, i32 1", needle.ty));
+    // Der letzte Ansatz: 0 fuer `starts_with`, sonst `len(hay) - len(needle)`.
+    let last = if prefix { "0".to_string() } else { m.inst(&format!("sub i32 {hlen}, {nlen}")).to_string() };
+    let fits = m.inst(&format!("icmp sle i32 {nlen}, {hlen}"));
+    let (found, s_ptr, j_ptr) = (m.alloca("i1"), m.alloca("i32"), m.alloca("i32"));
+    m.void_inst(&format!("store i1 false, ptr {found}"));
+    m.void_inst(&format!("store i32 0, ptr {s_ptr}"));
+    let (start, inner, step, hit, next, done) = (
+        format!("suche{k}_ansatz"),
+        format!("suche{k}_byte"),
+        format!("suche{k}_vergleich"),
+        format!("suche{k}_treffer"),
+        format!("suche{k}_weiter"),
+        format!("suche{k}_ende"),
+    );
+    m.void_inst(&format!("br i1 {fits}, label %{start}, label %{done}"));
+    m.label(&start);
+    let s = m.inst(&format!("load i32, ptr {s_ptr}"));
+    let more = m.inst(&format!("icmp sle i32 {s}, {last}"));
+    m.void_inst(&format!("store i32 0, ptr {j_ptr}"));
+    m.void_inst(&format!("br i1 {more}, label %{inner}, label %{done}"));
+    m.label(&inner);
+    let j = m.inst(&format!("load i32, ptr {j_ptr}"));
+    let open = m.inst(&format!("icmp slt i32 {j}, {nlen}"));
+    m.void_inst(&format!("br i1 {open}, label %{step}, label %{hit}"));
+    m.label(&step);
+    let at = m.inst(&format!("add i32 {s}, {j}"));
+    let hp = m.inst(&format!("getelementptr inbounds i8, ptr {hb}, i32 {at}"));
+    let np = m.inst(&format!("getelementptr inbounds i8, ptr {nb}, i32 {j}"));
+    let (a, b) = (m.inst(&format!("load i8, ptr {hp}")), m.inst(&format!("load i8, ptr {np}")));
+    let same = m.inst(&format!("icmp eq i8 {a}, {b}"));
+    let j1 = m.inst(&format!("add i32 {j}, 1"));
+    m.void_inst(&format!("store i32 {j1}, ptr {j_ptr}"));
+    m.void_inst(&format!("br i1 {same}, label %{inner}, label %{next}"));
+    m.label(&hit);
+    m.void_inst(&format!("store i1 true, ptr {found}"));
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&next);
+    let s1 = m.inst(&format!("add i32 {s}, 1"));
+    m.void_inst(&format!("store i32 {s1}, ptr {s_ptr}"));
+    m.void_inst(&format!("br label %{start}"));
+    m.label(&done);
+    let r = m.inst(&format!("load i1, ptr {found}"));
+    Ok(Lowered { value: r.to_string(), ty: LlvmType::Int(1) })
 }
 
 /// Der Channel hinter einem Ausdruck, sofern es einer ist.
@@ -944,7 +1050,11 @@ fn intrinsic(
             m.inst(&format!("call {} @llvm.{name}.{}({} {}, {} {})", x.ty, x.ty, x.ty, x.value, y.ty, y.value))
         }
         Intrinsic::Rotl | Intrinsic::Rotr => {
-            let (x, y) = (a(0)?, a(1)?);
+            let x = a(0)?;
+            // `fshl` nimmt den Betrag in der Breite des Werts und modulo
+            // dieser Breite; die unteren Bits des `int` sind fuer jede
+            // Zweierpotenz `n mod Breite` wie im Interpreter (3.10).
+            let y = int_to(a(1)?, &x.ty, m);
             let name = if op == Intrinsic::Rotl { "fshl" } else { "fshr" };
             // `fshl(x, x, n)` ist die Rotation: Der Trichter nimmt
             // dieselbe Zahl als beide Haelften.
@@ -1155,6 +1265,7 @@ pub(crate) fn propagate_fault(m: &mut Module, vars: &dyn Vars) -> Result<(), Not
 fn runtime_check(
     kind: &takt_mir::expr::CheckedKind,
     value: &Lowered,
+    signed: bool,
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<(), NotYet> {
@@ -1167,22 +1278,27 @@ fn runtime_check(
                 let (Some(lo), Some(hi)) = (const_i64(&r.lo), const_i64(&r.hi)) else {
                     return Ok(());
                 };
-                // Eine Grenze, die in die Breite des Werts nicht passt,
-                // ist keine: `slt i8 x, 255` vergleicht gegen -1, und die
-                // Pruefung schluege immer fehl. Der Wert *kann* sie dann
-                // nicht verletzen — die Analyse hat die Schranke schon im
-                // Typ (3.4), und ein Zweig waere toter Code.
-                let fits = |v: i64| {
-                    let b = i64::from(*bits);
-                    b >= 64 || (v >= -(1i64 << (b - 1)) && v < (1i64 << (b - 1)))
-                };
-                if !fits(lo) || !fits(hi) {
+                // Verglichen wird nach der Vorzeichenart des Werts: `u8 in
+                // 0..200` liegt als Bitmuster jenseits von `i8`, und ein
+                // vorzeichenbehafteter Vergleich gegen 200 wuerde -56. Eine
+                // Grenze ausserhalb der Breite kann der Wert nicht verletzen;
+                // nur sie entfaellt, nicht die Pruefung der anderen.
+                let (min, max) = width_range(*bits, signed);
+                let (ge, le) = if signed { ("sge", "sle") } else { ("uge", "ule") };
+                m.void_inst(&format!("; Range {lo}..{hi} auf {}", value.ty));
+                let mut ok = "true".to_string();
+                if i128::from(lo) > min && i128::from(lo) <= max {
+                    let a = m.inst(&format!("icmp {ge} {} {}, {lo}", value.ty, value.value));
+                    ok = m.inst(&format!("and i1 {ok}, {a}")).to_string();
+                }
+                if i128::from(hi) >= min && i128::from(hi) < max {
+                    let b = m.inst(&format!("icmp {le} {} {}, {hi}", value.ty, value.value));
+                    ok = m.inst(&format!("and i1 {ok}, {b}")).to_string();
+                }
+                if ok == "true" {
                     return Ok(());
                 }
-                m.void_inst(&format!("; Range {lo}..{hi} auf {}", value.ty));
-                let a = m.inst(&format!("icmp sge {} {}, {lo}", value.ty, value.value));
-                let b = m.inst(&format!("icmp sle {} {}, {hi}", value.ty, value.value));
-                m.inst(&format!("and i1 {a}, {b}")).to_string()
+                ok
             }
             // Die Grenzen stehen als Bitmuster, nicht dezimal: `0.1`
             // dezimal waere eine andere Zahl als die im Programm (4.2),
@@ -1293,6 +1409,11 @@ fn checked_expr(
         },
         K::Overflow => match &inner.kind {
             ExprKind::Binary { op, lhs, rhs } => overflow_checked(*op, lhs, rhs, want, p, m, vars),
+            // `-x` ist `0 - x`: Ueberlauf genau bei `MIN` (4.1, 3.3).
+            ExprKind::Unary { op: UnaryOp::Neg, expr } => {
+                let zero = Expr::new(ExprKind::Int(0), expr.ty, expr.span);
+                overflow_checked(BinaryOp::Sub, &zero, expr, want, p, m, vars)
+            }
             _ => Err(NotYet { what: "Ueberlaufpruefung ohne Operator" }),
         },
         K::Shift => match &inner.kind {
@@ -1305,7 +1426,7 @@ fn checked_expr(
         },
         K::Range(_) | K::DivZero | K::NonFinite | K::Domain => {
             let x = lower(inner, p, m, vars)?;
-            runtime_check(kind, &x, m, vars)?;
+            runtime_check(kind, &x, int_is_signed(inner.ty, p), m, vars)?;
             Ok(x)
         }
     }
@@ -1349,13 +1470,13 @@ fn overflow_checked(
         BinaryOp::Div | BinaryOp::Rem => {
             let mut divisor = b.value.clone();
             if signed {
-                let neg = m.inst(&format!("icmp eq i{bits} {divisor}, -1"));
                 if op == BinaryOp::Div {
+                    let neg = m.inst(&format!("icmp eq i{bits} {divisor}, -1"));
                     let min = m.inst(&format!("icmp eq i{bits} {}, -{}", a.value, 1u128 << (bits - 1)));
                     let bad = m.inst(&format!("and i1 {min}, {neg}"));
                     guard(&format!("xor i1 {bad}, true"), "ovf", &target, m);
                 } else {
-                    divisor = m.inst(&format!("select i1 {neg}, i{bits} 1, i{bits} {divisor}")).to_string();
+                    divisor = not_minus_one(&b, m);
                 }
             }
             let text = match (op, signed) {
@@ -1369,6 +1490,24 @@ fn overflow_checked(
         _ => return Err(NotYet { what: "Ueberlaufpruefung auf diesem Operator" }),
     };
     Ok(Lowered { value: value.to_string(), ty: want.clone() })
+}
+
+/// Kleinster und groesster Wert einer Ganzzahlbreite in Bits.
+fn width_range(bits: u32, signed: bool) -> (i128, i128) {
+    let b = bits.min(64);
+    if signed { (-(1i128 << (b - 1)), (1i128 << (b - 1)) - 1) } else { (0, (1i128 << b) - 1) }
+}
+
+/// Der Divisor eines `srem`, mit -1 durch 1 ersetzt (4.1).
+///
+/// `MIN % -1` ist null, `srem` dort aber undefiniert und auf x86 ein
+/// Absturz. Die Analyse beweist den Ueberlaufknoten um `%` weg, sobald der
+/// Divisor beschraenkt ist — der Rest passt dann in jede Breite —, also
+/// darf der Schutz nicht an diesem Knoten haengen. `x % 1` ist ebenfalls
+/// null; bei einem konstanten Divisor faltet LLVM den Vergleich weg.
+fn not_minus_one(b: &Lowered, m: &mut Module) -> String {
+    let minus_one = m.inst(&format!("icmp eq {} {}, -1", b.ty, b.value));
+    m.inst(&format!("select i1 {minus_one}, {} 1, {} {}", b.ty, b.ty, b.value)).to_string()
 }
 
 /// `<<`, `>>` mit geprueftem Betrag `0..width-1` (3.10).
@@ -1444,11 +1583,27 @@ fn narrow_ok(e: &Expr, p: &Program) -> bool {
             true
         }
         ExprKind::Unary { op, .. } => matches!(op, UnaryOp::Neg | UnaryOp::BitNot),
+        // Eine Schiebung in `i32` nur um einen Betrag, der bewiesen in
+        // `0..31` liegt: `ashr i32 _, 50` ist undefiniert, wo `i64` exakt
+        // rechnet (KON1-017).
+        ExprKind::Binary { op: BinaryOp::Shl | BinaryOp::Shr, rhs, .. } => narrow_amount(rhs),
         ExprKind::Binary { op, .. } => !matches!(op, BinaryOp::And | BinaryOp::Or),
         ExprKind::Checked { kind, .. } => matches!(kind, CheckedKind::Range(_) | CheckedKind::DivZero),
         _ => false,
     };
     kind && e.repr == Some(Repr::I32) && e.children().iter().all(|c| !wide_int(c, p) || c.repr == Some(Repr::I32))
+}
+
+/// Liegt der Schiebebetrag bewiesen in `0..31`?
+fn narrow_amount(amount: &Expr) -> bool {
+    let within = |lo: i64, hi: i64| (0..=31).contains(&lo) && (0..=31).contains(&hi);
+    match (&amount.kind, &amount.range) {
+        (ExprKind::Int(k), _) => within(*k, *k),
+        (_, Some(r)) => {
+            matches!((r.lo, r.hi), (takt_mir::types::Const::Int(lo), takt_mir::types::Const::Int(hi)) if within(lo, hi))
+        }
+        _ => false,
+    }
 }
 
 /// Ein Operand in 32 Bit: schmal gerechnet, wo es geht, sonst gerechnet
@@ -1507,7 +1662,10 @@ fn lower_narrow(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Resul
                 BinaryOp::Sub => "sub",
                 BinaryOp::Mul => "mul",
                 BinaryOp::Div => "sdiv",
-                BinaryOp::Rem => "srem",
+                BinaryOp::Rem => {
+                    let d = not_minus_one(&b, m);
+                    return Ok(Lowered { value: m.inst(&format!("srem i32 {}, {d}", a.value)).to_string(), ty: i32_ });
+                }
                 BinaryOp::BitAnd => "and",
                 BinaryOp::BitOr => "or",
                 BinaryOp::BitXor => "xor",
@@ -1534,13 +1692,13 @@ fn lower_narrow(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Resul
                     // Eine Grenze ausserhalb von `i32` prueft in 64 Bit.
                     let in_i32 = |c: &takt_mir::types::Const| const_i64(c).is_some_and(|x| i32::try_from(x).is_ok());
                     if in_i32(&r.lo) && in_i32(&r.hi) {
-                        runtime_check(kind, &v, m, vars)?;
+                        runtime_check(kind, &v, true, m, vars)?;
                     } else {
                         let wide = fit(v.clone(), &LlvmType::Int(64), m);
-                        runtime_check(kind, &wide, m, vars)?;
+                        runtime_check(kind, &wide, true, m, vars)?;
                     }
                 }
-                CheckedKind::DivZero => runtime_check(kind, &v, m, vars)?,
+                CheckedKind::DivZero => runtime_check(kind, &v, true, m, vars)?,
                 _ => {}
             }
             return Ok(v);
@@ -1923,8 +2081,12 @@ fn interp(args: &[Expr], want: &LlvmType, p: &Program, m: &mut Module, vars: &dy
         let ratio = m.inst(&format!("fdiv {want} {scaled}, {dx}"));
         let segment = m.inst(&format!("fadd {want} {}, {ratio}", y0.value));
         // `x <= x1` waehlt dieses Segment; weiter links liegende
-        // ueberschreiben es in der naechsten Runde.
-        let in_segment = m.inst(&format!("fcmp ole {want} {}, {}", x.value, x1.value));
+        // ueberschreiben es in der naechsten Runde. Das letzte Segment
+        // endet vor `x_last`: Ab dort gilt der letzte Stuetzwert selbst
+        // (`x >= x_last` im Interpreter), nicht die Formel, die ihn um ein
+        // Bit verfehlen kann.
+        let cmp = if i + 2 == points.len() { "olt" } else { "ole" };
+        let in_segment = m.inst(&format!("fcmp {cmp} {want} {}, {}", x.value, x1.value));
         result = m.inst(&format!("select i1 {in_segment}, {want} {segment}, {want} {result}")).to_string();
     }
     // Links vom ersten Stuetzpunkt wird geklemmt (3.9).
@@ -2151,6 +2313,8 @@ fn stream_count(base: &Expr, want: &LlvmType, m: &mut Module, vars: &dyn Vars) -
     };
     let n =
         m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
+    // 8.6: `s.count` zaehlt das Fenster, im Modus ENTRY also null.
+    let n = crate::stream::window_count(n, vars.window_closed(), m);
     let wide = m.inst(&format!("sext i32 {n} to {want}"));
     Ok(Lowered { value: wide.to_string(), ty: want.clone() })
 }
@@ -2174,6 +2338,7 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n =
         m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
+    let n = crate::stream::window_count(n, vars.window_closed(), m);
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let k = m.next_label();
     let (read, done) = (format!("peek{k}_lesen"), format!("peek{k}_fertig"));
@@ -2533,6 +2698,7 @@ fn field_of(
 /// Absicherung. Welche Instruktion es ist, entscheiden Quelle und Ziel:
 /// `trunc` verkuerzt, `sext`/`zext` verlaengern (mit Vorzeichen oder ohne),
 /// `fptosi`/`sitofp` wechseln die Domaene.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn cast(
     e: &Expr,
     to: TypeId,
@@ -2596,6 +2762,7 @@ fn cast_value(
 /// Quelle, dann `* num`, dann `/ den`, dann der Versatz des Ziels. Eine
 /// andere Reihenfolge waere mathematisch gleich, aber in Fliesskomma eine
 /// andere Zahl — und Satz 9.4.4 verlangt dasselbe Bit.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn convert(
     e: &Expr,
     kind: ConvertKind,
@@ -2639,20 +2806,47 @@ fn convert(
             let (factor, offset) =
                 src.map_or((takt_mir::types::Rational::int(1), None), |u| (u.factor, u.affine_offset));
             if let Some(off) = offset {
-                let o = float_literal(off.num as f64 / off.den as f64, want);
+                let o = offset_literal(off, want)?;
                 cur = m.inst(&format!("fadd {want} {cur}, {o}")).to_string();
             }
+            // 3.2 (INT-008): x mal dem exakten Faktor, korrekt gerundet, wie
+            // `libtaktm::scale_*` im Interpreter — eine Rundung, und kein
+            // Zwischenwert laeuft ueber. Die Faktoren gehen als je zwei
+            // 64-Bit-Haelften an `takt_m_scale_<breite>` (takt-native-abi).
             let num = i128::from(factor.num) * i128::from(dst.factor.den);
             let den = i128::from(factor.den) * i128::from(dst.factor.num);
-            cur = m.inst(&format!("fmul {want} {cur}, {}", float_literal(num as f64, want))).to_string();
-            cur = m.inst(&format!("fdiv {want} {cur}, {}", float_literal(den as f64, want))).to_string();
+            let (Ok(num), Ok(den)) = (u128::try_from(num), u128::try_from(den)) else {
+                return Err(NotYet { what: "Einheitenfaktor nicht positiv" });
+            };
+            let s = crate::matrix::suffix(want);
+            let name = format!("takt_m_scale_{s}");
+            m.needs_intrinsic(&format!("{want} @{name}({want}, i64, i64, i64, i64)"));
+            let half = |v: u128| (v as u64 as i64, (v >> 64) as u64 as i64);
+            let ((nl, nh), (dl, dh)) = (half(num), half(den));
+            cur = m
+                .inst(&format!("call {want} @{name}({want} {cur}, i64 {nl}, i64 {nh}, i64 {dl}, i64 {dh})"))
+                .to_string();
             if let Some(off) = dst.affine_offset {
-                let o = float_literal(off.num as f64 / off.den as f64, want);
+                let o = offset_literal(off, want)?;
                 cur = m.inst(&format!("fsub {want} {cur}, {o}")).to_string();
             }
             Ok(Lowered { value: cur, ty: want.clone() })
         }
     }
+}
+
+/// Der Versatz einer affinen Einheit als naechste Zahl der Breite, mit
+/// einer Rundung wie im Interpreter (`rational` in takt-interp).
+fn offset_literal(off: takt_mir::types::Rational, want: &LlvmType) -> Result<String, NotYet> {
+    if off.den == 0 {
+        return Err(NotYet { what: "Versatz mit Nenner null" });
+    }
+    let (mag, den) = (u128::from(off.num.unsigned_abs()), u128::from(off.den));
+    let sign = if off.num < 0 { -1.0 } else { 1.0 };
+    Ok(match want {
+        LlvmType::F32 => float_literal(f64::from(libtaktm::scale_f32(sign as f32, mag, den)), want),
+        _ => float_literal(libtaktm::scale_f64(sign, mag, den), want),
+    })
 }
 
 /// Ψ-Lesevorgang (7.2); Instanz-Arrays mit Index sind v1.2 (5.11).
@@ -2701,6 +2895,7 @@ fn int_is_signed_ty(ty: TypeId, p: &Program) -> bool {
 }
 
 /// Ein einstelliger Operator.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn unary(
     op: UnaryOp,
     expr: &Expr,
@@ -2723,6 +2918,7 @@ fn unary(
 }
 
 /// Ein zweistelliger Operator.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn binary(
     op: BinaryOp,
     lhs: &Expr,
@@ -2790,7 +2986,7 @@ fn binary(
         BinaryOp::Mul => format!("mul {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::Div if signed => format!("sdiv {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::Div => format!("udiv {} {}, {}", a.ty, a.value, b.value),
-        BinaryOp::Rem if signed => format!("srem {} {}, {}", a.ty, a.value, b.value),
+        BinaryOp::Rem if signed => format!("srem {} {}, {}", a.ty, a.value, not_minus_one(&b, m)),
         BinaryOp::Rem => format!("urem {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::BitAnd => format!("and {} {}, {}", a.ty, a.value, b.value),
         BinaryOp::BitOr => format!("or {} {}, {}", a.ty, a.value, b.value),
@@ -2899,7 +3095,7 @@ fn compare(op: BinaryOp, a: &Lowered, b: &Lowered, float: bool, signed: bool) ->
 ///
 /// `bool` und die Dauern zaehlen als vorzeichenbehaftet: Dauern sind
 /// Nanosekunden in `i64` und duerfen negativ sein (3.2).
-fn int_is_signed(ty: TypeId, p: &Program) -> bool {
+pub(crate) fn int_is_signed(ty: TypeId, p: &Program) -> bool {
     match p.types.list.get(ty.index()) {
         Some(Type::Int { width, .. }) => ty::signed(*width),
         Some(Type::Duration { .. }) => true,

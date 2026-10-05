@@ -172,3 +172,31 @@ machine ctrl:
     let journal: u64 = s.items.iter().filter(|i| i.name.contains("Journal")).map(|i| i.bytes).sum();
     assert!(journal > 0, "das Journal fehlt im Report: {:?}", s.items.iter().map(|i| &i.name).collect::<Vec<_>>());
 }
+
+/// 11.5 und 9.4.3 mit absoluten Zahlen: Der Posten ist `ctrl` selbst plus
+/// zwei `blip` (der groessere Geschwisterzustand `FIRST`), die Ersparnis
+/// genau ein `blip`, und die Spitze sind zwei Schritte von `blip` plus der
+/// von `ctrl`.
+#[test]
+fn the_overlay_counts_the_larger_sibling_exactly() {
+    let p = ok(THREE);
+    let ctrl = p.machines.iter().find(|m| m.name == "ctrl").expect("ctrl");
+    let instances: Vec<_> =
+        p.machines.iter().filter(|m| m.name != "ctrl" && m.kind != takt_mir::machine::MachineKind::Template).collect();
+    assert_eq!(instances.len(), 3, "{:?}", p.machines.iter().map(|m| &m.name).collect::<Vec<_>>());
+    let blip = size::machine_bytes(&p, instances[0]);
+    assert!(instances.iter().all(|m| size::machine_bytes(&p, m) == blip), "die Instanzen sind gleich gross");
+    // Zwei Zustaende ohne Variablen: conf 2, time_in_state 2 * 8, Latch,
+    // pending und pc 12.
+    assert_eq!(blip, 30);
+    let own = size::machine_bytes_without_instances(&p, ctrl);
+    assert_eq!(own, 30);
+    let s = size::size(&p);
+    assert_eq!(machine_states(&p), own + 2 * blip);
+    assert_eq!(s.overlay_saved, blip);
+
+    let activation = |m: &takt_mir::machine::Machine| m.budget.expect("Budget").activation;
+    let one = activation(instances[0]);
+    assert!(instances.iter().all(|m| activation(m) == one), "die Instanzen kosten gleich viel");
+    assert_eq!(schedulability::load(&p).peak, activation(ctrl) + one + one);
+}

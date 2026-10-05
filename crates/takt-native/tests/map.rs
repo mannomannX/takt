@@ -67,14 +67,11 @@ fn iteration_is_slot_order() {
     for k in [5u64, 3, 11, 7] {
         assert!(m.insert(&key(k), &(k as u32).to_le_bytes()));
     }
+    // FNV-1a 32 ueber die acht Byte, modulo 8: 5 -> 0, 3 -> 6, 11 -> 6,
+    // 7 -> 2. Die 11 kollidiert mit der 3 und sondiert linear auf Slot 7.
+    let homes: Vec<u32> = [5u64, 3, 11, 7].iter().map(|k| m.hash(&key(*k)) % 8).collect();
+    assert_eq!(homes, [0, 6, 6, 2], "der Hash ist je Edition festgelegt (3.9)");
     let order: Vec<u64> =
         (0..8).filter_map(|i| m.entry(i)).map(|(k, _)| u64::from_le_bytes(k.try_into().expect("8 Byte"))).collect();
-    let mut expected: Vec<(usize, u64)> =
-        [5u64, 3, 11, 7].iter().map(|k| ((m.hash(&key(*k)) as usize) % 8, *k)).collect();
-    expected.sort();
-    // Ohne Kollision steht jeder Schluessel auf seiner Hash-Position.
-    if expected.windows(2).all(|w| w[0].0 != w[1].0) {
-        assert_eq!(order, expected.iter().map(|(_, k)| *k).collect::<Vec<_>>());
-    }
-    assert_eq!(order.len(), 4);
+    assert_eq!(order, [5, 7, 3, 11], "Slot-Reihenfolge nach linearer Sondierung");
 }

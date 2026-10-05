@@ -50,7 +50,9 @@ impl Ctx<'_, '_> {
 
     /// Eine Anweisung.
     pub fn exec(&mut self, s: &Stmt, mode: Mode) -> EvalResult<Out> {
+        let outer = std::mem::replace(&mut self.entry, mode == Mode::Entry);
         let out = self.exec_inner(s, mode);
+        self.entry = outer;
         if self.outer.steps_wanted() {
             let result = match (&out, &s.kind) {
                 (Ok(_), StmtKind::Assign { target, .. }) => self.place_text(target),
@@ -271,8 +273,11 @@ impl Ctx<'_, '_> {
             }
             StmtKind::Skip(s) => {
                 // 8.6: `s.skip()` untersucht das ganze Fenster und verwirft
-                // es; der Cursor rueckt hinter das letzte Element.
-                if let Some(last) = self.outer.stream_window(*s)?.last() {
+                // es; der Cursor rueckt hinter das letzte Element. Im Modus
+                // ENTRY ist das Fenster leer (9.6).
+                if mode == Mode::Run
+                    && let Some(last) = self.outer.stream_window(*s)?.last()
+                {
                     self.outer.stream_examined(*s, last.seq)?;
                 }
                 Ok(Out::Normal)
@@ -517,9 +522,13 @@ impl Ctx<'_, '_> {
 
     /// `for ev in s:` ueber das Fenster eines Stroms (8.7, 9.6). Die Schleife
     /// ist durch CAP beschraenkt; jedes betrachtete Element gilt als
-    /// konsumiert, ein `break` laesst den Rest im Puffer.
+    /// konsumiert, ein `break` laesst den Rest im Puffer. Im Modus ENTRY ist
+    /// das Fenster leer (9.6), die Schleife laeuft nicht.
     fn for_window(&mut self, vars: &ForVars, stream: StreamRef, body: &Block, mode: Mode) -> EvalResult<Out> {
         let ForVars::One(var) = vars else { return bug("`for` ueber ein Fenster bindet genau eine Variable") };
+        if mode == Mode::Entry {
+            return Ok(Out::Normal);
+        }
         let window = self.outer.stream_window(stream)?;
         self.loops.push(0);
         let result = (|| {

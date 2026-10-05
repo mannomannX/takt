@@ -27,6 +27,7 @@ use takt_conformance::bringup;
 fn main() {
     // `linkall.x` liefert `esp-hal`: Speicherkarte, Vektortabelle, Cache-Mapping.
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+    image_key();
     // Konformitaetslauf (plan/esp32c6.md 5): so viele Ticks, dann `takt end`.
     println!("cargo:rerun-if-env-changed=TAKT_TICKS");
     if let Ok(ticks) = env::var("TAKT_TICKS") {
@@ -47,6 +48,19 @@ fn main() {
     build_takt_program(&out);
     native_vectors(&out);
     math_vectors(&out);
+}
+
+/// Der Schluessel des Baus (KON1-009) als Symbol ins ELF
+/// (`takt_board_support::image_key`): Wer parallel in dasselbe
+/// Zielverzeichnis baut, prueft an seiner Kopie, dass sie die eigene ist.
+/// Ohne `TAKT_IMAGE_KEY` traegt das Abbild keinen.
+fn image_key() {
+    use takt_board_support::image_key::{SYMBOL, valid};
+    println!("cargo:rerun-if-env-changed=TAKT_IMAGE_KEY");
+    if let Ok(key) = env::var("TAKT_IMAGE_KEY") {
+        assert!(valid(&key), "TAKT_IMAGE_KEY: 1 bis 32 Hexziffern erwartet, `{key}` gefunden");
+        println!("cargo:rustc-link-arg=--defsym={SYMBOL}{key}=0");
+    }
 }
 
 /// Legt Takt-Code und tick-gelesene Konstanten ins RAM (12.3).

@@ -47,12 +47,26 @@ pub struct Ctx<'p, 'o> {
     /// `event` im `then`-Teil eines Triggers (7.5); sonst `None`.
     pub event: Option<Value>,
     pub(crate) depth: u32,
+    /// Die laufende Anweisung steht im Modus ENTRY: Die Fenster der Stroeme
+    /// sind leer (9.6).
+    pub(crate) entry: bool,
+}
+
+/// Traegt der Wert einen nicht endlichen Gleitkommawert, auch als Element
+/// eines Arrays oder einer Matrix (4.1)?
+fn non_finite(v: &Value) -> bool {
+    match v {
+        Value::F32(x) => !x.is_finite(),
+        Value::F64(x) => !x.is_finite(),
+        Value::Array(items) | Value::Mat { data: items, .. } => items.iter().any(non_finite),
+        _ => false,
+    }
 }
 
 impl<'p, 'o> Ctx<'p, 'o> {
     /// Neuer Kontext ohne Rahmen.
     pub fn new(loaded: &'o Loaded<'p>, outer: &'o mut dyn Outer, tick: u64) -> Self {
-        Ctx { loaded, outer, tick, frames: Vec::new(), loops: Vec::new(), event: None, depth: 0 }
+        Ctx { loaded, outer, tick, frames: Vec::new(), loops: Vec::new(), event: None, depth: 0, entry: false }
     }
 
     /// Kontext mit gebundenem `event` (7.5).
@@ -495,7 +509,9 @@ impl<'p, 'o> Ctx<'p, 'o> {
             }
             takt_mir::pattern::Pattern::Text { .. } => Vec::new(),
         };
-        let Some(caps) = crate::pattern::match_value(pattern, kind, &value, &consts) else {
+        let Some(caps) =
+            crate::pattern::match_value(pattern, kind, &value, &consts, self.loaded.program.config.float_width)
+        else {
             return Ok(Value::Bool(false));
         };
         if let Some(var) = binding {
@@ -555,7 +571,12 @@ impl<'p, 'o> Ctx<'p, 'o> {
             };
             if let Some(r) = r {
                 if acc == Accessor::Peek {
-                    return self.outer.stream_peek(r);
+                    // 9.6: Im Modus ENTRY ist das Fenster leer.
+                    return if self.entry { Ok(Value::Optional(None)) } else { self.outer.stream_peek(r) };
+                }
+                // 8.6: `s.count` zaehlt das Fenster, im Modus ENTRY also null.
+                if acc == Accessor::Count && self.entry {
+                    return Ok(Value::Int(0));
                 }
                 if let Some(v) = self.outer.stream_stat(r, acc)? {
                     return Ok(v);
@@ -798,19 +819,22 @@ impl<'p, 'o> Ctx<'p, 'o> {
                     _ if v.as_f64().is_none() => return bug(format!("to(U) auf {}", v.kind_name())),
                     _ => v,
                 };
-                // Basiswert = (x + off_src) * f_src; Ergebnis = Basiswert / f_dst - off_dst
+                // Basiswert = (x + off_src) * f_src; Ergebnis = Basiswert / f_dst - off_dst.
+                // Der Faktor ist der exakte Bruch beider Einheiten, das Produkt
+                // korrekt gerundet (3.2, INT-008): eine Rundung, und ein
+                // endliches Ergebnis faultet nie an einem Zwischenwert.
                 if let Some(off) = offset {
-                    let o = rational(width, off.num, off.den);
+                    let o = rational(width, off.num, off.den)?;
                     x = arith::float_binary(BinaryOp::Add, &x, &o)?;
                 }
-                let num = i128::from(factor.num) * i128::from(dst.factor.den);
-                let den = i128::from(factor.den) * i128::from(dst.factor.num);
-                let p = Value::float_from_int(width, num);
-                let q = Value::float_from_int(width, den);
-                x = arith::float_binary(BinaryOp::Mul, &x, &p)?;
-                x = arith::float_binary(BinaryOp::Div, &x, &q)?;
+                let (num, den) = unit_ratio(factor, dst.factor)?;
+                x = match x {
+                    Value::F32(v) => Value::F32(libtaktm::scale_f32(v, num, den)),
+                    Value::F64(v) => Value::F64(libtaktm::scale_f64(v, num, den)),
+                    other => return bug(format!("to(U) auf {}", other.kind_name())),
+                };
                 if let Some(off) = dst.affine_offset {
-                    let o = rational(width, off.num, off.den);
+                    let o = rational(width, off.num, off.den)?;
                     x = arith::float_binary(BinaryOp::Sub, &x, &o)?;
                 }
                 Ok(x)
@@ -845,17 +869,17 @@ impl<'p, 'o> Ctx<'p, 'o> {
             }
             // 4.2 (FB-294): Gleitkomma prueft der Knoten — am Ende einer
             // Kette, wie der Codegen; die Operationen darin rechnen frei.
+            // Ein Array oder eine Matrix prueft jedes Element (INT-023).
             CheckedKind::NonFinite => {
                 let v = self.eval(inner)?;
-                match v {
-                    Value::F32(x) if !x.is_finite() => {
-                        Err(self.fault(FaultKind::Arithmetic(ArithKind::NonFinite), "Ergebnis nicht endlich", span))
-                    }
-                    Value::F64(x) if !x.is_finite() => {
-                        Err(self.fault(FaultKind::Arithmetic(ArithKind::NonFinite), "Ergebnis nicht endlich", span))
-                    }
-                    other => Ok(other),
+                if non_finite(&v) {
+                    return Err(self.fault(
+                        FaultKind::Arithmetic(ArithKind::NonFinite),
+                        "Ergebnis nicht endlich",
+                        span,
+                    ));
                 }
+                Ok(v)
             }
             // Validitaet, Index, Division, Ueberlauf, Konversion, Shift: die
             // Operation selbst faultet (4.1); der Knoten ist Annotation.
@@ -1089,8 +1113,29 @@ fn const_value(c: &Const) -> Value {
     }
 }
 
-fn rational(width: FloatWidth, num: i64, den: u64) -> Value {
-    Value::float(width, num as f64 / den as f64)
+/// Ein Bruch als naechste Zahl der Breite, mit einer Rundung — auch in
+/// `f32`, wo der Umweg ueber `f64` zweimal runden koennte.
+fn rational(width: FloatWidth, num: i64, den: u64) -> EvalResult<Value> {
+    if den == 0 {
+        return bug("Versatz mit Nenner null");
+    }
+    let (mag, den) = (u128::from(num.unsigned_abs()), u128::from(den));
+    let sign = if num < 0 { -1.0 } else { 1.0 };
+    Ok(match width {
+        FloatWidth::F32 => Value::F32(libtaktm::scale_f32(sign as f32, mag, den)),
+        FloatWidth::F64 => Value::F64(libtaktm::scale_f64(sign, mag, den)),
+    })
+}
+
+/// Der exakte Faktor von der Einheit mit `from` in die mit `to`:
+/// `from / to` als Zaehler und Nenner (3.2). Einheitenfaktoren sind positiv.
+fn unit_ratio(from: takt_mir::types::Rational, to: takt_mir::types::Rational) -> EvalResult<(u128, u128)> {
+    let num = i128::from(from.num) * i128::from(to.den);
+    let den = i128::from(from.den) * i128::from(to.num);
+    match (u128::try_from(num), u128::try_from(den)) {
+        (Ok(n), Ok(d)) if n > 0 && d > 0 => Ok((n, d)),
+        _ => bug(format!("Einheitenfaktor {num}/{den} ist nicht positiv")),
+    }
 }
 
 /// Grobform eines Zuweisungsorts, soweit `assign` sie unterscheiden muss.

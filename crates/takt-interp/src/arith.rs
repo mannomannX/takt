@@ -57,7 +57,8 @@ pub fn int_binary(op: BinaryOp, a: i128, b: i128, width: IntWidth, span: Span, t
     match op {
         BinaryOp::Add => fit(width, a + b, span, tick),
         BinaryOp::Sub => fit(width, a - b, span, tick),
-        BinaryOp::Mul => fit(width, a * b, span, tick),
+        // Zwei `u64` sprengen auch `i128`; ein solches Produkt passt in keine Breite.
+        BinaryOp::Mul => fit(width, a.checked_mul(b).unwrap_or(i128::MAX), span, tick),
         BinaryOp::Div => {
             if b == 0 {
                 return Err(arith(ArithKind::DivZero, "Division durch null", span, tick));

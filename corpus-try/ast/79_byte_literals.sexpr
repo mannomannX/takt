@@ -11,8 +11,8 @@
   (state RUN
     (loop
       (var frame :bytes<8> (array (as k u8) 7))
-      (= total (+ (as (+ (.len cmd) (.len frame)) int) (as (index frame 0) int)))
+      (= total (+ (as (paren (+ (.len cmd) (.len frame))) int) (paren (as (index frame 0) int))))
       (= second (as (index cmd 1) int))
       (if (== k 0)
         (send tx (array 0xAA 0x55 (as k u8))))
-      (= k (% (+ k 1) 4)))))
+      (= k (% (paren (+ k 1)) 4)))))

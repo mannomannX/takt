@@ -31,7 +31,7 @@
       (for i in (range 3)
         (every 2ms
           (= h (call min (+ h 1) 999)))
-        (alert (== (% (+ n i) 3) 0) "reihum {i}")
+        (alert (== (% (paren (+ n i)) 3) 0) "reihum {i}")
         (check (or (> i 0) (< n 20)) "erste Zeile" for=3ms))
       (= hits h)))
   (state DOWN

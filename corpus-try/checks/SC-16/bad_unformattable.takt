@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-16: ein `vec` ist nicht formatierbar.
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    var k : int in 0..100 = 3
+    var f : float[bar] = 2.5 bar
+    var q : vec<int, 4> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            log "Werte {q}"  # ~ SC-16
+            v = true

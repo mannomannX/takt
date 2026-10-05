@@ -264,14 +264,7 @@ impl Lowerer<'_> {
                 // Pruefung 57 (3.9): der Schluessel ist POD mit Gleichheit;
                 // Fliesskomma hat keine (NaN), und ein Hash darueber waere
                 // bitweise, was `==` nicht ist.
-                if !takt_mir::persist::is_pod(&self.program, key) || self.contains_float(key) {
-                    let n = self.type_name(key);
-                    self.error_hint(
-                        crate::checks::SC57,
-                        span,
-                        format!("`{n}` taugt nicht als Schluessel einer `map` (3.9)"),
-                        "Schluessel sind POD mit Gleichheit: Ganzzahlen, Enums, Records und Puffer daraus",
-                    );
+                if !self.map_key_ok(key, span) {
                     return None;
                 }
                 Some(self.intern(Type::Map { key, value, cap }))
@@ -656,6 +649,59 @@ impl Lowerer<'_> {
             _ => Vec::new(),
         };
         inner.into_iter().find_map(|t| self.default_outside_range(t))
+    }
+
+    /// Pruefung 57 (3.9): Der Schluessel einer `map` ist POD mit Gleichheit;
+    /// Fliesskomma hat keine (NaN), und ein Hash darueber waere bitweise,
+    /// was `==` nicht ist.
+    fn map_key_ok(&mut self, key: TypeId, span: Span) -> bool {
+        if takt_mir::persist::is_pod(&self.program, key) && !self.contains_float(key) {
+            return true;
+        }
+        let n = self.type_name(key);
+        self.error_hint(
+            crate::checks::SC57,
+            span,
+            format!("`{n}` taugt nicht als Schluessel einer `map` (3.9)"),
+            "Schluessel sind POD mit Gleichheit: Ganzzahlen, Enums, Records und Puffer daraus",
+        );
+        false
+    }
+
+    /// Pruefung 17 (8.6, 5.9): Ein Strom traegt `u8`, `bytes<N>`, `line<N>`,
+    /// `capture<T, N>` oder einen Record oder ein Enum aus POD-Feldern — mit
+    /// `layout` im Drahtformat, sonst in kanonischer Byteform.
+    pub fn check_stream_elem(&mut self, elem: TypeId, span: Span) {
+        let ok = match self.ty(elem) {
+            Type::Int { width: IntWidth::U8, .. } | Type::Bytes { .. } | Type::Line { .. } | Type::Capture { .. } => {
+                true
+            }
+            Type::Record(_) | Type::Enum(_) => takt_mir::persist::is_pod(&self.program, elem),
+            _ => false,
+        };
+        if !ok {
+            let n = self.type_name(elem);
+            self.error_hint(
+                crate::checks::SC17,
+                span,
+                format!("`{n}` ist kein Elementtyp eines Stroms (8.6)"),
+                "`u8`, `bytes<N>`, `line<N>`, `Edge` oder ein Record oder Enum aus POD-Feldern (5.9)",
+            );
+        }
+    }
+
+    /// Prueft die Schluessel der `map`-Typen in `ty` erneut, sobald alle
+    /// Records ihre Felder haben (siehe `collect`).
+    pub fn check_map_keys_in(&mut self, ty: TypeId, span: Span) {
+        match self.ty(ty).clone() {
+            Type::Map { key, .. } => {
+                self.map_key_ok(key, span);
+            }
+            Type::Optional(inner) | Type::Array { elem: inner, .. } | Type::Vec { elem: inner, .. } => {
+                self.check_map_keys_in(inner, span);
+            }
+            _ => {}
+        }
     }
 
     /// Traegt der Typ irgendwo eine Fliesskommazahl?

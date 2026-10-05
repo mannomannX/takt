@@ -10,13 +10,16 @@
 //!
 //! **Was verglichen wird.** Nicht nur das Urteil, sondern die *Werte*:
 //! Ein Vergleich der Ja/Nein-Antwort uebersaehe eine Spanne, die um ein
-//! Zeichen danebenliegt. Der Test uebersetzt je Muster eine kleine
-//! Funktion, laesst sie ueber viele Texte laufen und misst beides.
+//! Zeichen danebenliegt. Der Test uebersetzt je Muster zwei kleine
+//! Funktionen, `matches` und `has`, laesst sie ueber viele Texte laufen
+//! und misst beides. Erst `has` zeigt, wo eine Klasse am Musterende endet:
+//! Unter `matches` muesste ohnehin der ganze Text verbraucht sein.
 //!
 //! Er ueberspringt sich ohne clang, wie die uebrigen LLVM-Tests.
 
 use takt_llvm::emit::Module;
 use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::ty::LlvmType;
 use takt_match::{Kind, Piece};
 use takt_mir::pattern::{CaptureKind, PatternPiece};
 
@@ -62,16 +65,31 @@ fn all_of() -> Vec<Pattern> {
         ),
         pattern_of("[{s:str<8>}]", vec![lit("["), cap(CaptureKind::Str(8), Kind::Str(8)), lit("]")]),
         pattern_of("T{n:int}C", vec![lit("T"), cap(CaptureKind::Int, Kind::Int), lit("C")]),
+        // Ein offenes Ende vorn: `has` laeuft ueber den Durchlaufautomaten
+        // (`takt_mir::scan`), nicht ueber den Ansatz an jeder Stelle.
+        pattern_of(
+            "{_}={n:int}",
+            vec![(PatternPiece::Any, Piece::Capture(Kind::Any)), lit("="), cap(CaptureKind::Int, Kind::Int)],
+        ),
+        pattern_of("{s:str<8>}", vec![cap(CaptureKind::Str(8), Kind::Str(8))]),
     ]
 }
+
+/// Die Kapazitaet der Zeile, die `has` sieht; der Treiber haelt so viele
+/// Bytes.
+const LINE_CAP: u32 = 128;
 
 /// Die Texte, gegen die jedes Muster laeuft.
 ///
 /// Sie decken die Raender ab: leer, knapp daneben, der kleinste `int`
 /// (FB-114/FB-95), das Vorzeichen `+` und der Ueberlauf (FB-349),
 /// fuehrende Nullen, Hex in beiden Schreibweisen, und Text, der nur
-/// teilweise passt.
-const TEXTS: [&str; 35] = [
+/// teilweise passt. Dazu die Klassengrenzen aus 8.7 (GEN-014, SYN-039):
+/// `int` mit 19 und 20 Ziffern, `hex` mit 16 und 17 und blossem `0x`,
+/// `word` mit 64 und 65 Zeichen, `str<8>` mit 8 und 9 Bytes, auch aus
+/// Mehrbytezeichen, und ein `has`-Ansatz, der erst hinter einem
+/// Mehrbytezeichen beginnt.
+const TEXTS: [&str; 62] = [
     "",
     "READY",
     "READ",
@@ -107,11 +125,42 @@ const TEXTS: [&str; 35] = [
     "a=1",
     "[abc]",
     "[abcdefghij]",
+    "Boot v1234567890123456789",
+    "Boot v12345678901234567890",
+    "Boot v1234567890123456789 ok",
+    "Boot v12345678901234567890 ok",
+    "Boot v-1234567890123456789",
+    "Boot v-12345678901234567890",
+    "addr 0x123456789abcdef0",
+    "addr 0x123456789abcdef01",
+    "addr 123456789abcdef0",
+    "addr 123456789abcdef01",
+    "addr 0x",
+    "addr 0xg",
+    "addr 0x123456789abcdef01 ok",
+    "user abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_x",
+    "user abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_xy",
+    "user abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_xy!",
+    "[abcdefgh]",
+    "[abcdefghi]",
+    "[\u{e4}\u{f6}\u{fc}\u{e4}]",
+    "[\u{e4}\u{f6}\u{fc}\u{e4}b]",
+    "\u{fc}[\u{e4}\u{f6}]",
+    "abcdefghij",
+    "a=12345678901234567890",
+    "a=1234567890123456789",
+    "x=1 y=2",
+    "Boot v1 Boot v2",
+    "\u{e9}x",
 ];
 
-/// Baut ein Modul mit je einer Funktion `pruef<i>` pro Muster.
+/// Die beiden Lesarten eines Musters (8.7).
+const MODES: [&str; 2] = ["pruef", "such"];
+
+/// Baut ein Modul mit je einer Funktion `pruef<i>` (`matches`) und
+/// `such<i>` (`has`) pro Muster.
 ///
-/// Die Funktion nimmt einen Zeiger auf `{ i32 len, [64 x i8] }` und
+/// Die Funktion nimmt einen Zeiger auf `{ i32 len, [128 x i8] }` und
 /// schreibt das Ergebnis: das Urteil und die Werte der Captures. Mehr
 /// braucht der Vergleich nicht, und weniger waere zu wenig.
 fn module_of(pattern_of: &[Pattern]) -> String {
@@ -119,52 +168,59 @@ fn module_of(pattern_of: &[Pattern]) -> String {
     // Wirts sein.
     let triple = if cfg!(windows) { "x86_64-pc-windows-msvc" } else { "x86_64-unknown-linux-gnu" };
     let mut m = Module::new("captures", triple);
-    for (i, mu) in pattern_of.iter().enumerate() {
+    for ((i, mu), mode) in pattern_of.iter().enumerate().flat_map(|p| MODES.map(|mode| (p, mode))) {
         // `pruef(text, out, arena) -> i1`; `out` nimmt den Aufnahmerecord.
         // Von aussen gerufen, also mit aeusserer Bindung; die Arena haengt
         // an jeder erzeugten Funktion (12.11).
-        let regs = m.begin_with(
-            "",
-            &format!("pruef{i}"),
-            &takt_llvm::ty::LlvmType::Int(1),
-            &[takt_llvm::ty::LlvmType::Ptr, takt_llvm::ty::LlvmType::Ptr],
-            &[],
-            "",
-        );
+        let regs = m.begin_with("", &format!("{mode}{i}"), &LlvmType::Int(1), &[LlvmType::Ptr, LlvmType::Ptr], &[], "");
         let (text, out) = (regs[0], regs[1]);
         let count_of = mu.pieces.iter().filter(|p| matches!(p, PatternPiece::Capture { .. })).count();
         // Der Aufnahmerecord: je Capture ein Feld. `int` und `hex` sind
         // i64, `word` und `str` ein Textpuffer wie `str<N>` (3.9).
-        let fields: Vec<takt_llvm::ty::LlvmType> = mu
+        let fields: Vec<LlvmType> = mu
             .pieces
             .iter()
             .filter_map(|p| match p {
-                PatternPiece::Capture { kind: CaptureKind::Int | CaptureKind::Hex, .. } => {
-                    Some(takt_llvm::ty::LlvmType::Int(64))
-                }
+                PatternPiece::Capture { kind: CaptureKind::Int | CaptureKind::Hex, .. } => Some(LlvmType::Int(64)),
                 PatternPiece::Capture { kind: CaptureKind::Word | CaptureKind::Str(_), .. } => {
-                    Some(takt_llvm::ty::LlvmType::Struct(vec![
-                        takt_llvm::ty::LlvmType::Int(32),
-                        takt_llvm::ty::LlvmType::Array(Box::new(takt_llvm::ty::LlvmType::Int(8)), 64),
-                    ]))
+                    Some(LlvmType::Struct(vec![LlvmType::Int(32), LlvmType::Array(Box::new(LlvmType::Int(8)), 64)]))
                 }
                 _ => None,
             })
             .collect();
-        let rec = takt_llvm::ty::LlvmType::Struct(fields.clone());
-        let list: Vec<(u32, takt_llvm::ty::LlvmType)> =
-            fields.iter().enumerate().map(|(j, f)| (j as u32, f.clone())).collect();
+        let rec = LlvmType::Struct(fields.clone());
+        let list: Vec<(u32, LlvmType)> = fields.iter().enumerate().map(|(j, f)| (j as u32, f.clone())).collect();
         let into = (count_of > 0).then(|| takt_llvm::captures::Target { slot: out, record: &rec, fields: &list });
-        let zero = m.inst("add i32 0, 0");
-        let (ok, at) = takt_llvm::captures::walk(&mu.pieces, text, into.as_ref(), zero, &mut m).expect("walk");
-        // `matches`: der ganze Text muss verbraucht sein (8.7).
-        let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
-        let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-        let whole = m.inst(&format!("icmp eq i32 {at}, {len}"));
-        let hit = m.inst(&format!("and i1 {ok}, {whole}"));
-        m.end(Some((&takt_llvm::ty::LlvmType::Int(1), hit.to_string())));
+        let hit = if mode == "such" {
+            takt_llvm::captures::has(&mu.pieces, text, LINE_CAP, into.as_ref(), &mut m).expect("has")
+        } else {
+            let zero = m.inst("add i32 0, 0");
+            let (ok, at) = takt_llvm::captures::walk(&mu.pieces, text, into.as_ref(), zero, &mut m).expect("walk");
+            // `matches`: der ganze Text muss verbraucht sein (8.7).
+            let len_ptr = m.inst(&format!("getelementptr inbounds i8, ptr {text}, i64 0"));
+            let len = m.inst(&format!("load i32, ptr {len_ptr}"));
+            let whole = m.inst(&format!("icmp eq i32 {at}, {len}"));
+            m.inst(&format!("and i1 {ok}, {whole}"))
+        };
+        m.end(Some((&LlvmType::Int(1), hit.to_string())));
     }
     m.finish()
+}
+
+/// `{x:float}` baut der Codegen nicht: Eine eigene Dezimalkonversion waere
+/// eine zweite Rundungsquelle neben `libtaktm` (4.2). `matches` und `has`
+/// lehnen das Muster darum ab, statt still anders zu binden — auch `has`
+/// hinter einem offenen Ende, das sonst den Durchlaufautomaten naehme.
+#[test]
+fn a_float_capture_is_not_built() {
+    let float = PatternPiece::Capture { name: "x".to_string(), kind: CaptureKind::Float };
+    for pieces in [vec![PatternPiece::Text("t=".to_string()), float.clone()], vec![PatternPiece::Any, float]] {
+        let mut m = Module::new("float", "x86_64-unknown-linux-gnu");
+        let regs = m.begin_with("", "f", &LlvmType::Int(1), &[LlvmType::Ptr], &[], "");
+        let zero = m.inst("add i32 0, 0");
+        assert!(takt_llvm::captures::walk(&pieces, regs[0], None, zero, &mut m).is_err(), "{pieces:?}");
+        assert!(takt_llvm::captures::has(&pieces, regs[0], LINE_CAP, None, &mut m).is_err(), "{pieces:?}");
+    }
 }
 
 #[test]
@@ -212,9 +268,10 @@ fn the_generated_matcher_agrees_with_takt_match() {
     let mut differences = Vec::new();
     for (i, (a, b)) in actual.iter().zip(expected.iter()).enumerate() {
         if a != b {
-            let m = &pattern_of[i / TEXTS.len()];
-            let t = TEXTS[i % TEXTS.len()];
-            differences.push(format!("  `{}` gegen {t:?}: nativ `{a}`, `takt-match` `{b}`", m.text));
+            let m = &pattern_of[i / (TEXTS.len() * MODES.len())];
+            let t = TEXTS[i / MODES.len() % TEXTS.len()];
+            let mode = ["matches", "has"][i % MODES.len()];
+            differences.push(format!("  `{}` {mode} {t:?}: nativ `{a}`, `takt-match` `{b}`", m.text));
         }
     }
     assert!(
@@ -225,13 +282,19 @@ fn the_generated_matcher_agrees_with_takt_match() {
     );
 }
 
-/// Was `takt-match` zu jedem Paar sagt, in derselben Schreibweise wie
-/// der Treiber. Ein Wert ausserhalb des Bereichs ist kein Treffer (8.7).
+/// Was `takt-match` zu jedem Paar sagt, je `matches` und `has`, in
+/// derselben Schreibweise wie der Treiber. Ein Wert ausserhalb des
+/// Bereichs ist kein Treffer (8.7).
 fn oracle(pattern_of: &[Pattern]) -> Vec<String> {
     let mut out = Vec::new();
     for mu in pattern_of {
-        for t in TEXTS {
-            let Some(hit) = takt_match::matches(&mu.pieces_of, t.as_bytes()) else {
+        for (t, has) in TEXTS.iter().flat_map(|t| [(t, false), (t, true)]) {
+            let hit = if has {
+                takt_match::has(&mu.pieces_of, t.as_bytes())
+            } else {
+                takt_match::matches(&mu.pieces_of, t.as_bytes())
+            };
+            let Some(hit) = hit else {
                 out.push("0".to_string());
                 continue;
             };
@@ -272,7 +335,7 @@ fn driver(pattern_of: &[Pattern]) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "#include <stdio.h>");
     let _ = writeln!(s, "#include <string.h>\n");
-    let _ = writeln!(s, "struct text {{ int len; char bytes[64]; }};");
+    let _ = writeln!(s, "struct text {{ int len; char bytes[{LINE_CAP}]; }};");
     let _ = writeln!(s, "struct wort {{ int len; char bytes[64]; }};");
     // Je Muster ein eigener Record: Die Ausrichtung rechnet der
     // C-Compiler, wie LLVM sie auf der anderen Seite rechnet. Versaetze
@@ -296,8 +359,8 @@ fn driver(pattern_of: &[Pattern]) -> String {
         }
     }
     let _ = writeln!(s);
-    for (i, _) in pattern_of.iter().enumerate() {
-        let _ = writeln!(s, "_Bool pruef{i}(struct text *, void *, void *);");
+    for (i, mode) in (0..pattern_of.len()).flat_map(|i| MODES.map(|mode| (i, mode))) {
+        let _ = writeln!(s, "_Bool {mode}{i}(struct text *, void *, void *);");
     }
     // Die Fault-Ablagen am Anfang der Arena genuegen: Mehr beruehrt der
     // Mustervergleich nicht.
@@ -308,7 +371,7 @@ fn driver(pattern_of: &[Pattern]) -> String {
         let _ = writeln!(s, "    struct rec{i} r{i};");
     }
     for (i, mu) in pattern_of.iter().enumerate() {
-        for text in TEXTS {
+        for (text, mode) in TEXTS.iter().flat_map(|t| MODES.map(|mode| (t, mode))) {
             let bytes: String = text.as_bytes().iter().map(|b| format!("\\x{b:02x}")).collect();
             let _ = writeln!(s, "    memset(&t, 0, sizeof t);");
             let _ = writeln!(s, "    t.len = {};", text.len());
@@ -316,7 +379,7 @@ fn driver(pattern_of: &[Pattern]) -> String {
                 let _ = writeln!(s, "    memcpy(t.bytes, \"{bytes}\", {});", text.len());
             }
             let _ = writeln!(s, "    memset(&r{i}, 0, sizeof r{i});");
-            let _ = writeln!(s, "    if (!pruef{i}(&t, &r{i}, arena)) {{ printf(\"0\\n\"); }} else {{");
+            let _ = writeln!(s, "    if (!{mode}{i}(&t, &r{i}, arena)) {{ printf(\"0\\n\"); }} else {{");
             let _ = writeln!(s, "        printf(\"1\");");
             // Die Felder in der Reihenfolge des Musters auslesen.
             let mut j = 0usize;

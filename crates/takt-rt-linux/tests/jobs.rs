@@ -90,3 +90,68 @@ fn a_cancelled_job_leaves_no_result() {
     assert_eq!(jobs.take(0, &mut out), 1);
     assert_eq!(out[0], 6);
 }
+
+/// **Ein falscher Tag endet als `Err(FAILED)`** (4.5): Der Slot meldet
+/// `Failed`, liefert kein Ergebnis und ist danach frei.
+#[test]
+fn a_wrong_tag_fails_the_job() {
+    let (key, nonce) = ([0x11u8; 16], [0x22u8; 12]);
+    let args =
+        [bytes_arg(&key), bytes_arg(&nonce), bytes_arg(b""), bytes_arg(b"geheim"), bytes_arg(&[0u8; 16])].concat();
+    let mut jobs = ThreadJobs::new(1, 256 * 1024).expect("Arbeiter");
+    assert!(jobs.begin(0, "aes_gcm_decrypt", &args));
+    assert_eq!(wait_done(&mut jobs, 0), JobState::Failed);
+    let mut out = [0xAAu8; 16];
+    assert_eq!(jobs.take(0, &mut out), 0);
+    assert_eq!(out, [0xAA; 16], "nichts geschrieben");
+    assert_eq!(jobs.poll(0), JobState::Idle);
+}
+
+/// **Argumente, die nicht zur Signatur passen, scheitern** statt zu raten.
+#[test]
+fn arguments_that_do_not_fit_the_signature_fail() {
+    let mut jobs = ThreadJobs::new(1, 64 * 1024).expect("Arbeiter");
+    let two = [bytes_arg(b"abc"), bytes_arg(b"def")].concat();
+    assert!(jobs.begin(0, "sha256", &two));
+    assert_eq!(wait_done(&mut jobs, 0), JobState::Failed, "zwei Bloecke fuer einen Parameter");
+    let mut out = [0u8; 64];
+    assert_eq!(jobs.take(0, &mut out), 0);
+}
+
+/// **Ein Ergebnis, das nicht in den Puffer passt, kommt nicht gekuerzt an**:
+/// `take` nennt seine Laenge, schreibt nichts, und der Slot ist frei — der
+/// Kern stellt es als `Err(FAILED)` zu.
+#[test]
+fn a_result_larger_than_the_buffer_is_refused() {
+    let mut jobs = ThreadJobs::new(1, 64 * 1024).expect("Arbeiter");
+    assert!(jobs.begin(0, "sha256", &bytes_arg(b"abc")));
+    assert_eq!(wait_done(&mut jobs, 0), JobState::Done);
+    let mut small = [0u8; 8];
+    assert_eq!(jobs.take(0, &mut small), 36, "die Laenge des Ergebnisses");
+    assert_eq!(small, [0; 8], "nichts Gekuerztes");
+    assert_eq!(jobs.poll(0), JobState::Idle);
+}
+
+/// **Ein Neustart nach `cancel` wird angenommen, sobald der verworfene Lauf
+/// geraeumt ist** (4.5: `job` auf laufendem Handle bricht ab und startet
+/// neu): Solange der Arbeiter noch rechnet, verweigert `begin`, und der
+/// Aufrufer versucht es im naechsten Tick erneut; das Ergebnis ist das des
+/// neuen Laufs, nie das des verworfenen.
+#[test]
+fn a_restart_after_cancel_is_accepted_once_the_slot_is_free() {
+    let mut jobs = ThreadJobs::new(1, 64 * 1024).expect("Arbeiter");
+    for _ in 0..50 {
+        assert!(jobs.begin(0, "sha256", &bytes_arg(&[7u8; 4096])));
+        jobs.cancel(0);
+        let mut tries = 0;
+        while !jobs.begin(0, "sum8", &bytes_arg(&[1, 2, 3])) {
+            assert_eq!(jobs.poll(0), JobState::Running, "verweigert nur, solange der Arbeiter rechnet");
+            tries += 1;
+            assert!(tries < 2000, "der verworfene Lauf wird nie geraeumt");
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(wait_done(&mut jobs, 0), JobState::Done);
+        let mut out = [0u8; 64];
+        assert_eq!((jobs.take(0, &mut out), out[0]), (1, 6), "das Ergebnis des neuen Laufs");
+    }
+}

@@ -1,0 +1,38 @@
+# 107 — `pulse` und `cancel` (7.5, 9.8): Der Puls setzt jetzt und stellt
+# nach seiner Dauer den Latch von vor dem Statement wieder her; `cancel`
+# verwirft, was fuer einen Output geplant ist. Die erste Runde bricht die
+# geplante Abschaltung ab, die zweite laesst sie wirken.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output reset_n : bool        @ hw("o/reset_n") with safe = true
+output vbus_en : bool        @ hw("o/vbus")    with safe = true
+output phase   : int in 0..9 @ hw("o/phase")   with safe = 0
+
+machine m:
+    var turn : int in 0..9 = 0
+    initial IDLE
+
+    state IDLE:
+        enter:
+            phase = 1
+            vbus_en = true
+        after 10 ms: -> ARMED
+
+    state ARMED:
+        enter:
+            turn = min(turn + 1, 9)
+            phase = 2
+            pulse reset_n = false for 20 ms
+            at now + 50 ms:
+                vbus_en = false
+        when turn == 1 and time_in_state >= 30 ms: -> STOPPED
+        after 80 ms: -> IDLE
+
+    state STOPPED:
+        enter:
+            phase = 3
+            cancel vbus_en
+        after 50 ms: -> IDLE

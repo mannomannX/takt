@@ -7,19 +7,15 @@ use crate::token::TokenKind;
 impl<'t, 's> Parser<'t, 's> {
     /// `type`
     pub(super) fn parse_type(&mut self) -> PResult<Type> {
+        self.cover("type");
         self.enter()?;
-        let result = self.parse_type_inner();
-        self.leave();
-        result
-    }
-
-    fn parse_type_inner(&mut self) -> PResult<Type> {
         let start = self.pos;
         let kind = if self.at_op("[") {
             self.bump();
             let len = self.plain(Self::parse_const_expr)?;
             self.expect_op("]")?;
-            let elem = self.parse_type()?;
+            // Der Elementtyp eines Felds liegt eine Ebene tiefer, wie in `vec<…>`.
+            let elem = self.deeper(Self::parse_type)?;
             TypeKind::Array { len: Box::new(len), elem: Box::new(elem) }
         } else if self.is_scalar_word() {
             let scalar = self.parse_scalar_type()?;
@@ -142,11 +138,13 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `"<" const_expr ">"`
     fn parse_angle_expr(&mut self) -> PResult<Expr> {
+        self.cover("angle_expr");
         self.in_angles(Self::parse_const_expr)
     }
 
     /// `[ "?" | "!" TYPE_IDENT ]`
     fn parse_wrap(&mut self) -> PResult<Option<Wrap>> {
+        self.cover("wrap");
         if self.eat_op("?") {
             Ok(Some(Wrap::Optional))
         } else if self.at_op("!") {
@@ -159,6 +157,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `scalar_type`
     pub(super) fn parse_scalar_type(&mut self) -> PResult<ScalarType> {
+        self.cover("scalar_type");
         if !Self::is_word(self.kind()) {
             return Err(self.error_here("einen Skalartyp"));
         }
@@ -197,6 +196,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `[ "[" unit_expr "]" ]` hinter einem Zahlentyp.
     fn parse_bracket_unit(&mut self) -> PResult<Option<UnitExpr>> {
+        self.cover("bracket_unit");
         if self.eat_op("[") {
             let unit = self.parse_unit_expr(false)?;
             self.expect_op("]")?;
@@ -208,6 +208,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `int_type`
     pub(super) fn parse_int_type(&mut self) -> PResult<IntType> {
+        self.cover("int_type");
         let ty = if Self::is_word(self.kind()) {
             match self.text() {
                 "int" => IntType::Int,
@@ -230,6 +231,7 @@ impl<'t, 's> Parser<'t, 's> {
 
     /// `elem_type`
     pub(super) fn parse_elem_type(&mut self) -> PResult<ElemType> {
+        self.cover("elem_type");
         if self.at(TokenKind::TypeIdent) && self.text() != "Edge" {
             return Ok(ElemType::Named(self.type_ident()?));
         }

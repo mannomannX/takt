@@ -1,0 +1,5 @@
+(input vbus_wave :stream<capture<float[V], 4096>> @hw("daq1/cap0") max_rate=10[Hz] capacity=2)
+(output cap_arm :CaptureCmd @hw("daq1/cap0/arm") safe=NONE)
+(on vbus_wave as w
+  (measure dip_min (.min (.samples w) ()))
+  (measure dip_at (.t w)))

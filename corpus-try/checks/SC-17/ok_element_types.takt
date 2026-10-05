@@ -1,0 +1,53 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 17 (8.6, 5.9): Elementtypen sind `u8`, `bytes<N>`, `line<N>`,
+# `Edge` und Records und Enums aus POD-Feldern, auch ueber einen Alias;
+# Records ohne `layout` in kanonischer Byteform.
+
+record Sample:
+    id    : u8
+    value : float
+
+enum Mode: OFF, ON(level: u8)
+
+type Frame = bytes<8>
+
+stream<u8> raw with capacity = 4
+stream<Frame> frames with capacity = 4
+stream<line<32>> lines with capacity = 4
+stream<Edge> edges with capacity = 4
+stream<Sample> samples with capacity = 4
+stream<Mode> modes with capacity = 4
+
+output n : int in 0..99 @ hw("o/n") with safe = 0
+
+machine producer:
+    initial RUN
+
+    state RUN:
+        loop:
+            send raw, 1
+            send samples, Sample(id = 1, value = 2.0)
+            send modes, ON(level = 3)
+
+machine consumer:
+    var k : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = k
+        on raw as r:
+            k = (k + 1) % 100
+        on frames as f:
+            k = (k + 1) % 100
+        on lines as l:
+            k = (k + 1) % 100
+        on edges as e:
+            k = (k + 1) % 100
+        on samples as s:
+            k = (k + 1) % 100
+        on modes as m:
+            k = (k + 1) % 100

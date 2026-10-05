@@ -81,3 +81,76 @@ machine m:
     .expect_err("kein Ziel");
     assert!(!e.is_empty(), "{e:?}");
 }
+
+/// Ein Programm, das `bump` mit `arg` als `inout`-Argument ruft.
+fn bumping(arg: &str) -> Result<Program, Vec<String>> {
+    compile(&format!(
+        "fn bump(inout x: int in 0..99):
+    x = min(x + 1, 99)
+
+record Holder:
+    v : int in 0..99
+
+input  n_in  : int in 0..99 @ hw(\"i/n\")
+output n_sim : int @ sim(\"i/n\")
+param  P     : int in 0..99 = 1
+const  K : int in 0..99 = 3
+output width : int in 0..99 @ sim(\"w\")
+
+machine m:
+    var h   : Holder = default
+    var arr : [2] int in 0..99 = [0, 0]
+    initial RUN
+    state RUN:
+        loop:
+            bump({arg})
+            width = h.v + arr[1]
+"
+    ))
+}
+
+/// 3.9: Das `inout`-Argument ist eine Stelle. Ein Input ist nicht
+/// beschreibbar (Pruefung 7), Parameter, Konstante und `default` sind kein
+/// Zuweisungsziel; ein Recordfeld und ein Array-Element sind Stellen.
+#[test]
+fn only_a_place_takes_an_inout_argument() {
+    for (arg, want) in [("n_in", "SC-7"), ("P", "SC-3"), ("K", "SC-3"), ("default", "SC-3")] {
+        let e = bumping(arg).expect_err(arg);
+        assert_eq!(e.len(), 1, "{arg}: {e:?}");
+        let message = if want == "SC-7" { "Input `n_in` ist nicht beschreibbar" } else { "kein Zuweisungsziel" };
+        assert!(e[0].contains(want) && e[0].contains(message), "{arg}: {e:?}");
+    }
+    for arg in ["h.v", "arr[1]"] {
+        let p = bumping(arg).unwrap_or_else(|e| panic!("{arg}: {e:?}"));
+        let t =
+            run(&p, &Trace::default(), &RunOptions { ticks: 2, ..Default::default() }).expect("Lauf").trace.render();
+        assert!(t.contains("t=0 out width 1") && t.contains("t=2 out width 3"), "{arg}:\n{t}");
+    }
+}
+
+/// 3.9: Im Ausdruck ist der Aufruf eine gewoehnliche Rueckgabe — `y`
+/// bekommt den gefuellten Puffer, `b` bleibt, wie es war.
+#[test]
+fn a_call_in_an_expression_returns_without_writing_back() {
+    let p = compile(&format!(
+        "{FILL}
+output width : int in 0..16 @ sim(\"w\")
+output kept  : int in 0..16 @ sim(\"k\")
+
+machine m:
+    var b : bytes<16> = default
+    var y : bytes<16> = default
+    initial RUN
+    state RUN:
+        loop:
+            var src : bytes<8> = default
+            var a : bool = src.push(0x41)
+            y = fill(src, b)
+            width = y.len
+            kept = b.len
+"
+    ))
+    .expect("uebersetzt");
+    let t = run(&p, &Trace::default(), &RunOptions { ticks: 1, ..Default::default() }).expect("Lauf").trace.render();
+    assert!(t.contains("t=0 out width 2") && t.contains("t=0 out kept 0"), "{t}");
+}

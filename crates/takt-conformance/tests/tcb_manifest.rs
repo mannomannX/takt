@@ -50,6 +50,12 @@ fn column(heading: &str, index: usize) -> Vec<String> {
 
 #[test]
 fn every_crate_outside_the_workspace_is_in_the_manifest() {
+    // Was die Mitglieder erben, steht in der Wurzel: `forbid`, nicht `deny`
+    // (ein `allow` im Crate hebt es nicht auf), und nicht `warn` (KON2-034).
+    let cargo = read("Cargo.toml");
+    let rust = cargo.split("[workspace.lints.rust]").nth(1).expect("`[workspace.lints.rust]` in Cargo.toml");
+    let section: Vec<&str> = rust.lines().map(str::trim).take_while(|l| !l.starts_with('[')).collect();
+    assert!(section.contains(&"unsafe_code = \"forbid\""), "die Wurzel verbietet `unsafe` nicht: {section:?}");
     let (dirs, members) = (crate_dirs(), members());
     for m in &members {
         let manifest = read(&format!("crates/{m}/Cargo.toml"));

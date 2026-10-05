@@ -1,0 +1,7 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-31 (4.5): `duration` ist die Zusage eines Jobs; ein `native fn`
+# laeuft im Tick und hat keine.
+native fn crc32(b: bytes<8>) -> u32 with cost = 1600, stack = 32, duration = 1 ms, total  # ~ SC-31

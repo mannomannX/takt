@@ -201,7 +201,7 @@ machine m:
             w = (g * g)[0, 0]
 ";
     let e = compile(bad).expect_err("K^2 ist kein K").join("\n");
-    assert!(e.contains("K"), "{e}");
+    assert!(e.contains("SC-3") && e.contains("`float[K]`") && e.contains("`float[K^2]`"), "{e}");
 }
 
 #[test]
@@ -236,4 +236,103 @@ machine m:
 ",
     );
     assert!(t.contains("fault m Arithmetic(Singular)"), "{t}");
+}
+
+/// Laufzeitverhalten (3.11, 4.1): `cholesky` einer indefiniten Matrix ist
+/// `none`, die Determinante einer singulaeren ist 0 ohne Fault, und ein
+/// Produkt, das ueberlaeuft, faultet `Arithmetic(NonFinite)`.
+#[test]
+fn indefinite_singular_and_overflowing_matrices_behave_as_3_11_says() {
+    let t = trace(
+        "
+output pd  : bool  @ hw(\"o/pd\")  with safe = true
+output d   : float @ hw(\"o/d\")   with safe = 7
+output big : float @ hw(\"o/big\") with safe = 0
+machine m:
+    fault -> SAFE
+    var a : mat<2, 2> = [[1, 2], [2, 1]]
+    var s : mat<2, 2> = [[1, 2], [2, 4]]
+    var g : mat<2, 2> = [[1.0e200, 0], [0, 1]]
+    initial RUN
+    state RUN:
+        loop:
+            pd = a.cholesky().valid
+            d = s.det()
+            var h = g * g
+            big = h[0, 0]
+    state SAFE:
+        enter:
+            big = 7
+",
+    );
+    for line in [
+        "t=0 fault m Arithmetic(NonFinite) \"Matrixergebnis nicht endlich\" -> SAFE",
+        "t=0 out pd false",
+        "t=0 out d 0.0",
+        "t=0 out big 7.0",
+    ] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
+    assert_eq!(t.matches(" fault ").count(), 1, "nur das Produkt faultet:\n{t}");
+}
+
+/// 3.11, Literal: Bilden die Elementeinheiten ein aeusseres Produkt, ist das
+/// Literal ohne Deklaration typisierbar — hier `mat[(m, m/s), (1, 1/s)]`.
+#[test]
+fn an_outer_product_literal_types_without_a_declaration() {
+    let ok = "
+output a : float[m/s^2] @ hw(\"o/a\") with safe = 0
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var q = [[1 m, 2 m/s], [3 m/s, 4 m/s^2]]
+            a = q[1, 1]
+";
+    let t = trace(ok);
+    assert!(t.contains("t=0 out a 4.0 m/s^2"), "{t}");
+}
+
+/// Tabelle 10, Pruefung 34: Ein Literal, dessen Elementeinheiten kein
+/// aeusseres Produkt bilden, ist ein Fehler dieser Pruefung.
+#[test]
+fn a_literal_that_is_no_outer_product_is_check_34() {
+    let bad = "
+output a : float[m] @ hw(\"o/a\") with safe = 0
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var q = [[1 m, 1 m/s], [1 m/s, 1 m]]
+            a = q[0, 0]
+";
+    let e = compile(bad).expect_err("kein aeusseres Produkt").join("\n");
+    assert!(e.contains("SC-34"), "{e}");
+}
+
+/// `corpus-try/108_singular_solve.takt` im Interpreter: `solve` rechnet,
+/// solange die Determinante 3, 2, 1 ist, und faultet `Arithmetic(Singular)`
+/// genau im Tick, in dem sie 0 wird; `cholesky` der indefiniten Matrix ist
+/// `none` und faellt auf die Einheitsmatrix zurueck. Der Scratch ist der
+/// von `solve` einer 2x2 (56 Byte), wie im Kalman-Schritt.
+#[test]
+fn solve_faults_in_the_tick_its_matrix_becomes_singular() {
+    let src = include_str!("../../../corpus-try/108_singular_solve.takt");
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let p = takt_sema::compile(src, &options).program.expect("Programm");
+    assert_eq!(p.machines[0].layout.scratch_bytes, Some(56));
+    let t = run(&p, &Trace::default(), &RunOptions { ticks: 5, ..Default::default() }).expect("Lauf").trace.render();
+    for line in [
+        "t=0 out x1 0.3333333333333333",
+        "t=0 out l10 0.0",
+        "t=0 out pd false",
+        "t=1 out x0 0.0",
+        "t=1 out x1 0.5",
+        "t=2 out x0 -1.0",
+        "t=2 out x1 1.0",
+        "t=3 fault m Arithmetic(Singular) \"Matrix singulaer\" -> SAFE",
+        "t=3 out x0 7.0",
+    ] {
+        assert!(t.contains(line), "`{line}` fehlt:\n{t}");
+    }
 }

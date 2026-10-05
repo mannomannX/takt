@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-46 (3.7): Bitfelder eines Traegers ueberlappen nicht.
+
+record Sr layout little:
+    flags : u8 with bits:
+        ready : bool at 0
+        level : u8 at 0..3  # ~ SC-46
+
+output v : bool @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = true

@@ -209,6 +209,23 @@ impl Writer<'_> {
                     .void_inst(&format!("call void @llvm.memcpy.p0.p0.i64(ptr {dst}, ptr {src}, i64 {n}, i1 false)"));
                 self.module.inst(&format!("add i64 {off}, {n}"))
             }
+            // `vec<T, N>` (3.9, 5.9; SEM1-030): die Laenge, dann so viele
+            // Elemente in kanonischer Form.
+            Type::Vec { elem, .. } => {
+                let elem = *elem;
+                let LlvmType::Struct(parts) = &llvm else { return Err(NotYet { what: "vec-Typ" }) };
+                let arr = parts[1].clone();
+                let lp = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {src}, i32 0, i32 0"));
+                let len = self.module.inst(&format!("load i32, ptr {lp}"));
+                self.store_at(off, "i32", &len.to_string());
+                let start = self.module.inst(&format!("add i64 {off}, 4"));
+                let items = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {src}, i32 0, i32 1"));
+                let (p, out) = (self.p, self.out);
+                counted(self.module, len, start, &mut |m, i, o| {
+                    let ep = m.inst(&format!("getelementptr inbounds {arr}, ptr {items}, i32 0, i32 {i}"));
+                    Writer { p, out, module: m }.encode(elem, ep, o)
+                })?
+            }
             Type::Bytes { .. } | Type::Str { .. } => {
                 let lp = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {src}, i32 0, i32 0"));
                 let len = self.module.inst(&format!("load i32, ptr {lp}"));
@@ -288,7 +305,16 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
             return Err(NotYet { what: "persist-Variable im Zustand" });
         };
         let reject = format!("pr_v{k}_reset");
-        let mut r = Reader { p, input, end, labels: 0, prefix: format!("pr_v{k}"), reject: reject.clone(), module };
+        let mut r = Reader {
+            p,
+            input,
+            end,
+            labels: 0,
+            prefix: format!("pr_v{k}"),
+            reject: reject.clone(),
+            checking: true,
+            module,
+        };
         let after = match r.decode(ty, dst, body, false) {
             Ok(a) => a,
             Err(e) => {
@@ -299,6 +325,7 @@ pub fn restore_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         let exact = r.module.inst(&format!("icmp eq i64 {after}, {end}"));
         r.module.void_inst(&format!("br i1 {exact}, label %pr_v{k}_store, label %{reject}"));
         r.module.label(&format!("pr_v{k}_store"));
+        r.checking = false;
         if let Err(e) = r.decode(ty, dst, body, true) {
             module.abort(mark);
             return Err(e);
@@ -330,6 +357,8 @@ struct Reader<'a> {
     prefix: String,
     /// Wohin ein Eintrag springt, der nicht passt (`PersistReset`).
     reject: String,
+    /// Der Pruefdurchlauf: Jedes gelesene Byte muss im Eintrag liegen.
+    checking: bool,
     module: &'a mut Module,
 }
 
@@ -343,6 +372,19 @@ impl Reader<'_> {
     }
 
     fn load_at(&mut self, off: Reg, ty: &str) -> Reg {
+        // Ein zu kurzer Eintrag lese sonst hinter seine Nutzlast, bevor die
+        // Laengenpruefung am Ende ihn verwirft: Im Pruefdurchlauf liegt jedes
+        // gelesene Byte vor `end`.
+        if self.checking {
+            let n = match ty {
+                "double" => 8,
+                "float" => 4,
+                t => t.trim_start_matches('i').parse::<u32>().map_or(8, |b| b.div_ceil(8)),
+            };
+            let past = self.module.inst(&format!("add i64 {off}, {n}"));
+            let inside = self.module.inst(&format!("icmp ule i64 {past}, {}", self.end));
+            self.require(inside);
+        }
         let src = self.module.inst(&format!("getelementptr i8, ptr {}, i64 {off}", self.input));
         self.module.inst(&format!("load {ty}, ptr {src}, align 1"))
     }
@@ -401,7 +443,15 @@ impl Reader<'_> {
                 let v = self.module.inst(&format!("bitcast {bits} {raw} to {llvm}"));
                 if store {
                     self.module.void_inst(&format!("store {llvm} {v}, ptr {dst}"));
-                } else if let Some(r) = range {
+                    return Ok(self.module.inst(&format!("add i64 {off}, {n}")));
+                }
+                // 5.9: NaN und Inf sind keine gueltige Byteform, auch ohne
+                // Range (INT-025): Der Exponent besteht aus lauter Einsen.
+                let mask = if n == 4 { "2139095040" } else { "9218868437227405312" };
+                let exponent = self.module.inst(&format!("and {bits} {raw}, {mask}"));
+                let finite = self.module.inst(&format!("icmp ne {bits} {exponent}, {mask}"));
+                self.require(finite);
+                if let Some(r) = range {
                     if let (Const::Float(lo), Const::Float(hi)) = (r.lo, r.hi) {
                         let lo = crate::emit::float_literal(lo, &llvm);
                         let hi = crate::emit::float_literal(hi, &llvm);
@@ -512,6 +562,13 @@ impl Reader<'_> {
                 let mut off = off;
                 for (i, w, n) in [(0usize, "i64", 8), (1, "i32", 4), (2, "i32", 4), (3, "double", 8)] {
                     let v = self.load_at(off, w);
+                    // 5.9: Auch die Rate ist keine NaN und kein Inf (INT-025).
+                    if !store && i == 3 {
+                        let bits = self.module.inst(&format!("bitcast double {v} to i64"));
+                        let exponent = self.module.inst(&format!("and i64 {bits}, 9218868437227405312"));
+                        let finite = self.module.inst(&format!("icmp ne i64 {exponent}, 9218868437227405312"));
+                        self.require(finite);
+                    }
                     if store {
                         let fp = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 {i}"));
                         self.module.void_inst(&format!("store {w} {v}, ptr {fp}"));
@@ -550,6 +607,46 @@ impl Reader<'_> {
                 }
                 after
             }
+            // `vec<T, N>` (SEM1-030): die Laenge hoechstens `N`, dann die
+            // Elemente; beim Uebernehmen steht hinter ihnen der Default.
+            Type::Vec { elem, cap } => {
+                let (elem, cap) = (*elem, *cap);
+                let LlvmType::Struct(parts) = &llvm else { return Err(NotYet { what: "vec-Typ" }) };
+                let arr = parts[1].clone();
+                let len = self.load_at(off, "i32");
+                if store {
+                    self.module.void_inst(&format!("store {llvm} zeroinitializer, ptr {dst}"));
+                    let lp = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 0"));
+                    self.module.void_inst(&format!("store i32 {len}, ptr {lp}"));
+                } else {
+                    let small = self.module.inst(&format!("icmp ule i32 {len}, {cap}"));
+                    self.require(small);
+                }
+                let start = self.module.inst(&format!("add i64 {off}, 4"));
+                let items = self.module.inst(&format!("getelementptr inbounds {llvm}, ptr {dst}, i32 0, i32 1"));
+                let mut labels = self.labels;
+                let (p, input, end, reject, checking) =
+                    (self.p, self.input, self.end, self.reject.clone(), self.checking);
+                let prefix = self.prefix.clone();
+                let after = counted(self.module, len, start, &mut |m, i, o| {
+                    let ep = m.inst(&format!("getelementptr inbounds {arr}, ptr {items}, i32 0, i32 {i}"));
+                    let mut r = Reader {
+                        p,
+                        input,
+                        end,
+                        labels,
+                        prefix: prefix.clone(),
+                        reject: reject.clone(),
+                        checking,
+                        module: m,
+                    };
+                    let o = r.decode(elem, ep, o, store)?;
+                    labels = r.labels;
+                    Ok(o)
+                })?;
+                self.labels = labels;
+                after
+            }
             Type::Bytes { cap } | Type::Str { cap } => {
                 let cap = *cap;
                 let len = self.load_at(off, "i32");
@@ -575,6 +672,36 @@ impl Reader<'_> {
             _ => return Err(NotYet { what: "persist-Typ im Codegen" }),
         })
     }
+}
+
+/// Eine Schleife ueber `len` Elemente zur Laufzeit, mit dem Versatz im
+/// Puffer als laufendem Wert: `body` bekommt den Index und den Versatz vor
+/// dem Element und liefert den dahinter. Liefert den Versatz am Ende.
+fn counted(
+    m: &mut Module,
+    len: Reg,
+    start: Reg,
+    body: &mut dyn FnMut(&mut Module, Reg, Reg) -> Result<Reg, NotYet>,
+) -> Result<Reg, NotYet> {
+    let k = m.next_label();
+    let (head, step, done) = (format!("vec{k}_kopf"), format!("vec{k}_rumpf"), format!("vec{k}_ende"));
+    let (off_ptr, i_ptr) = (m.alloca("i64"), m.alloca("i32"));
+    m.void_inst(&format!("store i64 {start}, ptr {off_ptr}"));
+    m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&head);
+    let i = m.inst(&format!("load i32, ptr {i_ptr}"));
+    let more = m.inst(&format!("icmp ult i32 {i}, {len}"));
+    m.void_inst(&format!("br i1 {more}, label %{step}, label %{done}"));
+    m.label(&step);
+    let o = m.inst(&format!("load i64, ptr {off_ptr}"));
+    let after = body(m, i, o)?;
+    m.void_inst(&format!("store i64 {after}, ptr {off_ptr}"));
+    let next = m.inst(&format!("add i32 {i}, 1"));
+    m.void_inst(&format!("store i32 {next}, ptr {i_ptr}"));
+    m.void_inst(&format!("br label %{head}"));
+    m.label(&done);
+    Ok(m.inst(&format!("load i64, ptr {off_ptr}")))
 }
 
 /// Die kanonische Form eines Werts fuer die Grenze zu einer nativen
@@ -603,7 +730,16 @@ pub(crate) fn decode_canonical(
 ) -> Result<(), NotYet> {
     let zero = module.inst("add i64 0, 0");
     // Mit `store` prueft `decode` nichts; es gibt kein Sprungziel.
-    let mut r = Reader { p, input, end: zero, labels: 0, prefix: "native".into(), reject: String::new(), module };
+    let mut r = Reader {
+        p,
+        input,
+        end: zero,
+        labels: 0,
+        prefix: "native".into(),
+        reject: String::new(),
+        checking: false,
+        module,
+    };
     r.decode(ty, dst, zero, true).map(|_| ())
 }
 

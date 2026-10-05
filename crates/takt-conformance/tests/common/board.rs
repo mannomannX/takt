@@ -31,6 +31,7 @@ pub fn program(path: &std::path::Path) -> Program {
         build: takt_sema::Build::Sim,
         profile: None,
         channel_imports,
+        core: None,
     };
     let out = takt_sema::compile(&src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
@@ -63,23 +64,87 @@ pub fn driver_edge_agrees(board: &mut dyn Board) -> Vec<String> {
         failed.push(format!("{} Abweichungen:\n{}\n--- Board ---\n{text}", diffs.len(), list.join("\n")));
     }
     let lines = |t: &str, what: &str| -> Vec<String> {
-        t.lines().filter(|l| l.starts_with("t=") && l.contains(what)).map(str::to_string).collect()
+        t.lines().filter(|l| l.starts_with("t=") && l.contains(what)).map(|l| l.trim_end().to_string()).collect()
     };
-    if lines(&interpreted, " driver ") != lines(&text, " driver ") {
-        failed.push(format!(
-            "andere `driver`-Zeilen:\n{:?}\n{:?}",
-            lines(&interpreted, " driver "),
-            lines(&text, " driver ")
-        ));
+    // Je Fall des Pruefgeraets seine Zeile (KON1-012): Gleichheit allein
+    // bestuende auch, wenn beide Seiten keinen Verstoss mehr saehen.
+    let edge = |t: &str| -> Vec<String> {
+        let mut out = lines(t, " driver ");
+        out.extend(lines(t, " stream pairs "));
+        out.sort_by_key(|l| l.trim_start_matches("t=").split(' ').next().and_then(|k| k.parse::<u64>().ok()));
+        out
+    };
+    let want: Vec<String> = EDGE_LINES.iter().map(|l| l.to_string()).collect();
+    for (side, trace) in [("Interpreter", &interpreted), (board.name(), &text)] {
+        if edge(trace) != want {
+            failed.push(format!("{side}: andere Zeilen des Treiberrands:\n{:#?}\nerwartet:\n{want:#?}", edge(trace)));
+        }
     }
-    let raised: Vec<String> =
-        takt_board_support::edge_probe::DRIVER_FAULTS.iter().map(|k| format!("t={k} runtime Driver o")).collect();
-    if lines(&text, " runtime Driver ") != raised {
+    // Die Folge des Pruefgeraets bestimmt, welche Ausgaenge faulten; die
+    // Reihenfolge innerhalb eines Ticks ist die der Ausgaenge im Rahmen.
+    let by_tick = |mut v: Vec<String>| {
+        v.sort_by_key(|l| {
+            (l.trim_start_matches("t=").split(' ').next().and_then(|k| k.parse::<u64>().ok()), l.clone())
+        });
+        v
+    };
+    let raised = by_tick(raised_driver_faults(EDGE_TICKS));
+    if by_tick(lines(&text, " runtime Driver ")) != raised {
         failed.push(format!("das Board erhob {:?}, erwartet {raised:?}", lines(&text, " runtime Driver ")));
+    }
+    // Die Besitzer reagieren: `actor` und `talker` nehmen ihren Fault-Pfad,
+    // `failing` hat keinen und steht ab dem ersten Fault in FAULTED (5.3).
+    if lines(&text, " fault ") != FAULT_LINES {
+        failed.push(format!("{}: Faults {:?}, erwartet {FAULT_LINES:?}", board.name(), lines(&text, " fault ")));
+    }
+    if !interpreted.contains("t=1 state failing FAULTED") {
+        failed.push(format!("Interpreter: `failing` steht in Tick 1 nicht in FAULTED:\n{interpreted}"));
+    }
+    // FAULTED setzt den Ausgang auf `safe` (5.3), im selben Tick.
+    if !text.lines().any(|l| l.trim_end() == "t=1 out f 0") {
+        failed.push(format!("{}: `f` geht in Tick 1 nicht auf `safe`:\n{text}", board.name()));
     }
     eprintln!("{} Treiberrand: {} Abweichungen", board.name(), failed.len());
     failed
 }
+
+/// Die Zeilen des Treiberrands im Lauf des Pruefgeraets (12.6), je Fall der
+/// Folge aus `edge_probe` eine, in Tickordnung.
+const EDGE_LINES: [&str; 15] = [
+    // Zeile 1: hinter dem Fenster in der Toleranz, dann jenseits.
+    "t=1 driver edge_a warped p",
+    "t=2 driver edge_a degraded window",
+    "t=3 driver edge_a recovered",
+    // Zeile 2: Luecke in `seq`, mehr als MAXPT.
+    "t=5 driver edge_u degraded seq",
+    "t=6 driver edge_u recovered",
+    "t=7 driver edge_u degraded maxpt",
+    "t=8 driver edge_u recovered",
+    // Zeile 5: ein Byte zu viel fuer `Pair`.
+    "t=9 stream pairs dropped=0 overflowed=0 malformed=1",
+    // Zeile 2: fallender Zeitstempel.
+    "t=11 driver edge_b degraded timestamp",
+    "t=12 driver edge_b recovered",
+    // KON1-012: `seq` doppelt, ein Byte zu wenig fuer `Pair`; `t = t_k` gilt.
+    "t=13 driver edge_u degraded seq",
+    "t=13 stream pairs dropped=0 overflowed=0 malformed=2",
+    // Die Zeile ueber `line<16>` ist gekuerzt und kein Verstoss; `t =
+    // t_(k-1)` liegt knapp vor dem Fenster.
+    "t=14 driver edge_u recovered",
+    "t=14 driver edge_a warped q",
+    // `seq` rueckwaerts.
+    "t=15 driver edge_u degraded seq",
+];
+
+/// Die Faults des Laufs, wie der Rahmen sie schreibt: je `Runtime(Driver)`
+/// eines Besitzers einer, bei `failing` nur der erste — danach steht es in
+/// FAULTED, und ein weiterer Fault dort hat kein Ziel.
+const FAULT_LINES: [&str; 4] = [
+    "t=1 fault failing Runtime(Driver)",
+    "t=4 fault actor Runtime(Driver)",
+    "t=9 fault actor Runtime(Driver)",
+    "t=13 fault talker Runtime(Driver)",
+];
 
 /// Die Folge des Pruefgeraets als Stimulus des Interpreters: Lieferungen mit
 /// Zeitstempel und Folgenummer, die Faults der Ausgabeseite als `runtime`.
@@ -106,11 +171,27 @@ fn probe_stimulus(ticks: u64) -> String {
                 let _ = writeln!(s, "t={tick} in {} {text} seq={seq}", st.name());
             }
         }
-        if edge_probe::DRIVER_FAULTS.contains(&tick) {
-            let _ = writeln!(s, "t={tick} runtime Driver o");
-        }
+    }
+    for line in raised_driver_faults(ticks) {
+        let _ = writeln!(s, "{line}");
     }
     s
+}
+
+/// Die `Runtime(Driver)`, die der Rahmen nach der Folge des Pruefgeraets
+/// erhebt (12.6 Zeile 6), je einer im Tick nach dem gescheiterten Commit:
+/// `o` nach dem unbestaetigten Schreiben und dem stillen Heartbeat, `tx`
+/// nach dem ueberfahrenen Sendepuffer, `f` nach jedem Commit, den es nie
+/// bestaetigt. Auch Tick 0 committet (1.5, 9.4): Das erste Urteil ueber `f`
+/// faellt in Tick 1.
+fn raised_driver_faults(ticks: u64) -> Vec<String> {
+    use takt_board_support::edge_probe;
+    let mut out: Vec<String> = edge_probe::DRIVER_FAULTS.iter().map(|k| format!("t={k} runtime Driver o")).collect();
+    out.push(format!("t={} runtime Driver tx", edge_probe::TX_OVER_AT + 1));
+    out.extend(
+        (0..ticks).filter(|k| !edge_probe::failing_confirms(*k)).map(|k| format!("t={} runtime Driver f", k + 1)),
+    );
+    out
 }
 
 /// **Ein Zeitgeber, der seine Periode verfehlt, ist `Runtime(Hardware)`**
@@ -392,7 +473,9 @@ pub fn last_output(text: &str, name: &str) -> Option<String> {
 /// Laesst `names` auf dem Board laufen und haelt jeden Trace gegen den
 /// Interpreter; liefert je abweichendem Programm eine Meldung.
 ///
-/// `only` beschraenkt den Lauf auf ein Programm (`TAKT_…_ONLY`).
+/// `only` beschraenkt den Lauf auf ein Programm (`TAKT_…_ONLY`); ein Name,
+/// den die Liste nicht kennt, ist ein Fehlschlag mit den bekannten Namen,
+/// kein Lauf ohne Programm (KON1-027).
 pub fn agreement(board: &mut dyn Board, names: &[&str], only: Option<&str>) -> Vec<String> {
     agreement_with(board, names, only, &Options::fresh(TICKS))
 }
@@ -400,8 +483,16 @@ pub fn agreement(board: &mut dyn Board, names: &[&str], only: Option<&str>) -> V
 /// Wie [`agreement`], mit anderen Optionen des Baus — etwa im Profil
 /// `shared` unter dem RTOS des Boards (12.8).
 pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>, options: &Options) -> Vec<String> {
+    let chosen: Vec<&str> = names.iter().copied().filter(|n| only.is_none_or(|o| o == *n)).collect();
+    if chosen.is_empty() {
+        return vec![format!(
+            "kein Programm gewaehlt (`{}`); bekannt sind: {}",
+            only.unwrap_or_default(),
+            names.join(", ")
+        )];
+    }
     let mut failed = Vec::new();
-    for name in names.iter().filter(|n| only.is_none_or(|o| o == **n)) {
+    for name in chosen {
         let p = corpus(name);
         let text = match board.build(&board::corpus_path(name), options).and_then(|elf| board.run(&elf, options)) {
             Ok(t) => t,

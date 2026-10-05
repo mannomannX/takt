@@ -1,0 +1,20 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# `x /= k` (Census AssignDiv): ganzzahlige Division, die gegen null
+# rundet, auch fuer negative Werte.
+
+output n : int in -1000..1000 @ hw("o/n") with safe = 0
+
+machine m:
+    var x : int in -1000..1000 = -1000
+    initial RUN
+
+    state RUN:
+        loop:
+            if x == 0:
+                x = -1000
+            else:
+                x /= 3
+            n = x

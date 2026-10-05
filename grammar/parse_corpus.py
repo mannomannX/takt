@@ -90,8 +90,9 @@ def _starts_continuation(rest, tokens):
     if rest[:2] in _INFIX2:
         return True
     if rest[:1] and rest[0] in _INFIX1:
-        # `.` vor einer Ziffer ist ein Zahlfehler, keine Fortsetzung.
-        return rest[0] != "." or len(rest) < 2 or not rest[1].isdigit()
+        # `.` vor einer Ziffer ist ein Zahlfehler, `..` eroeffnet ein
+        # Bereichsmuster; beides setzt nicht fort.
+        return rest[0] != "." or len(rest) < 2 or not (rest[1].isdigit() or rest[1] == ".")
     word = ""
     for ch in rest:
         if ch.isalnum() or ch == "_":
@@ -109,11 +110,14 @@ def tokenize(text, keywords, reserved):
         raise LexError("E_CR", text[:text.index("\r")].count("\n") + 1, 1)
     tokens, stack, depth = [], [0], 0
     for lineno, line in enumerate(text.split("\n"), start=1):
+        # L1.5: Auch die Einrueckung einer Leer- oder Kommentarzeile steht
+        # ausserhalb von String und Kommentar.
+        lead = len(line) - len(line.lstrip(" \t"))
+        if "\t" in line[:lead]:
+            raise LexError("E_TAB", lineno, line.index("\t") + 1)
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         pos = len(line) - len(line.lstrip(" "))
-        if "\t" in line[:pos]:
-            raise LexError("E_TAB", lineno, line.index("\t") + 1)
         # L2.2a: haengendes Komma oder verbindendes Zeichen setzen die
         # logische Zeile fort; dann entfallen NEWLINE, INDENT und DEDENT.
         continued = depth == 0 and (_after_comma(tokens) or _starts_continuation(line[pos:], tokens))

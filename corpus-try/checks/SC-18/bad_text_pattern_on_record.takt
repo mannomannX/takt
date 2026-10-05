@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-18 (8.7): Ein Textmuster passt nur auf Text, nicht auf einen Record.
+
+record Pulse:
+    rising : bool
+    pin    : u8
+
+output hit : bool @ hw("o/hit") with safe = false
+
+machine m:
+    var p : Pulse = Pulse(rising = true, pin = 7)
+    initial RUN
+
+    state RUN:
+        loop:
+            hit = p matches "pin {n:int}"  # ~ SC-18

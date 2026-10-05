@@ -30,12 +30,26 @@ pub fn config_from(file: &ast::File, edition: u32, diags: &mut Vec<Diagnostic>) 
         let ast::Item::System(sys) = item else { continue };
         for entry in &sys.items {
             match entry {
+                // 1.3: erlaubt sind 10 us bis 1 s; darauf beruhen Analysen
+                // und Laufzeiten.
                 ast::SystemItem::Tick(d) => {
-                    if d.ns <= 0 {
-                        diags.push(Diagnostic::error(SC3, d.span, "`tick` muss positiv sein"));
-                    } else {
+                    const RANGE: std::ops::RangeInclusive<i64> = 10_000..=1_000_000_000;
+                    if RANGE.contains(&d.ns) {
                         config.tick = d.ns;
                         seen_tick = true;
+                    } else {
+                        let nearest = if d.ns < *RANGE.start() { "10 us" } else { "1 s" };
+                        diags.push(
+                            Diagnostic::error(
+                                SC3,
+                                d.span,
+                                format!(
+                                    "`tick = {}` liegt ausserhalb von 10 us bis 1 s (1.3)",
+                                    takt_mir::dump::duration(d.ns)
+                                ),
+                            )
+                            .with_suggestion(format!("`tick = {nearest}`; schnellere Ablaeufe gehoeren in die TCB")),
+                        );
                     }
                 }
                 ast::SystemItem::OutputTiming(t) => {
@@ -50,25 +64,41 @@ pub fn config_from(file: &ast::File, edition: u32, diags: &mut Vec<Diagnostic>) 
                     Err(d) => diags.push(shift(d, addr.span)),
                 },
                 ast::SystemItem::TickTolerance { value, ticks } => {
+                    // 3.6, 7.1: eine Zahl in `pct`; ohne Einheit oder in einer
+                    // fremden ist sie ein Fehler, nicht still ein Prozentwert.
+                    let in_pct = |u: &Option<ast::UnitExpr>| {
+                        u.as_ref().is_some_and(|u| {
+                            u.rest.is_empty()
+                                && u.first.exponent.is_none()
+                                && u.first.name.as_ref().is_some_and(|n| n.name == "pct")
+                        })
+                    };
                     let pct = match &value.kind {
-                        ast::ExprKind::Number { value: ast::Number::Int(i), .. } => {
+                        ast::ExprKind::Number { value: ast::Number::Int(i), unit } if in_pct(unit) => {
                             i.text.replace('_', "").parse::<f64>().ok()
                         }
-                        ast::ExprKind::Number { value: ast::Number::Float(f), .. } => {
+                        ast::ExprKind::Number { value: ast::Number::Float(f), unit } if in_pct(unit) => {
                             f.text.replace('_', "").parse::<f64>().ok()
                         }
                         _ => None,
                     };
-                    match pct {
-                        Some(pct) => {
-                            let ticks =
-                                ticks.as_ref().and_then(|t| t.text.replace('_', "").parse::<u32>().ok()).unwrap_or(10);
-                            config.tick_tolerance = Some(TickTolerance { pct, ticks });
-                        }
-                        None => diags.push(Diagnostic::error(
+                    // Ohne `for N ticks` gelten 10 Ticks (7.1); eine
+                    // unlesbare Zahl gilt nicht still als 10.
+                    let count = match ticks {
+                        None => Some(10),
+                        Some(t) => t.text.replace('_', "").parse::<u32>().ok(),
+                    };
+                    match (pct, count) {
+                        (Some(pct), Some(ticks)) => config.tick_tolerance = Some(TickTolerance { pct, ticks }),
+                        (None, _) => diags.push(Diagnostic::error(
                             SC3,
                             value.span,
                             "`tick_tolerance` verlangt eine Zahl in `pct`",
+                        )),
+                        (Some(_), None) => diags.push(Diagnostic::error(
+                            SC3,
+                            ticks.as_ref().map_or(value.span, |t| t.span),
+                            "`tick_tolerance … for N ticks` verlangt eine Tickzahl bis 2^32 - 1",
                         )),
                     }
                 }
@@ -262,6 +292,34 @@ impl Lowerer<'_> {
                         if hi < lo || u32::from(hi) >= width.bits() {
                             self.error("SC-46", b.span, format!("Bitfeld {lo}..{hi} ausserhalb des Traegerfelds"));
                             continue;
+                        }
+                        // 3.7: `bool` bei einer einzelnen Position, sonst der
+                        // Integer-Typ. Das Feld bleibt eingetragen, damit seine
+                        // Verwendungen keine Folgefehler melden.
+                        if matches!(b.ty, ast::BitType::Bool) && hi > lo {
+                            self.error_hint(
+                                "SC-46",
+                                b.span,
+                                format!("Bitfeld `{}` ist `bool` ueber {lo}..{hi}", b.name.name),
+                                "`bool at N` fuer eine Position, sonst einen Integer-Typ (3.7)",
+                            );
+                        }
+                        // 3.7, Pruefung 46: Der Typ fasst alle Werte der Bits,
+                        // `0..2^w - 1`, auch ein vorzeichenbehafteter.
+                        if let ast::BitType::Int(w) = &b.ty {
+                            let field = int_width(*w);
+                            let room = if field.signed() { field.bits() - 1 } else { field.bits() };
+                            let bits = u32::from(hi - lo) + 1;
+                            if bits > room {
+                                let top = (1u128 << bits) - 1;
+                                let n = self.type_name(bty);
+                                self.error_hint(
+                                    "SC-46",
+                                    b.span,
+                                    format!("Bitfeld `{}` fasst 0..{top}, `{n}` nicht (3.7)", b.name.name),
+                                    format!("einen Typ mit mindestens {bits} Bit fuer die Werte waehlen"),
+                                );
+                            }
                         }
                         out.push(BitfieldDef {
                             name: b.name.name.clone(),
@@ -505,8 +563,7 @@ impl Lowerer<'_> {
     /// `param NAME : T = default`, `tunable param …`.
     pub fn param_decl(&mut self, decl: &ast::ParamDecl) {
         let Some(ty) = self.resolve_type(&decl.ty) else { return };
-        let Some(default) = self.check(&decl.value, ty) else { return };
-        let Some(default) = self.fold(default) else { return };
+        let Some(default) = self.param_value(&decl.value, ty, "Default") else { return };
         let (_, meta) = self.attrs(&decl.attrs, ty, None, decl.span);
         let id = ParamId(self.program.params.len() as u32);
         self.program.params.push(Param {
@@ -523,13 +580,30 @@ impl Lowerer<'_> {
     /// `profile NAME:` mit Belegungen.
     pub fn profile_decl(&mut self, decl: &ast::ProfileDecl) {
         let mut assignments = Vec::new();
+        let mut seen: Vec<ParamId> = Vec::new();
         for (name, value) in &decl.entries {
-            let Some(Entity::Param(p, ty)) = self.lookup(name) else {
-                self.error(SC3, name.span, format!("`{}` ist kein Parameter", name.name));
-                continue;
+            // Einen unbekannten Namen hat `lookup` schon gemeldet.
+            let (p, ty) = match self.lookup(name) {
+                Some(Entity::Param(p, ty)) => (p, ty),
+                None => continue,
+                Some(_) => {
+                    self.error(SC3, name.span, format!("`{}` ist kein Parameter", name.name));
+                    continue;
+                }
             };
-            let Some(v) = self.check(value, ty) else { continue };
-            let Some(v) = self.fold(v) else { continue };
+            // 8.4: jeder Parameter hoechstens einmal; „der letzte gilt"
+            // ueberginge einen Tippfehler.
+            if seen.contains(&p) {
+                self.error_hint(
+                    SC3,
+                    name.span,
+                    format!("`{}` steht in Profil `{}` doppelt", name.name, decl.name.name),
+                    "einen der beiden Eintraege entfernen (8.4)",
+                );
+                continue;
+            }
+            seen.push(p);
+            let Some(v) = self.param_value(value, ty, "Profilwert") else { continue };
             assignments.push((p, v));
         }
         let id = ProfileId(self.program.profiles.len() as u32);
@@ -558,16 +632,20 @@ impl Lowerer<'_> {
                 ast::CampaignItem::Program(s) => c.program = Some(s.value.clone()),
                 ast::CampaignItem::Profile(id) => match self.lookup(id) {
                     Some(Entity::Profile(p)) => c.profile = Some(p),
-                    _ => {
+                    // Einen unbekannten Namen hat `lookup` schon gemeldet.
+                    None => {}
+                    Some(_) => {
                         self.error(SC3, id.span, format!("`{}` ist kein Profil", id.name));
                     }
                 },
                 ast::CampaignItem::SweepRange { param, from, to, step } => {
                     let Some((p, ty)) = self.sweep_param(param, &c.sweeps) else { continue };
                     let base = self.base(ty);
-                    let (Some(from), Some(to), Some(step)) =
-                        (self.sweep_value(from, ty), self.sweep_value(to, ty), self.sweep_value(step, base))
-                    else {
+                    let (Some(from), Some(to), Some(step)) = (
+                        self.param_value(from, ty, "Sweep-Wert"),
+                        self.param_value(to, ty, "Sweep-Wert"),
+                        self.param_value(step, base, "Sweep-Wert"),
+                    ) else {
                         continue;
                     };
                     let positive = match &step.kind {
@@ -580,11 +658,28 @@ impl Lowerer<'_> {
                         self.error(SC3, step.span, "der Sweep-Schritt muss eine positive Zahl oder Dauer sein");
                         continue;
                     }
+                    // 13.7: Ein leerer Laufraum bestuende ohne Lauf.
+                    let empty = match (&from.kind, &to.kind) {
+                        (ExprKind::Int(a), ExprKind::Int(b)) => a > b,
+                        (ExprKind::Float(a), ExprKind::Float(b)) => a > b,
+                        (ExprKind::Duration(a), ExprKind::Duration(b)) => a > b,
+                        _ => false,
+                    };
+                    if empty {
+                        self.error_hint(
+                            SC3,
+                            to.span,
+                            format!("der Sweep ueber `{}` ist leer: der Anfang liegt ueber dem Ende", param.name),
+                            "Grenzen tauschen; ein leerer Laufraum bestuende ohne Lauf (13.7)",
+                        );
+                        continue;
+                    }
                     c.sweeps.push(Sweep::Range { param: p, from, to, step });
                 }
                 ast::CampaignItem::SweepList { param, values } => {
                     let Some((p, ty)) = self.sweep_param(param, &c.sweeps) else { continue };
-                    let values: Vec<Expr> = values.iter().filter_map(|v| self.sweep_value(v, ty)).collect();
+                    let values: Vec<Expr> =
+                        values.iter().filter_map(|v| self.param_value(v, ty, "Sweep-Wert")).collect();
                     c.sweeps.push(Sweep::List { param: p, values });
                 }
                 ast::CampaignItem::Repeat(n) => match self.int_attr(n) {
@@ -606,9 +701,13 @@ impl Lowerer<'_> {
 
     /// Der Parameter eines Sweeps: deklariert und noch nicht gesweept.
     fn sweep_param(&mut self, name: &ast::Ident, sweeps: &[Sweep]) -> Option<(ParamId, TypeId)> {
-        let Some(Entity::Param(p, ty)) = self.lookup(name) else {
-            self.error(SC3, name.span, format!("`{}` ist kein Parameter", name.name));
-            return None;
+        // Einen unbekannten Namen hat `lookup` schon gemeldet.
+        let (p, ty) = match self.lookup(name)? {
+            Entity::Param(p, ty) => (p, ty),
+            _ => {
+                self.error(SC3, name.span, format!("`{}` ist kein Parameter", name.name));
+                return None;
+            }
         };
         let swept = sweeps.iter().any(|s| match s {
             Sweep::Range { param, .. } | Sweep::List { param, .. } => *param == p,
@@ -620,13 +719,15 @@ impl Lowerer<'_> {
         Some((p, ty))
     }
 
-    /// Ein Sweep-Wert: Konstante vom Typ des Parameters, in seiner Range.
-    fn sweep_value(&mut self, e: &ast::Expr, ty: TypeId) -> Option<Expr> {
+    /// Ein Wert fuer einen Parameter (Default, Profil, Sweep; 8.4, 13.7):
+    /// Konstante vom Typ des Parameters, gefaltet in seiner Range. Ein
+    /// Literal prueft schon `check`, einen Ausdruck erst der gefaltete Wert.
+    fn param_value(&mut self, e: &ast::Expr, ty: TypeId, what: &str) -> Option<Expr> {
         let v = self.check(e, ty)?;
         let v = self.fold(v)?;
         if let Some(r) = self.range_of(ty) {
             if !super::stmt::literal_in_range(&v, &r) {
-                self.error(SC3, v.span, "Sweep-Wert ausserhalb der Range des Parameters");
+                self.error(SC3, v.span, format!("{what} ausserhalb der Range des Parameters"));
                 return None;
             }
         }
@@ -655,12 +756,33 @@ impl Lowerer<'_> {
                 }
             },
         };
+        // Pruefung 7 je Richtung, verglichen ueber den Treibernamen: `a/b_c`
+        // und `a_b/c` bekaemen dieselbe Treiberfunktion (8.10, 12.11). Ein
+        // importierter Kanal heisst wie sein Treiber (8.2); dort meldet der
+        // doppelte Name dieselbe Ursache, und nur er.
         if let Binding::Hw(addr) = &binding {
-            if let Some(other) =
-                self.program.channels.iter().find(|c| matches!(&c.binding, Binding::Hw(a) if a == addr && c.dir == dir))
-            {
+            let clash = self.program.channels.iter().find_map(|c| match &c.binding {
+                Binding::Hw(a)
+                    if c.dir == dir && (a == addr || a.ident() == addr.ident() && c.name != decl.name.name) =>
+                {
+                    Some((c, a))
+                }
+                _ => None,
+            });
+            if let Some((other, theirs)) = clash {
+                let message = if theirs == addr {
+                    format!("Adresse schon an `{}` gebunden", other.name)
+                } else {
+                    format!(
+                        "`{}` ergibt denselben Treibernamen `{}` wie `{}` an `{}`",
+                        addr.text(),
+                        addr.ident(),
+                        theirs.text(),
+                        other.name
+                    )
+                };
                 self.diags.push(
-                    Diagnostic::error(SC7, decl.span, format!("Adresse schon an `{}` gebunden", other.name))
+                    Diagnostic::error(SC7, decl.span, message)
                         .with_note(other.span, "hier gebunden")
                         .with_suggestion("jede hw-Adresse hoechstens einmal je Richtung"),
                 );
@@ -670,7 +792,9 @@ impl Lowerer<'_> {
         let (attrs, meta) = self.attrs(&decl.attrs, ty, Some(dir), decl.span);
         let needs_safe =
             dir == Direction::Output && !matches!(binding, Binding::Sim(_)) && !matches!(self.ty(ty), Type::Stream(_));
-        if needs_safe && attrs.safe.is_none() {
+        // Ein `safe`, das schon abgelehnt ist, fehlt nicht noch einmal.
+        let declared = decl.attrs.iter().any(|a| matches!(a.kind, ast::AttrKind::Safe(_)));
+        if needs_safe && attrs.safe.is_none() && !declared {
             self.error_hint(
                 SC3,
                 decl.span,
@@ -772,7 +896,18 @@ impl Lowerer<'_> {
                         ast::Overflow::Drop => Overflow::Drop,
                     })
                 }
-                ast::AttrKind::Wake(b) => out.wake = *b,
+                // 5.10, Pruefung 17: Wake-Quellen sind Inputs und Commands.
+                ast::AttrKind::Wake(b) => {
+                    if *b && dir == Some(Direction::Output) {
+                        self.error_hint(
+                            crate::checks::SC17,
+                            a.span,
+                            "`wake` an einem Output: ein Output weckt niemanden (5.10)",
+                            "`wake = true` an den Input oder das Command, das wecken soll",
+                        );
+                    }
+                    out.wake = *b;
+                }
                 ast::AttrKind::Jitter(d) => out.jitter = Some(d.ns),
                 ast::AttrKind::MaxSlew(e) => {
                     if let Some(v) = self.expr(e, None) {
@@ -786,7 +921,9 @@ impl Lowerer<'_> {
                 ast::AttrKind::Label(s) => meta.label = Some(s.value.clone()),
                 ast::AttrKind::Display(u) => {
                     if let Some(unit) = self.unit_expr(u) {
-                        meta.display = self.unit_id(&unit, u.span);
+                        if self.display_fits(&unit, ty, a.span) {
+                            meta.display = self.unit_id(&unit, u.span);
+                        }
                     }
                 }
                 ast::AttrKind::Group(s) => meta.group = Some(s.value.clone()),
@@ -814,6 +951,27 @@ impl Lowerer<'_> {
         }
         let _ = span;
         (out, meta)
+    }
+
+    /// 2.5: `display` nennt eine Einheit gleicher Dimension wie der Traeger;
+    /// ein Traeger ohne Einheit (Bool, Enum, Strom) hat keine.
+    fn display_fits(&mut self, unit: &Unit, ty: TypeId, span: Span) -> bool {
+        let shown = self.type_name(ty);
+        let Some(carrier) = self.unit_of_type(ty) else {
+            self.error(SC3, span, format!("`display` an `{shown}`: der Traeger hat keine Einheit (2.5)"));
+            return false;
+        };
+        if self.units.dimension(&self.program, unit) == self.units.dimension(&self.program, &carrier) {
+            return true;
+        }
+        let text = self.units.display(&self.program, unit);
+        self.error_hint(
+            SC3,
+            span,
+            format!("`display = {text}` hat nicht die Dimension von `{shown}` (2.5)"),
+            "`display` rechnet nur in eine Einheit gleicher Dimension um",
+        );
+        false
     }
 
     /// `with budget = {ram = …, wcet = …}` am Maschinenkopf (7.2).
@@ -893,6 +1051,14 @@ impl Lowerer<'_> {
     /// ohne Zustaende: der Guard ueber dem Strom, der `then`-Block als
     /// Aktionsblock, und `event` darin mit dem Typ der Guard-Bindung.
     pub fn trigger_decl(&mut self, decl: &ast::TriggerDecl) {
+        let errors = self.error_count();
+        self.trigger_body(decl);
+        // Ein abgelehnter Trigger meldet an `arm` und `fired` keinen
+        // Folgefehler (FB-407).
+        self.reject_unless_declared(&decl.name, errors);
+    }
+
+    fn trigger_body(&mut self, decl: &ast::TriggerDecl) {
         let id = TriggerId(self.program.triggers.len() as u32);
         let node = decl.node.as_ref().and_then(|n| match self.lookup(n) {
             Some(Entity::Node(id)) => Some(id),
@@ -1116,17 +1282,23 @@ impl Lowerer<'_> {
             let f = &self.program.fns[id.index()];
             (f.params.clone(), f.ret)
         };
-        let Some((locals, body)) = self.lower_body(&params, ret, &decl.body, 0, None, decl.span) else { return };
+        let Some((locals, body)) = self.lower_body(&params, None, ret, &decl.body, 0, None, decl.span) else {
+            return;
+        };
         let f = &mut self.program.fns[id.index()];
         f.locals = locals;
         f.body = body;
     }
 
     /// Rumpf mit Rahmen: Parameter als Lokale ab `base`, Rueckgabe geprueft;
-    /// ein `inout`-Parameter wird am Ende zurueckgegeben.
+    /// ein `inout`-Parameter wird am Ende zurueckgegeben. `reserved` steht
+    /// direkt hinter den Parametern, vor den Lokalen des Rumpfs, der es
+    /// nicht sieht (`result` der Vertraege, 5.7).
+    #[allow(clippy::too_many_arguments)]
     pub fn lower_body(
         &mut self,
         params: &[FnParam],
+        reserved: Option<VarDef>,
         ret: Option<TypeId>,
         body: &ast::Block,
         base: u32,
@@ -1143,6 +1315,7 @@ impl Lowerer<'_> {
                 public: false,
                 span: p.span,
             })
+            .chain(reserved)
             .collect();
         self.fn_ctx.push(FnCtx { locals, base, ret, block });
         let result = self.scoped(|this| {
@@ -1409,6 +1582,14 @@ impl Lowerer<'_> {
 
     /// Lowert Parameter, Zustandsvariablen, `step` und Methoden eines Blocks.
     pub fn block_body(&mut self, decl: &ast::BlockDecl, id: BlockId, name: &str) {
+        // 5.7: Ein Block ist geschlossen; was er liest, kommt als Argument,
+        // Zustand oder Konstante.
+        let was = std::mem::replace(&mut self.closed_block, true);
+        self.closed_block_body(decl, id, name);
+        self.closed_block = was;
+    }
+
+    fn closed_block_body(&mut self, decl: &ast::BlockDecl, id: BlockId, name: &str) {
         let Some(params) = self.params(&decl.params) else { return };
         // Zustandsvariablen: Initialwerte sehen Parameter und fruehere Variablen
         let param_vars: Vec<VarDef> = params
@@ -1506,9 +1687,19 @@ impl Lowerer<'_> {
                 origin: None,
                 span: step.span,
             });
+            // `result` des `ensures` liegt direkt hinter den Parametern, vor
+            // den Lokalen des Rumpfs; dort sucht es auch `takt prove`.
+            let result_slot = step.ensures.as_ref().map(|_| VarDef {
+                name: "result".into(),
+                ty: ret,
+                init: None,
+                scope: VarScope::Local,
+                public: false,
+                span: step.span,
+            });
             let lowered = self.scoped(|this| {
                 declare_instance_vars(this);
-                this.lower_body(&sparams, Some(ret), &step.body, base, Some(id), step.span)
+                this.lower_body(&sparams, result_slot, Some(ret), &step.body, base, Some(id), step.span)
             });
             if let Some((locals, body)) = lowered {
                 let f = &mut self.program.fns[fid.index()];
@@ -1550,16 +1741,6 @@ impl Lowerer<'_> {
                 let def = &mut self.program.blocks[id.index()];
                 def.requires.extend(req);
                 def.ensures.extend(ens);
-                if step.ensures.is_some() {
-                    self.program.fns[fid.index()].locals.push(VarDef {
-                        name: "result".into(),
-                        ty: ret,
-                        init: None,
-                        scope: VarScope::Local,
-                        public: false,
-                        span: step.span,
-                    });
-                }
             }
         }
         for m in &decl.methods {
@@ -1585,7 +1766,7 @@ impl Lowerer<'_> {
             });
             let lowered = self.scoped(|this| {
                 declare_instance_vars(this);
-                this.lower_body(&mparams, ret, &m.body, base, Some(id), m.span)
+                this.lower_body(&mparams, None, ret, &m.body, base, Some(id), m.span)
             });
             if let Some((locals, body)) = lowered {
                 let f = &mut self.program.fns[fid.index()];

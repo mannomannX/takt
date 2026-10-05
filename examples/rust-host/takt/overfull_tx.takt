@@ -1,0 +1,25 @@
+# Ein Treiber, der seinen Sendepuffer ueberfaehrt (12.6 Zeile 6, dritter
+# Fall; KON1-012): Meldet er mehr freien Platz, als der Strom fasst
+# (`capacity = 64`), bekommt der Besitzer `Runtime(Driver)`.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output tx : stream<u8> @ hw("u/tx")  with capacity = 64, max_rate = 1000 Hz
+output up : bool       @ sim("o/up") with safe = false
+
+machine sender:
+    fault -> DOWN
+    initial UP
+
+    state UP:
+        enter:
+            up = true
+        loop:
+            send tx, 1 as u8
+
+    state DOWN:
+        enter:
+            up = false
+        after 20 ms: -> UP

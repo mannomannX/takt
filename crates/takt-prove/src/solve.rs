@@ -437,32 +437,41 @@ fn confirm_requires(
 }
 
 /// Spielt den Pfad nach: der Tick, in dem die Stelle im Interpreter feuert.
+///
+/// Bestaetigt wird nur die Stelle selbst: eine implizite Pruefung durch
+/// einen Fault ihrer Art *an ihrer Stelle* (INT-020). Ein Fault derselben
+/// Art an einer anderen Stelle der Maschine hiesse, dass das Modell einen
+/// Pfad fand, den der Interpreter nicht geht — die Kodierung weicht ab.
 fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &str, depth: u32) -> Option<u64> {
+    use takt_mir::machine::{ArithKind, FaultKind};
     let trace = Trace::parse(stimulus).ok()?;
     let r = run(program, &trace, &RunOptions { ticks: u64::from(depth), ..Default::default() }).ok()?;
-    // Eine implizite Pruefung (11.3) bestaetigt der Fault ihrer Art.
-    let fault_kind = match site.kind.as_str() {
-        "check" => "CheckFailed",
-        "expect" => "Expect",
-        "range" => "RangeFault",
-        "div" => "Arithmetic(DivZero)",
-        "ovf" => "Arithmetic(Overflow)",
-        "fin" => "Arithmetic(NonFinite)",
-        "dom" => "Arithmetic(Domain)",
+    let implicit = match site.kind.as_str() {
+        "range" => FaultKind::Range,
+        "div" => FaultKind::Arithmetic(ArithKind::DivZero),
+        "ovf" => FaultKind::Arithmetic(ArithKind::Overflow),
+        "fin" => FaultKind::Arithmetic(ArithKind::NonFinite),
+        "dom" => FaultKind::Arithmetic(ArithKind::Domain),
+        "check" | "expect" => {
+            let name = format!("{} @{}", site.kind, site.start);
+            let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, site.machine.clone(), name));
+            if fired.copied().unwrap_or(0) == 0 {
+                return None;
+            }
+            let kind = if site.kind == "check" { "CheckFailed" } else { "Expect" };
+            return r
+                .trace
+                .lines
+                .iter()
+                .find(|l| matches!(&l.kind, takt_interp::trace::LineKind::Fault { machine, kind: k, .. } if *machine == site.machine && k == kind))
+                .map(|l| l.tick);
+        }
         _ => return None,
     };
-    if matches!(site.kind.as_str(), "check" | "expect") {
-        let name = format!("{} @{}", site.kind, site.start);
-        let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, site.machine.clone(), name)).copied();
-        if fired.unwrap_or(0) == 0 {
-            return None;
-        }
-    }
-    r.trace
-        .lines
+    r.faults
         .iter()
-        .find(|l| matches!(&l.kind, takt_interp::trace::LineKind::Fault { machine, kind, .. } if *machine == site.machine && kind == fault_kind))
-        .map(|l| l.tick)
+        .find(|f| f.machine == site.machine && f.kind == implicit && f.span.start == site.start)
+        .map(|f| f.tick)
 }
 
 /// Prueft jede Eigenschaft des Modells.

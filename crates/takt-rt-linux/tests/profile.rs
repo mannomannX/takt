@@ -207,6 +207,8 @@ fn the_guarantee_survives_the_recording() {
         irreversible: Vec::new(),
         machine: None,
         chain: None,
+        polling_unchecked: Vec::new(),
+        persist: None,
     };
     let text = header.render();
     assert!(text.contains("#! runtime echtzeit nein"), "der Befund fehlt: {text}");
@@ -219,4 +221,62 @@ fn the_guarantee_survives_the_recording() {
         Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 }.header_lines();
     let text = header.render();
     assert!(text.contains("#! runtime echtzeit ja"), "{text}");
+}
+
+/// Eine Zeile von `/proc/<pid>/stat` (`proc(5)`, 52 Felder) mit Name,
+/// Feld 18 (`priority`), Feld 40 (`rt_priority`) und Feld 41 (`policy`).
+fn stat_line(name: &str, priority: i32, rt_priority: u32, policy: u32) -> String {
+    let mut fields: Vec<String> = (1..=52).map(|n| (1000 + n).to_string()).collect();
+    fields[0] = "4242".into();
+    fields[1] = format!("({name})");
+    fields[2] = "R".into();
+    fields[17] = priority.to_string();
+    fields[39] = rt_priority.to_string();
+    fields[40] = policy.to_string();
+    fields.join(" ")
+}
+
+/// **Die Prioritaet kommt aus `rt_priority` (Feld 40), die Klasse aus
+/// `policy` (Feld 41)** (`proc(5)`): Feld 18 ist unter Echtzeit
+/// `-1 - rt_priority`. `SCHED_RR` ist Echtzeit, aber nicht `fifo`;
+/// `SCHED_BATCH` und `SCHED_IDLE` sind bekannt, nur keine Echtzeit. Ein
+/// Prozessname mit Klammern und Leerzeichen verschiebt nichts.
+#[test]
+fn the_scheduling_class_is_read_from_its_fields() {
+    use takt_rt_linux::guarantee::scheduling_of;
+    let cases = [
+        (stat_line("takt", -81, 80, 1), Scheduling::Realtime { priority: 80 }, "fifo"),
+        (stat_line("a) b", -81, 80, 1), Scheduling::Realtime { priority: 80 }, "fifo"),
+        (stat_line("takt", -11, 10, 2), Scheduling::RoundRobin { priority: 10 }, "rr"),
+        (stat_line("takt", 20, 0, 0), Scheduling::Normal, "other"),
+        (stat_line("takt", 20, 0, 3), Scheduling::Batch, "batch"),
+        (stat_line("takt", 39, 0, 5), Scheduling::Idle, "idle"),
+        (stat_line("takt", 20, 0, 7), Scheduling::Unknown, "unbekannt"),
+    ];
+    for (line, want, name) in cases {
+        let got = scheduling_of(&line);
+        assert_eq!((got, got.name()), (want, name), "{line}");
+    }
+    assert!(Scheduling::RoundRobin { priority: 10 }.is_realtime());
+    assert!(!Scheduling::Batch.is_realtime() && !Scheduling::Idle.is_realtime());
+    assert_eq!(scheduling_of("4242 (abgeschnitten"), Scheduling::Unknown);
+    assert_eq!(scheduling_of("4242 (kurz) R 1 2 3"), Scheduling::Unknown);
+}
+
+/// **Ein Verzug vor einer Frist verschiebt die folgenden nicht** (12.2):
+/// Nach 30 ms Stillstand hinter der ersten Frist liegen die Fristen bei
+/// 40 und 60 ms; eine relative Pause laege bei 70 und 90 ms. Das Spiel
+/// ist kleiner als der eingeschobene Verzug, gleich welcher Scheduler.
+#[test]
+fn a_delay_before_a_deadline_does_not_shift_the_next_ones() {
+    const STEP: i64 = 20_000_000;
+    let mut c = RealtimeClock::new();
+    c.wait_until(STEP);
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    c.wait_until(2 * STEP);
+    assert_eq!(c.late, 1, "die zweite Frist war schon vorbei");
+    c.wait_until(3 * STEP);
+    let now = c.now();
+    assert!(now >= 3 * STEP, "zu frueh: {now}");
+    assert!(now < 3 * STEP + 20_000_000, "der Verzug hat sich fortgepflanzt: {now}");
 }

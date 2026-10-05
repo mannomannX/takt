@@ -1,0 +1,3 @@
+t=4 state plant HIGH
+t=4 out level 7
+t=5 out lagged 7

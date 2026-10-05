@@ -32,14 +32,14 @@ record BootKeys:
     pubkey      : bytes<64>
     min_version : u32
 
-input  flash_status : FlashStatus         @ hw("flash/status")   with max_age = 10 ms
-input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")       with max_rate = 200 Hz, capacity = 2
-output flash_cmd    : FlashCmd            @ hw("flash/cmd")      with safe = NONE
-output flash_data   : stream<u8>          @ hw("flash/tx")       with max_rate = 4000 Hz, capacity = 64
-input  keys         : BootKeys            @ hw("boot/keys")      with max_age = 1 s
-input  confirmed    : [2] bool            @ hw("boot/confirmed") with max_age = 1 s
-output slot         : u8                  @ hw("boot/slot")      with safe = 0
-output next_run     : NextRun             @ hw("sys/next_run")   with safe = NONE
+input  flash_status : FlashStatus         @ hw("flash/status") with max_age = 10 ms
+input  flash_rx     : stream<bytes<4096>> @ hw("flash/rx")     with max_rate = 200 Hz, capacity = 2
+output flash_cmd    : FlashCmd            @ hw("flash/cmd")    with safe = NONE
+output flash_data   : stream<u8>          @ hw("flash/tx")     with max_rate = 4000 Hz, capacity = 64
+input  keys         : BootKeys            @ hw("boot/keys")
+input  confirmed    : [2] bool            @ hw("boot/confirmed")  # je Slot: vom Anwendungsimage bestaetigt
+output slot         : u8                  @ hw("boot/slot")    with safe = 0
+output next_run     : NextRun             @ hw("sys/next_run") with safe = NONE
 # log geht an die UART der Runtime
 
 const SLOT_BASE  : [2] u32 = [0x10000, 0x110000]
@@ -48,13 +48,10 @@ param MAX_TRIALS : int in 1..5 = 3
 
 fn parse_header(b: bytes<4096>, min_version: u32) -> ImageHeader!HeaderErr:
     var h = ImageHeader.decode(b)
-    if h.valid:
-        if h.size > 1048576:
-            return ERR(SIZE)
-        if h.version < min_version:
-            return ERR(VERSION)
-        return OK(h.or(default))
-    return ERR(MAGIC)
+    if not h.valid: return ERR(MAGIC)
+    if h.size > 1048576: return ERR(SIZE)
+    if h.version < min_version: return ERR(VERSION)
+    return OK(h)
 
 machine bootloader:
     fault -> HALT
@@ -91,7 +88,7 @@ machine bootloader:
 
     state CHECK_HEADER:
         when hdr.ok:
-            img = hdr.or(default)
+            img = hdr  # durch hdr.ok dominiert: implizites Auspacken
             ctx = sha256_init()
             done = 0
             -> HASHING
@@ -113,7 +110,7 @@ machine bootloader:
     state VERIFY:
         fault -> SLOT_FAILED
         sequence:
-            var digest : bytes<32> = sha256_final(ctx)
+            var digest = sha256_final(ctx)
             expect digest == img.hash, "hash mismatch in slot {idx}"
             job v = ecdsa_p256_verify(key = keys.pubkey, digest = digest, sig = img.sig)
             until v.done timeout 500 ms -> SLOT_FAILED

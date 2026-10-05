@@ -1,0 +1,15 @@
+system:
+    language    = 1
+    tick        = 10 ms
+    tick_source = hw("daq/clock")
+
+# Pruefung 32: Die Tickquelle steht in der Konfiguration, die Last passt.
+
+output led : bool @ hw("ui/led") with safe = false
+
+machine m:
+    initial S
+
+    state S:
+        loop:
+            led = true

@@ -1,0 +1,5 @@
+(trigger cut_on_erase bound=20us
+  (when (matches dut_log "Erasing sector {n:int}"))
+  (then
+    (at (+ (.t event) 250us)
+      (= vbus_en false))))

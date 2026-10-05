@@ -1,0 +1,6 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-31 (4.5): Ein `native job` nennt seine `duration`.
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, total  # ~ SC-31

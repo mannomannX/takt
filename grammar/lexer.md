@@ -8,17 +8,21 @@ Wörter), 3.1 (Literale), 3.3 (Duration-Regel), 3.9 (Formatstrings), 8.1 (Adress
 
 **Testvektoren.** Jede Regel trägt Vektoren in Blöcken der Form
 
-```
+```text
 vectors
 <Eingabe> => <Tokenfolge>
 ```
 
 Die Eingabe steht in doppelten Anführungszeichen mit den Escapes `\n` (Zeilenende),
-`\t` (Tabulator), `\"` und `\\`. Tokens werden als `ART(text)` geschrieben; Interpunktion
-und Operatoren stehen nackt. `!` vor einem Vektor bedeutet: die Eingabe ist ein Fehler,
-und der Text nach `=>` ist der Fehlercode aus Abschnitt L9. Endet die Eingabe nicht mit
-einem Zeilenende, darf das `NEWLINE` aus L1.3 in der Erwartung entfallen. Ein Tokenizer
-gilt als konform, wenn er alle Vektoren dieses Dokuments erfüllt (`takt-conformance`, 13.8).
+`\t` (Tabulator), `\r`, `\"`, `\\` und `\xHH` (ein Byte). Tokens werden als `ART(text)`
+geschrieben; Interpunktion und Operatoren stehen nackt. `!` vor einem Vektor bedeutet: die
+Eingabe ist ein Fehler, und der Text nach `=>` nennt **alle** Fehler der Eingabe in ihrer
+Reihenfolge als Codes aus Abschnitt L9, auf Wunsch mit einem Teil der Meldung in Klammern
+(`E_RESERVED(while)`) und der Stelle als `@zeile:spalte` (`E_TAB@1:4`). Ein zweites `=>`
+nennt danach die Tokenfolge, die der Tokenizer trotz der Fehler liefert (L9). Endet die
+Eingabe nicht mit einem Zeilenende, darf das `NEWLINE` aus L1.3 in der Erwartung entfallen.
+Ein Tokenizer gilt als konform, wenn er alle Vektoren dieses Dokuments erfüllt
+(`takt-conformance`, 13.8). Jede nicht leere Zeile eines Blocks ist ein Vektor.
 
 Tokenarten: `NEWLINE INDENT DEDENT IDENT UPPER TYPE KW RESERVED INT HEX BIN OCT FLOAT DUR
 STRING WILD` sowie die Operatoren und Interpunktion aus L6. `UPPER`, `TYPE` und `KW`
@@ -27,9 +31,11 @@ entsprechen `UPPER_IDENT`, `TYPE_IDENT` und `KEYWORD` der Grammatik; `DUR` entsp
 
 **Anliegen.** Jedes Token trägt ein Flag *anliegend*: wahr, wenn das nächste Token ohne
 Leerraum direkt folgt. In den Vektoren schreibt `~` zwischen zwei Tokens diese
-Eigenschaft vor (`>~>`); ohne `~` wird sie nicht geprüft. Drei Regeln stützen sich
-darauf: der Shift-Operator (L6.1), Einheitenausdrücke nach Zahlen (L4.3) und der
-Abstand zwischen Zahl und Einheit (L4.3).
+Eigenschaft vor (`>~>`) und `_` ihr Gegenteil (`>_>`); zwischen zwei durch Leerraum
+getrennten Tokens wird sie nicht geprüft. Drei Regeln stützen sich darauf: der
+Shift-Operator (L6.1), Einheitenausdrücke nach Zahlen (L4.3) und der Abstand zwischen
+Zahl und Einheit (L4.3). `@zeile:spalte` hinter einem Token verlangt seine Stelle
+(`IDENT(b)@2:5`).
 
 **Beiwerk.** Kommentare und Leerzeilen erzeugen kein Token, gehen aber nicht verloren:
 Der Tokenizer legt sie als Beiwerk dem nächsten Token bei (am Dateiende dem
@@ -62,9 +68,20 @@ vectors
 "x = 1"                         => IDENT(x) = INT(1) NEWLINE
 "log \"a # b\"\n"               => KW(log) STRING(a # b) NEWLINE
 !"\xEF\xBB\xBFsystem:\n"        => E_BOM
-!"x =\t1\n"                     => E_TAB
-!"x = 1\r"                      => E_CR
-!"x = \xC3\xA4\n"               => E_NONASCII
+!"x =\t1\n"                     => E_TAB@1:4 => IDENT(x) = INT(1) NEWLINE
+!"x = 1\r"                      => E_CR@1:6
+!"x = \xC3\xA4\n"               => E_NONASCII@1:5
+"x = 1\r\ny = 2\r\n"            => IDENT(x) = INT(1) NEWLINE IDENT(y)@2:1 = INT(2) NEWLINE
+"\"a\tb\""                      => STRING(a\tb)
+"\"Grüße\tdir\""                => STRING(Grüße\tdir)
+"x = 1  # a\tb\n"               => IDENT(x) = INT(1) NEWLINE
+"x = 1  # Grüße \"\t\n"         => IDENT(x) = INT(1) NEWLINE
+!"\t# c\n"                      => E_TAB@1:1
+!"a:\n\t\n    b\n"              => E_TAB@2:1 => IDENT(a) : NEWLINE INDENT IDENT(b) NEWLINE DEDENT
+!"x\ry\n"                       => E_CR@1:2 => IDENT(x) IDENT(y) NEWLINE
+!"\"a\rb\"\n"                   => E_CR@1:3
+!"x = 1  # a\rb\n"              => E_CR@1:11
+!"x = 1\xEF\xBB\xBF\n"          => E_NONASCII@1:6
 ```
 
 ---
@@ -141,6 +158,29 @@ vectors
 "a\n    with b\n"                         => IDENT(a) KW(with) IDENT(b) NEWLINE
 "a:\n    -> B\n"                          => IDENT(a) : NEWLINE INDENT -> UPPER(B) NEWLINE DEDENT
 "a:\n    - b\n"                           => IDENT(a) : NEWLINE INDENT - IDENT(b) NEWLINE DEDENT
+"a\n    or b\n"                           => IDENT(a) KW(or) IDENT(b) NEWLINE
+"a\n    * b\n"                            => IDENT(a) * IDENT(b) NEWLINE
+"a\n    / b\n"                            => IDENT(a) / IDENT(b) NEWLINE
+"a\n    % b\n"                            => IDENT(a) % IDENT(b) NEWLINE
+"a\n    < b\n"                            => IDENT(a) < IDENT(b) NEWLINE
+"a\n    > b\n"                            => IDENT(a) > IDENT(b) NEWLINE
+"a\n    | b\n"                            => IDENT(a) | IDENT(b) NEWLINE
+"a\n    & b\n"                            => IDENT(a) & IDENT(b) NEWLINE
+"a\n    ^ b\n"                            => IDENT(a) ^ IDENT(b) NEWLINE
+"a\n    != b\n"                           => IDENT(a) != IDENT(b) NEWLINE
+"a\n    <= b\n"                           => IDENT(a) <= IDENT(b) NEWLINE
+"a\n    >= b\n"                           => IDENT(a) >= IDENT(b) NEWLINE
+"a\n    << b\n"                           => IDENT(a) << IDENT(b) NEWLINE
+"a\n    >> b\n"                           => IDENT(a) >~> IDENT(b) NEWLINE
+"a\n~b\n"                                 => IDENT(a) NEWLINE ~ IDENT(b) NEWLINE
+"a\n..b\n"                                => IDENT(a) NEWLINE .. IDENT(b) NEWLINE
+"a:\n    ..b\n"                           => IDENT(a) : NEWLINE INDENT .. IDENT(b) NEWLINE DEDENT
+"a:\n    b"                               => IDENT(a) : NEWLINE INDENT IDENT(b) NEWLINE DEDENT
+"    a\n"                                 => INDENT IDENT(a) NEWLINE DEDENT
+"a:\n   \n  # c\n    b\n"                 => IDENT(a) : NEWLINE INDENT IDENT(b)@4:5 NEWLINE DEDENT
+"a)\nb\n"                                 => IDENT(a) ) NEWLINE IDENT(b) NEWLINE
+!"x = [1,\n"                              => E_UNCLOSED
+!"x = {\n"                                => E_UNCLOSED
 ```
 
 ---
@@ -187,8 +227,9 @@ vectors
 "d.as(s)"                 => IDENT(d) . KW(as) ( IDENT(s) )
 "x.or(1)"                 => IDENT(x) . KW(or) ( INT(1) )
 "myVar degC kHz mV"       => IDENT(myVar) IDENT(degC) IDENT(kHz) IDENT(mV)
-!"while x:"               => E_RESERVED(while)
-!"var struct = 1"         => E_RESERVED(struct)
+"_ABC A_b"                => IDENT(_ABC) TYPE(A_b)
+!"while x:"               => E_RESERVED(while)@1:1 => RESERVED(while) IDENT(x) :
+!"var struct = 1"         => E_RESERVED(struct)@1:5
 ```
 
 ---
@@ -211,10 +252,18 @@ vectors
 "42 1_000_000 007"        => INT(42) INT(1_000_000) INT(007)
 "0x1F 0xFFFF_FFFF 0x7E8"  => HEX(0x1F) HEX(0xFFFF_FFFF) HEX(0x7E8)
 "0b1010 0o17"             => BIN(0b1010) OCT(0o17)
-!"0X1F"                   => E_NUMBER
-!"1_"                     => E_NUMBER
-!"0x_1"                   => E_NUMBER
-!"0b102"                  => E_NUMBER
+"0xFFFF_FFFF_FFFF_FFFF 1__0" => HEX(0xFFFF_FFFF_FFFF_FFFF) INT(1__0)
+"99999999999999999999999" => INT(99999999999999999999999)
+!"0X1F"                   => E_NUMBER@1:2
+!"0B1"                    => E_NUMBER@1:2
+!"0O7"                    => E_NUMBER@1:2
+!"1_"                     => E_NUMBER@1:2
+!"0x_1"                   => E_NUMBER@1:3
+!"0x_"                    => E_NUMBER@1:3
+!"0b102"                  => E_NUMBER@1:5
+!"0o8"                    => E_NUMBER@1:1 => OCT(0o) INT(8)
+!"0x"                     => E_NUMBER@1:1
+!"0xg"                    => E_NUMBER@1:1
 ```
 
 ### L4.2 Fließkommazahlen
@@ -233,9 +282,12 @@ vectors
 "1..3"                    => INT(1) .. INT(3)
 "2.0..4.5"                => FLOAT(2.0) .. FLOAT(4.5)
 "-4.25"                   => - FLOAT(4.25)
+"1E3 1e+3 1_000.5"        => FLOAT(1E3) FLOAT(1e+3) FLOAT(1_000.5)
 !"1."                     => E_NUMBER
 !".5"                     => E_NUMBER
 !"1e"                     => E_NUMBER
+!"1.5e"                   => E_NUMBER@1:4
+!"1.5_"                   => E_NUMBER@1:4
 ```
 
 ### L4.3 Einheiten nach Zahlen
@@ -267,7 +319,7 @@ vectors
 "85 degC"                 => INT(85) IDENT(degC)
 "4.25 V"                  => FLOAT(4.25) UPPER(V)
 "5 K/min"                 => INT(5) UPPER(K)~/~IDENT(min)
-"5 K / min"               => INT(5) UPPER(K) / IDENT(min)
+"5 K / min"               => INT(5) UPPER(K)_/_IDENT(min)
 "9.81 m/s^2"              => FLOAT(9.81) IDENT(m)~/~IDENT(s)~^~INT(2)
 "0.0005 1/s"              => FLOAT(0.0005) INT(1)~/~IDENT(s)
 "72000 A*s"               => INT(72000) UPPER(A)~*~IDENT(s)
@@ -360,7 +412,11 @@ vectors
 "\"a\\\"b\""                            => STRING(a"b)
 "\"Grüße\""                             => STRING(Grüße)
 !"\"abc"                                => E_STRING
-!"\"a\\qb\""                            => E_ESCAPE
+!"\"a\\qb\""                            => E_ESCAPE@1:3 => STRING(a\\qb)
+"\"\\0\\t\\r\\\\\""                      => STRING(\x00\t\r\\)
+"\"\""                                  => STRING()
+!"\"a\\"                                => E_STRING@1:1
+!"\"ab\nc\n"                            => E_STRING@1:1 => ERROR("ab) NEWLINE IDENT(c) NEWLINE
 ```
 
 Teilsprachen (Eingabe ist der Stringinhalt, Tokenarten der Teilsprache):
@@ -371,9 +427,16 @@ vectors-format
 "{x:hex} {y:.3} {z:08}"         => EXPR(x) SPEC(hex) TEXT( ) EXPR(y) SPEC(.3) TEXT( ) EXPR(z) SPEC(08)
 "{{literal}}"                    => TEXT({literal})
 "{i_dut.max()}"                  => EXPR(i_dut.max())
-!"{x"                            => E_FORMAT
-!"}"                             => E_FORMAT
-!"{f(\"a\")}"                    => E_FORMAT
+"{m[a:b]} {f(a:b)}"              => EXPR(m[a:b]) TEXT( ) EXPR(f(a:b))
+!"{x"                            => E_FORMAT@1
+!"ab{x"                          => E_FORMAT@3
+!"}"                             => E_FORMAT@1
+!"a}"                            => E_FORMAT@2
+!"{f(\"a\")}"                    => E_FORMAT@4
+!"{}"                            => E_FORMAT@1
+!"{x:}"                          => E_FORMAT@1
+!"{x:foo}"                       => E_FORMAT@1
+!"{x:hex:1}"                     => E_FORMAT@1
 ```
 
 ```
@@ -383,8 +446,20 @@ vectors-pattern
 "{_}CRC mismatch{_}"             => ANY TEXT(CRC mismatch) ANY
 "{name:str<32>}"                 => CAP(name:str<32>)
 "{{x}}"                          => TEXT({x})
-!"{n}"                           => E_PATTERN
-!"{n:bytes}"                     => E_PATTERN
+"{n:hex} {f:float} {w:word} {s:str}" => CAP(n:hex) TEXT( ) CAP(f:float) TEXT( ) CAP(w:word) TEXT( ) CAP(s:str)
+"{myVar:int} {_x:int}"           => CAP(myVar:int) TEXT( ) CAP(_x:int)
+"{n:str<0>}"                     => CAP(n:str<0>)
+!"{n}"                           => E_PATTERN@1
+!"{n:bytes}"                     => E_PATTERN@1
+!"ab{n:int"                      => E_PATTERN@3
+!"a}"                            => E_PATTERN@2
+!"{}"                            => E_PATTERN@1
+!"{N:int}"                       => E_PATTERN@1
+!"{:int}"                        => E_PATTERN@1
+!"{_:int}"                       => E_PATTERN@1
+!"{state:int}"                   => E_PATTERN@1
+!"{struct:int}"                  => E_PATTERN@1
+!"{n:str<>}"                     => E_PATTERN@1
 ```
 
 ```
@@ -394,8 +469,14 @@ vectors-address
 "i2c1/0x36/0x0C"                 => SEG(i2c1) SEG(0x36) SEG(0x0C)
 "sys/previous_run"               => SEG(sys) SEG(previous_run)
 "can0/pdo/0x181/0"               => SEG(can0) SEG(pdo) SEG(0x181) SEG(0)
-!"daq1//ai0"                     => E_ADDRESS
-!"daq1/tc[0-16]"                 => E_ADDRESS
+"a.b-c/x_1"                      => SEG(a.b-c) SEG(x_1)
+"tc[5:2]"                        => SEG(tc) RANGE(5:2)
+!"daq1//ai0"                     => E_ADDRESS@6
+!"daq1/tc[0-16]"                 => E_ADDRESS@8
+!"/ai0"                          => E_ADDRESS@1
+!"daq1/"                         => E_ADDRESS@6
+!"-x"                            => E_ADDRESS@1
+!"tc[a:2]"                       => E_ADDRESS@3
 ```
 
 ---
@@ -429,7 +510,7 @@ vectors
 "x += 1"                  => IDENT(x) += INT(1)
 "a <= b != c"             => IDENT(a) <= IDENT(b) != IDENT(c)
 "x >> 2 << 1"             => IDENT(x) >~> INT(2) << INT(1)
-"x > > 2"                 => IDENT(x) > > INT(2)
+"x > > 2"                 => IDENT(x) >_> INT(2)
 "vec<vec<u8, 4>>"         => IDENT(vec) < IDENT(vec) < IDENT(u8) , INT(4) >~>
 "vec<vec<u8, 4>, 2>"      => IDENT(vec) < IDENT(vec) < IDENT(u8) , INT(4) > , INT(2) >
 "T!E T?"                  => UPPER(T) ! UPPER(E) UPPER(T) ?
@@ -438,9 +519,15 @@ vectors
 "b[a..c]"                 => IDENT(b) [ IDENT(a) .. IDENT(c) ]
 "P[0, 1]"                 => UPPER(P) [ INT(0) , INT(1) ]
 "~x & 0xFF"               => ~ IDENT(x) & HEX(0xFF)
-!"a => b"                 => E_CHAR
-!"x = 'a'"                => E_CHAR
-!"a; b"                   => E_CHAR
+"x -= 1 *= 2 /= 3"        => IDENT(x) -= INT(1) *= INT(2) /= INT(3)
+"a % b | c ^ d ? { }"     => IDENT(a) % IDENT(b) | IDENT(c) ^ IDENT(d) ? { }
+!"a => b"                 => E_CHAR@1:3 => IDENT(a) ERROR(=>) IDENT(b)
+!"x = 'a'"                => E_CHAR@1:5 E_CHAR@1:7 => IDENT(x) = ERROR(') IDENT(a) ERROR(')
+!"a; b"                   => E_CHAR@1:2
+!"a \\ b"                 => E_CHAR@1:3
+!"$x"                     => E_CHAR@1:1
+!"`x`"                    => E_CHAR@1:1 E_CHAR@1:3
+!"x = \x01\n"             => E_CHAR@1:5
 ```
 
 ---
@@ -475,7 +562,9 @@ Stringliterale sind verboten; er endet an `:` oder `}` auf Tiefe 0. Die Teilspra
 Jeder Fehler nennt Position, Ursache und einen Vorschlag (0.1). Der Tokenizer bricht beim
 ersten Fehler nicht ab, sondern liefert ein Fehlertoken und setzt am nächsten Leerraum
 fort, damit der Parser mehrere Fehler melden kann; die Ausgabe ist dann kein gültiges
-Programm.
+Programm. Ein Tabulator, ein einzelnes `\r` und ein Nicht-ASCII-Zeichen ergeben kein
+Fehlertoken, sie werden wie Leerraum übergangen; ein Zahlenliteral meldet höchstens einen
+Fehler, ein offener String nur `E_STRING`.
 
 | Code | Ursache | Vorschlag |
 |---|---|---|

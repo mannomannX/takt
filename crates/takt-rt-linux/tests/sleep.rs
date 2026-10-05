@@ -61,7 +61,10 @@ fn traced(source: &str, stimulus: &str, may_sleep: bool, ticks: u64) -> (String,
     let run = Run::new(&p, &stimulus, &RunOptions { ticks, ..Default::default() }).expect("Lauf");
     let profile = Profile { may_sleep, ..Profile::LINUX_RT };
     let clock = RealtimeClock::new();
-    let mut rt = Runtime::new(run, clock, Quiet, Slept::default(), profile, p.config.tick, Policy::default());
+    // Der Wirt des Tests ist kein Echtzeitsystem: Weckt er spaet, ist das am
+    // Raster ein Ueberlauf (7.3). `alert` haelt ihn aus dem Trace, der hier
+    // nur den Schlaf zeigen soll.
+    let mut rt = Runtime::new(run, clock, Quiet, Slept::default(), profile, p.config.tick, Policy::Alert);
     while rt.tick_number() < ticks {
         rt.step();
     }

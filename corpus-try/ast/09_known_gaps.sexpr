@@ -21,7 +21,7 @@
   (state RUN
     (loop
       (var charge (.step coulomb cell_v 100ms))
-      (var seconds (.as 100ms s))
+      (var seconds (.as (paren 100ms) s))
       (var safe_v (.or cell_v 3.7[V]))
       (var mode (.state gaps))
       (var hdr (.decode Header (call raw_bytes)))

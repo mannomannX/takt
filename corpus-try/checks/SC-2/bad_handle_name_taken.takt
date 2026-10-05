@@ -1,0 +1,15 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-2 (2.5): Der Name eines Job-Handles ist frei; hier ist er schon
+# eine Variable.
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total
+
+machine m:
+    var msg : bytes<64> = default
+    var v   : int = 0
+    initial RUN
+    state RUN:
+        sequence:
+            job v = sha256(msg)  # ~ SC-2

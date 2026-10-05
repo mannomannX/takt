@@ -112,10 +112,11 @@ fn an_overrun_never_skips_a_tick() {
     assert_eq!(ks, vec![0, 1, 2], "die Tickzahl laeuft luckenlos weiter");
 }
 
-/// 7.3: Der Fault wirkt im *naechsten* Tick.
+/// 7.3: Der Fault wirkt im *naechsten* Tick. Der lange Schritt endet eine
+/// halbe Periode in Tick 1, der darum noch vor seinem Raster fertig wird.
 #[test]
 fn an_overrun_faults_in_the_following_tick() {
-    let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0, 0, 0], waits: Vec::new() });
+    let clock = RefCell::new(Fake { now: 0, costs: vec![3 * T0 / 2, 0, 0], waits: Vec::new() });
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
@@ -184,11 +185,11 @@ fn sleeping_advances_logical_time_exactly() {
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
-    let first = rt.step();
-    assert_eq!(first.slept, 8, "von 1 ms bis 10 ms sind acht Ticks zu ueberspringen");
+    rt.step();
     // Der naechste ausgefuehrte Tick ist der an der Frist.
     let second = rt.step();
     assert_eq!(second.now, 10 * T0, "der Tick an der Frist wird ausgefuehrt");
+    assert_eq!(rt.sink.0[0].slept, 8, "von 1 ms bis 10 ms sind acht Ticks zu ueberspringen");
 }
 
 /// 12.3: Auch im Schlaf sieht der Watchdog jede Tickgrenze — sonst schluege
@@ -199,8 +200,9 @@ fn the_watchdog_is_kicked_at_every_slept_tick() {
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
-    assert_eq!(rt.step().slept, 8);
     rt.step();
+    rt.step();
+    assert_eq!(rt.sink.0[0].slept, 8);
     assert_eq!(rt.watchdog.0, 2 + 8, "zwei Schritte und acht geschlafene Ticks");
     let waits: Vec<i64> = (0..=9).map(|k| k * T0).collect();
     assert_eq!(clock.borrow().waits, waits, "Periode fuer Periode bis zur Frist");
@@ -214,7 +216,8 @@ fn a_program_that_does_not_allow_sleep_never_sleeps() {
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
-    assert_eq!(rt.step().slept, 0);
+    rt.step();
+    assert_eq!((rt.sink.0[0].slept, rt.tick_number()), (0, 1));
 }
 
 /// Ein Lauf, der mit einem ohne Schlaf verglichen wird (Satz 9.9.1),
@@ -225,7 +228,8 @@ fn a_run_without_sleep_never_sleeps() {
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
     let profile = Profile { may_sleep: false, ..Profile::BAREMETAL };
     let mut rt = Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), profile, T0, Policy::Fault);
-    assert_eq!(rt.step().slept, 0);
+    rt.step();
+    assert_eq!((rt.sink.0[0].slept, rt.tick_number()), (0, 1));
 }
 
 /// Eine Frist im naechsten Tick ist kein Grund zu schlafen.
@@ -235,7 +239,8 @@ fn a_deadline_in_the_next_tick_is_no_reason_to_sleep() {
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(2 * T0) };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
-    assert_eq!(rt.step().slept, 0);
+    rt.step();
+    assert_eq!((rt.sink.0[0].slept, rt.tick_number()), (0, 1));
 }
 
 // --- Profile (12.8) -----------------------------------------------------
@@ -274,8 +279,14 @@ fn skipped_ticks_are_carried_over_to_the_program() {
     let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
-    let first = rt.step();
-    assert_eq!(first.slept, 8);
+    rt.step();
+    assert_eq!(
+        (rt.program().advanced, rt.tick_number()),
+        (0, 9),
+        "ohne Vorgriff: erst das Ende des Schlafs traegt nach"
+    );
+    rt.step();
+    assert_eq!(rt.sink.0[0].slept, 8);
     assert_eq!(rt.program().advanced, 8, "genau die uebersprungenen Ticks, nicht mehr und nicht weniger");
 }
 
@@ -394,6 +405,9 @@ fn service_names_the_deadline_of_the_sleep() {
     let mut rt =
         Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
     assert_eq!(rt.service().deadline, 9 * T0, "Tick 0, dann acht geschlafene; Tick 9 endet an der Frist");
+    assert_eq!(rt.program.advanced, 0, "ohne Vorgriff (FB-388)");
+    clock.borrow_mut().now = 9 * T0;
+    rt.service();
     assert_eq!(rt.program.advanced, 8);
 }
 
@@ -468,7 +482,14 @@ fn the_latch_is_committed_before_the_sleep() {
         Policy::Fault,
     );
     rt.service();
-    assert_eq!(rt.program.log, ["trace", "tick", "commit", "advance", "trace"]);
+    assert_eq!(
+        rt.program.log,
+        ["commit", "trace", "tick", "commit"],
+        "Tick 0 committet; der Trace des Ticks wartet auf das Ende des Schlafs"
+    );
+    rt.clock.0 = 9 * T0;
+    rt.service();
+    assert_eq!(rt.program.log[4..], ["advance", "trace", "tick", "commit", "trace"]);
 }
 
 /// **Das geordnete Ende gehoert zum Kern** (12.7): Nach dem Tick, der
@@ -480,7 +501,7 @@ fn the_end_of_a_run_is_part_of_the_service() {
     let mut rt = Runtime::new(program, Logical(0), Kicks::default(), EveryTick, Profile::BAREMETAL, T0, Policy::Fault);
     let next = rt.service();
     assert_eq!(next.ended, Some(takt_rt_core::NextRun::OnStart));
-    assert_eq!(rt.program.log, ["trace", "tick", "commit", "trace", "end", "commit", "trace"]);
+    assert_eq!(rt.program.log, ["commit", "trace", "tick", "commit", "trace", "end", "commit", "trace"]);
     rt.clock.0 = 100 * T0;
     rt.service();
     assert_eq!(rt.program.ticks, 1, "nach dem Ende rechnet der Kern nichts mehr");
@@ -513,4 +534,499 @@ fn every_end_of_a_run_comes_back_from_its_code() {
     }
     assert_eq!(NextRun::from_code(0, 5), None, "0 heisst weiter");
     assert_eq!(NextRun::from_code(5, 5), None);
+}
+
+// --- Ueberlaeufe in Folge und an Grenzen (7.3) --------------------------
+
+/// **Jeder ueberzogene Tick faultet genau einmal, im Tick danach** (7.3):
+/// Vier Ticks zu je fuenf Perioden ergeben nach vier Schritten drei Faults —
+/// der vierte steht noch aus.
+#[test]
+fn every_overrun_faults_once_in_the_following_tick() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0; 4], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        rt.step();
+        seen.push(rt.program.overruns);
+    }
+    assert_eq!(seen, [0, 1, 2, 3], "je Folgetick genau einer");
+    assert!(rt.sink.0.iter().all(|t| t.overrun));
+    assert_eq!(rt.overrun().count, 4);
+}
+
+/// **Eine Nanosekunde ueber der Periode ist ein Ueberlauf**, genau die
+/// Periode nicht (7.3).
+#[test]
+fn one_nanosecond_over_the_period_is_an_overrun() {
+    for (cost, over) in [(T0, false), (T0 + 1, true)] {
+        let clock = RefCell::new(Fake { now: 0, costs: vec![cost, 0], waits: Vec::new() });
+        let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+        let mut rt = Runtime::new(
+            program,
+            Shared(&clock),
+            Kicks::default(),
+            Log::default(),
+            Profile::LINUX_RT,
+            T0,
+            Policy::Fault,
+        );
+        assert_eq!(rt.step().overrun, over, "Schritt von {cost} ns");
+        rt.step();
+        assert_eq!(rt.program.overruns, u32::from(over), "Schritt von {cost} ns");
+    }
+}
+
+/// Ein Programm mit Schrittkosten, das den Lauf nach dem ersten Tick beendet.
+struct Ending<'a> {
+    clock: &'a RefCell<Fake>,
+    ticks: u64,
+    overruns: u32,
+}
+
+impl Program for Ending<'_> {
+    fn tick(&mut self, k: u64, _now: i64) {
+        self.ticks += 1;
+        let mut f = self.clock.borrow_mut();
+        let cost = *f.costs.get(k as usize).or(f.costs.last()).unwrap_or(&0);
+        f.now += cost;
+    }
+
+    fn raise_overrun(&mut self) {
+        self.overruns += 1;
+    }
+
+    fn next_run(&self) -> Option<takt_rt_core::NextRun> {
+        (self.ticks >= 1).then_some(takt_rt_core::NextRun::OnStart)
+    }
+}
+
+/// **Ein Ueberlauf im Tick, der den Lauf beendet, steht im Protokoll und
+/// faultet niemanden** (7.3, 12.7): Es gibt keinen naechsten Tick, in dem
+/// der Fault wirken koennte; die physische Verzoegerung bleibt sichtbar.
+#[test]
+fn an_overrun_in_the_last_tick_is_recorded_and_raises_nothing() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0], waits: Vec::new() });
+    let program = Ending { clock: &clock, ticks: 0, overruns: 0 };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    assert_eq!(rt.service().ended, Some(takt_rt_core::NextRun::OnStart));
+    clock.borrow_mut().now = 100 * T0;
+    rt.service();
+    assert_eq!((rt.program.ticks, rt.program.overruns), (1, 0), "kein Tick mehr, der den Fault saehe");
+    assert!(rt.sink.0[0].overrun, "die Ueberschreitung steht in der Zeitzeile");
+    assert_eq!(rt.overrun().count, 1);
+}
+
+/// **Ein Ueberlauf vor dem Schlaf haelt die Schleife wach** (7.3, 9.9):
+/// Der Fault wirkt im naechsten Tick, und ein vorgemerkter Fault ist ein
+/// `raised`, das den Schlaf verbietet — sonst wirkte er erst an der Frist.
+#[test]
+fn a_pending_overrun_forbids_the_sleep() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0, 0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    let first = rt.step();
+    assert_eq!((first.overrun, first.slept), (true, 0), "kein Schlaf mit vorgemerktem Fault");
+    let second = rt.step();
+    assert_eq!((second.k, rt.program.overruns), (1, 1), "der Fault wirkt im Tick 1");
+    assert_eq!(rt.program.advanced, second.slept, "danach darf geschlafen werden");
+}
+
+/// Unter `alert` wird nichts vorgemerkt, und der Schlaf bleibt erlaubt.
+#[test]
+fn an_overrun_under_alert_does_not_forbid_the_sleep() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![5 * T0, 0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(10 * T0) };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Alert);
+    assert!(rt.step().overrun);
+    rt.step();
+    assert_eq!(rt.sink.0[0].slept, 8);
+}
+
+// --- Watchdog: nach dem Schritt, nie nach dem Ende (12.3, 12.4) ---------
+
+/// Ein Programm und ein Watchdog, die in dasselbe Log schreiben.
+struct Logged<'a> {
+    log: &'a RefCell<Vec<&'static str>>,
+    ends_after: Option<u64>,
+    ticks: u64,
+}
+
+impl Program for Logged<'_> {
+    fn tick(&mut self, _k: u64, _now: i64) {
+        self.ticks += 1;
+        self.log.borrow_mut().push("tick");
+    }
+
+    fn next_run(&self) -> Option<takt_rt_core::NextRun> {
+        self.ends_after.filter(|n| self.ticks >= *n).map(|_| takt_rt_core::NextRun::Now)
+    }
+
+    fn commit(&mut self) {
+        self.log.borrow_mut().push("commit");
+    }
+
+    fn end(&mut self) {
+        self.log.borrow_mut().push("end");
+    }
+}
+
+struct LoggedKicks<'a>(&'a RefCell<Vec<&'static str>>);
+
+impl Watchdog for LoggedKicks<'_> {
+    fn kick(&mut self) {
+        self.0.borrow_mut().push("kick");
+    }
+}
+
+/// **Der Watchdog wird nach dem Schritt und dem Commit bestaetigt** (12.4),
+/// je Tick einmal, auch wenn ein spaeter Aufruf drei Grenzen aufholt.
+#[test]
+fn the_watchdog_is_kicked_after_the_step_of_every_tick() {
+    let log = RefCell::new(Vec::new());
+    let program = Logged { log: &log, ends_after: None, ticks: 0 };
+    let mut rt = Runtime::new(program, Logical(0), LoggedKicks(&log), (), Profile::BAREMETAL, T0, Policy::Fault);
+    rt.step();
+    assert_eq!(*log.borrow(), ["commit", "tick", "commit", "kick"], "Tick 0 committet ohne Bestaetigung");
+    log.borrow_mut().clear();
+    rt.clock.0 = 3 * T0 + T0 / 2;
+    rt.service();
+    assert_eq!(*log.borrow(), ["tick", "commit", "kick"].repeat(3), "drei Grenzen, drei Ticks");
+}
+
+/// **Nach dem Ende des Laufs bestaetigt der Kern nichts mehr** (12.7, 12.3):
+/// Der letzte Tick kickt nach seinem Schritt, dann folgen Ende und `safe`;
+/// spaetere Aufrufe rechnen und bestaetigen nichts.
+#[test]
+fn no_kick_follows_the_end_of_a_run() {
+    let log = RefCell::new(Vec::new());
+    let program = Logged { log: &log, ends_after: Some(1), ticks: 0 };
+    let mut rt = Runtime::new(program, Logical(0), LoggedKicks(&log), (), Profile::BAREMETAL, T0, Policy::Fault);
+    assert!(rt.service().ended.is_some());
+    assert_eq!(*log.borrow(), ["commit", "tick", "commit", "kick", "end", "commit"], "Tick 0 committet zuerst");
+    rt.clock.0 = 50 * T0;
+    rt.service();
+    rt.step();
+    assert_eq!(log.borrow().len(), 6, "nach dem Ende: {:?}", log.borrow());
+}
+
+// --- Extremwerte (7.1, 7.3, 9.9) ----------------------------------------
+
+/// **Die logische Zeit beginnt bei null, wann immer die Uhr startet** (12.1):
+/// Eine Uhr, die bei 5 ms steht, verschiebt die Fristen, nicht `now`.
+#[test]
+fn a_clock_that_starts_late_shifts_the_deadlines_only() {
+    let clock = RefCell::new(Fake { now: 5 * T0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
+    rt.run(3);
+    assert_eq!(rt.program.ticks, [(0, T0), (1, 2 * T0), (2, 3 * T0)]);
+    assert_eq!(clock.borrow().waits, [5 * T0, 6 * T0, 7 * T0]);
+    assert!(rt.sink.0.iter().all(|t| t.drift == 0));
+}
+
+/// **Eine Frist, die kein Vielfaches von T0 ist, wird nie uebersprungen**
+/// (9.9): Der erste ausgefuehrte Tick nach dem Schlaf endet spaetestens an
+/// der ersten Tickgrenze, die die Frist erreicht.
+#[test]
+fn a_deadline_between_two_boundaries_is_never_slept_past() {
+    for deadline in [10 * T0 - 1, 10 * T0, 10 * T0 + 1, 10 * T0 + T0 / 2, 11 * T0 - 1] {
+        let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+        let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(deadline) };
+        let mut rt = Runtime::new(
+            program,
+            Shared(&clock),
+            Kicks::default(),
+            Log::default(),
+            Profile::BAREMETAL,
+            T0,
+            Policy::Fault,
+        );
+        rt.step();
+        let next = rt.step();
+        let first_reaching = (deadline + T0 - 1) / T0 * T0;
+        assert!(next.now <= first_reaching, "Frist {deadline}: naechster Tick endet bei {}", next.now);
+        assert_eq!(rt.program.advanced as i64, next.now / T0 - 2, "Frist {deadline}: nachgetragen");
+    }
+}
+
+/// **Ein langer Schlaf rueckt genau um seine Ticks vor** (9.9), auch ueber
+/// eine Million Perioden.
+#[test]
+fn a_long_sleep_advances_exactly() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: Some(1_000_000 * T0) };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    assert_eq!(rt.service().deadline, (1_000_000 - 1) * T0);
+    assert_eq!(rt.tick_number(), 999_999);
+    clock.borrow_mut().now = (1_000_000 - 1) * T0;
+    rt.service();
+    assert_eq!((rt.program.advanced, rt.sink.0[0].slept), (999_998, 999_998));
+}
+
+/// **Ohne Frist schlaeft der Kern nicht** (9.9): Einen Schlaf, den nur ein
+/// Weckereignis beendet, sieht er nicht vor.
+#[test]
+fn without_a_deadline_the_core_does_not_sleep() {
+    struct Deadlineless;
+    impl Program for Deadlineless {
+        fn tick(&mut self, _k: u64, _now: i64) {}
+        fn sleep_allowed(&self) -> bool {
+            true
+        }
+    }
+    let mut rt =
+        Runtime::new(Deadlineless, Logical(0), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    rt.step();
+    assert_eq!((rt.sink.0[0].slept, rt.tick_number()), (0, 1));
+}
+
+/// Ein Programm, das nur seine Ticks zaehlt und nie schlaeft.
+#[derive(Default)]
+struct Plain(u64);
+
+impl Program for Plain {
+    fn tick(&mut self, _k: u64, _now: i64) {
+        self.0 += 1;
+    }
+}
+
+/// **Eine Periode von einer Nanosekunde** ist die kleinste, die es gibt;
+/// die Fristen wachsen um sie.
+#[test]
+fn a_period_of_one_nanosecond_still_counts_ticks() {
+    let mut rt = Runtime::new(Plain::default(), Logical(0), Kicks::default(), (), Profile::BAREMETAL, 1, Policy::Fault);
+    rt.clock.0 = 9;
+    assert_eq!(rt.service().deadline, 10);
+    assert_eq!(rt.program.0, 10);
+}
+
+/// **Eine Uhr am Ende ihres Bereichs haengt den Kern nicht auf** (12.11:
+/// kein Einstieg blockiert): Steht sie auf `i64::MAX`, waechst die Frist
+/// nicht mehr; `i64::MAX` ist das Ende der Zeitachse und keine Grenze, an
+/// der `service` noch rechnet.
+#[test]
+fn a_clock_at_the_end_of_its_range_does_not_hang_the_service() {
+    let start = i64::MAX - T0;
+    let mut rt =
+        Runtime::new(Plain::default(), Logical(start), Kicks::default(), (), Profile::BAREMETAL, T0, Policy::Fault);
+    rt.clock.0 = i64::MAX;
+    let next = rt.service();
+    assert_eq!((next.deadline, rt.program.0), (i64::MAX, 1), "der Tick an der letzten Grenze davor");
+    rt.service();
+    assert_eq!(rt.program.0, 1, "an der gesaettigten Frist rechnet der Kern nichts mehr");
+}
+
+/// **Die logische Zeit saettigt, statt umzuschlagen** (12.1): Ab 2^63 Ticks
+/// ergaebe `k as i64` eine negative Zeit.
+#[test]
+fn the_logical_time_saturates() {
+    assert_eq!(takt_rt_core::tick_end(u64::MAX, 1), i64::MAX);
+    assert_eq!(takt_rt_core::tick_end(1 << 63, T0), i64::MAX);
+    assert_eq!(takt_rt_core::tick_end(41, T0), 42 * T0);
+}
+
+// --- Jobs (4.5) ---------------------------------------------------------
+
+/// Slots mit vorgegebenem Zustand und Ergebnis.
+struct Scripted {
+    states: Vec<takt_rt_core::JobState>,
+    results: Vec<Vec<u8>>,
+    taken: Vec<u32>,
+}
+
+impl takt_rt_core::Jobs for Scripted {
+    fn slots(&self) -> u32 {
+        self.states.len() as u32
+    }
+
+    fn begin(&mut self, _slot: u32, _native: &str, _args: &[u8]) -> bool {
+        false
+    }
+
+    fn poll(&mut self, slot: u32) -> takt_rt_core::JobState {
+        self.states[slot as usize]
+    }
+
+    fn take(&mut self, slot: u32, into: &mut [u8]) -> usize {
+        self.taken.push(slot);
+        self.states[slot as usize] = takt_rt_core::JobState::Idle;
+        let result = &self.results[slot as usize];
+        if let Some(to) = into.get_mut(..result.len()) {
+            to.copy_from_slice(result);
+        }
+        result.len()
+    }
+
+    fn cancel(&mut self, _slot: u32) {}
+}
+
+/// Schreibt mit, was der Kern als Fertigstellung zustellt.
+#[derive(Default)]
+struct Waiting {
+    done: Vec<(u32, Option<Vec<u8>>)>,
+    ticks: u64,
+    ends_after: Option<u64>,
+}
+
+impl Program for Waiting {
+    fn tick(&mut self, _k: u64, _now: i64) {
+        self.ticks += 1;
+    }
+
+    fn job_done(&mut self, slot: u32, result: Option<&[u8]>) {
+        self.done.push((slot, result.map(<[u8]>::to_vec)));
+    }
+
+    fn next_run(&self) -> Option<takt_rt_core::NextRun> {
+        self.ends_after.filter(|n| self.ticks >= *n).map(|_| takt_rt_core::NextRun::Now)
+    }
+}
+
+/// **Fertige Jobs gehen vor dem Schritt ins Programm** (4.5): `Done` mit
+/// Ergebnis, `Failed` als `Err(FAILED)`; ein laufender bleibt, wo er ist.
+/// Ein Ergebnis, das den Puffer uebersteigt, wird verweigert statt gekuerzt —
+/// gekuerzt waere es ein gueltiges, falsches Ergebnis.
+#[test]
+fn finished_jobs_reach_the_program_before_the_step() {
+    use takt_rt_core::JobState::{Done, Failed, Idle, Running};
+    let mut jobs = Scripted {
+        states: vec![Done, Failed, Running, Done, Idle],
+        results: vec![vec![1, 2, 3], Vec::new(), Vec::new(), vec![9; 10], Vec::new()],
+        taken: Vec::new(),
+    };
+    let mut rt =
+        Runtime::new(Waiting::default(), Logical(0), Kicks::default(), (), Profile::BAREMETAL, T0, Policy::Fault);
+    let mut buf = [0u8; 4];
+    rt.step_with_jobs(&mut jobs, &mut buf);
+    assert_eq!(rt.program.done, [(0, Some(vec![1, 2, 3])), (1, None), (3, None)]);
+    assert_eq!(jobs.taken, [0, 1, 3], "der laufende und der freie Slot bleiben");
+    assert_eq!(rt.program.ticks, 1);
+}
+
+/// **Nach dem Ende des Laufs erreicht kein Ergebnis das Programm mehr**
+/// (12.7): Es gibt keinen Schritt, der es saehe.
+#[test]
+fn no_job_result_arrives_after_the_end_of_a_run() {
+    use takt_rt_core::JobState::{Done, Running};
+    let mut jobs = Scripted { states: vec![Running], results: vec![vec![7]], taken: Vec::new() };
+    let program = Waiting { ends_after: Some(1), ..Waiting::default() };
+    let mut rt = Runtime::new(program, Logical(0), Kicks::default(), (), Profile::BAREMETAL, T0, Policy::Fault);
+    let mut buf = [0u8; 4];
+    rt.step_with_jobs(&mut jobs, &mut buf);
+    assert!(rt.ended().is_some());
+    jobs.states[0] = Done;
+    rt.step_with_jobs(&mut jobs, &mut buf);
+    assert!(rt.program.done.is_empty(), "{:?}", rt.program.done);
+    assert_eq!(rt.program.ticks, 1);
+}
+
+/// **Uebergelaufen ist, wer nach dem nominalen Beginn des naechsten Ticks
+/// endet** (7.3, RT-003): gemessen am Raster `t0 + (k+1)·T0`. Ein Beginn eine
+/// halbe Periode zu spaet laesst dem Schritt eine halbe Periode; endet er
+/// genau am Raster, ist es keiner, eine Nanosekunde danach einer.
+#[test]
+fn the_overrun_is_measured_against_the_grid() {
+    for (cost, over) in [(T0 / 2, false), (T0 / 2 + 1, true)] {
+        let clock = RefCell::new(Fake { now: 0, costs: vec![cost, 0], waits: Vec::new() });
+        let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+        let mut rt = Runtime::new(
+            program,
+            Shared(&clock),
+            Kicks::default(),
+            Log::default(),
+            Profile::LINUX_RT,
+            T0,
+            Policy::Fault,
+        );
+        clock.borrow_mut().now = T0 / 2;
+        let first = rt.service();
+        assert_eq!(rt.sink.0[0].drift, T0 / 2);
+        assert_eq!(rt.sink.0[0].overrun, over, "Schritt von {cost} ns nach T0/2 Rueckstand");
+        assert_eq!(rt.overrun().count, u64::from(over));
+        clock.borrow_mut().now = first.deadline;
+        rt.service();
+        assert_eq!(rt.program.overruns, u32::from(over), "der Fault wirkt im naechsten Tick");
+    }
+}
+
+/// **Ein spaeter Beginn mit kurzem Schritt ist ein Ueberlauf** (7.3,
+/// RT-003): 0,9 Perioden Rueckstand und 0,2 Perioden Schritt enden 0,1
+/// Perioden nach dem Raster, obwohl der Schritt selbst kurz war.
+#[test]
+fn a_late_start_with_a_short_step_overruns() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![T0 / 5, 0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::LINUX_RT, T0, Policy::Fault);
+    clock.borrow_mut().now = 9 * T0 / 10;
+    rt.step();
+    assert!(rt.sink.0[0].overrun, "Ende bei 1,1 T0, das Raster bei 1 T0");
+    assert_eq!(rt.overrun().worst, T0 / 10, "um eine Zehntelperiode ueber dem Raster");
+}
+
+/// **Ein `service` 3,5 Perioden zu spaet faultet** (7.3, 12.11, RT-003):
+/// Die Ticks 0 bis 2 enden alle nach dem Beginn ihres Nachfolgers, Tick 3
+/// eine halbe Periode davor. Jeder Ueberlauf wirkt einmal, im Tick danach.
+#[test]
+fn a_service_call_three_and_a_half_periods_late_faults() {
+    let clock = RefCell::new(Fake { now: 0, costs: vec![0], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Shared(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    clock.borrow_mut().now = 3 * T0 + T0 / 2;
+    let next = rt.service();
+    let over: Vec<bool> = rt.sink.0.iter().map(|t| t.overrun).collect();
+    assert_eq!(over, [true, true, true, false]);
+    assert_eq!(rt.overrun().count, 3);
+    assert_eq!(rt.program.overruns, 3, "jeder wirkt im Tick danach, alle noch in diesem Aufruf");
+    clock.borrow_mut().now = next.deadline;
+    rt.service();
+    assert_eq!(rt.program.overruns, 3, "Tick 3 endete vor dem Raster: kein weiterer");
+}
+
+/// Ein Programm, dessen Latch nach dem Start `0` haelt und das jeder Tick
+/// neu setzt; die Treiber sehen, was `commit` ausschreibt.
+struct Latched {
+    latch: u64,
+    driven: Vec<u64>,
+}
+
+impl Program for Latched {
+    fn tick(&mut self, k: u64, _now: i64) {
+        self.latch = k + 1;
+    }
+
+    fn commit(&mut self) {
+        self.driven.push(self.latch);
+    }
+}
+
+/// **Tick 0 committet wie jeder andere Tick** (1.5, 9.4): Was der
+/// Anfangszustand in den Latch schreibt (`enter:` des Initialzustands),
+/// erreicht die Treiber vor Tick 1 — sonst kaeme ein Wert, den Tick 1
+/// schon aendert, nie an, waehrend der Trace ihn zeigt.
+#[test]
+fn tick_zero_commits_before_tick_one() {
+    let mut rt = Runtime::new(
+        Latched { latch: 0, driven: Vec::new() },
+        Logical(0),
+        Kicks::default(),
+        Log::default(),
+        Profile::BAREMETAL,
+        T0,
+        Policy::Fault,
+    );
+    rt.service();
+    assert_eq!(rt.program.driven, [0, 1], "erst der Latch von Tick 0, dann der von Tick 1");
+    rt.clock.0 = T0;
+    rt.service();
+    assert_eq!(rt.program.driven, [0, 1, 2], "Tick 0 committet einmal");
 }

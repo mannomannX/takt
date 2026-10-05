@@ -208,3 +208,158 @@ machine m:
         assert!(trace.contains(want), "`{}` fehlt:\n{trace}", want.trim());
     }
 }
+
+#[test]
+fn decode_rejects_a_buffer_one_byte_short_of_the_record() {
+    // 3.7: `none` bei zu kurzem Puffer. Der Record ist sieben Byte lang;
+    // sechs sind zu wenig, sieben und acht genug (SEM2-026).
+    let Some(trace) = agree(
+        "\
+record Frame layout little:
+    a : u8
+    b : u16
+    c : u32
+
+output six   : bool @ hw(\"o/six\")   with safe = true
+output seven : bool @ hw(\"o/seven\") with safe = false
+output eight : bool @ hw(\"o/eight\") with safe = false
+output c_out : u32  @ hw(\"o/c\")     with safe = 0
+
+machine m:
+    var b6 : bytes<8> = default
+    var b7 : bytes<8> = default
+    var b8 : bytes<8> = default
+    var ok : bool = false
+    initial RUN
+
+    state RUN:
+        enter:
+            for i in range(8):
+                if i < 6:
+                    ok = b6.push((i + 1) as u8)
+                if i < 7:
+                    ok = b7.push((i + 1) as u8)
+                ok = b8.push((i + 1) as u8)
+        loop:
+            six = Frame.decode(b6).valid
+            seven = Frame.decode(b7).valid
+            eight = Frame.decode(b8).valid
+            c_out = Frame.decode(b7).or(default).c
+",
+        "short_by_one",
+        1,
+    ) else {
+        return;
+    };
+    for want in ["out six false\n", "out seven true\n", "out eight true\n", "out c_out 117835012\n"] {
+        assert!(trace.contains(want), "`{}` fehlt:\n{trace}", want.trim());
+    }
+}
+
+#[test]
+fn a_bit_field_across_a_byte_boundary_follows_the_byte_order() {
+    // 3.7 Ueber Bytegrenzen (FB-128): Die Bitnummern zaehlen im Wert des
+    // Traegers, `layout` liest ihn aus den Bytes. `3A BC` ist unter `big`
+    // 0x3ABC (chan 3, value 0xABC), unter `little` 0xBC3A (chan 0xB, value
+    // 0xC3A); `encode` schreibt in derselben Ordnung zurueck. Dazu die
+    // Raender: alle Bits gesetzt, nur das oberste Nibble, ein Wert, der
+    // genau ueber die Grenze reicht (0x801), und ein Schreiben von `value`,
+    // das `chan` stehen laesst.
+    let Some(trace) = agree(
+        "\
+record Big layout big:
+    raw : u16 with bits:
+        chan  : u8  at 12..15
+        value : u16 at 0..11
+
+record Little layout little:
+    raw : u16 with bits:
+        chan  : u8  at 12..15
+        value : u16 at 0..11
+
+output big_chan     : u8  @ hw(\"o/bc\")  with safe = 0
+output big_value    : u16 @ hw(\"o/bv\")  with safe = 0
+output little_chan  : u8  @ hw(\"o/lc\")  with safe = 0
+output little_value : u16 @ hw(\"o/lv\")  with safe = 0
+output big_e0       : u8  @ hw(\"o/b0\")  with safe = 0
+output big_e1       : u8  @ hw(\"o/b1\")  with safe = 0
+output little_e0    : u8  @ hw(\"o/l0\")  with safe = 0
+output little_e1    : u8  @ hw(\"o/l1\")  with safe = 0
+output top_big      : u8  @ hw(\"o/tb\")  with safe = 0
+output top_little   : u16 @ hw(\"o/tl\")  with safe = 0
+output max_e0       : u8  @ hw(\"o/m0\")  with safe = 0
+output max_e1       : u8  @ hw(\"o/m1\")  with safe = 0
+output cross_big    : u8  @ hw(\"o/xb\")  with safe = 0
+output cross_little : u8  @ hw(\"o/xl\")  with safe = 0
+output kept_chan    : u8  @ hw(\"o/kc\")  with safe = 0
+output kept_raw     : u16 @ hw(\"o/kr\")  with safe = 0
+
+machine m:
+    var wire : bytes<2> = default
+    var top : bytes<2> = default
+    var ok : bool = false
+    initial RUN
+
+    state RUN:
+        enter:
+            ok = wire.push(0x3A)
+            ok = wire.push(0xBC)
+            ok = top.push(0xF0)
+            ok = top.push(0x00)
+        loop:
+            var b = Big.decode(wire).or(default)
+            var l = Little.decode(wire).or(default)
+            big_chan = b.raw.chan
+            big_value = b.raw.value
+            little_chan = l.raw.chan
+            little_value = l.raw.value
+            var be = b.encode()
+            var le = l.encode()
+            big_e0 = be[0]
+            big_e1 = be[1]
+            little_e0 = le[0]
+            little_e1 = le[1]
+            top_big = Big.decode(top).or(default).raw.chan
+            top_little = Little.decode(top).or(default).raw.value
+            var full : Big = default
+            full.raw.chan = 15
+            full.raw.value = 4095
+            var fe = full.encode()
+            max_e0 = fe[0]
+            max_e1 = fe[1]
+            var cross : Big = default
+            cross.raw.value = 0x801
+            cross_big = cross.encode()[0]
+            var lcross : Little = default
+            lcross.raw.value = 0x801
+            cross_little = lcross.encode()[1]
+            b.raw.value = 7
+            kept_chan = b.raw.chan
+            kept_raw = b.raw
+",
+        "bytegrenzen",
+        1,
+    ) else {
+        return;
+    };
+    for want in [
+        "out big_chan 3\n",
+        "out big_value 2748\n",
+        "out little_chan 11\n",
+        "out little_value 3130\n",
+        "out big_e0 58\n",
+        "out big_e1 188\n",
+        "out little_e0 58\n",
+        "out little_e1 188\n",
+        "out top_big 15\n",
+        "out top_little 240\n",
+        "out max_e0 255\n",
+        "out max_e1 255\n",
+        "out cross_big 8\n",
+        "out cross_little 8\n",
+        "out kept_chan 3\n",
+        "out kept_raw 12295\n",
+    ] {
+        assert!(trace.contains(want), "`{}` fehlt:\n{trace}", want.trim());
+    }
+}

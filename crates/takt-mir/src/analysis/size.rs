@@ -440,6 +440,13 @@ fn machine_bytes_at(p: &Program, m: &Machine, with_instances: bool) -> u64 {
     // Zustandslokale Variablen und gescopte Instanzen: je Zustand summiert,
     // ueber Geschwister das Maximum. Die Wurzeln schliessen einander aus.
     let state_vars = overlay(p, m, &m.roots, with_instances);
+    // 11.5: `persist`-Variablen gescopter Instanzen liegen in Sigma und
+    // ueberdauern jeden Zustandswechsel; sie werden nie ueberlagert.
+    let latches: u64 = if with_instances {
+        m.states.iter().flat_map(|s| &s.instances).map(|si| persist_bytes(p, &p.machines[si.machine.index()])).sum()
+    } else {
+        0
+    };
 
     // Konfigurationspfad, Timer, Zaehler, Cursor (11.2).
     let depth = m.states.len().max(1) as u64;
@@ -450,7 +457,15 @@ fn machine_bytes_at(p: &Program, m: &Machine, with_instances: bool) -> u64 {
         + 12 /* Abort-Latch, pending, pc */
         + if crate::visit::reads_last_fault(m) { 152 /* last_fault, 5.3 */ } else { 0 };
 
-    machine_vars + state_vars + fixed
+    machine_vars + state_vars + latches + fixed
+}
+
+/// Die `persist`-Variablen einer Maschine samt ihrer gescopten Instanzen.
+fn persist_bytes(p: &Program, m: &Machine) -> u64 {
+    let own: u64 = m.persist.iter().map(|pv| u64::from(type_bytes(p, m.vars[pv.var.index()].ty))).sum();
+    let nested: u64 =
+        m.states.iter().flat_map(|s| &s.instances).map(|si| persist_bytes(p, &p.machines[si.machine.index()])).sum();
+    own + nested
 }
 
 /// Das Maximum ueber einander ausschliessende Geschwister, rekursiv.
@@ -468,9 +483,16 @@ fn overlay(p: &Program, m: &Machine, siblings: &[crate::StateId], with_instances
             // 11.5: Die in `s` gescopten Instanzen liegen in `s`; zwei
             // Geschwister teilen ihren Platz, weil sie nie zugleich aktiv
             // sind (5.11). Ihre Summe, nicht ihr Maximum — sie laufen
-            // nebeneinander, solange `s` steht.
+            // nebeneinander, solange `s` steht. Ihre `persist`-Variablen
+            // zaehlt `machine_bytes_at` ausserhalb des Overlays.
             let instances: u64 = if with_instances {
-                s.instances.iter().map(|si| machine_bytes(p, &p.machines[si.machine.index()])).sum()
+                s.instances
+                    .iter()
+                    .map(|si| {
+                        let inst = &p.machines[si.machine.index()];
+                        machine_bytes(p, inst) - persist_bytes(p, inst)
+                    })
+                    .sum()
             } else {
                 0
             };
@@ -622,5 +644,56 @@ fn text_capacity(p: &Program, elem: Option<TypeId>) -> u32 {
     match elem.and_then(|e| p.types.list.get(e.index())) {
         Some(Type::Line { cap } | Type::Str { cap }) => *cap,
         _ => u32::MAX,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::{PersistVar, ScopedInstance, State, VarDef, VarScope};
+    use crate::program::Config;
+    use crate::types::IntWidth;
+    use crate::{MachineId, StateId, VarId};
+
+    /// SEM2-010: Zwei exklusive Zustaende mit je einer Instanz, die eine
+    /// `persist`-Variable traegt. Die Zustaende teilen ihren Platz, die
+    /// Latches nicht (11.5): Der Posten zaehlt beide `u64`.
+    #[test]
+    fn the_latches_of_exclusive_instances_are_summed() {
+        let mut p = Program::new(Config::new(1, 1_000_000));
+        let u64_ = p.types.intern(Type::Int { width: IntWidth::U64, unit: None, range: None });
+        let keeper = |name: &str| {
+            let mut m = Machine::new(name);
+            m.vars.push(VarDef {
+                name: "count".into(),
+                ty: u64_,
+                init: None,
+                scope: VarScope::Machine,
+                public: false,
+                span: takt_diag::Span::default(),
+            });
+            m.persist.push(PersistVar { var: VarId(0), min_interval: None, type_hash: 1 });
+            m.states.push(State::new("RUN", None));
+            m.roots.push(StateId(0));
+            m
+        };
+        p.machines.push(keeper("owner.FIRST.a"));
+        p.machines.push(keeper("owner.SECOND.b"));
+        let mut owner = Machine::new("owner");
+        for (i, name) in ["FIRST", "SECOND"].into_iter().enumerate() {
+            let mut s = State::new(name, None);
+            s.instances.push(ScopedInstance {
+                machine: MachineId(i as u32),
+                scope: StateId(i as u32),
+                resume: false,
+                span: takt_diag::Span::default(),
+            });
+            owner.states.push(s);
+            owner.roots.push(StateId(i as u32));
+        }
+        let single = machine_bytes(&p, &p.machines[0]);
+        let total = machine_bytes(&p, &owner);
+        let alone = machine_bytes_without_instances(&p, &owner);
+        assert_eq!(total - alone, single + 8, "eine Instanz im Overlay, beide Latches daneben");
     }
 }

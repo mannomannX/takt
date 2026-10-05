@@ -4,7 +4,8 @@
 //! **Satz 9.9.1** verlangt, dass der Trace mit Schlaf derselbe ist wie
 //! ohne. Die Bedingung ist die aus 9.9; die Frist ist die frueheste
 //! `after`-Frist ueber alle Maschinen — und die naechste Stimuluszeile,
-//! weil der Stimulus hier der Rand ist: Ein Ereignis vom Rand weckt, und
+//! weil der Stimulus hier der Rand ist: Ein Ereignis vom Rand weckt — auch
+//! eine Tunable-Aenderung (8.4, 9.9) —, und
 //! frueher zu wecken als noetig ist immer richtig, denn die
 //! uebersprungenen Ticks waeren leere Schritte gewesen. Ein Sendepuffer,
 //! den der Treiber noch leert, haelt wach: Sein Abholen steht im Trace.

@@ -1,0 +1,14 @@
+(system
+  (language 1)
+  (tick 1ms))
+(output n :int in (- 1000)..1000 @hw("o/n") safe=0)
+(machine m
+  (var x :int in (- 1000)..1000 (- 1000))
+  (initial RUN)
+  (state RUN
+    (loop
+      (if (== x 0)
+        (= x (- 1000)))
+      (else
+        (/= x 3))
+      (= n x))))

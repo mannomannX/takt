@@ -114,3 +114,82 @@ fn atan2_fast_of_the_origin_is_zero() {
     let s = samples("f64", (0.0, 0.0), (0.0, 0.0), "atan2_fast(x * 0.0, y * 0.0)", 1);
     assert!(s.iter().all(|(_, _, r)| *r == 0.0), "{s:?}");
 }
+
+/// Die Ergebnisse fester Ausdruecke nach einem Tick, in Programmbreite.
+/// `zero` und `one` sind Variablen vom Typ `float`: An ihnen leitet
+/// `atan2_fast[U]` seine Einheit ab, an einem Literal nicht.
+fn at(width: &str, exprs: &[&str]) -> Vec<f64> {
+    let n = exprs.len();
+    let body: String = exprs.iter().enumerate().map(|(i, e)| format!("            r[{i}] = {e}\n")).collect();
+    let src = format!(
+        "system:\n    language = 1\n    tick = 1 ms\n    float = {width}\n\n\
+         output r : [{n}] float @ sim(\"o/r\")\n\nmachine m:\n    var zero : float = 0.0\n    var one : float = 1.0\n    \
+         initial RUN\n    state RUN:\n        loop:\n{body}"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let out = takt_sema::compile(&src, &options);
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "unerwartete Fehler:\n{}\n{src}", errors.join("\n"));
+    let p = out.program.expect("Programm");
+    let trace =
+        run(&p, &Trace::default(), &RunOptions { ticks: 1, ..Default::default() }).expect("Lauf").trace.render();
+    let line = trace.lines().find_map(|l| l.strip_prefix("t=0 out r [")).unwrap_or_else(|| panic!("{trace}"));
+    let exact =
+        |x: &str| if width == "f32" { f64::from(x.parse::<f32>().expect("Zahl")) } else { x.parse().expect("Zahl") };
+    line.trim_end_matches(']').split(", ").map(exact).collect()
+}
+
+/// 11.4, prelude: Am Schnitt zaehlt das Vorzeichen einer Null nicht —
+/// `atan2_fast(-0, x)` mit `x < 0` ist `pi`; knapp unter null ist es `-pi`.
+#[test]
+fn atan2_fast_at_the_cut_follows_its_documentation() {
+    use std::f64::consts::PI;
+    for (width, bound) in [("f64", 2e-8), ("f32", 5e-7)] {
+        assert!(at(width, &["-zero"])[0].is_sign_negative(), "{width}: `-zero` ist die negative Null");
+        let r =
+            at(width, &["atan2_fast(-zero, -one)", "atan2_fast(1e-30 * one, -one)", "atan2_fast(-1e-30 * one, -one)"]);
+        assert!((r[0] - PI).abs() <= bound, "{width}: atan2_fast(-0, -1) = {} statt pi", r[0]);
+        assert!((r[1] - PI).abs() <= bound, "{width}: {}", r[1]);
+        assert!((r[2] + PI).abs() <= bound, "{width}: knapp unter null ist es -pi: {}", r[2]);
+        let origin = at(width, &["atan2_fast(zero, zero)", "atan2_fast(-zero, -zero)"]);
+        assert!(origin.iter().all(|r| *r == 0.0), "{width}: {origin:?}");
+    }
+}
+
+/// Die Bereichsenden selbst halten die Schranken: `sin_fast` und
+/// `cos_fast` bei `+-1e4`, `exp_fast` bei `+-80`, `atan2_fast` mit
+/// grossem `x` bei kleinem `y`.
+#[test]
+fn the_fast_functions_keep_their_bounds_at_the_ends_of_their_range() {
+    for (width, trig, exp, atan) in [("f64", 5e-9, 5e-9, 2e-8), ("f32", 2e-7, 3e-7, 5e-7)] {
+        let r = at(
+            width,
+            &[
+                "sin_fast(10000.0)",
+                "sin_fast(-10000.0)",
+                "cos_fast(10000.0)",
+                "cos_fast(-10000.0)",
+                "exp_fast(80.0)",
+                "exp_fast(-80.0)",
+                "atan2_fast(0.5 * one, 1000000.0 * one)",
+                "atan2_fast(0.5 * one, -1000000.0 * one)",
+            ],
+        );
+        let exact = |x: f64| if width == "f32" { f64::from(x as f32) } else { x };
+        let x = exact(1.0e4);
+        for (got, want, bound) in [
+            (r[0], x.sin(), trig),
+            (r[1], (-x).sin(), trig),
+            (r[2], x.cos(), trig),
+            (r[3], (-x).cos(), trig),
+            (r[6], 0.5f64.atan2(1.0e6), atan),
+            (r[7], 0.5f64.atan2(-1.0e6), atan),
+        ] {
+            assert!((got - want).abs() <= bound, "{width}: {got:e} gegen {want:e}");
+        }
+        for (got, arg) in [(r[4], 80.0f64), (r[5], -80.0)] {
+            let want = exact(arg).exp();
+            assert!(((got - want) / want).abs() <= exp, "{width}: exp_fast({arg}) = {got:e} gegen {want:e}");
+        }
+    }
+}

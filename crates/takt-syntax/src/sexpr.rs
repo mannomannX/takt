@@ -9,18 +9,26 @@
 use std::fmt::Write;
 
 use crate::ast::*;
+use crate::parser::with_deep_stack;
 
-/// Gibt eine Datei aus.
+/// Gibt eine Datei aus. Wie der Parser auf dem grossen Stapel: Infix- und
+/// Kettenglieder sind keine Ebene (2.1), ihr Baum ist so tief wie die Kette lang.
 pub fn file(f: &File) -> String {
-    let mut p = Printer::default();
-    for item in &f.items {
-        p.item(item);
-    }
-    p.finish()
+    with_deep_stack(|| {
+        let mut p = Printer::default();
+        for item in &f.items {
+            p.item(item);
+        }
+        p.finish()
+    })
 }
 
-/// Gibt einen Schnipsel aus.
+/// Gibt einen Schnipsel aus (auf dem grossen Stapel wie [`file`]).
 pub fn snippet(items: &[SnippetItem]) -> String {
+    with_deep_stack(|| snippet_here(items))
+}
+
+fn snippet_here(items: &[SnippetItem]) -> String {
     let mut p = Printer::default();
     for item in items {
         match item {
@@ -31,7 +39,9 @@ pub fn snippet(items: &[SnippetItem]) -> String {
             SnippetItem::Exit(b) => p.node("exit", "", |p| p.block(b)),
             SnippetItem::Loop(b) => p.node("loop", "", |p| p.block(b)),
             SnippetItem::On(h) => p.on_handler(h),
-            SnippetItem::Sequence(items) => p.node("sequence", "", |p| p.seq_items(items)),
+            SnippetItem::Sequence(timeout, items) => {
+                p.node("sequence", &sequence_head(timeout.as_ref()), |p| p.seq_items(items));
+            }
             SnippetItem::Transition(t) => p.transition(t),
             SnippetItem::State(s) => p.state(s),
             SnippetItem::Step(s) => p.step(s),
@@ -387,14 +397,7 @@ impl Printer {
                 p.on_handler(h);
             }
             if let Some(seq) = &b.sequence {
-                let head = match &b.sequence_timeout {
-                    Some(Timeout { duration, action: TimeoutAction::Goto(t) }) => {
-                        format!("timeout={} -> {}", expr(duration), t.name)
-                    }
-                    Some(Timeout { duration, .. }) => format!("timeout={}", expr(duration)),
-                    None => String::new(),
-                };
-                p.node("sequence", &head, |p| p.seq_items(seq));
+                p.node("sequence", &sequence_head(b.sequence_timeout.as_ref()), |p| p.seq_items(seq));
             }
             for t in &b.transitions {
                 p.transition(t);
@@ -772,6 +775,17 @@ fn params(list: &[Param]) -> String {
     format!("({})", parts.join(" "))
 }
 
+/// Kopf eines Sequenzblocks: der Segment-Default `with timeout = d [-> X]` (6.2).
+fn sequence_head(timeout: Option<&Timeout>) -> String {
+    match timeout {
+        Some(Timeout { duration, action: TimeoutAction::Goto(t) }) => {
+            format!("timeout={} -> {}", expr(duration), t.name)
+        }
+        Some(Timeout { duration, .. }) => format!("timeout={}", expr(duration)),
+        None => String::new(),
+    }
+}
+
 fn args(list: &[Arg]) -> String {
     let mut s = String::new();
     for a in list {
@@ -860,7 +874,9 @@ pub fn expr(e: &Expr) -> String {
             Some(a) => format!("({}{})", name.name, args(a)),
             None => name.name.clone(),
         },
-        ExprKind::Paren(inner) => expr(inner),
+        // Klammern und eine leere Argumentliste bleiben sichtbar: Der Golden-Test
+        // und der Baumvergleich in `fmt::verify` sollen ihren Verlust sehen.
+        ExprKind::Paren(inner) => format!("(paren {})", expr(inner)),
         ExprKind::Tuple(a, b) => format!("(tuple {} {})", expr(a), expr(b)),
         ExprKind::Array(items) => {
             let items = items.iter().map(expr).collect::<Vec<_>>().join(" ");
@@ -870,6 +886,7 @@ pub fn expr(e: &Expr) -> String {
             format!("(instances {} {}{})", expr(count), template.name, args(a))
         }
         ExprKind::Member { base, name, args: a } => match a {
+            Some(a) if a.is_empty() => format!("(.{} {} ())", name.name, expr(base)),
             Some(a) => format!("(.{} {}{})", name.name, expr(base), args(a)),
             None => format!("(.{} {})", name.name, expr(base)),
         },

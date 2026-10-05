@@ -33,6 +33,36 @@ pub fn clang_path() -> Option<std::path::PathBuf> {
     takt_testkit::require("clang", found, "`TAKT_CLANG` setzen oder LLVM installieren")
 }
 
+/// Die Programme, die der Codegen ganz senken muss, mit ihrem Namen
+/// relativ zu `corpus-try`: die Suite `vergleich` des Manifests (FB-378;
+/// ihre Ausnahmen sind die Luecken des Codegens) und jedes Beispiel unter
+/// `corpus-try/sim/`, das die Sema ohne Fehler annimmt.
+pub fn corpus_programs() -> Vec<(String, Program)> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try");
+    let mut names: Vec<String> =
+        takt_conformance::suites::programs("vergleich").into_iter().map(str::to_string).collect();
+    names.extend(
+        std::fs::read_dir(root.join("sim"))
+            .expect("corpus-try/sim lesbar")
+            .flatten()
+            .filter(|e| e.path().join("program.takt").is_file())
+            .map(|e| format!("sim/{}/program.takt", e.file_name().to_string_lossy())),
+    );
+    names.sort();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            let src = std::fs::read_to_string(root.join(&name)).ok()?;
+            let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+            let out = takt_sema::compile(&src, &options);
+            if out.diagnostics.iter().any(|d| d.is_error()) {
+                return None;
+            }
+            out.program.map(|p| (name, p))
+        })
+        .collect()
+}
+
 /// Erzeugt die IR eines Programms, so wie der Compiler sie erzeugt.
 pub fn ir_of(p: &Program) -> String {
     ir_for(p, "x86_64-pc-windows-msvc")
@@ -50,9 +80,21 @@ pub fn ir_for(p: &Program, triple: &str) -> String {
     // Folge waeren eine Quelle dafuer, dass der Test etwas anderes
     // prueft, als die Werkzeuge erzeugen.
     let out = takt_llvm::lower::program(p, triple, &takt_llvm::symbols::Prefix::default());
-    for s in &out.skipped {
-        eprintln!("{} fehlt: {}", takt_llvm::lower::Skipped::what(s), s.reason);
-    }
+    // Eine Senkung, die etwas auslaesst, ist ein Fehlschlag und keine Notiz
+    // auf stderr: Ein Konstrukt, das der Codegen nach einer Regression nicht
+    // mehr senkt, nahme sonst seine Programme still aus dem Vergleich
+    // (KON1-018).
+    let skipped: Vec<String> =
+        out.skipped.iter().map(|s| format!("{} fehlt: {}", takt_llvm::lower::Skipped::what(s), s.reason)).collect();
+    assert!(
+        skipped.is_empty(),
+        "der Codegen senkt nicht alles:
+{}",
+        skipped.join(
+            "
+"
+        )
+    );
     out.ir
 }
 
@@ -137,6 +179,19 @@ pub fn run_native_scenario(
     run_native_build(clang, p, name, ticks, harness::build_scenario(p, scenario, ticks, &[]))
 }
 
+/// Wie [`run_native_scenario`], mit Eingaben (12.5): der Stimulus des
+/// Szenarios aus `<szenario>.stim.trace`.
+pub fn run_native_scenario_with(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    scenario: &str,
+    ticks: u64,
+    inputs: &[Stimulus],
+) -> Result<String, String> {
+    run_native_build(clang, p, name, ticks, harness::build_scenario(p, scenario, ticks, inputs))
+}
+
 /// Der gemeinsame Rumpf: `Some(name)` fuehrt eine Maschine, `None` alle.
 fn run_native_inner(
     clang: &Clang,
@@ -151,10 +206,19 @@ fn run_native_inner(
 }
 
 /// Uebersetzt Programm und Rahmen, laeuft und liefert den Trace.
+///
+/// Jeder Aufruf baut in seinem eigenen Verzeichnis: Tests desselben Binarys
+/// laufen parallel ueber dieselben Programme mit verschiedenen Rahmen, und
+/// ein geteiltes Verzeichnis raeumte dem einen die Dateien des anderen weg
+/// (KON1-007).
 fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harness::Harness) -> Result<String, String> {
-    let _ = ticks;
-    let dir =
-        std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-abnahme-{}", name.replace('.', "_")));
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "takt-abnahme-{}-{}-{run}",
+        name.replace(['.', '/'], "_"),
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let ll = dir.join("programm.ll");
@@ -180,7 +244,22 @@ fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harne
     let out = std::process::Command::new(&exe).output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let _ = std::fs::remove_dir_all(&dir);
-    finished(&out.status, text)
+    finished(&out.status, text).and_then(|text| reaches(text, ticks))
+}
+
+/// Der Lauf reichte bis zum letzten Tick (KON1-010): Der Rahmen nennt am
+/// Ende, bis wohin er kam (`takt end <tick>`), nach der Schleife `ticks + 1`.
+/// Endet das Programm frueher selbst (12.7), steht das Ende in diesem Tick.
+pub fn reaches(text: String, ticks: u64) -> Result<String, String> {
+    let Some(last) = text.lines().find_map(|l| l.strip_prefix("takt end ")?.trim().parse::<u64>().ok()) else {
+        return Err(format!("der Lauf endete ohne `takt end`:\n{text}"));
+    };
+    let ended = text.lines().any(|l| l.starts_with(&format!("t={last} end ")));
+    if last == ticks + 1 || ended {
+        Ok(text)
+    } else {
+        Err(format!("der Lauf endete in Tick {last} von {ticks} ohne Ende des Programms:\n{text}"))
+    }
 }
 
 /// Ein Lauf, der abbricht, liefert einen abgeschnittenen Trace, und der

@@ -255,22 +255,24 @@ fn trig<const N: usize>(fun: Trig, bits: u64, f: Format) -> u64 {
                 f.zero(neg)
             }
         }
-        Class::Finite { neg, mant, exp } => {
-            let (k, r) = reduce::<N>(mant, exp);
-            let (s, c) = sin_cos(&r);
-            let v = match (fun, k) {
-                (Trig::Sin, 0) | (Trig::Cos, 3) => s,
-                (Trig::Sin, 1) | (Trig::Cos, 0) => c,
-                (Trig::Sin, 2) | (Trig::Cos, 1) => s.neg(),
-                (Trig::Sin, _) | (Trig::Cos, _) => c.neg(),
-                (Trig::Tan, k) if k % 2 == 0 => s.div(&c),
-                (Trig::Tan, _) => c.div(&s).neg(),
-            };
-            // sin und tan sind ungerade, cos ist gerade.
-            let v = if neg && fun != Trig::Cos { v.neg() } else { v };
-            v.round(f)
-        }
+        Class::Finite { neg, mant, exp } => trig_big::<N>(fun, neg, mant, exp).round(f),
     }
+}
+
+/// sin, cos oder tan von `(-1)^neg · mant · 2^exp`, ungerundet.
+fn trig_big<const N: usize>(fun: Trig, neg: bool, mant: u64, exp: i32) -> Big<N> {
+    let (k, r) = reduce::<N>(mant, exp);
+    let (s, c) = sin_cos(&r);
+    let v = match (fun, k) {
+        (Trig::Sin, 0) | (Trig::Cos, 3) => s,
+        (Trig::Sin, 1) | (Trig::Cos, 0) => c,
+        (Trig::Sin, 2) | (Trig::Cos, 1) => s.neg(),
+        (Trig::Sin, _) | (Trig::Cos, _) => c.neg(),
+        (Trig::Tan, k) if k % 2 == 0 => s.div(&c),
+        (Trig::Tan, _) => c.div(&s).neg(),
+    };
+    // sin und tan sind ungerade, cos ist gerade.
+    if neg && fun != Trig::Cos { v.neg() } else { v }
 }
 
 // ------------------------------------------- atan, atan2, asin, acos
@@ -315,16 +317,19 @@ pub(crate) fn atan<const N: usize>(bits: u64, f: Format) -> u64 {
         Class::Nan => f.nan(),
         Class::Inf { neg } => pi_quarters::<N>(2, neg, f),
         Class::Zero { neg } => f.zero(neg),
-        Class::Finite { neg, mant, exp } => {
-            let x = Big::<N>::from_parts(false, u128::from(mant), exp);
-            let a = if x.cmp_abs(&Big::ONE) == Ordering::Greater {
-                pi::<N>().mul_pow2(-1).sub(&atan_unit(&x.recip()))
-            } else {
-                atan_unit(&x)
-            };
-            (if neg { a.neg() } else { a }).round(f)
-        }
+        Class::Finite { neg, mant, exp } => atan_big::<N>(neg, mant, exp).round(f),
     }
+}
+
+/// atan von `(-1)^neg · mant · 2^exp`, ungerundet.
+fn atan_big<const N: usize>(neg: bool, mant: u64, exp: i32) -> Big<N> {
+    let x = Big::<N>::from_parts(false, u128::from(mant), exp);
+    let a = if x.cmp_abs(&Big::ONE) == Ordering::Greater {
+        pi::<N>().mul_pow2(-1).sub(&atan_unit(&x.recip()))
+    } else {
+        atan_unit(&x)
+    };
+    if neg { a.neg() } else { a }
 }
 
 /// atan2(y, x) nach IEEE 754-2019 9.2: Nullen und Unendlichkeiten ergeben
@@ -403,17 +408,22 @@ fn arc<const N: usize>(fun: Arc, bits: u64, f: Format) -> u64 {
                 }
                 Ordering::Less => {}
             }
-            let root = Big::ONE.sub(&ax).mul(&Big::ONE.add(&ax)).sqrt();
-            match fun {
-                Arc::Asin => {
-                    let a = angle(&ax, &root);
-                    (if neg { a.neg() } else { a }).round(f)
-                }
-                Arc::Acos => {
-                    let a = angle(&root, &ax);
-                    (if neg { pi::<N>().sub(&a) } else { a }).round(f)
-                }
-            }
+            arc_big(fun, neg, &ax).round(f)
+        }
+    }
+}
+
+/// asin oder acos von `±ax` fuer `ax < 1`, ungerundet.
+fn arc_big<const N: usize>(fun: Arc, neg: bool, ax: &Big<N>) -> Big<N> {
+    let root = Big::ONE.sub(ax).mul(&Big::ONE.add(ax)).sqrt();
+    match fun {
+        Arc::Asin => {
+            let a = angle(ax, &root);
+            if neg { a.neg() } else { a }
+        }
+        Arc::Acos => {
+            let a = angle(&root, ax);
+            if neg { pi::<N>().sub(&a) } else { a }
         }
     }
 }
@@ -571,5 +581,62 @@ pub(crate) fn pow<const N: usize>(x_bits: u64, y_bits: u64, f: Format) -> u64 {
             (if neg { v.neg() } else { v }).round(f)
         }
         _ => f.nan(),
+    }
+}
+
+/// INT-027: Die Schranke vor der Rundung, gemessen. `f64` rechnet mit vier
+/// Woertern, und das Modul sagt, das Zwischenergebnis liege relativ unter
+/// 2^-240 neben dem exakten Wert. `tests/unrounded.txt` traegt den exakten
+/// Wert auf 256 Bit aus der Dezimalreferenz (`tools/libtaktm.py unrounded`).
+#[cfg(test)]
+mod unrounded {
+    use super::{Arc, Trig, arc_big, atan_big, exp_big, log_big, trig_big};
+    use crate::big::{Big, Class, F64, classify};
+
+    /// Die Zahl der Werte in der Datei; eine gekuerzte bestuende sonst.
+    const VALUES: usize = 240;
+
+    fn value(fun: &str, bits: u64) -> Big<4> {
+        let Class::Finite { neg, mant, exp } = classify(bits, F64) else { panic!("{bits:016x} ist nicht endlich") };
+        let x = Big::<4>::from_parts(neg, u128::from(mant), exp);
+        match fun {
+            "exp" => exp_big(&x),
+            "log" => log_big(mant, exp),
+            "sin" => trig_big(Trig::Sin, neg, mant, exp),
+            "cos" => trig_big(Trig::Cos, neg, mant, exp),
+            "tan" => trig_big(Trig::Tan, neg, mant, exp),
+            "atan" => atan_big(neg, mant, exp),
+            "asin" => arc_big(Arc::Asin, neg, &x.abs()),
+            "acos" => arc_big(Arc::Acos, neg, &x.abs()),
+            other => panic!("unbekannte Funktion `{other}`"),
+        }
+    }
+
+    #[test]
+    fn every_unrounded_f64_value_is_within_two_to_the_minus_240() {
+        let mut seen = 0;
+        let mut wide = Vec::new();
+        for line in include_str!("../tests/unrounded.txt").lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
+            let bad = || -> ! { panic!("`{line}` ist keine Zeile") };
+            let (head, tail) = line.split_once(" -> ").unwrap_or_else(|| bad());
+            let (fun, x) = head.split_once(' ').unwrap_or_else(|| bad());
+            let f: Vec<&str> = tail.split_whitespace().collect();
+            let hex = |s: &str| u64::from_str_radix(s, 16).unwrap_or_else(|_| bad());
+            let [neg, exp, w0, w1, w2, w3] = f[..] else { bad() };
+            let want = Big::<4> {
+                neg: neg == "1",
+                exp: exp.parse().unwrap_or_else(|_| bad()),
+                m: [hex(w0), hex(w1), hex(w2), hex(w3)],
+            };
+            let got = value(fun, hex(x));
+            let diff = got.sub(&want);
+            // |got - want| < 2^(exp - 241) <= 2^-240 |want|, denn |want| >= 2^(exp - 1).
+            if !diff.is_zero() && diff.exp > want.exp - 241 {
+                wide.push(format!("{line}: Abstand 2^{} relativ", diff.exp - want.exp));
+            }
+            seen += 1;
+        }
+        assert_eq!(seen, VALUES, "Werte in unrounded.txt");
+        assert!(wide.is_empty(), "{} Werte ausserhalb der Schranke:\n{}", wide.len(), wide.join("\n"));
     }
 }

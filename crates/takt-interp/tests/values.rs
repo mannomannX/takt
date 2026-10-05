@@ -338,13 +338,17 @@ fn durations_follow_3_3() {
     assert_eq!(r32.eval(&as_s32), Ok(Value::F32(10_000_000f32 / 1e9f32)));
 }
 
+/// 3.2, INT-008: `x.to(U)` ist x mal dem exakten Faktor, korrekt gerundet.
+/// Die erwarteten Bitmuster stammen aus dem Bruch
+/// `100000 * 10^9 / 6894757293168` (bar nach psi), gerundet mit
+/// `round_exact` aus `tools/libtaktm.py` — nicht aus der Implementierung.
 #[test]
 fn unit_conversions_use_rational_factors() {
     let r = Rig::new(FloatWidth::F64);
     let one_bar = r.e(ExprKind::Float(1.0), r.t_bar);
     let to_psi = r.e(ExprKind::Convert { expr: Box::new(one_bar), kind: ConvertKind::To, unit: r.u_psi }, r.t_psi);
     let Ok(Value::F64(psi)) = r.eval(&to_psi) else { panic!() };
-    assert!((psi - 14.503_773_8).abs() < 1e-6, "{psi}");
+    assert_eq!(psi.to_bits(), 0x402d_01ee_a2cf_6bda, "{psi}");
     let twenty = r.e(ExprKind::Float(20.0), r.t_degc);
     let to_k = r.e(ExprKind::Convert { expr: Box::new(twenty), kind: ConvertKind::To, unit: r.u_k }, r.t_k);
     assert_eq!(r.eval(&to_k), Ok(Value::F64(20.0 + 273.15)));
@@ -356,6 +360,37 @@ fn unit_conversions_use_rational_factors() {
         r.t_bar,
     );
     assert_eq!(r.eval(&same), Ok(Value::F64(2.5)));
+}
+
+/// INT-008 (3.2): Kein Zwischenwert laeuft ueber. `1e300 psi .to(bar)` ist
+/// endlich, obwohl `1e300 * 6894757293168` jenseits von `f64::MAX` laege;
+/// `1e308 bar .to(psi)` ist es nicht, und `Checked{NonFinite}` faultet.
+#[test]
+fn a_unit_conversion_overflows_only_in_its_result() {
+    let r = Rig::new(FloatWidth::F64);
+    let convert = |x: f64, from: TypeId, to: UnitId, ty: TypeId| {
+        r.e(ExprKind::Convert { expr: Box::new(r.e(ExprKind::Float(x), from)), kind: ConvertKind::To, unit: to }, ty)
+    };
+    let bar = convert(1e300, r.t_psi, r.u_bar, r.t_bar);
+    assert_eq!(r.eval(&bar).map(|v| v.as_f64().map(f64::to_bits)), Ok(Some(0x7dfa_5b31_cd57_5051)));
+    let psi = convert(1e308, r.t_bar, r.u_psi, r.t_psi);
+    let checked = r.e(ExprKind::Checked { expr: Box::new(psi), kind: CheckedKind::NonFinite }, r.t_psi);
+    assert_eq!(r.fault(&checked), FaultKind::Arithmetic(ArithKind::NonFinite));
+}
+
+/// INT-008 (3.2) in `f32`: eine Rundung in der Breite, kein Umweg ueber
+/// `f64` und kein Ueberlauf am Zwischenwert (`1e30 * 6894757293168` laege
+/// jenseits von `f32::MAX`).
+#[test]
+fn a_unit_conversion_rounds_once_in_f32() {
+    let r = Rig::new(FloatWidth::F32);
+    let convert = |x: f64, from: TypeId, to: UnitId, ty: TypeId| {
+        r.e(ExprKind::Convert { expr: Box::new(r.e(ExprKind::Float(x), from)), kind: ConvertKind::To, unit: to }, ty)
+    };
+    let psi = convert(1.0, r.t_bar, r.u_psi, r.t_psi);
+    assert_eq!(r.eval(&psi), Ok(Value::F32(f32::from_bits(0x4168_0f75))));
+    let bar = convert(1e30, r.t_psi, r.u_bar, r.t_bar);
+    assert_eq!(r.eval(&bar), Ok(Value::F32(f32::from_bits(0x6f5e_c819))));
 }
 
 #[test]
@@ -721,4 +756,317 @@ fn formatting_truncates_and_marks_invalid() {
     assert_eq!(takt_interp::format::render(&short, &mut ctx), "ä", "Kuerzung an der Zeichengrenze");
     let plain = Format { pieces: vec![FormatPiece::Expr { expr: r.f64(3.0), spec: None }], len_max: 8 };
     assert_eq!(takt_interp::format::render(&plain, &mut ctx), "3.0");
+}
+
+/// Das Ergebnis eines Ausdrucks als Vergleichswert: Werte bitgenau,
+/// Faults nach Art.
+fn outcome(r: &Rig, e: &Expr) -> String {
+    match r.eval(e) {
+        Ok(Value::F64(x)) => format!("f64 {:#x}", x.to_bits()),
+        Ok(Value::F32(x)) => format!("f32 {:#x}", x.to_bits()),
+        Ok(v) => format!("{v:?}"),
+        Err(Trap::Fault(f)) => format!("{:?}", f.kind),
+        Err(Trap::Bug(b)) => format!("Bug {b}"),
+    }
+}
+
+/// INT-007: Die Raender der Gleitkomma-Primitive (4.1, 4.2).
+#[test]
+fn float_intrinsics_at_their_edges() {
+    let r = Rig::new(FloatWidth::F64);
+    let f = |x: f64| format!("f64 {:#x}", x.to_bits());
+    let g = |x: f32| format!("f32 {:#x}", x.to_bits());
+    let domain = format!("{:?}", FaultKind::Arithmetic(ArithKind::Domain));
+    let nonfinite = format!("{:?}", FaultKind::Arithmetic(ArithKind::NonFinite));
+    let range = format!("{:?}", FaultKind::Range);
+    let call = |op, args: Vec<Expr>, ty| r.call(op, args, ty);
+    let tiny = f64::from_bits(1);
+    let cast = |e: Expr, to: TypeId| r.e(ExprKind::Cast { expr: Box::new(e), to }, to);
+    let cases: Vec<(&str, Expr, String)> = vec![
+        ("sqrt(-0.0)", call(Intrinsic::Sqrt, vec![r.f64(-0.0)], r.t_f64), f(-0.0)),
+        ("sqrt(+0.0)", call(Intrinsic::Sqrt, vec![r.f64(0.0)], r.t_f64), f(0.0)),
+        ("sqrt(Subnormale)", call(Intrinsic::Sqrt, vec![r.f64(tiny)], r.t_f64), f(tiny.sqrt())),
+        ("sqrt(-Subnormale)", call(Intrinsic::Sqrt, vec![r.f64(-tiny)], r.t_f64), domain.clone()),
+        ("ln(-0.0)", call(Intrinsic::Log, vec![r.f64(-0.0)], r.t_f64), domain.clone()),
+        ("ln(+0.0)", call(Intrinsic::Log, vec![r.f64(0.0)], r.t_f64), domain.clone()),
+        ("ln(Subnormale)", call(Intrinsic::Log, vec![r.f64(tiny)], r.t_f64), f(libtaktm::log_f64(tiny))),
+        ("pow(-0.0, -1)", call(Intrinsic::Pow, vec![r.f64(-0.0), r.f64(-1.0)], r.t_f64), domain.clone()),
+        ("pow(-0.0, 0)", call(Intrinsic::Pow, vec![r.f64(-0.0), r.f64(0.0)], r.t_f64), f(1.0)),
+        ("pow(10, 400)", call(Intrinsic::Pow, vec![r.f64(10.0), r.f64(400.0)], r.t_f64), nonfinite.clone()),
+        ("pow(10, -400)", call(Intrinsic::Pow, vec![r.f64(10.0), r.f64(-400.0)], r.t_f64), f(0.0)),
+        (
+            "fma(MAX, 2, 0)",
+            call(Intrinsic::Fma, vec![r.f64(f64::MAX), r.f64(2.0), r.f64(0.0)], r.t_f64),
+            nonfinite.clone(),
+        ),
+        (
+            "fma(MAX, 1, MAX)",
+            call(Intrinsic::Fma, vec![r.f64(f64::MAX), r.f64(1.0), r.f64(f64::MAX)], r.t_f64),
+            nonfinite.clone(),
+        ),
+        ("f32 1/0", r.finite(r.bin(BinaryOp::Div, r.f32(1.0), r.f32(0.0), r.t_f32)), nonfinite.clone()),
+        ("round(2^63)", call(Intrinsic::Round, vec![r.f64(9_223_372_036_854_775_808.0)], r.t_int), range.clone()),
+        (
+            "round(-2^63)",
+            call(Intrinsic::Round, vec![r.f64(-9_223_372_036_854_775_808.0)], r.t_int),
+            format!("{:?}", Value::Int(i64::MIN)),
+        ),
+        ("floor(2^63)", call(Intrinsic::Floor, vec![r.f64(9_223_372_036_854_775_808.0)], r.t_int), range.clone()),
+        ("ceil(-2^63 - 2048)", call(Intrinsic::Ceil, vec![r.f64(-9_223_372_036_854_777_856.0)], r.t_int), range),
+        ("round(-2.5)", call(Intrinsic::Round, vec![r.f64(-2.5)], r.t_int), format!("{:?}", Value::Int(-3))),
+        ("round(-0.4)", call(Intrinsic::Round, vec![r.f64(-0.4)], r.t_int), format!("{:?}", Value::Int(0))),
+        ("(2^24 + 1) as f32", cast(r.int((1 << 24) + 1), r.t_f32), g(16_777_216.0)),
+        ("1e-50 as f32", cast(r.f64(1e-50), r.t_f32), g(0.0)),
+        ("-1e-50 as f32", cast(r.f64(-1e-50), r.t_f32), g(-0.0)),
+        ("1e39 as f32", cast(r.f64(1e39), r.t_f32), nonfinite),
+    ];
+    let mut wrong = Vec::new();
+    for (what, e, want) in &cases {
+        let got = outcome(&r, e);
+        if &got != want {
+            wrong.push(format!("  {what}: {got}, erwartet {want}"));
+        }
+    }
+    assert!(wrong.is_empty(), "abweichend:\n{}", wrong.join("\n"));
+}
+
+/// INT-005, INT-009: `+ - * / %` und unaeres Minus je Breite an den
+/// Grenzen, gegen das Modell aus 4.1: exakt rechnen, dann passt es in die
+/// Breite oder faultet `Overflow`; ein Divisor null faultet `DivZero`,
+/// `/` trunkiert, `%` traegt das Vorzeichen des Dividenden.
+#[test]
+fn integer_operations_follow_the_model_at_every_width() {
+    let mut r = Rig::new(FloatWidth::F64);
+    let widths = [
+        IntWidth::I8,
+        IntWidth::I16,
+        IntWidth::I32,
+        IntWidth::I64,
+        IntWidth::U8,
+        IntWidth::U16,
+        IntWidth::U32,
+        IntWidth::U64,
+    ];
+    let tys: Vec<TypeId> =
+        widths.iter().map(|w| r.p.types.intern(Type::Int { width: *w, unit: None, range: None })).collect();
+    let overflow = format!("{:?}", FaultKind::Arithmetic(ArithKind::Overflow));
+    let divzero = format!("{:?}", FaultKind::Arithmetic(ArithKind::DivZero));
+    let ops = [BinaryOp::Add, BinaryOp::Sub, BinaryOp::Mul, BinaryOp::Div, BinaryOp::Rem];
+    let mut checked = 0;
+    for (w, ty) in widths.iter().zip(&tys) {
+        let (lo, hi) = takt_interp::arith::bounds(*w);
+        let edge: Vec<i128> =
+            [lo, lo + 1, -1, 0, 1, hi - 1, hi].into_iter().filter(|x| (lo..=hi).contains(x)).collect();
+        let lit = |x: i128| r.e(ExprKind::Int(x as i64), *ty);
+        let fits = |x: i128| if (lo..=hi).contains(&x) { format!("{:?}", Value::int(*w, x)) } else { overflow.clone() };
+        for &a in &edge {
+            for &b in &edge {
+                for op in ops {
+                    let want = match op {
+                        BinaryOp::Add => fits(a + b),
+                        BinaryOp::Sub => fits(a - b),
+                        BinaryOp::Mul => a.checked_mul(b).map_or(overflow.clone(), fits),
+                        _ if b == 0 => divzero.clone(),
+                        BinaryOp::Div => fits(a / b),
+                        _ => fits(a % b),
+                    };
+                    let got = outcome(&r, &r.bin(op, lit(a), lit(b), *ty));
+                    assert_eq!(got, want, "{a} {op:?} {b} in {w:?}");
+                    checked += 1;
+                }
+            }
+            if w.signed() {
+                let neg = r.e(ExprKind::Unary { op: UnaryOp::Neg, expr: Box::new(lit(a)) }, *ty);
+                assert_eq!(outcome(&r, &neg), fits(-a), "-({a}) in {w:?}");
+            }
+        }
+    }
+    assert!(checked > 1000);
+    let u64_max = r.e(ExprKind::Int(-1), tys[7]);
+    let wrapping = r.call(Intrinsic::WrappingMul, vec![u64_max.clone(), u64_max], tys[7]);
+    assert_eq!(r.eval(&wrapping), Ok(Value::UInt(1)), "(2^64 - 1)^2 mod 2^64");
+    // Die kleinste Dauer hat kein Negatives (3.3).
+    let neg = r.e(ExprKind::Unary { op: UnaryOp::Neg, expr: Box::new(r.dur(i64::MIN)) }, r.t_dur);
+    assert_eq!(outcome(&r, &neg), overflow);
+    assert_eq!(
+        r.fault(&r.bin(BinaryOp::Sub, r.dur(i64::MIN), r.dur(1), r.t_dur)),
+        FaultKind::Arithmetic(ArithKind::Overflow)
+    );
+    assert_eq!(
+        r.fault(&r.bin(BinaryOp::Mul, r.dur(i64::MIN), r.int(-1), r.t_dur)),
+        FaultKind::Arithmetic(ArithKind::Overflow)
+    );
+    assert_eq!(
+        r.fault(&r.bin(BinaryOp::Div, r.dur(i64::MIN), r.int(-1), r.t_dur)),
+        FaultKind::Arithmetic(ArithKind::Overflow)
+    );
+    assert_eq!(r.fault(&r.bin(BinaryOp::Div, r.dur(1), r.dur(0), r.t_int)), FaultKind::Arithmetic(ArithKind::DivZero));
+}
+
+/// INT-006: `rotl`/`rotr` auf `u8` und `i8` fuer jeden Wert und jeden
+/// Betrag von -1 bis 9, gegen die Rotation des Bitmusters um `n mod 8`.
+#[test]
+fn rotations_follow_the_model_exhaustively() {
+    let mut r = Rig::new(FloatWidth::F64);
+    let t_i8 = r.p.types.intern(Type::Int { width: IntWidth::I8, unit: None, range: None });
+    for (w, ty) in [(IntWidth::U8, r.t_u8), (IntWidth::I8, t_i8)] {
+        let (lo, hi) = takt_interp::arith::bounds(w);
+        for x in lo..=hi {
+            for n in -1i64..=9 {
+                let bits = (x as u8).rotate_left(n.rem_euclid(8) as u32);
+                let right = (x as u8).rotate_right(n.rem_euclid(8) as u32);
+                let as_width =
+                    |b: u8| if w.signed() { Value::Int(i64::from(b as i8)) } else { Value::UInt(u64::from(b)) };
+                let arg = r.e(ExprKind::Int(x as i64), ty);
+                let rotl = r.call(Intrinsic::Rotl, vec![arg.clone(), r.int(n)], ty);
+                let rotr = r.call(Intrinsic::Rotr, vec![arg, r.int(n)], ty);
+                assert_eq!(r.eval(&rotl), Ok(as_width(bits)), "rotl({x}, {n}) in {w:?}");
+                assert_eq!(r.eval(&rotr), Ok(as_width(right)), "rotr({x}, {n}) in {w:?}");
+            }
+        }
+    }
+}
+
+/// INT-010: Die Raender von `interp` und der Range-Knoten im Interpreter,
+/// gegen die der Codegen gemessen wird (`takt-llvm/tests/native_fns.rs`).
+#[test]
+fn interp_and_ranges_at_their_edges() {
+    let r = Rig::new(FloatWidth::F64);
+    let point = |x: f64, y: f64| r.e(ExprKind::Tuple(Box::new(r.f64(x)), Box::new(r.f64(y))), r.t_table);
+    let table = r.e(ExprKind::Array(vec![point(0.0, 0.0), point(3.0, 0.1)]), r.t_table);
+    let at = |t: &Expr, x: f64| r.call(Intrinsic::Interp, vec![t.clone(), r.f64(x)], r.t_f64);
+    assert_eq!(r.eval(&at(&table, 3.0)), Ok(Value::F64(0.1)), "am rechten Rand der Stuetzwert, nicht die Formel");
+    assert_eq!(r.eval(&at(&table, 1.5)), Ok(Value::F64(0.1 * 1.5 / 3.0)));
+    // dy * dx laeuft ueber, obwohl das Ergebnis endlich waere: NonFinite (4.1).
+    let wide = r.e(ExprKind::Array(vec![point(0.0, -1e300), point(1e10, 1e300)]), r.t_table);
+    assert_eq!(r.fault(&at(&wide, 5e9)), FaultKind::Arithmetic(ArithKind::NonFinite));
+    let range = |lo: i64, hi: i64| Range { lo: Const::Int(lo), hi: Const::Int(hi), origin: RangeOrigin::Declared };
+    let checked = |v: i64, ty: TypeId| {
+        r.e(
+            ExprKind::Checked { expr: Box::new(r.e(ExprKind::Int(v), ty)), kind: CheckedKind::Range(range(10, 200)) },
+            ty,
+        )
+    };
+    assert_eq!(r.fault(&checked(9, r.t_int)), FaultKind::Range, "lo - 1");
+    assert_eq!(r.eval(&checked(10, r.t_int)), Ok(Value::Int(10)));
+    assert_eq!(r.eval(&checked(200, r.t_u8)), Ok(Value::UInt(200)));
+    assert_eq!(r.fault(&checked(201, r.t_u8)), FaultKind::Range, "u8 jenseits von i8 und doch in der Breite");
+    let frange = Range { lo: Const::Float(-1.5), hi: Const::Float(2.5), origin: RangeOrigin::Declared };
+    let fchecked =
+        |x: f64| r.e(ExprKind::Checked { expr: Box::new(r.f64(x)), kind: CheckedKind::Range(frange) }, r.t_f64);
+    assert_eq!(r.eval(&fchecked(-1.5)), Ok(Value::F64(-1.5)));
+    assert_eq!(r.fault(&fchecked(2.5000000000000004)), FaultKind::Range);
+    let arr = r.e(ExprKind::Array(vec![r.int(1), r.int(2)]), r.t_vec);
+    let idx = r.e(ExprKind::Index { base: Box::new(arr), index: Box::new(r.int(-1)) }, r.t_int);
+    assert_eq!(r.fault(&idx), FaultKind::Range, "negativer Index");
+}
+
+/// INT-030: Matrizen bitgenau (3.11, 4.2). `libtaktm::mat` legt die
+/// Reihenfolge der `fma` fest, und der Codegen baut sie nach; eine Toleranz
+/// saehe nicht, wenn eine Seite anders rundet. Dieselben Bits verlangt
+/// `takt-llvm/tests/native_fns.rs` vom erzeugten Code.
+#[test]
+fn matrices_are_bit_exact() {
+    use takt_interp::matrix::op;
+    let m64 = |rows: u32, d: &[f64]| Value::Mat {
+        rows,
+        cols: d.len() as u32 / rows,
+        data: d.iter().map(|x| Value::F64(*x)).collect(),
+    };
+    let m32 = |rows: u32, d: &[f32]| Value::Mat {
+        rows,
+        cols: d.len() as u32 / rows,
+        data: d.iter().map(|x| Value::F32(*x)).collect(),
+    };
+    let bits = |v: Value| -> Vec<u64> {
+        match v {
+            Value::F64(x) => vec![x.to_bits()],
+            Value::F32(x) => vec![u64::from(x.to_bits())],
+            Value::Mat { data, .. } => data
+                .iter()
+                .map(|x| match x {
+                    Value::F64(x) => x.to_bits(),
+                    Value::F32(x) => u64::from(x.to_bits()),
+                    other => panic!("{other:?}"),
+                })
+                .collect(),
+            other => panic!("{other:?}"),
+        }
+    };
+    let run = |o, a: Value| bits(op(o, vec![a], Span::default(), 0).expect("rechnet"));
+    let a3 = [4.0, 7.0, 2.0, 3.0, 6.0, 1.0, 2.0, 5.0, 3.0];
+    let a4 = [2.0, 1.0, 0.0, 0.0, 1.0, 3.0, 1.0, 0.0, 0.0, 1.0, 4.0, 1.0, 0.0, 0.0, 1.0, 5.0];
+    assert_eq!(run(MatOp::Inv, m64(3, &a3)), INV_A3);
+    assert_eq!(run(MatOp::Det, m64(3, &a3)), [9f64.to_bits()]);
+    assert_eq!(run(MatOp::Inv, m64(4, &a4)), INV_A4);
+    assert_eq!(run(MatOp::Det, m64(4, &a4)), [85f64.to_bits()]);
+    // Der Pivottausch kehrt das Vorzeichen der Determinante um.
+    assert_eq!(run(MatOp::Det, m64(2, &[0.0, 1.0, 1.0, 0.0])), [(-1f64).to_bits()]);
+    assert_eq!(run(MatOp::Inv, m64(2, &[0.0, 1.0, 1.0, 0.0])), [0, 1f64.to_bits(), 1f64.to_bits(), 0]);
+    // Fast singulaer: Das Inverse laeuft ueber und faultet.
+    let tiny = op(MatOp::Inv, vec![m64(2, &[1e-310, 0.0, 0.0, 1.0])], Span::default(), 0);
+    assert!(matches!(tiny, Err(Trap::Fault(f)) if f.kind == FaultKind::Arithmetic(ArithKind::NonFinite)));
+    let a3_32 = a3.map(|x| x as f32);
+    assert_eq!(run(MatOp::Inv, m32(3, &a3_32)), INV_A3_F32.map(u64::from));
+    assert_eq!(run(MatOp::Det, m32(3, &a3_32)), [u64::from(9f32.to_bits())]);
+}
+
+/// Die Bits von `inv` der 3×3 und 4×4 aus `matrices_are_bit_exact`.
+const INV_A3: [u64; 9] = [
+    0x3ff7_1c71_c71c_71c6,
+    0xbff3_8e38_e38e_38e3,
+    0xbfe1_c71c_71c7_1c72,
+    0xbfe8_e38e_38e3_8e38,
+    0x3fec_71c7_1c71_c71c,
+    0x3fcc_71c7_1c71_c71d,
+    0x3fd5_5555_5555_5555,
+    0xbfe5_5555_5555_5555,
+    0x3fd5_5555_5555_5555,
+];
+const INV_A4: [u64; 16] = [
+    0x3fe3_9393_9393_9394,
+    0xbfcc_9c9c_9c9c_9c9d,
+    0x3fae_1e1e_1e1e_1e1e,
+    0xbf88_1818_1818_1818,
+    0xbfcc_9c9c_9c9c_9c9d,
+    0x3fdc_9c9c_9c9c_9c9d,
+    0xbfbe_1e1e_1e1e_1e1e,
+    0x3f98_1818_1818_1818,
+    0x3fae_1e1e_1e1e_1e1f,
+    0xbfbe_1e1e_1e1e_1e1f,
+    0x3fd2_d2d2_d2d2_d2d3,
+    0xbfae_1e1e_1e1e_1e1e,
+    0xbf88_1818_1818_1818,
+    0x3f98_1818_1818_1818,
+    0xbfae_1e1e_1e1e_1e1e,
+    0x3fcb_1b1b_1b1b_1b1b,
+];
+const INV_A3_F32: [u32; 9] = [
+    0x3fb8_e390,
+    0xbf9c_71c7,
+    0xbf0e_38e3,
+    0xbf47_1c73,
+    0x3f63_8e39,
+    0x3e63_8e38,
+    0x3eaa_aaab,
+    0xbf2a_aaab,
+    0x3eaa_aaab,
+];
+
+/// INT-023: `Checked{NonFinite}` um ein Array prueft jedes Element, auch in
+/// einem Array von Arrays; ein endliches Array geht unveraendert durch.
+#[test]
+fn a_non_finite_element_of_an_array_faults() {
+    let mut r = Rig::new(FloatWidth::F64);
+    let t_row = r.p.types.intern(Type::Array { elem: r.t_f64, len: 2 });
+    let t_grid = r.p.types.intern(Type::Array { elem: t_row, len: 2 });
+    let huge = |r: &Rig| r.bin(BinaryOp::Mul, r.f64(1e308), r.f64(10.0), r.t_f64);
+    let row = |r: &Rig, a: Expr, b: Expr| r.e(ExprKind::Array(vec![a, b]), t_row);
+    let fine = r.finite(row(&r, r.f64(1.0), r.f64(2.0)));
+    assert_eq!(r.eval(&fine), Ok(Value::Array(vec![Value::F64(1.0), Value::F64(2.0)])));
+    let bad = r.finite(row(&r, r.f64(1.0), huge(&r)));
+    assert_eq!(r.fault(&bad), FaultKind::Arithmetic(ArithKind::NonFinite), "ein Element ist Inf");
+    let grid = ExprKind::Array(vec![row(&r, r.f64(1.0), r.f64(2.0)), row(&r, r.f64(0.0), huge(&r))]);
+    let grid = r.finite(r.e(grid, t_grid));
+    assert_eq!(r.fault(&grid), FaultKind::Arithmetic(ArithKind::NonFinite), "geschachtelt");
 }
