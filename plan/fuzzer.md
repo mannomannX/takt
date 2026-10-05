@@ -48,8 +48,9 @@ Zusätzlich zur Annahme wird die *Struktur* geprüft, ohne den Baum in Python na
   Programme.
 - **Abdeckung.** Jede Alternative jeder Produktion und jedes `[ … ]`/`{ … }` muss in der
   erzeugten Menge vorkommen; der Lauf meldet, was fehlt. Damit ist belegt, dass wirklich die
-  ganze Grammatik durch Parser und Formatter gegangen ist — dieselbe Idee wie
-  `corpus-try/coverage.py`, nur ohne Handarbeit.
+  ganze Grammatik durch Parser und Formatter gegangen ist — dieselbe Idee wie die
+  frühere Handliste `corpus-try/coverage.py`, nur ohne Handarbeit; sie ist entfallen, seit Census und Inventur
+  dasselbe mechanisch prüfen (KOR-006).
 
 ## 2. Abwägung
 
