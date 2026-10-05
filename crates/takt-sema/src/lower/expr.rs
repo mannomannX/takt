@@ -647,6 +647,9 @@ impl Lowerer<'_> {
         span: Span,
     ) -> Option<Vec<Expr>> {
         let mut slots: Vec<Option<Expr>> = vec![None; params.len()];
+        // Angegeben, auch wenn das Argument selbst scheitert: Es fehlt dann
+        // nicht noch einmal (FB-407).
+        let mut given = vec![false; params.len()];
         let mut ok = true;
         for (i, a) in args.iter().enumerate() {
             let idx = match &a.name {
@@ -673,11 +676,12 @@ impl Lowerer<'_> {
                     }
                 },
             };
-            if slots[idx].is_some() {
+            if given[idx] {
                 self.error(SC3, a.span, format!("Argument `{}` doppelt", params[idx].0));
                 ok = false;
                 continue;
             }
+            given[idx] = true;
             // 3.4: Ein Parameter oder Feld mit Range traegt sie; die Analyse
             // des Rumpfs und jeder Leser verlassen sich darauf.
             match self.check(&a.value, params[idx].1) {
@@ -686,7 +690,7 @@ impl Lowerer<'_> {
             }
         }
         for (i, slot) in slots.iter_mut().enumerate() {
-            if slot.is_none() {
+            if !given[i] {
                 match &params[i].2 {
                     Some(d) => *slot = Some(d.clone()),
                     None => {
