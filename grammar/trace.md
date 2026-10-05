@@ -60,7 +60,10 @@ Werte stehen in der Literalschreibweise der Sprache (2.3): `true`, `42`,
 `2.5`, `45 bar`, `150 ms`, `OPEN`, `"text"`, `none`, `[1, 2]`,
 `CanFrame(1, 2)`. Eine Dauer wird in der größten Einheit geschrieben, in der
 sie ganzzahlig ist (3.3). Ein Fließkommawert trägt immer einen Dezimalpunkt,
-damit er sich von einer Ganzzahl unterscheidet.
+damit er sich von einer Ganzzahl unterscheidet, und steht in der kürzesten
+Ziffernfolge, die beim Zurücklesen denselben Wert ergibt; ab dem Betrag `1e16`
+(`f64`) bzw. `1e7` (`f32`) und unter `1e-5` in Exponentform (`1.0e30`,
+`1.5e-7`), sodass eine Zahl höchstens 24 bzw. 16 Zeichen braucht (3.9).
 
 Ein Input kann statt eines Werts eine Qualität tragen (3.5): `bad`, `stale`,
 `suspect`, jeweils mit optionalem `reason=` (`Stale`, `OutOfRange`,
