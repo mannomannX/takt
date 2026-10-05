@@ -81,7 +81,7 @@ impl Stm32f401 {
     /// nach dem Wecken aus dem Tiefschlaf (12.7). Die Leitung bleibt dabei
     /// offen, nur das Board schweigt, solange es schlaeft.
     pub fn listen(&self, within: Duration) -> Result<String, String> {
-        capture(&self.port, BAUD, serialport::FlowControl::Software, within, || Ok(()))
+        capture(&self.port, BAUD, serialport::FlowControl::Software, within, false, || Ok(()))
     }
 
     /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
@@ -93,7 +93,7 @@ impl Stm32f401 {
         let address = format!("{APP:#010x}:leave");
         // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
         // Wirt nicht abholt (FB-306).
-        capture(&self.port, BAUD, serialport::FlowControl::Software, within, || {
+        capture(&self.port, BAUD, serialport::FlowControl::Software, within, true, || {
             let args = ["-a", "0", "-d", DFU_ID, "-s", &address, "-D", &bin.to_string_lossy()];
             run_bounded(&self.dfu_util, &args, DOWNLOAD).map(|_| ()).map_err(|e| format!("{}: {e}", self.dfu_util))
         })

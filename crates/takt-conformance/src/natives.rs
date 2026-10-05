@@ -200,11 +200,19 @@ impl Row {
         self.deviations.is_empty()
     }
 
-    /// Haelt die Funktion ihre Zusage? Ein Stack von null Byte ist keine
-    /// Messung: Das Malen des Stacks lief nicht.
+    /// Haelt die Funktion ihre Zusage? Null Byte ist eine Messung: Eine
+    /// Blattfunktion wie `crc32` braucht auf dem C6 keinen eigenen Rahmen. Ob
+    /// das Malen ueberhaupt lief, prueft [`painted`] am ganzen Lauf.
     pub fn within_contract(&self) -> bool {
-        self.stack > 0 && self.stack <= self.contract
+        self.stack <= self.contract
     }
+}
+
+/// Lief das Malen des Stacks? Ein Lauf, in dem jede Native und jede Funktion
+/// der Mathematik null Byte meldet, hat nichts gemessen: Die grossen unter
+/// ihnen (`sha256`, `fft256`, `exp_f64`) brauchen Hunderte Byte.
+pub fn painted(natives: &[Row], math: &[crate::math::Row]) -> bool {
+    natives.iter().any(|r| r.stack > 0) || math.iter().any(|r| r.stack > 0)
 }
 
 /// Vergleicht die Messung mit dem Wirt und der Zusage; je Funktion eine
@@ -301,14 +309,22 @@ mod tests {
         assert_eq!(rows[0].deviations, vec![48]);
     }
 
-    /// Ein Stack von null Byte ist keine Messung (das Malen lief nicht) und
-    /// haelt die Zusage darum nicht ein; einer ueber ihr ebenso wenig.
+    /// Ein Stack ueber der Zusage bricht sie, null Byte nicht (Blattfunktion).
     #[test]
-    fn a_stack_of_zero_is_no_measurement() {
+    fn a_stack_above_the_contract_breaks_it() {
         let row = |stack| Row { native: Native::Crc32, vectors: 1, deviations: Vec::new(), stack, contract: 64 };
         assert!(row(64).within_contract());
         assert!(!row(65).within_contract());
-        assert!(!row(0).within_contract());
+        assert!(row(0).within_contract());
+    }
+
+    /// Meldet jede Funktion null Byte, lief das Malen nicht (KON1-033);
+    /// eine einzelne Null mit gemessenen Nachbarn ist eine Messung.
+    #[test]
+    fn a_run_where_every_stack_is_zero_measured_nothing() {
+        let row = |stack| Row { native: Native::Crc32, vectors: 1, deviations: Vec::new(), stack, contract: 64 };
+        assert!(painted(&[row(0), row(40)], &[]));
+        assert!(!painted(&[row(0), row(0)], &[]));
     }
 
     /// Das Board meldet, was `parse` liest.

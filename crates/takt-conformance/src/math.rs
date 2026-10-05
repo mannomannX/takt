@@ -142,10 +142,10 @@ impl Row {
         self.deviations.is_empty()
     }
 
-    /// Unter dem Stackvertrag der Mathematik? Ein Stack von null Byte ist
-    /// keine Messung.
+    /// Unter dem Stackvertrag der Mathematik? Ob das Malen lief, prueft
+    /// [`crate::natives::painted`] am ganzen Lauf.
     pub fn within_contract(&self) -> bool {
-        self.stack > 0 && self.stack <= MATH_STACK
+        self.stack <= MATH_STACK
     }
 }
 
@@ -209,13 +209,11 @@ mod tests {
         assert_eq!(rows[0].name(), "exp_f64");
     }
 
-    /// Ein Stack von null Byte ist keine Messung und haelt den Vertrag nicht
-    /// ein; einer ueber ihm ebenso wenig.
+    /// Ein Stack ueber dem Vertrag bricht ihn.
     #[test]
-    fn a_stack_of_zero_is_no_measurement() {
+    fn a_stack_above_the_contract_breaks_it() {
         let row = |stack| Row { fun: "exp", wide: true, vectors: 1, deviations: Vec::new(), stack, cycles: 1 };
         assert!(row(MATH_STACK).within_contract());
         assert!(!row(MATH_STACK + 1).within_contract());
-        assert!(!row(0).within_contract());
     }
 }

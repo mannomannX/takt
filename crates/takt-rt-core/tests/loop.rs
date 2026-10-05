@@ -31,6 +31,27 @@ impl Clock for Shared<'_> {
     }
 }
 
+/// Eine Uhr mit eigener Tickquelle (12.3): Ereignisse auf den Vielfachen von
+/// T0, gewartet wird bis zum ersten an oder nach der Frist, und das naechste
+/// Ereignis ist der Ursprung des Rasters.
+struct Evented<'a>(&'a RefCell<Fake>);
+
+impl Clock for Evented<'_> {
+    fn now(&self) -> i64 {
+        self.0.borrow().now
+    }
+
+    fn wait_until(&mut self, deadline: i64) {
+        let mut f = self.0.borrow_mut();
+        f.waits.push(deadline);
+        f.now = f.now.max((deadline + T0 - 1) / T0 * T0);
+    }
+
+    fn origin(&self) -> i64 {
+        (self.0.borrow().now / T0 + 1) * T0
+    }
+}
+
 /// Ein Programm, das die Uhr um die vorgesehene Schrittdauer vorstellt.
 struct Counted<'a> {
     clock: &'a RefCell<Fake>,
@@ -955,6 +976,24 @@ fn the_overrun_is_measured_against_the_grid() {
         rt.service();
         assert_eq!(rt.program.overruns, u32::from(over), "der Fault wirkt im naechsten Tick");
     }
+}
+
+/// **Das Raster beginnt am Ursprung der Uhr** (7.3, 12.3, FB-436): Gibt
+/// die Tickquelle die Grenzen vor, liegt `t0` auf ihrem naechsten Ereignis.
+/// Begaenne es beim Start, 0,47 Perioden nach einem Ereignis, truege jeder
+/// Tick 0,53 Perioden `drift`, und ein Schritt von 0,6 Perioden liefe am
+/// Raster ueber, obwohl er vor dem naechsten Ereignis endet.
+#[test]
+fn the_grid_begins_at_the_origin_of_the_clock() {
+    let clock = RefCell::new(Fake { now: T0 * 47 / 100, costs: vec![T0 * 6 / 10], waits: Vec::new() });
+    let program = Counted { clock: &clock, ticks: Vec::new(), overruns: 0, advanced: 0, sleepy: None };
+    let mut rt =
+        Runtime::new(program, Evented(&clock), Kicks::default(), Log::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    rt.run(3);
+    assert_eq!(clock.borrow().waits.first(), Some(&T0), "Tick 0 wartet auf das erste Ereignis");
+    let drifts: Vec<i64> = rt.sink.0.iter().map(|t| t.drift).collect();
+    assert_eq!(drifts, vec![0, 0, 0]);
+    assert_eq!(rt.overrun().count, 0);
 }
 
 /// **Ein spaeter Beginn mit kurzem Schritt ist ein Ueberlauf** (7.3,

@@ -219,6 +219,10 @@ pub struct Options {
     /// und die Abschlusszeile nennt das Steuerregister danach. Ein Board
     /// ohne FPU uebergeht es.
     pub hostile_fpu: bool,
+    /// Der Build des Abbilds (8.3): `Sim` fuer einen Vergleich mit dem
+    /// Interpreter, in dem Plant-Modelle auf dem Board mitlaufen; `Hw`, wenn
+    /// die Treiber die Eingaenge speisen.
+    pub build: takt_sema::Build,
 }
 
 impl Options {
@@ -385,6 +389,7 @@ impl Bringup {
         let mut h = DefaultHasher::new();
         hash_program(program, &mut h)?;
         (options.ticks, options.fresh, options.timed, options.rtos, options.hostile_fpu, self.triple).hash(&mut h);
+        (options.build == takt_sema::Build::Hw).hash(&mut h);
         if let Some(hw) = &options.hardware {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
         }
@@ -423,6 +428,7 @@ impl Bringup {
             .env("TAKT_PROGRAM", program)
             .env("TAKT_TICKS", options.ticks.to_string())
             .env("TAKT_IMAGE_KEY", key)
+            .env("TAKT_BUILD", if options.build == takt_sema::Build::Hw { "hw" } else { "sim" })
             .envs(self.env.iter().copied());
         if options.fresh {
             cargo.env("TAKT_FRESH_JOURNAL", "1");
@@ -627,6 +633,11 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> std::thread::JoinHandle<St
 /// `flow` ist die Flusskontrolle der Leitung: XON/XOFF, wo sie keinen
 /// eigenen Rueckstau hat (FB-306).
 ///
+/// `fresh`: `start` startet ein neues Abbild. Was vorher ankommt, schrieb
+/// das vorige — der USB-Serial-JTAG des C6 haelt 64 Byte ueber Flashen und
+/// Reset, ein Adapter seinen Puffer — und wird bis zur ersten Stille
+/// verworfen (FB-437). Ohne `fresh` gehoert alles zum Lauf.
+///
 /// Ohne [`END`] ist das Ergebnis der Text, der bis dahin kam: Ob das ein
 /// Befund ist, entscheidet der Aufrufer.
 pub(crate) fn capture(
@@ -634,6 +645,7 @@ pub(crate) fn capture(
     baud: u32,
     flow: serialport::FlowControl,
     within: Duration,
+    fresh: bool,
     start: impl FnOnce() -> Result<(), String>,
 ) -> Result<String, String> {
     let mut serial = serialport::new(port, baud)
@@ -663,7 +675,8 @@ pub(crate) fn capture(
             }
         }
     });
-    let started = start();
+    let stale = if fresh { discard_stale(&rx).map_err(|e| format!("{port}: {e}")) } else { Ok(()) };
+    let started = stale.and_then(|()| start());
     let deadline = Instant::now() + within;
     // Rohbytes, erst am Ende dekodiert: Ein Zeichen, das auf zwei Pakete
     // faellt, bliebe sonst zweimal ein Ersatzzeichen, und die Bilanz
@@ -691,6 +704,20 @@ pub(crate) fn capture(
         std::thread::sleep(Duration::from_millis(20));
     }
     result.map(|()| String::from_utf8_lossy(&raw).into_owned())
+}
+
+/// Verwirft, was der Leser bringt, bis eine Lesefrist lang nichts kommt —
+/// hoechstens eine Sekunde: Ein angehaltenes Abbild schreibt nicht nach.
+fn discard_stale(rx: &mpsc::Receiver<Result<Vec<u8>, String>>) -> Result<(), String> {
+    let until = Instant::now() + Duration::from_secs(1);
+    loop {
+        let quiet = Duration::from_millis(200).min(until.saturating_duration_since(Instant::now()));
+        match rx.recv_timeout(quiet) {
+            Ok(Ok(_)) if Instant::now() < until => {}
+            Ok(Err(e)) => return Err(e),
+            _ => return Ok(()),
+        }
+    }
 }
 
 /// Wartet, bis das System den Port fuehrt (`present`) oder nicht mehr.
@@ -923,5 +950,17 @@ mod tests {
         let found = violations(trace);
         let rows: Vec<(u8, &str)> = found.iter().map(|v| (v.row, &v.line[..3])).collect();
         assert_eq!(rows, [(1, "t=1"), (1, "t=2"), (6, "t=4"), (2, "t=5"), (5, "t=6"), (7, "t=9")]);
+    }
+
+    /// **Was vor dem Start ankommt, gehoert dem vorigen Abbild** (FB-437):
+    /// verworfen bis zur ersten Stille; ein Fehler der Leitung bleibt einer.
+    #[test]
+    fn stale_bytes_are_discarded_until_the_line_is_quiet() {
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(b"t=819 out previous WATCHDOG\r\n".to_vec())).unwrap();
+        assert_eq!(discard_stale(&rx), Ok(()));
+        assert!(rx.try_recv().is_err(), "nichts bleibt fuer den Lauf");
+        tx.send(Err("weg".to_string())).unwrap();
+        assert_eq!(discard_stale(&rx), Err("weg".to_string()));
     }
 }

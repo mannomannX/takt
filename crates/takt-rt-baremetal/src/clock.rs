@@ -102,6 +102,15 @@ impl<T: TickSource, F: FnMut()> Clock for TimerClock<T, F> {
         let ns = self.timer.last_period_ns();
         (ns > 0).then_some(ns)
     }
+
+    /// **Das Raster liegt auf den Ereignissen des Timers** (7.3, 12.3,
+    /// FB-436): `t0` ist das naechste. Begaenne es beim Start der Schleife,
+    /// zwischen zwei Ereignissen, truege jeder Tick die Phase bis zum
+    /// Ereignis als `drift`, und der Ueberlauf am Raster waere nicht mehr
+    /// das Flag aus 12.3.
+    fn origin(&self) -> i64 {
+        i64::try_from(self.timer.ticks().saturating_add(1)).unwrap_or(i64::MAX).saturating_mul(self.nominal_ns)
+    }
 }
 
 /// Die logische Zeit als Uhr, fuer Konformitaetslaeufe (13.8).
@@ -311,6 +320,17 @@ mod tests {
         }
         clock.wait_until(5 * MS);
         assert_eq!(clock.now(), 5 * MS, "eine Frist auf einem Ereignis wartet genau bis zu ihm");
+    }
+
+    /// **Das Raster beginnt am naechsten Ereignis** (7.3, FB-436): Startet
+    /// die Schleife zwischen zwei Ereignissen, liegt `t0` auf dem folgenden;
+    /// steht der Timer auf einem, auf dem danach.
+    #[test]
+    fn the_grid_begins_at_the_next_event() {
+        let clock = TimerClock::new(Phased { now: Cell::new(MS * 47 / 100), period_ns: MS }, MS);
+        assert_eq!(clock.origin(), MS);
+        let clock = TimerClock::new(Phased { now: Cell::new(2 * MS), period_ns: MS }, MS);
+        assert_eq!(clock.origin(), 3 * MS);
     }
 
     /// Eine Tickquelle, deren Periode von der nominalen abweicht: Gewartet

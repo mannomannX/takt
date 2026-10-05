@@ -423,7 +423,9 @@ pub fn c_prototypes(drivers: &[Driver], x: &Prefix) -> String {
 
 /// Ausdrueckliche Stummel fuer alle Treiber: ein Eingang liefert nichts,
 /// ein Ausgang gilt als bestaetigt, ein Geraet als lebendig, ein
-/// Sendepuffer als unbekannt. Fuer Tests, die einen Rahmen ohne Treiber
+/// Sendepuffer als unbekannt. Ein Sender ist fertig: Er nahm jedes Byte
+/// sofort an, und `tx.idle` haengt wie in der Simulation (8.8) nur am
+/// eigenen Puffer (FB-439). Fuer Tests, die einen Rahmen ohne Treiber
 /// binden.
 pub fn c_stubs(drivers: &[Driver], x: &Prefix) -> String {
     let mut s = String::new();
@@ -442,8 +444,8 @@ pub fn c_stubs(drivers: &[Driver], x: &Prefix) -> String {
             .collect();
         let result = match d.kind {
             Kind::Input | Kind::Poll | Kind::Sys => "0",
-            Kind::Output | Kind::Alive => "1",
-            Kind::Free | Kind::Idle => "-1",
+            Kind::Output | Kind::Idle | Kind::Alive => "1",
+            Kind::Free => "-1",
         };
         let _ = writeln!(s, "{} {{ {unused}return {result}; }}", c_signature(d, x));
     }
@@ -631,7 +633,8 @@ fn rig_method(s: &mut String, d: &Driver, wired: bool) {
         let signature =
             signature.replace("now: i64", "_now: i64").replace("buf: &mut", "_buf: &mut").replace("value:", "_value:");
         let result = match d.kind {
-            Kind::Input | Kind::Poll | Kind::Free | Kind::Idle | Kind::Sys => "None",
+            Kind::Input | Kind::Poll | Kind::Free | Kind::Sys => "None",
+            Kind::Idle => "Some(true)",
             Kind::Output | Kind::Alive => "true",
         };
         let _ = writeln!(s, "    {signature} {{");

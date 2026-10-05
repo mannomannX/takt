@@ -747,10 +747,12 @@ pub fn natives_on(
     let options = Options::natives();
     let elf = board.build(program, &options)?;
     let text = board.run(&elf, &options)?;
-    Ok((
-        crate::natives::judge(&natives, &crate::natives::parse(&text)?)?,
-        crate::math::judge(&math, &crate::math::parse(&text)?)?,
-    ))
+    let natives = crate::natives::judge(&natives, &crate::natives::parse(&text)?)?;
+    let math = crate::math::judge(&math, &crate::math::parse(&text)?)?;
+    if !crate::natives::painted(&natives, &math) {
+        return Err("jede Funktion meldet 0 Byte Stack: Das Malen des Stacks lief nicht (KON1-033)".into());
+    }
+    Ok((natives, math))
 }
 
 /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
@@ -864,13 +866,7 @@ impl Outcome {
                 if n.same_result() { "bitgleich" } else { "WEICHEN AB" },
                 n.stack,
                 n.contract,
-                if n.stack == 0 {
-                    "  STACK NICHT GEMESSEN"
-                } else if n.within_contract() {
-                    ""
-                } else {
-                    "  UEBER DER ZUSAGE"
-                }
+                if n.within_contract() { "" } else { "  UEBER DER ZUSAGE" }
             )
         });
         let math = self.math.iter().map(|m| {
@@ -882,13 +878,7 @@ impl Outcome {
                 m.stack,
                 takt_mir::analysis::stack::MATH_STACK,
                 m.cycles,
-                if m.stack == 0 {
-                    "  STACK NICHT GEMESSEN"
-                } else if m.within_contract() {
-                    ""
-                } else {
-                    "  UEBER DEM VERTRAG"
-                }
+                if m.within_contract() { "" } else { "  UEBER DEM VERTRAG" }
             )
         });
         self.kernels

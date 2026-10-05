@@ -115,7 +115,7 @@ impl Esp32c6 {
         std::thread::sleep(Duration::from_millis(500));
         // USB staut selbst zurueck; XON/XOFF braucht es hier nicht.
         let flow = serialport::FlowControl::None;
-        capture(&self.port, BAUD, flow, TRACE, || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ()))
+        capture(&self.port, BAUD, flow, TRACE, true, || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ()))
     }
 
     /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
@@ -126,13 +126,13 @@ impl Esp32c6 {
         self.download(elf)?;
         std::thread::sleep(Duration::from_millis(500));
         let reset = || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ());
-        capture(&self.port, BAUD, serialport::FlowControl::None, within, reset)
+        capture(&self.port, BAUD, serialport::FlowControl::None, within, true, reset)
     }
 
     /// Liest, was das Board von sich aus schreibt, ohne es zurueckzusetzen —
     /// nach einem Neustart, den das Programm befiehlt (12.7).
     pub fn listen(&self, within: Duration) -> Result<String, String> {
-        capture(&self.port, BAUD, serialport::FlowControl::None, within, || Ok(()))
+        capture(&self.port, BAUD, serialport::FlowControl::None, within, false, || Ok(()))
     }
 
     /// Wartet, bis der Port verschwindet: Im Tiefschlaf ist der

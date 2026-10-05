@@ -26,6 +26,14 @@ pub trait Clock {
     /// dann ueberfaellig, und [`Overrun`] entscheidet, was daraus folgt.
     fn wait_until(&mut self, deadline: i64);
 
+    /// Der Beginn des Rasters `t0` (7.3): die Frist von Tick 0, ab der die
+    /// Schleife jede weitere als `t0 + k·T0` rechnet. Eine Uhr, deren
+    /// Tickquelle die Grenzen vorgibt, legt ihn auf deren naechstes Ereignis
+    /// (12.3); sonst beginnt das Raster jetzt.
+    fn origin(&self) -> i64 {
+        self.now()
+    }
+
     /// Die zuletzt gemessene Periode der Tickquelle in Nanosekunden (7.1);
     /// `None`, wenn die Uhr sie nicht misst oder noch nicht kennt. Die
     /// logische Uhr eines Konformitaetslaufs misst nichts.
@@ -468,7 +476,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// `tick_ns` ist T0 aus dem `system:`-Block, `policy` die Reaktion auf
     /// eine Ueberschreitung (7.3, Default `fault`).
     pub fn new(program: P, clock: C, watchdog: W, sink: S, profile: Profile, tick_ns: i64, policy: Policy) -> Self {
-        let start = clock.now();
+        let start = clock.origin();
         Runtime {
             program,
             clock,

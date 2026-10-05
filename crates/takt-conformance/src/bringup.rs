@@ -42,7 +42,7 @@ pub fn compile(path: &str) -> Option<takt_mir::Program> {
         .collect();
     let options = takt_sema::Options {
         policy: takt_diag::Policy::default(),
-        build: takt_sema::Build::Hw,
+        build: build(),
         profile: None,
         channel_imports,
         core: None,
@@ -54,6 +54,18 @@ pub fn compile(path: &str) -> Option<takt_mir::Program> {
         }
     }
     checked.program
+}
+
+/// Der Build aus `TAKT_BUILD` (8.3): Der Board-Vergleich verlangt `sim`,
+/// damit Plant-Modelle mitlaufen; ohne Angabe baut ein Bring-up fuer die
+/// Hardware. Rahmen ([`compile`]) und Codegen ([`takt_build`]) lesen ihn
+/// beide hier, sonst ruft der Rahmen Maschinen, die der Codegen ausliess.
+fn build() -> takt_sema::Build {
+    println!("cargo:rerun-if-env-changed=TAKT_BUILD");
+    match env::var("TAKT_BUILD").as_deref() {
+        Ok("sim") => takt_sema::Build::Sim,
+        _ => takt_sema::Build::Hw,
+    }
 }
 
 /// Schreibt die Arena des Programms als Rust-Typ nach `file` (12.11): so gross
@@ -124,8 +136,8 @@ pub fn drivers(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) 
     fs::write(file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
 }
 
-/// Ruft `takt build PROGRAMM --target ZIEL --build hw --prefix app` mit `extra`, etwa
-/// `--emit ir`, und schreibt nach `out`.
+/// Ruft `takt build PROGRAMM --target ZIEL --build BUILD --prefix app` mit
+/// `extra`, etwa `--emit ir`, und schreibt nach `out`; `BUILD` aus [`build`].
 ///
 /// **Der Umweg ueber die Kommandozeile ist Absicht.** Ein Build-Skript,
 /// das `takt_llvm::lower` direkt ruft, uebersetzt anders als das Werkzeug —
@@ -134,7 +146,14 @@ pub fn drivers(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) 
 pub fn takt_build(program: &str, target: &str, extra: &[&str], out: &Path) {
     let takt = takt();
     let status = Command::new(&takt)
-        .args(["build", program, "--target", target, "--build", "hw"])
+        .args([
+            "build",
+            program,
+            "--target",
+            target,
+            "--build",
+            if build() == takt_sema::Build::Sim { "sim" } else { "hw" },
+        ])
         // Das Praefix des Rahmens der Bring-ups (`takt_frame::mcu::Frame`, 12.11).
         .args(["--prefix", takt_llvm::symbols::Prefix::default().as_str()])
         .args(extra)
