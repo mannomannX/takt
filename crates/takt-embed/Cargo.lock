@@ -410,6 +410,7 @@ dependencies = [
 name = "takt-llvm"
 version = "0.1.0"
 dependencies = [
+ "libtaktm",
  "takt-diag",
  "takt-mir",
 ]

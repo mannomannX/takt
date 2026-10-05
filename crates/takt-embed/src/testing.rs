@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::string::{String, ToString};
 use std::vec::Vec;
-use std::{format, thread_local};
+use std::{format, thread_local, vec};
 
 use crate::Jobs as _;
 use takt_rt_core::{Clock, Outputs, Policy, Profile, Runtime, Sink, Tick, Tunables, Watchdog};
@@ -206,9 +206,14 @@ impl<P: crate::Program> Stepper<P> {
                 // davor erst hier frei (9.9).
                 self.rt.finish(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>);
                 self.done = true;
-            } else {
-                self.rt.clock.wait_until(next.deadline);
+                // Wie weit der Lauf reicht, wie auf den Boards (KON1-010):
+                // Schleifentick `k` ist Tick `k + 1` des Traces, die Zahl des
+                // naechsten also der letzte, den der Lauf deckt.
+                let mut part = take();
+                let _ = writeln!(part, "{REACHED}{}", self.rt.tick_number());
+                return Some(part);
             }
+            self.rt.clock.wait_until(next.deadline);
             return Some(take());
         }
     }
@@ -219,6 +224,36 @@ fn again<'a>(tunables: &'a mut Option<&mut dyn Tunables>) -> Option<&'a mut dyn 
     match tunables {
         Some(t) => Some(&mut **t),
         None => None,
+    }
+}
+
+/// Die letzte Zeile eines Laufs der Testhilfe: bis zu welchem Tick des
+/// Traces er reicht.
+const REACHED: &str = "takt end ";
+
+/// Ob der Lauf `trace` so weit reicht wie der Interpreter ueber `ticks`
+/// (GEN-030): Dasselbe Ende des Laufs (`t=<k> end …`, 12.7) auf beiden
+/// Seiten, und ohne Ende bis Tick `ticks`. Ein zu frueh endender Lauf mit
+/// gleichbleibenden Ausgaengen gliche sonst jedem Interpreterlauf.
+fn reach_problems(interpreted: &str, trace: &str, ticks: u64) -> Vec<String> {
+    let end_of = |t: &str| -> Option<String> {
+        t.lines()
+            .map(str::trim_end)
+            .find(|l| l.starts_with("t=") && l.split_whitespace().nth(1) == Some("end"))
+            .map(str::to_string)
+    };
+    let (theirs, ours) = (end_of(interpreted), end_of(trace));
+    if theirs != ours {
+        let shown = |e: &Option<String>| e.clone().unwrap_or_else(|| "keins".into());
+        return vec![format!("Ende des Laufs: Interpreter `{}`, nativ `{}`", shown(&theirs), shown(&ours))];
+    }
+    if ours.is_some() {
+        return Vec::new();
+    }
+    match trace.lines().find_map(|l| l.trim_end().strip_prefix(REACHED)?.parse::<u64>().ok()) {
+        None => vec![format!("der Lauf nennt nicht, wie weit er kam (`{REACHED}<tick>`)")],
+        Some(n) if n < ticks => vec![format!("der Lauf endete in Tick {n} von {ticks} ohne Ende des Programms")],
+        Some(_) => Vec::new(),
     }
 }
 
@@ -260,10 +295,14 @@ pub fn same_as_interpreter_with(
     let have = output_names(trace);
     let missing: Vec<&str> = output_names(&widened).into_iter().filter(|n| !have.contains(n)).collect();
     let diffs = takt_conformance::run::compare(&widened, trace);
-    if missing.is_empty() && diffs.is_empty() {
+    let reach = reach_problems(&widened, trace, ticks);
+    if missing.is_empty() && diffs.is_empty() && reach.is_empty() {
         return Ok(());
     }
     let mut s = format!("{}: {} Abweichungen vom Interpreter\n", path.display(), diffs.len());
+    for r in &reach {
+        let _ = writeln!(s, "  {r}");
+    }
     if !missing.is_empty() {
         let _ = writeln!(s, "  im Lauf fehlen die Ausgaenge {}", missing.join(", "));
     }
@@ -324,7 +363,7 @@ mod tests {
     /// fehlender Ausgang scheitern und nennen, was fehlt.
     #[test]
     fn the_comparison_rejects_what_differs() {
-        let good = interpreted(Path::new(VALVE), 1000, &Default::default()).expect("Interpreter");
+        let good = interpreted(Path::new(VALVE), 1000, &Default::default()).expect("Interpreter") + "takt end 1000\n";
         assert!(good.contains("t=300 out valve true"), "{good}");
         assert_eq!(same_as_interpreter(VALVE, 1000, &good), Ok(()));
 
@@ -339,5 +378,43 @@ mod tests {
             good.lines().filter(|l| !l.contains(" out fills ")).map(|l| l.to_string() + "\n").collect();
         let without = same_as_interpreter(VALVE, 1000, &without).expect_err("ein fehlender Ausgang");
         assert!(without.contains("fehlen die Ausgaenge fills"), "{without}");
+    }
+
+    const LIFECYCLE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/rust-host/takt/lifecycle.takt");
+
+    /// **Ein zu frueh endender Lauf besteht nicht** (GEN-030): Abgeschnitten
+    /// nach Tick 500 von 1000, mit oder ohne Angabe, wie weit er kam,
+    /// scheitert er, obwohl jede Zeile, die er hat, stimmt.
+    #[test]
+    fn a_run_that_stops_early_fails() {
+        let full = interpreted(Path::new(VALVE), 1000, &Default::default()).expect("Interpreter");
+        let tick = |l: &str| l.strip_prefix("t=").and_then(|r| r.split_whitespace().next()?.parse::<u64>().ok());
+        let cut: String =
+            full.lines().filter(|l| tick(l).is_some_and(|k| k <= 500)).map(|l| l.to_string() + "\n").collect();
+        let e = same_as_interpreter(VALVE, 1000, &(cut.clone() + "takt end 500\n")).expect_err("abgeschnitten");
+        assert!(e.contains("Tick 500 von 1000"), "{e}");
+        let e = same_as_interpreter(VALVE, 1000, &cut).expect_err("ohne Angabe");
+        assert!(e.contains("wie weit er kam"), "{e}");
+    }
+
+    /// **Ein Ende des Laufs zaehlt nur auf beiden Seiten** (12.7, GEN-030):
+    /// `lifecycle` endet in Tick 34 mit `next_run`; ein Lauf ohne diese
+    /// Zeile scheitert, ein Ende, das der Interpreter nicht kennt, ebenso.
+    /// Mit dem Ende auf beiden Seiten genuegt es, bis dorthin zu reichen.
+    #[test]
+    fn an_end_on_one_side_only_fails() {
+        let theirs = interpreted(Path::new(LIFECYCLE), 60, &Default::default()).expect("Interpreter");
+        assert!(theirs.contains("t=34 end after"), "{theirs}");
+        assert_eq!(same_as_interpreter(LIFECYCLE, 60, &(theirs.clone() + "takt end 35\n")), Ok(()));
+        let without: String =
+            theirs.lines().filter(|l| !l.contains(" end ")).map(|l| l.to_string() + "\n").collect::<String>()
+                + "takt end 60\n";
+        let e = same_as_interpreter(LIFECYCLE, 60, &without).expect_err("ohne Ende");
+        assert!(e.contains("Ende des Laufs: Interpreter `t=34 end after`, nativ `keins`"), "{e}");
+
+        let valve = interpreted(Path::new(VALVE), 1000, &Default::default()).expect("Interpreter");
+        let e =
+            same_as_interpreter(VALVE, 1000, &(valve + "t=600 end now\ntakt end 1000\n")).expect_err("Ende nur nativ");
+        assert!(e.contains("nativ `t=600 end now`"), "{e}");
     }
 }
