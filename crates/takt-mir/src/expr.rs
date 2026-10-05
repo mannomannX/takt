@@ -243,6 +243,9 @@ pub enum Accessor {
     /// `o.sent -> bytes<CAP>?`: der im letzten Tick gesendete Ausschnitt eines
     /// Ausgabestroms, mit Unit-Delay (8.8, FB-132).
     Sent,
+    /// `o.idle -> bool`: Sendepuffer leer und Sender fertig, zu Tickbeginn
+    /// gesampelt wie `free` (8.8, FB-124).
+    Idle,
 }
 
 impl Accessor {
@@ -267,6 +270,7 @@ impl Accessor {
             Accessor::Malformed => "malformed",
             Accessor::Overflowed => "overflowed",
             Accessor::Free => "free",
+            Accessor::Idle => "idle",
             Accessor::Jitter => "jitter",
             Accessor::TimeWarped => "time_warped",
             Accessor::Done => "done",
@@ -298,7 +302,7 @@ impl Accessor {
     }
 
     /// Alle Zugriffe ohne Nutzlast (fuer Paritaetstests gegen 2.5).
-    pub const ALL: [Accessor; 43] = [
+    pub const ALL: [Accessor; 44] = [
         Accessor::Valid,
         Accessor::Suspect,
         Accessor::Stale,
@@ -342,6 +346,7 @@ impl Accessor {
         Accessor::Truncated,
         Accessor::Peek,
         Accessor::Sent,
+        Accessor::Idle,
     ];
 }
 

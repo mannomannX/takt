@@ -88,8 +88,10 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// `profile` (Herkunft) am Geraet. 11: `call_hook`, das Gewicht eines
 /// Aufrufs in die Runtime, die ihn beobachtet (FB-295). 12: `f32_math` und
 /// `f64_math`, das Gewicht eines Aufrufs der korrekt gerundeten Mathematik
-/// (4.2, FB-344).
-pub const FORMAT_VERSION: u32 = 12;
+/// (4.2, FB-344). 13: `tx_idle`, ob der Treiber eines Ausgabestroms
+/// `tx.idle` beantwortet (8.8, 8.10, FB-124); eine aeltere Datei kennt den
+/// Schluessel nicht, und es gilt der Default `true`.
+pub const FORMAT_VERSION: u32 = 13;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -353,6 +355,17 @@ pub struct HwChannel {
     /// Weckt der Input den Chip aus dem Tiefschlaf (12.7)? Eine Tatsache
     /// des Boards: Nicht jeder Pin, der aus `idle` weckt, arbeitet ohne RAM.
     pub deep_wake: Option<bool>,
+    /// Beantwortet der Treiber eines Ausgabestroms `tx.idle` — Puffer leer
+    /// und das letzte Bit draussen (8.8)? Ohne Angabe `true` (8.10); `false`
+    /// macht `tx.idle` an diesem Kanal zum Fehler (Pruefung 60).
+    pub tx_idle: Option<bool>,
+}
+
+impl HwChannel {
+    /// Beantwortet der Treiber `tx.idle` (8.10, Default `true`)?
+    pub fn answers_tx_idle(&self) -> bool {
+        self.tx_idle.unwrap_or(true)
+    }
 }
 
 /// Was das Journal vom nichtfluechtigen Speicher wissen muss (5.9, 11.5).
@@ -733,13 +746,14 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
         "latency_ns" => channel.latency_ns = Some(field::<i64>(value, line)?),
         "deep_wake" => channel.deep_wake = Some(boolean(value, line)?),
         "tick_granular" => channel.tick_granular = Some(boolean(value, line)?),
+        "tx_idle" => channel.tx_idle = Some(boolean(value, line)?),
         _ => {
             return Err(ParseError {
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: direction, raw, unit, range, safe, device, port, \
                      rate_hz, max_rate_hz, framing, calibration, guard_ns, jitter_ns, tick_granular, latency_ns, \
-                     deep_wake"
+                     deep_wake, tx_idle"
                 ),
             });
         }
@@ -970,7 +984,7 @@ pub fn render(hw: &Hardware) -> String {
                 s.push_str(&format!("{key} = {v}\n"));
             }
         }
-        for (key, value) in [("tick_granular", c.tick_granular), ("deep_wake", c.deep_wake)] {
+        for (key, value) in [("tick_granular", c.tick_granular), ("deep_wake", c.deep_wake), ("tx_idle", c.tx_idle)] {
             if let Some(v) = value {
                 s.push_str(&format!("{key} = {v}\n"));
             }
@@ -1343,6 +1357,21 @@ t_io = 120000
         assert_eq!(hw.channel("gpio/btn").expect("Kanal").deep_wake, Some(true));
         assert_eq!(parse(&render(&hw)).expect("Rundreise"), hw);
         assert!(parse("# takt-hw 8\n[channel gpio/btn]\ndeep_wake = vielleicht\n").is_err());
+    }
+
+    /// FB-124 (8.10): `tx_idle` liest und schreibt sich; eine Datei der
+    /// Version 12 kennt den Schluessel nicht, und es gilt `true`.
+    #[test]
+    fn tx_idle_round_trips_and_defaults_to_true() {
+        let text = format!("# takt-hw {FORMAT_VERSION}\n[channel spi0/tx]\ndirection = output\ntx_idle = false\n");
+        let hw = parse(&text).expect("lesbar");
+        let c = hw.channel("spi0/tx").expect("Kanal");
+        assert_eq!((c.tx_idle, c.answers_tx_idle()), (Some(false), false));
+        assert_eq!(parse(&render(&hw)).expect("Rundreise"), hw);
+        assert!(render(&hw).contains("tx_idle = false\n"), "{}", render(&hw));
+        let old = parse("# takt-hw 12\n[channel spi0/tx]\ndirection = output\n").expect("Version 12");
+        assert!(old.channel("spi0/tx").expect("Kanal").answers_tx_idle());
+        assert!(parse("# takt-hw 13\n[channel spi0/tx]\ntx_idle = ja\n").is_err());
     }
 
     /// Nur eine Tabelle zum Kostenmodell dieses Compilers ist eine

@@ -484,6 +484,9 @@ fn access(
     if which == Accessor::Sent {
         return stream_sent(base, want, m);
     }
+    if matches!(which, Accessor::Free | Accessor::Idle) {
+        return stream_tx(base, which, want, m);
+    }
     if which == Accessor::Jitter
         && let ExprKind::Output(c) = base.kind
     {
@@ -2280,6 +2283,28 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
     let r = m.inst(&format!("insertvalue {want} {with_value}, i1 {some}, 1"));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+}
+
+/// `o.free` und `o.idle` (8.8, FB-124): zu Tickbeginn gesampelt; der Wert
+/// steht bei der Runtime, die den Sendepuffer fuehrt (`P_stream_free`,
+/// `P_stream_idle`), wie `o.sent`.
+fn stream_tx(base: &Expr, which: Accessor, want: &LlvmType, m: &mut Module) -> Result<Lowered, NotYet> {
+    let ExprKind::Input { channel: c, .. } = base.kind else {
+        return Err(NotYet { what: "`free` oder `idle` ohne Ausgabestrom" });
+    };
+    let (name, ret) = if which == Accessor::Free {
+        (crate::stream::Streams::FREE, "i32")
+    } else {
+        (crate::stream::Streams::IDLE, "i8")
+    };
+    let v = m.inst(&format!("call {ret} @{}(ptr %arena, i32 {})", m.runtime(name), c.0));
+    let r = match (which, want) {
+        (Accessor::Free, LlvmType::Int(64)) => m.inst(&format!("sext i32 {v} to i64")),
+        (Accessor::Free, LlvmType::Int(32)) => v,
+        (Accessor::Idle, LlvmType::Int(1)) => m.inst(&format!("icmp ne i8 {v}, 0")),
+        _ => return Err(NotYet { what: "Typ von `free` oder `idle`" }),
+    };
     Ok(Lowered { value: r.to_string(), ty: want.clone() })
 }
 

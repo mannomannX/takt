@@ -225,7 +225,7 @@ macro_rules! accessor_tags {
 accessor_tags! {
     Valid, Suspect, Stale, Age, Reason, Or, Ok, Err, T, Seq, Text, Data, Len, Count, Dropped, Malformed, Overflowed,
     Free, Jitter, TimeWarped, Done, Result, Bit, Bits, WithBit, Min, Max, Mean, Rms, Last, Encode, Get, StartsWith,
-    Contains, Armed, Pre, Post, Samples, Rate, Remaining, Truncated, Peek, Sent,
+    Contains, Armed, Pre, Post, Samples, Rate, Remaining, Truncated, Peek, Sent, Idle,
 }
 
 /// Eine Konstruktion der MIR.

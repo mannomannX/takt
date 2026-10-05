@@ -54,17 +54,51 @@ fn built(name: &str, build: takt_sema::Build) -> Program {
 }
 
 /// **Die HIL-Umschaltung aendert den erzeugten Code nicht** (8.3, 11.3):
-/// Sim- und HW-Build unterscheiden sich in der Bindungstabelle, nicht in
+/// Sim- und HW-Build unterscheiden sich in der Bindungstabelle und darin,
+/// dass ein Plant-Modell im HW-Build nicht gelinkt wird (FB-418), nicht in
 /// der Logik. `builds.rs` prueft es am Logik-Hash der MIR; hier steht es
-/// fuer das, was auf das Ziel geht — die IR ist Zeichen fuer Zeichen
-/// dieselbe, auch fuer Programme mit `sim`-Modell und Stroemen.
+/// fuer das, was auf das Ziel geht — jede Funktion des HW-Builds steht
+/// Zeichen fuer Zeichen im Sim-Build, und was nur dort steht, gehoert zu
+/// einem Plant-Modell.
 #[test]
 fn the_simulation_and_the_hardware_build_yield_the_same_ir() {
     for name in [NAME, "15_quality.takt", "45_journal_cut.takt", "53_stream_kinds.takt"] {
-        let sim = common::ir_of(&built(name, takt_sema::Build::Sim));
-        let hw = common::ir_of(&built(name, takt_sema::Build::Hw));
-        assert!(sim == hw, "{name}: die IR der beiden Builds unterscheidet sich");
+        let program = built(name, takt_sema::Build::Sim);
+        let sim = functions(&common::ir_of(&program));
+        let hw = functions(&common::ir_of(&built(name, takt_sema::Build::Hw)));
+        for (f, body) in &hw {
+            assert!(sim.get(f) == Some(body), "{name}: `{f}` unterscheidet sich zwischen den Builds");
+        }
+        let models: Vec<String> = (0..program.machines.len())
+            .filter(|&i| program.is_plant_model(takt_mir::MachineId(i as u32)))
+            .map(|i| format!("{}_", program.machines[i].name))
+            .collect();
+        for f in sim.keys().filter(|f| !hw.contains_key(*f)) {
+            let of_model = models.iter().any(|m| f.starts_with(m.as_str()) || f.contains(&format!("_{m}")));
+            assert!(of_model, "{name}: `{f}` fehlt im HW-Build, ist aber kein Modell");
+        }
     }
+}
+
+/// Die Funktionen einer IR nach Namen, je mit ihrem Rumpf.
+fn functions(ir: &str) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut current: Option<(String, String)> = None;
+    for line in ir.lines() {
+        if let Some((name, body)) = current.as_mut() {
+            body.push_str(line);
+            body.push('\n');
+            if line == "}" {
+                out.insert(std::mem::take(name), std::mem::take(body));
+                current = None;
+            }
+        } else if line.starts_with("define ")
+            && let Some(name) = line.split('@').nth(1).and_then(|s| s.split('(').next())
+        {
+            current = Some((name.to_string(), format!("{line}\n")));
+        }
+    }
+    out
 }
 
 /// **Stufe 1**: Zweimal uebersetzen ergibt dieselbe IR.

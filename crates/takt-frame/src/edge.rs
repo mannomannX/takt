@@ -50,7 +50,7 @@ pub const GATE: &str =
 /// `takt_edge_driver_bad`.
 pub const DRIVER_BAD: &str = "void takt_edge_driver_bad(struct takt_gate *);";
 /// `takt_edge_output`.
-pub const OUTPUT: &str = "_Bool takt_edge_output(_Bool, _Bool, int, int);";
+pub const OUTPUT: &str = "_Bool takt_edge_output(_Bool, _Bool, int, int, int);";
 /// `takt_edge_decodes`.
 pub const DECODES: &str =
     "_Bool takt_edge_decodes(const unsigned char *, unsigned, const unsigned char *, unsigned, _Bool);";

@@ -85,7 +85,7 @@ fn a_frame_without_the_arena_constants_is_an_error() {
 
 /// **Die Stummel sind ausdruecklich und eindeutig** (12.6): Ein Eingang
 /// liefert nichts, ein Strom nichts, ein Ausgang gilt als bestaetigt, ein
-/// Geraet als lebendig, ein Sendepuffer als unbekannt (-1).
+/// Geraet als lebendig, ein Sendepuffer und sein `idle` als unbekannt (-1).
 #[test]
 fn the_driver_stubs_answer_conservatively() {
     let value = Some(Value { c: "int32_t", rust: "i32" });
@@ -101,6 +101,7 @@ fn the_driver_stubs_answer_conservatively() {
         driver(Kind::Poll, "poll_dev_rx"),
         driver(Kind::Output, "out_dev_o"),
         driver(Kind::Free, "free_dev_tx"),
+        driver(Kind::Idle, "idle_dev_tx"),
         driver(Kind::Alive, "alive_dev"),
     ];
     let stubs = c_stubs(&drivers, &Prefix::default());
@@ -111,6 +112,7 @@ fn the_driver_stubs_answer_conservatively() {
         ("poll_dev_rx", "return 0;"),
         ("out_dev_o", "return 1;"),
         ("free_dev_tx", "return -1;"),
+        ("idle_dev_tx", "return -1;"),
         ("alive_dev", "return 1;"),
     ] {
         assert!(line(method).contains(result), "{method}: {}", line(method));

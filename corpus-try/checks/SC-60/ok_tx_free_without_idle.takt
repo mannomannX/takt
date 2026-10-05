@@ -1,0 +1,16 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 60 (8.8): Der Treiber beantwortet `tx.idle` nicht
+# (`tx_idle = false`); `tx.free` fragt nur den Puffer und bleibt erlaubt.
+
+output spi_tx : stream<u8> @ hw("spi0/tx") with max_rate = 200 Hz, capacity = 16
+output cs_n   : bool       @ hw("spi0/cs") with safe = true
+
+machine eink:
+    initial SEND
+
+    state SEND:
+        loop:
+            cs_n = spi_tx.free == 16

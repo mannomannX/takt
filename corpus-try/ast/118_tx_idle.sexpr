@@ -1,0 +1,30 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output spi_tx :stream<u8> @hw("spi0/tx") max_rate=200[Hz] capacity=16)
+(output cs_n :bool @hw("spi0/cs") safe=true)
+(output space :int @hw("o/space") safe=0)
+(output shown :int in 0..63 @sim("o/shown"))
+(machine eink
+  (initial READY)
+  (state READY
+    (enter
+      (= cs_n true))
+    (after 30ms -> SELECT))
+  (state SELECT
+    (enter
+      (= cs_n false)
+      (send spi_tx (array 0x12 0x34 0x56 0x78))
+      (= space (.free spi_tx)))
+    (loop
+      (= space (.free spi_tx)))
+    (when (.idle spi_tx) -> READY)))
+(machine panel
+  (var last :bytes<2>? none)
+  (var bytes :int in 0..63 0)
+  (initial WATCH)
+  (state WATCH
+    (loop
+      (= last (.sent spi_tx))
+      (= bytes (call min (+ bytes (.len (.or last default))) 63))
+      (= shown bytes))))

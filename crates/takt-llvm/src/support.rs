@@ -200,7 +200,8 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Remaining
         | AccessorTag::Truncated
         | AccessorTag::Peek
-        | AccessorTag::Sent => Yes,
+        | AccessorTag::Sent
+        | AccessorTag::Idle => Yes,
         AccessorTag::Or => Partial("`.or` nur auf einem Channel oder Wrapper"),
         AccessorTag::Err => Partial("`.err` nicht auf `T?`"),
         AccessorTag::Len => Partial("`.len` nur auf Sammlungen"),

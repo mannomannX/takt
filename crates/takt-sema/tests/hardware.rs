@@ -392,3 +392,84 @@ fn the_gate_judges_rows_39_and_59() {
     let diags = polling(&driver, &cfg, target);
     assert_eq!(of(&gate(&driver, target, Some(&cfg), &diags), 59), Gate::Ok, "{:?}", codes(&diags));
 }
+
+/// FB-124 (8.8, 8.10, Pruefung 60): `tx.idle` an einem Kanal, dessen Treiber
+/// die Frage nach der Konfiguration nicht beantwortet (`tx_idle = false`),
+/// ist ein Fehler an der Stelle des Zugriffs; ohne Angabe oder mit `true`
+/// keiner, und `tx.free` an demselben Kanal bleibt erlaubt.
+#[test]
+fn tx_idle_on_a_channel_that_cannot_answer_is_an_error() {
+    let program = |member: &str| {
+        compile(&format!(
+            "
+output tx   : stream<u8> @ hw(\"spi0/tx\") with max_rate = 200 Hz, capacity = 16
+output cs_n : bool       @ hw(\"spi0/cs\") with safe = true
+
+machine m:
+    initial SEND
+    state SEND:
+        loop:
+            cs_n = tx.{member}
+"
+        ))
+    };
+    let config = |tx_idle: &str| {
+        hw(&format!(
+            "[channel spi0/tx]\ndirection = output\n{tx_idle}\n[channel spi0/cs]\ndirection = output\nraw = bool\nsafe = true\n"
+        ))
+    };
+    let sc60 = |p: &takt_mir::Program, cfg: &Hardware| -> Vec<String> {
+        codes(&check_bindings(p, cfg)).into_iter().filter(|c| c.starts_with("SC-60")).collect()
+    };
+    let idle = program("idle");
+    let errors = sc60(&idle, &config("tx_idle = false"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("`tx.idle`") && errors[0].contains("spi0/tx"), "{errors:?}");
+    assert!(sc60(&idle, &config("tx_idle = true")).is_empty());
+    assert!(sc60(&idle, &config("")).is_empty(), "ohne Angabe gilt `true` (8.10)");
+    let free = compile(
+        "
+output tx   : stream<u8>    @ hw(\"spi0/tx\") with max_rate = 200 Hz, capacity = 16
+output cs_n : bool          @ hw(\"spi0/cs\") with safe = true
+
+machine m:
+    initial SEND
+    state SEND:
+        loop:
+            cs_n = tx.free > 8
+",
+    );
+    assert!(sc60(&free, &config("tx_idle = false")).is_empty(), "`tx.free` fragt den Sender nicht");
+}
+
+/// FB-124 (8.8): `free`, `idle` und `sent` gibt es nur an einem
+/// Ausgabestrom; an einem Eingabestrom sind sie ein Typfehler.
+#[test]
+fn tx_members_need_an_output_stream() {
+    for member in ["free", "idle", "sent"] {
+        let src = format!(
+            "system:
+    language = 1
+    tick = 10 ms
+
+input  rx : stream<u8> @ hw(\"uart0/rx\") with max_rate = 100 Hz, capacity = 4
+output o  : bool       @ hw(\"o/o\")      with safe = false
+
+machine m:
+    var x : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            o = rx.{member} == rx.{member}
+"
+        );
+        let out = takt_sema::compile(&src, &takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() });
+        let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("SC-3") && e.contains(&format!("`{member}` gibt es nur an einem Ausgabestrom"))),
+            "{member}: {errors:?}"
+        );
+    }
+}

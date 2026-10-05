@@ -27,12 +27,15 @@
 //! daraus Vektorzeilen:
 //! `python tools/libtaktm.py round < … >> crates/libtaktm/tests/hard_f32.txt`.
 //!
-//! **Das Protokoll (INT-028).** Ein bestandener Lauf traegt sich mit dem
+//! **Die Ratsche (INT-028).** Ein bestandener Lauf traegt sich mit dem
 //! Fingerabdruck der Implementierung (`elem.rs`, `big.rs`, `table.rs`),
-//! Datum und Commit in `exhaustive_runs.txt` ein. Im gewoehnlichen Lauf
-//! prueft eine Stichprobe jeder Funktion gegen dasselbe Orakel, und die
-//! Annahme des Orakels — die `f64`-Bibliothek der Plattform irrt um weniger
-//! als 16 ulp — wird an den Zufallsvektoren der Referenz gemessen.
+//! Datum und Commit in `exhaustive_runs.txt` ein. Der gewoehnliche Lauf
+//! prueft, dass jede Funktion fuer den heutigen Fingerabdruck belegt ist:
+//! Wer die Implementierung aendert, muss den erschoepfenden Lauf wiederholen.
+//! Dazu laeuft im gewoehnlichen Lauf eine Stichprobe jeder Funktion gegen
+//! dasselbe Orakel, und die Annahme des Orakels — die `f64`-Bibliothek der
+//! Plattform irrt um weniger als 16 ulp — wird an den Zufallsvektoren der
+//! Referenz gemessen.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -203,13 +206,42 @@ fn record_run(name: &str, near: usize) {
     let _guard = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let path = runs_path();
     let old = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut lines: Vec<String> =
-        old.lines().filter(|l| l.split_whitespace().next() != Some(name)).map(str::to_string).collect();
+    let mut lines: Vec<String> = old
+        .lines()
+        .filter(|l| !l.starts_with('#') && l.split_whitespace().next() != Some(name))
+        .map(str::to_string)
+        .collect();
     lines.push(format!("{name} {} {near} {} {}", fingerprint(), today(), commit()));
     lines.sort();
     let head = "# Erschoepfende Laeufe (exhaustive.rs): Funktion, Fingerabdruck der Implementierung, \
                 nahe Faelle, Datum, Commit.";
     std::fs::write(&path, format!("{head}\n{}\n", lines.join("\n"))).expect("Ratsche beschreibbar");
+}
+
+/// Die Funktionen, deren Lauf die Ratsche verlangt.
+const RUNS: [&str; 10] = ["exp", "log", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "pow"];
+
+/// INT-028: Jede Funktion ist fuer den heutigen Stand der Implementierung
+/// erschoepfend belegt.
+#[test]
+fn every_exhaustive_run_covers_the_current_implementation() {
+    let print = fingerprint();
+    let text = std::fs::read_to_string(runs_path()).unwrap_or_default();
+    let stale: Vec<&str> = RUNS
+        .iter()
+        .copied()
+        .filter(|name| {
+            !text.lines().any(|l| {
+                let mut f = l.split_whitespace();
+                f.next() == Some(*name) && f.next() == Some(print.as_str())
+            })
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "Die Implementierung hat den Abdruck {print}; ohne erschoepfenden Lauf dafuer: {stale:?}. \
+         `cargo test -p libtaktm --release --test exhaustive -- --ignored --test-threads=1`"
+    );
 }
 
 /// INT-028: Die Annahme des Orakels, gemessen: Die `f64`-Funktionen der

@@ -258,7 +258,8 @@ impl Edge {
             .iter()
             .filter(|(w, d)| {
                 let capacity = p.channels[w.channel.index()].attrs.capacity_bytes;
-                crate::contract::output_fails(*d == Delivery::Acked, alive, driver.free(w.channel), capacity)
+                let (free, idle) = (driver.free(w.channel), driver.idle(w.channel));
+                crate::contract::output_fails(*d == Delivery::Acked, alive, free, capacity, idle)
             })
             .map(|(w, _)| w.channel)
             .collect()
@@ -284,6 +285,13 @@ pub trait Heartbeat {
 pub trait Capacity {
     /// Freier Platz in Bytes (`free[o]`).
     fn free(&self, channel: ChannelId) -> Option<u32>;
+
+    /// Puffer leer und Sender fertig (`tx.idle`); `None`, wenn der Treiber
+    /// es nicht beantworten kann.
+    fn idle(&self, channel: ChannelId) -> Option<bool> {
+        let _ = channel;
+        None
+    }
 }
 
 /// Der Treiber eines Kanals: das Geraet, also das erste Segment seiner

@@ -249,6 +249,7 @@ pub const RESERVED_MEMBERS: &[&str] = &[
     "malformed",
     "overflowed",
     "free",
+    "idle",
     "jitter",
     "time_warped",
     "done",

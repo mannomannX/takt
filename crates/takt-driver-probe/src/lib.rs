@@ -187,6 +187,12 @@ impl StreamOutput for EdgeTTx {
     fn free(&mut self, now: i64) -> Option<u32> {
         Some(edge_probe::tx_free(tick_of(now)))
     }
+
+    /// `tx.idle` (8.8): fertig genau dann, wenn der Puffer leer ist
+    /// (`free == capacity`), wie das Simulationsgeraet.
+    fn idle(&mut self, now: i64) -> Option<bool> {
+        Some(edge_probe::tx_free(tick_of(now)) == edge_probe::TX_CAPACITY)
+    }
 }
 
 /// Der Ausgang `edge_f/o`: bestaetigt nie (Dauerversagen, 12.6 Zeile 6).
@@ -400,6 +406,16 @@ mod tests {
         assert_eq!(at, Some(edge_probe::TX_OVER_AT as i64));
         assert_eq!((0..16).filter(|k| EdgeTTx.free(k * t) == over).count(), 1);
         assert!((0..16).all(|k| !Output::<bool>::write(&mut EdgeFO, true, k * t)));
+    }
+
+    /// FB-124: `edge_t/tx` beantwortet `tx.idle`, fertig genau bei vollem
+    /// freiem Platz; in dem Tick, in dem es den Puffer ueberfaehrt, nicht.
+    #[test]
+    fn the_stream_device_answers_idle() {
+        let t = edge_probe::TICK_NS;
+        let at = edge_probe::TX_OVER_AT as i64;
+        assert!((0..16).filter(|k| *k != at).all(|k| EdgeTTx.idle(k * t) == Some(true)));
+        assert_eq!(EdgeTTx.idle(at * t), Some(false));
     }
 
     /// Die ausdruecklichen Stummel: bestaetigt, lebendig, ohne Lieferung.

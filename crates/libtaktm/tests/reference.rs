@@ -43,7 +43,7 @@ fn hard_f64_cases_match_the_reference() {
 
 #[test]
 fn hard_f32_cases_match_the_reference() {
-    check("hard_f32.txt", 1016);
+    check("hard_f32.txt", 1040);
 }
 
 /// INT-029: `fma` beider Breiten gegen die exakte Referenz — Ausloeschung

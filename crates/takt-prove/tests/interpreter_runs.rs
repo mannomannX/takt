@@ -601,3 +601,45 @@ campaign c:
     let e = takt_interp::campaign::runs(&p, &p.campaigns[0]).expect_err("leerer Laufraum");
     assert!(e.to_string().contains("`c`") && e.to_string().contains("`GAIN`") && e.to_string().contains("leer"), "{e}");
 }
+
+/// FB-124 (8.8): `tx.idle` ist zu Tickbeginn gesampelt und in der
+/// Simulation genau dann wahr, wenn der Sendepuffer leer ist. Ein `send`
+/// macht es erst im naechsten Tick falsch; ist der Puffer geleert, ist es
+/// wieder wahr. Vier Byte bei zwei Byte je Tick: Der Commit von Tick 2 holt
+/// zwei, Tick 3 sieht zwei wartende, sein Commit holt den Rest.
+#[test]
+fn tx_idle_is_true_exactly_while_the_buffer_is_empty() {
+    let p = compile(
+        "system:
+    language = 1
+    tick = 10 ms
+
+output tx   : stream<u8> @ hw(\"spi0/tx\") with max_rate = 200 Hz, capacity = 16
+output idle : bool       @ hw(\"o/idle\")  with safe = false
+output same : bool       @ hw(\"o/same\")  with safe = false
+
+machine m:
+    var k : int in 0..9 = 0
+    initial RUN
+    state RUN:
+        loop:
+            idle = tx.idle
+            if k == 2:
+                send tx, [1, 2, 3, 4]
+                same = tx.idle
+            k = min(k + 1, 9)
+",
+    );
+    let trace =
+        run(&p, &Trace::default(), &RunOptions { ticks: 7, ..Default::default() }).expect("Lauf").trace.render();
+    let idle = |t: u64| {
+        trace
+            .lines()
+            .rev()
+            .filter_map(|l| l.strip_prefix("t=").and_then(|r| r.split_once(' ')))
+            .find(|(tick, rest)| tick.parse::<u64>().is_ok_and(|k| k <= t) && rest.starts_with("out idle "))
+            .map(|(_, rest)| rest == "out idle true")
+    };
+    assert_eq!((0..7).map(|t| idle(t).expect("idle")).collect::<Vec<_>>(), [true, true, true, false, true, true, true]);
+    assert!(trace.contains("t=2 out same true"), "im Tick des `send` noch wahr:\n{trace}");
+}

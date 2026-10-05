@@ -172,3 +172,50 @@ machine m:
     let Some(trace) = agree("to_overflow", &compile(src), 2) else { return };
     assert!(trace.contains("fault m") && trace.contains("NonFinite"), "{trace}");
 }
+
+/// Ein Ausgabestrom mit einem Byte je Tick (100 Hz bei 10 ms) und 16 Byte
+/// Puffer; `before`/`after` lesen `tx.free` vor und nach einem `send`.
+const FREE: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+output tx     : stream<u8>    @ hw(\"uart0/tx\") with max_rate = 100 Hz, capacity = 16
+output before : int in 0..16  @ hw(\"o/before\") with safe = 0
+output after  : int in 0..16  @ hw(\"o/after\")  with safe = 0
+
+machine m:
+    var k : int in 0..9 = 0
+    initial RUN
+    state RUN:
+        loop:
+            before = tx.free
+            if k < 2:
+                send tx, [1, 2, 3]
+                k = k + 1
+            after = tx.free
+";
+
+/// FB-124 (8.8, 9.3): `tx.free` ist zu Tickbeginn gesampelt und sinkt mit
+/// jedem `send` im Tick; der Treiber leert ein Byte je Tick. Im erzeugten
+/// Code wie im Interpreter.
+#[test]
+fn tx_free_agrees_with_the_interpreter() {
+    let Some(trace) = agree("tx_free", &compile(FREE), 8) else { return };
+    for line in ["t=0 out before 16", "t=0 out after 13", "t=1 out before 14", "t=1 out after 11", "t=2 out before 12"]
+    {
+        assert!(trace.contains(line), "`{line}`:\n{trace}");
+    }
+}
+
+/// FB-124 (8.8): `corpus-try/118_tx_idle.takt` — ein SPI-Treiber gibt
+/// `cs_n` erst frei, wenn `tx.idle` wahr ist; im erzeugten Code Tick fuer
+/// Tick wie im Interpreter.
+#[test]
+fn tx_idle_agrees_with_the_interpreter() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/118_tx_idle.takt");
+    let src = std::fs::read_to_string(path).expect("118 lesbar");
+    let Some(trace) = agree("tx_idle", &compile(&src), 12) else { return };
+    for line in ["t=3 out cs_n false", "t=5 out cs_n true", "t=8 out cs_n false", "t=10 out cs_n true"] {
+        assert!(trace.contains(line), "`{line}`:\n{trace}");
+    }
+}

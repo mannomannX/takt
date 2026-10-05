@@ -82,6 +82,9 @@ t=5 runtime Overrun
 t=6 runtime Driver valve
 ```
 
+Was ein Treiber zu einem Ausgabestrom meldet, steht als `tx`-Zeile, sobald es sich ändert (8.8, 12.5):
+`t=12 tx dut_tx free=64 idle=true`. Ein Lauf in der Simulation schreibt sie nicht, weil er beide Werte aus dem Modell rechnet; ein Stimulus darf sie setzen.
+
 Ein Strom trägt kein Latch, sondern ein *Element* je Zeile (8.6): der Wert
 steht in der Literalform des Elementtyps. Mehrere Zeilen eines Ticks liefern
 mehrere Elemente in ihrer Reihenfolge; ein Element vom Rand ist sofort

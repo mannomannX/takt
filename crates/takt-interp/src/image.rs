@@ -98,6 +98,10 @@ pub struct TxBuffer {
     pub per_tick: u32,
     /// Im Tick gesendete Bytes (fuer den Trace).
     pub sent: Vec<u8>,
+    /// `tx.idle` (8.8): zu Tickbeginn gesampelt, in der Simulation genau
+    /// dann wahr, wenn der Puffer leer ist (`free == capacity`). Ein `send`
+    /// im Tick aendert es erst im naechsten.
+    pub idle: bool,
 }
 
 impl TxBuffer {
@@ -111,6 +115,9 @@ impl TxBuffer {
     pub fn drain(&mut self) {
         let n = (self.per_tick as usize).min(self.queued.len());
         self.sent = self.queued.drain(..n).collect();
+        // Was nach dem Commit im Puffer steht, steht zu Beginn des naechsten
+        // Ticks darin: dort wird `idle` gesampelt.
+        self.idle = self.queued.is_empty();
     }
 }
 
@@ -187,7 +194,12 @@ impl Image {
                     };
                     tx.insert(
                         id,
-                        TxBuffer { capacity: c.attrs.capacity.unwrap_or(256), per_tick, ..Default::default() },
+                        TxBuffer {
+                            capacity: c.attrs.capacity.unwrap_or(256),
+                            per_tick,
+                            idle: true,
+                            ..Default::default()
+                        },
                     );
                 }
             }

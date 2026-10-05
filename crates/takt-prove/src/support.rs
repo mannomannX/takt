@@ -200,7 +200,8 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Remaining
         | AccessorTag::Truncated
         | AccessorTag::Peek
-        | AccessorTag::Sent => No("Zugriffe sind nicht kodiert (FB-372, FB-373)"),
+        | AccessorTag::Sent
+        | AccessorTag::Idle => No("Zugriffe sind nicht kodiert (FB-372, FB-373)"),
     }
 }
 

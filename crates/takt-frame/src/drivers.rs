@@ -46,6 +46,9 @@ pub enum Kind {
     Output,
     /// Nennt den freien Platz eines Ausgabestroms.
     Free,
+    /// Meldet, ob der Sendepuffer eines Ausgabestroms leer und der Sender
+    /// fertig ist (`tx.idle`, 8.8) — nur, wo das Programm es liest (12.11).
+    Idle,
     /// Meldet den Heartbeat eines Geraets.
     Alive,
     /// Liefert einen Eingang des eingebauten Geraets `sys` (12.7, 7.4):
@@ -61,6 +64,7 @@ impl Kind {
             Kind::Poll => "poll",
             Kind::Output => "out",
             Kind::Free => "free",
+            Kind::Idle => "idle",
             Kind::Alive => "alive",
             Kind::Sys => "sys",
         }
@@ -247,7 +251,8 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
             devices.push(takt_hal::edge::driver_of(c));
         }
     }
-    for c in &p.channels {
+    let idle = idle_read(p);
+    for (i, c) in p.channels.iter().enumerate() {
         let Binding::Hw(addr) = &c.binding else { continue };
         if c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))) {
             out.push(Driver {
@@ -257,6 +262,15 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
                 value: None,
                 doc: format!("Ausgabestrom `{}` (8.8){}", c.name, contract(p, c)),
             });
+            if idle.contains(&i) {
+                out.push(Driver {
+                    kind: Kind::Idle,
+                    method: method(Kind::Idle, &addr.ident()),
+                    address: addr.text(),
+                    value: None,
+                    doc: format!("`{}.idle`: Puffer leer und Sender fertig (8.8)", c.name),
+                });
+            }
             devices.push(takt_hal::edge::driver_of(c));
         }
     }
@@ -273,6 +287,29 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
         });
     }
     out.append(&mut sys);
+    out
+}
+
+/// Die Ausgabestroeme, deren `idle` das Programm liest (8.8), als Index in
+/// `Program::channels`: Nur sie brauchen einen Treiber `P_idle_<adr>` — ein
+/// Treiber wird verlangt, wenn das Programm ihn nutzt (12.11).
+pub fn idle_read(p: &Program) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut look = |e: &Expr| {
+        if let ExprKind::Accessor { base, accessor: takt_mir::expr::Accessor::Idle, .. } = &e.kind
+            && let ExprKind::Input { channel, .. } = base.kind
+            && !out.contains(&channel.index())
+        {
+            out.push(channel.index());
+        }
+    };
+    for m in &p.machines {
+        takt_mir::visit::for_each_expr_machine(m, &mut look);
+    }
+    for f in &p.fns {
+        takt_mir::visit::for_each_expr_block(&f.body, &mut look);
+    }
+    out.sort_unstable();
     out
 }
 
@@ -347,13 +384,18 @@ fn c_params(d: &Driver) -> String {
         Kind::Input | Kind::Sys => format!("{value} *value, uint8_t *quality, int64_t *t"),
         Kind::Poll => "uint8_t *buf, int32_t cap, int32_t *len, int64_t *t, int64_t *seq".to_string(),
         Kind::Output => format!("{value} value"),
-        Kind::Free | Kind::Alive => String::new(),
+        Kind::Free | Kind::Idle | Kind::Alive => String::new(),
     }
 }
 
-/// Die Rueckgabe eines Treibers in C.
+/// Die Rueckgabe eines Treibers in C; `idle` ist eins, null oder -1 fuer
+/// „kann ich nicht beantworten“.
 fn c_return(kind: Kind) -> &'static str {
-    if kind == Kind::Free { "int32_t" } else { "uint8_t" }
+    match kind {
+        Kind::Free => "int32_t",
+        Kind::Idle => "int8_t",
+        Kind::Input | Kind::Poll | Kind::Output | Kind::Alive | Kind::Sys => "uint8_t",
+    }
 }
 
 /// Die Signatur eines Treibers in C.
@@ -391,7 +433,7 @@ pub fn c_stubs(drivers: &[Driver], x: &Prefix) -> String {
             Kind::Input | Kind::Sys => vec!["value", "quality", "t"],
             Kind::Poll => vec!["buf", "cap", "len", "t", "seq"],
             Kind::Output => vec!["value"],
-            Kind::Free | Kind::Alive => vec![],
+            Kind::Free | Kind::Idle | Kind::Alive => vec![],
         };
         let unused: String = std::iter::once("user")
             .chain(std::iter::once("now"))
@@ -401,7 +443,7 @@ pub fn c_stubs(drivers: &[Driver], x: &Prefix) -> String {
         let result = match d.kind {
             Kind::Input | Kind::Poll | Kind::Sys => "0",
             Kind::Output | Kind::Alive => "1",
-            Kind::Free => "-1",
+            Kind::Free | Kind::Idle => "-1",
         };
         let _ = writeln!(s, "{} {{ {unused}return {result}; }}", c_signature(d, x));
     }
@@ -418,6 +460,7 @@ fn rust_signature(d: &Driver) -> String {
         Kind::Poll => format!("fn {}(&mut self, buf: &mut [u8], now: i64) -> Option<takt_embed::Piece>", d.method),
         Kind::Output => format!("fn {}(&mut self, value: {value}, now: i64) -> bool", d.method),
         Kind::Free => format!("fn {}(&mut self, now: i64) -> Option<u32>", d.method),
+        Kind::Idle => format!("fn {}(&mut self, now: i64) -> Option<bool>", d.method),
         Kind::Alive => format!("fn {}(&mut self, now: i64) -> bool", d.method),
     }
 }
@@ -464,9 +507,13 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
             Kind::Input | Kind::Sys => format!(", value: *mut {value}, quality: *mut u8, t: *mut i64"),
             Kind::Poll => ", buf: *mut u8, cap: i32, len: *mut i32, t: *mut i64, seq: *mut i64".to_string(),
             Kind::Output => format!(", value: {value}"),
-            Kind::Free | Kind::Alive => String::new(),
+            Kind::Free | Kind::Idle | Kind::Alive => String::new(),
         };
-        let ret = if d.kind == Kind::Free { "i32" } else { "u8" };
+        let ret = match d.kind {
+            Kind::Free => "i32",
+            Kind::Idle => "i8",
+            Kind::Input | Kind::Poll | Kind::Output | Kind::Alive | Kind::Sys => "u8",
+        };
         let _ = writeln!(s, "/// `{symbol}`: der Kleber zu [`{}::{}`].", trait_of(d), d.method);
         let _ = writeln!(s, "///\n/// # Safety\n///");
         let _ = writeln!(s, "/// `user` ist das Treiberobjekt, das der Wirt bei `init` uebergab; die");
@@ -513,6 +560,9 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
             Kind::Free => {
                 let _ = writeln!(s, "    {call}(drivers, now).map_or(-1, |n| i32::try_from(n).unwrap_or(i32::MAX))");
             }
+            Kind::Idle => {
+                let _ = writeln!(s, "    {call}(drivers, now).map_or(-1, i8::from)");
+            }
             Kind::Alive => {
                 let _ = writeln!(s, "    u8::from({call}(drivers, now))");
             }
@@ -529,6 +579,7 @@ fn device_call(d: &Driver, field: &str) -> String {
         Kind::Poll => format!("takt_embed::StreamInput::poll(&mut self.{field}, buf, now)"),
         Kind::Output => format!("takt_embed::Output::write(&mut self.{field}, value, now)"),
         Kind::Free => format!("takt_embed::StreamOutput::free(&mut self.{field}, now)"),
+        Kind::Idle => format!("takt_embed::StreamOutput::idle(&mut self.{field}, now)"),
         Kind::Alive => format!("takt_embed::Device::alive(&mut self.{field}, now)"),
     }
 }
@@ -580,7 +631,7 @@ fn rig_method(s: &mut String, d: &Driver, wired: bool) {
         let signature =
             signature.replace("now: i64", "_now: i64").replace("buf: &mut", "_buf: &mut").replace("value:", "_value:");
         let result = match d.kind {
-            Kind::Input | Kind::Poll | Kind::Free | Kind::Sys => "None",
+            Kind::Input | Kind::Poll | Kind::Free | Kind::Idle | Kind::Sys => "None",
             Kind::Output | Kind::Alive => "true",
         };
         let _ = writeln!(s, "    {signature} {{");

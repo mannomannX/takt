@@ -1616,7 +1616,12 @@ impl Lowerer<'_> {
             // `o.sent` (8.8, FB-132): was der Treiber im letzten Tick abgeholt
             // hat, hoechstens `max_rate * T0` Byte — ein Wert mit Unit-Delay,
             // kein Fenster.
-            ("sent", Type::Stream(_)) => {
+            // `o.sent`, `o.free` und `o.idle` (8.8) gehoeren dem Sendepuffer
+            // eines Ausgabestroms. `sent` ist was der Treiber im letzten Tick
+            // abgeholt hat, hoechstens `max_rate * T0` Byte — ein Wert mit
+            // Unit-Delay, kein Fenster (FB-132); `free` und `idle` sind zu
+            // Tickbeginn gesampelt (FB-124).
+            (name @ ("sent" | "free" | "idle"), Type::Stream(_)) => {
                 if !no_args(self) {
                     return None;
                 }
@@ -1629,29 +1634,20 @@ impl Lowerer<'_> {
                         channel
                     }
                     _ => {
-                        self.error(SC3, span, "`sent` gibt es nur an einem Ausgabestrom (8.8)");
+                        self.error(SC3, span, format!("`{name}` gibt es nur an einem Ausgabestrom (8.8)"));
                         return None;
                     }
                 };
-                let cap = self.sent_per_tick(c);
-                let bytes = self.intern(Type::Bytes { cap });
-                let ty = self.intern(Type::Optional(bytes));
-                Some(Expr::new(
-                    ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Sent, args: vec![] },
-                    ty,
-                    span,
-                ))
-            }
-            ("free", Type::Stream(_)) => {
-                if !no_args(self) {
-                    return None;
-                }
-                let ty = self.tys.int;
-                Some(Expr::new(
-                    ExprKind::Accessor { base: Box::new(b), accessor: Accessor::Free, args: vec![] },
-                    ty,
-                    span,
-                ))
+                let (accessor, ty) = match name {
+                    "sent" => {
+                        let cap = self.sent_per_tick(c);
+                        let bytes = self.intern(Type::Bytes { cap });
+                        (Accessor::Sent, self.intern(Type::Optional(bytes)))
+                    }
+                    "free" => (Accessor::Free, self.tys.int),
+                    _ => (Accessor::Idle, self.tys.bool),
+                };
+                Some(Expr::new(ExprKind::Accessor { base: Box::new(b), accessor, args: vec![] }, ty, span))
             }
             // `capture<T, N>` (8.9, v1.2), gemessener Jitter aus der
             // Hardware-Konfiguration und `time_warped` (7.5, 8.10) haengen an

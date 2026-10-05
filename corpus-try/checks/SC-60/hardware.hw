@@ -1,0 +1,13 @@
+# takt-hw 13
+#
+# Pruefung 60 (8.8, 8.10): Der Treiber von `spi0/tx` meldet nur den freien
+# Platz im Sendepuffer, nicht, ob das letzte Bit draussen ist.
+
+[channel spi0/tx]
+direction = output
+tx_idle = false
+
+[channel spi0/cs]
+direction = output
+raw = bool
+safe = true

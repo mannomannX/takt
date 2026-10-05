@@ -703,6 +703,12 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     // naechsten Tick — der Unit-Delay eines Outputs.
     let _ = writeln!(t.fields, "    _Alignas(8) unsigned char tx_sent[{n}][{sent_max}];");
     let _ = writeln!(t.fields, "    int tx_sent_n[{n}];");
+    // 8.8, FB-124: `o.idle` ist zu Tickbeginn gesampelt. `tx_busy` haelt fest,
+    // ob nach dem letzten Commit noch Bytes warten; `tx_hold`, ob der
+    // Treiber den Sender noch nicht fertig meldet (nur der MCU-Rahmen fragt
+    // ihn). Beide null heisst `idle` — auch im Tick 0, ohne Initialisierung.
+    let _ = writeln!(t.fields, "    unsigned char tx_busy[{n}];");
+    let _ = writeln!(t.fields, "    unsigned char tx_hold[{n}];");
     let s = &mut t.code;
     let _ = writeln!(s, "static int takt_tx_slot(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
@@ -792,7 +798,19 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
         let _ = writeln!(s, "    }} else {{");
         let _ = writeln!(s, "        a->tx_sent_n[{slot}] = 0;");
         let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "    a->tx_busy[{slot}] = a->tx_n[{slot}] > 0;");
     }
+    let _ = writeln!(s, "}}\n");
+    // `o.free` (8.8, 9.3): gesampelt und um jedes `send` des Ticks verringert —
+    // der Platz, den der eigene Puffer noch hat.
+    let _ = writeln!(s, "int {x}_stream_free(struct {x}_arena *a, int s) {{");
+    let _ = writeln!(s, "    int k = takt_tx_slot(s);");
+    let _ = writeln!(s, "    return k < 0 ? 0 : takt_tx_cap(s) - a->tx_n[k];");
+    let _ = writeln!(s, "}}\n");
+    // `o.idle` (8.8): zu Tickbeginn leer und der Sender fertig.
+    let _ = writeln!(s, "unsigned char {x}_stream_idle(struct {x}_arena *a, int s) {{");
+    let _ = writeln!(s, "    int k = takt_tx_slot(s);");
+    let _ = writeln!(s, "    return k >= 0 && !a->tx_busy[k] && !a->tx_hold[k];");
     let _ = writeln!(s, "}}\n");
     // `o.sent` (8.8): `{ i32 len, [CAP x i8] }` an die uebergebene Stelle.
     let _ = writeln!(s, "int {x}_stream_sent(struct {x}_arena *a, int s, void *out) {{");

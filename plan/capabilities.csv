@@ -132,7 +132,7 @@ Accessor(Count),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Dropped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Malformed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Overflowed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Free),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Free),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Jitter),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(TimeWarped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Done),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -158,6 +158,7 @@ Accessor(Remaining),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Truncated),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Peek),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Sent),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Idle),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Wrap),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Match(Matches),ja,nein: Mustervergleich ist nicht kodiert,ja
 Match(Has),ja,nein: Mustervergleich ist nicht kodiert,ja

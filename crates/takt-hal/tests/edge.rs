@@ -411,9 +411,22 @@ fn a_silent_heartbeat_faults_the_owner() {
 /// Zeile 6: ein ueberfahrener Sendepuffer (`free[o] > capacity`).
 #[test]
 fn an_overrun_send_buffer_faults_the_owner() {
-    assert!(takt_hal::contract::output_fails(true, true, Some(65), Some(64)));
-    assert!(!takt_hal::contract::output_fails(true, true, Some(64), Some(64)));
-    assert!(!takt_hal::contract::output_fails(true, true, None, Some(64)));
+    assert!(takt_hal::contract::output_fails(true, true, Some(65), Some(64), None));
+    assert!(!takt_hal::contract::output_fails(true, true, Some(64), Some(64), None));
+    assert!(!takt_hal::contract::output_fails(true, true, None, Some(64), None));
+}
+
+/// FB-124 (8.8, Zeile 6): Ein Sender, der sich fertig meldet, obwohl sein
+/// Puffer nicht leer ist (`idle` bei `free < capacity`), bricht den
+/// Vertrag; bei leerem Puffer oder ohne Antwort nicht.
+#[test]
+fn an_idle_sender_with_bytes_in_its_buffer_faults_the_owner() {
+    use takt_hal::contract::output_fails;
+    assert!(output_fails(true, true, Some(60), Some(64), Some(true)));
+    assert!(!output_fails(true, true, Some(64), Some(64), Some(true)));
+    assert!(!output_fails(true, true, Some(60), Some(64), Some(false)));
+    assert!(!output_fails(true, true, Some(60), Some(64), None), "ohne Antwort raet der Rand nicht");
+    assert!(!output_fails(true, true, None, Some(64), Some(true)), "ohne `free` keine Aussage");
 }
 
 /// Zeile 7: Erst nach `N` aufeinanderfolgenden Verletzungen ist es ein
@@ -684,4 +697,25 @@ fn a_send_buffer_beyond_its_capacity_faults_through_the_edge() {
     assert!(e.confirm(&sim, &w, &p).is_empty(), "genau die Kapazitaet");
     sim.set_free(tx, 65);
     assert_eq!(e.confirm(&sim, &w, &p), vec![tx]);
+}
+
+/// FB-124 (8.8): Das Simulationsgeraet meldet `idle` genau dann, wenn
+/// `free == capacity`; der Rand nimmt die Antwort an. Ohne Kapazitaet weiss
+/// es nichts.
+#[test]
+fn the_simulated_sender_is_idle_exactly_with_an_empty_buffer() {
+    use takt_hal::Driver;
+    let p = stream_program(takt_mir::expr::ExprKind::Int(10), SEC);
+    let e = edge(&p, SEC);
+    let tx = ChannelId(1);
+    let w = [(Writing { channel: tx, value: Num(1.0), at: None }, Delivery::Acked)];
+    let mut sim: Sim<Num> = Sim::new();
+    sim.set_free(tx, 60);
+    assert_eq!(Driver::idle(&sim, tx), None, "ohne Kapazitaet");
+    sim.set_capacity(tx, 64);
+    assert_eq!(Driver::idle(&sim, tx), Some(false));
+    assert!(e.confirm(&sim, &w, &p).is_empty(), "ein voller Puffer mit `idle = false` ist vertragsgemaess");
+    sim.set_free(tx, 64);
+    assert_eq!(Driver::idle(&sim, tx), Some(true));
+    assert!(e.confirm(&sim, &w, &p).is_empty());
 }

@@ -92,7 +92,7 @@ const UNFIRED: &[(&str, usize)] = &[
     ("65_trigger.takt", 2),
     ("116_sequence_timeout.takt", 2),
     // Schnitt, Timeouts und Flash-Fehler nur mit `CUT > 0`, also in der Kampagne.
-    ("110_journal_log.takt", 16),
+    ("110_journal_log.takt", 17),
     ("sim/12_7/program.takt", 4),
     ("sim/14_7/program.takt", 10),
 ];

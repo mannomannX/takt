@@ -333,6 +333,58 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
         out.extend(sweep_check(p, c, entry, tick));
     }
     out.extend(deep_wake_check(p, hw));
+    out.extend(tx_idle_check(p, hw));
+    out
+}
+
+/// Pruefung 60 (8.8, FB-124): `tx.idle` an einem Kanal, dessen Treiber die
+/// Frage nach der Konfiguration nicht beantwortet (`tx_idle = false`). Der
+/// Rand raet nicht: Ein leerer Puffer allein sagt nicht, dass das letzte
+/// Bit draussen ist.
+fn tx_idle_check(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
+    let silent: Vec<(takt_mir::ChannelId, String)> = p
+        .channels
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| match &c.binding {
+            Binding::Hw(a) if hw.channel(&a.text()).is_some_and(|e| !e.answers_tx_idle()) => {
+                Some((takt_mir::ChannelId(i as u32), a.text()))
+            }
+            _ => None,
+        })
+        .collect();
+    if silent.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut look = |e: &takt_mir::expr::Expr| {
+        let takt_mir::expr::ExprKind::Accessor { base, accessor: takt_mir::expr::Accessor::Idle, .. } = &e.kind else {
+            return;
+        };
+        let takt_mir::expr::ExprKind::Input { channel, .. } = base.kind else { return };
+        if let Some((_, address)) = silent.iter().find(|(c, _)| *c == channel) {
+            let name = &p.channels[channel.index()].name;
+            out.push(
+                Diagnostic::error(
+                    SC60,
+                    e.span,
+                    format!(
+                        "`{name}.idle`: der Treiber an `{address}` beantwortet `tx.idle` nicht (`tx_idle = false`, 8.8)"
+                    ),
+                )
+                .with_suggestion(
+                    "einen Treiber, der `tx.idle` beantwortet, oder ohne `tx.idle` auskommen; der Rand raet nicht"
+                        .to_string(),
+                ),
+            );
+        }
+    };
+    for m in &p.machines {
+        takt_mir::visit::for_each_expr_machine(m, &mut look);
+    }
+    for f in &p.fns {
+        takt_mir::visit::for_each_expr_block(&f.body, &mut look);
+    }
     out
 }
 

@@ -36,7 +36,7 @@ fn corpus(name: &str) -> takt_mir::Program {
 
 /// Was ein gebundenes Programm offen lassen darf: was das Board stellt
 /// (KON2-004, KON2-011). Treiber (`app_in_`, `app_out_`, `app_poll_`,
-/// `app_free_`, `app_alive_`, 12.6), die Kanaele `sys/…` des Wirts
+/// `app_free_`, `app_idle_`, `app_alive_`, 12.6), die Kanaele `sys/…` des Wirts
 /// (`app_sys_`, 12.7), Trace und Rand der Runtime
 /// (`takt_board_`, `takt_edge_`), Natives und Mathematik aus
 /// `takt-native-abi` (`takt_native_`, `takt_m_`), die Laufzeit des Compilers
@@ -45,12 +45,13 @@ fn corpus(name: &str) -> takt_mir::Program {
 /// kein `printf` (12.3) — und keine Funktion der ABI, die der Rahmen selbst
 /// stellen muss.
 fn board_provides(symbol: &str) -> bool {
-    const PREFIXES: [&str; 11] = [
+    const PREFIXES: [&str; 12] = [
         "app_in_",
         "app_sys_",
         "app_out_",
         "app_poll_",
         "app_free_",
+        "app_idle_",
         "app_alive_",
         "takt_board_",
         "takt_edge_",
@@ -364,7 +365,9 @@ fn a_hardware_path_becomes_a_driver_call() {
         "der Treiber ist deklariert:\n{src}"
     );
     assert!(
-        src.contains("takt_edge_output(app_out_ui_led(a->user, now, *(uint8_t *)(a->latch + 0)), alive_ui, -1, -1)"),
+        src.contains(
+            "takt_edge_output(app_out_ui_led(a->user, now, *(uint8_t *)(a->latch + 0)), alive_ui, -1, -1, -1)"
+        ),
         "und wird gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
     );
     assert!(src.contains("void app_commit(struct app_arena *a)"), "Schritt 10 hat einen Namen (12.1)");
@@ -795,10 +798,20 @@ fn a_missing_driver_fails_the_link_by_name() {
     let Some(clang) = common::clang_path() else { return };
     // Skalare und Ausgaenge, dazu Stroeme in beide Richtungen (KON2-004):
     // Der Rand holt Elemente mit `app_poll_*` und fragt den Platz eines
-    // Ausgabestroms mit `app_free_*`.
+    // Ausgabestroms mit `app_free_*`; `app_idle_*` nur, wo das Programm
+    // `tx.idle` liest (FB-124, 12.11).
     for (label, src, drivers) in [
         ("scalars", INPUTS, &["app_in_ui_button", "app_in_adc_temp", "app_out_ui_led", "app_alive_ui"][..]),
         ("streams", STREAMS, &["app_poll_bus_rx", "app_free_bus_tx"]),
+        (
+            "idle",
+            &STREAMS.replace(
+                "send tx, e.data",
+                "if tx.idle:
+                send tx, e.data",
+            ),
+            &["app_idle_bus_tx"],
+        ),
     ] {
         let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-mcuh-strong-{label}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -840,6 +853,12 @@ fn a_missing_driver_fails_the_link_by_name() {
 
         let (linked, stderr, _) = link(false);
         assert!(!linked, "{label}: ohne Treiber darf das Programm nicht binden");
+        assert_eq!(
+            stderr.contains("app_idle_"),
+            label == "idle",
+            "{label}: `app_idle_*` nur mit `tx.idle`:
+{stderr}"
+        );
         for name in drivers {
             assert!(stderr.contains(name), "{label}: der Linker nennt `{name}` nicht:\n{stderr}");
         }

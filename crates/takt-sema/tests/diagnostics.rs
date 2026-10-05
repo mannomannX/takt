@@ -36,7 +36,6 @@ const WITHOUT_DIRECTORY: &[(&str, &str)] = &[
     ("SC-28", "braucht gemessenen Jitter der Hardware-Konfiguration; Faelle in tests/hardware.rs"),
     ("SC-29", "eine Pruefung der Kampagnen; Faelle in tests/campaigns.rs"),
     ("SC-39", "braucht die Speichergrenzen der Hardware-Konfiguration; Faelle in tests/calibrated.rs"),
-    ("SC-60", "braucht die Hardware-Konfiguration; Faelle in tests/hardware.rs und tests/sys_channels.rs"),
     ("SC-65", "braucht eine Beweisdatei; Faelle in tests/analysis.rs"),
 ];
 

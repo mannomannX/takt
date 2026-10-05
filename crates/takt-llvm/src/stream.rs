@@ -82,6 +82,16 @@ impl Streams {
     /// Treiber, der den Puffer leert.
     pub const SENT: &'static str = "stream_sent";
 
+    /// `o.free` (8.8, FB-124): der freie Platz im Sendepuffer eines
+    /// Ausgabestroms — zu Tickbeginn gesampelt und um jedes `send` dieses
+    /// Ticks verringert (9.3); die Nummer ist die des Channels, wie bei
+    /// [`SENT`](Self::SENT).
+    pub const FREE: &'static str = "stream_free";
+
+    /// `o.idle` (8.8, FB-124): Sendepuffer leer und Sender fertig, zu
+    /// Tickbeginn gesampelt; null oder eins.
+    pub const IDLE: &'static str = "stream_idle";
+
     /// Ein Zaehler am Ring (8.6): `s.dropped` (0), `s.overflowed` (1),
     /// `s.malformed` (2). Den Verwurf im `idle` zaehlt die Maschine selbst
     /// (5.10); `s.dropped` ist die Summe beider.
@@ -120,6 +130,15 @@ impl Streams {
             "declare i32 @{}(ptr readnone, i32, i32) nounwind willreturn memory(inaccessiblemem: read)",
             m.runtime(Streams::COUNTER)
         ));
+        // `free` liest, was `send` im selben Tick verbraucht hat: beide am
+        // Speicher der Runtime, darum ordnet LLVM sie nicht um.
+        for f in [Streams::FREE, Streams::IDLE] {
+            let ret = if f == Streams::FREE { "i32" } else { "i8" };
+            m.declare(&format!(
+                "declare {ret} @{}(ptr readnone, i32) nounwind willreturn memory(inaccessiblemem: read)",
+                m.runtime(f)
+            ));
+        }
     }
 }
 

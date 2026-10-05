@@ -264,7 +264,7 @@ fn an_unknown_profile_is_a_user_error() {
         let out = takt(args);
         let err = stderr(&out);
         assert!(!out.status.success(), "{args:?}");
-        assert!(err.contains("Profil `NOPE` gibt es nicht") && !err.contains("Bug("), "{args:?}: {err}");
+        assert!(err.contains("Parameterprofil `NOPE` gibt es nicht") && !err.contains("Bug("), "{args:?}: {err}");
     }
 }
 

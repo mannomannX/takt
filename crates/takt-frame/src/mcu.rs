@@ -1529,11 +1529,35 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "    }}");
         off += u64::from(b.polls) * u64::from(b.cap);
     }
+    // 8.8, FB-124: `tx.idle` zu Tickbeginn — der eigene Puffer leer
+    // (`tx_busy`, beim Commit gesetzt) und der Sender fertig nach seinem
+    // Treiber. Wer es nicht beantworten kann (-1), haelt die Leitung.
+    for (channel, slot) in idle_slots(p) {
+        let takt_mir::program::Binding::Hw(addr) = &p.channels[channel].binding else { continue };
+        let _ = writeln!(s, "    a->tx_hold[{slot}] = {x}_idle_{}(a->user, now) != 1;", addr.ident());
+    }
     if !p.recorded.is_empty() {
         let _ = writeln!(s, "    takt_record(a, now);");
     }
     let _ = writeln!(s, "    takt_edge_commit(a, a->tick);");
     let _ = writeln!(s, "}}\n");
+}
+
+/// Die hw-gebundenen Ausgabestroeme, deren `idle` das Programm liest, mit
+/// ihrem Platz im Sendepuffer des Rahmens (`takt_tx_slot`: die
+/// Ausgabestroeme in der Reihenfolge der Channels, streams.rs).
+fn idle_slots(p: &Program) -> Vec<(usize, usize)> {
+    use takt_mir::program::{Binding, Direction};
+    use takt_mir::types::Type;
+    let read = crate::drivers::idle_read(p);
+    p.channels
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.dir == Direction::Output && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))))
+        .enumerate()
+        .filter(|(_, (i, c))| read.contains(i) && matches!(c.binding, Binding::Hw(_)))
+        .map(|(slot, (i, _))| (i, slot))
+        .collect()
 }
 
 /// Die importierten Inputs, die das Programm nicht liest (8.2): je Tick
@@ -1864,7 +1888,7 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         let device = takt_mir::pattern::Address::simple(&outputs[i].device).ident();
         let _ = writeln!(
             s,
-            "    if (takt_edge_output({fname}(a->user, now, *({ct} *)(a->latch + {})), alive_{device}, -1, -1)) a->driver_fault[{i}] = 1;",
+            "    if (takt_edge_output({fname}(a->user, now, *({ct} *)(a->latch + {})), alive_{device}, -1, -1, -1)) a->driver_fault[{i}] = 1;",
             slot.offset
         );
     }
@@ -1874,9 +1898,15 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         // 8.8: Der Sendepuffer eines Ausgabestroms ist `capacity` Bytes,
         // Default 256 — dieselbe Zahl wie `takt_tx_cap` (streams.rs).
         let cap = i64::from(c.attrs.capacity.unwrap_or(256));
+        // 8.8, FB-124: `idle` prueft der Rand nur, wo das Programm es liest
+        // und der Treiber darum da ist; sonst unbekannt.
+        let idle = match (&c.binding, idle_slots(p).iter().any(|(ch, _)| p.channels[*ch].name == c.name)) {
+            (Binding::Hw(a), true) => format!("{x}_idle_{}(a->user, now)", a.ident()),
+            _ => "-1".to_string(),
+        };
         let _ = writeln!(
             s,
-            "    if (takt_edge_output(1, alive_{device}, {fname}(a->user, now), {cap})) a->driver_fault[{i}] = 1;"
+            "    if (takt_edge_output(1, alive_{device}, {fname}(a->user, now), {cap}, {idle})) a->driver_fault[{i}] = 1;"
         );
     }
     let _ = writeln!(s, "}}");

@@ -378,10 +378,18 @@ impl Period {
 }
 
 /// Die Ausgabeseite (12.6, Zeile 6): Ein nicht bestaetigter
-/// Schreibvorgang, ein stiller Heartbeat oder ein ueberfahrener
-/// Sendepuffer (`free[o] > capacity`) geben den Besitzern
-/// `Runtime(Driver)`.
-pub fn output_fails(confirmed: bool, alive: bool, free: Option<u32>, capacity: Option<u32>) -> bool {
+/// Schreibvorgang, ein stiller Heartbeat, ein ueberfahrener Sendepuffer
+/// (`free[o] > capacity`) oder ein Sender, der sich fertig meldet, obwohl
+/// sein Puffer nicht leer ist (`idle` bei `free[o] < capacity`, 8.8), geben
+/// den Besitzern `Runtime(Driver)`. Unbekanntes prueft der Rand nicht.
+pub fn output_fails(
+    confirmed: bool,
+    alive: bool,
+    free: Option<u32>,
+    capacity: Option<u32>,
+    idle: Option<bool>,
+) -> bool {
     let overrun = free.zip(capacity).is_some_and(|(free, cap)| free > cap);
-    !confirmed || !alive || overrun
+    let false_idle = idle == Some(true) && free.zip(capacity).is_some_and(|(free, cap)| free < cap);
+    !confirmed || !alive || overrun || false_idle
 }

@@ -1,0 +1,11 @@
+# Erschoepfende Laeufe (exhaustive.rs): Funktion, Fingerabdruck der Implementierung, nahe Faelle, Datum, Commit.
+acos e8068ad0740bad8d 42 2026-10-05 b79ca82
+asin e8068ad0740bad8d 20 2026-10-05 b79ca82
+atan e8068ad0740bad8d 78 2026-10-05 08c1dbb
+atan2 e8068ad0740bad8d 2 2026-10-05 ae7d9fa
+cos e8068ad0740bad8d 246 2026-10-05 6e20edd
+exp e8068ad0740bad8d 55 2026-10-05 8170f3d
+log e8068ad0740bad8d 191 2026-10-05 ae7d9fa
+pow e8068ad0740bad8d 24 2026-10-05 ae7d9fa
+sin e8068ad0740bad8d 220 2026-10-05 ae7d9fa
+tan e8068ad0740bad8d 154 2026-10-05 ae7d9fa

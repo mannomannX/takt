@@ -100,6 +100,14 @@ pub trait Driver<V> {
         None
     }
 
+    /// Ist der Sendepuffer eines Ausgabestroms leer und der Sender fertig,
+    /// das letzte Bit draussen (`tx.idle`, 8.8)? `None` heisst: Der
+    /// Treiber kann es nicht beantworten (`tx_idle = false`, 8.10).
+    fn idle(&self, channel: ChannelId) -> Option<bool> {
+        let _ = channel;
+        None
+    }
+
     /// Ist der Heartbeat zum Geraet intakt (12.6, Zeile 6)?
     fn alive(&self) -> bool {
         true

@@ -575,9 +575,19 @@ pub struct Port {
 }
 
 impl Program {
-    /// Ist die Maschine ein Plant-Modell (8.3): schreibt sie einen `sim`-Output?
+    /// Ist die Maschine ein Plant-Modell (8.3): speist sie einen `hw`-Input,
+    /// schreibt also einen `sim`-Output an dessen Adresse? Ein `sim`-Output
+    /// ohne solchen Input ist eine Beobachtung, und wer ihn schreibt, gehoert
+    /// zum Steuerprogramm.
     pub fn is_plant_model(&self, id: MachineId) -> bool {
-        self.channels.iter().any(|c| c.owner == Some(id) && matches!(c.binding, Binding::Sim(_)))
+        self.channels.iter().any(|out| {
+            let Binding::Sim(addr) = &out.binding else { return false };
+            out.owner == Some(id)
+                && self
+                    .channels
+                    .iter()
+                    .any(|inp| inp.dir == Direction::Input && matches!(&inp.binding, Binding::Hw(a) if a == addr))
+        })
     }
 
     /// Gehoert die Maschine zum Build (8.3): Im Hardware-Build laufen keine

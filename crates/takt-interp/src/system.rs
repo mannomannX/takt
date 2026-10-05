@@ -704,6 +704,14 @@ impl Outer for MachineEnv<'_, '_> {
             };
             return Ok(Some(Value::Int(i64::from(free))));
         }
+        // `o.idle` (8.8): zu Tickbeginn gesampelt, Puffer leer und Sender fertig.
+        if acc == Accessor::Idle {
+            let idle = match r {
+                StreamRef::Channel(c) => self.image.tx.get(&c).is_some_and(|t| t.idle),
+                _ => false,
+            };
+            return Ok(Some(Value::Bool(idle)));
+        }
         let buf = match r {
             StreamRef::Channel(c) => self.image.channel_bufs.get(&c),
             StreamRef::Internal(s) => self.image.stream_bufs.get(s.index()),

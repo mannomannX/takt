@@ -1,0 +1,51 @@
+# 118 — `tx.idle` (8.8, FB-124): Ein SPI-Treiber fuer ein E-Ink-Display
+# waehlt den Chip mit `cs_n = false`, schickt einen Rahmen von vier Byte
+# und gibt die Leitung erst frei, wenn der Sendepuffer leer und das letzte
+# Bit draussen ist. Eine Wartezeit aus Baudrate und Byteanzahl stimmte nur
+# fuer eine Taktfrequenz; `tx.idle` fragt den Sender.
+#
+# Der Treiber holt zwei Byte je Tick ab (200 Hz bei 10 ms): Der Rahmen
+# braucht zwei Ticks, und `idle` ist im dritten wahr. `space` zeigt
+# `tx.free`, das mit dem `send` im selben Tick sinkt (9.3). Das Modell
+# `panel` liest mit `sent`, was hinausging (8.3).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output spi_tx : stream<u8>   @ hw("spi0/tx") with max_rate = 200 Hz, capacity = 16
+output cs_n   : bool         @ hw("spi0/cs") with safe = true
+output space  : int          @ hw("o/space") with safe = 0
+output shown  : int in 0..63 @ sim("o/shown")
+
+machine eink:
+    initial READY
+
+    state READY:
+        enter:
+            cs_n = true
+
+        after 30 ms: -> SELECT
+
+    state SELECT:
+        enter:
+            cs_n = false
+            send spi_tx, [0x12, 0x34, 0x56, 0x78]
+            space = spi_tx.free
+
+        loop:
+            space = spi_tx.free
+
+        when spi_tx.idle: -> READY
+
+machine panel:
+    var last  : bytes<2>? = none
+    var bytes : int in 0..63 = 0
+
+    initial WATCH
+
+    state WATCH:
+        loop:
+            last = spi_tx.sent
+            bytes = min(bytes + last.or(default).len, 63)
+            shown = bytes

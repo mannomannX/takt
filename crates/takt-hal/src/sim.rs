@@ -30,6 +30,9 @@ pub struct Sim<V> {
     pub written: Vec<Writing<V>>,
     /// Freier Platz je Ausgabestrom in Bytes (8.8).
     free: Vec<(ChannelId, u32)>,
+    /// Kapazitaet je Ausgabestrom in Bytes (8.8): Das Simulationsgeraet
+    /// meldet `idle` genau dann, wenn `free == capacity`.
+    capacity: Vec<(ChannelId, u32)>,
     /// Heartbeat; in der Simulation intakt, bis ein Test ihn nimmt.
     alive: bool,
 }
@@ -37,7 +40,14 @@ pub struct Sim<V> {
 impl<V> Sim<V> {
     /// Ein Treiber ohne Lieferungen.
     pub fn new() -> Sim<V> {
-        Sim { pending: Vec::new(), elements: Vec::new(), written: Vec::new(), free: Vec::new(), alive: true }
+        Sim {
+            pending: Vec::new(),
+            elements: Vec::new(),
+            written: Vec::new(),
+            free: Vec::new(),
+            capacity: Vec::new(),
+            alive: true,
+        }
     }
 
     /// Legt eine Abtastung fuer den naechsten Tick vor (Stimulus).
@@ -62,6 +72,22 @@ impl<V> Sim<V> {
             Some(slot) => slot.1 = free,
             None => self.free.push((channel, free)),
         }
+    }
+
+    /// Setzt die Kapazitaet eines Ausgabestroms (8.8).
+    pub fn set_capacity(&mut self, channel: ChannelId, capacity: u32) {
+        match self.capacity.iter_mut().find(|(c, _)| *c == channel) {
+            Some(slot) => slot.1 = capacity,
+            None => self.capacity.push((channel, capacity)),
+        }
+    }
+
+    /// `idle` der Simulation (8.8): genau dann, wenn `free == capacity`;
+    /// ohne beide Zahlen unbekannt.
+    fn sim_idle(&self, channel: ChannelId) -> Option<bool> {
+        let free = self.free.iter().find(|(c, _)| *c == channel).map(|(_, f)| *f)?;
+        let cap = self.capacity.iter().find(|(c, _)| *c == channel).map(|(_, n)| *n)?;
+        Some(free == cap)
     }
 
     /// Laesst den Heartbeat aussetzen (12.6, Zeile 6).
@@ -94,6 +120,10 @@ impl<V: Clone> Driver<V> for Sim<V> {
         self.free.iter().find(|(c, _)| *c == channel).map(|(_, f)| *f)
     }
 
+    fn idle(&self, channel: ChannelId) -> Option<bool> {
+        self.sim_idle(channel)
+    }
+
     fn alive(&self) -> bool {
         self.alive
     }
@@ -108,5 +138,9 @@ impl<V> Heartbeat for Sim<V> {
 impl<V> Capacity for Sim<V> {
     fn free(&self, channel: ChannelId) -> Option<u32> {
         self.free.iter().find(|(c, _)| *c == channel).map(|(_, f)| *f)
+    }
+
+    fn idle(&self, channel: ChannelId) -> Option<bool> {
+        self.sim_idle(channel)
     }
 }

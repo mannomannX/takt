@@ -133,6 +133,13 @@ pub trait Output<T> {
 pub trait StreamOutput {
     /// Der freie Platz im Sendepuffer des Geraets; `None`, wenn es ihn nicht kennt.
     fn free(&mut self, now: i64) -> Option<u32>;
+
+    /// Puffer leer und Sender fertig, das letzte Bit draussen (`tx.idle`,
+    /// 8.8); `None`, wenn das Geraet es nicht beantworten kann.
+    fn idle(&mut self, now: i64) -> Option<bool> {
+        let _ = now;
+        None
+    }
 }
 
 /// Ein Geraet mit Heartbeat (12.4).
