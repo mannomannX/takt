@@ -2,10 +2,8 @@
 //! Lauf endet mit dem alten oder dem neuen Stand, nie dazwischen — die
 //! Aussage von `takt-rt-core/tests/journal.rs`, hier ueber das Takt-Modell.
 //! `45_journal_cut` schreibt je Slot einen Eintrag, `110_journal_log` das
-//! Log der Version 2 ueber drei Generationen.
-//!
-//! TODO: Ein Schnitt waehrend ERASE braucht ein Flash-Modell, das halb
-//! loescht; `flash_model` im Prelude loescht atomar.
+//! Log der Version 2 ueber drei Generationen, mit Schnitt im Schreiben und
+//! im Loeschen.
 
 use std::collections::BTreeMap;
 
@@ -121,12 +119,15 @@ fn log_runs(campaign: &str) -> Vec<Measured> {
 /// zweiten Eintrags in seiner Nutzlast ab, ist der Rest von Slot 0 nicht
 /// mehr geloescht; der zweite geht nach Slot 1, und der siebte steht in
 /// Slot 0 als dritter. Bricht er erst nach dem letzten Kopfbyte ab, gilt
-/// der Eintrag, und alles liegt wie ohne Schnitt.
+/// der Eintrag, und alles liegt wie ohne Schnitt. Der erste Vorgang nach
+/// dem Schnitt (`next_slot`) geht beim schmutzigen Rest (`dirty`, Bit 0 fuer
+/// Slot 0) in den anderen Slot, beim sauberen in denselben.
 #[test]
 fn every_cut_in_the_log_leaves_a_whole_entry_and_writing_goes_on() {
     let runs = log_runs("power_cut");
     assert_eq!(runs.len(), 261);
     let layout = BTreeMap::from([(0, ("0", "40")), (40, ("0", "120")), (74, ("0", "40"))]);
+    let next = BTreeMap::from([(40, ("1", "1")), (74, ("0", "0"))]);
     for (params, m) in &runs {
         let cut: u32 = params[0].1.parse().expect("CUT");
         let after_cut = (1..=259).contains(&cut).then(|| (cut / 37).to_string());
@@ -135,6 +136,34 @@ fn every_cut_in_the_log_leaves_a_whole_entry_and_writing_goes_on() {
         if let Some((slot, end)) = layout.get(&cut) {
             assert_eq!((m["last_slot"].as_str(), m["last_end"].as_str()), (*slot, *end), "CUT={cut}");
         }
+        if let Some((slot, dirty)) = next.get(&cut) {
+            assert_eq!((m["next_slot"].as_str(), m["dirty"].as_str()), (*slot, *dirty), "CUT={cut}");
+        }
+    }
+}
+
+/// **Das Log mit Schnitt an jedem Chunk eines Loeschvorgangs** (8.11). Drei
+/// Loeschvorgaenge zu 16 Chunks: vor Vorgang 1 (Slot 0), vor Vorgang 4
+/// (Slot 1) und vor Vorgang 7 (Slot 0 mit den Eintraegen 1 bis 3). Nach
+/// jedem Schnitt gilt der vorige Stand, der erste Vorgang danach loescht
+/// denselben Slot neu, und am Ende steht der siebte Stand wie ohne Schnitt.
+///
+/// Der Slot liegt bei 192 bis 319 im Sektor, ueber der Chunkgrenze: Bricht
+/// der dritte Loeschvorgang nach seinem ersten Chunk ab, stehen die Eintraege
+/// 2 und 3 halb und ganz in Slot 0, dahinter nichts Gueltiges — ein
+/// schmutziger Rest ohne Stand, den der Start uebergeht.
+#[test]
+fn every_cut_while_erasing_keeps_the_previous_entry_and_erases_again() {
+    let runs = log_runs("erase_cut");
+    assert_eq!(runs.len(), 48);
+    for (params, m) in &runs {
+        let chunk: usize = params[0].1.parse().expect("CUT_CHUNK");
+        let (before, slot) = [("0", "0"), ("3", "1"), ("6", "0")][(chunk - 1) / 16];
+        let dirty = if chunk == 33 { "1" } else { "0" };
+        let seen = (m["after_cut"].as_str(), m["next_slot"].as_str(), m["dirty"].as_str());
+        assert_eq!(seen, (before, slot, dirty), "CUT_CHUNK={chunk}");
+        let end = (m["stand"].as_str(), m["last_slot"].as_str(), m["last_end"].as_str());
+        assert_eq!(end, ("7", "0", "40"), "CUT_CHUNK={chunk}");
     }
 }
 

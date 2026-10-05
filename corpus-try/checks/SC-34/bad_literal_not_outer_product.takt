@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Pruefung 34 (3.11): Ein Matrixliteral ohne Deklaration typt nach Hart,
+# wenn seine Elementeinheiten ein aeusseres Produkt `r_i * c_j` bilden.
+# Hier nicht: Aus erster Zeile und Spalte folgt unten rechts m/s^2, dort
+# steht m.
+
+output a : float[m] @ hw("o/a") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var q = [[1 m, 1 m/s], [1 m/s, 1 m]]  # ~ SC-34
+            a = q[0, 0]

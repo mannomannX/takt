@@ -6,22 +6,29 @@ system:
 # haengt seinen Eintrag im aktiven Slot an, auf vier Byte ausgerichtet;
 # ist der Slot voll oder steht hinter dem letzten gueltigen Eintrag ein
 # Rest, loescht er den anderen Slot und beginnt dort. Ein Slot sind hier
-# die ersten 128 Byte seines Sektors und fasst drei Eintraege; sieben
-# Vorgaenge fuellen Slot 0, Slot 1 und wieder Slot 0. Beim Start gewinnt
-# der gueltige Eintrag mit der hoechsten Sequenznummer.
+# 128 Byte ab `BASE` = 192 in seinem Sektor und fasst drei Eintraege;
+# sieben Vorgaenge fuellen Slot 0, Slot 1 und wieder Slot 0. Beim Start
+# gewinnt der gueltige Eintrag mit der hoechsten Sequenznummer. Der Slot
+# reicht ueber die Chunkgrenze bei 256: Ein im Loeschen abgebrochener
+# Sektor laesst seine zweite Haelfte stehen.
 #
 # `CUT` laesst den Strom nach so vielen Bytes wegbleiben: Der Neustart
 # findet den letzten abgeschlossenen oder den gerade geschriebenen Stand,
 # und das Programm schreibt von dort weiter bis zum siebten. `FLIP`
 # verfaelscht die Nutzlast des letzten Vorgangs nach dem CRC: Der Start
-# verwirft ihn und findet den sechsten.
+# verwirft ihn und findet den sechsten. `CUT_CHUNK` schneidet den Strom
+# im Loeschen nach so vielen Chunks (8.11): Die drei Loeschvorgaenge
+# haben je 16, und der dritte trifft Slot 0 mit den Eintraegen der ersten
+# Generation.
 
 native fn crc32(b: bytes<64>) -> u32 with cost = {i32: 1000}, stack = 64, total
 
-param CUT  : int in 0..1000 = 0
-param FLIP : int in 0..1 = 0
+param CUT       : int in 0..1000 = 0
+param CUT_CHUNK : int in 0..1000 = 0
+param FLIP      : int in 0..1 = 0
 
 const SLOT   : int = 128
+const BASE   : int = 192
 const WRITES : int = 7
 const LOGIC  : int = 0x7A6B
 
@@ -34,7 +41,7 @@ output flash_rx_sim     : stream<bytes<4096>> @ sim("flash/rx")    with capacity
 input  flash_seed       : stream<u8>          @ hw("flash/seed")   with max_rate = 200 kHz, capacity = 256
 input  flash_seed_addr  : int in 0..4194304   @ hw("flash/seed_addr")
 
-instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 2, t_erase = 2 ms, t_program = 1 ms, cut_at_byte = CUT)
+instance flash = flash_model(cmd = flash_cmd, data = flash_data, status = flash_status_sim, rx = flash_rx_sim, seed = flash_seed, seed_addr = flash_seed_addr, sectors = 2, t_erase = 2 ms, t_program = 1 ms, cut_at_byte = CUT, cut_at_chunk = CUT_CHUNK)
 
 # Ein Eintrag, wie `read_entry` ihn prueft.
 record Entry:
@@ -180,17 +187,18 @@ machine journal:
     var k       : int in 0..1000 = 0
     var cut_k   : int in 0..1000 = 0
     var stage   : int in 0..2 = 0
+    var told    : bool = false
     initial BOOT
 
     # Strom da: beide Slots lesen (`Journal::load`).
     state BOOT:
         sequence:
-            flash_cmd = READ(addr = 0, size = SLOT as u32)
+            flash_cmd = READ(addr = BASE as u32, size = SLOT as u32)
             until flash_rx as p timeout 50 ms
             a = scan(p.data)
             flash_cmd = NONE
             until flash_status == IDLE timeout 50 ms
-            flash_cmd = READ(addr = 4096, size = SLOT as u32)
+            flash_cmd = READ(addr = (4096 + BASE) as u32, size = SLOT as u32)
             until flash_rx as q timeout 50 ms
             b = scan(q.data)
             flash_cmd = NONE
@@ -220,6 +228,7 @@ machine journal:
             verify k == seq, "Stand und Sequenznummer laufen auseinander"
             if stage == 1:
                 measure after_cut = k
+                measure dirty = (0 if a.clean else 1) + (0 if b.clean else 2)
                 verify k == cut_k or k == cut_k - 1, "weder der alte noch der neue Stand"
             elif stage == 2:
                 measure stand = k
@@ -255,16 +264,17 @@ machine journal:
             flash_cmd = NONE
             until flash_status == IDLE timeout 50 ms
             -> APPEND
+        when flash_status == ERROR(code = 1): -> CUT
 
     # Nutzlast, dann Kopf.
     state APPEND:
         sequence:
-            flash_cmd = PROGRAM(addr = (target * 4096 + pos + 32) as u32, size = payload.len as u32)
+            flash_cmd = PROGRAM(addr = (target * 4096 + BASE + pos + 32) as u32, size = payload.len as u32)
             send flash_data, payload
             until flash_status == DONE timeout 50 ms
             flash_cmd = NONE
             until flash_status == IDLE timeout 50 ms
-            flash_cmd = PROGRAM(addr = (target * 4096 + pos) as u32, size = 32)
+            flash_cmd = PROGRAM(addr = (target * 4096 + BASE + pos) as u32, size = 32)
             send flash_data, header
             until flash_status == DONE timeout 50 ms
             flash_cmd = NONE
@@ -278,6 +288,10 @@ machine journal:
             slot = target
             free = pos + entry_len(payload.len)
             clean = true
+            # Wohin der erste Vorgang nach einem Schnitt ging.
+            if stage == 1 and not told:
+                measure next_slot = slot
+                told = true
         when k < WRITES: -> BEGIN
         when true: -> FINAL
 
@@ -302,4 +316,9 @@ campaign power_cut:
 campaign bit_error:
     program "110_journal_log.takt"
     sweep FLIP = [1]
+    stop_on never
+
+campaign erase_cut:
+    program "110_journal_log.takt"
+    sweep CUT_CHUNK = 1..48 step 1
     stop_on never
