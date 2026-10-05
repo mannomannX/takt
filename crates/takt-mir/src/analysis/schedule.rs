@@ -24,7 +24,9 @@ pub fn runnable_with(p: &Program, scenario: Option<MachineId>) -> Vec<MachineId>
         .enumerate()
         .filter(|(i, m)| {
             let own = scenario == Some(MachineId(*i as u32));
-            (own || !matches!(m.kind, MachineKind::Template | MachineKind::Scenario)) && !m.states.is_empty()
+            (own || !matches!(m.kind, MachineKind::Template | MachineKind::Scenario))
+                && !m.states.is_empty()
+                && p.in_build(MachineId(*i as u32))
         })
         .map(|(i, _)| MachineId(i as u32))
         .collect()

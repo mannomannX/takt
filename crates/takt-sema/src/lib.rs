@@ -42,15 +42,7 @@ pub fn source_map(name: &str, src: &str) -> takt_diag::SourceMap {
     map
 }
 
-/// Art des Builds (8.3).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Build {
-    /// Simulation: `sim`-Outputs speisen `hw`-Inputs.
-    #[default]
-    Sim,
-    /// Hardware.
-    Hw,
-}
+pub use takt_mir::program::Build;
 
 /// Optionen des Uebersetzens.
 #[derive(Clone, Debug, Default)]

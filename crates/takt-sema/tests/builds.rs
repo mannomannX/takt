@@ -88,10 +88,10 @@ fn the_binding_table_is_what_may_differ() {
 /// Die Linkmenge unterscheidet sich: Ein Plant-Modell ist eine Maschine
 /// wie jede andere (8.3), aber auf Hardware laeuft sie nicht mit.
 ///
-/// Der Compiler entscheidet das heute nicht — beide Builds tragen alle
-/// Maschinen, und *wer* tickt, legt die Runtime fest (12.1, `build_all`
-/// gegen `build_with`). Der Test haelt den Stand fest, damit eine
-/// spaetere Trennung im Compiler auffaellt statt still zu geschehen.
+/// Die MIR traegt in beiden Builds alle Maschinen, sonst teilten sie den
+/// Logik-Hash nicht; welche laufen und gelinkt werden, sagt die Regel
+/// `Program::in_build` nach dem Build in der Config (FB-418). Laufmenge,
+/// Codegen, Arena und Rahmen fragen dieselbe Regel.
 #[test]
 fn the_plant_model_is_an_ordinary_machine() {
     let sim = build(takt_sema::Build::Sim);
@@ -99,6 +99,14 @@ fn the_plant_model_is_an_ordinary_machine() {
     let namen = |p: &Program| p.machines.iter().map(|m| m.name.clone()).collect::<Vec<_>>();
     assert_eq!(namen(&sim), namen(&hw), "die Maschinenliste ist in beiden Builds dieselbe");
     assert!(namen(&sim).contains(&"model".to_string()), "das Modell ist eine gewoehnliche Maschine");
+    let laufen = |p: &Program| {
+        takt_mir::analysis::schedule::runnable(p)
+            .iter()
+            .map(|id| p.machines[id.index()].name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(laufen(&sim), ["model", "ctrl"], "im Sim-Build laeuft das Modell");
+    assert_eq!(laufen(&hw), ["ctrl"], "im HW-Build laeuft es nicht");
 
     // Was es zum Modell macht, ist seine `sim`-Bindung — nicht seine
     // Art. Die Runtime liest sie, um zu entscheiden, wer auf Hardware
@@ -184,4 +192,41 @@ fn only_machines_of_the_hardware_build_use_a_channel() {
         let flagged = hw.iter().any(|e| e.contains("[SC-13]") && e.contains("`spare`"));
         assert_eq!(flagged, used, "{what}: {hw:?}");
     }
+}
+
+/// Das beim Bau gewaehlte Profil traegt die MIR (8.4, FB-414): Der
+/// Interpreter rechnet ohne eigene Wahl mit ihm, wie der erzeugte Code.
+#[test]
+fn the_built_profile_is_the_default_of_a_run() {
+    let src = "\
+system:
+    language = 1
+    tick     = 10 ms
+
+param GAIN : int in 0..10 = 1
+
+profile HIGH:
+    GAIN = 7
+
+output g : int in 0..10 @ hw(\"do1/1\") with safe = 0
+
+machine m:
+    initial A
+    state A:
+        loop:
+            g = GAIN
+";
+    let run = |profile: Option<&str>| {
+        let options = takt_sema::Options { profile: profile.map(str::to_string), ..Default::default() };
+        let p = takt_sema::compile(src, &options).program.expect("Programm");
+        let out = takt_interp::run(
+            &p,
+            &takt_interp::Trace::default(),
+            &takt_interp::RunOptions { ticks: 1, ..Default::default() },
+        )
+        .expect("Lauf");
+        out.trace.render()
+    };
+    assert!(run(Some("HIGH")).contains("t=0 out g 7"), "{}", run(Some("HIGH")));
+    assert!(run(None).contains("t=0 out g 1"), "{}", run(None));
 }

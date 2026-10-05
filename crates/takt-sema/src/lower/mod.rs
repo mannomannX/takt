@@ -774,7 +774,11 @@ pub fn run(
 ) -> (Option<Program>, Vec<Diagnostic>) {
     let prelude_ast = prelude_file(edition);
     let mut diags = Vec::new();
-    let config = decl::config_from(file, edition.number(), &mut diags);
+    let mut config = decl::config_from(file, edition.number(), &mut diags);
+    // Build und Profil traegt die MIR als Metadaten (8.3, 8.4): Rahmen und
+    // Codegen lesen sie dort, kein Aufrufer muss sie weiterreichen.
+    config.build = options.build;
+    config.params_profile = options.profile.clone();
     let mut lo = Lowerer::new(config, edition, options);
     lo.diags = diags;
     lo.imports_used = used;

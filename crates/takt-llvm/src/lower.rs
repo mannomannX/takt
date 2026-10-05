@@ -128,11 +128,12 @@ pub fn program_with_diagnostics(
         }
     }
 
-    for machine in &p.machines {
+    for (i, machine) in p.machines.iter().enumerate() {
         // Eine Vorlage hat keine eigene Schrittfunktion — nur ihre
         // Instanzen laufen (5.9). Sie zu senken meldete „Maschine ohne
-        // Blattzustand", und das laese sich wie ein Mangel (FB-118).
-        if machine.kind == MachineKind::Template {
+        // Blattzustand", und das laese sich wie ein Mangel (FB-118). Ein
+        // Plant-Modell wird im Hardware-Build nicht gelinkt (8.3).
+        if machine.kind == MachineKind::Template || !p.in_build(takt_mir::MachineId(i as u32)) {
             continue;
         }
         let Some(st) = crate::machine::state_struct(machine, p) else {

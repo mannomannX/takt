@@ -432,7 +432,11 @@ pub fn fault_names(s: &mut String, p: &Program) {
 /// er nicht mehr `Bad` (3.5). Ohne das bliebe er `Bad`, und jeder
 /// Lesezugriff faultete.
 pub fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
-    use takt_mir::program::{Binding, Direction};
+    use takt_mir::program::{Binding, Build, Direction};
+    // Im Hardware-Build speisen die Treiber die Eingaenge (8.3).
+    if p.config.build == Build::Hw {
+        return;
+    }
     let adresse = |b: &Binding| match b {
         Binding::Hw(a) | Binding::Sim(a) => Some(a.clone()),
         Binding::None => None,
@@ -513,9 +517,13 @@ fn range_check(p: &Program, ty: takt_mir::TypeId) -> Option<(&'static str, Strin
 }
 
 /// Die `hw`-Eingaenge, die ein `sim`-Output derselben Adresse speist (8.3):
-/// Im Sim-Build ist das Modell ihre Quelle, kein Treiber.
+/// Im Sim-Build ist das Modell ihre Quelle, kein Treiber; im Hardware-Build
+/// keiner, dort hat jeder Eingang seinen Treiber.
 pub fn sim_fed_inputs(p: &Program) -> Vec<usize> {
-    use takt_mir::program::{Binding, Direction};
+    use takt_mir::program::{Binding, Build, Direction};
+    if p.config.build == Build::Hw {
+        return Vec::new();
+    }
     p.channels
         .iter()
         .enumerate()
@@ -814,7 +822,10 @@ pub fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
 
 /// Der Vorgabewert des Parameters `index` als C-Literal.
 pub fn param_literal(p: &Program, index: usize) -> Option<String> {
-    literal(p, &p.params.get(index)?.default)
+    // 8.4: Das beim Bau gewaehlte Profil gilt, sonst der Default.
+    let chosen = p.config.params_profile.as_deref().and_then(|name| p.profiles.iter().find(|pr| pr.name == name));
+    let assigned = chosen.and_then(|pr| pr.assignments.iter().find(|(id, _)| id.index() == index)).map(|(_, e)| e);
+    literal(p, assigned.unwrap_or(&p.params.get(index)?.default))
 }
 
 /// `takt_tune(a, param, value, len)`: ein Tunable aendert sich (8.4), fuer

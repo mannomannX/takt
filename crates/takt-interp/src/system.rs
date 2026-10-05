@@ -1632,6 +1632,8 @@ fn eval_params(
     overrides: &[(String, String)],
 ) -> Result<Vec<Value>, ParamError> {
     let p = loaded.program;
+    // 8.4: Ohne Wahl des Laufs gilt das Profil, mit dem das Programm gebaut wurde.
+    let profile = profile.or(p.config.params_profile.as_deref());
     let mut env = crate::ConstEnv::new(p.config.tick);
     let mut ctx = Ctx::new(loaded, &mut env, 0);
     let mut out = Vec::with_capacity(p.params.len());

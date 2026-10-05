@@ -121,7 +121,13 @@ pub fn state_name(machine: &str) -> String {
 pub fn machines(p: &Program) -> Vec<&Machine> {
     p.machines
         .iter()
-        .filter(|m| m.kind != MachineKind::Template && crate::machine::state_struct(m, p).is_some())
+        .enumerate()
+        .filter(|(i, m)| {
+            m.kind != MachineKind::Template
+                && p.in_build(takt_mir::MachineId(*i as u32))
+                && crate::machine::state_struct(m, p).is_some()
+        })
+        .map(|(_, m)| m)
         .collect()
 }
 

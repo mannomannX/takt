@@ -172,6 +172,7 @@ impl Lowerer<'_> {
         self.check_termination();
         self.check_simulation();
         self.check_unbound();
+        self.check_params_profile();
         self.check_unused();
         self.check_definite_assignment();
     }
@@ -1638,6 +1639,25 @@ impl Lowerer<'_> {
         self.diags.extend(diags);
     }
 
+    /// Das gewaehlte Parameterprofil (8.4) gibt es im Programm; sonst baute
+    /// der Rahmen still die Defaults ein.
+    fn check_params_profile(&mut self) {
+        let Some(name) = self.options.profile.as_deref() else { return };
+        if self.program.profiles.iter().any(|pr| pr.name == name) {
+            return;
+        }
+        let known: Vec<&str> = self.program.profiles.iter().map(|pr| pr.name.as_str()).collect();
+        let hint = if known.is_empty() {
+            "das Programm deklariert kein `profile` (8.4)".to_string()
+        } else {
+            format!("vorhanden: {}", known.join(", "))
+        };
+        self.diags.push(
+            Diagnostic::error(crate::lower::SC2, Span::default(), format!("Parameterprofil `{name}` gibt es nicht"))
+                .with_suggestion(hint),
+        );
+    }
+
     /// Pruefung 13 im Hardware-Build: Ein Channel ohne Bindung (`none`) darf
     /// deklariert, aber nicht benutzt werden (8.1) — auf dem Ziel gibt es
     /// nichts, woraus er liest oder wohin er schreibt.
@@ -1653,13 +1673,7 @@ impl Lowerer<'_> {
             .machines
             .iter()
             .enumerate()
-            .map(|(i, m)| {
-                let model = p
-                    .channels
-                    .iter()
-                    .any(|c| c.owner == Some(MachineId(i as u32)) && matches!(c.binding, Binding::Sim(_)));
-                m.kind != MachineKind::Scenario && !model
-            })
+            .map(|(i, m)| m.kind != MachineKind::Scenario && p.in_build(MachineId(i as u32)))
             .collect();
         let mut read = self.trigger_reads();
         for (_, m) in p.machines.iter().enumerate().filter(|(i, _)| in_build[*i]) {

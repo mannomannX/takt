@@ -56,6 +56,22 @@ pub struct Config {
     pub tcb_reviewed: bool,
     /// `overrun` (7.3): Reaktion der Runtime, kein Logikanteil.
     pub overrun: OverrunPolicy,
+    /// Fuer welchen Build uebersetzt wurde (8.3); kein Logikanteil, Sim- und
+    /// HW-Build haben denselben Logik-Hash.
+    pub build: Build,
+    /// Das beim Bau gewaehlte Parameterprofil (8.4: beim Laden gewaehlt, und
+    /// ein Abbild ist das geladene Programm); kein Logikanteil.
+    pub params_profile: Option<String>,
+}
+
+/// Art des Builds (8.3).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Build {
+    /// Simulation: `sim`-Outputs speisen `hw`-Inputs, Plant-Modelle laufen.
+    #[default]
+    Sim,
+    /// Hardware: die Treiber speisen die Inputs, Plant-Modelle laufen nicht.
+    Hw,
 }
 
 /// `system: overrun = fault | alert` (7.3).
@@ -127,6 +143,8 @@ impl Config {
             tcb_allowlist: Vec::new(),
             tcb_reviewed: false,
             overrun: OverrunPolicy::Fault,
+            build: Build::Sim,
+            params_profile: None,
         }
     }
 }
@@ -557,6 +575,18 @@ pub struct Port {
 }
 
 impl Program {
+    /// Ist die Maschine ein Plant-Modell (8.3): schreibt sie einen `sim`-Output?
+    pub fn is_plant_model(&self, id: MachineId) -> bool {
+        self.channels.iter().any(|c| c.owner == Some(id) && matches!(c.binding, Binding::Sim(_)))
+    }
+
+    /// Gehoert die Maschine zum Build (8.3): Im Hardware-Build laufen keine
+    /// Plant-Modelle, sie werden auch nicht gelinkt. Die eine Regel fuer
+    /// Laufmenge, Codegen, Arena und Rahmen.
+    pub fn in_build(&self, id: MachineId) -> bool {
+        self.config.build == Build::Sim || !self.is_plant_model(id)
+    }
+
     /// Leeres Programm.
     pub fn new(config: Config) -> Self {
         Program {

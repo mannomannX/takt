@@ -109,6 +109,8 @@ const OUTSIDE_THE_LOGIC_HASH: &[(&str, &str)] = &[
     ("polling_unchecked", "gibt Pruefung 59 frei, aendert keinen Schritt"),
     ("sources", "Quelltextzeilen fuer Meldungen"),
     ("recorded", "die Aufzeichnung ungebundener Kanaele (8.2), ausserhalb der Semantik"),
+    ("build", "fuer welchen Build uebersetzt wurde (8.3): gleiche Logik, andere Linkmenge"),
+    ("params_profile", "das beim Bau gewaehlte Parameterprofil (8.4): Eingaben, keine Logik"),
 ];
 
 /// **Jedes Feld ausserhalb des Logik-Hashes hat einen Grund.** Gelesen aus
@@ -146,11 +148,11 @@ fn the_hashes_of_a_fixed_program_are_pinned() {
         })
         .collect();
     let pinned = [
-        ("Logik-Hash", logic_hash(&p).to_string(), "895a2c47cf27e081efd8f2e313ea67aa70493ebc99fa94a06fd83aaa43469e11"),
+        ("Logik-Hash", logic_hash(&p).to_string(), "400011c7d1093950585ca3c963ebc8fb1a46a19d07f3ab3331e0ba2165cdd969"),
         (
             "Programm-Hash",
             program_hash(&p).to_string(),
-            "5cfe0c9a102921a57879d0334e60604d107b5db890ba791d17fd7f093304d386",
+            "6a9aa53e148bfc7c9bbe9b20cf07ddc51cf7d59232edfcaddc306d70b1debea0",
         ),
         (
             "Typ-Hashes",
@@ -160,15 +162,7 @@ fn the_hashes_of_a_fixed_program_are_pinned() {
     ];
     let changed: Vec<String> =
         pinned.iter().filter(|(_, got, want)| got != want).map(|(what, got, _)| format!("{what}: {got}")).collect();
-    assert!(
-        changed.is_empty(),
-        "geaendert:
-{}",
-        changed.join(
-            "
-"
-        )
-    );
+    assert!(changed.is_empty(), "geaendert:\n{}", changed.join("\n"));
 }
 
 #[test]

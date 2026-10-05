@@ -193,6 +193,8 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], bytes: u64, 
     let _ = writeln!(s, "triple = {}", e.triple);
     let _ = writeln!(s, "form = {}", e.form.name());
     let _ = writeln!(s, "profile = {}", e.form.profile().map_or("none", RuntimeProfile::name));
+    // 8.4: das Parameterprofil, dessen Werte das Abbild traegt.
+    let _ = writeln!(s, "params_profile = {}", p.config.params_profile.as_deref().unwrap_or("none"));
     let _ = writeln!(s, "tick_ns = {}", p.config.tick);
     let _ = writeln!(s, "arena_bytes = {bytes}");
     let _ = writeln!(s, "arena_align = {align}");
