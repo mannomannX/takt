@@ -46,10 +46,17 @@ use takt_native_abi as _;
 pub trait Program: rt::Program {
     /// Der Griff des Job-Kontexts.
     type Jobs: Jobs;
+    /// Der Griff, der zwischen den Ticks verteilt.
+    type Dispatch: Dispatch;
 
     /// Der Griff fuer den Job-Kontext (4.5), einmal je Programm: `None`, wenn
     /// ihn schon jemand hat.
     fn jobs(&mut self) -> Option<Self::Jobs>;
+
+    /// Der Griff, der dem Job-Kontext zwischen den Ticks den naechsten
+    /// Auftrag gibt (4.5), fuer einen Port, der nicht ueber `service`
+    /// verteilt; einmal je Programm.
+    fn dispatch(&mut self) -> Option<Self::Dispatch>;
 }
 
 /// Der Job-Kontext eines Programms (4.5). Es gibt ihn einmal; er lebt nicht

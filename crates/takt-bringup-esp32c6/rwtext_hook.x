@@ -4,9 +4,12 @@
  * ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK gesetzt ist (build.rs). Der Tick-Pfad
  * in Rust traegt `#[ram]`; der erzeugte Takt-Code und sein C-Rahmen
  * koennen das nicht und werden hier ueber ihr Archiv benannt — samt der
- * Konstanten, die der Tick liest (DFA- und `const`-Tabellen, `safe`).
+ * Konstanten, die der Tick liest (DFA- und `const`-Tabellen, `safe`). Die
+ * Lieferform heisst `libapp.a` (12.11); `libtaktboard.a` traegt Millicode
+ * und die C-Referenz von `takt bench`.
  */
-*libtaktprogramm.a:(.text .text.* .rodata .rodata.* .srodata .srodata.*)
+*libapp.a:(.text .text.* .rodata .rodata.* .srodata .srodata.*)
+*libtaktboard.a:(.text .text.* .rodata .rodata.* .srodata .srodata.*)
 
 /* Die Mathematik, die der erzeugte Code ruft (FB-301): Die Grundrechenarten
  * in Soft-Float liegen im ROM des Chips, `fma` und `sqrt` kommen aus
@@ -16,8 +19,8 @@
 *libcompiler_builtins-*.rlib:*(.text .text.* .rodata .rodata.* .srodata .srodata.*)
 
 /* Der Rest des Tick-Pfads in Rust (12.3, FB-357): die Schleife
- * (`takt-rt-core`, `takt-rt-baremetal`), die Bindung des Programms
- * (`takt-mcu-program`), der Treiberrand (`takt_edge_*`, `takt-hal`) und die
+ * (`takt-rt-core`, `takt-rt-baremetal`), die Huelle des Programms (Modul
+ * `app` der Binaries `takt` und `bench`), der Treiberrand (`takt_edge_*`, `takt-hal`) und die
  * Bibliotheksroutinen, die der erzeugte Code ruft — die korrekt gerundete
  * Mathematik (`takt_m_*`, `libtaktm`) und die kuratierten Natives
  * (`takt_native_*`, `takt-native`, `takt-native-abi`). Das Bring-up baut mit
@@ -29,7 +32,8 @@
  */
 *(.text.takt_m_* .text.takt_native_* .text.takt_edge_*)
 *(.text.*8libtaktm* .text.*11takt_native* .text.*15takt_native_abi* .text.*8takt_hal*)
-*(.text.*12takt_rt_core* .text.*17takt_rt_baremetal* .text.*16takt_mcu_program*)
+*(.text.*12takt_rt_core* .text.*17takt_rt_baremetal*)
+*(.text.*4takt3app* .text.*takt..app..* .text.*5bench3app* .text.*bench..app..*)
 
 /* Ihre Konstanten: die Tabellen, `static` mit Namen, und was der Compiler
  * namenlos ablegt (`.Lanon`), wenn eine Konstante per Referenz uebergeben

@@ -72,7 +72,6 @@ pub use jobs::JobContext;
 pub use led::Ws2812;
 pub use nvm::FlashNvm;
 pub use pins::route_uart0;
-pub use takt_mcu_program::Generated;
 pub use tick::{SystimerTick, on_timer_interrupt};
 pub use uart::{Telemetry, UsbJtag, telemetry};
 pub use usb::reenumerate_if_requested;

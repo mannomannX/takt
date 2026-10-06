@@ -6,13 +6,13 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.86"
 
-# Eigener Workspace wie `takt-mcu-program`: Eine Funktion mit C-Namen, die
+# Eigener Workspace wie die Board-Crates: Eine Funktion mit C-Namen, die
 # Zeiger liest, braucht `unsafe`, und `forbid` (13.4) laesst sich nicht
 # lokal aufheben. 9.5 fuehrt die Natives in der TCB.
 [workspace]
 
 # Die Rechnung steht in `takt-native`, `takt-crypto` und `libtaktm`; hier nur die
-# Grenze. Boards binden das Crate als rlib (ueber `takt-mcu-program`), der
+# Grenze. Boards binden das Crate als rlib (ueber `takt-embed`), der
 # Wirtsrahmen der Konformitaet als statische Bibliothek:
 # `cargo rustc --lib --crate-type staticlib --features host`.
 [features]

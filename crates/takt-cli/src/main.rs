@@ -1411,7 +1411,7 @@ fn measure(
 ) -> (takt_mir::analysis::size::Measured, Option<takt_llvm::inspect::Residency>) {
     let mut out = takt_mir::analysis::size::Measured::default();
     let host = if cfg!(windows) { takt_llvm::Target::X86_64_WINDOWS } else { takt_llvm::Target::X86_64_LINUX };
-    let target = args.value("--target").and_then(takt_llvm::Target::by_name);
+    let target = args.value("--target").and_then(resolve_target);
     let built;
     let path = match (args.value("--object"), target) {
         (Some(file), _) => std::path::Path::new(file).to_path_buf(),
@@ -1561,7 +1561,8 @@ fn hardware(args: &Args) -> Option<takt_mir::hardware::Hardware> {
 fn calibration(args: &Args) -> Option<takt_mir::hardware::Target> {
     let path = args.value("--hardware")?;
     let hw = hardware(args)?;
-    let name = args.value("--target").unwrap_or("x86_64");
+    let given = args.value("--target").unwrap_or("x86_64");
+    let name = resolve_target(given).map_or(given, |t| t.name);
     match hw.target(name) {
         Some(t) => Some(t.clone()),
         None => {
@@ -1570,6 +1571,16 @@ fn calibration(args: &Args) -> Option<takt_mir::hardware::Target> {
             None
         }
     }
+}
+
+/// Das Ziel aus `--target` (12.8, 12.11): ein Takt-Ziel beim Namen, sein
+/// LLVM-Tripel oder das Tripel eines Wirts, wie Cargo es nennt. Kalibrierung,
+/// Kern und `takt size` fragen es so; unter dem Tripel allein fand die
+/// Hardware-Konfiguration kein Ziel (FB-445).
+fn resolve_target(name: &str) -> Option<takt_llvm::Target> {
+    takt_llvm::Target::by_name(name)
+        .or_else(|| takt_llvm::Target::by_triple(name))
+        .or_else(|| takt_llvm::Target::by_host_triple(name).ok())
 }
 
 /// Build aus `--build sim|hw`; Default `sim`, fuer die Lieferform `hw`.
@@ -1657,8 +1668,7 @@ fn sema_options(path: &str, src: &str, policy: Policy, args: &Args) -> takt_sema
 /// Der Kern des Bauziels aus `--target` (Name oder Triple) fuer die
 /// Pruefungen 40 und 41 (12.8); ohne Angabe urteilen sie nach dem Profil.
 fn core_of(args: &Args) -> Option<takt_sema::Core> {
-    let name = args.value("--target")?;
-    let target = takt_llvm::Target::by_name(name).or_else(|| takt_llvm::Target::by_triple(name))?;
+    let target = resolve_target(args.value("--target")?)?;
     Some(takt_sema::Core { word_bits: target.pointer * 8, f64_hardware: target.class.has_f64_hardware() })
 }
 

@@ -176,7 +176,7 @@ dependencies = [
  "cortex-m",
  "stm32f4",
  "takt-board-support",
- "takt-mcu-program",
+ "takt-embed",
  "takt-rt-baremetal",
  "takt-rt-core",
 ]
@@ -186,16 +186,16 @@ name = "takt-board-support"
 version = "0.1.0"
 
 [[package]]
-name = "takt-hal"
-version = "0.1.0"
-
-[[package]]
-name = "takt-mcu-program"
+name = "takt-embed"
 version = "0.1.0"
 dependencies = [
  "takt-native-abi",
  "takt-rt-core",
 ]
+
+[[package]]
+name = "takt-hal"
+version = "0.1.0"
 
 [[package]]
 name = "takt-native"

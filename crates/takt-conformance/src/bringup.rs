@@ -18,11 +18,17 @@ use std::time::SystemTime;
 /// geplanten Output sein `guard` (7.5). Ohne sie ist es null wie in der
 /// Simulation — ein Konformitaetslauf vergleicht mit dem Interpreter.
 pub fn hardware() -> Option<takt_mir::hardware::Hardware> {
+    let path = hardware_path()?;
+    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    Some(takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{path}:{}: {}", e.line, e.message)))
+}
+
+/// Der Pfad aus `TAKT_HARDWARE`, fuer den Bauhelfer (`takt_embed::build`).
+pub fn hardware_path() -> Option<String> {
     println!("cargo:rerun-if-env-changed=TAKT_HARDWARE");
     let path = env::var("TAKT_HARDWARE").ok()?;
     println!("cargo:rerun-if-changed={path}");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
-    Some(takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{path}:{}: {}", e.line, e.message)))
+    Some(path)
 }
 
 /// Uebersetzt das Programm fuer die Hardware, um den Rahmen dazu bauen zu
@@ -66,6 +72,12 @@ fn build() -> takt_sema::Build {
         Ok("sim") => takt_sema::Build::Sim,
         _ => takt_sema::Build::Hw,
     }
+}
+
+/// Der Build aus `TAKT_BUILD` als Wort fuer den Bauhelfer
+/// (`takt_embed::build::Program::build_for`), derselbe wie in [`compile`].
+pub fn build_name() -> &'static str {
+    if build() == takt_sema::Build::Sim { "sim" } else { "hw" }
 }
 
 /// Schreibt die Arena des Programms als Rust-Typ nach `file` (12.11): so gross
@@ -136,6 +148,21 @@ pub fn drivers(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) 
     fs::write(file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
 }
 
+/// Schreibt den Pruefstand `Rig` des Programms nach `file` (12.6): je Adresse
+/// das Geraet aus `wiring`, sonst ein Stummel, den die Dokumentation von
+/// `Rig` nennt. Die Traits `Drivers` und `Sys` und den Kleber dazu bringt das
+/// Modul der Lieferform (`P.rs`); hier steht er im Modul `crate::app`.
+pub fn rig(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) {
+    use takt_frame::drivers::{Kind, of, rust_rig};
+    let list = of(p, &takt_frame::layout::of(p));
+    let traits = if list.iter().any(|d| d.kind == Kind::Sys) { "{Drivers, Sys}" } else { "Drivers" };
+    let text = format!(
+        "// Erzeugt von `takt_conformance::bringup::rig` (12.6).\n\nuse crate::app::{traits};\n\n{}",
+        rust_rig(&list, "Rig", wiring)
+    );
+    fs::write(file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+}
+
 /// Ruft `takt build PROGRAMM --target ZIEL --build BUILD --prefix app` mit
 /// `extra`, etwa `--emit ir`, und schreibt nach `out`; `BUILD` aus [`build`].
 ///
@@ -175,18 +202,18 @@ pub fn clang() -> PathBuf {
     }
 }
 
-/// Bindet die Objekte zur Bibliothek `taktprogramm` in `out` und meldet sie
-/// dem Linker. Der Name folgt dem Ziel: `taktprogramm.lib` fuer MSVC,
-/// sonst `libtaktprogramm.a`.
-pub fn archive(out: &Path, objs: &[&Path]) {
+/// Bindet die Objekte zur Bibliothek `name` in `out` und meldet sie dem
+/// Linker. Der Dateiname folgt dem Ziel: `name.lib` fuer MSVC, sonst
+/// `libname.a`.
+pub fn archive(out: &Path, name: &str, objs: &[&Path]) {
     let msvc = env::var("TARGET").is_ok_and(|t| t.ends_with("-msvc"));
-    let lib = out.join(if msvc { "taktprogramm.lib" } else { "libtaktprogramm.a" });
+    let lib = out.join(if msvc { format!("{name}.lib") } else { format!("lib{name}.a") });
     let _ = fs::remove_file(&lib);
     let ar = clang().with_file_name(if cfg!(windows) { "llvm-ar.exe" } else { "llvm-ar" });
     let ok = Command::new(&ar).arg("crs").arg(&lib).args(objs).status().is_ok_and(|s| s.success());
-    assert!(ok, "llvm-ar schlug fehl; das Takt-Programm waere nicht gebunden");
+    assert!(ok, "llvm-ar schlug fehl; `{name}` waere nicht gebunden");
     println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=taktprogramm");
+    println!("cargo:rustc-link-lib=static={name}");
 }
 
 /// Das Werkzeug `takt` aus dem Zielverzeichnis dieses Baus, im selben
@@ -204,33 +231,78 @@ pub fn takt() -> PathBuf {
     // die CLI liegt fuer den Wirt gebaut, also ohne Triple.
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let found = out.ancestors().skip(1).take(6).map(|dir| dir.join(&profile).join(exe)).find(|p| p.exists());
-    let Some(takt) = found else { panic!("Das Werkzeug takt fehlt; erst `cargo build -p takt-cli --{profile}`") };
+    let Some(takt) = found else { panic!("Das Werkzeug takt fehlt; erst `{}`", build_command(&profile)) };
     // Auch das Werkzeug ist eine Quelle: Ohne diese Zeile baute Cargo nach
     // einer Aenderung am Compiler nicht neu.
     println!("cargo:rerun-if-changed={}", takt.display());
-    assert_fresh(&takt);
+    assert_fresh(&takt, &profile);
     takt
+}
+
+/// Wie das Werkzeug fuer `profile` entsteht; `dev` und `debug` sind Cargos Vorgabe.
+fn build_command(profile: &str) -> String {
+    if profile == "release" { "cargo build -p takt-cli --release".into() } else { "cargo build -p takt-cli".into() }
 }
 
 /// Ein `takt`, das aelter ist als der Compiler, baut stillschweigend das
 /// Objekt von gestern (FB-193). Der Vergleich ist grob — Aenderungszeit
-/// gegen jede Quelle der Compiler-Crates —, aber er faellt genau dann,
-/// wenn es darauf ankommt.
-fn assert_fresh(takt: &Path) {
+/// gegen jede Quelle der Crates, aus denen das Werkzeug entsteht
+/// ([`tool_crates`]) —, aber er faellt genau dann, wenn es darauf ankommt.
+fn assert_fresh(takt: &Path, profile: &str) {
     let Ok(built) = fs::metadata(takt).and_then(|m| m.modified()) else { return };
     let mut newest: Option<(SystemTime, PathBuf)> = None;
-    for krate in ["takt-syntax", "takt-diag", "takt-mir", "takt-sema", "takt-interp", "takt-llvm", "takt-cli"] {
-        walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(krate).join("src"), &mut newest);
+    for krate in tool_crates() {
+        walk(&krate.join("src"), &mut newest);
     }
     if let Some((t, file)) = newest
         && t > built
     {
         panic!(
-            "{} ist aelter als {}; `cargo build -p takt-cli --release` vor dem Bring-up (FB-193)",
+            "{} ist aelter als {}; `{}` vor dem Bring-up (FB-193)",
             takt.display(),
-            file.display()
+            file.display(),
+            build_command(profile)
         );
     }
+}
+
+/// Die Crates, aus denen das Werkzeug entsteht: `takt-cli` und jede
+/// Pfadabhaengigkeit fuer den Bau, transitiv aus den `Cargo.toml` gelesen.
+/// Eine Liste von Hand vergass `takt-frame`, und ein altes `takt` schrieb
+/// die Huelle von gestern (FB-444).
+pub fn tool_crates() -> Vec<PathBuf> {
+    let canonical = |p: PathBuf| fs::canonicalize(&p).unwrap_or(p);
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut todo = vec![canonical(Path::new(env!("CARGO_MANIFEST_DIR")).join("../takt-cli"))];
+    while let Some(dir) = todo.pop() {
+        if seen.contains(&dir) {
+            continue;
+        }
+        let manifest = fs::read_to_string(dir.join("Cargo.toml")).unwrap_or_default();
+        todo.extend(path_dependencies(&manifest).into_iter().map(|p| canonical(dir.join(p))));
+        seen.push(dir);
+    }
+    seen
+}
+
+/// Die Pfade der Abhaengigkeiten eines `Cargo.toml`, ohne die zum Testen
+/// (`[dev-dependencies]`): Was ein Test braucht, steckt nicht im Werkzeug.
+fn path_dependencies(manifest: &str) -> Vec<String> {
+    let mut section = "";
+    let mut out = Vec::new();
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            section = line;
+            continue;
+        }
+        if !section.contains("dependencies") || section.contains("dev-dependencies") {
+            continue;
+        }
+        if let Some(path) = line.split("path = \"").nth(1).and_then(|rest| rest.split('"').next()) {
+            out.push(path.to_string());
+        }
+    }
+    out
 }
 
 fn walk(dir: &Path, newest: &mut Option<(SystemTime, PathBuf)>) {
@@ -250,7 +322,29 @@ fn walk(dir: &Path, newest: &mut Option<(SystemTime, PathBuf)>) {
 
 #[cfg(test)]
 mod tests {
-    use super::read_wiring;
+    use super::{path_dependencies, read_wiring, tool_crates};
+
+    /// Die Pfade der Abhaengigkeiten fuer den Bau, auch als eigene Tabelle;
+    /// die zum Testen nicht (FB-444).
+    #[test]
+    fn the_path_dependencies_of_a_manifest_leave_out_the_dev_ones() {
+        let manifest = "[package]\nname = \"x\"\n\n[dependencies]\na = { path = \"../a\" }\nserde = \"1\"\n\
+                        \n[build-dependencies]\nb = { path = \"../b\", default-features = false }\n\
+                        \n[dependencies.c]\npath = \"../c\"\n\n[dev-dependencies]\nd = { path = \"../d\" }\n";
+        assert_eq!(path_dependencies(manifest), ["../a", "../b", "../c"]);
+    }
+
+    /// Das Werkzeug entsteht aus `takt-frame` und den Compiler-Crates, nicht
+    /// aus dem, was nur seine Tests brauchen (FB-444).
+    #[test]
+    fn the_tool_is_built_from_the_frame_and_not_from_the_test_kit() {
+        let names: Vec<String> =
+            tool_crates().iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
+        for wanted in ["takt-cli", "takt-frame", "takt-llvm", "takt-sema", "takt-mir"] {
+            assert!(names.iter().any(|n| n == wanted), "{wanted} fehlt: {names:?}");
+        }
+        assert!(!names.iter().any(|n| n == "takt-testkit"), "{names:?}");
+    }
 
     /// **Zwei Dateien verdrahten eine Adresse: ein Fehler** (12.6, GEN-021),
     /// der beide Dateien und die Adresse nennt, gleich in welcher

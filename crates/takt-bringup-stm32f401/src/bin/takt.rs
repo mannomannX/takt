@@ -36,27 +36,32 @@
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
-use core::ffi::c_void;
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 #[cfg(not(feature = "rtos"))]
 use cortex_m_rt::entry;
 use panic_halt as _;
-use stm32f4::stm32f401::{Interrupt, NVIC, Peripherals, interrupt};
+#[cfg(not(feature = "rtos"))]
+use stm32f4::stm32f401::{Interrupt, NVIC};
+use stm32f4::stm32f401::{Peripherals, interrupt};
+#[cfg(not(feature = "rtos"))]
+use takt_board_stm32f401::JobContext;
 use takt_board_stm32f401::{
-    BAUD, Board, CORE_HZ, Generated, Iwdg, JobContext, Led, Mpu, Telemetry, Tim2Tick, Wire, cycles, mpu, platform, tick,
+    BAUD, Board, CORE_HZ, Iwdg, Led, Mpu, Telemetry, Tim2Tick, Wire, cycles, mpu, platform, tick,
 };
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock, Trace};
 #[cfg(not(feature = "rtos"))]
 use takt_rt_baremetal::{LogicalClock, Sleep};
 use takt_rt_core::{Clock, FakeNvm, NextRun, Persist, Policy, Profile, Runtime};
 
-mod takt {
+/// Das Programm als Lieferform (12.11): Konstanten, Arena, Treiber-Traits,
+/// Kleber und Huelle, erzeugt von `takt build --emit embed` (`build.rs`).
+mod app {
     #![allow(dead_code)]
-    include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
+    include!(env!("TAKT_APP_RS"));
 }
-use takt::{HW_ADDRESSES, NVM_BLOCKING_NS, OVERRUN_ALERT, TICK_NS};
+use app::{HW_ADDRESSES, NVM_BLOCKING_NS, OVERRUN_ALERT, TICK_NS};
 
 /// Die Frist des Watchdogs im Betrieb (12.3): zwei Perioden und ein
 /// blockierender NVM-Vorgang (8.10). Ein Tick, der darueber hinaus
@@ -180,32 +185,42 @@ static PROBE: AtomicU8 = AtomicU8::new(0);
 /// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
 static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
 
-/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
-/// Ziel verlangt (`build.rs`).
-mod arena {
-    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
-}
-
 /// Die Arena, am Anfang des RAM: Ihren Programmbereich schuetzt die MPU
-/// ausserhalb des Ticks (12.3, `takt_state.x`).
+/// ausserhalb des Ticks (12.3, `takt_state.x`); die Lieferform richtet sie
+/// an der Region aus.
 #[unsafe(link_section = ".takt_state")]
-static mut ARENA: arena::Arena = arena::Arena::new();
-
-/// Die Arena als Zeiger der C-ABI; nur der Rahmen liest und schreibt sie.
-fn arena() -> *mut c_void {
-    (&raw mut ARENA).cast()
-}
-
-/// Die Jobs des Programms (4.5), fuer den Job-Kontext und die Job-Aufgabe.
-fn jobs() -> takt_mcu_program::jobs::Jobs {
-    // SAFETY: `ARENA` gehoert nur diesem Programm und lebt so lange wie es.
-    unsafe { takt_mcu_program::jobs::Jobs::new(arena()) }
-}
+static mut ARENA: app::Arena = app::Arena::new();
 
 /// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
 /// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
 mod drivers {
-    include!(concat!(env!("OUT_DIR"), "/takt_drivers.rs"));
+    include!(concat!(env!("OUT_DIR"), "/takt_rig.rs"));
+}
+
+/// Der Pruefstand, statisch: Das Programm haelt ihn so lange wie die Arena.
+static mut RIG: Option<drivers::Rig> = None;
+
+/// Der Griff, mit dem der Job-Faden oder die Job-Aufgabe rechnet (4.5):
+/// statisch, weil sie ihn ueber den Aufbau hinaus halten.
+static mut JOBS: Option<app::Jobs<'static>> = None;
+
+/// Das Programm auf seiner Arena (12.11).
+///
+/// # Safety
+///
+/// Einmal je Lauf: Arena und Pruefstand gehoeren danach dem Programm.
+unsafe fn program() -> app::Program<'static> {
+    // SAFETY: siehe oben.
+    let (arena, rig) = unsafe { (&mut *(&raw mut ARENA), (*(&raw mut RIG)).insert(drivers::Rig::default())) };
+    app::Program::new(arena, rig)
+}
+
+/// Legt den Griff der Jobs ab, mit dem der Job-Faden oder die Job-Aufgabe
+/// rechnet; `None`, wenn das Programm keine Jobs hat.
+fn hand_over_jobs(program: &mut app::Program<'static>) -> Option<&'static mut dyn takt_embed::Jobs> {
+    // SAFETY: ein Aufruf je Lauf, bevor jemand rechnet; danach benutzt den
+    // Griff nur der Job-Kontext.
+    program.jobs().map(|j| unsafe { (*(&raw mut JOBS)).insert(j) as &mut dyn takt_embed::Jobs })
 }
 
 /// Die Geraete des Boards (12.6): je Adresse der Typ, den `takt-drivers.toml`
@@ -428,27 +443,22 @@ type Line = Trace<fn() -> Option<&'static mut Telemetry>, Telemetry>;
 
 /// Die Schleife ueber dem Programm: das Programm hinter dem
 /// Speicherschutz (12.3), der Watchdog im Betrieb.
-type Takt<C> = Runtime<Guarded<Generated, Mpu>, C, Option<Iwdg>, Line>;
+type Takt<C> = Runtime<Guarded<app::Program<'static>, Mpu>, C, Option<Iwdg>, Line>;
 
 /// Nach so vielen Ticks endet ein Konformitaetslauf; 0 im Betrieb.
 fn limit() -> u64 {
     TICKS.and_then(|t| t.parse().ok()).unwrap_or(0)
 }
 
-/// Baut die Schleife unter `clock` im Profil `profile` (12.8).
-///
-/// # Safety
-///
-/// `rig` lebt, solange das Programm Treiber ruft: Der Rahmen haelt einen
-/// Zeiger auf ihn, den der Kleber in `drivers` als `Rig` liest.
-unsafe fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, rig: &mut drivers::Rig) -> Takt<C> {
+/// Baut die Schleife ueber `program` unter `clock` im Profil `profile` (12.8).
+fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, mut program: app::Program<'static>) -> Takt<C> {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
     // auf die Leitung und ist kein Betrieb.
     let watchdog = (limit() == 0).then(|| Iwdg::arm(WATCHDOG_NS));
     // 12.3: Nach `init` ist der Programmzustand nur noch im Tick beschreibbar.
-    // SAFETY: siehe oben.
-    let program = Guarded::new(unsafe { Generated::init(arena(), core::ptr::from_mut(rig).cast()) }, protection);
+    program.ensure_init();
+    let program = Guarded::new(program, protection);
     let line: Line = Trace::new(Cadence::of(limit(), TRACE_EVERY), TICK_NS, uart);
     Runtime::new(program, clock, watchdog, line, profile, TICK_NS, policy)
 }
@@ -460,9 +470,8 @@ fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 #[cfg(not(feature = "rtos"))]
-fn conduct(clock: impl Clock, protection: Mpu, rig: &mut drivers::Rig) {
-    // SAFETY: `rig` kommt aus `main`, das nicht zurueckkehrt.
-    let mut rt = unsafe { runtime(clock, protection, Profile::BAREMETAL, rig) };
+fn conduct(clock: impl Clock, protection: Mpu, program: app::Program<'static>) {
+    let mut rt = runtime(clock, protection, Profile::BAREMETAL, program);
     let stats = takt_rt_baremetal::run(&mut rt, no_journal());
     conclude(&rt, &stats);
 }
@@ -535,10 +544,10 @@ fn hostile_fpu() {
 struct Setup {
     timer: Tim2Tick,
     protection: Mpu,
-    /// Der Job-Faden des blanken Boards (4.5); unter RTIC rechnen Jobs in
-    /// einer eigenen Aufgabe.
+    /// Der Stack des Job-Fadens auf dem blanken Board (4.5); unter RTIC
+    /// rechnen Jobs in einer eigenen Aufgabe.
     #[cfg(not(feature = "rtos"))]
-    jobs: Option<JobContext>,
+    job_stack: Option<&'static mut [u8]>,
     /// Unter RTIC richtet die App die Interrupts nach ihren Prioritaeten ein.
     #[cfg(not(feature = "rtos"))]
     nvic: NVIC,
@@ -577,15 +586,15 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
         unsafe { WIRE = Some(Wire::new(dp.GPIOA, &dp.RCC)) };
     }
 
-    // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
-    // der Tick holt den Kern zurueck.
-    let jobs = if cfg!(feature = "rtos") { None } else { JobContext::start(jobs()) };
+    // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden auf
+    // dem Stack der Lieferform; unter dessen Ende liegt ein Waechter (12.3).
+    let job_stack = if cfg!(feature = "rtos") { None } else { app::job_stack() };
 
     #[cfg(not(feature = "rtos"))]
     let nvic = cp.NVIC;
     let (mut dcb, mut dwt, mut core_mpu, mut scb) = (cp.DCB, cp.DWT, cp.MPU, cp.SCB);
     cycles::enable(&mut dcb, &mut dwt);
-    let Some(protection) = Mpu::arm(&mut core_mpu, &mut scb, jobs.as_ref().map(JobContext::bottom)) else {
+    let Some(protection) = Mpu::arm(&mut core_mpu, &mut scb, job_stack.as_ref().map(|s| s.as_ptr() as u32)) else {
         if let Some(u) = uart() {
             u.write("takt: Speicherschutz nicht einrichtbar");
             u.newline();
@@ -604,7 +613,7 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
         timer,
         protection,
         #[cfg(not(feature = "rtos"))]
-        jobs,
+        job_stack,
         #[cfg(not(feature = "rtos"))]
         nvic,
     }
@@ -615,7 +624,7 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
-    let Setup { timer, protection, mut jobs, mut nvic } = setup(dp, cp);
+    let Setup { timer, protection, job_stack, mut nvic } = setup(dp, cp);
     // SAFETY: Prioritaeten und Freigabe vor dem ersten Tick; die Handler
     // oben sind bereit.
     unsafe {
@@ -625,7 +634,10 @@ fn main() -> ! {
         }
     }
 
-    let mut rig = drivers::Rig::default();
+    // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck.
+    let mut program = unsafe { program() };
+    let dispatch = program.dispatch();
+    let mut jobs = JobContext::start(job_stack, dispatch, hand_over_jobs(&mut program));
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
         // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
@@ -641,7 +653,7 @@ fn main() -> ! {
                 }
             }),
             protection,
-            &mut rig,
+            program,
         );
     } else {
         // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
@@ -657,7 +669,7 @@ fn main() -> ! {
                 }
             }),
             protection,
-            &mut rig,
+            program,
         );
     }
     // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
@@ -682,36 +694,46 @@ struct TaskBoundary {
     work: rtic_sync::signal::SignalWriter<'static, ()>,
 }
 
+/// Die Tickgrenze mit dem Griff, der verteilt: Er entsteht mit dem Programm
+/// in der Takt-Aufgabe und bleibt dort, darum nicht in [`TaskBoundary`], das
+/// RTIC von `init` an die Aufgabe gibt.
 #[cfg(feature = "rtos")]
-impl takt_rt_rtos::Boundary for TaskBoundary {
+struct Dispatching {
+    boundary: TaskBoundary,
+    dispatch: Option<app::Dispatch<'static>>,
+}
+
+#[cfg(feature = "rtos")]
+impl takt_rt_rtos::Boundary for Dispatching {
     async fn reached(&mut self) {
-        if jobs().dispatch() {
-            self.work.write(());
+        if self.dispatch.as_mut().is_some_and(app::Dispatch::next) {
+            self.boundary.work.write(());
         }
         if let Some(u) = uart() {
             u.flush();
         }
-        self.reached.wait().await;
+        self.boundary.reached.wait().await;
     }
 }
 
 /// Die Takt-Aufgabe (12.8): der Lauf, die Abschlusszeile, danach die
 /// offene Leitung wie auf dem blanken Board.
 #[cfg(feature = "rtos")]
-async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, mut boundary: TaskBoundary) {
-    let mut rig = drivers::Rig::default();
+async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, boundary: TaskBoundary) {
+    // SAFETY: einmal je Lauf; die Aufgabe kehrt nicht zurueck.
+    let mut program = unsafe { program() };
+    let mut boundary = Dispatching { boundary, dispatch: program.dispatch() };
+    hand_over_jobs(&mut program);
     if LOGICAL {
         // In logischer Zeit ist jede Grenze eine Periode (13.8); die
         // Aufgaben darunter rechnen wie im Betrieb.
         let now = core::cell::Cell::new(0);
-        // SAFETY: `rig` lebt bis zum Ende der Aufgabe, die nicht zurueckkehrt.
-        let mut rt = unsafe { runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED, &mut rig) };
+        let mut rt = runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED, program);
         let mut logical = takt_rt_rtos::Logical::new(&mut boundary, &now, TICK_NS);
         let stats = takt_rt_rtos::run(&mut rt, no_journal(), &mut logical).await;
         conclude(&rt, &stats);
     } else {
-        // SAFETY: wie oben.
-        let mut rt = unsafe { runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED, &mut rig) };
+        let mut rt = runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED, program);
         let stats = takt_rt_rtos::run(&mut rt, no_journal(), &mut boundary).await;
         conclude(&rt, &stats);
     }
@@ -796,7 +818,7 @@ mod load {
 /// die Takt-Aufgabe verspaetet, misst `drift` jedes Ticks.
 #[cfg(feature = "rtos")]
 #[rtic::app(device = stm32f4::stm32f401, peripherals = true, dispatchers = [SPI1, SPI2, SPI3])]
-mod app {
+mod rtic_app {
     use rtic_sync::signal::{Signal, SignalReader, SignalWriter};
     use takt_board_stm32f401::{Mpu, Tim2Tick, mpu};
 
@@ -878,7 +900,11 @@ mod app {
     async fn jobs(cx: jobs::Context) {
         loop {
             cx.local.work.wait().await;
-            super::jobs().work();
+            // SAFETY: Die Takt-Aufgabe legt den Griff ab, bevor sie verteilt;
+            // danach rechnet nur diese Aufgabe mit ihm.
+            if let Some(jobs) = unsafe { (*(&raw mut super::JOBS)).as_mut() } {
+                jobs.work();
+            }
         }
     }
 }

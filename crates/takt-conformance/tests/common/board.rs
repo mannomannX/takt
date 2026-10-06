@@ -236,11 +236,18 @@ pub fn a_stretched_tick_is_runtime_hardware(board: &mut dyn Board) -> Vec<String
 /// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
 /// `at now + 100 ns` liegt unter der gemessenen Treiberlatenz der Bruecke
 /// in `corpus-try/hw/<board>.hw` und ist ein `TimingFault`, `at now + 1 ms`
-/// geht durch. Derselbe Bau ohne Konfiguration rechnet wie die Simulation
-/// und laesst beides durch.
+/// geht durch. Derselbe Bau ohne `guard` am Kanal rechnet wie die
+/// Simulation und laesst beides durch. Ohne Konfiguration baut ein Board
+/// nicht mehr: Speicher, Schutzregion und NVM stehen in ihr (M11 Schritt 10).
 pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> Vec<String> {
     let program = board::root().join("crates/takt-conformance/tests/programs/guard.takt");
     let hardware = board::root().join(format!("corpus-try/hw/{}.hw", board.name()));
+    // Dieselbe Konfiguration ohne die gemessenen `guard_ns`.
+    let text = std::fs::read_to_string(&hardware).expect("Konfiguration lesbar");
+    let unguarded = takt_conformance::target_dir().join(format!("takt-{}-ohne-guard.hw", board.name()));
+    let lines: String =
+        text.lines().filter(|l| !l.trim_start().starts_with("guard_ns")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(&unguarded, lines).expect("Konfiguration schreibbar");
     let mut run = |options: Options| board.build(&program, &options).and_then(|elf| board.run(&elf, &options));
     let mut failed = Vec::new();
     match run(Options::fresh(20).with_hardware(hardware)) {
@@ -254,12 +261,12 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
         }
         Err(e) => failed.push(format!("kein Lauf mit Konfiguration: {e}")),
     }
-    match run(Options::fresh(20)) {
+    match run(Options::fresh(20).with_hardware(unguarded)) {
         Ok(without) if without.contains("fault m") => {
-            failed.push(format!("ohne Konfiguration ist guard null:\n{without}"));
+            failed.push(format!("ohne `guard` am Kanal ist guard null:\n{without}"));
         }
         Ok(_) => {}
-        Err(e) => failed.push(format!("kein Lauf ohne Konfiguration: {e}")),
+        Err(e) => failed.push(format!("kein Lauf ohne `guard`: {e}")),
     }
     failed
 }

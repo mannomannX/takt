@@ -30,8 +30,8 @@ static inline const char *takt_dur_unit(long long ns) { return takt_dur_name[tak
 
 /// Die nativen Funktionen (4.5) liegen in der Runtime: `takt-native-abi`
 /// liefert ihre C-Einstiege, fuer den Wirtsrahmen als statische
-/// Bibliothek ([`native_library`]), fuer ein Board ueber
-/// `takt-mcu-program` (FB-293). Der Rahmen deklariert nur, was er selbst
+/// Bibliothek ([`native_library`]), fuer ein Board ueber `takt-embed`
+/// (FB-293). Der Rahmen deklariert nur, was er selbst
 /// ruft — die Jobs; den erzeugten Code bindet der Linker direkt.
 pub fn natives(s: &mut String, p: &Program) {
     for n in &p.natives {

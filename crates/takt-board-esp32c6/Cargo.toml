@@ -14,7 +14,8 @@ rust-version = "1.86"
 
 [dependencies]
 takt-board-support = { path = "../takt-board-support" }
-takt-mcu-program = { path = "../takt-mcu-program" }
+# Die Griffe der Jobs (4.5, 12.11): Das Programm bringt das Bring-up mit.
+takt-embed = { path = "../takt-embed" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 takt-rt-core = { path = "../takt-rt-core" }
 

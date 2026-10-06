@@ -188,6 +188,14 @@ fn the_board_agrees_with_the_interpreter() {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
+/// Darf das Programm unter RTIC laufen? Wer sein Profil nennt und ein anderes
+/// als `shared` verlangt, bindet sich nicht in die Form `rtos` (12.11):
+/// `07_embedded_field` nennt `baremetal`.
+fn runs_under_rtos(name: &str) -> bool {
+    let p = common::board::program(&board::corpus_path(name));
+    p.config.runtime_profile().is_none_or(|profile| profile == takt_mir::program::RuntimeProfile::Shared)
+}
+
 /// **Unter RTIC rechnet der Korpus wie der Interpreter** (12.8, M10
 /// Schritt 16): Takt als hoechstpriore Aufgabe, darueber eine Funk-ISR,
 /// darunter eine Treiber-Aufgabe mit kritischen Abschnitten und die Jobs.
@@ -198,7 +206,7 @@ fn the_board_agrees_with_the_interpreter() {
 fn the_board_agrees_with_the_interpreter_under_rtos() {
     let Some((mut board, _guard)) = board() else { return };
     let only = std::env::var("TAKT_F401_ONLY").ok();
-    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n)).collect();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_under_rtos(n)).collect();
     let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).under_rtos());
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }

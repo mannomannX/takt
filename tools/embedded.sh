@@ -145,10 +145,6 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
     cargo build --target riscv32imac-unknown-none-elf "$@"
     cargo clippy --target riscv32imac-unknown-none-elf "$@" -- -D warnings
 )
-(
-    cd crates/takt-mcu-program
-    cargo clippy --target riscv32imac-unknown-none-elf "$@" -- -D warnings
-)
 # Die Einstiege der Natives fuer beide Ziele und als Bibliothek des Wirts,
 # mit jedem Job; ihre Puffervertraege mit Tests auf dem Wirt (FB-397) —
 # ohne `host`, dessen Panic-Handler der statischen Bibliothek gehoert.
@@ -163,10 +159,9 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
 )
 cargo build --release --target riscv32imac-unknown-none-elf     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
 program_in_binary crates/takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
-# Der MCU-Rahmen auf dem Wirt (13.8, `takt driver-test --crate`): eigener
-# Workspace wie die Bring-ups, mit demselben Programm wie das F401.
-TAKT_PROGRAM="$(pwd)/corpus-try/29_heartbeat.takt" \
-    cargo clippy --all-targets --manifest-path crates/takt-bringup-host/Cargo.toml "$@" -- -D warnings
+# Die Schleife des Wirts (13.8, `takt driver-test --crate`): eigener
+# Workspace wie die Bring-ups; das Programm bringt, wer sie bindet.
+cargo clippy --all-targets --manifest-path crates/takt-bringup-host/Cargo.toml "$@" -- -D warnings
 # Takt als Baustein in Rust (12.11): die Traits fuer beide Ziele, Bauhelfer
 # und Testhilfe auf dem Wirt mit ihren Tests.
 (

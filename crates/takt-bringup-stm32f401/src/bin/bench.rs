@@ -19,31 +19,26 @@
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Generated, WfiSleep, cycles, stack};
+use takt_board_stm32f401::{BAUD, Board, CORE_HZ, WfiSleep, cycles, stack};
 use takt_rt_baremetal::Sleep;
 use takt_rt_baremetal::bench::{series, subnormal_failures, write_series, write_value};
 use takt_rt_core::{Program, tick_end};
 
-mod takt {
+/// Das Programm als Lieferform (12.11), dasselbe wie in `takt`.
+mod app {
     #![allow(dead_code)]
-    include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
+    include!(env!("TAKT_APP_RS"));
 }
 
 mod reference {
     include!(concat!(env!("OUT_DIR"), "/bench_reference.rs"));
 }
 
-/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
-/// Ziel verlangt (`build.rs`).
-mod arena {
-    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
-}
-
-static mut ARENA: arena::Arena = arena::Arena::new();
+static mut ARENA: app::Arena = app::Arena::new();
 
 /// Die Treiber des Messkerns: Stummel, ausdruecklich (`build.rs`).
 mod drivers {
-    include!(concat!(env!("OUT_DIR"), "/takt_drivers_bench.rs"));
+    include!(concat!(env!("OUT_DIR"), "/takt_rig_bench.rs"));
 }
 
 unsafe extern "C" {
@@ -98,7 +93,7 @@ fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
     let board = Board::WEACT_BLACKPILL;
-    let Ok(_timer) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, takt::TICK_NS) else {
+    let Ok(_timer) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, app::TICK_NS) else {
         halt();
     };
     let Ok(mut uart) = takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, BAUD) else {
@@ -116,18 +111,16 @@ fn main() -> ! {
 
     let runs = RUNS.and_then(|r| r.parse().ok()).unwrap_or(1000);
     let mut rig = drivers::Rig::default();
-    // SAFETY: `ARENA` gehoert nur diesem Programm; der Kleber in `drivers`
-    // ist fuer `Rig` erzeugt, und `rig` lebt bis zum Ende von `main`, das
-    // nicht zurueckkehrt.
-    let mut program = unsafe { Generated::init((&raw mut ARENA).cast(), core::ptr::from_mut(&mut rig).cast()) };
+    // SAFETY: `ARENA` gehoert nur diesem Programm, und `main` kehrt nicht zurueck.
+    let mut program = app::Program::init(unsafe { &mut *(&raw mut ARENA) }, &mut rig);
     let mut k = 0u64;
     for _ in 0..WARMUP {
-        program.tick(k, tick_end(k, takt::TICK_NS));
+        program.tick(k, tick_end(k, app::TICK_NS));
         k += 1;
     }
     let takt = cortex_m::interrupt::free(|_| {
         series(runs, cycles::now, || {
-            program.tick(k, tick_end(k, takt::TICK_NS));
+            program.tick(k, tick_end(k, app::TICK_NS));
             k += 1;
         })
     });

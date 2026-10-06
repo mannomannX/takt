@@ -8,8 +8,12 @@
 //! `takt-host/<crate>` im Zielverzeichnis, die Abbilder unter
 //! `takt-host-images` — wie bei den Boards je Stand der Quellen.
 //!
-//! **Der Pruefstand.** Das Bauskript des Programms erzeugt die Treiber
-//! (`bringup::drivers`): je Adresse das Geraet, das die Verdrahtung des
+//! **Das Programm** bindet der Bauhelfer aus `takt-embed` wie bei jedem Wirt
+//! (12.11): Bibliothek und Modul der Lieferform, darin Treiber-Traits,
+//! Kleber und Huelle.
+//!
+//! **Der Pruefstand.** Das Bauskript des Programms erzeugt ihn
+//! (`bringup::rig`): je Adresse das Geraet, das die Verdrahtung des
 //! Wirts-Bring-ups oder des Treiber-Crates nennt (`takt-drivers.toml`,
 //! 12.6). Mit Treiber-Crate hat jede Adresse genau ein Geraet, sonst
 //! scheitert der Bau vor dem Start mit ihrem Namen — einen Vorgabewert, der
@@ -118,11 +122,12 @@ impl Host {
         let manifest = format!(
             "# Erzeugt von `takt-conformance::board::host`.\n[package]\nname = \"{package}\"\nversion = \"0.0.0\"\n\
              edition = \"2024\"\npublish = false\n\n[workspace]\n\n[build-dependencies]\n\
-             takt-conformance = {{ path = {}, default-features = false }}\n\n[dependencies]\n\
-             takt-bringup-host = {{ path = {} }}\ntakt-embed = {{ path = {} }}\n{dependency}",
+             takt-conformance = {{ path = {}, default-features = false }}\n\
+             takt-embed = {{ path = {embed}, features = [\"build\"] }}\n\n[dependencies]\n\
+             takt-bringup-host = {{ path = {} }}\ntakt-embed = {{ path = {embed} }}\n{dependency}",
             krate("takt-conformance")?,
             toml_path(&bringup),
-            krate("takt-embed")?
+            embed = krate("takt-embed")?
         );
         let files: String = wiring.iter().map(|p| format!("        Path::new({:?}),\n", plain(p))).collect();
         let build = format!(
@@ -134,18 +139,29 @@ impl Host {
              let Some(p) = bringup::compile(&program) else {{ panic!(\"{{program}}: uebersetzt nicht\") }};\n    \
              let wiring = bringup::wiring(&[\n{files}    ]);\n    \
              let out = PathBuf::from(std::env::var(\"OUT_DIR\").expect(\"OUT_DIR\"));\n    \
-             bringup::drivers(&p, &wiring, &out.join(\"takt_drivers.rs\"));\n}}\n"
+             bringup::rig(&p, &wiring, &out.join(\"takt_rig.rs\"));\n    \
+             // Die Lieferform wie bei jedem Wirt (12.11), mit dem Werkzeug dieses Baus.\n    \
+             let mut embed = takt_embed::build::Program::new(&program)\n        \
+             .tool(bringup::takt())\n        .prefix(\"app\")\n        .form(\"logical\")\n        \
+             .build_for(bringup::build_name())\n        .drivers(\"crate::drivers::Rig\");\n    \
+             if let Some(hw) = bringup::hardware_path() {{\n        embed = embed.hardware(hw);\n    }}\n    \
+             embed.build();\n}}\n"
         );
         let main = "// Erzeugt von `takt-conformance::board::host`.\n\n\
-                    mod drivers {\n    include!(concat!(env!(\"OUT_DIR\"), \"/takt_drivers.rs\"));\n}\n\n\
+                    mod app {\n    #![allow(dead_code)]\n    include!(env!(\"TAKT_APP_RS\"));\n}\n\n\
+                    mod drivers {\n    include!(concat!(env!(\"OUT_DIR\"), \"/takt_rig.rs\"));\n}\n\n\
                     fn main() -> std::process::ExitCode {\n    \
                     // Der Schluessel des Abbilds, fuer den Zwischenspeicher von `board::host`.\n    \
                     if std::env::args().nth(1).as_deref() == Some(\"--key\") {\n        \
                     println!(\"{}\", env!(\"TAKT_HOST_KEY\"));\n        \
                     return std::process::ExitCode::SUCCESS;\n    }\n    \
                     let mut rig = drivers::Rig::default();\n    \
-                    // SAFETY: Der Kleber in `drivers` ist fuer `Rig` erzeugt, und `rig` lebt bis zum Ende des Laufs.\n    \
-                    unsafe { takt_bringup_host::run(core::ptr::from_mut(&mut rig).cast()) }\n}\n";
+                    // Auf dem Heap: Die Arena eines Programms mit Ringen und Pools ist fuer den Stack zu gross.\n    \
+                    // SAFETY: `Arena` traegt nur `MaybeUninit`; jedes Bitmuster ist eine Arena vor `init`.\n    \
+                    let mut arena = unsafe { Box::<app::Arena>::new_uninit().assume_init() };\n    \
+                    // `new`, nicht `init`: Tick 0 zeichnet auf, und erst `run` legt die Leitung an.\n    \
+                    let program = app::Program::new(&mut arena, &mut rig);\n    \
+                    takt_bringup_host::run(program, app::TICK_NS, app::OVERRUN_ALERT)\n}\n";
         write_if_changed(&dir.join("Cargo.toml"), &manifest)?;
         write_if_changed(&dir.join("build.rs"), &build)?;
         write_if_changed(&dir.join("src/main.rs"), main)?;
@@ -164,6 +180,7 @@ impl Host {
     pub(super) fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         cfg!(debug_assertions).hash(&mut h);
+        (options.build == takt_sema::Build::Hw).hash(&mut h);
         hash_program(program, &mut h)?;
         if let Some(hw) = &options.hardware {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
@@ -225,7 +242,9 @@ impl Board for Host {
             .arg(&manifest)
             .env("CARGO_TARGET_DIR", crate::target_dir())
             .env("TAKT_PROGRAM", &program)
-            .env("TAKT_HOST_KEY", &key);
+            .env("TAKT_HOST_KEY", &key)
+            // 8.3: Der Vergleich verlangt `sim`, damit Plant-Modelle mitlaufen (FB-438).
+            .env("TAKT_BUILD", if options.build == takt_sema::Build::Hw { "hw" } else { "sim" });
         match &options.hardware {
             Some(hw) => cargo.env("TAKT_HARDWARE", absolute(hw)?),
             None => cargo.env_remove("TAKT_HARDWARE"),

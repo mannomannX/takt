@@ -240,6 +240,44 @@ fn a_protected_arena_is_padded_and_aligned_to_its_region() {
     assert!(module.contains(&format!("align({})", window.size)), "das Modul legt die Arena ebenso aus");
 }
 
+/// **Die Kalibrierung eines Tripels steht unter seinem Ziel** (8.10,
+/// FB-445): Cargo nennt `riscv32imac-unknown-none-elf`, die
+/// Hardware-Konfiguration `[target.riscv32imac]`. Die Lieferform findet die
+/// NVM-Zeiten des C6 dort; ohne sie gaelte sein Flash als asynchron, und das
+/// Journal hielte den Kern mitten in einer Periode an.
+#[test]
+fn the_calibration_of_a_triple_is_found_under_its_target_name() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    let dir = scratch("takt-embed-calibration");
+    let run = takt(&[
+        "build",
+        "corpus-try/35_persist.takt",
+        "--emit",
+        "embed",
+        "--target",
+        "riscv32imac-unknown-none-elf",
+        "--form",
+        "own",
+        "--prefix",
+        "journal",
+        "--hardware",
+        "corpus-try/hw/esp32c6.hw",
+        "--out",
+        dir.to_str().expect("Pfad"),
+    ]);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(run.status.success(), "{stderr}");
+    assert!(!stderr.contains("kein Ziel"), "das Ziel des Tripels fehlt in der Konfiguration:\n{stderr}");
+    let module = std::fs::read_to_string(dir.join("journal.rs")).expect("Modul");
+    let blocking: i64 = module
+        .lines()
+        .find_map(|l| l.strip_prefix("pub const NVM_BLOCKING_NS: i64 = ")?.strip_suffix(';')?.parse().ok())
+        .unwrap_or_else(|| panic!("NVM_BLOCKING_NS fehlt:\n{module}"));
+    assert!(blocking > 0, "die NVM-Zeiten des C6 fehlen: {blocking}");
+}
+
 fn manifest_value(dir: &Path, key: &str) -> String {
     let text = std::fs::read_to_string(dir.join("valve.manifest")).expect("Manifest");
     let prefix = format!("{key} = ");

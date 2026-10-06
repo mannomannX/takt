@@ -1502,7 +1502,7 @@ dependencies = [
  "esp-storage",
  "portable-atomic",
  "takt-board-support",
- "takt-mcu-program",
+ "takt-embed",
  "takt-rt-baremetal",
  "takt-rt-core",
 ]
@@ -1523,7 +1523,6 @@ dependencies = [
  "takt-conformance",
  "takt-driver-probe",
  "takt-embed",
- "takt-frame",
  "takt-llvm",
  "takt-native",
  "takt-native-abi",
@@ -1621,14 +1620,6 @@ dependencies = [
 [[package]]
 name = "takt-match"
 version = "0.1.0"
-
-[[package]]
-name = "takt-mcu-program"
-version = "0.1.0"
-dependencies = [
- "takt-native-abi",
- "takt-rt-core",
-]
 
 [[package]]
 name = "takt-mir"

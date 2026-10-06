@@ -336,29 +336,10 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "takt-bringup-host"
 version = "0.1.0"
 dependencies = [
- "takt-conformance",
  "takt-embed",
- "takt-frame",
- "takt-llvm",
- "takt-mcu-program",
  "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",
-]
-
-[[package]]
-name = "takt-conformance"
-version = "0.1.0"
-dependencies = [
- "takt-crypto",
- "takt-diag",
- "takt-frame",
- "takt-hal",
- "takt-interp",
- "takt-llvm",
- "takt-mir",
- "takt-native",
- "takt-sema",
 ]
 
 [[package]]
@@ -372,10 +353,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "takt-diag"
-version = "0.1.0"
-
-[[package]]
 name = "takt-embed"
 version = "0.1.0"
 dependencies = [
@@ -384,66 +361,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "takt-frame"
-version = "0.1.0"
-dependencies = [
- "takt-hal",
- "takt-interp",
- "takt-llvm",
- "takt-mir",
- "takt-native",
- "takt-rt-core",
-]
-
-[[package]]
 name = "takt-hal"
 version = "0.1.0"
-dependencies = [
- "takt-mir",
-]
-
-[[package]]
-name = "takt-interp"
-version = "0.1.0"
-dependencies = [
- "libtaktm",
- "takt-crypto",
- "takt-diag",
- "takt-hal",
- "takt-match",
- "takt-mir",
- "takt-native",
- "takt-rt-core",
-]
-
-[[package]]
-name = "takt-llvm"
-version = "0.1.0"
-dependencies = [
- "libtaktm",
- "takt-diag",
- "takt-mir",
-]
-
-[[package]]
-name = "takt-match"
-version = "0.1.0"
-
-[[package]]
-name = "takt-mcu-program"
-version = "0.1.0"
-dependencies = [
- "takt-native-abi",
- "takt-rt-core",
-]
-
-[[package]]
-name = "takt-mir"
-version = "0.1.0"
-dependencies = [
- "takt-diag",
- "takt-native",
-]
 
 [[package]]
 name = "takt-native"
@@ -472,25 +391,6 @@ version = "0.1.0"
 dependencies = [
  "takt-hal",
  "takt-native",
-]
-
-[[package]]
-name = "takt-sema"
-version = "0.1.0"
-dependencies = [
- "libtaktm",
- "takt-diag",
- "takt-interp",
- "takt-mir",
- "takt-native",
- "takt-syntax",
-]
-
-[[package]]
-name = "takt-syntax"
-version = "0.1.0"
-dependencies = [
- "takt-diag",
 ]
 
 [[package]]

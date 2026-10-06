@@ -19,29 +19,19 @@
 //! oder bis es seinen Lauf beendet (`next_run`, 12.7); `0` heisst nur
 //! Letzteres. Die Ausgabe hat die Form der Boards — Kopf, `takt trace`,
 //! der Trace, die Bilanz, `takt end`.
+//!
+//! **Das Programm bringt der Wirt mit** (12.11, M11 Schritt 10): Er bindet
+//! es als Lieferform (`takt_embed::build`), mit dem Pruefstand `Rig` als
+//! Treiberobjekt, und reicht die Huelle an [`run`].
 
-#![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt ihn in der TCB")]
+#![allow(unsafe_code, reason = "Telemetrie fuer den C-Rahmen; 9.5 fuehrt ihn in der TCB")]
 
-use core::ffi::c_void;
 use std::io::{BufWriter, Stdout, Write as _};
 use std::process::ExitCode;
 
-use takt_embed::{Input, Sample};
-use takt_mcu_program::Generated;
+use takt_embed::{Dispatch as _, Input, Jobs as _, Sample};
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Port, Telemetry, Trace};
 use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
-
-/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
-/// Ziel verlangt (`build.rs`).
-mod arena {
-    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
-}
-
-mod takt {
-    #![allow(dead_code, missing_docs)]
-    include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
-}
-use takt::{OVERRUN_ALERT, TICK_NS};
 
 /// Die Standardausgabe als Leitung: Sie nimmt jedes Byte.
 struct Console(BufWriter<Stdout>);
@@ -158,14 +148,9 @@ fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
     None
 }
 
-/// Fuehrt das Programm aus, so viele Ticks, wie das erste Argument nennt.
-///
-/// # Safety
-///
-/// `drivers` zeigt auf das Treiberobjekt, fuer das der Kleber des Programms
-/// erzeugt ist (`takt_conformance::bringup::drivers`), und lebt bis zum
-/// Ende des Laufs.
-pub unsafe fn run(drivers: *mut c_void) -> ExitCode {
+/// Fuehrt `program` aus, so viele Ticks, wie das erste Argument nennt;
+/// `tick_ns` und `alert` sind `TICK_NS` und `OVERRUN_ALERT` seines Moduls.
+pub fn run<P: takt_embed::Program>(mut program: P, tick_ns: i64, alert: bool) -> ExitCode {
     let Some(ticks) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) else {
         eprintln!("Aufruf: <binary> TICKS");
         return ExitCode::FAILURE;
@@ -177,26 +162,22 @@ pub unsafe fn run(drivers: *mut c_void) -> ExitCode {
     head.newline();
     head.mark();
 
-    let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
-    // Auf dem Heap: Die Arena eines Programms mit Ringen und Pools ist fuer
-    // den Stack zu gross. `init` beschreibt sie ganz.
-    let mut arena = Box::<arena::Arena>::new_uninit();
-    // SAFETY: Die Arena gehoert nur diesem Programm und lebt bis zum Ende
-    // von `run`; zu `drivers` siehe oben.
-    let program = unsafe { Generated::init(arena.as_mut_ptr().cast(), drivers) };
-    let jobs = program.jobs();
+    let policy = if alert { Policy::Alert } else { Policy::Fault };
+    let (mut dispatch, mut jobs) = (program.dispatch(), program.jobs());
     // Zwischen den Ticks rechnet jeder Job zu Ende und die Leitung leert
     // sich; dann steht die Uhr auf der Frist (4.5, 13.8).
     let clock = LogicalClock::new(|| {
-        while jobs.dispatch() {
-            jobs.work();
+        if let (Some(dispatch), Some(jobs)) = (dispatch.as_mut(), jobs.as_mut()) {
+            while dispatch.next() {
+                jobs.work();
+            }
         }
         if let Some(line) = line() {
             line.drain(DRAIN_ROUNDS);
         }
     });
-    let trace = Trace::new(Cadence::of(ticks, 1), TICK_NS, line);
-    let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, TICK_NS, policy);
+    let trace = Trace::new(Cadence::of(ticks, 1), tick_ns, line);
+    let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, tick_ns, policy);
     let stats = takt_rt_baremetal::run(&mut rt, no_journal());
     if let Some(line) = line() {
         takt_rt_baremetal::report(line, rt.overrun(), &stats, &JournalStats::default(), None);

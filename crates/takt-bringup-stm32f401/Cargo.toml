@@ -11,15 +11,16 @@ rust-version = "1.85"
 # laesst sich nicht lokal aufheben. Siehe `takt-board-stm32f401`.
 [workspace]
 
-# Der Bau uebersetzt das Takt-Programm mit: `takt-frame` erzeugt den Rahmen,
-# `takt-conformance` ruft `takt build` (`bringup`), `takt-llvm` nennt die Flags. Sie
-# laufen auf dem *Wirt*, nicht auf dem Ziel — darum `build-dependencies`
-# und nicht `dependencies`.
+# Der Bau bindet das Takt-Programm wie jeder Wirt (12.11): `takt-embed`
+# ruft `takt build --emit embed`, `takt-conformance` stellt Werkzeug und
+# Pruefstand (`bringup`), `takt-llvm` Praefix und Flags. Sie laufen auf dem
+# *Wirt*, nicht auf dem Ziel — darum `build-dependencies` und nicht
+# `dependencies`.
 [build-dependencies]
-# Die Groesse der MPU-Region fuer den Programmzustand (12.3).
+# Der Schluessel des Baus im ELF (KON1-009).
 takt-board-support = { path = "../takt-board-support" }
 takt-conformance = { path = "../takt-conformance", default-features = false }
-takt-frame = { path = "../takt-frame" }
+takt-embed = { path = "../takt-embed", features = ["build"] }
 takt-llvm = { path = "../takt-llvm" }
 
 [dependencies]
@@ -32,11 +33,11 @@ takt-board-support = { path = "../takt-board-support" }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 # Fuer den `Program`-Trait, den die Tickschleife ruft.
 takt-rt-core = { path = "../takt-rt-core" }
-# Unter RTIC (Profil `shared`) gibt die Takt-Aufgabe Jobs aus und die Job-Aufgabe rechnet sie (4.5).
-takt-mcu-program = { path = "../takt-mcu-program" }
 # Das Pruefgeraet des Treiberrands (12.6, 13.8), wie auf dem Wirt.
 takt-driver-probe = { path = "../takt-driver-probe" }
-# Die Geraete-Traits, die die Geraete des Boards erfuellen (12.6).
+# Die Geraete-Traits, die die Geraete des Boards erfuellen (12.6), und die
+# Griffe der Jobs: Unter RTIC verteilt die Takt-Aufgabe, die Job-Aufgabe
+# rechnet (4.5).
 takt-embed = { path = "../takt-embed" }
 
 # `critical-section-single-core` liefert die Implementierung, die die PAC

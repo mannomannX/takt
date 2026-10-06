@@ -13,12 +13,14 @@
 //! Dasselbe gilt fuer das Takt-Programm: Das Binary `takt` ruft
 //! `app_init` und `app_tick`, und die entstehen erst, wenn eine
 //! `.takt`-Datei uebersetzt und der MCU-Rahmen erzeugt wurde. Beides
-//! passiert hier, damit `cargo build` genuegt.
+//! passiert hier, damit `cargo build` genuegt — wie bei jedem Wirt ueber den
+//! Bauhelfer aus `takt-embed` (12.11, M11 Schritt 10): Bibliothek `libapp.a`,
+//! Modul `app.rs`.
 //!
 //! **Welches Programm?** `takt.toml` neben `Cargo.toml` nennt den Pfad
 //! (FB-141); `TAKT_PROGRAM` sticht nur fuer einen einmaligen Versuch.
 //!
-//! **Die Treiber** (12.6) erzeugt `bringup::drivers` als Pruefstand: fuer
+//! **Die Treiber** (12.6) erzeugt `bringup::rig` als Pruefstand: fuer
 //! `takt` nach der Verdrahtung des Boards und des Pruefgeraets, fuer
 //! `bench` ganz aus Stummeln — der Messkern misst den Tick, nicht die
 //! Peripherie.
@@ -86,41 +88,51 @@ fn build_takt_program(out: &Path) {
         panic!("Takt-Programm nicht gefunden: {program}");
     }
 
-    // Der Rahmen (12.1) entsteht hier, weil er an der Speicherform in
-    // `takt-conformance` haengt; `takt build` uebersetzt das Programm.
     let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
-    let rahmen = out.join("takt_rahmen.c");
-    let protect = state_section(out, takt_llvm::arena::of(&p).bytes);
-    let frame = takt_frame::mcu::build_with(
-        &p,
-        takt_frame::mcu::Frame {
-            diagnostics: takt_llvm::Diagnostics::Ids,
-            hardware: bringup::hardware().as_ref(),
-            protect: Some(protect),
-            prefix: takt_llvm::symbols::Prefix::default(),
-            stubs: false,
-            job_stack_reserve: takt_frame::mcu::JOB_STACK_RESERVE,
-        },
-    );
-    if let Err(e) = fs::write(&rahmen, &frame.source) {
-        panic!("Rahmen nicht schreibbar: {e}");
-    }
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
     let wiring =
         bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
-    bringup::drivers(&p, &wiring, &out.join("takt_drivers.rs"));
-    bringup::drivers(&p, &[], &out.join("takt_drivers_bench.rs"));
-    bringup::arena(&frame, "thumbv7em-none-eabihf", &[], &out.join("takt_arena.rs"));
-
-    let ir = out.join("takt_programm.ll");
-    bringup::takt_build(&program, "thumbv7em", &["--emit", "ir"], &ir);
-    bringup::takt_build(&program, "thumbv7em", &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
-    let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
-    translate(&ir, &obj, &[]);
-    translate(&rahmen, &obj_rahmen, &[]);
+    bringup::rig(&p, &wiring, &out.join("takt_rig.rs"));
+    bringup::rig(&p, &[], &out.join("takt_rig_bench.rs"));
+    // 12.8, 12.11: Unter RTIC ist das Programm eine Aufgabe neben anderen.
+    let form = if env::var_os("CARGO_FEATURE_RTOS").is_some() { "rtos" } else { "own" };
+    let mut embed = takt_embed::build::Program::new(&program)
+        .tool(bringup::takt())
+        .prefix(takt_llvm::symbols::Prefix::default().as_str())
+        .form(form)
+        .build_for(bringup::build_name())
+        .drivers("crate::drivers::Rig")
+        .hardware(hardware());
+    // 11.2: Instrumentierung und Diagnosestufe, wenn der Lauf sie verlangt.
+    if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
+        embed = embed.instrument(&mode);
+    }
+    if let Ok(level) = env::var("TAKT_DIAGNOSTICS") {
+        embed = embed.diagnostics(&level);
+    }
+    let built = embed.build();
+    // 12.3: Den Programmbereich schuetzt die MPU ausserhalb des Ticks; ohne
+    // Schutzregion richtete der Speicherschutz des Boards nichts ein.
+    let unit = built.value("protect");
+    assert_eq!(
+        unit, "armv7m_mpu",
+        "das F401 schuetzt die Arena mit seiner MPU: `protect = armv7m_mpu` in der Hardware-Konfiguration (12.3)"
+    );
+    state_section(out, &built.value("protect_bytes"));
     let reference = bench_reference(out);
-    bringup::archive(out, &[&obj, &obj_rahmen, &reference]);
+    bringup::archive(out, "taktboard", &[&reference]);
     println!("cargo:rustc-link-arg=--icf=all");
+}
+
+/// Die Hardware-Konfiguration des Boards (8.10): Kalibrierung, Speicher,
+/// Schutzeinheit. `TAKT_HARDWARE` sticht, etwa fuer `takt driver-test` mit
+/// gemessenem `guard`.
+fn hardware() -> String {
+    bringup::hardware_path().unwrap_or_else(|| {
+        let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/hw/stm32f401.hw");
+        println!("cargo:rerun-if-changed={}", own.display());
+        own.display().to_string()
+    })
 }
 
 /// Der Schluessel des Baus (KON1-009) als Symbol ins ELF
@@ -137,20 +149,14 @@ fn image_key() {
 }
 
 /// Die Arena als eigener Abschnitt am Anfang des RAM (12.3, 12.11,
-/// `takt_state.x`). `program` ist die Groesse ihres Programmbereichs; die
-/// MPU-Region deckt ihn in ganzen Achteln. Liefert, wie weit der Rahmen
-/// ihn auffuellt: bis ans Ende dieser Achtel, damit die Runtime dahinter
-/// ungeschuetzt bleibt.
-fn state_section(out: &Path, program: u64) -> u64 {
-    const RAM_ORIGIN: u32 = 0x2000_0000;
+/// `takt_state.x`). `protected` ist, was die MPU-Region von ihr deckt: der
+/// Programmbereich in ganzen Achteln, wie die Lieferform ihn aufgefuellt hat
+/// (`protect_bytes` im Manifest); die Runtime dahinter bleibt ungeschuetzt.
+fn state_section(out: &Path, protected: &str) {
     println!("cargo:rerun-if-changed=takt_state.x");
-    let bytes = u32::try_from(program).unwrap_or_else(|_| panic!("Programmbereich {program} Byte"));
-    let region = takt_board_support::mpu::Region::covering(RAM_ORIGIN, bytes)
-        .expect("ORIGIN(RAM) ist fuer jede Region ausgerichtet");
     fs::write(out.join("takt_state.x"), include_bytes!("takt_state.x")).expect("takt_state.x schreiben");
-    println!("cargo:rustc-link-arg=--defsym=__takt_state_size={}", region.protected());
+    println!("cargo:rustc-link-arg=--defsym=__takt_state_size={protected}");
     println!("cargo:rustc-link-arg=-Ttakt_state.x");
-    u64::from(region.protected())
 }
 
 /// Welches Programm gebaut wird.
@@ -234,10 +240,10 @@ fn math_vectors(out: &Path) {
         .expect("math_vectors.rs schreiben");
 }
 
-/// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.
+/// Uebersetzt eine C-Quelle mit den Flags, die auch der erzeugte Code bekommt.
 fn translate(src: &Path, obj: &Path, extra: &[&str]) {
     let ok = Command::new(bringup::clang())
-        .args(["-c", "-Wno-override-module", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
+        .args(["-c", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
         .args(takt_llvm::toolchain::object_flags("thumbv7em-none-eabihf"))
         .args(extra)
         .arg(src)

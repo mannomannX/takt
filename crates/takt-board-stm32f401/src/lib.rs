@@ -64,7 +64,6 @@ pub use guard::{Iwdg, WfiSleep};
 pub use jobs::JobContext;
 pub use led::Led;
 pub use mpu::Mpu;
-pub use takt_mcu_program::Generated;
 pub use tick::{Tim2Tick, on_timer_interrupt};
 pub use uart::{BAUD, Telemetry, Usart1, telemetry};
 pub use wire::Wire;

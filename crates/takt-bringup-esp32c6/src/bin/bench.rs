@@ -13,33 +13,28 @@
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{CORE_HZ, Generated, WfiSleep, cycles, stack};
+use takt_board_esp32c6::{CORE_HZ, WfiSleep, cycles, stack};
 use takt_rt_baremetal::bench::{series, subnormal_failures, write_series, write_value};
 use takt_rt_baremetal::{DRAIN_ROUNDS, Sleep};
 use takt_rt_core::{Program, tick_end};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-mod takt {
+/// Das Programm als Lieferform (12.11), dasselbe wie in `takt`.
+mod app {
     #![allow(dead_code)]
-    include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
+    include!(env!("TAKT_APP_RS"));
 }
 
 mod reference {
     include!(concat!(env!("OUT_DIR"), "/bench_reference.rs"));
 }
 
-/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
-/// Ziel verlangt (`build.rs`).
-mod arena {
-    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
-}
-
-static mut ARENA: arena::Arena = arena::Arena::new();
+static mut ARENA: app::Arena = app::Arena::new();
 
 /// Die Treiber des Messkerns: Stummel, ausdruecklich (`build.rs`).
 mod drivers {
-    include!(concat!(env!("OUT_DIR"), "/takt_drivers_bench.rs"));
+    include!(concat!(env!("OUT_DIR"), "/takt_rig_bench.rs"));
 }
 
 unsafe extern "C" {
@@ -95,18 +90,16 @@ fn main() -> ! {
 
     let runs = RUNS.and_then(|r| r.parse().ok()).unwrap_or(1000);
     let mut rig = drivers::Rig::default();
-    // SAFETY: `ARENA` gehoert nur diesem Programm; der Kleber in `drivers`
-    // ist fuer `Rig` erzeugt, und `rig` lebt bis zum Ende von `main`, das
-    // nicht zurueckkehrt.
-    let mut program = unsafe { Generated::init((&raw mut ARENA).cast(), core::ptr::from_mut(&mut rig).cast()) };
+    // SAFETY: `ARENA` gehoert nur diesem Programm, und `main` kehrt nicht zurueck.
+    let mut program = app::Program::init(unsafe { &mut *(&raw mut ARENA) }, &mut rig);
     let mut k = 0u64;
     for _ in 0..WARMUP {
-        program.tick(k, tick_end(k, takt::TICK_NS));
+        program.tick(k, tick_end(k, app::TICK_NS));
         k += 1;
     }
     let takt = critical_section::with(|_| {
         series(runs, cycles::now, || {
-            program.tick(k, tick_end(k, takt::TICK_NS));
+            program.tick(k, tick_end(k, app::TICK_NS));
             k += 1;
         })
     });

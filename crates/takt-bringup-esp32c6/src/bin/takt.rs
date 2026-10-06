@@ -1,7 +1,8 @@
 //! Ein Takt-Programm auf dem ESP32-C6 (plan/esp32c6.md Schritte 4 und 6).
 //!
 //! Die Schleife aus `takt-rt-baremetal` (12.1) ueber dem SYSTIMER-Alarm,
-//! das erzeugte Programm hinter `Generated`, das `persist`-Journal in
+//! das erzeugte Programm hinter der Huelle seiner Lieferform (`app`, 12.11),
+//! das `persist`-Journal in
 //! zwei Flash-Sektoren, Schlaf in `idle`-Zustaenden als virtuelle Ticks
 //! (9.9), der Trace ueber USB-Serial-JTAG. Welches Programm laeuft, sagt
 //! `takt.toml`. Hier steht nur, was das Board ist: Peripherie, Geraete
@@ -15,19 +16,19 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{
-    Button, CORE_HZ, FlashNvm, Generated, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0,
-};
+use takt_board_esp32c6::{Button, CORE_HZ, FlashNvm, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0};
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock, Trace};
 use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-mod takt {
+/// Das Programm als Lieferform (12.11): Konstanten, Arena, Treiber-Traits,
+/// Kleber und Huelle, erzeugt von `takt build --emit embed` (`build.rs`).
+mod app {
     #![allow(dead_code)]
-    include!(concat!(env!("OUT_DIR"), "/takt_consts.rs"));
+    include!(env!("TAKT_APP_RS"));
 }
-use takt::{HW_ADDRESSES, LOGIC_HASH, NVM_BLOCKING_NS, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
+use app::{HW_ADDRESSES, LOGIC_HASH, NVM_BLOCKING_NS, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
 
 /// Die Frist des Watchdogs im Betrieb (12.3): zwei Perioden und ein
 /// blockierender NVM-Vorgang (8.10). Ein Tick, der darueber hinaus
@@ -167,22 +168,23 @@ fn probe() {
 /// Wie der vorige Lauf endete (12.7), beim Start aus dem Plattformblock gelesen.
 static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
 
-/// Die Arena des Programms (12.11), so gross, wie der Rahmen sie fuer dieses
-/// Ziel verlangt (`build.rs`).
-mod arena {
-    include!(concat!(env!("OUT_DIR"), "/takt_arena.rs"));
-}
-
 /// Die Arena, statisch. Unter ihrem Namen liest der Host ueber JTAG den Tick,
 /// wenn die Konsole schweigt (`__takt_tick_at`).
 #[unsafe(export_name = "app_arena")]
-static mut ARENA: arena::Arena = arena::Arena::new();
+static mut ARENA: app::Arena = app::Arena::new();
 
 /// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
 /// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
 mod drivers {
-    include!(concat!(env!("OUT_DIR"), "/takt_drivers.rs"));
+    include!(concat!(env!("OUT_DIR"), "/takt_rig.rs"));
 }
+
+/// Der Pruefstand, statisch: Das Programm haelt ihn so lange wie die Arena.
+static mut RIG: Option<drivers::Rig> = None;
+
+/// Der Griff, mit dem der Job-Faden rechnet (4.5): statisch, weil der Faden
+/// ihn ueber `main` hinaus haelt.
+static mut JOBS: Option<app::Jobs<'static>> = None;
 
 /// Die Geraete des Boards (12.6): je Adresse der Typ, den `takt-drivers.toml`
 /// nennt. `main` richtet die Peripherie ein; die Geraete erreichen sie ueber
@@ -313,7 +315,7 @@ mod devices {
 }
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
-fn conduct(program: Generated, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
+fn conduct(program: app::Program<'static>, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
@@ -409,11 +411,10 @@ fn main() -> ! {
         }
         persist = Some(Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), &mut current, &mut stored));
     }
-    let mut rig = drivers::Rig::default();
-    // SAFETY: `ARENA` gehoert nur diesem Programm; der Kleber in `drivers`
-    // ist fuer `Rig` erzeugt, und `rig` lebt bis zum Ende von `main`, das
-    // nicht zurueckkehrt.
-    let mut program = unsafe { Generated::new((&raw mut ARENA).cast(), core::ptr::from_mut(&mut rig).cast()) };
+    // SAFETY: Arena und Pruefstand gehoeren nur diesem Programm; `main`
+    // kehrt nicht zurueck, und ausser ihm greift niemand auf sie zu.
+    let (arena, rig) = unsafe { (&mut *(&raw mut ARENA), (*(&raw mut RIG)).insert(drivers::Rig::default())) };
+    let mut program = app::Program::new(arena, rig);
     let loaded = persist.as_mut().map(|p| p.load(&mut program));
     program.ensure_init();
     if let Some(u) = uart() {
@@ -429,7 +430,10 @@ fn main() -> ! {
 
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
     // der Tick holt den Kern zurueck.
-    let mut jobs = JobContext::start(program.jobs());
+    let dispatch = program.dispatch();
+    // SAFETY: ein Faden; der Job-Faden liest den Griff erst nach `start`.
+    let worker = program.jobs().map(|j| unsafe { (*(&raw mut JOBS)).insert(j) as &mut dyn takt_embed::Jobs });
+    let mut jobs = JobContext::start(app::job_stack(), dispatch, worker);
     JOB_STACK.store(jobs.as_ref().map_or(0, JobContext::bottom), Ordering::Relaxed);
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet

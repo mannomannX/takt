@@ -10,17 +10,10 @@ rust-version = "1.86"
 # braucht `unsafe`, und `forbid` (13.4) laesst sich nicht lokal aufheben.
 [workspace]
 
-# Der Bau uebersetzt das Programm aus `TAKT_PROGRAM` und erzeugt den Rahmen
-# dazu, auf dem Wirt wie bei den Boards.
-[build-dependencies]
-takt-conformance = { path = "../takt-conformance", default-features = false }
-takt-frame = { path = "../takt-frame" }
-takt-llvm = { path = "../takt-llvm" }
-
 [dependencies]
-# Die Geraete-Traits (12.6): `PreviousRun` ist ein Geraet des Wirts.
+# Die Lieferform (12.11) und die Geraete-Traits (12.6): `PreviousRun` ist
+# ein Geraet des Wirts.
 takt-embed = { path = "../takt-embed" }
-takt-mcu-program = { path = "../takt-mcu-program" }
 # Wie auf den Boards: jede kuratierte Native, die der erzeugte Code ruft.
 takt-native-abi = { path = "../takt-native-abi", features = ["ecdsa", "rsa", "aes-gcm"] }
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }

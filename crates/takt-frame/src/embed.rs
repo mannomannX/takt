@@ -260,9 +260,14 @@ impl Jobs<'_> {{
 
 impl<'a> takt_embed::Program for Program<'a> {{
     type Jobs = Jobs<'a>;
+    type Dispatch = Dispatch<'a>;
 
     fn jobs(&mut self) -> Option<Jobs<'a>> {{
         Program::jobs(self)
+    }}
+
+    fn dispatch(&mut self) -> Option<Dispatch<'a>> {{
+        Program::dispatch(self)
     }}
 }}
 

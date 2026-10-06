@@ -11,13 +11,14 @@ rust-version = "1.86"
 # nicht lokal aufheben (plan/esp32c6.md 2).
 [workspace]
 
-# Der Bau uebersetzt das Takt-Programm mit: `takt-frame` erzeugt den Rahmen,
-# `takt-conformance` ruft `takt build` (`bringup`), `takt-llvm` nennt die Flags.
+# Der Bau bindet das Takt-Programm wie jeder Wirt (12.11): `takt-embed`
+# ruft `takt build --emit embed`, `takt-conformance` stellt Werkzeug und
+# Pruefstand (`bringup`), `takt-llvm` Praefix und Flags.
 [build-dependencies]
 # Der Schluessel des Baus im ELF (KON1-009).
 takt-board-support = { path = "../takt-board-support" }
 takt-conformance = { path = "../takt-conformance", default-features = false }
-takt-frame = { path = "../takt-frame" }
+takt-embed = { path = "../takt-embed", features = ["build"] }
 takt-llvm = { path = "../takt-llvm" }
 
 [dependencies]

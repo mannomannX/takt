@@ -1,13 +1,14 @@
 //! Baut das Takt-Programm fuer den ESP32-C6 und bindet es ein.
 //!
-//! Dieselbe Konstruktion wie beim F401-Bring-up: `takt build` erzeugt das
-//! Objekt fuer `riscv32imac`, `takt_frame::mcu` den C-Rahmen, `clang`
-//! uebersetzt ihn fuer RV32IMAC, `llvm-ar` packt beides in ein Archiv.
-//! Die Linker-Argumente stehen hier und nicht in `.cargo/config.toml`: Die
-//! Konfigurationsdatei gilt nur, wenn `cargo` aus diesem Verzeichnis laeuft,
-//! und ein Bau von aussen erzeugte sonst still ein Binary ohne Speicherkarte.
+//! **Wie jeder Wirt** (12.11, M11 Schritt 10): Der Bauhelfer aus
+//! `takt-embed` ruft `takt build --emit embed` und bindet die Bibliothek
+//! `libapp.a` mit Rahmen und erzeugtem Code; das Modul `app.rs` traegt
+//! Konstanten, Arena, Treiber-Traits und die Huelle. Die Linker-Argumente
+//! stehen hier und nicht in `.cargo/config.toml`: Die Konfigurationsdatei
+//! gilt nur, wenn `cargo` aus diesem Verzeichnis laeuft, und ein Bau von
+//! aussen erzeugte sonst still ein Binary ohne Speicherkarte.
 //!
-//! **Die Treiber** (12.6) erzeugt `bringup::drivers` als Pruefstand: fuer
+//! **Die Treiber** (12.6) erzeugt `bringup::rig` als Pruefstand: fuer
 //! `takt` nach der Verdrahtung des Boards und des Pruefgeraets, fuer
 //! `bench` ganz aus Stummeln — der Messkern misst den Tick, nicht die
 //! Peripherie.
@@ -87,47 +88,50 @@ fn build_takt_program(out: &Path) {
         panic!("Takt-Programm nicht gefunden: {program}");
     }
     let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
-    let rahmen = out.join("takt_rahmen.c");
-    let frame = takt_frame::mcu::build_with(
-        &p,
-        takt_frame::mcu::Frame {
-            diagnostics: diagnostics(),
-            hardware: bringup::hardware().as_ref(),
-            protect: None,
-            prefix: takt_llvm::symbols::Prefix::default(),
-            stubs: false,
-            // 4.5: Interrupts laufen auf dem Stack des unterbrochenen Fadens,
-            // also auch auf dem des Jobs (`jobs.rs` im Board-Crate).
-            // Trap-Rahmen, Verteiler und die Handler einer Prioritaetsstufe
-            // brauchen unter 1 KiB; die Reserve verdoppelt das.
-            job_stack_reserve: 2048,
-        },
-    );
-    if let Err(e) = fs::write(&rahmen, &frame.source) {
-        panic!("Rahmen nicht schreibbar: {e}");
-    }
     let here = Path::new(env!("CARGO_MANIFEST_DIR"));
     let wiring =
         bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
-    bringup::drivers(&p, &wiring, &out.join("takt_drivers.rs"));
-    bringup::drivers(&p, &[], &out.join("takt_drivers_bench.rs"));
-    bringup::arena(&frame, "riscv32-unknown-none-elf", &["-march=rv32imac", "-mabi=ilp32"], &out.join("takt_arena.rs"));
+    bringup::rig(&p, &wiring, &out.join("takt_rig.rs"));
+    bringup::rig(&p, &[], &out.join("takt_rig_bench.rs"));
+    let mut embed = takt_embed::build::Program::new(&program)
+        .tool(bringup::takt())
+        .prefix(takt_llvm::symbols::Prefix::default().as_str())
+        .form("own")
+        .build_for(bringup::build_name())
+        .drivers("crate::drivers::Rig")
+        .hardware(hardware());
+    // 11.2: `statements` fuellt `pc` je Maschine; Default auf `baremetal`
+    // ist `states`, also aus.
+    if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
+        embed = embed.instrument(&mode);
+    }
+    if let Ok(level) = env::var("TAKT_DIAGNOSTICS") {
+        embed = embed.diagnostics(&level);
+    }
+    let built = embed.build();
     // Wo der Tick in der Arena steht, als absolutes Symbol: Die Probe liest
     // ihn ueber JTAG, wenn die Konsole schweigt (`Esp32c6::tick_over_jtag`).
-    println!("cargo:rustc-link-arg=--defsym=__takt_tick_at={}", frame.tick_at);
-    let ir = out.join("takt_programm.ll");
-    run_takt_build(&program, &["--emit", "ir"], &ir);
-    run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
-    let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
-    translate(&ir, &obj, &[]);
-    translate(&rahmen, &obj_rahmen, &[]);
-    let millicode = Path::new(env!("CARGO_MANIFEST_DIR")).join("millicode.S");
+    println!("cargo:rustc-link-arg=--defsym=__takt_tick_at={}", built.value("tick_at"));
+    // Was das Board dazulegt: die Millicode-Routinen fuer `-msave-restore`
+    // und die C-Referenz von `takt bench`, wie das Programm im RAM.
+    let millicode = here.join("millicode.S");
     println!("cargo:rerun-if-changed={}", millicode.display());
     let obj_mc = out.join("millicode.o");
     assemble(&millicode, &obj_mc);
     let reference = bench_reference(out);
-    bringup::archive(out, &[&obj, &obj_rahmen, &obj_mc, &reference]);
+    bringup::archive(out, "taktboard", &[&obj_mc, &reference]);
     println!("cargo:rustc-link-arg=--icf=all");
+}
+
+/// Die Hardware-Konfiguration des Boards (8.10): Anschluesse, Kalibrierung,
+/// NVM-Zeiten und die Reserve des Job-Stacks. `TAKT_HARDWARE` sticht, etwa
+/// fuer `takt driver-test` mit gemessenem `guard`.
+fn hardware() -> String {
+    bringup::hardware_path().unwrap_or_else(|| {
+        let own = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/hw/esp32c6.hw");
+        println!("cargo:rerun-if-changed={}", own.display());
+        own.display().to_string()
+    })
 }
 
 /// Der Pfad des Programms aus `takt.toml`; `TAKT_PROGRAM` sticht fuer
@@ -149,26 +153,6 @@ fn program_path() -> String {
         })
         .unwrap_or_else(|| panic!("{config}: kein `program = \"…\"`"));
     format!("{here}/{value}")
-}
-
-/// `takt build` fuer `riscv32imac` mit `emit`, dazu Instrumentierung und
-/// Diagnosestufe aus der Umgebung (11.2) und die Konfiguration des Boards.
-fn run_takt_build(program: &str, emit: &[&str], out: &Path) {
-    let mut extra: Vec<String> = emit.iter().map(|s| (*s).to_string()).collect();
-    if let Ok(mode) = env::var("TAKT_INSTRUMENT") {
-        extra.extend(["--instrument".into(), mode]);
-    }
-    if let Ok(level) = env::var("TAKT_DIAGNOSTICS") {
-        extra.extend(["--diagnostics".into(), level]);
-    }
-    // 8.10: Anschluesse und NVM-Zeiten des Boards, wenn die Konfiguration da ist.
-    let hardware = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/hw/esp32c6.hw");
-    println!("cargo:rerun-if-changed={}", hardware.display());
-    if hardware.exists() {
-        extra.extend(["--hardware".into(), hardware.display().to_string()]);
-    }
-    let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
-    bringup::takt_build(program, "riscv32imac", &extra, out);
 }
 
 /// Die Vektoren der kuratierten Natives fuer das Messprogramm `natives`
@@ -193,7 +177,6 @@ fn math_vectors(out: &Path) {
         .expect("math_vectors.rs schreiben");
 }
 
-/// Uebersetzt eine Quelle (IR oder C) mit den Groessenflags des Ziels.
 /// Die C-Referenz fuer `takt bench` als Objekt: die Datei aus
 /// `TAKT_BENCH_C` oder schwache Definitionen, die niemand ruft, solange
 /// `bench_reference.rs` sagt, dass keine da ist.
@@ -220,11 +203,11 @@ fn bench_reference(out: &Path) -> PathBuf {
     obj
 }
 
+/// Uebersetzt eine C-Quelle mit den Flags, die auch der erzeugte Code bekommt.
 fn translate(src: &Path, obj: &Path, extra: &[&str]) {
     let ok = Command::new(bringup::clang())
         .args([
             "-c",
-            "-Wno-override-module",
             "-ffreestanding",
             "-nostdlib",
             "--target=riscv32-unknown-none-elf",
@@ -251,12 +234,4 @@ fn assemble(src: &Path, obj: &Path) {
         .status()
         .is_ok_and(|s| s.success());
     assert!(ok, "{}: uebersetzt nicht", src.display());
-}
-
-/// Die Diagnosestufe aus `TAKT_DIAGNOSTICS`; ohne Angabe `ids`.
-fn diagnostics() -> takt_llvm::Diagnostics {
-    env::var("TAKT_DIAGNOSTICS")
-        .ok()
-        .and_then(|l| takt_llvm::Diagnostics::parse(&l))
-        .unwrap_or(takt_llvm::Diagnostics::Ids)
 }
