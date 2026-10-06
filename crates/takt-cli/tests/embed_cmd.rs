@@ -67,7 +67,7 @@ fn one_call_delivers_library_header_module_and_manifest() {
     for line in [
         "# takt-manifest 1",
         "prefix = valve",
-        "abi = 3",
+        "abi = 4",
         "protect = none",
         &format!("triple = {}", host_triple()),
         "form = logical",
@@ -112,13 +112,13 @@ fn one_call_delivers_library_header_module_and_manifest() {
     let text = std::fs::read_to_string(&header).expect("Kopf");
     assert!(text.contains("#define VALVE_TICK_NS 10000000LL"), "{text}");
 
-    assert!(module.contains("ffi::valve_abi_3"), "die Huelle liest das ABI-Symbol nicht");
+    assert!(module.contains("ffi::valve_abi_4"), "die Huelle liest das ABI-Symbol nicht");
     let nm = clang.with_file_name(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });
     let symbols = Command::new(&nm).arg("--defined-only").arg(&lib).output().expect("llvm-nm");
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     let abi: Vec<&str> =
         symbols.lines().filter_map(|l| l.split_whitespace().last()).filter(|s| s.contains("_abi_")).collect();
-    assert_eq!(abi, ["valve_abi_3"], "{symbols}");
+    assert_eq!(abi, ["valve_abi_4"], "{symbols}");
 }
 
 /// **Die Float-ABI des Tripels gehoert zur Zielklasse** (12.11, 2.9): Ein
@@ -191,7 +191,8 @@ fn deliver(name: &str, triple: &str, form: &str) -> PathBuf {
 /// Schritt 10): Mit `protect = armv7m_mpu` fuellt der Rahmen den
 /// Programmbereich auf die Region auf, die ihn deckt, der Tick steht dahinter,
 /// und die Arena ist an der Region ausgerichtet; das Manifest nennt beides.
-/// `job_stack_reserve` gibt dem Job-Stack seine Reserve.
+/// `job_stack_reserve` gibt dem Job-Stack seine Reserve; ihn stellt der Wirt
+/// nach `JOB_STACK_BYTES` (4.5, 12.11).
 #[test]
 fn a_protected_arena_is_padded_and_aligned_to_its_region() {
     if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
@@ -234,10 +235,15 @@ fn a_protected_arena_is_padded_and_aligned_to_its_region() {
     assert_eq!(value("protect_bytes"), window.protected.to_string());
     assert_eq!(value("tick_at"), window.protected.to_string(), "der Tick steht hinter dem geschuetzten Bereich");
     assert_eq!(value("arena_align"), window.size.to_string(), "die Arena liegt, wo die Region liegt");
-    let frame = std::fs::read_to_string(out.join("jobs_frame.c")).expect("Rahmen");
-    assert!(frame.contains("#define TAKT_JOB_STACK_RESERVE 3000"), "die Reserve aus der Konfiguration");
+    // 4.5, 12.11: Den Job-Stack stellt der Wirt, mit der Reserve aus der Konfiguration.
+    let job_stack = takt_frame::mcu::job_stack_bytes(&p, 3000);
+    assert!(job_stack > 3000 + 32, "Vertrag, Reserve und Waechter: {job_stack}");
+    assert_eq!(value("job_stack_bytes"), job_stack.to_string());
     let module = std::fs::read_to_string(out.join("jobs.rs")).expect("Modul");
     assert!(module.contains(&format!("align({})", window.size)), "das Modul legt die Arena ebenso aus");
+    assert!(module.contains(&format!("pub const JOB_STACK_BYTES: usize = {job_stack};")), "{module}");
+    let header = std::fs::read_to_string(out.join("jobs.h")).expect("Kopf");
+    assert!(header.contains(&format!("#define JOBS_JOB_STACK_BYTES {job_stack}u")), "{header}");
 }
 
 /// **Die Kalibrierung eines Tripels steht unter seinem Ziel** (8.10,
@@ -309,7 +315,7 @@ fn every_target_class_gets_a_library_with_its_entries_and_arena() {
             "valve_commit",
             "valve_deadline",
             "valve_output_timing",
-            "valve_abi_3",
+            "valve_abi_4",
             "valve_arena_bytes",
         ] {
             assert!(defined.contains(&entry), "{triple}: `{entry}` fehlt:\n{symbols}");
@@ -525,4 +531,93 @@ fn an_unknown_form_and_a_missing_out_are_named() {
     assert!(!run.status.success());
     let err = String::from_utf8_lossy(&run.stderr);
     assert!(err.contains("--emit embed schreibt in ein Verzeichnis; `--out VERZEICHNIS` fehlt"), "{err}");
+}
+
+/// Die Lieferform fuer den ESP32-C6 (`xip_flash`, 12.3) in `dir`.
+fn xip_delivery(dir: &Path) -> Output {
+    takt(&[
+        "build",
+        VALVE,
+        "--emit",
+        "embed",
+        "--target",
+        "riscv32imac-unknown-none-elf",
+        "--form",
+        "own",
+        "--prefix",
+        "valve",
+        "--hardware",
+        "corpus-try/hw/esp32c6.hw",
+        "--out",
+        dir.to_str().expect("Pfad"),
+    ])
+}
+
+/// **Unter `xip_flash` legen Fragmente den Tick-Pfad in den RAM** (12.3,
+/// M11 Schritt 11): `P_ram.x` fuer GNU ld und lld, `P.lf` fuer `ldgen`; das
+/// Manifest sagt `xip_flash` und nennt die Einstiege des Tick-Pfads. Ohne
+/// Instruktions-RAM gibt es keine Fragmente.
+#[test]
+fn xip_flash_brings_the_fragments_and_the_tick_path() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    let dir = scratch("takt-embed-xip");
+    let run = xip_delivery(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let ram = std::fs::read_to_string(dir.join("valve_ram.x")).expect("Fragment fuer ld");
+    assert!(ram.contains("*libvalve.a:(.text .text.*"), "{ram}");
+    let lf = std::fs::read_to_string(dir.join("valve.lf")).expect("Fragment fuer ldgen");
+    assert!(lf.contains("archive: libvalve.a"), "{lf}");
+    let manifest = std::fs::read_to_string(dir.join("valve.manifest")).expect("Manifest");
+    assert!(manifest.contains("xip_flash = true"), "{manifest}");
+    assert!(manifest.contains("tick_path = valve_tick, valve_commit,"), "{manifest}");
+    assert!(manifest.contains("arena_symbol = valve_arena"), "{manifest}");
+
+    let plain = scratch("takt-embed-no-xip");
+    let run = takt(&[
+        "build",
+        VALVE,
+        "--emit",
+        "embed",
+        "--target",
+        host_triple(),
+        "--form",
+        "logical",
+        "--out",
+        plain.to_str().expect("Pfad"),
+    ]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(!plain.join("valve_ram.x").exists() && !plain.join("valve.lf").exists(), "ohne `iram` keine Fragmente");
+    let manifest = std::fs::read_to_string(plain.join("valve.manifest")).expect("Manifest");
+    assert!(manifest.contains("xip_flash = false"), "{manifest}");
+}
+
+/// **`P.lf` liest der Parser von ESP-IDF** (12.3, 12.11): eine Abbildung
+/// `takt_valve` fuer `libvalve.a`, alles nach `noflash`. Braucht ESP-IDF
+/// (`IDF_PATH`) und ein Python mit `pyparsing` (`TAKT_IDF_PYTHON`, sonst
+/// `python`).
+#[test]
+#[ignore = "ESP-IDF: IDF_PATH und ein Python mit pyparsing (TAKT_IDF_PYTHON); mit --ignored"]
+fn the_ldgen_fragment_parses_with_esp_idf() {
+    let idf = std::env::var("IDF_PATH").expect("IDF_PATH nennt ESP-IDF");
+    let python = std::env::var("TAKT_IDF_PYTHON").unwrap_or_else(|_| "python".to_string());
+    let dir = scratch("takt-embed-ldgen");
+    let run = xip_delivery(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let script = "import sys\n\
+                  sys.path.insert(0, sys.argv[1])\n\
+                  from ldgen.fragments import parse_fragment_file\n\
+                  for f in parse_fragment_file(sys.argv[2], None).fragments:\n    \
+                  print(type(f).__name__, f.name, f.archive, sorted(str(e) for e in f.entries))\n";
+    let out = Command::new(python)
+        .args(["-c", script])
+        .arg(Path::new(&idf).join("tools").join("ldgen"))
+        .arg(dir.join("valve.lf"))
+        .output()
+        .expect("Python startet");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{text}");
+    assert!(text.starts_with("Mapping takt_valve libvalve.a"), "{text}");
+    assert!(text.contains("noflash"), "{text}");
 }

@@ -48,6 +48,8 @@ pub struct McuHarness {
     /// hinter dem Programmbereich. Ein Pruefgeraet liest ihn ueber den
     /// Debugport, wenn die Konsole schweigt.
     pub tick_at: u64,
+    /// So viele Bytes braucht der Stack des Job-Kontexts ([`job_stack_bytes`]).
+    pub job_stack_bytes: u64,
 }
 
 /// Baut den Rahmen fuer alle Maschinen eines Programms.
@@ -126,7 +128,7 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     // `apply_scheduled` ihn schreibt.
     crate::parts::scheduled(&mut t, p, &layout, hw, x);
     crate::parts::jitter(&mut t.code, p, hw, x);
-    jobs(&mut t, p, x, frame.job_stack_reserve);
+    jobs(&mut t, p, x);
     declarations(&mut t.code, p, &driven, x);
     // 8.10, 12.6: die Treiber, stark gebunden; Stummel nur ausdruecklich.
     let drivers = crate::drivers::of(p, &layout);
@@ -142,24 +144,65 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     // Fuer einen Wirt, der die Arena nicht in C anlegt (12.11, [`arena_layout`]).
     let _ = writeln!(t.code, "const uint64_t {x}_arena_bytes = sizeof(struct {x}_arena);");
     let _ = writeln!(t.code, "const uint64_t {x}_arena_align = _Alignof(struct {x}_arena);");
-    // Die Version der Schnittstelle: Die Huelle eines Wirts liest das Symbol,
-    // und passt sie nicht, bindet das Programm nicht (12.11).
+    // Die Version der Schnittstelle und der Logik-Hash: Die Huelle eines
+    // Wirts liest beide Symbole, und passt eines nicht, bindet das Programm
+    // nicht; `init` liest sie auch, damit sie in jedem Abbild stehen, das
+    // das Programm startet (12.11, `takt check-image`).
     let abi = crate::embed::ABI;
     let _ = writeln!(t.code, "const uint8_t {x}_abi_{abi} = {abi};");
+    let _ = writeln!(t.code, "const uint8_t {x}_logic_{} = 1;", logic_hex(p));
 
     let mut head = String::new();
     prologue(&mut head, p);
     let arena_types = t.header(x, &arena, frame.protect);
-    let entries = entry_prototypes(x);
+    let entries = entry_prototypes(x, &logic_hex(p));
     let source = format!("{head}{arena_types}\n{entries}\n{}", t.code);
     let header = header(x, &arena_types, &entries, &crate::drivers::c_prototypes(&drivers, x));
-    McuHarness { source, header, layout, tick_at }
+    let job_stack_bytes = job_stack_bytes(p, frame.job_stack_reserve);
+    McuHarness { source, header, layout, tick_at, job_stack_bytes }
+}
+
+/// Der Logik-Hash des Programms als Hexziffern (5.9): im Symbol
+/// `P_logic_<hex>` und im Manifest.
+pub fn logic_hex(p: &Program) -> String {
+    takt_mir::hash::logic_hash(p).0.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Die Einstiege, die im Tick laufen (12.3, 12.11): Schritt, Commit und
+/// Trace, Schlaf und Wecken, Tunables, Ende des Laufs, Jobs verteilen,
+/// Journal und Toleranz. Unter `xip_flash` muessen sie und alles, was sie
+/// rufen, im RAM liegen (`takt check-image`); `init`, `persist_restore`,
+/// `end` und die Rechnung der Jobs laufen ausserhalb des Ticks.
+pub fn tick_path(x: &Prefix) -> Vec<String> {
+    [
+        "tick",
+        "commit",
+        "dump",
+        "pc",
+        "idle",
+        "deadline",
+        "advance",
+        "woken",
+        "wake_sources",
+        "tune",
+        "next_run",
+        "overrun",
+        "hardware",
+        "tolerance",
+        "output_timing",
+        "job_dispatch",
+        "jobs_busy",
+        "persist_snapshot",
+    ]
+    .iter()
+    .map(|e| format!("{x}_{e}"))
+    .collect()
 }
 
 /// Die oeffentlichen Einstiege des Rahmens (12.11). Sie stehen im Kopf fuer
 /// den Wirt und im Rahmen selbst: So prueft der Uebersetzer jede Definition
 /// gegen ihre Deklaration.
-fn entry_prototypes(x: &Prefix) -> String {
+fn entry_prototypes(x: &Prefix, logic: &str) -> String {
     let a = format!("struct {x}_arena *a");
     let lines = [
         format!("int32_t {x}_init_with({a}, void *user, const void *persist, int32_t persist_len);"),
@@ -186,12 +229,12 @@ fn entry_prototypes(x: &Prefix) -> String {
         format!("int32_t {x}_job_dispatch({a});"),
         format!("void {x}_job_work({a});"),
         format!("int32_t {x}_jobs_busy({a});"),
-        format!("uint8_t *{x}_job_stack(uint32_t *size);"),
         format!("extern const int32_t {x}_persist_entries;"),
         format!("extern const int32_t {x}_persist_bound;"),
         format!("extern const uint64_t {x}_arena_bytes;"),
         format!("extern const uint64_t {x}_arena_align;"),
         format!("extern const uint8_t {x}_abi_{};", crate::embed::ABI),
+        format!("extern const uint8_t {x}_logic_{logic};"),
     ];
     let mut s = String::from("/* Die Einstiege (12.11): jeder bekommt die Arena des Wirts. */\n");
     for line in lines {
@@ -554,6 +597,53 @@ fn declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machi
 /// laufen — die Interrupts selbst.
 pub const JOB_STACK_RESERVE: u32 = 1024;
 
+/// Der Stack des Job-Kontexts (4.5, 12.11): der groesste `stack`-Vertrag
+/// der Jobs, `reserve` und 32 Byte fuer den Waechter am unteren Ende (12.3),
+/// an 32 Byte ausgerichtet, damit eine MPU-Region oder ein
+/// NAPOT-Watchpoint ihn genau abdeckt; 0 ohne Jobs. Ihn stellt der Wirt,
+/// statisch fuer die Lebensdauer des Programms wie die Arena, und nur er
+/// legt ihn ab: Die Bibliothek haelt ausserhalb der Arena keinen
+/// beschreibbaren Speicher (`takt check-image`).
+pub fn job_stack_bytes(p: &Program, reserve: u32) -> u64 {
+    let slots = crate::parts::job_slots(p);
+    let Some(stack) = slots.iter().map(|(_, _, n)| p.natives[n.index()].stack).max() else { return 0 };
+    32 + u64::from(stack) + u64::from(reserve)
+}
+
+/// Der Typ des Job-Stacks fuer einen Wirt in Rust (12.11): `bytes` Bytes,
+/// an 32 Byte ausgerichtet ([`job_stack_bytes`]).
+pub fn rust_job_stack(bytes: u64) -> String {
+    format!(
+        "/// Die Groesse des Job-Stacks in Bytes (4.5, 12.11); 0 ohne Jobs.
+pub const JOB_STACK_BYTES: usize = {bytes};
+
+/// Der Stack des Job-Kontexts (4.5): Der Wirt stellt ihn statisch fuer die
+/// Lebensdauer des Programms, wie die Arena; am unteren Ende liegt der
+/// Waechter (12.3).
+#[repr(C, align(32))]
+pub struct JobStack([u8; JOB_STACK_BYTES]);
+
+impl JobStack {{
+    /// Ein Job-Stack; `const` fuer einen statischen.
+    pub const fn new() -> JobStack {{
+        JobStack([0; JOB_STACK_BYTES])
+    }}
+
+    /// Der Stack fuer den Job-Kontext; `None` ohne Jobs.
+    pub fn bytes(&mut self) -> Option<&mut [u8]> {{
+        (JOB_STACK_BYTES > 0).then_some(&mut self.0[..])
+    }}
+}}
+
+impl Default for JobStack {{
+    fn default() -> JobStack {{
+        JobStack::new()
+    }}
+}}
+"
+    )
+}
+
 /// 4.5: Jobs auf der MCU. Der Start kopiert die Argumente in den Slot und
 /// reiht ihn ein; gerechnet wird im Job-Kontext der Runtime, einem Faden
 /// mit eigenem Stack, den der Tick unterbricht (12.3). Sichtbar wird das
@@ -571,17 +661,14 @@ pub const JOB_STACK_RESERVE: u32 = 1024;
 /// Ohne Jobs bleiben die Einstiege, damit das Board sie ohne Unterschied
 /// rufen kann.
 ///
-/// **Unter dem Stack liegt der Waechter** (12.3): 32 Byte am unteren Ende,
-/// zusaetzlich zu Vertrag und Reserve und an 32 Byte ausgerichtet, damit
-/// eine MPU-Region oder ein NAPOT-Watchpoint ihn genau abdeckt.
-fn jobs(t: &mut Text, p: &Program, x: &Prefix, reserve: u32) {
+/// Den Stack des Job-Kontexts stellt der Wirt ([`job_stack_bytes`]).
+fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let s = &mut t.code;
     let _ = writeln!(s, "/* Jobs (4.5): Slots der Hauptschleife, ein Auftrag fuer den Job-Kontext. */");
     let Some((slots, out_max)) = crate::parts::job_tables(s, p, x) else {
         let _ = writeln!(s, "int32_t {x}_job_dispatch(struct {x}_arena *a) {{ (void)a; return 0; }}");
         let _ = writeln!(s, "void {x}_job_work(struct {x}_arena *a) {{ (void)a; }}");
-        let _ = writeln!(s, "int32_t {x}_jobs_busy(struct {x}_arena *a) {{ (void)a; return 0; }}");
-        let _ = writeln!(s, "uint8_t *{x}_job_stack(uint32_t *size) {{ *size = 0; return 0; }}\n");
+        let _ = writeln!(s, "int32_t {x}_jobs_busy(struct {x}_arena *a) {{ (void)a; return 0; }}\n");
         return;
     };
     // So gross wie der Puffer, den der erzeugte Code fuer die Argumente anlegt.
@@ -594,7 +681,6 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix, reserve: u32) {
         .max()
         .unwrap_or(0)
         .max(4);
-    let stack = crate::parts::job_slots(p).iter().map(|(_, _, n)| p.natives[n.index()].stack).max().unwrap_or(0);
     let names: Vec<String> = crate::parts::job_slots(p)
         .iter()
         .map(|(mi, j, _)| {
@@ -622,14 +708,6 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix, reserve: u32) {
     let _ = writeln!(f, "    unsigned char work_in[{in_max}], work_out[{out_max}];");
     let s = &mut t.code;
     let _ = writeln!(s, "static const char *const takt_job_names[{slots}] = {{ {} }};", names.join(", "));
-    let _ = writeln!(s, "#define TAKT_JOB_STACK_RESERVE {reserve}");
-    let _ = writeln!(
-        s,
-        "static unsigned char takt_job_stack_mem[32 + {stack} + TAKT_JOB_STACK_RESERVE] __attribute__((aligned(32)));"
-    );
-    let _ = writeln!(s, "uint8_t *{x}_job_stack(uint32_t *size) {{");
-    let _ = writeln!(s, "    *size = sizeof takt_job_stack_mem; return takt_job_stack_mem;");
-    let _ = writeln!(s, "}}");
 
     let _ = writeln!(
         s,
@@ -752,6 +830,10 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // 12.11: `init` beschreibt die ganze Arena und verlaesst sich nicht auf
     // genullten Speicher.
     let _ = writeln!(s, "    memset(a, 0, sizeof *a);");
+    // 12.11: ABI-Version und Logik-Hash stehen in jedem Abbild, das das
+    // Programm startet; `takt check-image` liest sie dort.
+    let _ = writeln!(s, "    (void)*(volatile const uint8_t *)&{x}_abi_{};", crate::embed::ABI);
+    let _ = writeln!(s, "    (void)*(volatile const uint8_t *)&{x}_logic_{};", logic_hex(p));
     let _ = writeln!(s, "    a->user = user;");
     let _ = writeln!(s, "    takt_edge_init(a);");
 

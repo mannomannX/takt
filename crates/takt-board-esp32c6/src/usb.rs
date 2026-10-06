@@ -32,6 +32,7 @@ pub fn reenumerate_if_requested() {
 }
 
 /// Der Reset auf RTC-Ebene, wie der EN-Pin.
+#[esp_hal::ram]
 pub fn chip_reset() -> ! {
     // SAFETY: Den RTC-Timer nutzt sonst nichts im Bring-up, und nach diesem
     // Aufruf laeuft nichts mehr — der Watchdog setzt den Chip zurueck.

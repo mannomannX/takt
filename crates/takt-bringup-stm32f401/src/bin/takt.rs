@@ -187,8 +187,9 @@ static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
 
 /// Die Arena, am Anfang des RAM: Ihren Programmbereich schuetzt die MPU
 /// ausserhalb des Ticks (12.3, `takt_state.x`); die Lieferform richtet sie
-/// an der Region aus.
+/// an der Region aus. Unter ihrem Namen findet `takt check-image` sie.
 #[unsafe(link_section = ".takt_state")]
+#[unsafe(export_name = "app_arena")]
 static mut ARENA: app::Arena = app::Arena::new();
 
 /// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
@@ -199,6 +200,10 @@ mod drivers {
 
 /// Der Pruefstand, statisch: Das Programm haelt ihn so lange wie die Arena.
 static mut RIG: Option<drivers::Rig> = None;
+
+/// Der Stack des Job-Fadens (4.5): Ihn stellt der Wirt, so gross, wie die
+/// Lieferform sagt; unter seinem Ende liegt der Waechter (12.3).
+static mut JOB_STACK: app::JobStack = app::JobStack::new();
 
 /// Der Griff, mit dem der Job-Faden oder die Job-Aufgabe rechnet (4.5):
 /// statisch, weil sie ihn ueber den Aufbau hinaus halten.
@@ -589,8 +594,10 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     }
 
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden auf
-    // dem Stack der Lieferform; unter dessen Ende liegt ein Waechter (12.3).
-    let job_stack = if cfg!(feature = "rtos") { None } else { app::job_stack() };
+    // ihrem Stack; unter dessen Ende liegt ein Waechter (12.3). Unter RTIC
+    // rechnet die Job-Aufgabe auf dem Stack des RTOS.
+    // SAFETY: einmal beim Aufbau; danach haelt nur der Job-Faden den Stack.
+    let job_stack = if cfg!(feature = "rtos") { None } else { unsafe { (*(&raw mut JOB_STACK)).bytes() } };
 
     #[cfg(not(feature = "rtos"))]
     let nvic = cp.NVIC;

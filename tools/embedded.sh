@@ -128,6 +128,21 @@ program_in_binary() {
     fi
 }
 
+# **Haelt das Abbild, was die Lieferform verspricht?** (12.11, M11 Schritt
+# 11): `takt check-image` gegen das Manifest, das der Bau des Bring-ups
+# schrieb — ABI und Logik-Hash, die Arena, nichts Beschreibbares daneben,
+# unter `xip_flash` der Tick-Pfad im RAM. Das Werkzeug ist das, mit dem das
+# Bring-up gebaut hat (`release`, FB-193).
+image_checked() {
+    local triple="$1" crate="$2" bin="$3" manifest
+    manifest="$(ls -t "${target_dir:-target}/$triple/release/build/$crate"-*/out/takt/app/app.manifest 2>/dev/null | head -1)"
+    if [ -z "$manifest" ]; then
+        echo "FEHLER: kein app.manifest im Bau von $crate" >&2
+        exit 1
+    fi
+    "${target_dir:-target}/release/takt" check-image "$bin" --manifest "$manifest"
+}
+
 # Die Probe: Liegt die Vektortabelle dort, wo der Bootloader sie erwartet?
 # `takt-flash-weact --dry-run` prueft Stackzeiger, Resetvektor und Groesse,
 # ohne ein Board anzufassen.
@@ -137,6 +152,7 @@ tmp="$(mktemp -t takt-bringup-XXXXXX)"
 cargo run -q -p takt-flash-weact --bin takt-flash-weact -- "$tmp" --dry-run
 rm -f "$tmp"
 program_in_binary crates/takt-bringup-stm32f401 "$bin"
+image_checked thumbv7em-none-eabihf takt-bringup-stm32f401 "$bin"
 
 echo
 echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
@@ -157,8 +173,13 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
     cargo clippy --all-targets --features ecdsa,rsa,aes-gcm "$@" -- -D warnings
     cargo test --features ecdsa,rsa,aes-gcm "$@"
 )
-cargo build --release --target riscv32imac-unknown-none-elf     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
+# Von aussen gilt `.cargo/config.toml` des Bring-ups nicht; die Schalter fuer
+# `esp-hal` setzt darum der Aufruf, wie der Board-Harness (12.3, FB-449).
+ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK=true ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM=false \
+    cargo build --release --target riscv32imac-unknown-none-elf \
+    --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
 program_in_binary crates/takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
+image_checked riscv32imac-unknown-none-elf takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
 # Die Schleife des Wirts (13.8, `takt driver-test --crate`): eigener
 # Workspace wie die Bring-ups; das Programm bringt, wer sie bindet.
 cargo clippy --all-targets --manifest-path crates/takt-bringup-host/Cargo.toml "$@" -- -D warnings
@@ -179,4 +200,5 @@ cargo test -p takt-board-support -p takt-flash-weact "$@"
 
 echo
 echo "Gebaut und geprueft: Kerne (${cores[*]}) fuer ${targets[*]}, beide Board-Crates, beide Bring-ups mit"
-echo "Abbild- und Programmpruefung, Natives mit Tests, takt-embed, takt-bringup-host, die rechnende Haelfte."
+echo "Abbild-, Programm- und Bindungspruefung (check-image), Natives mit Tests, takt-embed, takt-bringup-host,"
+echo "die rechnende Haelfte."

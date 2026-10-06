@@ -83,6 +83,7 @@ impl UsbJtag {
     /// `wr_done`, das aber erst wirkt, wenn der Host den Endpunkt abfragt —
     /// also beim ersten IN-Token danach, nicht beim Reset selbst. Was im
     /// FIFO stand, hat der Host nie gesehen.
+    #[esp_hal::ram]
     fn settle(&mut self) {
         let regs = USB_DEVICE::regs();
         let raw = regs.int_raw().read();
@@ -110,6 +111,7 @@ impl UsbJtag {
     }
 
     /// Leert den Empfangspuffer, hoechstens ein Paket je Aufruf (4.1).
+    #[esp_hal::ram]
     fn drain_rx(&mut self) {
         let regs = USB_DEVICE::regs();
         for _ in 0..64 {
@@ -133,6 +135,7 @@ fn on_packet_taken() {
 }
 
 impl Port for UsbJtag {
+    #[esp_hal::ram]
     fn try_write(&mut self, b: u8) -> bool {
         self.settle();
         if self.in_flight || self.filled == PACKET || self.port.write_byte_nb(b).is_err() {
@@ -142,6 +145,7 @@ impl Port for UsbJtag {
         true
     }
 
+    #[esp_hal::ram]
     fn flush(&mut self) {
         self.settle();
         self.drain_rx();
@@ -157,6 +161,7 @@ impl Port for UsbJtag {
     }
 
     /// Nichts mehr im FIFO, und der Host hat das letzte Paket abgeholt.
+    #[esp_hal::ram]
     fn idle(&mut self) -> bool {
         self.settle();
         self.filled == 0 && !self.in_flight

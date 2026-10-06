@@ -41,7 +41,8 @@ impl Ws2812 {
         Ok(Ws2812 { last: None, channel: Some(channel) })
     }
 
-    /// Setzt die Farbe; `[0, 0, 0]` ist aus.
+    /// Setzt die Farbe; `[0, 0, 0]` ist aus. Der Tick ruft es (12.3).
+    #[esp_hal::ram]
     pub fn set(&mut self, rgb: [u8; 3]) {
         if self.last == Some(rgb) {
             return;

@@ -203,6 +203,14 @@ impl Built {
             std::fs::read_to_string(&self.manifest).unwrap_or_else(|e| panic!("{}: {e}", self.manifest.display()));
         value(&text, key).unwrap_or_else(|| panic!("{}: kein `{key}`", self.manifest.display()))
     }
+
+    /// Das Linker-Fragment `P_ram.x`, das unter `xip_flash` den Tick-Pfad in
+    /// den RAM legt (12.3); `None` auf einem Ziel ohne Instruktions-RAM.
+    pub fn ram_fragment(&self) -> Option<PathBuf> {
+        let prefix = self.value("prefix");
+        let path = self.manifest.with_file_name(format!("{prefix}_ram.x"));
+        (self.value("xip_flash") == "true" && path.is_file()).then_some(path)
+    }
 }
 
 /// Der Wert zu `key` in einem Manifest (`key = wert`).

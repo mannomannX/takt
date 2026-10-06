@@ -22,6 +22,7 @@ pub mod drivers;
 pub mod edge;
 pub mod embed;
 pub mod layout;
+pub mod linker;
 pub mod mcu;
 pub mod parts;
 pub mod streams;

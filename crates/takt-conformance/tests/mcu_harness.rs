@@ -726,7 +726,6 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
         "int32_t app_job_dispatch(struct app_arena *a)",
         "void app_job_work(struct app_arena *a)",
         "int32_t app_jobs_busy(struct app_arena *a)",
-        "uint8_t *app_job_stack(uint32_t *size)",
     ] {
         assert!(
             src.contains(symbol),
@@ -748,8 +747,19 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     assert!(src[at..].contains("if (app_jobs_busy(a)) return 0;"), "{src}");
 
     // Ohne Jobs bleiben die Einstiege, und das Board ruft sie ohne Unterschied.
-    let plain = takt_frame::mcu::build(&corpus("01_minimal.takt")).source;
-    assert!(plain.contains("int32_t app_job_dispatch(struct app_arena *a) { (void)a; return 0; }"), "{plain}");
+    let plain = takt_frame::mcu::build(&corpus("01_minimal.takt"));
+    assert!(
+        plain.source.contains("int32_t app_job_dispatch(struct app_arena *a) { (void)a; return 0; }"),
+        "{}",
+        plain.source
+    );
+
+    // 12.11: Den Job-Stack stellt der Wirt; die Bibliothek haelt ausserhalb
+    // der Arena keinen beschreibbaren Speicher.
+    let jobs = takt_frame::mcu::build(&corpus("40_jobs.takt"));
+    assert!(jobs.job_stack_bytes > u64::from(takt_frame::mcu::JOB_STACK_RESERVE) + 32, "{}", jobs.job_stack_bytes);
+    assert_eq!(plain.job_stack_bytes, 0, "ohne Jobs kein Job-Stack");
+    assert!(!jobs.source.contains("static unsigned char"), "kein Puffer in der Bibliothek:\n{}", jobs.source);
 }
 
 /// **Auch der Start tastet ab** (9.4, FB-316): Ein `enter:` des

@@ -121,19 +121,31 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     let lib = e.out.join(if e.triple.ends_with("-msvc") { format!("{x}.lib") } else { format!("lib{x}.a") });
     archive(&lib, &[&obj, &obj_frame])?;
 
-    write(&e.out.join(format!("{x}.h")), &header(&frame.header, e.program, x, e.nvm_blocking_ns))?;
+    let job_stack = frame.job_stack_bytes;
+    write(&e.out.join(format!("{x}.h")), &header(&frame.header, e.program, x, e.nvm_blocking_ns, job_stack))?;
     let layout = takt_frame::layout::of(e.program);
     let drivers = takt_frame::drivers::of(e.program, &layout);
+    let logic = takt_frame::mcu::logic_hex(e.program);
     let module = takt_frame::embed::Module {
         prefix: x,
         consts: &e.consts_rs,
         arena: (bytes, align),
+        job_stack_bytes: job_stack,
+        logic: &logic,
         drivers: &drivers,
         drivers_type: e.drivers_type,
     };
     write(&e.out.join(format!("{x}.rs")), &takt_frame::embed::rust_module(&module))?;
+    // 12.3: Unter `xip_flash` gehoert der Tick-Pfad in den RAM; die
+    // Fragmente sagen dem Linker des Wirts, was dazu gehoert.
+    let xip = memory.iram.is_some();
+    if xip {
+        write(&e.out.join(format!("{x}_ram.x")), &takt_frame::linker::ld_fragment(x))?;
+        write(&e.out.join(format!("{x}.lf")), &takt_frame::linker::ldgen_fragment(x))?;
+    }
     let placement = Placement { bytes, align, tick_at: frame.tick_at, protect: memory.protect.zip(window) };
-    write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &placement))?;
+    let layout_lines = Layout { arena: &placement, job_stack, xip };
+    write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &layout_lines))?;
     let sys = drivers.iter().filter(|d| d.kind == takt_frame::drivers::Kind::Sys).count();
     println!(
         "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}), {} Treiber, {sys} sys-Kanaele",
@@ -156,6 +168,14 @@ fn protection(
     unit.window(bytes)
         .map(Some)
         .ok_or_else(|| format!("protect = {}: keine Region deckt {bytes} Byte Programmbereich", unit.name()))
+}
+
+/// Was der Wirt in seinen Speicher- und Bauplan uebernimmt (12.11): die
+/// Arena, der Job-Stack und ob der Tick-Pfad im RAM liegen muss.
+struct Layout<'a> {
+    arena: &'a Placement,
+    job_stack: u64,
+    xip: bool,
 }
 
 /// Wie die Arena liegt: Groesse, Ausrichtung, die Stelle des Ticks und die
@@ -186,7 +206,7 @@ fn check_form(p: &takt_mir::Program, form: Form) -> Result<(), String> {
 
 /// Der Kopf `P.h`: der Kopf des Rahmens und die Konstanten des Programms,
 /// dieselben wie im Rust-Modul, mit dem Praefix.
-fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns: i64) -> String {
+fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns: i64, job_stack: u64) -> String {
     let upper = x.as_str().to_uppercase();
     let hash = takt_mir::hash::logic_hash(p);
     let key = u64::from_le_bytes(hash.0[..8].try_into().unwrap_or_default());
@@ -197,6 +217,8 @@ fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns
     let alert = u8::from(p.config.overrun == takt_mir::program::OverrunPolicy::Alert);
     let _ = writeln!(consts, "#define {upper}_OVERRUN_ALERT {alert}");
     let _ = writeln!(consts, "#define {upper}_LOGIC_HASH {key:#018x}ULL");
+    // 4.5, 12.11: Den Job-Stack stellt der Wirt, an 32 Byte ausgerichtet.
+    let _ = writeln!(consts, "#define {upper}_JOB_STACK_BYTES {job_stack}u");
     let _ = writeln!(consts, "#define {upper}_PERSIST_BOUND {}u", takt_mir::persist::max_payload(p).unwrap_or(0));
     let min = takt_mir::persist::min_interval_ns(p).unwrap_or(0);
     let _ = writeln!(consts, "#define {upper}_PERSIST_MIN_INTERVAL_NS {min}LL\n");
@@ -212,16 +234,16 @@ fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns
 
 /// Das Manifest `P.manifest` (12.11): was der Wirt in seinen Speicher- und
 /// Bauplan uebernimmt.
-fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], arena: &Placement) -> String {
+fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layout<'_>) -> String {
     let p = e.program;
     let x = e.prefix;
-    let hash = takt_mir::hash::logic_hash(p);
+    let arena = plan.arena;
     let mut s = String::new();
     let _ = writeln!(s, "# takt-manifest 1");
     let _ = writeln!(s, "# Erzeugt von `takt build --emit embed` (12.11).");
     let _ = writeln!(s, "prefix = {x}");
     let _ = writeln!(s, "abi = {}", takt_frame::embed::ABI);
-    let _ = writeln!(s, "logic_hash = {}", hash.0.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    let _ = writeln!(s, "logic_hash = {}", takt_frame::mcu::logic_hex(p));
     let _ = writeln!(s, "target = {}", e.target.name);
     let _ = writeln!(s, "triple = {}", e.triple);
     let _ = writeln!(s, "form = {}", e.form.name());
@@ -229,8 +251,12 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], arena: &Plac
     // 8.4: das Parameterprofil, dessen Werte das Abbild traegt.
     let _ = writeln!(s, "params_profile = {}", p.config.params_profile.as_deref().unwrap_or("none"));
     let _ = writeln!(s, "tick_ns = {}", p.config.tick);
+    // Die Arena stellt der Wirt unter diesem Namen, damit `takt check-image`
+    // sie im Abbild findet (12.11).
+    let _ = writeln!(s, "arena_symbol = {x}_arena");
     let _ = writeln!(s, "arena_bytes = {}", arena.bytes);
     let _ = writeln!(s, "arena_align = {}", arena.align);
+    let _ = writeln!(s, "job_stack_bytes = {}", plan.job_stack);
     // Wo der Tick in der Arena steht: Eine Probe liest ihn, wenn die Leitung schweigt.
     let _ = writeln!(s, "tick_at = {}", arena.tick_at);
     // 12.3: die Schutzregion und wie viel der Arena sie deckt.
@@ -264,6 +290,9 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], arena: &Plac
         |list: &[&takt_frame::drivers::Driver]| list.iter().map(|d| d.symbol(x)).collect::<Vec<_>>().join(", ");
     let _ = writeln!(s, "drivers = {}", symbols(&drivers));
     let _ = writeln!(s, "sys = {}", symbols(&sys));
+    // 12.3: Unter `xip_flash` liegt alles, was diese Einstiege rufen, im RAM.
+    let _ = writeln!(s, "xip_flash = {}", plan.xip);
+    let _ = writeln!(s, "tick_path = {}", takt_frame::mcu::tick_path(x).join(", "));
     s
 }
 

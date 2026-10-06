@@ -11,8 +11,8 @@
 //! Ausleihe `&'a mut`: Zwei Programme auf derselben Arena, ein Zugriff des
 //! Wirts hinein oder ein Verschieben waehrend des Laufs uebersetzen nicht
 //! (12.11). Bibliothek und Huelle muessen zueinander passen; die Huelle
-//! liest dafuer das Symbol `P_abi_<n>`, und ohne es bindet das Programm
-//! nicht.
+//! liest dafuer die Symbole `P_abi_<n>` und `P_logic_<hash>`, und ohne sie
+//! bindet das Programm nicht.
 
 use std::fmt::Write as _;
 
@@ -22,7 +22,7 @@ use crate::drivers::Driver;
 
 /// Die Version der Schnittstelle zwischen Bibliothek und Huelle (12.11):
 /// Sie steht im Symbol `P_abi_<n>` und im Manifest.
-pub const ABI: u32 = 3;
+pub const ABI: u32 = 4;
 
 /// Was das Modul braucht.
 pub struct Module<'a> {
@@ -32,6 +32,10 @@ pub struct Module<'a> {
     pub consts: &'a str,
     /// Groesse und Ausrichtung der Arena ([`crate::mcu::arena_layout`]).
     pub arena: (u64, u64),
+    /// Die Groesse des Job-Stacks ([`crate::mcu::job_stack_bytes`]).
+    pub job_stack_bytes: u64,
+    /// Der Logik-Hash des Programms ([`crate::mcu::logic_hex`]).
+    pub logic: &'a str,
     /// Die Treiber des Programms.
     pub drivers: &'a [Driver],
     /// Der Rust-Typ, der `Drivers` erfuellt; ohne ihn stellt der Wirt die
@@ -49,19 +53,21 @@ pub fn rust_module(m: &Module<'_>) -> String {
     let _ = writeln!(s);
     s.push_str(&crate::mcu::rust_arena(bytes, align));
     let _ = writeln!(s);
-    s.push_str(&ffi(x));
+    s.push_str(&crate::mcu::rust_job_stack(m.job_stack_bytes));
+    let _ = writeln!(s);
+    s.push_str(&ffi(x, m.logic));
     let _ = writeln!(s);
     s.push_str(&crate::drivers::rust_trait(m.drivers));
     if let Some(ty) = m.drivers_type {
         let _ = writeln!(s);
         s.push_str(&crate::drivers::rust_glue(m.drivers, x, ty));
     }
-    s.push_str(&hull(x, m.drivers_type));
+    s.push_str(&hull(x, m.drivers_type, m.logic));
     s
 }
 
 /// Die Einstiege der Bibliothek (C-ABI).
-fn ffi(x: &Prefix) -> String {
+fn ffi(x: &Prefix, logic: &str) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "/// Die Einstiege der Bibliothek (C-ABI, 12.11); die Huelle `Program` ruft sie.");
     let _ = writeln!(s, "mod ffi {{");
@@ -90,9 +96,9 @@ fn ffi(x: &Prefix) -> String {
         format!("pub fn {x}_output_timing() -> u8;"),
         format!("pub fn {x}_job_dispatch(a: *mut c_void) -> i32;"),
         format!("pub fn {x}_job_work(a: *mut c_void);"),
-        format!("pub fn {x}_job_stack(size: *mut u32) -> *mut u8;"),
         format!("pub fn {x}_output(a: *mut c_void, index: i32) -> i64;"),
         format!("pub static {x}_abi_{ABI}: u8;"),
+        format!("pub static {x}_logic_{logic}: u8;"),
     ];
     for line in lines {
         let _ = writeln!(s, "        {line}");
@@ -102,7 +108,7 @@ fn ffi(x: &Prefix) -> String {
 }
 
 /// Die sichere Huelle `Program` und der Griff `Jobs`.
-fn hull(x: &Prefix, drivers_type: Option<&str>) -> String {
+fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str) -> String {
     let (param, user, borrow) = match drivers_type {
         Some(ty) => (
             format!(", drivers: &'a mut {ty}"),
@@ -131,10 +137,12 @@ impl<'a> Program<'a> {{
     /// Das Programm vor Tick 0: Das Journal darf noch laden
     /// (`takt_embed::rt::Persist::load`), sonst beginnt `ensure_init`.
     pub fn new(arena: &'a mut Arena{param}) -> Program<'a> {{
-        // Bibliothek und Huelle muessen dieselbe Schnittstelle sprechen; ohne
-        // `{x}_abi_{ABI}` bindet das Programm nicht (12.11).
-        // SAFETY: liest eine Konstante der Bibliothek.
+        // Bibliothek und Huelle muessen dieselbe Schnittstelle sprechen und
+        // dasselbe Programm meinen; ohne `{x}_abi_{ABI}` und
+        // `{x}_logic_{logic}` bindet das Programm nicht (12.11).
+        // SAFETY: liest zwei Konstanten der Bibliothek.
         let _ = unsafe {{ core::ptr::read_volatile(&raw const ffi::{x}_abi_{ABI}) }};
+        let _ = unsafe {{ core::ptr::read_volatile(&raw const ffi::{x}_logic_{logic}) }};
         Program {{
             arena: core::ptr::from_mut(arena).cast(),
             user: {user},
@@ -194,24 +202,6 @@ impl<'a> Program<'a> {{
         // SAFETY: liest einen Latch der Arena nach `init`; ein fremder Index liefert 0.
         unsafe {{ ffi::{x}_output(self.arena, index) }}
     }}
-}}
-
-/// Der Stack des Job-Kontexts (4.5), statisch in der Bibliothek: so gross
-/// wie der groesste `stack`-Vertrag der Jobs und `job_stack_reserve` (8.10).
-/// Einmal; `None` ohne Jobs und bei jedem weiteren Aufruf. Ein Wirt mit
-/// eigenen Faeden braucht ihn nicht.
-pub fn job_stack() -> Option<&'static mut [u8]> {{
-    static TAKEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
-    if TAKEN.swap(true, core::sync::atomic::Ordering::Relaxed) {{
-        return None;
-    }}
-    let mut size = 0u32;
-    // SAFETY: Die Bibliothek liefert einen statischen Puffer dieser Groesse,
-    // und `TAKEN` gibt ihn hoechstens einmal heraus.
-    let at = unsafe {{ ffi::{x}_job_stack(&mut size) }};
-    let len = usize::try_from(size).unwrap_or(0);
-    // SAFETY: wie oben.
-    (len > 0 && !at.is_null()).then(|| unsafe {{ core::slice::from_raw_parts_mut(at, len) }})
 }}
 
 /// Der Griff, der verteilt (4.5): Er gibt dem ruhenden Job-Kontext den

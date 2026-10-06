@@ -45,8 +45,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TAKT_INSTRUMENT");
     println!("cargo:rerun-if-env-changed=TAKT_DIAGNOSTICS");
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    ram_resident(&out);
-    build_takt_program(&out);
+    let built = build_takt_program(&out);
+    ram_resident(&out, &built);
     native_vectors(&out);
     math_vectors(&out);
 }
@@ -64,23 +64,36 @@ fn image_key() {
     }
 }
 
-/// Legt Takt-Code und tick-gelesene Konstanten ins RAM (12.3).
+/// Legt den Tick-Pfad ins RAM (12.3): das Fragment der Lieferform
+/// (`app_ram.x`) und dahinter, was das Board dazulegt (`board_ram.x`).
 ///
 /// `esp-hal` bindet `rwtext_hook.x` in `.rwtext` ein; die Datei muss im
 /// Suchpfad des Linkers liegen, und `OUT_DIR` steht dort. Eingeschaltet
 /// wird der Haken ueber `ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK` — als echte
 /// Umgebungsvariable zur Bauzeit von `esp-hal`, darum in
 /// `.cargo/config.toml` und nicht hier.
-fn ram_resident(out: &Path) {
-    let hook = Path::new(env!("CARGO_MANIFEST_DIR")).join("rwtext_hook.x");
-    println!("cargo:rerun-if-changed={}", hook.display());
-    if let Err(e) = fs::copy(&hook, out.join("rwtext_hook.x")) {
-        panic!("rwtext_hook.x nicht kopierbar: {e}");
-    }
+fn ram_resident(out: &Path, built: &takt_embed::build::Built) {
+    // Ohne den Schalter bindet `esp-hal` den Haken nicht ein, und der
+    // Tick-Pfad laege still im Flash (FB-449). Ein Bau von aussen
+    // (`--manifest-path`) sieht `.cargo/config.toml` nicht.
+    println!("cargo:rerun-if-env-changed=ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK");
+    assert!(
+        env::var("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK").as_deref() == Ok("true"),
+        "ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK=true fehlt: ohne ihn laege der Tick-Pfad im Flash (12.3); \
+         `.cargo/config.toml` setzt ihn nur fuer einen Bau aus diesem Verzeichnis"
+    );
+    let Some(fragment) = built.ram_fragment() else {
+        panic!("{}: kein Fragment fuer den RAM; die Konfiguration nennt `iram` (12.3)", built.manifest.display())
+    };
+    let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("board_ram.x");
+    println!("cargo:rerun-if-changed={}", board.display());
+    let read = |p: &Path| fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+    let hook = format!("{}\n{}", read(&fragment), read(&board));
+    fs::write(out.join("rwtext_hook.x"), hook).expect("rwtext_hook.x schreiben");
     println!("cargo:rustc-link-search={}", out.display());
 }
 
-fn build_takt_program(out: &Path) {
+fn build_takt_program(out: &Path) -> takt_embed::build::Built {
     let program = program_path();
     println!("cargo:rerun-if-env-changed=TAKT_PROGRAM");
     println!("cargo:rerun-if-changed={program}");
@@ -121,6 +134,7 @@ fn build_takt_program(out: &Path) {
     let reference = bench_reference(out);
     bringup::archive(out, "taktboard", &[&obj_mc, &reference]);
     println!("cargo:rustc-link-arg=--icf=all");
+    built
 }
 
 /// Die Hardware-Konfiguration des Boards (8.10): Anschluesse, Kalibrierung,

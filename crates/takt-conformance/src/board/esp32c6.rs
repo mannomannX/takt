@@ -21,7 +21,7 @@ use super::{Board, Bringup, ConsoleLine, Failure, Options, capture, port_listed,
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-esp32c6",
     triple: "riscv32imac-unknown-none-elf",
-    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "rwtext_hook.x", "millicode.S"],
+    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "board_ram.x", "millicode.S"],
     // 12.3: RAM-Residenz des Takt-Programms.
     env: &[("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true"), ("ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM", "false")],
 };

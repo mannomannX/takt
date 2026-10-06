@@ -82,6 +82,7 @@ fn wire() -> Option<&'static mut Wire> {
 /// Der Rahmen uebergibt einen nullterminierten Zeiger auf statischen
 /// Text; die Schranke haelt einen Zeiger ohne Null auf (4.1, von Hand).
 #[unsafe(no_mangle)]
+#[esp_hal::ram]
 pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
     let Some(uart) = uart() else { return };
     let mut p = text;
@@ -99,6 +100,7 @@ pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
 
 /// Vom Rahmen gerufen: eine Zahl im Trace.
 #[unsafe(no_mangle)]
+#[esp_hal::ram]
 pub extern "C" fn takt_board_trace_i64(value: i64) {
     let Some(uart) = uart() else { return };
     uart.write_i64(value);
@@ -107,6 +109,7 @@ pub extern "C" fn takt_board_trace_i64(value: i64) {
 
 /// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
 #[unsafe(no_mangle)]
+#[esp_hal::ram]
 pub extern "C" fn takt_board_trace_u64(value: u64) {
     let Some(uart) = uart() else { return };
     uart.write_u64(value);
@@ -116,6 +119,7 @@ pub extern "C" fn takt_board_trace_u64(value: u64) {
 /// Vom Rahmen gerufen: eine Fliesskommazahl im Trace, als kuerzeste
 /// Ziffernfolge, die den Wert eindeutig zurueckgibt (Bitgleichheit, 4.2).
 #[unsafe(no_mangle)]
+#[esp_hal::ram]
 pub extern "C" fn takt_board_trace_f64(value: f64) {
     let Some(uart) = uart() else { return };
     let _ = write!(uart, "{value:?} ");
@@ -123,6 +127,7 @@ pub extern "C" fn takt_board_trace_f64(value: f64) {
 
 /// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
 #[unsafe(no_mangle)]
+#[esp_hal::ram]
 pub extern "C" fn takt_board_trace_hex8(value: u8) {
     let Some(uart) = uart() else { return };
     uart.write_hex8(value);
@@ -145,7 +150,7 @@ pub extern "C" fn takt_board_trace_hex8(value: u8) {
 static PROBE: AtomicU8 = AtomicU8::new(0);
 
 /// Das untere Ende des Job-Stacks, 0 ohne Job-Kontext.
-static JOB_STACK: AtomicU32 = AtomicU32::new(0);
+static JOB_STACK_BOTTOM: AtomicU32 = AtomicU32::new(0);
 
 /// Fuehrt einen angeforderten Pruefzugriff aus.
 fn probe() {
@@ -154,7 +159,7 @@ fn probe() {
     }
     let target = match PROBE.swap(0, Ordering::Relaxed) {
         1 => &raw mut __stack_chk_guard,
-        2 => match JOB_STACK.load(Ordering::Relaxed) {
+        2 => match JOB_STACK_BOTTOM.load(Ordering::Relaxed) {
             0 => return,
             bottom => bottom as *mut u32,
         },
@@ -169,7 +174,8 @@ fn probe() {
 static PREVIOUS_RUN: AtomicU32 = AtomicU32::new(0);
 
 /// Die Arena, statisch. Unter ihrem Namen liest der Host ueber JTAG den Tick,
-/// wenn die Konsole schweigt (`__takt_tick_at`).
+/// wenn die Konsole schweigt (`__takt_tick_at`), und `takt check-image`
+/// findet sie.
 #[unsafe(export_name = "app_arena")]
 static mut ARENA: app::Arena = app::Arena::new();
 
@@ -181,6 +187,10 @@ mod drivers {
 
 /// Der Pruefstand, statisch: Das Programm haelt ihn so lange wie die Arena.
 static mut RIG: Option<drivers::Rig> = None;
+
+/// Der Stack des Job-Fadens (4.5): Ihn stellt der Wirt, so gross, wie die
+/// Lieferform sagt; unter seinem Ende liegt der Waechter (12.3).
+static mut JOB_STACK: app::JobStack = app::JobStack::new();
 
 /// Der Griff, mit dem der Job-Faden rechnet (4.5): statisch, weil der Faden
 /// ihn ueber `main` hinaus haelt.
@@ -435,8 +445,10 @@ fn main() -> ! {
     let dispatch = program.dispatch();
     // SAFETY: ein Faden; der Job-Faden liest den Griff erst nach `start`.
     let worker = program.jobs().map(|j| unsafe { (*(&raw mut JOBS)).insert(j) as &mut dyn takt_embed::Jobs });
-    let mut jobs = JobContext::start(app::job_stack(), dispatch, worker);
-    JOB_STACK.store(jobs.as_ref().map_or(0, JobContext::bottom), Ordering::Relaxed);
+    // SAFETY: ein Faden; nur der Job-Faden haelt den Stack danach.
+    let stack = unsafe { (*(&raw mut JOB_STACK)).bytes() };
+    let mut jobs = JobContext::start(stack, dispatch, worker);
+    JOB_STACK_BOTTOM.store(jobs.as_ref().map_or(0, JobContext::bottom), Ordering::Relaxed);
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
         // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer

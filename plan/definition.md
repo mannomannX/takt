@@ -1852,7 +1852,7 @@ takt-testkit        was die Tests aller Crates teilen: die Werkzeug-Schranke (ei
 takt-trace-serial   Trace von einer seriellen Schnittstelle lesen und gegen den Interpreter halten
 takt-flash-weact    Flash-Werkzeug für den WeAct-HID-Bootloader (STM32)
 takt-import-c       (geplant, M7) C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)
-takt-cli            check | build | sim | run | replay | verify-trace | timing | test | campaign | driver-test | prove | fmt | size | cost | latency | graph | bench | tune | tcb | mir | parse | tokens; geplant: migrate | import-c (M7) | new | doctor | check-image | port-test (M11)
+takt-cli            check | build | sim | run | replay | verify-trace | timing | test | campaign | driver-test | prove | fmt | size | cost | latency | graph | bench | tune | tcb | mir | parse | tokens | check-image; geplant: migrate | import-c (M7) | new | doctor | port-test (M11)
 takt-lsp            (geplant, M7) Editor-Integration, Live-Zustandsanzeige über Telemetrie
 ```
 

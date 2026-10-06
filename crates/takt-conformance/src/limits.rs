@@ -68,14 +68,6 @@ pub const LIMITS: &[Limit] = &[
         row: "FB-431",
     },
     Limit {
-        was: "Tunables in der Runtime (8.4)",
-        warum: "Rahmen, Huelle und Wirtsharness nehmen einen Tune ueber `P_tune` mit den \
-                Pruefungen des Interpreters an; die Bring-ups der Boards reichen keinen von der \
-                Konsole dorthin weiter.",
-        wann: "M11 Schritt 10 (Bring-ups auf takt-embed).",
-        row: "FB-389",
-    },
-    Limit {
         was: "Beobachtungen ohne Gegenstueck im Rahmen",
         warum: "`compare` haelt `log`, `measure`, `verify`, `verdict`, `property` und `end` \
                 gegeneinander; `job`, `signal` und `verdict-final` schreibt kein Rahmen, \

@@ -36,6 +36,7 @@
 //! Golden-Unterschied, dem Lauf-Verdikt FAIL (13.5) und unter `test` und
 //! `campaign` jedem Urteil ausser PASS (13.5, 13.7).
 
+mod check_image;
 mod embed;
 
 use std::collections::BTreeMap;
@@ -48,7 +49,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt bench --board NAME (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt check-image ABBILD --manifest P.manifest | takt bench --board NAME (siehe crates/takt-cli/src/main.rs)";
 
 /// Die Schalter je Unterbefehl, genau die, die er liest (11.1): Ein
 /// unbekannter Schalter ist ein Fehler, kein still uebergangener Tippfehler
@@ -223,6 +224,7 @@ const FLAGS: &[(&str, &[&str])] = &[
         &["--build", "--by", "--date", "--emit", "--native", "--params-profile", "--profile", "--proof", "--review"],
     ),
     ("bench", &["--board", "--conformance", "--hardware", "--runs"]),
+    ("check-image", &["--manifest"]),
 ];
 
 /// Stapel des Threads, auf dem jeder Unterbefehl laeuft (2.1): Mit hoechstens 64
@@ -244,6 +246,15 @@ struct Args {
 impl Args {
     fn has(&self, flag: &str) -> bool {
         self.flags.iter().any(|f| f == flag)
+    }
+
+    /// Alle Werte eines Schalters, der mehrfach stehen darf, in ihrer
+    /// Reihenfolge.
+    fn values(&self, flag: &str) -> Vec<&str> {
+        let mut out: Vec<&str> =
+            self.flags.iter().filter_map(|f| f.strip_prefix(flag).and_then(|r| r.strip_prefix('='))).collect();
+        out.extend(self.values.iter().filter(|(f, _)| f == flag).map(|(_, v)| v.as_str()));
+        out
     }
 
     /// Wert eines Schalters, als `--flag=wert` oder `--flag wert`.
@@ -304,6 +315,7 @@ impl Args {
             "--crate",
             "--runs",
             "--conformance",
+            "--manifest",
         ];
         let allowed = FLAGS.iter().find(|(c, _)| *c == command).map(|(_, f)| *f).ok_or_else(|| USAGE.to_string())?;
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
@@ -373,12 +385,24 @@ fn command() -> ExitCode {
         "tokens" => tokens(&args),
         "tcb" => tcb(&args),
         "bench" => bench(&args),
+        "check-image" => check_image(&args),
         _ => {
             eprintln!("{USAGE}");
             false
         }
     };
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+/// `takt check-image ABBILD --manifest P.manifest …` (12.11, 13.8): prueft
+/// das gebundene Abbild gegen die Manifeste seiner Programme
+/// ([`check_image`]).
+fn check_image(args: &Args) -> bool {
+    let [image] = args.files.as_slice() else {
+        eprintln!("takt check-image ABBILD --manifest P.manifest …");
+        return false;
+    };
+    check_image::run(std::path::Path::new(image), &args.values("--manifest"))
 }
 
 /// `takt bench --board NAME [--runs N] [--hardware DATEI] [--conformance DATEI]`

@@ -39,6 +39,7 @@
 //! Funktion `None`. Ein Test, der misst, ueberspringt sich dann — wie
 //! jeder andere Werkzeugkettentest auch.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -133,6 +134,229 @@ pub fn residency(symbols: &[Symbol], sections: &[SectionRange], is_program: impl
         if resident { &mut out.ram } else { &mut out.flash }.push(s.name.clone());
     }
     out
+}
+
+/// Liegt `address` in einem Abschnitt, der im RAM laeuft (12.3)? Eine
+/// Adresse ausserhalb jedes Abschnitts ist absolut — eine Routine im ROM
+/// des Chips — und laeuft ebenso ohne Flash.
+pub fn runs_without_flash(address: u64, sections: &[SectionRange]) -> bool {
+    sections.iter().find(|sec| sec.contains(address)).is_none_or(|sec| is_iram_text(&sec.name))
+}
+
+/// Eine Funktion im Aufrufgraphen.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Function {
+    /// Der demangelte Name (`objdump -C`). Lokale Namen gibt es je Objekt
+    /// einmal (`OUTLINED_FUNCTION_2`); der Graph fuehrt die Funktion darum
+    /// unter ihrer Adresse.
+    pub name: String,
+    /// Die Groesse in Byte aus der Symboltabelle; 0, wenn sie sie nicht nennt.
+    pub size: u64,
+    /// Die Startadressen der Funktionen, die sie ruft oder anspringt.
+    pub calls: BTreeSet<u64>,
+    /// Ziele, deren Adresse die Disassemblierung nicht nennt und deren Name
+    /// mehrere Funktionen tragen.
+    pub unresolved: BTreeSet<String>,
+    /// Ein Aufruf ueber ein Register: Sein Ziel kennt der Graph nicht.
+    pub indirect: bool,
+}
+
+/// Der Aufrufgraph eines gebundenen Abbilds (12.3, `takt check-image`):
+/// je Funktion die Funktionen, die sie ruft oder anspringt, aus der
+/// Disassemblierung. Ein Sprung innerhalb der Funktion ist keine Kante.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CallGraph {
+    /// Die Funktionen nach ihrer Startadresse.
+    pub functions: BTreeMap<u64, Function>,
+}
+
+impl CallGraph {
+    /// Die Startadressen der Funktionen, die `name` tragen.
+    pub fn named(&self, name: &str) -> Vec<u64> {
+        self.functions.iter().filter(|(_, f)| f.name == name).map(|(at, _)| *at).collect()
+    }
+
+    /// Die Funktion, in der `address` liegt: ab ihrem Anfang bis zu ihrer
+    /// Groesse, ohne Groesse bis zur naechsten.
+    pub fn containing(&self, address: u64) -> Option<u64> {
+        let (at, f) = self.functions.range(..=address).next_back()?;
+        (f.size == 0 || address < at.saturating_add(f.size)).then_some(*at)
+    }
+}
+
+/// Ein Ziel, wie die Zeile es nennt.
+enum Target {
+    Address(u64),
+    Name(String),
+}
+
+/// Liest `objdump -d -C`: Ein Kopf `adresse <name>:` beginnt eine Funktion,
+/// ein Sprung oder Aufruf mit Ziel `<name>` oder `<name+0x..>` ist eine
+/// Kante, ein Aufruf ohne Ziel (`jalr a0`, `blx r3`, `call *%rax`) ein
+/// indirekter. Die Adresse des Ziels steht in der Zeile (`jal 0x… <f>`);
+/// bei `auipc` und `jalr off(ra)` (RISC-V) rechnet der Leser sie aus dem
+/// Paar. Nur wo keine steht, entscheidet der Name, und nur, wenn er eindeutig
+/// ist.
+///
+/// **Funktionen nach der Symboltabelle.** `code` nennt Anfang und Groesse
+/// jeder Funktion (`nm -S`, Klasse `T`/`t`/`W`/`w`). Ein Kopf, der keine
+/// beginnt — eine Konstante, eine Marke —, ist keine, und was hinter dem
+/// Ende einer Funktion steht, liest der Leser nicht: In einem
+/// RAM-Abschnitt mit Code liegen auch Konstanten, und `objdump` liest sie
+/// als Befehle.
+pub fn parse_call_graph(text: &str, code: &BTreeMap<u64, u64>) -> CallGraph {
+    let mut graph = CallGraph::default();
+    let mut raw: Vec<(u64, Target)> = Vec::new();
+    let mut current: Option<u64> = None;
+    let mut bases: BTreeMap<String, u64> = BTreeMap::new();
+    for line in text.lines() {
+        if let Some((at, name)) = function_header(line) {
+            if let Some(&size) = code.get(&at) {
+                graph.functions.entry(at).or_insert_with(|| Function {
+                    name: name.to_string(),
+                    size,
+                    ..Function::default()
+                });
+                current = Some(at);
+                bases.clear();
+            }
+            continue;
+        }
+        let Some(f) = current else { continue };
+        // `  408018fc:      \tjalr\t0x54e(ra) <takt_board_trace>`
+        let Some((pc, insn)) = line.split_once('\t') else { continue };
+        let Some(pc) = pc.trim().strip_suffix(':').and_then(|pc| u64::from_str_radix(pc, 16).ok()) else { continue };
+        let size = graph.functions.get(&f).map_or(0, |func| func.size);
+        if size != 0 && pc >= f.saturating_add(size) {
+            current = None;
+            continue;
+        }
+        let insn = insn.trim();
+        let (mnemonic, operands) = insn.split_once('\t').unwrap_or((insn, ""));
+        if mnemonic == "auipc"
+            && let Some((reg, imm)) = operands.split_once(", ")
+            && let Some(imm) = parse_signed(imm)
+        {
+            // Das Feld hat 20 Bit, `objdump` schreibt es ohne Vorzeichen.
+            let imm = if imm >= 0x8_0000 { imm - 0x10_0000 } else { imm };
+            bases.insert(reg.to_string(), wrap(pc, imm << 12));
+            continue;
+        }
+        if !is_branch(mnemonic) {
+            continue;
+        }
+        match branch_target(operands) {
+            Some((before, name)) => {
+                let target = match last_operand(before) {
+                    // `0x54e(ra)`: Versatz zu einem Register, das `auipc` setzte.
+                    Some(op) if op.ends_with(')') => op
+                        .strip_suffix(')')
+                        .and_then(|o| o.split_once('('))
+                        .and_then(|(off, reg)| Some(wrap(*bases.get(reg)?, parse_signed(off)?)))
+                        .map(Target::Address),
+                    Some(op) => parse_signed(op).and_then(|a| u64::try_from(a).ok()).map(Target::Address),
+                    None => None,
+                };
+                let name = name.rsplit_once("+0x").map_or(name, |(n, _)| n);
+                raw.push((f, target.unwrap_or_else(|| Target::Name(name.to_string()))));
+            }
+            None if is_indirect(mnemonic, insn) => {
+                if let Some(func) = graph.functions.get_mut(&f) {
+                    func.indirect = true;
+                }
+            }
+            None => {}
+        }
+    }
+    for (f, target) in raw {
+        let to = match target {
+            Target::Address(at) => graph.containing(at),
+            Target::Name(name) => match graph.named(&name).as_slice() {
+                [one] => Some(*one),
+                _ => {
+                    if let Some(func) = graph.functions.get_mut(&f) {
+                        func.unresolved.insert(name);
+                    }
+                    None
+                }
+            },
+        };
+        if let Some(to) = to.filter(|to| *to != f)
+            && let Some(func) = graph.functions.get_mut(&f)
+        {
+            func.calls.insert(to);
+        }
+    }
+    graph
+}
+
+/// Adresse und Name im Kopf einer Funktion: `408018b8 <app_tick>:`.
+fn function_header(line: &str) -> Option<(u64, &str)> {
+    let (address, rest) = line.split_once(' ')?;
+    if address.is_empty() || !address.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((u64::from_str_radix(address, 16).ok()?, rest.strip_prefix('<')?.strip_suffix(">:")?))
+}
+
+/// Eine Zahl mit Vorzeichen, hexadezimal (`0x54e`, `-0x48`) oder dezimal.
+fn parse_signed(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let (negative, digits) = s.strip_prefix('-').map_or((false, s), |d| (true, d));
+    let value = match digits.strip_prefix("0x") {
+        Some(hex) => i64::from_str_radix(hex, 16).ok()?,
+        None => digits.parse().ok()?,
+    };
+    Some(if negative { -value } else { value })
+}
+
+/// `base + offset` in der Breite der Adresse: 32 Bit, solange sie passt.
+fn wrap(base: u64, offset: i64) -> u64 {
+    let sum = base.wrapping_add_signed(offset);
+    if base <= u64::from(u32::MAX) { sum & u64::from(u32::MAX) } else { sum }
+}
+
+/// Der letzte Operand: `t0, 0x40802bbc` → `0x40802bbc`, `0x54e(ra)` bleibt.
+fn last_operand(operands: &str) -> Option<&str> {
+    operands.rsplit([',', ' ']).map(str::trim).find(|s| !s.is_empty())
+}
+
+/// Ein Sprung, Aufruf oder bedingter Sprung: RISC-V (`jal`, `j`, `beqz`,
+/// `tail`), ARM (`bl`, `b.w`, `cbz`) und x86 (`call`, `jmp`, `jne`).
+fn is_branch(mnemonic: &str) -> bool {
+    mnemonic.starts_with('j')
+        || mnemonic.starts_with('b')
+        || mnemonic.starts_with("call")
+        || mnemonic.starts_with("tail")
+        || mnemonic.starts_with("cb")
+}
+
+/// Ein Aufruf, dessen Ziel in einem Register steht (`jalr a0`, `blx r3`,
+/// `call *%rax`). Ein Sprung ueber ein Register ist keiner: Er ist eine
+/// Sprungtabelle in der Funktion oder die Rueckkehr aus Millicode und
+/// ausgelagerten Stuecken (`jr t0`).
+fn is_indirect(mnemonic: &str, insn: &str) -> bool {
+    match mnemonic {
+        "jalr" | "blx" => true,
+        m if m.starts_with("call") => insn.contains('*'),
+        _ => false,
+    }
+}
+
+/// Das Ziel am Ende der Operanden, `<…>` mit allen Klammern des
+/// demangelten Namens darin, und was davor steht.
+fn branch_target(operands: &str) -> Option<(&str, &str)> {
+    let body = operands.strip_suffix('>')?;
+    let mut depth = 0usize;
+    for (at, c) in body.char_indices().rev() {
+        match c {
+            '>' => depth += 1,
+            '<' if depth == 0 => return Some((body[..at].trim_end(), &body[at + 1..])),
+            '<' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Die Werkzeuge einer Zielkette (`size`, `nm`, `objdump`).
@@ -264,6 +488,27 @@ impl Binutils {
         // Adresse, und ein Vergleich zweier Ziele soll sie nicht sehen.
         list.sort_by(|a, b| a.name.cmp(&b.name));
         Some(list)
+    }
+
+    /// Die definierten Symbole mit demangelten Namen (`nm -C`), so wie
+    /// [`Binutils::call_graph`] sie nennt.
+    pub fn symbols_demangled(&self, file: &Path) -> Option<Vec<Symbol>> {
+        let out = Command::new(self.tool("nm")).args(["-S", "--defined-only", "-C"]).arg(file).output().ok()?;
+        out.status.success().then(|| parse_demangled_symbols(&String::from_utf8_lossy(&out.stdout)))
+    }
+
+    /// Der Aufrufgraph eines gebundenen Abbilds (`objdump -d -C`), mit den
+    /// Funktionen, die die Symboltabelle nennt.
+    pub fn call_graph(&self, file: &Path) -> Option<CallGraph> {
+        let code: BTreeMap<u64, u64> = self
+            .symbols(file)?
+            .into_iter()
+            .filter(|s| matches!(s.kind, 'T' | 't' | 'W' | 'w'))
+            .map(|s| (s.address, s.size))
+            .collect();
+        let out =
+            Command::new(self.tool("objdump")).args(["-d", "-C", "--no-show-raw-insn"]).arg(file).output().ok()?;
+        out.status.success().then(|| parse_call_graph(&String::from_utf8_lossy(&out.stdout), &code))
     }
 
     /// Der Stackbedarf einer Funktion aus ihrem Prolog, in Byte (12.3).
@@ -461,6 +706,31 @@ fn parse_sections(text: &str) -> Sections {
     s
 }
 
+/// `nm -S -C`: `adresse [groesse] klasse name`, der Name mit Leerzeichen
+/// (`<impl Foo for Bar>::f`). Eine Zeile ohne Adresse (der Kopf eines
+/// Archivmitglieds) zaehlt nicht.
+fn parse_demangled_symbols(text: &str) -> Vec<Symbol> {
+    let hex = |w: &str| u64::from_str_radix(w, 16).ok();
+    let mut list = Vec::new();
+    for line in text.lines() {
+        let Some((address, rest)) = line.split_once(' ') else { continue };
+        let Some(address) = hex(address) else { continue };
+        let Some((second, rest)) = rest.split_once(' ') else { continue };
+        let (size, kind, name) = match second.len() {
+            1 => (0, second, rest),
+            _ => {
+                let Some((kind, name)) = rest.split_once(' ') else { continue };
+                (hex(second).unwrap_or(0), kind, name)
+            }
+        };
+        let mut chars = kind.chars();
+        let (Some(k), None) = (chars.next(), chars.next()) else { continue };
+        list.push(Symbol { name: name.to_string(), address, size, kind: k });
+    }
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    list
+}
+
 /// Die Tabelle von `objdump -h`: `Idx Name Size VMA Type`, hexadezimal.
 fn parse_section_table(text: &str) -> Vec<SectionRange> {
     text.lines()
@@ -501,6 +771,135 @@ fn is_iram_rodata(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `llvm-objdump -d -C` auf dem Bring-up-Abbild des ESP32-C6: Aufrufe
+    /// ueber `auipc`/`jalr`, Spruenge innerhalb der Funktion und ueber eine
+    /// Tabelle, der Millicode, zwei ausgelagerte Stuecke desselben Namens,
+    /// ein indirekter Aufruf und ein Name mit Klammern.
+    const RISCV: &str = "
+408000f0 <OUTLINED_FUNCTION_2>:
+408000f0:      \tjr\tt0
+408000f2:      \tjal\ta4, 0x42000000 <core::fmt::write>
+
+40800400 <OUTLINED_FUNCTION_2>:
+40800400:      \tjal\t0x42000000 <core::fmt::write>
+
+4080047c <<esp_hal::peripherals::UART0 as esp_hal::uart::low_level::Instance>::parts::handler>:
+4080047c:      \tjalr\ta0
+40800480:      \tjal\t0x40801000 <<takt_rt_core::loopcore::Runtime<P, C>>::finish>
+40800484:      \tret
+
+40801000 <<takt_rt_core::loopcore::Runtime<P, C>>::finish>:
+40801000:      \tret
+
+408018b8 <app_tick>:
+408018b8:      \tjal\tt0, 0x40802bbc <__riscv_save_3>
+408018ca:      \tbeqz\ta2, 0x408018d4 <app_tick+0x1c>
+408018d0:      \tj\t0x40802be0 <__riscv_restore_3>
+408018d4:      \tjr\ta1
+408018f8:      \tauipc\tra, 0x1812
+408018fc:      \tjalr\t0x54e(ra) <takt_board_trace>
+40801900:      \tauipc\tra, 0xfffff
+40801904:      \tjalr\t-0x810(ra) <OUTLINED_FUNCTION_2>
+40801908:      \tjalr\t0x10(a5) <OUTLINED_FUNCTION_2>
+4080190a:      \tauipc\tra, 0xff7fe
+4080190e:      \tjalr\t0x4ea(ra) <.Lline_table_start1+0x3ffcd76d>
+
+40802bbc <__riscv_save_3>:
+40802bbc:      \tjr\tt0
+
+40802be0 <__riscv_restore_3>:
+40802be0:      \tret
+
+42000000 <core::fmt::write>:
+42000000:      \tret
+
+42013e46 <takt_board_trace>:
+42013e46:      \tret
+";
+
+    /// Die Funktionen des Abbilds mit ihrer Groesse (`nm -S`); hinter dem
+    /// ersten Stueck stehen Konstanten, die `objdump` als `jal` liest.
+    fn code() -> BTreeMap<u64, u64> {
+        [
+            (0x4080_00f0, 2),
+            (0x4080_0400, 4),
+            (0x4080_047c, 12),
+            (0x4080_1000, 2),
+            (0x4080_18b8, 0x5a),
+            (0x4080_2bbc, 2),
+            (0x4080_2be0, 2),
+            (0x4200_0000, 2),
+            (0x4201_3e46, 2),
+        ]
+        .into()
+    }
+
+    fn names(g: &CallGraph, at: u64) -> Vec<&str> {
+        g.functions[&at].calls.iter().map(|c| g.functions[c].name.as_str()).collect()
+    }
+
+    #[test]
+    fn the_call_graph_follows_calls_and_tail_calls_but_not_local_branches() {
+        let g = parse_call_graph(RISCV, &code());
+        assert!(g.functions[&0x4080_00f0].calls.is_empty(), "Konstanten hinter dem Stueck sind keine Befehle");
+        assert_eq!(
+            names(&g, 0x4080_18b8),
+            ["OUTLINED_FUNCTION_2", "__riscv_save_3", "__riscv_restore_3", "takt_board_trace"]
+        );
+        assert!(g.functions[&0x4080_18b8].calls.contains(&0x4080_00f0), "das Stueck, das `auipc` und `jalr` nennen");
+        assert!(!g.functions[&0x4080_18b8].calls.contains(&0x4080_0400), "nicht das andere gleichen Namens");
+        assert_eq!(
+            g.functions[&0x4080_18b8].unresolved.iter().collect::<Vec<_>>(),
+            ["OUTLINED_FUNCTION_2"],
+            "ohne Basis bleibt es offen; der Aufruf in das ROM ist keiner in eine Funktion des Abbilds"
+        );
+        assert!(!g.functions[&0x4080_18b8].indirect, "eine Sprungtabelle ist kein Aufruf");
+        let handler = &g.functions[&0x4080_047c];
+        assert!(handler.indirect && handler.name.ends_with("::handler"));
+        assert_eq!(names(&g, 0x4080_047c), ["<takt_rt_core::loopcore::Runtime<P, C>>::finish"]);
+        assert_eq!(g.named("OUTLINED_FUNCTION_2"), [0x4080_00f0, 0x4080_0400]);
+    }
+
+    /// ARM (`bl`, `b.w`, `blx`, `bx lr`) und x86 (`call`, `call *`, `jmp *`).
+    #[test]
+    fn the_call_graph_reads_arm_and_x86() {
+        let arm = "08000100 <app_tick>:\n 8000102:      \tbl\t0x8000200 <takt_board_trace>\n 8000106:      \tblx\tr3\n \
+                   8000108:      \tb.w\t0x8000300 <takt_tail>\n 800010c:      \tbx\tlr\n\n08000200 <takt_board_trace>:\n \
+                   8000200:      \tbx\tlr\n\n08000300 <takt_tail>:\n 8000300:      \tbx\tlr\n";
+        let g = parse_call_graph(arm, &[(0x0800_0100, 0x10), (0x0800_0200, 2), (0x0800_0300, 2)].into());
+        assert_eq!(names(&g, 0x0800_0100), ["takt_board_trace", "takt_tail"]);
+        assert!(g.functions[&0x0800_0100].indirect);
+        let x86 = "0000000000001000 <app_tick>:\n    1004:      \tcall\t0x2000 <takt_board_trace>\n    \
+                   1009:      \tcall\t*%rax\n    100b:      \tjmp\t*%rcx\n\n0000000000002000 <takt_board_trace>:\n    \
+                   2000:      \tret\n";
+        let g = parse_call_graph(x86, &[(0x1000, 0x10), (0x2000, 1)].into());
+        assert_eq!(names(&g, 0x1000), ["takt_board_trace"]);
+        assert!(g.functions[&0x1000].indirect);
+    }
+
+    #[test]
+    fn demangled_symbols_keep_their_spaces() {
+        let text = "\nlibapp.a(app.o):\n40807418 00000168 B app_arena\n\
+                    4081d96a 00000052 t <takt::app::Program as takt_rt_core::loopcore::Program>::trace\n\
+                    40000000 T rom_routine\n";
+        let s = parse_demangled_symbols(text);
+        assert_eq!(s.len(), 3);
+        let trace = s.iter().find(|s| s.name.ends_with("::trace")).expect("Hullenfunktion");
+        assert_eq!((trace.size, trace.kind), (0x52, 't'));
+        assert_eq!(trace.name, "<takt::app::Program as takt_rt_core::loopcore::Program>::trace");
+    }
+
+    #[test]
+    fn rom_and_iram_run_without_flash_but_text_does_not() {
+        let sections = [
+            SectionRange { name: ".rwtext".into(), start: 0x4080_0000, size: 0x1000 },
+            SectionRange { name: ".text".into(), start: 0x4200_0000, size: 0x1000 },
+        ];
+        assert!(runs_without_flash(0x4080_0010, &sections));
+        assert!(!runs_without_flash(0x4200_0010, &sections));
+        assert!(runs_without_flash(0x4000_0010, &sections), "eine Routine im ROM");
+    }
 
     /// `llvm-size -A` auf dem Bring-up-Abbild des ESP32-C6 (12.3).
     const ESP32C6: &str = "\
