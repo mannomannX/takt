@@ -65,8 +65,9 @@ echo "== 3. Die Bring-up-Programme, von aussen gebaut"
 # Drei Binaries, drei Stufen der Fehlersuche: `blink` schaltet einen Pin
 # ohne PLL, `minimal` prueft die Tickquelle, `takt` fuehrt ein echtes
 # Takt-Programm aus. Jedes laesst weg, was das naechste braucht — so
-# halbiert ein Fehlerbild den Suchraum, statt ihn zu durchmustern.
-cargo build --release --target thumbv7em-none-eabihf \
+# halbiert ein Fehlerbild den Suchraum, statt ihn zu durchmustern. Mit
+# `bench` baut auch das Messprogramm von `takt bench` (13.8).
+cargo build --release --target thumbv7em-none-eabihf --features bench \
     --manifest-path crates/takt-bringup-stm32f401/Cargo.toml "$@"
 
 # Das Zielverzeichnis kann umgelenkt sein (`CARGO_TARGET_DIR`, oder in
@@ -134,10 +135,10 @@ program_in_binary() {
 # unter `xip_flash` der Tick-Pfad im RAM. Das Werkzeug ist das, mit dem das
 # Bring-up gebaut hat (`release`, FB-193).
 image_checked() {
-    local triple="$1" crate="$2" bin="$3" manifest
-    manifest="$(ls -t "${target_dir:-target}/$triple/release/build/$crate"-*/out/takt/app/app.manifest 2>/dev/null | head -1)"
+    local triple="$1" crate="$2" bin="$3" library="${4:-app}" manifest
+    manifest="$(ls -t "${target_dir:-target}/$triple/release/build/$crate"-*/out/takt/$library/$library.manifest 2>/dev/null | head -1)"
     if [ -z "$manifest" ]; then
-        echo "FEHLER: kein app.manifest im Bau von $crate" >&2
+        echo "FEHLER: kein $library.manifest im Bau von $crate" >&2
         exit 1
     fi
     "${target_dir:-target}/release/takt" check-image "$bin" --manifest "$manifest"
@@ -176,10 +177,13 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
 # Von aussen gilt `.cargo/config.toml` des Bring-ups nicht; die Schalter fuer
 # `esp-hal` setzt darum der Aufruf, wie der Board-Harness (12.3, FB-449).
 ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK=true ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM=false \
-    cargo build --release --target riscv32imac-unknown-none-elf \
+    cargo build --release --target riscv32imac-unknown-none-elf --features bench \
     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
 program_in_binary crates/takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
 image_checked riscv32imac-unknown-none-elf takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
+# Das Messprogramm misst aus dem RAM wie die Programme, deren Kosten es misst.
+image_checked riscv32imac-unknown-none-elf takt-bringup-esp32c6 \
+    "${target_dir:-target}/riscv32imac-unknown-none-elf/release/bench" takt_bench
 # Die Schleife des Wirts (13.8, `takt driver-test --crate`): eigener
 # Workspace wie die Bring-ups; das Programm bringt, wer sie bindet.
 cargo clippy --all-targets --manifest-path crates/takt-bringup-host/Cargo.toml "$@" -- -D warnings
@@ -197,8 +201,14 @@ cargo clippy --all-targets --manifest-path crates/takt-bringup-host/Cargo.toml "
 echo
 echo "== 5. Die rechnende Haelfte auf dem Wirt"
 cargo test -p takt-board-support -p takt-flash-weact "$@"
+# Takt als Baustein in einem Projekt wie dem eines Nutzers (12.11): Programme,
+# Messprogramm und erzeugte Module ohne Befund von Clippy, die Tests gegen den
+# Interpreter und `takt bench --import` (FB-452).
+TAKT="${target_dir:-target}/release/takt" \
+    cargo clippy --all-targets --manifest-path examples/rust-host/Cargo.toml "$@" -- -D warnings
+TAKT="${target_dir:-target}/release/takt" cargo test --manifest-path examples/rust-host/Cargo.toml "$@"
 
 echo
 echo "Gebaut und geprueft: Kerne (${cores[*]}) fuer ${targets[*]}, beide Board-Crates, beide Bring-ups mit"
 echo "Abbild-, Programm- und Bindungspruefung (check-image), Natives mit Tests, takt-embed, takt-bringup-host,"
-echo "die rechnende Haelfte."
+echo "die rechnende Haelfte, examples/rust-host."

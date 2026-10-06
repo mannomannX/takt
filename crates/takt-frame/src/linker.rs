@@ -60,9 +60,39 @@ pub fn ld_fragment(x: &Prefix) -> String {
     let _ = writeln!(s, "/* Die Bibliothek: erzeugter Code und Rahmen mit den Konstanten, die der Tick liest. */");
     let _ = writeln!(s, "*lib{x}.a:(.text .text.* .rodata .rodata.* .srodata .srodata.*)\n");
     let _ = writeln!(s, "/* Im Wirt: der Kleber zu den Treibern (`{x}_*`) und die Huelle (Modul `{x}`). */");
+    owned(&mut s, x.as_str());
+    shared(&mut s);
+    s
+}
+
+/// `takt_bench_ram.x`: das Messprogramm von `takt bench` im RAM (13.8). Ein
+/// Kern, der aus dem Flash liefe, maesse den Cache mit; gemessen wird, wie
+/// ein Programm unter `xip_flash` laeuft.
+pub fn bench_ld_fragment() -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "/* Erzeugt von `takt bench --emit embed` (12.3, 13.8): das Messprogramm im RAM");
+    let _ = writeln!(s, " * (`xip_flash`), wie die Programme, deren Kosten es misst. Ein Wirt bindet");
+    let _ = writeln!(s, " * diese Zeilen in den Ausgabeabschnitt seines Instruktions-RAM. Nicht von Hand");
+    let _ = writeln!(s, " * aendern.");
+    let _ = writeln!(s, " */\n");
+    let _ = writeln!(s, "/* Die Bibliothek: Kerne, Rahmen, C-Referenzen und der Laeufer. */");
+    let _ = writeln!(s, "*libtakt_bench.a:(.text .text.* .rodata .rodata.* .srodata .srodata.*)\n");
+    let _ = writeln!(s, "/* Im Wirt: die Haken (`takt_bench_*`) und das Modul `takt_bench`. */");
+    owned(&mut s, "takt_bench");
+    shared(&mut s);
+    s
+}
+
+/// Was dem Wirt gehoert und den Namen `x` traegt: Symbole `x_*` und das
+/// Modul `x`.
+fn owned(s: &mut String, x: &str) {
     let _ = writeln!(s, "*(.text.{x}_* .rodata.{x}_* .srodata.{x}_*)");
-    let hull = mangled(x.as_str());
+    let hull = mangled(x);
     let _ = writeln!(s, "*(.text.{hull} .rodata.{hull} .srodata.{hull})\n");
+}
+
+/// Was alle Programme teilen.
+fn shared(s: &mut String) {
     let _ = writeln!(s, "/* Was alle Programme teilen: Schleife, Huelle, Treiberrand, Mathematik, Natives. */");
     let c: Vec<String> = SHARED_C.iter().map(|p| format!(".text.{p}* .rodata.{p}* .srodata.{p}*")).collect();
     let _ = writeln!(s, "*({})", c.join(" "));
@@ -79,7 +109,17 @@ pub fn ld_fragment(x: &Prefix) -> String {
     let _ = writeln!(s, "*(.rodata..Lanon.* .srodata..Lanon.*)\n");
     let _ = writeln!(s, "/* Die Grundrechenarten, `fma` und `sqrt`, die der erzeugte Code ruft (FB-301). */");
     let _ = writeln!(s, "*libcompiler_builtins-*.rlib:*(.text .text.* .rodata .rodata.* .srodata .srodata.*)");
-    s
+}
+
+/// `takt_bench.lf`: das Messprogramm im RAM fuer einen Wirt unter ESP-IDF.
+pub fn bench_ldgen_fragment() -> String {
+    "# Erzeugt von `takt bench --emit embed` (12.3, 13.8): das Messprogramm im RAM\n\
+     # (`xip_flash`) fuer einen Wirt unter ESP-IDF.\n\
+     [mapping:takt_bench]\n\
+     archive: libtakt_bench.a\n\
+     entries:\n    \
+     * (noflash)\n"
+        .to_string()
 }
 
 /// `P.lf`: das Fragment fuer `ldgen` unter ESP-IDF. `noflash` legt Code
@@ -111,6 +151,17 @@ mod tests {
         assert!(s.contains(".text.*4core3num[0-9A-Z_]*"), "die Mathematik ruft `isqrt`: {s}");
         assert!(s.contains(".text.*4core3str[0-9A-Z_]*"), "die Natives pruefen UTF-8: {s}");
         assert!(!s.contains("app"), "kein fremdes Praefix: {s}");
+    }
+
+    /// Das Messprogramm liegt mit Haken, Modul und allem Geteilten im RAM.
+    #[test]
+    fn the_bench_fragment_names_the_library_and_the_hooks() {
+        let s = bench_ld_fragment();
+        assert!(s.contains("*libtakt_bench.a:(.text .text.*"), "{s}");
+        assert!(s.contains("*(.text.takt_bench_* "), "{s}");
+        assert!(s.contains(".text.*10takt_bench[0-9A-Z_]*"), "{s}");
+        assert!(s.contains(".text.*8libtaktm[0-9A-Z_]*") && s.contains("libcompiler_builtins"), "{s}");
+        assert!(bench_ldgen_fragment().contains("archive: libtakt_bench.a\nentries:\n    * (noflash)\n"));
     }
 
     #[test]

@@ -8,15 +8,12 @@
 //! gilt nur, wenn `cargo` aus diesem Verzeichnis laeuft, und ein Bau von
 //! aussen erzeugte sonst still ein Binary ohne Speicherkarte.
 //!
-//! **Die Treiber** (12.6) erzeugt `bringup::rig` als Pruefstand: fuer
-//! `takt` nach der Verdrahtung des Boards und des Pruefgeraets, fuer
-//! `bench` ganz aus Stummeln — der Messkern misst den Tick, nicht die
-//! Peripherie.
+//! **Die Treiber** (12.6) erzeugt `bringup::rig` als Pruefstand nach der
+//! Verdrahtung des Boards und des Pruefgeraets.
 //!
-//! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`, wie
-//! beim F401: dieselben Flags wie der erzeugte Code, dazu
-//! `-ffp-contract=off` und `-fno-math-errno`, und im Archiv, also mit ihm
-//! im RAM (12.3).
+//! **Das Messprogramm von `takt bench`** (13.8) bindet das Merkmal `bench`
+//! wie jeder Wirt: `takt bench --emit embed` ueber den Bauhelfer, im RAM wie
+//! das Programm (12.3).
 
 use std::env;
 use std::fs;
@@ -46,7 +43,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TAKT_DIAGNOSTICS");
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let built = build_takt_program(&out);
-    ram_resident(&out, &built);
+    let bench = bench();
+    ram_resident(&out, &built, bench.as_ref());
     native_vectors(&out);
     math_vectors(&out);
 }
@@ -64,15 +62,22 @@ fn image_key() {
     }
 }
 
+/// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`.
+fn bench() -> Option<takt_embed::build::Built> {
+    env::var_os("CARGO_FEATURE_BENCH")
+        .map(|_| takt_embed::build::Bench::new().tool(bringup::takt()).hardware(hardware()).build())
+}
+
 /// Legt den Tick-Pfad ins RAM (12.3): das Fragment der Lieferform
-/// (`app_ram.x`) und dahinter, was das Board dazulegt (`board_ram.x`).
+/// (`app_ram.x`), mit dem Messprogramm dessen Fragment, und dahinter, was
+/// das Board dazulegt (`board_ram.x`).
 ///
 /// `esp-hal` bindet `rwtext_hook.x` in `.rwtext` ein; die Datei muss im
 /// Suchpfad des Linkers liegen, und `OUT_DIR` steht dort. Eingeschaltet
 /// wird der Haken ueber `ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK` — als echte
 /// Umgebungsvariable zur Bauzeit von `esp-hal`, darum in
 /// `.cargo/config.toml` und nicht hier.
-fn ram_resident(out: &Path, built: &takt_embed::build::Built) {
+fn ram_resident(out: &Path, built: &takt_embed::build::Built, bench: Option<&takt_embed::build::Built>) {
     // Ohne den Schalter bindet `esp-hal` den Haken nicht ein, und der
     // Tick-Pfad laege still im Flash (FB-449). Ein Bau von aussen
     // (`--manifest-path`) sieht `.cargo/config.toml` nicht.
@@ -88,7 +93,14 @@ fn ram_resident(out: &Path, built: &takt_embed::build::Built) {
     let board = Path::new(env!("CARGO_MANIFEST_DIR")).join("board_ram.x");
     println!("cargo:rerun-if-changed={}", board.display());
     let read = |p: &Path| fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
-    let hook = format!("{}\n{}", read(&fragment), read(&board));
+    let mut hook = read(&fragment);
+    if let Some(bench) = bench {
+        let Some(own) = bench.ram_fragment() else {
+            panic!("{}: kein Fragment fuer den RAM (12.3)", bench.manifest.display())
+        };
+        hook = format!("{hook}\n{}", read(&own));
+    }
+    let hook = format!("{hook}\n{}", read(&board));
     fs::write(out.join("rwtext_hook.x"), hook).expect("rwtext_hook.x schreiben");
     println!("cargo:rustc-link-search={}", out.display());
 }
@@ -105,7 +117,6 @@ fn build_takt_program(out: &Path) -> takt_embed::build::Built {
     let wiring =
         bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
     bringup::rig(&p, &wiring, &out.join("takt_rig.rs"));
-    bringup::rig(&p, &[], &out.join("takt_rig_bench.rs"));
     let mut embed = takt_embed::build::Program::new(&program)
         .tool(bringup::takt())
         .prefix(takt_llvm::symbols::Prefix::default().as_str())
@@ -125,14 +136,13 @@ fn build_takt_program(out: &Path) -> takt_embed::build::Built {
     // Wo der Tick in der Arena steht, als absolutes Symbol: Die Probe liest
     // ihn ueber JTAG, wenn die Konsole schweigt (`Esp32c6::tick_over_jtag`).
     println!("cargo:rustc-link-arg=--defsym=__takt_tick_at={}", built.value("tick_at"));
-    // Was das Board dazulegt: die Millicode-Routinen fuer `-msave-restore`
-    // und die C-Referenz von `takt bench`, wie das Programm im RAM.
+    // Was das Board dazulegt: die Millicode-Routinen fuer `-msave-restore`,
+    // wie das Programm im RAM.
     let millicode = here.join("millicode.S");
     println!("cargo:rerun-if-changed={}", millicode.display());
     let obj_mc = out.join("millicode.o");
     assemble(&millicode, &obj_mc);
-    let reference = bench_reference(out);
-    bringup::archive(out, "taktboard", &[&obj_mc, &reference]);
+    bringup::archive(out, "taktboard", &[&obj_mc]);
     println!("cargo:rustc-link-arg=--icf=all");
     built
 }
@@ -189,53 +199,6 @@ fn math_vectors(out: &Path) {
     let vectors = takt_conformance::math::vectors(&text).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
     fs::write(out.join("math_vectors.rs"), takt_conformance::math::table_source(&vectors))
         .expect("math_vectors.rs schreiben");
-}
-
-/// Die C-Referenz fuer `takt bench` als Objekt: die Datei aus
-/// `TAKT_BENCH_C` oder schwache Definitionen, die niemand ruft, solange
-/// `bench_reference.rs` sagt, dass keine da ist.
-fn bench_reference(out: &Path) -> PathBuf {
-    println!("cargo:rerun-if-env-changed=TAKT_BENCH_C");
-    let given = env::var("TAKT_BENCH_C").ok();
-    let src = match &given {
-        Some(path) => {
-            println!("cargo:rerun-if-changed={path}");
-            PathBuf::from(path)
-        }
-        None => {
-            let stub = out.join("bench_reference_none.c");
-            let text = "__attribute__((weak)) void takt_bench_reference(void) {}\n\
-                        __attribute__((weak)) unsigned long long takt_bench_reference_digest(void) { return 0; }\n";
-            fs::write(&stub, text).expect("bench_reference_none.c schreiben");
-            stub
-        }
-    };
-    let present = format!("/// Ist eine C-Referenz gebunden?\npub const PRESENT: bool = {};\n", given.is_some());
-    fs::write(out.join("bench_reference.rs"), present).expect("bench_reference.rs schreiben");
-    let obj = out.join("bench_reference.o");
-    translate(&src, &obj, &["-ffp-contract=off", "-fno-math-errno"]);
-    obj
-}
-
-/// Uebersetzt eine C-Quelle mit den Flags, die auch der erzeugte Code bekommt.
-fn translate(src: &Path, obj: &Path, extra: &[&str]) {
-    let ok = Command::new(bringup::clang())
-        .args([
-            "-c",
-            "-ffreestanding",
-            "-nostdlib",
-            "--target=riscv32-unknown-none-elf",
-            "-march=rv32imac",
-            "-mabi=ilp32",
-        ])
-        .args(takt_llvm::toolchain::object_flags("riscv32-unknown-none-elf"))
-        .args(extra)
-        .arg(src)
-        .arg("-o")
-        .arg(obj)
-        .status()
-        .is_ok_and(|s| s.success());
-    assert!(ok, "{}: uebersetzt nicht", src.display());
 }
 
 /// Uebersetzt die Millicode-Routinen fuer `-msave-restore`.

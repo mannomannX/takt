@@ -84,12 +84,22 @@ pub fn opt_level_for(triple: &str) -> &'static str {
 /// Schrittzeit), Millicode fuer Prolog und Epilog (RISC-V) und der
 /// Outliner fuer wiederkehrende Befehlsfolgen (plan/codegen-hebel.md A).
 pub fn object_flags(triple: &str) -> Vec<&'static str> {
+    let mut flags = frame_flags(triple);
+    if triple.starts_with("riscv32") || triple.starts_with("thumb") {
+        flags.extend(["-mllvm", "-enable-machine-outliner=always"]);
+    }
+    flags
+}
+
+/// Die Flags fuer den Rahmen (12.1): wie [`object_flags`], ohne den
+/// Outliner. Der Rahmen ist der Weg jedes Ticks — Schritt, Commit, die Hooks
+/// der Runtime —, und eine ausgelagerte Folge kostet dort bei jedem Aufruf:
+/// Ohne Outliner fiel `call_hook` auf dem F401 um 21 %, auf dem C6 um 8 %,
+/// `T_IO` um 4 und 1 %, fuer 54 und 84 Byte je Rahmen (FB-366).
+pub fn frame_flags(triple: &str) -> Vec<&'static str> {
     let mut flags = vec![opt_level_for(triple), "-ffunction-sections", "-fdata-sections"];
     if triple.starts_with("riscv32") {
         flags.push("-msave-restore");
-    }
-    if triple.starts_with("riscv32") || triple.starts_with("thumb") {
-        flags.extend(["-mllvm", "-enable-machine-outliner=always"]);
     }
     flags
 }

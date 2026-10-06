@@ -25,6 +25,13 @@ MEMORY
  */
 _stack_start = ORIGIN(RAM) + LENGTH(RAM);
 
+/* Die Lage des Programms im Flash: `takt bench` misst den F401 in mehreren
+ * Lagen, weil eine Messung aus dem Flash an der Lage des Codes haengt
+ * (FB-367). `build.rs` schreibt die Verschiebung `TAKT_TEXT_SHIFT`, sonst
+ * null, in Vielfachen von 8 Byte.
+ */
+INCLUDE takt_shift.x
+
 /* `.text` beginnt auf der naechsten 8-Byte-Grenze hinter der
  * Vektortabelle. `cortex-m-rt` legt es direkt dahinter (404 Byte, also
  * bei 0x08004194), aber die f64-Routinen aus `compiler_builtins`
@@ -34,7 +41,7 @@ _stack_start = ORIGIN(RAM) + LENGTH(RAM);
  * ueber den Anfang des Abschnitts; hier wird die Ursache behoben statt
  * die Warnung hingenommen.
  */
-_stext = ALIGN(ADDR(.vector_table) + SIZEOF(.vector_table), 8);
+_stext = ALIGN(ADDR(.vector_table) + SIZEOF(.vector_table), 8) + TAKT_TEXT_SHIFT;
 
 /* Der Schutzbereich aus 12.3.
  *

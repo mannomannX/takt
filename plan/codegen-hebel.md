@@ -123,7 +123,7 @@ Alle Hebel sind entweder umgesetzt oder mit Messung verworfen. Zahlen am UART-St
 | Hebel | Stand | Messung |
 |---|---|---|
 | A1 `-Oz` | verworfen | −5 % Objekt, aber Schrittzeit 20,9 auf 25,7 µs |
-| A2 `-msave-restore`, A3 Outliner | umgesetzt (FB-233) | zusammen 13 782 auf 12 432 Byte bei 21,5 µs; Millicode `millicode.S` im C6-Bring-up |
+| A2 `-msave-restore`, A3 Outliner | umgesetzt (FB-233); der Rahmen seit M11 Schritt 12 ohne Outliner (FB-366) | zusammen 13 782 auf 12 432 Byte bei 21,5 µs; Millicode `millicode.S` im C6-Bring-up |
 | A4 `--icf=all` | umgesetzt | −1 % |
 | A5 LTO-Modul aus Programm und Rahmen | verworfen | in jeder Variante rund 3,5 KB größer als getrennt |
 | A6 `cold` auf Fault-Pfaden | verworfen | 0 |

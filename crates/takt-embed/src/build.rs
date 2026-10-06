@@ -17,6 +17,9 @@
 //! Werkzeug nennt `TAKT`, sonst steht es im `PATH`. Das Tripel ist das von
 //! Cargo (`TARGET`); passt seine Float-ABI nicht zur Zielklasse, bricht der
 //! Bau mit beiden Namen ab.
+//!
+//! **Das Messprogramm von `takt bench`** bindet [`Bench`] auf demselben Weg
+//! (13.8): `takt bench --emit embed`, das Modul in `TAKT_BENCH_RS`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -149,36 +152,81 @@ impl Program {
         let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR: nur aus einem Bauskript"));
         let triple = env::var("TARGET").expect("TARGET: nur aus einem Bauskript");
         let call = self.invocation(&out, &triple);
-        let tool = match &self.tool {
-            Some(path) => path.clone(),
-            None => {
-                println!("cargo:rerun-if-env-changed=TAKT");
-                tool()
-            }
-        };
-        // Auch das Werkzeug ist eine Quelle: Ein neues `takt` uebersetzt
-        // anders, und ohne diese Zeile bliebe das alte Modul stehen.
-        if tool.exists() {
-            println!("cargo:rerun-if-changed={}", tool.display());
-        }
         // Die Konfigurationen aus `import channels` liegen neben dem Programm (8.2).
         if let Some(parent) = self.source.parent().filter(|p| !p.as_os_str().is_empty()) {
             println!("cargo:rerun-if-changed={}", parent.display());
         }
         println!("cargo:rerun-if-changed={}", self.source.display());
+        let what = format!("takt build --emit embed scheiterte fuer {}", self.source.display());
+        call.build(self.tool.as_deref(), self.hardware.as_deref(), &what)
+    }
+}
+
+/// Das Messprogramm von `takt bench` (13.8), das der Bau einbindet: alle
+/// Kerne fuer das Ziel dieses Baus, die Haken stellt der Wirt.
+///
+/// ```ignore
+/// // build.rs
+/// takt_embed::build::Bench::new().build();
+/// // src/main.rs
+/// mod takt_bench {
+///     include!(env!("TAKT_BENCH_RS"));
+/// }
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct Bench {
+    hardware: Option<PathBuf>,
+    tool: Option<PathBuf>,
+}
+
+impl Bench {
+    /// Das Messprogramm ohne weitere Angaben.
+    pub fn new() -> Bench {
+        Bench::default()
+    }
+
+    /// Das Werkzeug; ohne Angabe `TAKT`, sonst `takt` im `PATH`.
+    pub fn tool(mut self, path: impl Into<PathBuf>) -> Bench {
+        self.tool = Some(path.into());
+        self
+    }
+
+    /// Die Hardware-Konfiguration (8.10): Unter `xip_flash` gehoert das
+    /// Messprogramm in den RAM, und die Lieferform bringt das Fragment dazu.
+    pub fn hardware(mut self, path: impl Into<PathBuf>) -> Bench {
+        self.hardware = Some(path.into());
+        self
+    }
+
+    /// Was der Bau ruft und wohin er legt, wie [`Program::invocation`].
+    pub fn invocation(&self, out: &Path, triple: &str) -> Invocation {
+        let prefix = "takt_bench".to_string();
+        let dir = out.join("takt").join(&prefix);
+        let mut args: Vec<OsString> = vec!["bench".into()];
+        for word in ["--emit", "embed", "--target", triple, "--out"] {
+            args.push(word.into());
+        }
+        args.push(dir.clone().into_os_string());
         if let Some(hw) = &self.hardware {
-            println!("cargo:rerun-if-changed={}", hw.display());
+            args.push("--hardware".into());
+            args.push(hw.clone().into_os_string());
         }
-        if let Err(lines) = call.run(&tool) {
-            for line in lines {
-                println!("cargo:warning={line}");
-            }
-            panic!("takt build --emit embed scheiterte fuer {}", self.source.display());
-        }
-        println!("cargo:rustc-link-search=native={}", call.dir.display());
-        println!("cargo:rustc-link-lib=static={}", call.prefix);
-        println!("cargo:rustc-env={}={}", call.env, call.module.display());
-        Built { manifest: call.dir.join(format!("{}.manifest", call.prefix)), module: call.module }
+        let module = dir.join(format!("{prefix}.rs"));
+        Invocation { args, dir, module, prefix, env: "TAKT_BENCH_RS".into() }
+    }
+
+    /// Baut das Messprogramm nach `OUT_DIR/takt/takt_bench`, bindet die
+    /// Bibliothek und nennt das Modul in `TAKT_BENCH_RS`.
+    ///
+    /// # Panics
+    ///
+    /// Wenn der Bau scheitert: Die Meldungen von `takt bench` stehen davor
+    /// als Warnungen.
+    pub fn build(self) -> Built {
+        let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR: nur aus einem Bauskript"));
+        let triple = env::var("TARGET").expect("TARGET: nur aus einem Bauskript");
+        let call = self.invocation(&out, &triple);
+        call.build(self.tool.as_deref(), self.hardware.as_deref(), "takt bench --emit embed scheiterte")
     }
 }
 
@@ -238,6 +286,36 @@ pub struct Invocation {
 }
 
 impl Invocation {
+    /// Ruft das Werkzeug aus einem Bauskript, bindet die Bibliothek und nennt
+    /// das Modul; `what` ist die Meldung, wenn es scheitert.
+    fn build(&self, tool: Option<&Path>, hardware: Option<&Path>, what: &str) -> Built {
+        let tool = match tool {
+            Some(path) => path.to_path_buf(),
+            None => {
+                println!("cargo:rerun-if-env-changed=TAKT");
+                self::tool()
+            }
+        };
+        // Auch das Werkzeug ist eine Quelle: Ein neues `takt` uebersetzt
+        // anders, und ohne diese Zeile bliebe das alte Modul stehen.
+        if tool.exists() {
+            println!("cargo:rerun-if-changed={}", tool.display());
+        }
+        if let Some(hw) = hardware {
+            println!("cargo:rerun-if-changed={}", hw.display());
+        }
+        if let Err(lines) = self.run(&tool) {
+            for line in lines {
+                println!("cargo:warning={line}");
+            }
+            panic!("{what}");
+        }
+        println!("cargo:rustc-link-search=native={}", self.dir.display());
+        println!("cargo:rustc-link-lib=static={}", self.prefix);
+        println!("cargo:rustc-env={}={}", self.env, self.module.display());
+        Built { manifest: self.dir.join(format!("{}.manifest", self.prefix)), module: self.module.clone() }
+    }
+
     /// Ruft `tool` mit den Argumenten.
     ///
     /// # Errors
@@ -333,6 +411,28 @@ mod tests {
         assert_eq!(call.env, "TAKT_BOILER_RS");
         let plain = words(&Program::new("p/kessel.takt").invocation(Path::new("o"), "x"));
         assert!(!plain.iter().any(|w| ["--build", "--instrument", "--diagnostics"].contains(&w.as_str())), "{plain:?}");
+    }
+
+    /// Das Messprogramm: `takt bench --emit embed` fuer das Tripel, das Modul
+    /// in `TAKT_BENCH_RS`, die Konfiguration, wenn genannt.
+    #[test]
+    fn the_bench_invocation_emits_the_library() {
+        let call = Bench::new().hardware("hw/board.hw").invocation(Path::new("o"), "riscv32imac-unknown-none-elf");
+        assert_eq!(
+            words(&call),
+            [
+                "bench",
+                "--emit",
+                "embed",
+                "--target",
+                "riscv32imac-unknown-none-elf",
+                "--out",
+                "o/takt/takt_bench",
+                "--hardware",
+                "hw/board.hw"
+            ]
+        );
+        assert_eq!((call.prefix.as_str(), call.env.as_str()), ("takt_bench", "TAKT_BENCH_RS"));
     }
 
     /// Ein Wert des Manifests nach seinem Schluessel, ohne Leerraum; ein

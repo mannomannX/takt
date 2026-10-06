@@ -212,7 +212,7 @@ impl Row {
 /// der Mathematik null Byte meldet, hat nichts gemessen: Die grossen unter
 /// ihnen (`sha256`, `fft256`, `exp_f64`) brauchen Hunderte Byte.
 pub fn painted(natives: &[Row], math: &[crate::math::Row]) -> bool {
-    natives.iter().any(|r| r.stack > 0) || math.iter().any(|r| r.stack > 0)
+    natives.iter().any(|r| r.stack > 0) || math.iter().any(|r| r.stack.is_some_and(|s| s > 0))
 }
 
 /// Vergleicht die Messung mit dem Wirt und der Zusage; je Funktion eine

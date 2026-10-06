@@ -15,6 +15,11 @@
 //!    Treiber des Wirts. Ausgenommen sind Wege, die nur in eine Panik
 //!    fuehren.
 //!
+//! Das Manifest des Messprogramms von `takt bench` (`# takt-bench 1`, 13.8)
+//! traegt keine Arena und keinen Logik-Hash: Fuer es gilt Punkt 3, mit
+//! `takt_bench_measure` als Einstieg — ein Kern, der aus dem Flash liefe,
+//! maesse den Cache mit.
+//!
 //! Die Stacks prueft Schritt 13, die Antwortzeiten mehrerer Programme eines
 //! Kerns Schritt 16. Jede Zeile traegt ihren Ursprung (11.5): `exakt` aus
 //! Symboltabelle und Disassemblierung, `offen`, wo das Abbild es nicht sagt.
@@ -42,6 +47,8 @@ const TAKT_CRATES: [&str; 8] = [
 /// Was ein Manifest ueber sein Programm sagt (`P.manifest`, 12.11).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Manifest {
+    /// Das Messprogramm von `takt bench` statt eines Programms.
+    pub(crate) bench: bool,
     pub(crate) prefix: String,
     pub(crate) abi: String,
     pub(crate) logic_hash: String,
@@ -64,19 +71,27 @@ impl Manifest {
         let get = |key: &str| values.get(key).copied().ok_or_else(|| format!("kein `{key}`"));
         let number = |key: &str| get(key)?.parse::<u64>().map_err(|e| format!("`{key}`: {e}"));
         let prefix = get("prefix")?.to_string();
+        let tick_path = || -> Result<Vec<String>, String> {
+            Ok(get("tick_path")?.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect())
+        };
+        if text.trim_start().starts_with("# takt-bench ") {
+            return Ok(Manifest {
+                bench: true,
+                xip_flash: get("xip_flash")? == "true",
+                tick_path: tick_path()?,
+                prefix,
+                ..Manifest::default()
+            });
+        }
         Ok(Manifest {
+            bench: false,
             arena_symbol: values.get("arena_symbol").map_or_else(|| format!("{prefix}_arena"), |s| s.to_string()),
             abi: get("abi")?.to_string(),
             logic_hash: get("logic_hash")?.to_string(),
             arena_bytes: number("arena_bytes")?,
             arena_align: number("arena_align")?,
             xip_flash: get("xip_flash")? == "true",
-            tick_path: get("tick_path")?
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-                .collect(),
+            tick_path: tick_path()?,
             prefix,
         })
     }
@@ -125,6 +140,13 @@ fn finding(text: String) -> Line {
 /// aller Arenen des Abbilds.
 pub(crate) fn check(image: &Image, m: &Manifest, library: &BTreeSet<String>, arenas: &[(u64, u64)]) -> Vec<Line> {
     let x = &m.prefix;
+    if m.bench {
+        return if m.xip_flash {
+            tick_path_in_ram(image, m)
+        } else {
+            vec![exact(format!("{x}: ohne `xip_flash` nichts zu pruefen"))]
+        };
+    }
     let by_name: BTreeMap<&str, &Symbol> = image.symbols.iter().map(|s| (s.name.as_str(), s)).collect();
     let mut out = Vec::new();
 
@@ -341,6 +363,7 @@ pub(crate) fn run(image_path: &Path, manifests: &[&str]) -> bool {
     let image = Image { symbols, sections, graph: tools.call_graph(image_path) };
     let arenas: Vec<(u64, u64)> = parsed
         .iter()
+        .filter(|(_, m)| !m.bench)
         .filter_map(|(_, m)| image.symbols.iter().find(|s| s.name == m.arena_symbol))
         .map(|s| (s.address, s.size))
         .collect();
@@ -369,6 +392,7 @@ mod tests {
 
     fn manifest() -> Manifest {
         Manifest {
+            bench: false,
             prefix: "app".into(),
             abi: "4".into(),
             logic_hash: "ab12".into(),
@@ -498,6 +522,19 @@ mod tests {
         let mut m = manifest();
         m.abi = "5".into();
         assert!(findings(&check(&clean(), &m, &BTreeSet::new(), &[]))[0].contains("`app_abi_5` fehlt"));
+    }
+
+    /// Das Manifest des Messprogramms nennt nur Lage und Einstieg; geprueft
+    /// wird der Weg vom Messen aus.
+    #[test]
+    fn the_bench_manifest_checks_only_the_path() {
+        let text = "# takt-bench 1\nprefix = takt_bench\nsuite = 0123\nsteps = 44\ntarget = riscv32imac\n\
+                    triple = riscv32imac-unknown-none-elf\nxip_flash = true\ntick_path = takt_bench_measure\n";
+        let m = Manifest::parse(text).expect("lesbar");
+        assert!(m.bench && m.xip_flash);
+        assert_eq!(m.tick_path, ["takt_bench_measure"]);
+        let lines = check(&Image::default(), &m, &BTreeSet::new(), &[]);
+        assert!(lines.iter().all(|l| !l.text.contains("Arena") && !l.text.contains("ABI")), "{lines:?}");
     }
 
     /// Ohne `xip_flash` gibt es keinen Tick-Pfad zu pruefen.

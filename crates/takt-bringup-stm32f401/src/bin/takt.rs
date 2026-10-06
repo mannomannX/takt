@@ -715,7 +715,7 @@ struct Dispatching {
 #[cfg(feature = "rtos")]
 impl takt_rt_rtos::Boundary for Dispatching {
     async fn reached(&mut self) {
-        if self.dispatch.as_mut().is_some_and(app::Dispatch::next) {
+        if self.dispatch.as_mut().is_some_and(takt_embed::Dispatch::next) {
             self.boundary.work.write(());
         }
         if let Some(u) = uart() {

@@ -21,7 +21,9 @@ ohne, Streuungen als `min mean max` in Zyklen des Kerns, Zeiten in
 Pikosekunden.
 
 Ein Leser nimmt jede Version bis zu seiner eigenen und lehnt eine neuere ab
-(11.3). Er ist streng: Ein unbekannter Abschnitt oder Schlüssel ist ein Fehler
+(11.3). Version 2 (M11 Schritt 12) kam mit dem Messprogramm als Baustein:
+`suite` und `placements` im Lauf, `overhead` in der Kalibrierung, `function`
+und `placements` je Probe; eine Datei der Version 1 kennt sie nicht. Er ist streng: Ein unbekannter Abschnitt oder Schlüssel ist ein Fehler
 mit Zeilennummer — ein Bericht ist ein Beleg, und ein still überlesenes Feld
 wäre einer weniger.
 
@@ -29,17 +31,18 @@ wäre einer weniger.
 
 | Abschnitt | Einmal | Schlüssel |
 |---|---|---|
-| `[run]` | ja | `date` (`"JJJJ-MM-TT"`, UTC), `board`, `target` (Zielklasse wie `takt build --target`, 12.8), `profile` (12.8), `tool` (Werkzeug mit Version), `core_hz`, `runs` (Messungen je Kern) |
-| `[calibration]` | höchstens | `t_io_ps` (7.2), `stretch` (Bruch `z/n`, `1/1` ohne Streckung), `stack_reserve` (Byte, 12.3; fehlt ohne Messung), `subnormal_failures` (4.2) |
-| `[probe <name>]` | je Gewicht | `ps` (Gewicht vor der Streckung), `ops` (Unterschied der Operationen zwischen kleinem und großem Kern), `small`, `large` (Streuungen) |
+| `[run]` | ja | `date` (`"JJJJ-MM-TT"`, UTC), `board`, `target` (Zielklasse wie `takt build --target`, 12.8), `profile` (12.8), `tool` (Werkzeug mit Version), `core_hz`, `runs` (Messungen je Kern und Lage), `suite` (Kennung der Kerne des Messprogramms), `placements` (die Lagen als Verschiebung des Programms in Byte, FB-367) |
+| `[calibration]` | höchstens | `t_io_ps` (7.2), `stretch` (Bruch `z/n`, `1/1` ohne Streckung), `stack_reserve` (Byte, 12.3; fehlt ohne Messung), `subnormal_failures` (4.2), `overhead` (Zyklen zweier Lesungen des Zählers, von jeder Reihe abgezogen) |
+| `[probe <name>]` | je Gewicht | `function` (nur bei der Mathematik: die Funktion des teuersten Aufrufs), `ps` (Gewicht vor der Streckung), `ops` (Unterschied der Operationen zwischen kleinem und großem Kern), `small`, `large` (Streuungen über alle Lagen), `placements` (das Gewicht je Lage in Pikosekunden, wenn in mehreren gemessen) |
 | `[check <name>]` | je Kern | `measured_ps` (Maximum), `bound_ps` (`Σ N_c · c_target[c] + T_IO` der gestreckten Tabelle, dazu das Mehrgewicht jeder Division, jedes `fma` und jeder Wurzel, 7.2) |
 | `[kernel <name>]` | je Referenzkern | `takt`, `c` (Streuungen), `same_digest` (`true`/`false`), `implicit_checks` (3.4) |
 | `[native <name>]` | je kuratierter Native | `vectors` (gerechnete Vektoren aus `grammar/takt-native.md`), `same_result` (`true`, wenn jedes Ergebnis dem des Wirts gleicht), `stack` (größter gemessener Bedarf je Aufruf in Byte), `contract` (die Zusage `stack`, 4.5) |
 | `[corpus]` | höchstens | `programs`, `deviations` |
 
 `<name>` einer Probe ist der Schlüssel der Hardware-Konfiguration (`i32`,
-`mem`, `f64_div`, `f32_fma`, `f64_sqrt`); ein Kern heißt nach seiner Probe
-mit `klein` oder `groß` oder nach dem Referenzkern aus 13.8.
+`mem`, `f64_div`, `f32_fma`, `f64_sqrt`); ein Kern heißt wie im Protokoll des
+Messprogramms, nach seiner Probe mit `_small` oder `_large` oder nach dem
+Referenzkern aus 13.8.
 
 ## R3 Was ein Bericht zusagt
 
@@ -59,7 +62,7 @@ mit `klein` oder `groß` oder nach dem Referenzkern aus 13.8.
 ## R4 Vektor
 
 ```text
-# takt-conformance 1
+# takt-conformance 2
 [run]
 date = "2026-09-25"
 board = "stm32f401"
@@ -68,20 +71,31 @@ profile = "baremetal"
 tool = "takt 0.1.0"
 core_hz = 84000000
 runs = 200
+suite = "3f2a9c0d11e4b7a8"
+placements = 0 8 24
 
 [calibration]
 t_io_ps = 5000
 stretch = 21/20
 stack_reserve = 1432
 subnormal_failures = 0
+overhead = 6
 
 [probe i32]
 ps = 11905
 ops = 192
 small = 100 101 110
 large = 292 293 300
+placements = 11905 11905 11905
 
-[check i32 gross]
+[probe f64_math]
+function = "acos"
+ps = 1008345000
+ops = 8
+small = 170000 170100 170400
+large = 848000 848300 848900
+
+[check i32_large]
 measured_ps = 3571500
 bound_ps = 3600000
 

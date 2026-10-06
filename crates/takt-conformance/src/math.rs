@@ -3,11 +3,12 @@
 //! eines Aufrufs.
 //!
 //! Die Vektoren der Stufe 2 stehen normativ in `grammar/libtaktm.md`;
-//! `libtaktm/tests/vectors.rs` prueft sie auf dem Wirt. Das Messprogramm
-//! `natives` der Bring-ups ruft dieselben Einstiege `takt_m_*` aus
-//! `takt-native-abi`, die der erzeugte Code ruft, und schreibt je Vektor
-//! `math <i> <ergebnis> stack <byte> cycles <zyklen>`. Ein Ergebnis gleich
-//! der Norm ist das korrekt gerundete; der Stack gilt gegen
+//! `libtaktm/tests/vectors.rs` prueft sie auf dem Wirt. Zwei Messprogramme
+//! rufen dieselben Einstiege `takt_m_*`, die der erzeugte Code ruft, und
+//! schreiben je Vektor eine Zeile: das von `takt bench` (13.8) `math <i>
+//! <ergebnis> cycles <zyklen>`, das Messprogramm `natives` der Bring-ups
+//! dazu den Stack, `math <i> <ergebnis> stack <byte> cycles <zyklen>`. Ein
+//! Ergebnis gleich der Norm ist das korrekt gerundete; der Stack gilt gegen
 //! [`takt_mir::analysis::stack::MATH_STACK`], die Zyklen gegen das Gewicht
 //! `math` der Kalibrierung (FB-344).
 
@@ -83,33 +84,55 @@ pub fn table_source(vectors: &[Vector]) -> String {
     s
 }
 
-/// Eine Zeile des Messprogramms.
+/// Eine Zeile eines Messprogramms.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Measured {
     /// Der Platz des Vektors in der Tabelle.
     pub index: usize,
     /// Das Ergebnis als Bitmuster.
     pub result: u64,
-    /// Der Stack-Bedarf des Einstiegs in Byte.
-    pub stack: u32,
+    /// Der Stack-Bedarf des Einstiegs in Byte, wenn das Messprogramm ihn malt.
+    pub stack: Option<u32>,
     /// Die Zyklen eines Aufrufs.
     pub cycles: u32,
 }
 
-/// Liest die Zeilen `math <i> <ergebnis> stack <byte> cycles <zyklen>`.
+/// Liest die Zeilen `math <i> <ergebnis> [stack <byte>] cycles <zyklen>`.
 pub fn parse(text: &str) -> Result<Vec<Measured>, String> {
     text.lines()
         .filter_map(|l| l.trim().strip_prefix("math "))
         .map(|rest| {
             let bad = || format!("unlesbar: `math {rest}`");
             let words: Vec<&str> = rest.split_whitespace().collect();
-            let [i, result, "stack", stack, "cycles", cycles] = words.as_slice() else { return Err(bad()) };
+            let (i, result, stack, cycles) = match words.as_slice() {
+                [i, result, "stack", stack, "cycles", cycles] => (i, result, Some(stack), cycles),
+                [i, result, "cycles", cycles] => (i, result, None, cycles),
+                _ => return Err(bad()),
+            };
             Ok(Measured {
                 index: i.parse().map_err(|_| bad())?,
                 result: u64::from_str_radix(result, 16).map_err(|_| bad())?,
-                stack: stack.parse().map_err(|_| bad())?,
+                stack: stack.map(|s| s.parse()).transpose().map_err(|_| bad())?,
                 cycles: cycles.parse().map_err(|_| bad())?,
             })
+        })
+        .collect()
+}
+
+/// Die Zyklen aus `timed`, den Stack aus `painted`: zwei Messprogramme,
+/// dieselben Vektoren. Ein Vektor, der in beiden verschieden ausgeht, ist ein
+/// Fehler; er fehlt in keinem, solange beide alle rechnen.
+pub fn joined(timed: &[Measured], painted: &[Measured]) -> Result<Vec<Measured>, String> {
+    timed
+        .iter()
+        .map(|t| {
+            let p = painted.iter().find(|p| p.index == t.index);
+            match p {
+                Some(p) if p.result != t.result => {
+                    Err(format!("Vektor {} der Mathematik: {:016x} gegen {:016x}", t.index, t.result, p.result))
+                }
+                _ => Ok(Measured { stack: p.and_then(|p| p.stack), ..t.clone() }),
+            }
         })
         .collect()
 }
@@ -125,8 +148,9 @@ pub struct Row {
     pub vectors: u32,
     /// Zeilen der Spezifikation, deren Ergebnis abweicht.
     pub deviations: Vec<usize>,
-    /// Der groesste gemessene Stack-Bedarf in Byte.
-    pub stack: u32,
+    /// Der groesste gemessene Stack-Bedarf in Byte; `None`, wenn kein
+    /// Messprogramm den Stack malte.
+    pub stack: Option<u32>,
     /// Die meisten Zyklen eines Aufrufs.
     pub cycles: u32,
 }
@@ -145,7 +169,7 @@ impl Row {
     /// Unter dem Stackvertrag der Mathematik? Ob das Malen lief, prueft
     /// [`crate::natives::painted`] am ganzen Lauf.
     pub fn within_contract(&self) -> bool {
-        self.stack <= MATH_STACK
+        self.stack.is_none_or(|s| s <= MATH_STACK)
     }
 }
 
@@ -161,7 +185,7 @@ pub fn judge(vectors: &[Vector], measured: &[Measured]) -> Result<Vec<Row>, Stri
         let at = match rows.iter().position(|r| r.fun == v.fun && r.wide == v.wide) {
             Some(at) => at,
             None => {
-                rows.push(Row { fun: v.fun, wide: v.wide, vectors: 0, deviations: Vec::new(), stack: 0, cycles: 0 });
+                rows.push(Row { fun: v.fun, wide: v.wide, vectors: 0, deviations: Vec::new(), stack: None, cycles: 0 });
                 rows.len() - 1
             }
         };
@@ -205,15 +229,29 @@ mod tests {
         let rows = judge(&v, &parse(text).expect("lesbar")).expect("vollstaendig");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].deviations, vec![8]);
-        assert_eq!((rows[0].stack, rows[0].cycles), (420, 9000));
+        assert_eq!((rows[0].stack, rows[0].cycles), (Some(420), 9000));
         assert_eq!(rows[0].name(), "exp_f64");
+    }
+
+    /// Eine Zeile von `takt bench` hat keinen Stack; die Zyklen kommen von
+    /// dort, der Stack aus dem Messprogramm `natives`.
+    #[test]
+    fn the_bench_times_and_natives_paints() {
+        let timed = parse("math 0 3ff0000000000000 cycles 9000\n").expect("lesbar");
+        let painted = parse("math 0 3ff0000000000000 stack 400 cycles 9100\n").expect("lesbar");
+        assert_eq!(timed[0].stack, None);
+        let both = joined(&timed, &painted).expect("passt");
+        assert_eq!((both[0].stack, both[0].cycles), (Some(400), 9000));
+        let other = parse("math 0 3ff0000000000001 stack 400 cycles 9100\n").expect("lesbar");
+        assert!(joined(&timed, &other).is_err());
     }
 
     /// Ein Stack ueber dem Vertrag bricht ihn.
     #[test]
     fn a_stack_above_the_contract_breaks_it() {
         let row = |stack| Row { fun: "exp", wide: true, vectors: 1, deviations: Vec::new(), stack, cycles: 1 };
-        assert!(row(MATH_STACK).within_contract());
-        assert!(!row(MATH_STACK + 1).within_contract());
+        assert!(row(Some(MATH_STACK)).within_contract());
+        assert!(!row(Some(MATH_STACK + 1)).within_contract());
+        assert!(row(None).within_contract(), "ungemessen bricht nichts");
     }
 }

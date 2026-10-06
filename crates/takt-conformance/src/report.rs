@@ -16,7 +16,11 @@
 use std::fmt::Write as _;
 
 /// Formatversion dieses Schreibers (11.3); Leser nehmen jede bis zu ihrer.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// 2: das Messprogramm als Baustein (M11 Schritt 12) — `suite` und
+/// `placements` im Lauf, `overhead` in der Kalibrierung, `function` und
+/// `placements` je Probe; die Kerne heissen wie im Protokoll.
+pub const FORMAT_VERSION: u32 = 2;
 
 const MAGIC: &str = "takt-conformance";
 
@@ -57,8 +61,12 @@ pub struct Run {
     pub tool: String,
     /// Kerntakt in Hertz.
     pub core_hz: u32,
-    /// Messungen je Kern.
+    /// Messungen je Kern und Lage.
     pub runs: u64,
+    /// Die Kennung des Messprogramms (`takt bench --emit embed`).
+    pub suite: String,
+    /// Die Lagen, in denen gemessen wurde, als Verschiebung in Byte (FB-367).
+    pub placements: Vec<u32>,
 }
 
 /// Was die Kalibrierung neben den Gewichten ergab.
@@ -72,6 +80,8 @@ pub struct Calibration {
     pub stack_reserve: Option<u64>,
     /// Faelle des Subnormal-Vektors mit falschem Ergebnis (4.2).
     pub subnormal_failures: u64,
+    /// Was die Messung selbst kostet, in Zyklen; von jeder Reihe abgezogen.
+    pub overhead: u64,
 }
 
 /// Kuerzeste, mittlere und laengste Messung in Zyklen.
@@ -90,6 +100,8 @@ pub struct Spread {
 pub struct Probe {
     /// Der Schluessel wie in der Hardware-Konfiguration (`i32`, `f64_div`).
     pub name: String,
+    /// Bei der Mathematik die Funktion, an der das Gewicht haengt.
+    pub function: Option<String>,
     /// Das Gewicht in Pikosekunden, vor einer Streckung.
     pub ps: u64,
     /// Um wie viele Operationen der Klasse sich die beiden Kerne unterscheiden.
@@ -98,6 +110,8 @@ pub struct Probe {
     pub small: Spread,
     /// Der grosse Kern.
     pub large: Spread,
+    /// Das Gewicht je Lage in Pikosekunden, wenn in mehreren gemessen wurde.
+    pub placements: Vec<u64>,
 }
 
 /// Ein Kern gegen die gestreckte Tabelle.
@@ -174,26 +188,35 @@ pub fn render(r: &Report) -> String {
     let run = &r.run;
     let _ = write!(
         s,
-        "\n[run]\ndate = \"{}\"\nboard = \"{}\"\ntarget = \"{}\"\nprofile = \"{}\"\ntool = \"{}\"\ncore_hz = {}\nruns = {}\n",
-        run.date, run.board, run.target, run.profile, run.tool, run.core_hz, run.runs
+        "\n[run]\ndate = \"{}\"\nboard = \"{}\"\ntarget = \"{}\"\nprofile = \"{}\"\ntool = \"{}\"\ncore_hz = {}\nruns = {}\n\
+         suite = \"{}\"\nplacements = {}\n",
+        run.date,
+        run.board,
+        run.target,
+        run.profile,
+        run.tool,
+        run.core_hz,
+        run.runs,
+        run.suite,
+        numbers(&run.placements)
     );
     if let Some(c) = &r.calibration {
         let _ = write!(s, "\n[calibration]\nt_io_ps = {}\nstretch = {}/{}\n", c.t_io_ps, c.stretch.0, c.stretch.1);
         if let Some(bytes) = c.stack_reserve {
             let _ = writeln!(s, "stack_reserve = {bytes}");
         }
-        let _ = writeln!(s, "subnormal_failures = {}", c.subnormal_failures);
+        let _ = writeln!(s, "subnormal_failures = {}\noverhead = {}", c.subnormal_failures, c.overhead);
     }
     for p in &r.probes {
-        let _ = write!(
-            s,
-            "\n[probe {}]\nps = {}\nops = {}\nsmall = {}\nlarge = {}\n",
-            p.name,
-            p.ps,
-            p.ops,
-            spread(&p.small),
-            spread(&p.large)
-        );
+        let _ = write!(s, "\n[probe {}]\n", p.name);
+        if let Some(f) = &p.function {
+            let _ = writeln!(s, "function = \"{f}\"");
+        }
+        let _ =
+            write!(s, "ps = {}\nops = {}\nsmall = {}\nlarge = {}\n", p.ps, p.ops, spread(&p.small), spread(&p.large));
+        if !p.placements.is_empty() {
+            let _ = writeln!(s, "placements = {}", numbers(&p.placements));
+        }
     }
     for c in &r.checks {
         let _ = write!(s, "\n[check {}]\nmeasured_ps = {}\nbound_ps = {}\n", c.name, c.measured_ps, c.bound_ps);
@@ -224,6 +247,16 @@ pub fn render(r: &Report) -> String {
 
 fn spread(s: &Spread) -> String {
     format!("{} {} {}", s.min, s.mean, s.max)
+}
+
+/// Eine Liste von Zahlen, durch Leerzeichen getrennt.
+fn numbers<T: std::fmt::Display>(values: &[T]) -> String {
+    values.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
+}
+
+/// Eine Liste von Zahlen aus [`numbers`].
+fn parse_numbers<T: std::str::FromStr>(value: &str) -> Option<Vec<T>> {
+    value.split_whitespace().map(|w| w.parse().ok()).collect()
 }
 
 /// Welcher Abschnitt gerade gelesen wird.
@@ -317,6 +350,11 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                 "tool" => r.run.tool = text(),
                 "core_hz" => r.run.core_hz = number()? as u32,
                 "runs" => r.run.runs = number()?,
+                "suite" => r.run.suite = text(),
+                "placements" => {
+                    r.run.placements =
+                        parse_numbers(value).ok_or_else(|| err(format!("`{value}` sind keine Verschiebungen")))?
+                }
                 _ => return Err(unknown()),
             },
             Some(Section::Calibration) => {
@@ -331,14 +369,20 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                     }
                     "stack_reserve" => c.stack_reserve = Some(number()?),
                     "subnormal_failures" => c.subnormal_failures = number()?,
+                    "overhead" => c.overhead = number()?,
                     _ => return Err(unknown()),
                 }
             }
             Some(Section::Probe) => {
                 let p = r.probes.last_mut().expect("Abschnitt angelegt");
                 match key {
+                    "function" => p.function = Some(text()),
                     "ps" => p.ps = number()?,
                     "ops" => p.ops = number()?,
+                    "placements" => {
+                        p.placements =
+                            parse_numbers(value).ok_or_else(|| err(format!("`{value}` sind keine Gewichte")))?
+                    }
                     "small" => {
                         p.small = parse_spread(value).ok_or_else(|| err(format!("`{value}` ist keine Streuung")))?
                     }
@@ -441,21 +485,37 @@ mod tests {
                 tool: "takt 0.1.0".into(),
                 core_hz: 84_000_000,
                 runs: 200,
+                suite: "3f2a9c0d11e4b7a8".into(),
+                placements: vec![0, 8, 24],
             },
             calibration: Some(Calibration {
                 t_io_ps: 5_000,
                 stretch: (21, 20),
                 stack_reserve: Some(1_432),
                 subnormal_failures: 0,
+                overhead: 6,
             }),
-            probes: vec![Probe {
-                name: "i32".into(),
-                ps: 11_905,
-                ops: 192,
-                small: s(100, 101, 110),
-                large: s(292, 293, 300),
-            }],
-            checks: vec![Check { name: "i32 gross".into(), measured_ps: 3_571_500, bound_ps: 3_600_000 }],
+            probes: vec![
+                Probe {
+                    name: "i32".into(),
+                    function: None,
+                    ps: 11_905,
+                    ops: 192,
+                    small: s(100, 101, 110),
+                    large: s(292, 293, 300),
+                    placements: vec![11_905, 11_905, 11_905],
+                },
+                Probe {
+                    name: "f64_math".into(),
+                    function: Some("acos".into()),
+                    ps: 1_008_345_000,
+                    ops: 8,
+                    small: s(170_000, 170_100, 170_400),
+                    large: s(848_000, 848_300, 848_900),
+                    placements: Vec::new(),
+                },
+            ],
+            checks: vec![Check { name: "i32_large".into(), measured_ps: 3_571_500, bound_ps: 3_600_000 }],
             kernels: vec![Kernel {
                 name: "crc32".into(),
                 takt: s(9_000, 9_010, 9_050),
@@ -478,8 +538,13 @@ mod tests {
     fn a_report_round_trips() {
         let r = sample();
         let text = render(&r);
-        assert!(text.starts_with("# takt-conformance 1\n"), "{text}");
+        assert!(text.starts_with("# takt-conformance 2\n"), "{text}");
+        assert!(text.contains("[probe f64_math]\nfunction = \"acos\"\nps = "), "{text}");
+        assert!(text.contains("placements = 0 8 24\n") && text.contains("placements = 11905 11905 11905\n"), "{text}");
         assert_eq!(parse(&text), Ok(r));
+        // Version 1 kannte Kennung, Lagen und Messaufwand nicht; sie liest sich weiter.
+        let old = parse("# takt-conformance 1\n[run]\nruns = 200\n[calibration]\nt_io_ps = 5\n").expect("Version 1");
+        assert_eq!((old.run.suite.as_str(), old.run.placements.len()), ("", 0));
     }
 
     /// Ein Bericht ist ein Beleg: Ein unbekannter Schluessel faellt auf.

@@ -1,17 +1,16 @@
-# takt-hw 14
+# takt-hw 15 edition 1 compiler 0.1.0
 # ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
 # Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
 # plan/esp32c6.md).
 #
-# **Gemessen mit `takt bench` auf Board 2** (2026-10-02, 200 Wiederholungen
-# je Kern, 160 MHz), zum Kostenmodell 2. Der Bericht daneben
-# (`esp32c6.report`) nennt Streuung und Umstaende. Gestreckt um
-# 2831250/2575558 (rund 10 %): Seit der ganze Tick-Pfad im RAM liegt,
-# kostet der feste Weg durch Rahmen und Treiberrand im warmen Messlauf rund
-# 340 Zyklen mehr als frueher aus dem Flash-Cache, und `T_IO` traegt das;
-# dafuer faellt der kalte Fall weg (ein Tick von `01_minimal` hoechstens
-# 12,1 statt 46,3 us). Der Hook der Runtime hat sein eigenes Gewicht
-# (`call_hook`, FB-295).
+# **Gemessen mit `takt bench` auf Board 2** (2026-10-06, 200 Wiederholungen
+# je Kern, 160 MHz), zum Kostenmodell 2, mit dem Messprogramm als Baustein.
+# Der Bericht daneben (`esp32c6.report`) nennt Streuung und Umstaende. Aus
+# dem RAM misst der Kern ohne Streuung (Minimum gleich Maximum), und die
+# Tabelle braucht keine Streckung; die alte Messung trug in jeder Reihe
+# einen Ausreisser von 273 Zyklen (FB-451). `T_IO` enthaelt den Commit
+# (FB-450). Der Hook der Runtime hat sein eigenes Gewicht (`call_hook`,
+# FB-295).
 #
 # Was die Zahlen voraussetzen: Alles, was der Tick beruehrt, liegt im RAM
 # (12.3, `rwtext_hook.x`, FB-301, FB-357) — der erzeugte Code mit seinem
@@ -20,9 +19,10 @@
 # Tabellen, `fma` und `sqrt` aus `compiler_builtins` und die Konstanten;
 # die Soft-Float-Grundrechenarten im ROM des Chips. Ohne FPU sind Division,
 # `fma` und `sqrt` Bibliotheksaufrufe mit eigenem Gewicht (7.2); die
-# Mathematik hat eines je Breite (`f32_math`, `f64_math`; Konfiguration 12,
-# FB-344), gemessen an der teuersten Funktion des Boards — `acos` in `f32`,
-# `asin` in `f64` — und mindestens ihr teuerster Vektor am Einstieg.
+# Mathematik hat eines je Breite (`f32_math`, `f64_math`; FB-344): der
+# Aufwand eines Aufrufs im erzeugten Code, gemessen an `pow`, auf dem
+# teuersten Einstieg ueber alle Funktionen und Vektoren (`acos` in beiden
+# Breiten).
 #
 # `ram` und `iram` nennen denselben Bereich, und das ist kein Fehler: Der
 # C6 hat einen einheitlichen HP-SRAM (`esp-hal` richtet 0x6E610 Byte ein,
@@ -45,31 +45,31 @@ nvm_sectors = 2
 nvm_erase_ns = 60000000
 nvm_program_ns = 200000
 nvm_blocking = true
-i32 = 8289
-i64 = 26329
-f32 = 368022
-f64 = 585265
-mem = 31302
-call = 58400
+i32 = 7305
+i64 = 24854
+f32 = 332793
+f64 = 531914
+mem = 27871
+call = 44063
 native = 0
-i32_div = 65158
-i64_div = 1130169
-f32_div = 1324904
-f64_div = 2569605
-f32_fma = 4708595
-f64_fma = 3041538
-f32_sqrt = 521059
-f64_sqrt = 1414475
-t_io = 5125000
+i32_div = 60643
+i64_div = 1025311
+f32_div = 1204023
+f64_div = 2338593
+f32_fma = 4290078
+f64_fma = 2774355
+f32_sqrt = 458417
+f64_sqrt = 1286836
+t_io = 3781250
 tick_jitter_ns = 0
-stack_reserve = 4904
+stack_reserve = 4696
 # Interrupts laufen auf dem Stack des unterbrochenen Fadens, also auch auf
 # dem des Jobs; Trap-Rahmen, Verteiler und die Handler einer
 # Prioritaetsstufe brauchen unter 1 KiB, die Reserve verdoppelt das (4.5).
 job_stack_reserve = 2048
-call_hook = 653748
-f32_math = 255547400
-f64_math = 600534671
+call_hook = 524336
+f32_math = 231568750
+f64_math = 501975000
 
 [device.led]
 driver = "esp32c6-rmt-ws2812"

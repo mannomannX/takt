@@ -36,6 +36,7 @@
 //! Golden-Unterschied, dem Lauf-Verdikt FAIL (13.5) und unter `test` und
 //! `campaign` jedem Urteil ausser PASS (13.5, 13.7).
 
+mod bench;
 mod check_image;
 mod embed;
 
@@ -223,7 +224,22 @@ const FLAGS: &[(&str, &[&str])] = &[
         "tcb",
         &["--build", "--by", "--date", "--emit", "--native", "--params-profile", "--profile", "--proof", "--review"],
     ),
-    ("bench", &["--board", "--conformance", "--hardware", "--runs"]),
+    (
+        "bench",
+        &[
+            "--board",
+            "--conformance",
+            "--emit",
+            "--hardware",
+            "--import",
+            "--logs",
+            "--loop",
+            "--natives",
+            "--out",
+            "--runs",
+            "--target",
+        ],
+    ),
     ("check-image", &["--manifest"]),
 ];
 
@@ -316,6 +332,9 @@ impl Args {
             "--runs",
             "--conformance",
             "--manifest",
+            "--logs",
+            "--loop",
+            "--natives",
         ];
         let allowed = FLAGS.iter().find(|(c, _)| *c == command).map(|(_, f)| *f).ok_or_else(|| USAGE.to_string())?;
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
@@ -384,7 +403,7 @@ fn command() -> ExitCode {
         "parse" => parse(&args),
         "tokens" => tokens(&args),
         "tcb" => tcb(&args),
-        "bench" => bench(&args),
+        "bench" => bench::bench(&args),
         "check-image" => check_image(&args),
         _ => {
             eprintln!("{USAGE}");
@@ -403,69 +422,6 @@ fn check_image(args: &Args) -> bool {
         return false;
     };
     check_image::run(std::path::Path::new(image), &args.values("--manifest"))
-}
-
-/// `takt bench --board NAME [--runs N] [--hardware DATEI] [--conformance DATEI]`
-/// (13.8): die Kostentabelle des Boards, gemessen.
-///
-/// Das Board kommt aus der Umgebung wie in der Board-Suite
-/// (`TAKT_F401_PORT`, `TAKT_ESP32C6_PORT`). `--hardware` traegt die
-/// Messwerte in die Konfiguration ein, ohne ihre Kommentare zu verwerfen;
-/// `--conformance` schreibt den Konformitaetsbericht daneben — die Quelle der
-/// Zahlen (13.8). Ohne beide stehen die Zahlen nur in der Ausgabe.
-fn bench(args: &Args) -> bool {
-    let runs = match args.value("--runs").map(str::parse::<u64>) {
-        None => 200,
-        Some(Ok(n)) => n,
-        Some(Err(e)) => {
-            eprintln!("--runs: {e}");
-            return false;
-        }
-    };
-    let Some(mut board) = board_of(args, "bench") else { return false };
-    let outcome = match takt_conformance::bench::run(board.as_mut(), runs, |line| eprintln!("  {line}")) {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("takt bench: {e}");
-            return false;
-        }
-    };
-    for line in outcome.calibration.lines().into_iter().chain(outcome.kernel_lines()) {
-        println!("{line}");
-    }
-    let target = outcome.target(board.target());
-    let tool = format!("takt {}", env!("CARGO_PKG_VERSION"));
-    if let Some(path) = args.value("--conformance") {
-        let text = takt_conformance::report::render(&outcome.report(board.name(), board.target(), &tool));
-        if let Err(e) = std::fs::write(path, text) {
-            eprintln!("{path}: {e}");
-            return false;
-        }
-        println!("  Bericht: {path}");
-    }
-    if let Some(path) = args.value("--hardware") {
-        let old = std::fs::read_to_string(path).unwrap_or_default();
-        let values = takt_mir::hardware::measured_values(&target);
-        match takt_mir::hardware::with_values(&old, board.target(), &values) {
-            Ok(text) => {
-                if let Err(e) = std::fs::write(path, text) {
-                    eprintln!("{path}: {e}");
-                    return false;
-                }
-                println!("  Konfiguration: {path}");
-            }
-            Err(e) => {
-                eprintln!("{path}: {e}");
-                return false;
-            }
-        }
-    }
-    // 4.2: Rechnet eine Subnormal-Probe falsch, hat das Ziel FTZ oder DAZ
-    // an; der Bericht steht, aber keine Zahl dieses Laufs gilt fuer Takt.
-    if outcome.frame.subnormal > 0 {
-        eprintln!("takt bench: {} Subnormal-Proben falsch, FTZ/DAZ ist an (4.2)", outcome.frame.subnormal);
-    }
-    outcome.frame.subnormal == 0 && outcome.calibration.checks.iter().all(|c| c.measured_ps <= c.bound_ps)
 }
 
 /// Das Board aus `--board`; der Port kommt aus der Umgebung wie in der
@@ -512,7 +468,7 @@ fn driver_test_board(args: &Args) -> bool {
     let Some(path) = args.value("--hardware") else { return true };
     let mut text = std::fs::read_to_string(path).unwrap_or_default();
     for (address, values) in measured.values() {
-        text = match takt_mir::hardware::with_channel_values(&text, address, &values) {
+        text = match takt_mir::hardware::with_channel_values(&text, address, &values, &origin()) {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("{path}:{}: {}", e.line, e.message);
@@ -1643,6 +1599,11 @@ fn proof_of(args: &Args) -> Option<Option<takt_mir::analysis::proof::Proof>> {
     }
 }
 
+/// Dieses Werkzeug als Schreiber einer Hardware-Konfiguration (11.3).
+fn origin() -> takt_mir::hardware::Origin {
+    takt_mir::hardware::Origin { edition: Edition::LATEST.number(), compiler: env!("CARGO_PKG_VERSION").to_string() }
+}
+
 /// `takt check --hw-export DATEI` (12.4): die `safe`-Werte der gebundenen
 /// Outputs in die Konfiguration, ohne deren Kommentare zu verwerfen.
 fn hw_export(program: &takt_mir::Program, path: &str) -> bool {
@@ -1656,7 +1617,7 @@ fn hw_export(program: &takt_mir::Program, path: &str) -> bool {
             }
         };
         let values = [("direction", "output".to_string()), ("safe", safe)];
-        text = match takt_mir::hardware::with_channel_values(&text, &address, &values) {
+        text = match takt_mir::hardware::with_channel_values(&text, &address, &values, &origin()) {
             Ok(t) => t,
             Err(e) => {
                 eprintln!("{path}:{}: {}", e.line, e.message);

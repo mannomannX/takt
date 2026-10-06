@@ -691,12 +691,12 @@ pub fn natives_agree(board: &mut dyn Board) -> Vec<String> {
             let math = math
                 .iter()
                 .inspect(|r| {
-                    eprintln!("{name} {}: Stack {} von {contract} Byte, {} Zyklen", r.name(), r.stack, r.cycles)
+                    eprintln!("{name} {}: Stack {:?} von {contract} Byte, {} Zyklen", r.name(), r.stack, r.cycles)
                 })
                 .filter(|r| !r.same_result() || !r.within_contract())
                 .map(|r| {
                     format!(
-                        "{}: abweichende Zeilen {:?}, Stack {} von {contract} Byte",
+                        "{}: abweichende Zeilen {:?}, Stack {:?} von {contract} Byte",
                         r.name(),
                         r.deviations,
                         r.stack

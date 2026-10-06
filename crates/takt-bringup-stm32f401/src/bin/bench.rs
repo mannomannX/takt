@@ -1,16 +1,11 @@
-//! `takt bench` auf der Black Pill (13.8): ein Messkern und, wenn gebunden,
-//! seine C-Referenz, je `TAKT_TICKS`-mal gemessen.
+//! `takt bench` auf der Black Pill (13.8): das Messprogramm als Baustein,
+//! wie jeder Wirt es bindet (`takt bench --emit embed`, plan/m11.md 2.12).
 //!
-//! Der Kern ist das Takt-Programm aus `TAKT_PROGRAM`, gebaut wie fuer das
-//! Binary `takt`; gemessen wird ein ganzer Tick des Rahmens
-//! (`app_tick`), mit dem Zyklenzaehler und bei gesperrten
-//! Interrupts — eine ISR mitten in der Messung ist Last, nicht Kosten des
-//! Programms. Die C-Referenz aus `TAKT_BENCH_C` rechnet dasselbe; ihr
-//! `digest` muss dem des Kerns gleichen, sonst vergliche das Verhaeltnis
-//! zwei verschiedene Rechnungen.
-//!
-//! Dazu die Stack-Tiefe unter Last (Painting) und der Subnormal-Vektor
-//! (4.2). Die Zeilen liest `takt_conformance::bench`.
+//! Das Board stellt die beiden Haken — den Zyklenzaehler des DWT und die
+//! Leitung — und faehrt jeden Schritt bei gesperrten Interrupts: Eine ISR
+//! mitten in einer Messung ist Last, nicht Kosten des Programms. Geschrieben
+//! wird zwischen den Schritten; `takt bench --import` liest das Protokoll.
+//! Die Lage des Programms im Flash nennt `TAKT_BENCH_SHIFT` (FB-367).
 
 #![no_std]
 #![no_main]
@@ -19,41 +14,23 @@
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-use takt_board_stm32f401::{BAUD, Board, CORE_HZ, WfiSleep, cycles, stack};
-use takt_rt_baremetal::Sleep;
-use takt_rt_baremetal::bench::{series, subnormal_failures, write_series, write_value};
-use takt_rt_core::{Program, tick_end};
+use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Telemetry, WfiSleep, cycles};
+use takt_rt_baremetal::{DRAIN_ROUNDS, Sleep};
 
-/// Das Programm als Lieferform (12.11), dasselbe wie in `takt`.
-mod app {
-    #![allow(dead_code)]
-    include!(env!("TAKT_APP_RS"));
-}
-
-mod reference {
-    include!(concat!(env!("OUT_DIR"), "/bench_reference.rs"));
-}
-
-static mut ARENA: app::Arena = app::Arena::new();
-
-/// Die Treiber des Messkerns: Stummel, ausdruecklich (`build.rs`).
-mod drivers {
-    include!(concat!(env!("OUT_DIR"), "/takt_rig_bench.rs"));
-}
-
-unsafe extern "C" {
-    /// Ein Durchlauf der C-Referenz, wie ein Tick des Kerns.
-    fn takt_bench_reference();
-    /// Was die C-Referenz nach allen Durchlaeufen ergibt.
-    fn takt_bench_reference_digest() -> u64;
+/// Das Messprogramm (`TAKT_BENCH_RS`).
+mod takt_bench {
+    #![allow(dead_code, reason = "die Kennung `SUITE` braucht nur, wer das Protokoll selbst prueft")]
+    include!(env!("TAKT_BENCH_RS"));
 }
 
 /// Wie oft gemessen wird: `TAKT_TICKS` beim Bau, sonst tausendmal.
 const RUNS: Option<&str> = option_env!("TAKT_TICKS");
 
-/// Durchlaeufe vor der Messung: Caches und Vorabrufpuffer des Flash
-/// fuellen sich, und die Initialisierung der Maschinen ist vorbei.
-const WARMUP: u32 = 8;
+/// Um wie viele Byte `.text` verschoben liegt (`build.rs`).
+const SHIFT: &str = env!("TAKT_BENCH_SHIFT");
+
+/// Die Tickperiode des Timers; das Messprogramm wartet auf keinen Tick.
+const TICK_NS: i64 = 1_000_000;
 
 /// Die Leitung: senden ohne zu warten, und der Host kann das Board
 /// zurueckverlangen.
@@ -62,98 +39,60 @@ fn USART1() {
     takt_board_stm32f401::uart::on_interrupt();
 }
 
-/// Vom Rahmen gerufen: Ein Messkern schreibt keinen Trace.
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt einen nullterminierten Text; er wird nicht gelesen.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_board_trace(_text: *const u8) {}
+/// Der Wirt des Messprogramms.
+struct Host {
+    uart: Telemetry,
+}
 
-/// Vom Rahmen gerufen: Ein Messkern schreibt keinen Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_i64(_value: i64) {}
+impl takt_bench::Host for Host {
+    fn cycles(&mut self) -> u32 {
+        cycles::now()
+    }
 
-/// Vom Rahmen gerufen: Ein Messkern schreibt keinen Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_u64(_value: u64) {}
-
-/// Vom Rahmen gerufen: Ein Messkern schreibt keinen Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_f64(_value: f64) {}
-
-/// Vom Rahmen gerufen: Ein Messkern schreibt keinen Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_hex8(_value: u8) {}
+    /// Jede Zeile geht ganz an die Leitung, bevor der naechste Schritt die
+    /// Interrupts sperrt; sonst liefe der Ring ueber.
+    fn put(&mut self, byte: u8) {
+        self.uart.write_byte(byte);
+        if byte == b'\n' {
+            self.uart.flush();
+            self.uart.drain(DRAIN_ROUNDS);
+        }
+    }
+}
 
 #[entry]
 fn main() -> ! {
-    // Zuerst: Was spaeter an Stack gebraucht wird, soll auf dem Muster landen.
-    stack::paint();
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
     let board = Board::WEACT_BLACKPILL;
-    let Ok(_timer) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, app::TICK_NS) else {
+    let Ok(_timer) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS) else {
         halt();
     };
-    let Ok(mut uart) = takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, BAUD) else {
+    let Ok(uart) = takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, BAUD) else {
         halt();
     };
     let (mut dcb, mut dwt) = (cp.DCB, cp.DWT);
     cycles::enable(&mut dcb, &mut dwt);
     // Nur die Leitung: Der Timer tickt, aber niemand wartet auf ihn.
+    // SAFETY: Der Handler ist oben definiert und teilt nur den FIFO der
+    // Leitung, der fuer einen Schreiber und einen Leser gebaut ist.
     unsafe { cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::USART1) };
 
-    uart.newline();
-    uart.write("takt bench stm32f401");
-    uart.newline();
-    write_value(&mut uart, "core_hz", u64::from(CORE_HZ));
-
     let runs = RUNS.and_then(|r| r.parse().ok()).unwrap_or(1000);
-    let mut rig = drivers::Rig::default();
-    // SAFETY: `ARENA` gehoert nur diesem Programm, und `main` kehrt nicht zurueck.
-    let mut program = app::Program::init(unsafe { &mut *(&raw mut ARENA) }, &mut rig);
-    let mut k = 0u64;
-    for _ in 0..WARMUP {
-        program.tick(k, tick_end(k, app::TICK_NS));
-        k += 1;
+    let mut host = Host { uart };
+    takt_bench::begin(&mut host, CORE_HZ);
+    for byte in b"bench shift ".iter().chain(SHIFT.as_bytes()).chain(b"\n") {
+        takt_bench::Host::put(&mut host, *byte);
     }
-    let takt = cortex_m::interrupt::free(|_| {
-        series(runs, cycles::now, || {
-            program.tick(k, tick_end(k, app::TICK_NS));
-            k += 1;
-        })
-    });
-    write_series(&mut uart, "takt", &takt, program.output(0) as u64);
-
-    if reference::PRESENT {
-        // Das Programm hat mit `init` Tick 0 hinter sich; die Referenz
-        // rechnet ihn hier nach. Sonst laege der Kern einen Tick vorn, und
-        // die Digests liessen sich nicht vergleichen (FB-287).
-        // SAFETY: die C-Referenz, ein Durchlauf ohne Argumente.
-        unsafe { takt_bench_reference() };
-        for _ in 0..WARMUP {
-            // SAFETY: die C-Referenz, ein Durchlauf ohne Argumente.
-            unsafe { takt_bench_reference() };
-        }
-        // SAFETY: wie oben; die Referenz haelt ihren Zustand selbst.
-        let c = cortex_m::interrupt::free(|_| series(runs, cycles::now, || unsafe { takt_bench_reference() }));
-        // SAFETY: liest den Zustand der Referenz.
-        write_series(&mut uart, "c", &c, unsafe { takt_bench_reference_digest() });
-    }
-
-    write_value(&mut uart, "stack", u64::from(stack::high_water()));
-    write_value(&mut uart, "subnormal", u64::from(subnormal_failures()));
-    uart.write("takt end");
-    uart.newline();
-    uart.drain(takt_rt_baremetal::DRAIN_ROUNDS);
+    takt_bench::steps(&mut host, runs, |measure| cortex_m::interrupt::free(|_| measure()));
+    takt_bench::end(&mut host);
 
     // Danach bleibt die Leitung offen: Der Host holt das Board mit `TAKT`
-    // fuer den naechsten Kern zurueck (FB-275).
+    // fuer das naechste Abbild zurueck (FB-275).
     let mut sleep = WfiSleep;
     loop {
         sleep.sleep_until_event();
-        uart.flush();
+        host.uart.flush();
     }
 }
 

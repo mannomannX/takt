@@ -25,7 +25,7 @@
 //! wie sie zustande kam, ist eine Zahl ohne Herkunft.
 //!
 //! ```text
-//! # takt-hw 9
+//! # takt-hw 15 edition 1 compiler 0.1.0
 //! [target.thumbv7em]
 //! cost_model = 2     # die Version des Kostenmodells der Gewichte
 //! core_hz = 84000000
@@ -94,8 +94,10 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// Schutzeinheit, deren Region die Arena deckt (8.10, 12.3, 12.11), und
 /// `job_stack_reserve`, die Reserve des Job-Stacks ueber den groessten
 /// `stack`-Vertrag (4.5, 12.3); eine aeltere Datei kennt beide nicht: keine
-/// Schutzregion, die Reserve des Rahmens.
-pub const FORMAT_VERSION: u32 = 14;
+/// Schutzregion, die Reserve des Rahmens. 15: Edition und Compiler-Version
+/// des Werkzeugs, das die Datei zuletzt schrieb, in der Kopfzeile (11.3,
+/// FB-441); eine Datei von Hand traegt keine.
+pub const FORMAT_VERSION: u32 = 15;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -465,11 +467,26 @@ impl NvmGeometry {
     }
 }
 
+/// Wer eine Konfiguration zuletzt schrieb (11.3): die Edition und die
+/// Version des Werkzeugs. `takt bench` und `takt driver-test` schreiben
+/// Messwerte, die an dem Code haengen, den dieses Werkzeug erzeugt; die
+/// Angabe sagt, welchem.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Origin {
+    /// Die neueste Edition, die der Schreiber kennt (2.5).
+    pub edition: u32,
+    /// Die Version des Werkzeugs, `CARGO_PKG_VERSION` von `takt`.
+    pub compiler: String,
+}
+
 /// Die Hardware-Konfiguration, soweit gelesen (8.10).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Hardware {
     /// Die Formatversion der gelesenen Datei.
     pub format_version: u32,
+    /// Wer sie zuletzt schrieb; `None` fuer eine Datei von Hand oder vor
+    /// Version 15.
+    pub origin: Option<Origin>,
     /// Die Ziele, nach Namen.
     pub targets: BTreeMap<String, Target>,
     /// Die Geraete, nach Namen.
@@ -541,6 +558,7 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
         if !seen_magic {
             if let Some(v) = magic_version(raw) {
                 out.format_version = v;
+                out.origin = magic_origin(raw).map_err(|message| ParseError { line: line_no, message })?;
                 seen_magic = true;
                 if v > FORMAT_VERSION {
                     return Err(ParseError {
@@ -828,8 +846,39 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
 
 /// Die Version aus `# takt-hw <n>`.
 fn magic_version(line: &str) -> Option<u32> {
+    magic_words(line)?.first()?.parse().ok()
+}
+
+/// Die Woerter der Kopfzeile nach der Kennung.
+fn magic_words(line: &str) -> Option<Vec<&str>> {
     let rest = line.trim().strip_prefix('#')?.trim().strip_prefix(MAGIC)?;
-    rest.split_whitespace().next()?.parse().ok()
+    Some(rest.split_whitespace().collect())
+}
+
+/// Der Schreiber aus `# takt-hw <n> edition <e> compiler <v>`; ohne beide
+/// Angaben keiner. Eine halbe oder unbekannte Angabe ist ein Fehler, wie
+/// ein unbekannter Schluessel.
+fn magic_origin(line: &str) -> Result<Option<Origin>, String> {
+    let words = magic_words(line).unwrap_or_default();
+    match words.get(1..).unwrap_or_default() {
+        [] => Ok(None),
+        ["edition", edition, "compiler", compiler] => match edition.parse() {
+            Ok(edition) => Ok(Some(Origin { edition, compiler: (*compiler).to_string() })),
+            Err(_) => Err(format!("`edition {edition}` ist keine Zahl")),
+        },
+        rest => Err(format!(
+            "die Kopfzeile endet mit `{}`; erwartet ist `edition <n> compiler <version>` oder nichts (11.3)",
+            rest.join(" ")
+        )),
+    }
+}
+
+/// Die Kopfzeile dieses Schreibers.
+fn magic_line(origin: Option<&Origin>) -> String {
+    match origin {
+        Some(o) => format!("# {MAGIC} {FORMAT_VERSION} edition {} compiler {}", o.edition, o.compiler),
+        None => format!("# {MAGIC} {FORMAT_VERSION}"),
+    }
 }
 
 /// Traegt Messwerte in eine bestehende Konfiguration ein, ohne sie neu zu
@@ -841,10 +890,16 @@ fn magic_version(line: &str) -> Option<u32> {
 /// Schluessel im Abschnitt `[target.<ziel>]` — ein Kommentar hinter einem
 /// Wert bleibt stehen —, haengt fehlende Schluessel an das Ende des
 /// Abschnitts an, legt einen fehlenden Abschnitt an und hebt die
-/// Formatversion im Kopf auf die dieses Schreibers. Das Ergebnis wird
-/// gelesen, bevor es zurueckkommt: Was diese Funktion schreibt, ist lesbar.
-pub fn with_values<K: AsRef<str>>(text: &str, target: &str, values: &[(K, String)]) -> Result<String, ParseError> {
-    with_section(text, &format!("[target.{target}]"), values)
+/// Formatversion im Kopf auf die dieses Schreibers, mit `origin` als
+/// Schreiber (11.3). Das Ergebnis wird gelesen, bevor es zurueckkommt: Was
+/// diese Funktion schreibt, ist lesbar.
+pub fn with_values<K: AsRef<str>>(
+    text: &str,
+    target: &str,
+    values: &[(K, String)],
+    origin: &Origin,
+) -> Result<String, ParseError> {
+    with_section(text, &format!("[target.{target}]"), values, origin)
 }
 
 /// Wie [`with_values`], fuer den Abschnitt `[channel <adresse>]`: die
@@ -853,15 +908,21 @@ pub fn with_channel_values<K: AsRef<str>>(
     text: &str,
     address: &str,
     values: &[(K, String)],
+    origin: &Origin,
 ) -> Result<String, ParseError> {
-    with_section(text, &format!("[channel {address}]"), values)
+    with_section(text, &format!("[channel {address}]"), values, origin)
 }
 
-fn with_section<K: AsRef<str>>(text: &str, header: &str, values: &[(K, String)]) -> Result<String, ParseError> {
+fn with_section<K: AsRef<str>>(
+    text: &str,
+    header: &str,
+    values: &[(K, String)],
+    origin: &Origin,
+) -> Result<String, ParseError> {
     let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
     match lines.iter().position(|l| magic_version(l).is_some()) {
-        Some(i) => lines[i] = format!("# {MAGIC} {FORMAT_VERSION}"),
-        None => lines.insert(0, format!("# {MAGIC} {FORMAT_VERSION}")),
+        Some(i) => lines[i] = magic_line(Some(origin)),
+        None => lines.insert(0, magic_line(Some(origin))),
     }
     let start = match lines.iter().position(|l| l.split('#').next().unwrap_or("").trim() == header) {
         Some(i) => i,
@@ -942,7 +1003,8 @@ pub fn measured_values(t: &Target) -> Vec<(String, String)> {
 /// schreibt sie, ein Mensch liest sie, und ein Vergleich zweier Laeufe
 /// soll die Unterschiede zeigen statt einer anderen Reihenfolge.
 pub fn render(hw: &Hardware) -> String {
-    let mut s = format!("# {MAGIC} {FORMAT_VERSION}\n");
+    let mut s = magic_line(hw.origin.as_ref());
+    s.push('\n');
     s.push_str("# Kalibrierung je Ziel (8.10, 13.8). Zeiten in Pikosekunden.\n");
     for target in hw.targets.values() {
         s.push_str(&format!("\n[target.{}]\n", target.name));
@@ -1243,8 +1305,8 @@ t_io = 120000
             ("jitter_ns", "250000".to_string()),
             ("guard_ns", "1000000".to_string()),
         ];
-        let once = with_channel_values(text, "o/valve", &values).expect("lesbar");
-        let twice = with_channel_values(&once, "o/valve", &values).expect("lesbar");
+        let once = with_channel_values(text, "o/valve", &values, &origin()).expect("lesbar");
+        let twice = with_channel_values(&once, "o/valve", &values, &origin()).expect("lesbar");
         assert_eq!(once, twice, "der zweite Lauf aendert die Datei");
         assert!(once.contains("safe = true   # stromlos zu"), "{once}");
         assert_eq!(once.matches("safe =").count(), 1, "{once}");
@@ -1254,7 +1316,25 @@ t_io = 120000
         assert_eq!((c.jitter_ns, c.guard_ns), (Some(250_000), Some(1_000_000)));
         assert_eq!(c.safe.as_deref(), Some("true"));
         // Ein Wert, den der Leser ablehnt, kommt nicht zurueck.
-        assert!(with_channel_values(text, "o/valve", &[("range", "2..1".to_string())]).is_err());
+        assert!(with_channel_values(text, "o/valve", &[("range", "2..1".to_string())], &origin()).is_err());
+    }
+
+    fn origin() -> Origin {
+        Origin { edition: 1, compiler: "0.1.0".into() }
+    }
+
+    /// Der Schreiber steht im Kopf und reist mit; eine Datei von Hand hat
+    /// keinen, und eine halbe Angabe ist ein Fehler (11.3, FB-441).
+    #[test]
+    fn the_writer_stands_in_the_head() {
+        let out = with_values("# takt-hw 14\n", "x", &[("i32", "7".to_string())], &origin()).expect("lesbar");
+        let hw = parse(&out).expect("lesbar");
+        assert_eq!(hw.origin, Some(origin()));
+        assert_eq!(parse(&render(&hw)).expect("Rundreise"), hw);
+        assert_eq!(parse("# takt-hw 15\n").expect("von Hand").origin, None);
+        for head in ["# takt-hw 15 edition 1\n", "# takt-hw 15 edition x compiler 0.1.0\n", "# takt-hw 15 von Hand\n"] {
+            assert!(parse(head).is_err(), "{head}");
+        }
     }
 
     /// Ohne Kennung keine Datei.
@@ -1381,9 +1461,10 @@ t_io = 120000
     #[test]
     fn measured_values_keep_the_comments() {
         let text = "# takt-hw 3\n# Von Hand.\n[target.thumbv7em]\ni32 = 11905   # geschaetzt\nram = 65536\n\n[device.gpio]\ndriver = \"x\"\n";
-        let out =
-            with_values(text, "thumbv7em", &[("i32", "12000".into()), ("i32_div", "140000".into())]).expect("lesbar");
-        assert!(out.starts_with(&format!("# takt-hw {FORMAT_VERSION}\n# Von Hand.\n")), "{out}");
+        let values = [("i32", "12000".to_string()), ("i32_div", "140000".to_string())];
+        let out = with_values(text, "thumbv7em", &values, &origin()).expect("lesbar");
+        let head = format!("# takt-hw {FORMAT_VERSION} edition 1 compiler 0.1.0\n# Von Hand.\n");
+        assert!(out.starts_with(&head), "{out}");
         assert!(out.contains("i32 = 12000   # geschaetzt"), "{out}");
         assert!(out.contains("ram = 65536\ni32_div = 140000\n"), "angehaengt am Ende des Abschnitts: {out}");
         let hw = parse(&out).expect("lesbar");
@@ -1394,7 +1475,8 @@ t_io = 120000
     /// Ein fehlendes Ziel bekommt seinen Abschnitt.
     #[test]
     fn a_missing_target_gets_its_section() {
-        let out = with_values("# takt-hw 4\n", "riscv32imac", &[("core_hz", "160000000".into())]).expect("lesbar");
+        let values = [("core_hz", "160000000".to_string())];
+        let out = with_values("# takt-hw 4\n", "riscv32imac", &values, &origin()).expect("lesbar");
         assert_eq!(parse(&out).expect("lesbar").target("riscv32imac").and_then(|t| t.core_hz), Some(160_000_000));
     }
 
@@ -1423,12 +1505,13 @@ t_io = 120000
     fn channel_values_land_in_their_section() {
         let text = "# takt-hw 8\n[channel gpio/loop_out]\ndirection = output   # die Bruecke\n\n[channel ui/led]\n";
         let values = [("guard_ns", "120".to_string()), ("tick_granular", "true".to_string())];
-        let out = with_channel_values(text, "gpio/loop_out", &values).expect("lesbar");
+        let out = with_channel_values(text, "gpio/loop_out", &values, &origin()).expect("lesbar");
         let hw = parse(&out).expect("lesbar");
         let c = hw.channel("gpio/loop_out").expect("Kanal");
         assert_eq!((c.guard_ns, c.tick_granular), (Some(120), Some(true)));
         assert!(out.contains("direction = output   # die Bruecke\nguard_ns = 120\ntick_granular = true\n"), "{out}");
-        let out = with_channel_values(&out, "gpio/loop_in", &[("latency_ns", "90".to_string())]).expect("lesbar");
+        let latency = [("latency_ns", "90".to_string())];
+        let out = with_channel_values(&out, "gpio/loop_in", &latency, &origin()).expect("lesbar");
         assert!(out.ends_with("\n[channel gpio/loop_in]\nlatency_ns = 90\n"), "{out}");
         assert_eq!(parse(&render(&parse(&out).expect("lesbar"))).expect("lesbar"), parse(&out).expect("lesbar"));
     }

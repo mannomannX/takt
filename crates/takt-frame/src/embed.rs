@@ -212,19 +212,13 @@ pub struct Dispatch<'a> {{
     borrow: core::marker::PhantomData<&'a mut Arena>,
 }}
 
-impl Dispatch<'_> {{
-    /// Gibt den naechsten Auftrag; wahr, wenn der Job-Kontext zu rechnen hat.
-    /// Nur, solange er ruht, und nicht zugleich mit `service`.
-    pub fn next(&mut self) -> bool {{
+/// Gibt den naechsten Auftrag; wahr, wenn der Job-Kontext zu rechnen hat. Nur,
+/// solange er ruht, und nicht zugleich mit `service`.
+impl takt_embed::Dispatch for Dispatch<'_> {{
+    fn next(&mut self) -> bool {{
         // SAFETY: Den Auftrag schreibt nur der Kontext des Schritts, solange
         // der Job-Kontext ruht; den Griff gibt es einmal (`Program::dispatch`).
         unsafe {{ ffi::{x}_job_dispatch(self.arena) != 0 }}
-    }}
-}}
-
-impl takt_embed::Dispatch for Dispatch<'_> {{
-    fn next(&mut self) -> bool {{
-        Dispatch::next(self)
     }}
 }}
 

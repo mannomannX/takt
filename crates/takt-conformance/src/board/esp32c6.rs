@@ -78,7 +78,7 @@ impl Esp32c6 {
         let mut last = String::new();
         for attempt in 0..3 {
             let next = if attempt == 0 { "neuer Versuch" } else { "Neuanmeldung des USB-Geraets" };
-            let text = match self.capture_once(&options.console) {
+            let text = match self.capture_within(&options.console, options.within()) {
                 Ok(text) => text,
                 Err(e) if attempt < 2 => {
                     eprintln!("{e}; {next}");
@@ -96,7 +96,8 @@ impl Esp32c6 {
             let tick = self.tick_over_jtag(elf)?;
             if u64::from(tick) < ticks {
                 return Err(format!(
-                    "kein `takt end` binnen 30 s, das Programm steht bei Tick {tick}; gelesen:\n{text}"
+                    "kein `takt end` binnen {} s, das Programm steht bei Tick {tick}; gelesen:\n{text}",
+                    options.within().as_secs()
                 ));
             }
             let when = if text.is_empty() { "" } else { " mittendrin" };
@@ -112,13 +113,18 @@ impl Esp32c6 {
     /// Ein Reset und ein Lesen mit harter Frist; `console` geht waehrenddessen
     /// an die Konsole des Boards.
     pub fn capture_once(&self, console: &[ConsoleLine]) -> Result<String, String> {
+        self.capture_within(console, TRACE)
+    }
+
+    /// [`Esp32c6::capture_once`] mit der Frist `within`.
+    fn capture_within(&self, console: &[ConsoleLine], within: Duration) -> Result<String, String> {
         // Nach dem Flashen legt der USB-Serial-JTAG neu an; ein Handle von
         // davor liefert nichts. Darum kurz warten und je Versuch neu oeffnen.
         std::thread::sleep(Duration::from_millis(500));
         // USB staut selbst zurueck; XON/XOFF braucht es hier nicht.
         let flow = serialport::FlowControl::None;
         let reset = || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ());
-        capture(&self.port, BAUD, flow, TRACE, true, console, reset)
+        capture(&self.port, BAUD, flow, within, true, console, reset)
     }
 
     /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens

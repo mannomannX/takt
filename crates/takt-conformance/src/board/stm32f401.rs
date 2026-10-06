@@ -54,9 +54,6 @@ const BY_HAND: Duration = Duration::from_secs(60);
 /// Frist fuer Schreiben und Starten.
 const DOWNLOAD: Duration = Duration::from_secs(120);
 
-/// Frist fuer den Trace nach dem Start.
-const TRACE: Duration = Duration::from_secs(30);
-
 /// Board 1 am Host.
 #[derive(Clone, Debug)]
 pub struct Stm32f401 {
@@ -182,12 +179,21 @@ impl Board for Stm32f401 {
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
-        let text = self.run_with(elf, TRACE, &options.console)?;
+        let within = options.within();
+        let text = self.run_with(elf, within, &options.console)?;
         if text.contains(super::END) {
             super::complete(text, options)
         } else {
-            Err(format!("kein `takt end` binnen {} s; gelesen:\n{text}", TRACE.as_secs()))
+            Err(format!("kein `takt end` binnen {} s; gelesen:\n{text}", within.as_secs()))
         }
+    }
+
+    /// Der F401 fuehrt aus dem Flash ueber den ART-Beschleuniger aus, und
+    /// eine Messung haengt an der Lage des Codes (FB-367): ungeschoben, um
+    /// eine halbe Zeile von 16 Byte und um anderthalb, damit sich Zeilengrenzen
+    /// und Zeilen zugleich verschieben.
+    fn placements(&self) -> &'static [u32] {
+        &[0, 8, 24]
     }
 }
 

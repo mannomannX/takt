@@ -116,8 +116,8 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     write(&ll, e.ir)?;
     write(&c, &frame.source)?;
     let (obj, obj_frame) = (e.out.join(format!("{x}.o")), e.out.join(format!("{x}_frame.o")));
-    compile(&ll, &obj, e.target, &flags)?;
-    compile(&c, &obj_frame, e.target, &flags)?;
+    compile(&ll, &obj, e.target, Code::Generated, &flags)?;
+    compile(&c, &obj_frame, e.target, Code::Frame, &flags)?;
     let lib = e.out.join(if e.triple.ends_with("-msvc") { format!("{x}.lib") } else { format!("lib{x}.a") });
     archive(&lib, &[&obj, &obj_frame])?;
 
@@ -300,16 +300,28 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Uebersetzt eine Quelle (IR oder C) fuer das Ziel, mit den Flags, die
-/// auch der erzeugte Code bekommt.
-fn compile(src: &Path, obj: &Path, target: Target, flags: &[&str]) -> Result<(), String> {
+/// Was eine Quelle der Lieferform ist; danach richten sich die Flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Code {
+    /// Erzeugter Code und C, das wie er uebersetzt wird.
+    Generated,
+    /// Der Rahmen: der Weg jedes Ticks, ohne Outliner (FB-366).
+    Frame,
+}
+
+/// Uebersetzt eine Quelle (IR oder C) fuer das Ziel mit den Flags ihrer Art
+/// und `flags`.
+pub(crate) fn compile(src: &Path, obj: &Path, target: Target, code: Code, flags: &[&str]) -> Result<(), String> {
     let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() else {
         return Err("clang fehlt; ohne ihn entsteht keine Bibliothek".into());
     };
     let mut cmd = Command::new(&clang);
     let cmd = takt_llvm::toolchain::Clang::deterministic(&mut cmd)
         .args(["-c", "-Wno-override-module", "-ffreestanding"])
-        .args(takt_llvm::toolchain::object_flags(target.triple))
+        .args(match code {
+            Code::Generated => takt_llvm::toolchain::object_flags(target.triple),
+            Code::Frame => takt_llvm::toolchain::frame_flags(target.triple),
+        })
         .arg(format!("--target={}", target.triple))
         .args(flags);
     if target.is_bare_metal() {
@@ -324,7 +336,7 @@ fn compile(src: &Path, obj: &Path, target: Target, flags: &[&str]) -> Result<(),
 }
 
 /// Bindet die Objekte zur Bibliothek, mit dem `llvm-ar` neben clang.
-fn archive(lib: &Path, objs: &[&Path]) -> Result<(), String> {
+pub(crate) fn archive(lib: &Path, objs: &[&Path]) -> Result<(), String> {
     let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() else {
         return Err("clang fehlt".into());
     };

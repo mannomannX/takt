@@ -312,6 +312,12 @@ pub mod overfull_tx {
     include!(env!("TAKT_OVERFULL_TX_RS"));
 }
 
+/// Das Messprogramm von `takt bench` (13.8): Der Wirt stellt Zyklenzaehler
+/// und Senke (`tests/bench.rs`).
+pub mod takt_bench {
+    include!(env!("TAKT_BENCH_RS"));
+}
+
 /// Ein Sender, der zu einem Tick mehr freien Platz meldet, als der Strom
 /// fasst.
 #[derive(Debug)]

@@ -20,23 +20,17 @@
 //! **Welches Programm?** `takt.toml` neben `Cargo.toml` nennt den Pfad
 //! (FB-141); `TAKT_PROGRAM` sticht nur fuer einen einmaligen Versuch.
 //!
-//! **Die Treiber** (12.6) erzeugt `bringup::rig` als Pruefstand: fuer
-//! `takt` nach der Verdrahtung des Boards und des Pruefgeraets, fuer
-//! `bench` ganz aus Stummeln — der Messkern misst den Tick, nicht die
-//! Peripherie.
+//! **Die Treiber** (12.6) erzeugt `bringup::rig` als Pruefstand nach der
+//! Verdrahtung des Boards und des Pruefgeraets.
 //!
-//! **Die C-Referenz fuer `takt bench`** (13.8) nennt `TAKT_BENCH_C`. Sie
-//! wird mit denselben Flags uebersetzt wie der erzeugte Code — das
-//! Verhaeltnis der Zeiten soll die Sprachen vergleichen, nicht die
-//! Optimierungsstufen —, mit `-ffp-contract=off`, weil Takt nie
-//! stillschweigend zu `fma` zusammenzieht (4.2), und mit `-fno-math-errno`:
-//! Ohne sie wird `__builtin_fmaf` zum Bibliotheksaufruf statt zum Befehl,
-//! und Takt kennt kein `errno` (FB-287).
+//! **Das Messprogramm von `takt bench`** (13.8) bindet das Merkmal `bench`
+//! wie jeder Wirt: `takt bench --emit embed` ueber den Bauhelfer. Der F401
+//! fuehrt aus dem Flash aus, und eine Messung haengt an der Lage des Codes
+//! (FB-367): `TAKT_BENCH_SHIFT` verschiebt `.text` um so viele Byte.
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use takt_conformance::bringup;
 
@@ -53,6 +47,7 @@ fn main() {
     // linkt, und sie ist unbrauchbar.
     println!("cargo:rustc-link-arg=-Tlink.x");
     println!("cargo:rustc-link-arg=--nmagic");
+    text_shift(&out);
     image_key();
 
     // 4.2, 12.11: die Fliesskomma-Umgebung vor dem Lauf verstellen, als
@@ -63,8 +58,30 @@ fn main() {
     }
 
     build_takt_program(&out);
+    bench();
     native_vectors(&out);
     math_vectors(&out);
+}
+
+/// Die Lage von `.text` im Flash (FB-367): `memory.x` liest
+/// `TAKT_TEXT_SHIFT` aus `takt_shift.x`. In Achteln, denn die f64-Routinen
+/// aus `compiler_builtins` verlangen 8 Byte Ausrichtung (siehe `memory.x`).
+fn text_shift(out: &Path) {
+    println!("cargo:rerun-if-env-changed=TAKT_BENCH_SHIFT");
+    let shift: u32 = env::var("TAKT_BENCH_SHIFT")
+        .map_or(Ok(0), |s| s.parse())
+        .unwrap_or_else(|e| panic!("TAKT_BENCH_SHIFT: keine Zahl ({e})"));
+    assert!(shift % 8 == 0, "TAKT_BENCH_SHIFT = {shift}: nur Vielfache von 8 Byte (`memory.x`)");
+    let text = format!("/* Erzeugt von `build.rs`: die Verschiebung von `.text` (FB-367). */\nTAKT_TEXT_SHIFT = {shift};\n");
+    fs::write(out.join("takt_shift.x"), text).expect("takt_shift.x schreiben");
+    println!("cargo:rustc-env=TAKT_BENCH_SHIFT={shift}");
+}
+
+/// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`.
+fn bench() {
+    if env::var_os("CARGO_FEATURE_BENCH").is_some() {
+        takt_embed::build::Bench::new().tool(bringup::takt()).hardware(hardware()).build();
+    }
 }
 
 /// Uebersetzt das Takt-Programm und bindet es als Objekt ein.
@@ -93,7 +110,6 @@ fn build_takt_program(out: &Path) {
     let wiring =
         bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
     bringup::rig(&p, &wiring, &out.join("takt_rig.rs"));
-    bringup::rig(&p, &[], &out.join("takt_rig_bench.rs"));
     // 12.8, 12.11: Unter RTIC ist das Programm eine Aufgabe neben anderen.
     let form = if env::var_os("CARGO_FEATURE_RTOS").is_some() { "rtos" } else { "own" };
     let mut embed = takt_embed::build::Program::new(&program)
@@ -119,8 +135,6 @@ fn build_takt_program(out: &Path) {
         "das F401 schuetzt die Arena mit seiner MPU: `protect = armv7m_mpu` in der Hardware-Konfiguration (12.3)"
     );
     state_section(out, &built.value("protect_bytes"));
-    let reference = bench_reference(out);
-    bringup::archive(out, "taktboard", &[&reference]);
     println!("cargo:rustc-link-arg=--icf=all");
 }
 
@@ -192,32 +206,6 @@ fn program_path() -> String {
     format!("{here}/{value}")
 }
 
-/// Die C-Referenz fuer `takt bench` als Objekt: die Datei aus
-/// `TAKT_BENCH_C` oder schwache Definitionen, die niemand ruft, solange
-/// `bench_reference.rs` sagt, dass keine da ist.
-fn bench_reference(out: &Path) -> PathBuf {
-    println!("cargo:rerun-if-env-changed=TAKT_BENCH_C");
-    let given = env::var("TAKT_BENCH_C").ok();
-    let src = match &given {
-        Some(path) => {
-            println!("cargo:rerun-if-changed={path}");
-            PathBuf::from(path)
-        }
-        None => {
-            let stub = out.join("bench_reference_none.c");
-            let text = "__attribute__((weak)) void takt_bench_reference(void) {}\n\
-                        __attribute__((weak)) unsigned long long takt_bench_reference_digest(void) { return 0; }\n";
-            fs::write(&stub, text).expect("bench_reference_none.c schreiben");
-            stub
-        }
-    };
-    let present = format!("/// Ist eine C-Referenz gebunden?\npub const PRESENT: bool = {};\n", given.is_some());
-    fs::write(out.join("bench_reference.rs"), present).expect("bench_reference.rs schreiben");
-    let obj = out.join("bench_reference.o");
-    translate(&src, &obj, &["-ffp-contract=off", "-fno-math-errno"]);
-    obj
-}
-
 /// Die Vektoren der kuratierten Natives fuer das Messprogramm `natives`
 /// (13.8), aus der Spezifikation `grammar/takt-native.md`.
 fn native_vectors(out: &Path) {
@@ -238,18 +226,4 @@ fn math_vectors(out: &Path) {
     let vectors = takt_conformance::math::vectors(&text).unwrap_or_else(|e| panic!("{}: {e}", spec.display()));
     fs::write(out.join("math_vectors.rs"), takt_conformance::math::table_source(&vectors))
         .expect("math_vectors.rs schreiben");
-}
-
-/// Uebersetzt eine C-Quelle mit den Flags, die auch der erzeugte Code bekommt.
-fn translate(src: &Path, obj: &Path, extra: &[&str]) {
-    let ok = Command::new(bringup::clang())
-        .args(["-c", "-ffreestanding", "-nostdlib", "--target=thumbv7em-none-eabihf"])
-        .args(takt_llvm::toolchain::object_flags("thumbv7em-none-eabihf"))
-        .args(extra)
-        .arg(src)
-        .arg("-o")
-        .arg(obj)
-        .status()
-        .is_ok_and(|s| s.success());
-    assert!(ok, "{}: uebersetzt nicht", src.display());
 }

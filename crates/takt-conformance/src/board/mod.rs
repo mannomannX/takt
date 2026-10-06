@@ -177,12 +177,11 @@ pub enum Bin {
     /// `takt`: das Programm unter der Tickschleife, mit Trace.
     #[default]
     Takt,
-    /// `bench`: das Programm als Messkern von `takt bench` (13.8), mit
-    /// einer C-Referenz, wenn eine genannt ist.
+    /// `bench`: das Messprogramm von `takt bench` (13.8) mit allen Kernen,
+    /// gebaut mit dem Merkmal `bench`; das Takt-Programm bleibt ungenutzt.
     Bench {
-        /// Die C-Datei mit `takt_bench_reference` und
-        /// `takt_bench_reference_digest`.
-        reference: Option<PathBuf>,
+        /// Um wie viele Byte das Programm im Flash verschoben liegt (FB-367).
+        shift: u32,
     },
     /// `natives`: die Vektoren der kuratierten Natives mit dem
     /// Stack-Bedarf je Aufruf (13.8); das Takt-Programm bleibt ungenutzt.
@@ -288,9 +287,19 @@ impl Options {
         Options { ticks, fresh: true, timed: true, ..Options::default() }
     }
 
-    /// Ein Messkern mit `runs` Messungen und seiner C-Referenz.
-    pub fn bench(runs: u64, reference: Option<PathBuf>) -> Options {
-        Options { ticks: runs, fresh: true, bin: Bin::Bench { reference }, ..Options::default() }
+    /// Das Messprogramm mit `runs` Messungen je Reihe, um `shift` Byte
+    /// verschoben.
+    pub fn bench(runs: u64, shift: u32) -> Options {
+        Options { ticks: runs, fresh: true, bin: Bin::Bench { shift }, ..Options::default() }
+    }
+
+    /// Wie lange ein Lauf hoechstens dauert, bis `takt end` kommt: das
+    /// Messprogramm misst alle Kerne in einem Lauf.
+    pub fn within(&self) -> std::time::Duration {
+        match self.bin {
+            Bin::Bench { .. } => std::time::Duration::from_secs(900),
+            _ => std::time::Duration::from_secs(30),
+        }
     }
 
     /// Die Vektoren der kuratierten Natives.
@@ -313,6 +322,12 @@ pub trait Board {
 
     /// Schreibt das Abbild, startet es und liest den Trace bis [`END`].
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String>;
+
+    /// Die Lagen, in denen `takt bench` misst, als Verschiebung des
+    /// Programms in Byte (FB-367). Wer aus dem RAM rechnet, braucht eine.
+    fn placements(&self) -> &'static [u32] {
+        &[0]
+    }
 }
 
 /// Die Wurzel des Repositorys.
@@ -431,11 +446,10 @@ impl Bringup {
         }
         match &options.bin {
             Bin::Takt => 0u8.hash(&mut h),
-            Bin::Bench { reference } => {
-                1u8.hash(&mut h);
-                if let Some(c) = reference {
-                    std::fs::read(c).map_err(|e| format!("{}: {e}", c.display()))?.hash(&mut h);
-                }
+            // Die Kerne stehen ausserhalb von `src`; ihre Kennung deckt sie.
+            Bin::Bench { shift } => {
+                (1u8, shift).hash(&mut h);
+                crate::bench::suite_id(&crate::bench::suite(), &crate::bench::math_vectors()?).hash(&mut h);
             }
             // Die Vektoren stehen in der Spezifikation, nicht in `src`.
             Bin::Natives => {
@@ -489,8 +503,8 @@ impl Bringup {
             cargo.args(["--features", "rtos"]);
         }
         match &options.bin {
-            Bin::Bench { reference: Some(c) } => cargo.env("TAKT_BENCH_C", c),
-            _ => cargo.env_remove("TAKT_BENCH_C"),
+            Bin::Bench { shift } => cargo.args(["--features", "bench"]).env("TAKT_BENCH_SHIFT", shift.to_string()),
+            _ => cargo.env_remove("TAKT_BENCH_SHIFT"),
         };
         let out = cargo.output().map_err(|e| format!("cargo: {e}"))?;
         if !out.status.success() {
@@ -825,7 +839,7 @@ mod tests {
         let any = Options::default();
         assert!(complete(run(body, 25076, body.len()), &any).is_err_and(|e| e.contains("25076")));
         assert!(complete(run(body, 0, body.len()), &any).is_ok());
-        assert!(complete("bench takt min 1\ntakt end\n".to_string(), &Options::bench(1, None)).is_ok());
+        assert!(complete("bench takt frame min 1\ntakt end\n".to_string(), &Options::bench(1, 0)).is_ok());
     }
 
     /// **Ein Lauf des Programms braucht Marke, Bilanz und alle Ticks**
