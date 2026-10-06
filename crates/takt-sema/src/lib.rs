@@ -137,7 +137,15 @@ pub fn compile(src: &str, options: &Options) -> Compiled {
 
 /// Wie [`compile`], mit einer Beweisdatei (11.3): Ihr Hash muss zur
 /// Quelle passen (Pruefung 65), dann entfallen die bewiesenen Stellen.
+///
+/// Auf eigenem Stapel ([`takt_diag::stack`]): An den Grenzen aus 2.1
+/// braucht die Sema mehr, als ein Aufrufer haben muss (FB-433).
 pub fn compile_with(src: &str, options: &Options, proof: Option<&takt_mir::analysis::proof::Proof>) -> Compiled {
+    takt_diag::stack::with_deep_stack(|| compile_here(src, options, proof))
+}
+
+/// [`compile_with`] auf dem Stapel des Aufrufers.
+fn compile_here(src: &str, options: &Options, proof: Option<&takt_mir::analysis::proof::Proof>) -> Compiled {
     let mut sink = Sink::new(options.policy);
     let external = match proof {
         Some(p) if p.program != takt_mir::review::hash_of(src.as_bytes()) => {

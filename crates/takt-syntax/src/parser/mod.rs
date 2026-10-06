@@ -90,27 +90,9 @@ pub(crate) fn token_span(t: &Token) -> Span {
     Span::new(t.start, t.end)
 }
 
-/// Stapel fuer den rekursiven Abstieg: `MAX_DEPTH` Ebenen brauchen in einem
-/// Debug-Build mehrere Megabyte, mehr als ein Hauptthread hat.
-const DEEP_STACK: usize = 64 << 20;
-
-/// Fuehrt `f` auf einem Thread mit grossem Stapel aus, damit die Tiefengrenze
-/// `MAX_DEPTH` und nicht der Stapel entscheidet, was der Parser annimmt.
-pub(crate) fn with_deep_stack<R: Send>(f: impl FnOnce() -> R + Send) -> R {
-    with_stack(DEEP_STACK, f)
-}
-
-/// Fuehrt `f` auf einem Thread mit `bytes` Stapel aus und wartet auf ihn. Mit
-/// den Grenzen aus 2.1 (`MAX_DEPTH`, `MAX_TREE`) ist die Rekursion jedes
-/// Werkzeugs beschraenkt; wer sie durchlaeuft, bemisst seinen Stapel danach
-/// und laesst nicht den Hauptthread entscheiden (unter Windows 1 MiB). Eine
-/// Panik in `f` setzt sich im Aufrufer fort.
-pub fn with_stack<R: Send>(bytes: usize, f: impl FnOnce() -> R + Send) -> R {
-    std::thread::scope(|scope| {
-        let thread = std::thread::Builder::new().stack_size(bytes).spawn_scoped(scope, f).expect("Thread mit Stapel");
-        thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-    })
-}
+// Die Tiefengrenze `MAX_DEPTH` und nicht der Stapel entscheidet, was der
+// Parser annimmt (2.1).
+pub(crate) use takt_diag::stack::with_deep_stack;
 
 /// Zustand des Parsers.
 pub struct Parser<'t, 's> {

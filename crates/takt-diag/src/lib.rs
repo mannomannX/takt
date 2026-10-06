@@ -10,6 +10,8 @@ use std::collections::HashSet;
 use std::fmt;
 use std::panic::Location;
 
+pub mod stack;
+
 /// Schwere einer Diagnose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {

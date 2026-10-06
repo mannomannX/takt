@@ -81,7 +81,21 @@ pub fn program_with(p: &Program, triple: &str, prefix: &Prefix, instrument: crat
 }
 
 /// Wie [`program_with`], mit Diagnosestufe (plan/codegen-hebel.md C).
+///
+/// Auf eigenem Stapel ([`takt_diag::stack`]): An den Grenzen aus 2.1
+/// braucht das Senken mehr, als ein Aufrufer haben muss (FB-433).
 pub fn program_with_diagnostics(
+    p: &Program,
+    triple: &str,
+    prefix: &Prefix,
+    instrument: crate::target::Instrument,
+    diagnostics: crate::target::Diagnostics,
+) -> Lowered {
+    takt_diag::stack::with_deep_stack(|| program_here(p, triple, prefix, instrument, diagnostics))
+}
+
+/// [`program_with_diagnostics`] auf dem Stapel des Aufrufers.
+fn program_here(
     p: &Program,
     triple: &str,
     prefix: &Prefix,

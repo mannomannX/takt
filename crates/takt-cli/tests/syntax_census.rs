@@ -71,7 +71,7 @@ fn covered() -> BTreeMap<Sugar, Vec<String>> {
 #[test]
 fn every_desugared_form_has_a_program_or_a_reason() {
     // Die Sema rekursiert; der Stapel ist bemessen wie in der CLI (2.1).
-    let covered = takt_syntax::parser::with_stack(32 << 20, covered);
+    let covered = takt_diag::stack::with_deep_stack(covered);
     let gaps: BTreeMap<Sugar, &str> = GAPS.iter().copied().collect();
     assert_eq!(gaps.len(), GAPS.len(), "eine Form steht doppelt in GAPS");
     let mut wrong = Vec::new();

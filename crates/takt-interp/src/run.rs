@@ -388,8 +388,15 @@ impl<'p> Run<'p> {
     }
 }
 
-/// Fuehrt ein Programm mit einem Stimulus aus.
+/// Fuehrt ein Programm mit einem Stimulus aus, auf eigenem Stapel
+/// ([`takt_diag::stack`]): An den Grenzen aus 2.1 braucht die Auswertung
+/// mehr, als ein Aufrufer haben muss (FB-433).
 pub fn run(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<RunResult, Trap> {
+    takt_diag::stack::with_deep_stack(|| run_here(program, stimulus, options))
+}
+
+/// [`run`] auf dem Stapel des Aufrufers.
+fn run_here(program: &Program, stimulus: &Trace, options: &RunOptions) -> Result<RunResult, Trap> {
     let mut run = Run::new(program, stimulus, options)?;
     for tick in 1..=options.ticks {
         if !run.tick(tick)? {

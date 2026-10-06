@@ -332,7 +332,7 @@ impl Args {
 }
 
 fn main() -> ExitCode {
-    takt_syntax::parser::with_stack(STACK, command)
+    takt_diag::stack::with_stack(STACK, command)
 }
 
 /// Der Unterbefehl aus der Kommandozeile, auf dem bemessenen Stapel.
