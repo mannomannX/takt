@@ -1,4 +1,4 @@
-# takt-hw 12
+# takt-hw 14
 # ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
 # Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
 # plan/esp32c6.md).
@@ -63,6 +63,10 @@ f64_sqrt = 1414475
 t_io = 5125000
 tick_jitter_ns = 0
 stack_reserve = 4904
+# Interrupts laufen auf dem Stack des unterbrochenen Fadens, also auch auf
+# dem des Jobs; Trap-Rahmen, Verteiler und die Handler einer
+# Prioritaetsstufe brauchen unter 1 KiB, die Reserve verdoppelt das (4.5).
+job_stack_reserve = 2048
 call_hook = 653748
 f32_math = 255547400
 f64_math = 600534671

@@ -88,6 +88,8 @@ fn ffi(x: &Prefix) -> String {
         format!("pub fn {x}_output_timing() -> u8;"),
         format!("pub fn {x}_job_dispatch(a: *mut c_void) -> i32;"),
         format!("pub fn {x}_job_work(a: *mut c_void);"),
+        format!("pub fn {x}_job_stack(size: *mut u32) -> *mut u8;"),
+        format!("pub fn {x}_output(a: *mut c_void, index: i32) -> i64;"),
         format!("pub static {x}_abi_{ABI}: u8;"),
     ];
     for line in lines {
@@ -119,6 +121,7 @@ pub struct Program<'a> {{
     user: *mut core::ffi::c_void,
     initialized: bool,
     jobs_taken: bool,
+    dispatch_taken: bool,
     borrow: {borrow},
 }}
 
@@ -135,6 +138,7 @@ impl<'a> Program<'a> {{
             user: {user},
             initialized: false,
             jobs_taken: false,
+            dispatch_taken: false,
             borrow: core::marker::PhantomData,
         }}
     }}
@@ -166,6 +170,69 @@ impl<'a> Program<'a> {{
         }}
         self.ensure_init();
         Some(Jobs {{ arena: self.arena, borrow: core::marker::PhantomData }})
+    }}
+
+    /// Der Griff, der dem ruhenden Job-Kontext den naechsten Auftrag gibt
+    /// (4.5), fuer einen Port, der zwischen den Ticks selbst verteilt statt
+    /// ueber `service`: einmal je Programm, nur im Kontext des Schritts.
+    pub fn dispatch(&mut self) -> Option<Dispatch<'a>> {{
+        if core::mem::replace(&mut self.dispatch_taken, true) {{
+            return None;
+        }}
+        self.ensure_init();
+        Some(Dispatch {{ arena: self.arena, borrow: core::marker::PhantomData }})
+    }}
+
+    /// Ein Ausgang als Bitmuster, nach seiner Stellung (`OUT_*`): fuer
+    /// Diagnose und Messung, nicht fuer Treiber.
+    pub fn output(&self, index: i32) -> i64 {{
+        if !self.initialized {{
+            return 0;
+        }}
+        // SAFETY: liest einen Latch der Arena nach `init`; ein fremder Index liefert 0.
+        unsafe {{ ffi::{x}_output(self.arena, index) }}
+    }}
+}}
+
+/// Der Stack des Job-Kontexts (4.5), statisch in der Bibliothek: so gross
+/// wie der groesste `stack`-Vertrag der Jobs und `job_stack_reserve` (8.10).
+/// Einmal; `None` ohne Jobs und bei jedem weiteren Aufruf. Ein Wirt mit
+/// eigenen Faeden braucht ihn nicht.
+pub fn job_stack() -> Option<&'static mut [u8]> {{
+    static TAKEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if TAKEN.swap(true, core::sync::atomic::Ordering::Relaxed) {{
+        return None;
+    }}
+    let mut size = 0u32;
+    // SAFETY: Die Bibliothek liefert einen statischen Puffer dieser Groesse,
+    // und `TAKEN` gibt ihn hoechstens einmal heraus.
+    let at = unsafe {{ ffi::{x}_job_stack(&mut size) }};
+    let len = usize::try_from(size).unwrap_or(0);
+    // SAFETY: wie oben.
+    (len > 0 && !at.is_null()).then(|| unsafe {{ core::slice::from_raw_parts_mut(at, len) }})
+}}
+
+/// Der Griff, der verteilt (4.5): Er gibt dem ruhenden Job-Kontext den
+/// aeltesten wartenden Job. Nicht `Send`: Er bleibt im Kontext des Schritts.
+#[derive(Debug)]
+pub struct Dispatch<'a> {{
+    arena: *mut core::ffi::c_void,
+    borrow: core::marker::PhantomData<&'a mut Arena>,
+}}
+
+impl Dispatch<'_> {{
+    /// Gibt den naechsten Auftrag; wahr, wenn der Job-Kontext zu rechnen hat.
+    /// Nur, solange er ruht, und nicht zugleich mit `service`.
+    pub fn next(&mut self) -> bool {{
+        // SAFETY: Den Auftrag schreibt nur der Kontext des Schritts, solange
+        // der Job-Kontext ruht; den Griff gibt es einmal (`Program::dispatch`).
+        unsafe {{ ffi::{x}_job_dispatch(self.arena) != 0 }}
+    }}
+}}
+
+impl takt_embed::Dispatch for Dispatch<'_> {{
+    fn next(&mut self) -> bool {{
+        Dispatch::next(self)
     }}
 }}
 

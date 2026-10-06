@@ -60,6 +60,14 @@ pub trait Jobs: Send {
     fn work(&mut self);
 }
 
+/// Das Verteilen der Jobs fuer einen Port, der zwischen den Ticks selbst
+/// verteilt (4.5): im Kontext des Schritts, solange der Job-Kontext ruht.
+pub trait Dispatch {
+    /// Gibt dem Job-Kontext den aeltesten wartenden Job; wahr, wenn er zu
+    /// rechnen hat.
+    fn next(&mut self) -> bool;
+}
+
 /// Die Qualitaet einer Lieferung (3.5), in der Zahl des Prozessabbilds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]

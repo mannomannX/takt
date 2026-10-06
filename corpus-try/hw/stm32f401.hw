@@ -1,4 +1,4 @@
-# takt-hw 12
+# takt-hw 14
 # WeAct Black Pill (STM32F401CCU6, Cortex-M4F): Kalibrierung, Speicher,
 # Geraete und Kanaele fuer 29_heartbeat.takt (8.10).
 #
@@ -19,6 +19,8 @@
 #
 # `ram` und `flash` stehen im Datenblatt; die ersten 16 KiB Flash gehoeren
 # dem HID-Bootloader, das Journal liegt in zwei 16-KiB-Sektoren dahinter.
+# `protect`: Die MPU des Cortex-M4 schuetzt den Programmbereich der Arena
+# ausserhalb des Ticks (12.3).
 [target.thumbv7em]
 cost_model = 2
 core_hz = 84000000
@@ -32,6 +34,7 @@ native = 0
 t_io = 3250000
 ram = 65536
 flash = 245760
+protect = armv7m_mpu
 nvm_sector_bytes = 16384
 nvm_sectors = 2
 nvm_min_interval = 10000000000

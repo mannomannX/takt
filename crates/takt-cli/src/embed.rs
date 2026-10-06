@@ -87,20 +87,30 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     check_form(e.program, e.form)?;
     let x = e.prefix;
     std::fs::create_dir_all(&e.out).map_err(|err| format!("{}: {err}", e.out.display()))?;
+    // 8.10: was das Ziel ueber Speicher und Stack sagt.
+    let memory = e.hardware.and_then(|hw| hw.target(e.target.name)).map(|t| t.memory).unwrap_or_default();
+    let window = protection(e.program, memory.protect)?;
+    let job_stack_reserve = match memory.job_stack_reserve {
+        Some(n) => u32::try_from(n).map_err(|_| format!("job_stack_reserve = {n}: passt nicht in 32 Bit"))?,
+        None => takt_frame::mcu::JOB_STACK_RESERVE,
+    };
     let frame = takt_frame::mcu::build_with(
         e.program,
         takt_frame::mcu::Frame {
             diagnostics: e.diagnostics,
             hardware: e.hardware,
-            protect: None,
+            protect: window.map(|w| w.protected),
             prefix: x.clone(),
             stubs: false,
+            job_stack_reserve,
         },
     );
     let flags: Vec<String> =
         if e.target.march.is_empty() { Vec::new() } else { vec![format!("-march={}", e.target.march)] };
     let flags: Vec<&str> = flags.iter().map(String::as_str).collect();
     let (bytes, align) = takt_frame::mcu::arena_layout(&frame, x, e.target.triple, &flags)?;
+    // 12.3: Die Region ist an ihrer Groesse ausgerichtet, also auch die Arena.
+    let align = window.map_or(align, |w| align.max(w.size));
 
     let (ll, c) = (e.out.join(format!("{x}.ll")), e.out.join(format!("{x}_frame.c")));
     write(&ll, e.ir)?;
@@ -122,7 +132,8 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         drivers_type: e.drivers_type,
     };
     write(&e.out.join(format!("{x}.rs")), &takt_frame::embed::rust_module(&module))?;
-    write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, bytes, align))?;
+    let placement = Placement { bytes, align, tick_at: frame.tick_at, protect: memory.protect.zip(window) };
+    write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &placement))?;
     let sys = drivers.iter().filter(|d| d.kind == takt_frame::drivers::Kind::Sys).count();
     println!(
         "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}), {} Treiber, {sys} sys-Kanaele",
@@ -132,6 +143,28 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         drivers.len() - sys
     );
     Ok(())
+}
+
+/// Die Region der Schutzeinheit ueber dem Programmbereich der Arena (12.3),
+/// wenn die Konfiguration eine nennt.
+fn protection(
+    p: &takt_mir::Program,
+    unit: Option<takt_mir::hardware::Protect>,
+) -> Result<Option<takt_mir::hardware::Window>, String> {
+    let Some(unit) = unit else { return Ok(None) };
+    let bytes = takt_llvm::arena::of(p).bytes;
+    unit.window(bytes)
+        .map(Some)
+        .ok_or_else(|| format!("protect = {}: keine Region deckt {bytes} Byte Programmbereich", unit.name()))
+}
+
+/// Wie die Arena liegt: Groesse, Ausrichtung, die Stelle des Ticks und die
+/// Schutzregion (12.11).
+struct Placement {
+    bytes: u64,
+    align: u64,
+    tick_at: u64,
+    protect: Option<(takt_mir::hardware::Protect, takt_mir::hardware::Window)>,
 }
 
 /// Das Profil im Programm darf der Form nicht widersprechen (12.8, 12.11):
@@ -179,7 +212,7 @@ fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns
 
 /// Das Manifest `P.manifest` (12.11): was der Wirt in seinen Speicher- und
 /// Bauplan uebernimmt.
-fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], bytes: u64, align: u64) -> String {
+fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], arena: &Placement) -> String {
     let p = e.program;
     let x = e.prefix;
     let hash = takt_mir::hash::logic_hash(p);
@@ -196,8 +229,20 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], bytes: u64, 
     // 8.4: das Parameterprofil, dessen Werte das Abbild traegt.
     let _ = writeln!(s, "params_profile = {}", p.config.params_profile.as_deref().unwrap_or("none"));
     let _ = writeln!(s, "tick_ns = {}", p.config.tick);
-    let _ = writeln!(s, "arena_bytes = {bytes}");
-    let _ = writeln!(s, "arena_align = {align}");
+    let _ = writeln!(s, "arena_bytes = {}", arena.bytes);
+    let _ = writeln!(s, "arena_align = {}", arena.align);
+    // Wo der Tick in der Arena steht: Eine Probe liest ihn, wenn die Leitung schweigt.
+    let _ = writeln!(s, "tick_at = {}", arena.tick_at);
+    // 12.3: die Schutzregion und wie viel der Arena sie deckt.
+    match arena.protect {
+        Some((unit, w)) => {
+            let _ = writeln!(s, "protect = {}", unit.name());
+            let _ = writeln!(s, "protect_bytes = {}", w.protected);
+        }
+        None => {
+            let _ = writeln!(s, "protect = none");
+        }
+    }
     let _ = writeln!(s, "persist_bytes = {}", takt_mir::persist::max_payload(p).unwrap_or(0));
     let jobs = !takt_frame::parts::job_slots(p).is_empty();
     let _ = writeln!(s, "jobs = {jobs}");

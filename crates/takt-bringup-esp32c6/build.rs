@@ -96,6 +96,11 @@ fn build_takt_program(out: &Path) {
             protect: None,
             prefix: takt_llvm::symbols::Prefix::default(),
             stubs: false,
+            // 4.5: Interrupts laufen auf dem Stack des unterbrochenen Fadens,
+            // also auch auf dem des Jobs (`jobs.rs` im Board-Crate).
+            // Trap-Rahmen, Verteiler und die Handler einer Prioritaetsstufe
+            // brauchen unter 1 KiB; die Reserve verdoppelt das.
+            job_stack_reserve: 2048,
         },
     );
     if let Err(e) = fs::write(&rahmen, &frame.source) {
@@ -115,11 +120,7 @@ fn build_takt_program(out: &Path) {
     run_takt_build(&program, &["--emit", "consts-rs"], &out.join("takt_consts.rs"));
     let (obj, obj_rahmen) = (out.join("takt_programm.o"), out.join("takt_rahmen.o"));
     translate(&ir, &obj, &[]);
-    // 4.5: Interrupts laufen auf dem Stack des unterbrochenen Fadens, also
-    // auch auf dem des Jobs (`jobs.rs` im Board-Crate). Trap-Rahmen,
-    // Verteiler und die Handler einer Prioritaetsstufe brauchen unter 1 KiB;
-    // die Reserve verdoppelt das.
-    translate(&rahmen, &obj_rahmen, &["-DTAKT_JOB_STACK_RESERVE=2048"]);
+    translate(&rahmen, &obj_rahmen, &[]);
     let millicode = Path::new(env!("CARGO_MANIFEST_DIR")).join("millicode.S");
     println!("cargo:rerun-if-changed={}", millicode.display());
     let obj_mc = out.join("millicode.o");

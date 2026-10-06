@@ -33,12 +33,51 @@ pub struct Program {
     drivers: Option<String>,
     form: String,
     prefix: Option<String>,
+    tool: Option<PathBuf>,
+    build: Option<String>,
+    instrument: Option<String>,
+    diagnostics: Option<String>,
 }
 
 impl Program {
     /// Das Programm in der Datei `source`, relativ zum Crate.
     pub fn new(source: impl Into<PathBuf>) -> Program {
-        Program { source: source.into(), hardware: None, drivers: None, form: "logical".into(), prefix: None }
+        Program {
+            source: source.into(),
+            hardware: None,
+            drivers: None,
+            form: "logical".into(),
+            prefix: None,
+            tool: None,
+            build: None,
+            instrument: None,
+            diagnostics: None,
+        }
+    }
+
+    /// Das Werkzeug; ohne Angabe `TAKT`, sonst `takt` im `PATH`.
+    pub fn tool(mut self, path: impl Into<PathBuf>) -> Program {
+        self.tool = Some(path.into());
+        self
+    }
+
+    /// Der Build (8.3): `hw` oder `sim`, in dem Plant-Modelle mitlaufen;
+    /// ohne Angabe der Hardware-Bau der Lieferform.
+    pub fn build_for(mut self, build: &str) -> Program {
+        self.build = Some(build.into());
+        self
+    }
+
+    /// Die Instrumentierung (11.2): `none`, `states` oder `statements`.
+    pub fn instrument(mut self, mode: &str) -> Program {
+        self.instrument = Some(mode.into());
+        self
+    }
+
+    /// Die Diagnosestufe des erzeugten Codes (11.2).
+    pub fn diagnostics(mut self, level: &str) -> Program {
+        self.diagnostics = Some(level.into());
+        self
     }
 
     /// Die Hardware-Konfiguration (8.10): Zielklasse, Kalibrierung, Kanaele.
@@ -86,27 +125,41 @@ impl Program {
             args.push("--drivers".into());
             args.push(ty.into());
         }
+        for (flag, value) in
+            [("--build", &self.build), ("--instrument", &self.instrument), ("--diagnostics", &self.diagnostics)]
+        {
+            if let Some(v) = value {
+                args.push(flag.into());
+                args.push(v.into());
+            }
+        }
         let module = dir.join(format!("{prefix}.rs"));
         let env = format!("TAKT_{}_RS", prefix.to_uppercase());
         Invocation { args, dir, module, prefix, env }
     }
 
     /// Baut die Lieferform nach `OUT_DIR/takt/P`, bindet die Bibliothek und
-    /// nennt das Modul in `TAKT_<P>_RS`. Liefert den Pfad des Moduls.
+    /// nennt das Modul in `TAKT_<P>_RS`. Liefert, was entstand.
     ///
     /// # Panics
     ///
     /// Wenn der Bau scheitert: Die Meldungen von `takt build` stehen davor
     /// als Warnungen.
-    pub fn build(self) -> PathBuf {
+    pub fn build(self) -> Built {
         let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR: nur aus einem Bauskript"));
         let triple = env::var("TARGET").expect("TARGET: nur aus einem Bauskript");
         let call = self.invocation(&out, &triple);
-        println!("cargo:rerun-if-env-changed=TAKT");
+        let tool = match &self.tool {
+            Some(path) => path.clone(),
+            None => {
+                println!("cargo:rerun-if-env-changed=TAKT");
+                tool()
+            }
+        };
         // Auch das Werkzeug ist eine Quelle: Ein neues `takt` uebersetzt
         // anders, und ohne diese Zeile bliebe das alte Modul stehen.
-        if let Some(path) = env::var_os("TAKT").map(PathBuf::from).filter(|p| p.exists()) {
-            println!("cargo:rerun-if-changed={}", path.display());
+        if tool.exists() {
+            println!("cargo:rerun-if-changed={}", tool.display());
         }
         // Die Konfigurationen aus `import channels` liegen neben dem Programm (8.2).
         if let Some(parent) = self.source.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -116,7 +169,7 @@ impl Program {
         if let Some(hw) = &self.hardware {
             println!("cargo:rerun-if-changed={}", hw.display());
         }
-        if let Err(lines) = call.run(&tool()) {
+        if let Err(lines) = call.run(&tool) {
             for line in lines {
                 println!("cargo:warning={line}");
             }
@@ -125,8 +178,39 @@ impl Program {
         println!("cargo:rustc-link-search=native={}", call.dir.display());
         println!("cargo:rustc-link-lib=static={}", call.prefix);
         println!("cargo:rustc-env={}={}", call.env, call.module.display());
-        call.module
+        Built { manifest: call.dir.join(format!("{}.manifest", call.prefix)), module: call.module }
     }
+}
+
+/// Was ein Bau lieferte: das Modul und das Manifest (12.11).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Built {
+    /// Das Modul `P.rs`.
+    pub module: PathBuf,
+    /// Das Manifest `P.manifest`.
+    pub manifest: PathBuf,
+}
+
+impl Built {
+    /// Ein Wert des Manifests, etwa `arena_bytes` oder `tick_at`.
+    ///
+    /// # Panics
+    ///
+    /// Wenn das Manifest fehlt oder den Schluessel nicht nennt: Der Bau
+    /// ginge sonst mit einer Annahme weiter.
+    pub fn value(&self, key: &str) -> String {
+        let text =
+            std::fs::read_to_string(&self.manifest).unwrap_or_else(|e| panic!("{}: {e}", self.manifest.display()));
+        value(&text, key).unwrap_or_else(|| panic!("{}: kein `{key}`", self.manifest.display()))
+    }
+}
+
+/// Der Wert zu `key` in einem Manifest (`key = wert`).
+fn value(manifest: &str, key: &str) -> Option<String> {
+    manifest.lines().find_map(|l| {
+        let (k, v) = l.split_once('=')?;
+        (k.trim() == key).then(|| v.trim().to_string())
+    })
 }
 
 /// Ein Aufruf von `takt build --emit embed`: Argumente, Ziel und was der Bau
@@ -214,7 +298,9 @@ mod tests {
         assert_eq!(call.module, Path::new("out").join("takt").join("valve").join("valve.rs"));
     }
 
-    /// Form, Praefix, Treiber und Hardware gehen in die Befehlszeile.
+    /// Form, Praefix, Treiber, Hardware, Build, Instrumentierung und
+    /// Diagnosestufe gehen in die Befehlszeile; ohne Angabe fehlen die
+    /// letzten drei, und das Werkzeug waehlt.
     #[test]
     fn every_option_reaches_the_command_line() {
         let call = Program::new("p/kessel.takt")
@@ -222,6 +308,9 @@ mod tests {
             .prefix("boiler")
             .drivers("crate::io::Board")
             .hardware("p/board.hw")
+            .build_for("sim")
+            .instrument("statements")
+            .diagnostics("none")
             .invocation(Path::new("o"), "thumbv7em-none-eabihf");
         let w = words(&call);
         let after = |flag: &str| w.iter().position(|x| x == flag).and_then(|i| w.get(i + 1)).cloned();
@@ -230,7 +319,22 @@ mod tests {
         assert_eq!(after("--drivers").as_deref(), Some("crate::io::Board"));
         assert_eq!(after("--hardware").as_deref(), Some("p/board.hw"));
         assert_eq!(after("--out").as_deref(), Some("o/takt/boiler"));
+        assert_eq!(after("--build").as_deref(), Some("sim"));
+        assert_eq!(after("--instrument").as_deref(), Some("statements"));
+        assert_eq!(after("--diagnostics").as_deref(), Some("none"));
         assert_eq!(call.env, "TAKT_BOILER_RS");
+        let plain = words(&Program::new("p/kessel.takt").invocation(Path::new("o"), "x"));
+        assert!(!plain.iter().any(|w| ["--build", "--instrument", "--diagnostics"].contains(&w.as_str())), "{plain:?}");
+    }
+
+    /// Ein Wert des Manifests nach seinem Schluessel, ohne Leerraum; ein
+    /// Schluessel, der nur Praefix eines anderen ist, trifft nicht.
+    #[test]
+    fn a_manifest_value_is_found_by_its_key() {
+        let text = "# takt-manifest 1\narena_bytes = 4096\narena_align = 8\ntick_at = 160\n";
+        assert_eq!(value(text, "tick_at").as_deref(), Some("160"));
+        assert_eq!(value(text, "arena").as_deref(), None);
+        assert_eq!(value(text, "arena_align").as_deref(), Some("8"));
     }
 
     /// Ein Dateiname, der mit einer Ziffer beginnt, ergibt kein gueltiges

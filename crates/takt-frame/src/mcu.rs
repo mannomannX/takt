@@ -78,6 +78,10 @@ pub struct Frame<'a> {
     /// Ausdrueckliche Stummel fuer alle Treiber, fuer einen Test, der den
     /// Rahmen ohne Treiber bindet ([`crate::drivers::c_stubs`]).
     pub stubs: bool,
+    /// Was der Job-Kontext ueber den groessten `stack`-Vertrag der Jobs
+    /// hinaus bekommt (`job_stack_reserve` der Hardware-Konfiguration, 8.10);
+    /// ohne Angabe [`JOB_STACK_RESERVE`].
+    pub job_stack_reserve: u32,
 }
 
 impl Default for Frame<'_> {
@@ -88,6 +92,7 @@ impl Default for Frame<'_> {
             protect: None,
             prefix: Prefix::default(),
             stubs: false,
+            job_stack_reserve: JOB_STACK_RESERVE,
         }
     }
 }
@@ -121,7 +126,7 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     // `apply_scheduled` ihn schreibt.
     crate::parts::scheduled(&mut t, p, &layout, hw, x);
     crate::parts::jitter(&mut t.code, p, hw, x);
-    jobs(&mut t, p, x);
+    jobs(&mut t, p, x, frame.job_stack_reserve);
     declarations(&mut t.code, p, &driven, x);
     // 8.10, 12.6: die Treiber, stark gebunden; Stummel nur ausdruecklich.
     let drivers = crate::drivers::of(p, &layout);
@@ -541,12 +546,11 @@ fn declarations(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machi
 }
 
 /// Wie viel Stack der Job-Kontext ueber den groessten `stack`-Vertrag der
-/// Jobs hinaus bekommt, wenn das Board nichts anderes sagt: Rahmen und
-/// Verteiler des Jobs, die Umschaltung und — wo Interrupts auf dem Stack
-/// des unterbrochenen Fadens laufen — die Interrupts selbst.
-// TODO(M10 Schritt 12): die Reserve aus der Hardware-Konfiguration (8.10),
-// wie die des Hauptstacks.
-const JOB_STACK_RESERVE: u32 = 1024;
+/// Jobs hinaus bekommt, wenn die Hardware-Konfiguration nichts anderes sagt
+/// (`job_stack_reserve`, 8.10): Rahmen und Verteiler des Jobs, die
+/// Umschaltung und — wo Interrupts auf dem Stack des unterbrochenen Fadens
+/// laufen — die Interrupts selbst.
+pub const JOB_STACK_RESERVE: u32 = 1024;
 
 /// 4.5: Jobs auf der MCU. Der Start kopiert die Argumente in den Slot und
 /// reiht ihn ein; gerechnet wird im Job-Kontext der Runtime, einem Faden
@@ -568,7 +572,7 @@ const JOB_STACK_RESERVE: u32 = 1024;
 /// **Unter dem Stack liegt der Waechter** (12.3): 32 Byte am unteren Ende,
 /// zusaetzlich zu Vertrag und Reserve und an 32 Byte ausgerichtet, damit
 /// eine MPU-Region oder ein NAPOT-Watchpoint ihn genau abdeckt.
-fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
+fn jobs(t: &mut Text, p: &Program, x: &Prefix, reserve: u32) {
     let s = &mut t.code;
     let _ = writeln!(s, "/* Jobs (4.5): Slots der Hauptschleife, ein Auftrag fuer den Job-Kontext. */");
     let Some((slots, out_max)) = crate::parts::job_tables(s, p, x) else {
@@ -616,9 +620,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(f, "    unsigned char work_in[{in_max}], work_out[{out_max}];");
     let s = &mut t.code;
     let _ = writeln!(s, "static const char *const takt_job_names[{slots}] = {{ {} }};", names.join(", "));
-    let _ = writeln!(s, "#ifndef TAKT_JOB_STACK_RESERVE");
-    let _ = writeln!(s, "#define TAKT_JOB_STACK_RESERVE {JOB_STACK_RESERVE}");
-    let _ = writeln!(s, "#endif");
+    let _ = writeln!(s, "#define TAKT_JOB_STACK_RESERVE {reserve}");
     let _ = writeln!(
         s,
         "static unsigned char takt_job_stack_mem[32 + {stack} + TAKT_JOB_STACK_RESERVE] __attribute__((aligned(32)));"

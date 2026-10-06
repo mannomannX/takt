@@ -68,6 +68,7 @@ fn one_call_delivers_library_header_module_and_manifest() {
         "# takt-manifest 1",
         "prefix = valve",
         "abi = 2",
+        "protect = none",
         &format!("triple = {}", host_triple()),
         "form = logical",
         "profile = none",
@@ -184,6 +185,59 @@ fn deliver(name: &str, triple: &str, form: &str) -> PathBuf {
     let run = takt(&["build", VALVE, "--emit", "embed", "--target", triple, "--form", form, "--out", out]);
     assert!(run.status.success(), "{triple} {form}: {}", String::from_utf8_lossy(&run.stderr));
     dir
+}
+
+/// **Eine geschuetzte Arena ist ihre Region** (8.10 `protect`, 12.3, M11
+/// Schritt 10): Mit `protect = armv7m_mpu` fuellt der Rahmen den
+/// Programmbereich auf die Region auf, die ihn deckt, der Tick steht dahinter,
+/// und die Arena ist an der Region ausgerichtet; das Manifest nennt beides.
+/// `job_stack_reserve` gibt dem Job-Stack seine Reserve.
+#[test]
+fn a_protected_arena_is_padded_and_aligned_to_its_region() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    let dir = scratch("takt-embed-protect");
+    let hw = dir.join("board.hw");
+    std::fs::write(&hw, "# takt-hw 14\n[target.thumbv7em]\nprotect = armv7m_mpu\njob_stack_reserve = 3000\n")
+        .expect("hw");
+    let source = "corpus-try/40_jobs.takt";
+    let out = dir.join("out");
+    let run = takt(&[
+        "build",
+        source,
+        "--emit",
+        "embed",
+        "--target",
+        "thumbv7em-none-eabihf",
+        "--form",
+        "own",
+        "--prefix",
+        "jobs",
+        "--hardware",
+        hw.to_str().expect("Pfad"),
+        "--out",
+        out.to_str().expect("Pfad"),
+    ]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let text = std::fs::read_to_string(root().join(source)).expect("Quelle");
+    let options = takt_sema::Options { build: takt_sema::Build::Hw, ..Default::default() };
+    let p = takt_sema::compile(&text, &options).program.expect("Programm");
+    let window =
+        takt_mir::hardware::Protect::Armv7mMpu.window(takt_llvm::arena::of(&p).bytes).expect("eine Region deckt ihn");
+    let manifest = std::fs::read_to_string(out.join("jobs.manifest")).expect("Manifest");
+    let value = |key: &str| {
+        let prefix = format!("{key} = ");
+        manifest.lines().find_map(|l| l.strip_prefix(&prefix)).unwrap_or_else(|| panic!("{key} fehlt:\n{manifest}"))
+    };
+    assert_eq!(value("protect"), "armv7m_mpu");
+    assert_eq!(value("protect_bytes"), window.protected.to_string());
+    assert_eq!(value("tick_at"), window.protected.to_string(), "der Tick steht hinter dem geschuetzten Bereich");
+    assert_eq!(value("arena_align"), window.size.to_string(), "die Arena liegt, wo die Region liegt");
+    let frame = std::fs::read_to_string(out.join("jobs_frame.c")).expect("Rahmen");
+    assert!(frame.contains("#define TAKT_JOB_STACK_RESERVE 3000"), "die Reserve aus der Konfiguration");
+    let module = std::fs::read_to_string(out.join("jobs.rs")).expect("Modul");
+    assert!(module.contains(&format!("align({})", window.size)), "das Modul legt die Arena ebenso aus");
 }
 
 fn manifest_value(dir: &Path, key: &str) -> String {

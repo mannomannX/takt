@@ -90,8 +90,12 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// `f64_math`, das Gewicht eines Aufrufs der korrekt gerundeten Mathematik
 /// (4.2, FB-344). 13: `tx_idle`, ob der Treiber eines Ausgabestroms
 /// `tx.idle` beantwortet (8.8, 8.10, FB-124); eine aeltere Datei kennt den
-/// Schluessel nicht, und es gilt der Default `true`.
-pub const FORMAT_VERSION: u32 = 13;
+/// Schluessel nicht, und es gilt der Default `true`. 14: `protect`, die
+/// Schutzeinheit, deren Region die Arena deckt (8.10, 12.3, 12.11), und
+/// `job_stack_reserve`, die Reserve des Job-Stacks ueber den groessten
+/// `stack`-Vertrag (4.5, 12.3); eine aeltere Datei kennt beide nicht: keine
+/// Schutzregion, die Reserve des Rahmens.
+pub const FORMAT_VERSION: u32 = 14;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -287,6 +291,56 @@ pub struct Memory {
     pub stack_reserve: Option<u64>,
     /// Marge auf den gerechneten Stack (12.3).
     pub stack_margin: Option<u64>,
+    /// Was der Job-Kontext ueber den groessten `stack`-Vertrag der Jobs
+    /// hinaus bekommt: Rahmen, Umschaltung und, wo Interrupts auf dem Stack
+    /// des unterbrochenen Fadens laufen, die Interrupts (4.5, 12.3).
+    pub job_stack_reserve: Option<u64>,
+    /// Die Schutzeinheit, deren Region den Programmbereich der Arena deckt
+    /// (12.3, 12.11); ohne sie ist die Arena keine Schutzregion.
+    pub protect: Option<Protect>,
+}
+
+/// Eine Schutzeinheit (8.10 `protect`, 12.3): wie ihre Region den
+/// Programmbereich der Arena deckt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Protect {
+    /// Die MPU von ARMv7-M (Cortex-M3, M4, M7): eine Region mit
+    /// Zweierpotenz als Groesse ab 32 Byte, an ihr ausgerichtet; ab 256 Byte
+    /// in Achteln, die sich einzeln abschalten lassen.
+    Armv7mMpu,
+}
+
+/// Die Region einer Schutzeinheit ueber dem Programmbereich der Arena.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Window {
+    /// Groesse der Region und ihre Ausrichtung, und damit die der Arena.
+    pub size: u64,
+    /// Was die Region schuetzt: der Programmbereich, auf ganze Teile der
+    /// Region aufgefuellt; dahinter liegt die Runtime ungeschuetzt.
+    pub protected: u64,
+}
+
+impl Protect {
+    /// Alle Schutzeinheiten.
+    pub const ALL: [Protect; 1] = [Protect::Armv7mMpu];
+
+    /// Der Name in der Konfiguration.
+    pub fn name(self) -> &'static str {
+        match self {
+            Protect::Armv7mMpu => "armv7m_mpu",
+        }
+    }
+
+    /// Die kleinste Region, die `bytes` deckt; `None`, wenn es keine gibt.
+    pub fn window(self, bytes: u64) -> Option<Window> {
+        match self {
+            Protect::Armv7mMpu => {
+                let size = bytes.max(32).checked_next_power_of_two()?;
+                let eighths = if size >= 256 { bytes.max(1).div_ceil(size / 8) } else { 8 };
+                Some(Window { size, protected: size / 8 * eighths })
+            }
+        }
+    }
 }
 
 /// Ein Geraet (8.10: Treibertyp, Adresse, Heartbeat, Zykluszeit).
@@ -658,6 +712,17 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
         "iram" => target.memory.iram = Some(number(value, line)?),
         "stack_reserve" => target.memory.stack_reserve = Some(number(value, line)?),
         "stack_margin" => target.memory.stack_margin = Some(number(value, line)?),
+        "job_stack_reserve" => target.memory.job_stack_reserve = Some(number(value, line)?),
+        "protect" => {
+            let unit = Protect::ALL.into_iter().find(|p| p.name() == value).ok_or_else(|| ParseError {
+                line,
+                message: format!(
+                    "`protect = {value}`: unbekannte Schutzeinheit; bekannt: {}",
+                    Protect::ALL.map(Protect::name).join(", ")
+                ),
+            })?;
+            target.memory.protect = Some(unit);
+        }
         _ => {
             if let Some((h, c)) = heavy_pairs().find(|(h, c)| heavy_key(*h, *c).as_deref() == Some(key)) {
                 target.c_target.set_heavy(h, c, number(value, line)?);
@@ -667,7 +732,7 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: cost_model, core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
-                     stack_reserve, stack_margin, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, \
+                     stack_reserve, stack_margin, job_stack_reserve, protect, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, \
                      nvm_program_ns, nvm_blocking, die Klassen {} und die eigenen Gewichte {}",
                     CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "),
                     heavy_pairs().filter_map(|(h, c)| heavy_key(h, c)).collect::<Vec<_>>().join(", ")
@@ -919,10 +984,14 @@ pub fn render(hw: &Hardware) -> String {
             ("iram", m.iram),
             ("stack_reserve", m.stack_reserve),
             ("stack_margin", m.stack_margin),
+            ("job_stack_reserve", m.job_stack_reserve),
         ] {
             if let Some(v) = value {
                 s.push_str(&format!("{key} = {v}\n"));
             }
+        }
+        if let Some(p) = m.protect {
+            s.push_str(&format!("protect = {}\n", p.name()));
         }
     }
     for d in hw.devices.values() {
@@ -1027,6 +1096,35 @@ t_io = 120000
         let hw = parse(BEISPIEL).expect("lesbar");
         let wieder = parse(&render(&hw)).expect("wieder lesbar");
         assert_eq!(hw.targets, wieder.targets);
+    }
+
+    /// **Schutzeinheit und Reserve des Job-Stacks** (8.10, Version 14):
+    /// gelesen, geschrieben und wieder gelesen; eine unbekannte Einheit ist
+    /// ein Fehler, der die bekannten nennt.
+    #[test]
+    fn protect_and_job_stack_reserve_round_trip() {
+        let text = format!("# {MAGIC} 14\n[target.thumbv7em]\nprotect = armv7m_mpu\njob_stack_reserve = 2048\n");
+        let hw = parse(&text).expect("lesbar");
+        let m = hw.target("thumbv7em").expect("Ziel").memory;
+        assert_eq!((m.protect, m.job_stack_reserve), (Some(Protect::Armv7mMpu), Some(2048)));
+        assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
+        let e = parse(&text.replace("armv7m_mpu", "pmp")).expect_err("unbekannt");
+        assert!(e.message.contains("armv7m_mpu"), "{}", e.message);
+    }
+
+    /// **Die Region der ARMv7-M-MPU** (12.3): eine Zweierpotenz ab 32 Byte;
+    /// ab 256 Byte deckt sie den Programmbereich in ganzen Achteln, darunter
+    /// ganz.
+    #[test]
+    fn the_armv7m_window_covers_in_eighths() {
+        let window = |bytes| Protect::Armv7mMpu.window(bytes).expect("Region");
+        assert_eq!(window(0), Window { size: 32, protected: 32 });
+        assert_eq!(window(100), Window { size: 128, protected: 128 });
+        assert_eq!(window(256), Window { size: 256, protected: 256 });
+        assert_eq!(window(257), Window { size: 512, protected: 320 });
+        assert_eq!(window(1000), Window { size: 1024, protected: 1024 });
+        assert_eq!(window(4097), Window { size: 8192, protected: 5120 });
+        assert_eq!(Protect::Armv7mMpu.window(u64::MAX), None);
     }
 
     /// **Das Skalarprodukt aus 9.4.3.**

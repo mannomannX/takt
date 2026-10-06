@@ -143,6 +143,20 @@ fn the_board_hands_itself_back_for_the_next_program() {
     assert!(last_output(&second, "vent").is_some(), "{second}");
 }
 
+/// **Die Region des Baus ist die Region des Boards** (12.3): Was
+/// `takt build --emit embed` aus `protect = armv7m_mpu` an Groesse und
+/// geschuetztem Bereich rechnet (`takt_mir::hardware::Protect`), richtet das
+/// Board-Crate in der MPU ein (`takt_board_support::mpu::Region`); beide
+/// Rechnungen stimmen fuer jede Groesse des Programmbereichs ueberein.
+#[test]
+fn the_mpu_window_of_the_build_is_the_region_of_the_board() {
+    for bytes in (0..=70_000u32).step_by(7).chain([255, 256, 257, 511, 512, 513, 65_536]) {
+        let window = takt_mir::hardware::Protect::Armv7mMpu.window(u64::from(bytes)).expect("Region");
+        let region = takt_board_support::mpu::Region::covering(0, bytes).expect("an 0 ausgerichtet");
+        assert_eq!((window.size, window.protected), (u64::from(region.size), u64::from(region.protected())), "{bytes}");
+    }
+}
+
 /// **`TOO_BIG` ist, was Pruefung 39 fuer den F401 ablehnt** (11.5,
 /// FB-442): je Programm der Board-Suite im Build `sim`, wie das Board es
 /// baut, gegen `ram` und `flash` aus `corpus-try/hw/stm32f401.hw`. Ein

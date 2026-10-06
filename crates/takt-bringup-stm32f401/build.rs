@@ -99,6 +99,7 @@ fn build_takt_program(out: &Path) {
             protect: Some(protect),
             prefix: takt_llvm::symbols::Prefix::default(),
             stubs: false,
+            job_stack_reserve: takt_frame::mcu::JOB_STACK_RESERVE,
         },
     );
     if let Err(e) = fs::write(&rahmen, &frame.source) {
