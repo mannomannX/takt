@@ -1,0 +1,26 @@
+# 8.4, 9.9, FB-389: Tunes von der Konsole des Boards. Die Maschine
+# schlaeft in `idle` mit einer Frist von 2 s; ein Tune, den der Host
+# waehrenddessen schickt, gilt ab der naechsten Grenze und weckt dort
+# (`when GAIN > 5`). Ein Wert ausserhalb der Range wirkt nicht.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+tunable param GAIN : int in 0..100 = 0
+
+output up    : bool           @ hw("o/up")  with safe = false
+output level : int in 0..1000 @ hw("o/sum") with safe = 0
+
+machine m:
+    initial SLEEP
+
+    state SLEEP idle:
+        when GAIN > 5: -> UP
+        after 2 s: -> UP
+
+    state UP:
+        enter:
+            up = true
+        loop:
+            level = GAIN * 2

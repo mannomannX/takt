@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::board::{agreement, driver_edge_agrees, unread_channels_are_recorded};
+use common::board::{a_wake_source_ends_the_sleep, agreement, driver_edge_agrees, unread_channels_are_recorded};
 use takt_conformance::board::{self, Board, host::Host};
 
 /// Der Wirt mit dem Pruefgeraet; ohne clang keiner.
@@ -32,6 +32,15 @@ fn the_driver_edge_judges_on_the_host_like_the_interpreter() {
 fn the_unread_channels_are_recorded_on_the_host() {
     let Some(mut host) = probe() else { return };
     let failed = unread_channels_are_recorded(&mut host);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Eine Wake-Quelle weckt auch auf dem Wirt an der Grenze nach ihrem
+/// Ereignis** (9.9, FB-388): `a_wake_source_ends_the_sleep`.
+#[test]
+fn a_wake_source_ends_the_sleep_on_the_host() {
+    let Some(mut host) = probe() else { return };
+    let failed = a_wake_source_ends_the_sleep(&mut host);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 

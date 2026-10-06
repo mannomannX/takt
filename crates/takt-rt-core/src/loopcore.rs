@@ -366,8 +366,29 @@ pub trait Program {
     }
 
     /// Ein Tunable aendert sich (8.4): Parameterindex und Wert in
-    /// kanonischer Byteform, gueltig ab dem naechsten Schritt.
-    fn tune(&mut self, _param: u32, _value: &[u8]) {}
+    /// kanonischer Byteform, gueltig ab dem Schritt von Tick `k`. Der
+    /// Golden-Trace zeichnet die Zeile auf, auch eine verworfene
+    /// (`grammar/trace.md`); dafuer nennt der Kern den Tick.
+    fn tune(&mut self, _k: u64, _param: u32, _value: &[u8]) {}
+
+    /// Hat eine Wake-Quelle des Programms ausgeloest (5.10, 9.9)? Der Kern
+    /// fragt im Schlaf an jeder geschlafenen Grenze, in Reihenfolge, mit dem
+    /// Tick `k`, der dort rechnen wuerde; wahr beendet den Schlaf dort. Das
+    /// Programm tastet seine Wake-Quellen dafuer so ab, wie der Schritt von
+    /// Tick `k` es taete, und sagt, ob er etwas anderes saehe als der Tick
+    /// vor dem Schlaf. Frueher zu wecken ist nie falsch: Die uebersprungenen
+    /// Ticks waeren leere Schritte gewesen (Satz 9.9.1).
+    fn woken(&mut self, _k: u64) -> bool {
+        false
+    }
+
+    /// Hat das Programm Wake-Quellen, die [`Program::woken`] abtastet? Ein
+    /// Port, der den Kern ueber [`Runtime::service`] faehrt, kommt dann im
+    /// Schlaf an jeder Grenze wieder ([`Next::deadline`]); ohne sie schlaeft
+    /// er bis zur Frist.
+    fn wake_sources(&self) -> bool {
+        false
+    }
 
     /// Ein Job ist fertig (4.5): das Ergebnis in kanonischer Byteform, oder
     /// `None`, wenn der Lauf gescheitert ist. Es geht als `done`/`result`
@@ -411,7 +432,9 @@ pub trait Program {
 pub struct Next {
     /// Wann `service` wieder gerufen werden will, absolut in Nanosekunden:
     /// die naechste Tickgrenze, mit erlaubtem Schlaf (9.9) die Frist des
-    /// Schlafs; haelt der Kern einen Latch (1.4), die naechste Grenze.
+    /// Schlafs; haelt der Kern einen Latch (1.4) oder tastet das Programm
+    /// im Schlaf Wake-Quellen ab ([`Program::wake_sources`]), die naechste
+    /// Grenze.
     pub deadline: i64,
     /// Ein Job wartet (4.5): Der Job-Kontext soll rechnen.
     pub jobs: bool,
@@ -455,6 +478,9 @@ pub struct Runtime<P, C, W, S> {
     asleep: Option<Asleep>,
     /// Die erste Grenze, deren Tunables noch nicht abgefragt sind (8.4).
     tuned: u64,
+    /// Die erste geschlafene Grenze, deren Wake-Quellen noch nicht
+    /// abgetastet sind (9.9).
+    polled: u64,
     /// Die erste Tickgrenze, an der die Schleife auf dem Weg zur Frist den
     /// Watchdog bestaetigt: nach virtuellen Ticks die erste geschlafene,
     /// sonst die Frist selbst.
@@ -479,6 +505,8 @@ pub struct Runtime<P, C, W, S> {
     /// Nanosekunden (12.3: das geordnete Ende hat eine eigene Frist);
     /// `None` wartet, bis das Geraet fertig ist.
     end_budget: Option<i64>,
+    /// Die Zahl der Ticks eines Laufs mit Ende ([`Runtime::end_at`]).
+    horizon: Option<u64>,
 }
 
 impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
@@ -501,6 +529,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             start,
             asleep: None,
             tuned: 0,
+            polled: 0,
             beat_from: start,
             pending_overrun: false,
             held: false,
@@ -510,7 +539,17 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             ended: None,
             flushed: None,
             end_budget: None,
+            horizon: None,
         }
+    }
+
+    /// Ein Lauf ueber `ticks` Ticks (13.8: ein Konformitaetslauf endet nach
+    /// Tick `ticks - 1`). Ein Schlaf reicht dann hoechstens bis zum letzten
+    /// Tick: Jede Grenze davor wird abgetastet, und ein Weckereignis vor dem
+    /// Ende wirkt (9.9). Der Tick an dieser verkuerzten Frist ist ein leerer
+    /// Schritt — frueher zu wecken ist nie falsch (Satz 9.9.1).
+    pub fn end_at(&mut self, ticks: u64) {
+        self.horizon = Some(ticks);
     }
 
     /// Begrenzt das synchrone Schreiben des Journals am Ende des Laufs auf
@@ -573,18 +612,21 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// `wait_for_tick_boundary()`: Nach virtuellen Ticks (9.9) liegt die
     /// Frist mehrere Perioden voraus. Der eigene Kern wartet Periode fuer
     /// Periode und bestaetigt den Watchdog an jeder Grenze — er sieht auch
-    /// im Schlaf, dass die Tickquelle lebt (12.3). Ein Weckereignis oder eine
-    /// Tunable-Aenderung an einer Grenze beendet den Schlaf dort; ihr Tick
-    /// bestaetigt den Watchdog nach seinem Schritt.
+    /// im Schlaf, dass die Tickquelle lebt (12.3). Ein Weckereignis der Uhr
+    /// oder einer Wake-Quelle oder eine Tunable-Aenderung an einer Grenze
+    /// beendet den Schlaf dort; ihr Tick bestaetigt den Watchdog nach
+    /// seinem Schritt.
     fn wait(&mut self, mut tunables: Option<&mut dyn Tunables>) {
         while self.beat_from < self.deadline {
             self.clock.wait_until(self.beat_from);
             self.release();
             if self.asleep.is_some() {
                 let j = self.boundary_at(self.beat_from);
-                let changed = reborrow(&mut tunables).is_some_and(|t| self.tune_at(t, j));
-                if self.clock.woken() || changed {
+                self.wake_asleep(reborrow(&mut tunables), self.beat_from);
+                if self.clock.woken() {
                     self.wake_at(j);
+                }
+                if self.deadline <= self.beat_from {
                     break;
                 }
             }
@@ -614,9 +656,10 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
 
     /// [`Runtime::service`] mit Journal und Tunables (8.4): Die Aenderungen
     /// einer Grenze gehen vor ihrem Schritt in das Programm. Im Schlaf
-    /// fragt der Kern die Grenzen bis jetzt in Reihenfolge ab, und die erste
-    /// mit einer Aenderung beendet ihn (9.9); ebenso ein Weckereignis der
-    /// Uhr ([`Clock::woken`]) an der Grenze nach dem Aufruf.
+    /// fragt der Kern die Grenzen bis jetzt in Reihenfolge ab, je Grenze
+    /// Tunables und Wake-Quellen ([`Program::woken`]), und die erste mit
+    /// einer Aenderung beendet ihn (9.9); ebenso ein Weckereignis der Uhr
+    /// ([`Clock::woken`]) an der Grenze nach dem Aufruf.
     pub fn service_with<N: Nvm>(
         &mut self,
         mut persist: Option<&mut crate::journal::Persist<'_, N>>,
@@ -625,10 +668,8 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         self.begin(persist.as_deref_mut());
         let now = self.clock.now();
         if self.asleep.is_some() {
-            if let Some(t) = reborrow(&mut tunables) {
-                self.tune_asleep(t, now);
-            }
-            if self.asleep.is_some() && self.clock.woken() {
+            self.wake_asleep(reborrow(&mut tunables), now);
+            if self.clock.woken() {
                 let j = self.boundary_at(now);
                 self.wake_at(j);
             }
@@ -645,13 +686,10 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         while self.ended.is_none() && self.deadline <= now && self.deadline < i64::MAX {
             self.end_sleep();
             self.tick_now(persist.as_deref_mut(), reborrow(&mut tunables));
-            if let Some(t) = reborrow(&mut tunables)
-                && self.asleep.is_some()
-            {
-                self.tune_asleep(t, now);
-            }
+            self.wake_asleep(reborrow(&mut tunables), now);
         }
-        let deadline = if self.held { self.beat_from.min(self.deadline) } else { self.deadline };
+        let polling = self.asleep.is_some() && self.program.wake_sources();
+        let deadline = if self.held || polling { self.beat_from.min(self.deadline) } else { self.deadline };
         Next { deadline, jobs: self.program.dispatch_job(), ended: self.ended }
     }
 
@@ -708,18 +746,40 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         let mut changed = false;
         tunables.poll(j, &mut |param, value| {
             changed = true;
-            program.tune(param, value);
+            program.tune(j, param, value);
         });
         changed
     }
 
-    /// Im Schlaf: die Tunables der geschlafenen Grenzen bis `now`, in
-    /// Reihenfolge; die erste mit einer Aenderung beendet den Schlaf dort.
-    fn tune_asleep(&mut self, tunables: &mut dyn Tunables, now: i64) {
+    /// Tastet die Wake-Quellen der geschlafenen Grenze `j` ab, wenn sie noch
+    /// nicht abgetastet ist; wahr, wenn eine ausgeloest hat.
+    fn poll_at(&mut self, j: u64) -> bool {
+        if j < self.polled || !self.program.wake_sources() {
+            return false;
+        }
+        self.polled = j.saturating_add(1);
+        self.program.woken(j)
+    }
+
+    /// Im Schlaf: die geschlafenen Grenzen bis `now` in Reihenfolge, je
+    /// Grenze erst die Tunables, dann die Wake-Quellen; die erste mit einer
+    /// Aenderung beendet den Schlaf dort (9.9). So sieht kein Tick vor
+    /// dieser Grenze einen Tune, der erst an ihr gilt.
+    fn wake_asleep(&mut self, mut tunables: Option<&mut dyn Tunables>, now: i64) {
         let Some(a) = self.asleep else { return };
-        let mut j = a.from.max(self.tuned);
+        let polling = self.program.wake_sources();
+        if tunables.is_none() && !polling {
+            return;
+        }
+        let first = match (tunables.is_some(), polling) {
+            (true, true) => self.tuned.min(self.polled),
+            (true, false) => self.tuned,
+            _ => self.polled,
+        };
+        let mut j = a.from.max(first);
         while j < self.k && self.boundary(j) <= now {
-            if self.tune_at(tunables, j) {
+            let changed = reborrow(&mut tunables).is_some_and(|t| self.tune_at(t, j));
+            if changed || self.poll_at(j) {
                 self.wake_at(j);
                 return;
             }
@@ -977,6 +1037,8 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             return 0;
         }
         // n = d / T0, und der Tick an der Frist selbst wird ausgefuehrt.
-        u64::try_from(d / self.tick_ns).unwrap_or(0).saturating_sub(1)
+        let n = u64::try_from(d / self.tick_ns).unwrap_or(0).saturating_sub(1);
+        // Mit Ende rechnet der letzte Tick `horizon - 1` an der Frist.
+        self.horizon.map_or(n, |h| n.min(h.saturating_sub(self.k.saturating_add(2))))
     }
 }

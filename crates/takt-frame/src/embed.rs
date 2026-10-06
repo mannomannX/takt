@@ -22,7 +22,7 @@ use crate::drivers::Driver;
 
 /// Die Version der Schnittstelle zwischen Bibliothek und Huelle (12.11):
 /// Sie steht im Symbol `P_abi_<n>` und im Manifest.
-pub const ABI: u32 = 2;
+pub const ABI: u32 = 3;
 
 /// Was das Modul braucht.
 pub struct Module<'a> {
@@ -75,7 +75,9 @@ fn ffi(x: &Prefix) -> String {
         format!("pub fn {x}_idle(a: *mut c_void) -> u8;"),
         format!("pub fn {x}_deadline(a: *mut c_void) -> i64;"),
         format!("pub fn {x}_advance(a: *mut c_void, n: i64);"),
-        format!("pub fn {x}_tune(a: *mut c_void, param: u32, value: *const c_void, len: i32) -> i32;"),
+        format!("pub fn {x}_tune(a: *mut c_void, k: i64, param: u32, value: *const c_void, len: i32) -> i32;"),
+        format!("pub fn {x}_woken(a: *mut c_void, k: i64) -> u8;"),
+        format!("pub fn {x}_wake_sources() -> u8;"),
         format!("pub fn {x}_persist_snapshot(a: *mut c_void, out: *mut c_void, cap: i32) -> i32;"),
         format!("pub fn {x}_persist_restore(a: *mut c_void, bytes: *const c_void, len: i32) -> i32;"),
         format!("pub fn {x}_dump(a: *mut c_void, all: i32);"),
@@ -292,12 +294,27 @@ impl takt_embed::rt::Program for Program<'_> {{
         unsafe {{ ffi::{x}_overrun(self.arena) }}
     }}
 
-    fn tune(&mut self, param: u32, value: &[u8]) {{
+    fn tune(&mut self, k: u64, param: u32, value: &[u8]) {{
         self.ensure_init();
         let len = i32::try_from(value.len()).unwrap_or(i32::MAX);
         // SAFETY: Der Rahmen liest `len` Byte ab `value`; einen Wert, den er
-        // nicht annimmt, laesst er stehen (8.4).
-        let _ = unsafe {{ ffi::{x}_tune(self.arena, param, value.as_ptr().cast(), len) }};
+        // nicht annimmt, laesst er stehen (8.4) und schreibt ihn als
+        // verworfen in den Trace, in Tick `k + 1` wie `tick`.
+        let _ = unsafe {{ ffi::{x}_tune(self.arena, k as i64 + 1, param, value.as_ptr().cast(), len) }};
+    }}
+
+    fn woken(&mut self, k: u64) -> bool {{
+        if !self.initialized {{
+            return false;
+        }}
+        // SAFETY: die Arena nach `init`; der Rahmen tastet die Treiber ab
+        // wie der Schritt von Tick `k + 1`.
+        unsafe {{ ffi::{x}_woken(self.arena, k as i64 + 1) != 0 }}
+    }}
+
+    fn wake_sources(&self) -> bool {{
+        // SAFETY: liest eine Konstante der Bibliothek.
+        unsafe {{ ffi::{x}_wake_sources() != 0 }}
     }}
 
     fn raise_hardware(&mut self) {{

@@ -25,6 +25,10 @@
 "edge_r/text" = "takt_driver_probe::EdgeRText"
 "edge_r/raw" = "takt_driver_probe::EdgeRRaw"
 
+# Die Wake-Quellen fuer `wake.takt` (9.9, FB-388).
+"wake/level" = "takt_driver_probe::WakeLevel"
+"wake/bell" = "takt_driver_probe::WakeBell"
+
 # Das vertragstreue Pruefgeraet fuer `fair.takt` (GEN-046).
 "fair_a/level" = "takt_driver_probe::FairLevel"
 "fair_a/spike" = "takt_driver_probe::FairSpike"

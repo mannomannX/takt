@@ -16,7 +16,7 @@ use std::time::Duration;
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::{Board, Bringup, Failure, Options, capture, port_listed, run_bounded};
+use super::{Board, Bringup, ConsoleLine, Failure, Options, capture, port_listed, run_bounded};
 
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-esp32c6",
@@ -73,11 +73,12 @@ impl Esp32c6 {
     /// davor nichts liefert, genuegt ein zweiter Reset; sonst steht ihr
     /// Empfangsendpunkt (FB-266), und das Board meldet sein USB-Geraet auf
     /// Wunsch neu an — ein Neustecken ohne Hand.
-    pub fn capture(&self, elf: &Path, ticks: u64) -> Result<String, String> {
+    pub fn capture(&self, elf: &Path, options: &Options) -> Result<String, String> {
+        let ticks = options.ticks;
         let mut last = String::new();
         for attempt in 0..3 {
             let next = if attempt == 0 { "neuer Versuch" } else { "Neuanmeldung des USB-Geraets" };
-            let text = match self.capture_once() {
+            let text = match self.capture_once(&options.console) {
                 Ok(text) => text,
                 Err(e) if attempt < 2 => {
                     eprintln!("{e}; {next}");
@@ -108,14 +109,16 @@ impl Esp32c6 {
         Err(format!("{last}; auch nach Neuanmeldung des USB-Geraets — Kabel neu stecken"))
     }
 
-    /// Ein Reset und ein Lesen mit harter Frist.
-    pub fn capture_once(&self) -> Result<String, String> {
+    /// Ein Reset und ein Lesen mit harter Frist; `console` geht waehrenddessen
+    /// an die Konsole des Boards.
+    pub fn capture_once(&self, console: &[ConsoleLine]) -> Result<String, String> {
         // Nach dem Flashen legt der USB-Serial-JTAG neu an; ein Handle von
         // davor liefert nichts. Darum kurz warten und je Versuch neu oeffnen.
         std::thread::sleep(Duration::from_millis(500));
         // USB staut selbst zurueck; XON/XOFF braucht es hier nicht.
         let flow = serialport::FlowControl::None;
-        capture(&self.port, BAUD, flow, TRACE, true, || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ()))
+        let reset = || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ());
+        capture(&self.port, BAUD, flow, TRACE, true, console, reset)
     }
 
     /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
@@ -126,13 +129,13 @@ impl Esp32c6 {
         self.download(elf)?;
         std::thread::sleep(Duration::from_millis(500));
         let reset = || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ());
-        capture(&self.port, BAUD, serialport::FlowControl::None, within, true, reset)
+        capture(&self.port, BAUD, serialport::FlowControl::None, within, true, &[], reset)
     }
 
     /// Liest, was das Board von sich aus schreibt, ohne es zurueckzusetzen —
     /// nach einem Neustart, den das Programm befiehlt (12.7).
     pub fn listen(&self, within: Duration) -> Result<String, String> {
-        capture(&self.port, BAUD, serialport::FlowControl::None, within, false, || Ok(()))
+        capture(&self.port, BAUD, serialport::FlowControl::None, within, false, &[], || Ok(()))
     }
 
     /// Wartet, bis der Port verschwindet: Im Tiefschlaf ist der
@@ -279,7 +282,7 @@ impl Board for Esp32c6 {
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
         self.download(elf)?;
-        self.capture(elf, options.ticks).and_then(|text| super::complete(text, options))
+        self.capture(elf, options).and_then(|text| super::complete(text, options))
     }
 }
 

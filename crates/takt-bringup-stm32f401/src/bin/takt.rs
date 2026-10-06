@@ -50,7 +50,7 @@ use takt_board_stm32f401::JobContext;
 use takt_board_stm32f401::{
     BAUD, Board, CORE_HZ, Iwdg, Led, Mpu, Telemetry, Tim2Tick, Wire, cycles, mpu, platform, tick,
 };
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock, Trace};
+use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock, Trace};
 #[cfg(not(feature = "rtos"))]
 use takt_rt_baremetal::{LogicalClock, Sleep};
 use takt_rt_core::{Clock, FakeNvm, NextRun, Persist, Policy, Profile, Runtime};
@@ -472,7 +472,9 @@ fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
 #[cfg(not(feature = "rtos"))]
 fn conduct(clock: impl Clock, protection: Mpu, program: app::Program<'static>) {
     let mut rt = runtime(clock, protection, Profile::BAREMETAL, program);
-    let stats = takt_rt_baremetal::run(&mut rt, no_journal());
+    // 8.4: Tunes vom Host kommen ueber die Gegenrichtung der Konsole.
+    let mut tunes = Console::new(takt_board_stm32f401::console_byte);
+    let stats = takt_rt_baremetal::run(&mut rt, no_journal(), Some(&mut tunes));
     conclude(&rt, &stats);
 }
 
@@ -724,17 +726,18 @@ async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, boundary: TaskBoundary) 
     let mut program = unsafe { program() };
     let mut boundary = Dispatching { boundary, dispatch: program.dispatch() };
     hand_over_jobs(&mut program);
+    let mut tunes = Console::new(takt_board_stm32f401::console_byte);
     if LOGICAL {
         // In logischer Zeit ist jede Grenze eine Periode (13.8); die
         // Aufgaben darunter rechnen wie im Betrieb.
         let now = core::cell::Cell::new(0);
         let mut rt = runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED, program);
         let mut logical = takt_rt_rtos::Logical::new(&mut boundary, &now, TICK_NS);
-        let stats = takt_rt_rtos::run(&mut rt, no_journal(), &mut logical).await;
+        let stats = takt_rt_rtos::run(&mut rt, no_journal(), Some(&mut tunes), &mut logical).await;
         conclude(&rt, &stats);
     } else {
         let mut rt = runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED, program);
-        let stats = takt_rt_rtos::run(&mut rt, no_journal(), &mut boundary).await;
+        let stats = takt_rt_rtos::run(&mut rt, no_journal(), Some(&mut tunes), &mut boundary).await;
         conclude(&rt, &stats);
     }
     loop {

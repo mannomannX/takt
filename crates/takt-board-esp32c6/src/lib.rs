@@ -73,7 +73,7 @@ pub use led::Ws2812;
 pub use nvm::FlashNvm;
 pub use pins::route_uart0;
 pub use tick::{SystimerTick, on_timer_interrupt};
-pub use uart::{Telemetry, UsbJtag, telemetry};
+pub use uart::{Telemetry, UsbJtag, console_byte, telemetry};
 pub use usb::reenumerate_if_requested;
 pub use watchdog::Mwdt;
 pub use wire::Wire;

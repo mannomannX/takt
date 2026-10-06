@@ -828,91 +828,210 @@ pub fn param_literal(p: &Program, index: usize) -> Option<String> {
     literal(p, assigned.unwrap_or(&p.params.get(index)?.default))
 }
 
-/// `takt_tune(a, param, value, len)`: ein Tunable aendert sich (8.4), fuer
-/// beide Rahmen. `value` ist die kanonische Byteform (5.9); angenommen wird
-/// nur ein `tunable param` mit passender Laenge, endlicher Zahl, bekannter
-/// Variante und Wert in seiner Range, wie `run.rs` im Interpreter — sonst
-/// bleibt der Wert, und die Rueckgabe ist 0 (`rejected`). Der Wert gilt ab
-/// dem naechsten Schritt; die Schleife ruft vor ihm (`Runtime::service_with`).
-pub fn tune(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
+/// Ein Tunable, wie der Rahmen es nimmt und in den Trace schreibt (8.4).
+struct Tunable<'a> {
+    /// Der Index in `Program::params`, der Parameter der Schleife.
+    index: usize,
+    name: &'a str,
+    /// Der C-Typ im Parameterspeicher und sein Versatz.
+    ct: &'static str,
+    offset: u64,
+    /// Die Laenge der kanonischen Byteform (5.9).
+    bytes: u64,
+    kind: TuneKind,
+}
+
+/// Was ein Tunable ist: wie der Rahmen den Wert prueft und schreibt.
+enum TuneKind {
+    Bool,
+    /// Eine Ganzzahl mit ihrer Range; `wide` ist ein `u64` jenseits von `i64`.
+    Int {
+        check: String,
+        unit: Option<String>,
+        wide: bool,
+    },
+    /// Eine endliche Zahl in ihrer Range.
+    Float {
+        check: String,
+        unit: Option<String>,
+    },
+    Duration {
+        check: String,
+    },
+    /// Ein Enum ohne Felder: die Diskriminante als `i64` (5.9).
+    Enum(Vec<(i64, String)>),
+}
+
+/// Die Tunables des Programms, die der Rahmen nehmen kann.
+fn tunables<'a>(p: &'a Program, layout: &Layout) -> Vec<Tunable<'a>> {
     use takt_mir::types::{Const, FloatWidth, Type};
     let bound = |c: &Const| match c {
         Const::Int(i) | Const::Duration(i) => format!("{i}LL"),
         Const::Float(f) => format!("{f:?}"),
         Const::Bool(b) => u8::from(*b).to_string(),
     };
-    let _ = writeln!(
-        s,
-        "static int32_t takt_tune(struct {x}_arena *a, uint32_t param, const unsigned char *v, int32_t len) {{"
-    );
-    let _ = writeln!(s, "    unsigned long long raw = 0;");
-    let _ = writeln!(s, "    if (len < 1 || len > 8) return 0;");
-    let _ = writeln!(s, "    for (int i = 0; i < len; i++) raw |= (unsigned long long)v[i] << (8 * i);");
-    let _ = writeln!(s, "    switch (param) {{");
-    for (i, param) in p.params.iter().enumerate() {
+    let range = |r: &Option<takt_mir::types::Range>| {
+        r.as_ref().map_or_else(|| "1".into(), |r| format!("x >= {} && x <= {}", bound(&r.lo), bound(&r.hi)))
+    };
+    let unit = |u: &Option<takt_mir::UnitId>| u.map(|u| p.units[u.index()].name.clone());
+    let mut out = Vec::new();
+    for (index, param) in p.params.iter().enumerate() {
         let Some(slot) = layout.parameters.iter().find(|sl| sl.name == param.name).filter(|_| param.tunable) else {
             continue;
         };
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let (bytes, check) = match p.types.list.get(param.ty.index()) {
-            Some(Type::Bool) => (1, "x <= 1".to_string()),
-            Some(Type::Int { width, range, .. }) => (
+        let (bytes, kind) = match p.types.list.get(param.ty.index()) {
+            Some(Type::Bool) => (1, TuneKind::Bool),
+            Some(Type::Int { width, range: r, unit: u }) => (
                 u64::from(width.bits() / 8),
-                range
-                    .as_ref()
-                    .map_or_else(|| "1".into(), |r| format!("x >= {} && x <= {}", bound(&r.lo), bound(&r.hi))),
+                TuneKind::Int { check: range(r), unit: unit(u), wide: !width.signed() && width.bits() == 64 },
             ),
-            Some(Type::Float { width, range, .. }) => {
-                let finite = "x == x && x - x == 0".to_string();
-                let check = match range {
+            Some(Type::Float { width, range: r, unit: u }) => {
+                let finite = "x == x && x - x == 0";
+                let check = match r {
                     Some(r) => format!("{finite} && x >= {} && x <= {}", bound(&r.lo), bound(&r.hi)),
-                    None => finite,
+                    None => finite.to_string(),
                 };
-                (if *width == FloatWidth::F32 { 4 } else { 8 }, check)
+                (if *width == FloatWidth::F32 { 4 } else { 8 }, TuneKind::Float { check, unit: unit(u) })
             }
-            Some(Type::Duration { range }) => (
-                8,
-                range
-                    .as_ref()
-                    .map_or_else(|| "1".into(), |r| format!("x >= {} && x <= {}", bound(&r.lo), bound(&r.hi))),
-            ),
-            // Eine Variante ohne Felder: die Diskriminante als `i64` (5.9).
+            Some(Type::Duration { range: r }) => (8, TuneKind::Duration { check: range(r) }),
             Some(Type::Enum(e)) => {
                 let Some(def) = p.enums.get(e.index()).filter(|d| d.variants.iter().all(|v| v.fields.is_empty()))
                 else {
                     continue;
                 };
-                let known: Vec<String> = def.variants.iter().map(|v| format!("d == {}LL", v.discriminant)).collect();
-                let _ = writeln!(s, "    case {i}: {{ /* {} */", param.name);
+                (8, TuneKind::Enum(def.variants.iter().map(|v| (v.discriminant, v.name.clone())).collect()))
+            }
+            _ => continue,
+        };
+        out.push(Tunable { index, name: &param.name, ct, offset: slot.offset, bytes, kind });
+    }
+    out
+}
+
+/// Der C-Typ ohne Vorzeichen, in dem `bytes` kanonische Bytes stehen.
+fn unsigned_of(bytes: u64) -> &'static str {
+    match bytes {
+        1 => "uint8_t",
+        2 => "uint16_t",
+        4 => "uint32_t",
+        _ => "uint64_t",
+    }
+}
+
+/// `takt_tune_value(a, param, value, len)`: ein Tunable aendert sich (8.4),
+/// fuer beide Rahmen. `value` ist die kanonische Byteform (5.9); angenommen
+/// wird nur ein `tunable param` mit passender Laenge, endlicher Zahl,
+/// bekannter Variante und Wert in seiner Range, wie `run.rs` im Interpreter
+/// — sonst bleibt der Wert, und die Rueckgabe ist 0 (`rejected`). Der Wert
+/// gilt ab dem naechsten Schritt; die Schleife ruft vor ihm
+/// (`Runtime::service_with`).
+pub fn tune(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
+    let _ = writeln!(
+        s,
+        "static int32_t takt_tune_value(struct {x}_arena *a, uint32_t param, const unsigned char *v, int32_t len) {{"
+    );
+    let _ = writeln!(s, "    unsigned long long raw = 0;");
+    let _ = writeln!(s, "    if (len < 1 || len > 8) return 0;");
+    let _ = writeln!(s, "    for (int i = 0; i < len; i++) raw |= (unsigned long long)v[i] << (8 * i);");
+    let _ = writeln!(s, "    switch (param) {{");
+    for t in tunables(p, layout) {
+        let (ct, off) = (t.ct, t.offset);
+        let _ = writeln!(s, "    case {}: {{ /* {} */", t.index, t.name);
+        let check = match &t.kind {
+            TuneKind::Enum(variants) => {
+                let known: Vec<String> = variants.iter().map(|(d, _)| format!("d == {d}LL")).collect();
                 let _ = writeln!(s, "        long long d;");
                 let _ = writeln!(s, "        if (len != 8) return 0;");
                 let _ = writeln!(s, "        memcpy(&d, &raw, 8);");
                 let _ = writeln!(s, "        if (!({})) return 0;", known.join(" || "));
-                let _ = writeln!(s, "        *({ct} *)(a->params + {}) = ({ct})d;", slot.offset);
+                let _ = writeln!(s, "        *({ct} *)(a->params + {off}) = ({ct})d;");
                 let _ = writeln!(s, "        return 1;");
                 let _ = writeln!(s, "    }}");
                 continue;
             }
-            _ => continue,
+            TuneKind::Bool => "x <= 1",
+            TuneKind::Int { check, .. } | TuneKind::Float { check, .. } | TuneKind::Duration { check } => check,
         };
-        let unsigned = match bytes {
-            1 => "uint8_t",
-            2 => "uint16_t",
-            4 => "uint32_t",
-            _ => "uint64_t",
-        };
-        let _ = writeln!(s, "    case {i}: {{ /* {} */", param.name);
+        let (unsigned, bytes) = (unsigned_of(t.bytes), t.bytes);
         let _ = writeln!(s, "        {unsigned} u = ({unsigned})raw;");
         let _ = writeln!(s, "        {ct} x;");
         let _ = writeln!(s, "        if (len != {bytes}) return 0;");
         let _ = writeln!(s, "        memcpy(&x, &u, {bytes});");
         let _ = writeln!(s, "        if (!({check})) return 0;");
-        let _ = writeln!(s, "        *({ct} *)(a->params + {}) = x;", slot.offset);
+        let _ = writeln!(s, "        *({ct} *)(a->params + {off}) = x;");
         let _ = writeln!(s, "        return 1;");
         let _ = writeln!(s, "    }}");
     }
     let _ = writeln!(s, "    default: (void)a; (void)raw; return 0;");
     let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+}
+
+/// `takt_tune_trace(k, param, value, len, accepted)`: die Zeile `t=<k> tune
+/// <name> <wert>` des Golden-Trace (`grammar/trace.md`), eine verworfene
+/// mit ` rejected` — in der Form, die der Interpreter als Stimulus liest
+/// (12.5). Ein Wert, der keinem Tunable gehoert oder nicht seine Laenge
+/// hat, ist keine Tune-Zeile und steht nicht im Trace. Jedes Stueck endet
+/// wie `takt_board_trace_i64` mit einem Leerzeichen; `DURATION_C` steht davor.
+pub fn tune_trace(s: &mut String, p: &Program, layout: &Layout) {
+    let _ = writeln!(
+        s,
+        "static void takt_tune_trace(int64_t k, uint32_t param, const unsigned char *v, int32_t len, int32_t accepted) {{"
+    );
+    let _ = writeln!(s, "    unsigned long long raw = 0;");
+    let _ = writeln!(s, "    if (len < 1 || len > 8) return;");
+    let _ = writeln!(s, "    for (int i = 0; i < len; i++) raw |= (unsigned long long)v[i] << (8 * i);");
+    let _ = writeln!(s, "    switch (param) {{");
+    for t in tunables(p, layout) {
+        let (ct, bytes) = (t.ct, t.bytes);
+        let head =
+            format!("takt_board_trace(\"t=\"); takt_board_trace_i64(k); takt_board_trace(\"tune {} \");", t.name);
+        let _ = writeln!(s, "    case {}: {{", t.index);
+        if let TuneKind::Enum(variants) = &t.kind {
+            let _ = writeln!(s, "        long long d;");
+            let _ = writeln!(s, "        if (len != 8) return;");
+            let _ = writeln!(s, "        memcpy(&d, &raw, 8);");
+            let _ = writeln!(s, "        {head}");
+            let _ = writeln!(s, "        switch (d) {{");
+            for (d, name) in variants {
+                let _ = writeln!(s, "        case {d}LL: takt_board_trace(\"{name} \"); break;");
+            }
+            let _ = writeln!(s, "        default: takt_board_trace_i64(d); break;");
+            let _ = writeln!(s, "        }}");
+            let _ = writeln!(s, "        break;");
+            let _ = writeln!(s, "    }}");
+            continue;
+        }
+        let unsigned = unsigned_of(bytes);
+        let _ = writeln!(s, "        {unsigned} u = ({unsigned})raw;");
+        let _ = writeln!(s, "        {ct} x;");
+        let _ = writeln!(s, "        if (len != {bytes}) return;");
+        let _ = writeln!(s, "        memcpy(&x, &u, {bytes});");
+        let _ = writeln!(s, "        {head}");
+        let (value, unit) = match &t.kind {
+            TuneKind::Bool => {
+                ("if (x <= 1) takt_board_trace(x ? \"true \" : \"false \"); else takt_board_trace_i64(x);", None)
+            }
+            TuneKind::Int { unit, wide: true, .. } => ("takt_board_trace_u64((unsigned long long)x);", unit.as_deref()),
+            TuneKind::Int { unit, .. } => ("takt_board_trace_i64((long long)x);", unit.as_deref()),
+            TuneKind::Float { unit, .. } => ("takt_board_trace_f64((double)x);", unit.as_deref()),
+            TuneKind::Duration { .. } => (
+                "takt_board_trace_i64(takt_dur_value(x)); takt_board_trace(takt_dur_unit(x)); takt_board_trace(\" \");",
+                None,
+            ),
+            TuneKind::Enum(_) => continue,
+        };
+        let _ = writeln!(s, "        {value}");
+        if let Some(unit) = unit {
+            let _ = writeln!(s, "        takt_board_trace(\"{unit} \");");
+        }
+        let _ = writeln!(s, "        break;");
+        let _ = writeln!(s, "    }}");
+    }
+    let _ = writeln!(s, "    default: (void)k; (void)raw; return;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    takt_board_trace(accepted ? \"\\n\" : \"rejected\\n\");");
     let _ = writeln!(s, "}}");
 }
 
@@ -957,11 +1076,28 @@ pub fn age_offset(p: &Program, name: &str) -> Option<u64> {
 }
 
 /// Die Abtastungen altern um einen Tick; ueber `max_age` werden sie
-/// `Stale` (3.5), wie `age_inputs` im Interpreter — vor der Lieferung
-/// des Ticks, die das Alter zuruecksetzt.
+/// `Stale` (3.5), wie `age_inputs` im Interpreter — vor der Lieferung des
+/// Ticks, die das Alter zuruecksetzt.
 pub fn aging(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
+    age_by(s, p, layout, indent, "1", &[]);
+}
+
+/// Die Abtastungen altern ueber `n` geschlafene Ticks wie in leeren
+/// Schritten (9.9, `Run::skip`): Ein Eingang ohne Lieferung ist danach so
+/// alt, wie er ohne Schlaf waere. Ein Eingang, den ein `sim`-Output speist,
+/// altert nicht: Der Commit jedes geschlafenen Ticks haette ihn frisch
+/// gestellt (8.3).
+pub fn aging_slept(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
+    age_by(s, p, layout, indent, "n", &sim_fed_inputs(p));
+}
+
+/// Das Altern um `ticks` Ticks, einen C-Ausdruck, ohne die Kanaele in `fed`.
+fn age_by(s: &mut String, p: &Program, layout: &Layout, indent: &str, ticks: &str, fed: &[usize]) {
     let tick = p.config.tick;
     for slot in &layout.inputs {
+        if p.channels.iter().position(|c| c.name == slot.name).is_some_and(|i| fed.contains(&i)) {
+            continue;
+        }
         let (Some(q), Some(age), Some(reason)) = (
             quality_offset(p, &slot.name),
             age_offset(p, &slot.name),
@@ -977,9 +1113,10 @@ pub fn aging(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
         };
         let _ = writeln!(
             s,
-            "{indent}{{ long long *at = (long long *)(a->image + {age}); *at = *at > {}LL ? {}LL : *at + {tick}LL;{stale} }}",
-            i64::MAX - tick,
-            i64::MAX
+            "{indent}{{ long long *at = (long long *)(a->image + {age}); long long d = ({ticks}) > {}LL ? {max}LL : \
+             ({ticks}) * {tick}LL; *at = *at > {max}LL - d ? {max}LL : *at + d;{stale} }}",
+            i64::MAX / tick.max(1),
+            max = i64::MAX
         );
     }
 }

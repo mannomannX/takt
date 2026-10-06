@@ -67,7 +67,7 @@ fn one_call_delivers_library_header_module_and_manifest() {
     for line in [
         "# takt-manifest 1",
         "prefix = valve",
-        "abi = 2",
+        "abi = 3",
         "protect = none",
         &format!("triple = {}", host_triple()),
         "form = logical",
@@ -112,13 +112,13 @@ fn one_call_delivers_library_header_module_and_manifest() {
     let text = std::fs::read_to_string(&header).expect("Kopf");
     assert!(text.contains("#define VALVE_TICK_NS 10000000LL"), "{text}");
 
-    assert!(module.contains("ffi::valve_abi_2"), "die Huelle liest das ABI-Symbol nicht");
+    assert!(module.contains("ffi::valve_abi_3"), "die Huelle liest das ABI-Symbol nicht");
     let nm = clang.with_file_name(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });
     let symbols = Command::new(&nm).arg("--defined-only").arg(&lib).output().expect("llvm-nm");
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     let abi: Vec<&str> =
         symbols.lines().filter_map(|l| l.split_whitespace().last()).filter(|s| s.contains("_abi_")).collect();
-    assert_eq!(abi, ["valve_abi_2"], "{symbols}");
+    assert_eq!(abi, ["valve_abi_3"], "{symbols}");
 }
 
 /// **Die Float-ABI des Tripels gehoert zur Zielklasse** (12.11, 2.9): Ein
@@ -309,7 +309,7 @@ fn every_target_class_gets_a_library_with_its_entries_and_arena() {
             "valve_commit",
             "valve_deadline",
             "valve_output_timing",
-            "valve_abi_2",
+            "valve_abi_3",
             "valve_arena_bytes",
         ] {
             assert!(defined.contains(&entry), "{triple}: `{entry}` fehlt:\n{symbols}");

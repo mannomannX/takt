@@ -17,7 +17,7 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
 use takt_board_esp32c6::{Button, CORE_HZ, FlashNvm, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0};
-use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock, Trace};
+use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock, Trace};
 use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -323,7 +323,9 @@ fn conduct(program: app::Program<'static>, clock: impl Clock, persist: &mut Opti
     let watchdog = (limit == 0).then(|| Mwdt::arm(WATCHDOG_NS));
     let trace = Trace::new(Cadence::of(limit, TRACE_EVERY), TICK_NS, uart);
     let mut rt = Runtime::new(program, clock, watchdog, trace, Profile::BAREMETAL, TICK_NS, policy);
-    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut());
+    // 8.4: Tunes vom Host kommen ueber die Gegenrichtung der Konsole.
+    let mut tunes = Console::new(takt_board_esp32c6::console_byte);
+    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Some(&mut tunes));
     if rt.watchdog.is_some() {
         Mwdt::arm(END_OF_RUN_NS);
     }

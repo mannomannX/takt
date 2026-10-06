@@ -290,6 +290,27 @@ fn a_schedule_inside_the_guard_is_a_timing_fault() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
+/// **Ein Tune von der Konsole gilt ab seiner Grenze und weckt das Board**
+/// (8.4, 9.9, FB-389): in Echtzeit, der Host schickt waehrend des Schlafs.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_tune_from_the_console_wakes_the_board() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_tune_from_the_console_wakes_the_board(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Eine Wake-Quelle weckt an der Grenze nach ihrem Ereignis** (9.9,
+/// FB-388): Das Pruefgeraet hebt einen Pegel und laeutet eine Klingel, die
+/// das Programm nicht vorher kennt.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_wake_source_ends_the_sleep() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_wake_source_ends_the_sleep(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
 /// M10 Schritt 29d): das Pruefgeraet liefert Kanaele ohne Bindung.
 #[test]

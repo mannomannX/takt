@@ -28,6 +28,7 @@ pub mod mpu;
 pub mod platform;
 pub mod pll;
 pub mod uart;
+pub mod wake_probe;
 pub mod watchdog;
 pub mod wire;
 

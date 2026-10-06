@@ -169,7 +169,9 @@ fn entry_prototypes(x: &Prefix) -> String {
         format!("uint8_t {x}_idle({a});"),
         format!("int64_t {x}_deadline({a});"),
         format!("void {x}_advance({a}, int64_t n);"),
-        format!("int32_t {x}_tune({a}, uint32_t param, const void *value, int32_t len);"),
+        format!("int32_t {x}_tune({a}, int64_t k, uint32_t param, const void *value, int32_t len);"),
+        format!("uint8_t {x}_woken({a}, int64_t k);"),
+        format!("uint8_t {x}_wake_sources(void);"),
         format!("int32_t {x}_persist_snapshot({a}, void *out, int32_t cap);"),
         format!("int32_t {x}_persist_restore({a}, const void *in, int32_t len);"),
         format!("void {x}_dump({a}, int32_t all);"),
@@ -893,6 +895,104 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
 
     sleep(s, p.config.tick, layout, p, driven, x);
     platform(s, p, layout, x);
+    wake(t, p, layout, x);
+}
+
+/// `P_woken` und `P_wake_sources`: die Weckereignisse im Schlaf (5.10, 9.9).
+///
+/// Der Kern fragt an jeder geschlafenen Grenze, ob der Schritt dort etwas
+/// anderes saehe als der Tick vor dem Schlaf. Der Rahmen tastet dafuer die
+/// Wake-Quellen ueber ihre Treiber ab, wie `takt_sample` es an dieser
+/// Grenze taete: ein anliegendes Wake-Kommando; ein Skalar, dessen Treiber
+/// anders liefert als im letzten Tick (geliefert oder nicht, Wert,
+/// Qualitaet) oder dessen Abtastung ohne Lieferung veraltet (3.5); ein
+/// Strom, dessen Treiber ein Element bringt. Das Element haelt der Rahmen
+/// auf dem ersten Platz seines Stroms vor, und der Tick an dieser Grenze
+/// liefert es zuerst. Eine Uhr ohne diese Frage weckte erst an der Frist,
+/// und ein Taster wirkte Stunden spaeter (FB-388).
+fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
+    let tick = p.config.tick;
+    let scalars: Vec<BoundScalar> = bound_scalars(p, layout, x).into_iter().filter(|b| b.wake.is_some()).collect();
+    let streams: Vec<BoundStream> = bound_streams(p, x).into_iter().filter(|b| b.wake.is_some()).collect();
+    let commands: Vec<&crate::layout::Slot> =
+        layout.commands.iter().filter(|slot| p.commands.iter().any(|c| c.name == slot.name && c.wake)).collect();
+    if !scalars.is_empty() {
+        let n = scalars.len();
+        let _ = writeln!(t.fields, "    unsigned char wake_v[{n}][8];");
+        let _ = writeln!(t.fields, "    uint8_t wake_q[{n}], wake_got[{n}];");
+    }
+    if !streams.is_empty() {
+        let n = streams.len();
+        let _ = writeln!(t.fields, "    _Bool wake_held[{n}];");
+        let _ = writeln!(t.fields, "    int32_t wake_len[{n}];");
+        let _ = writeln!(t.fields, "    int64_t wake_t[{n}], wake_seq[{n}];");
+    }
+    let s = &mut t.code;
+    let any = u8::from(!scalars.is_empty() || !streams.is_empty() || !commands.is_empty());
+    let _ = writeln!(s, "/* Weckereignisse im Schlaf (9.9). */");
+    let _ = writeln!(s, "uint8_t {x}_wake_sources(void) {{ return {any}u; }}");
+    let _ = writeln!(s, "static uint8_t takt_woken(struct {x}_arena *a, int64_t k) {{");
+    let _ = writeln!(s, "    int64_t now = k * {tick}LL;");
+    for slot in &commands {
+        let _ = writeln!(s, "    if (a->image[{}]) return 1; /* {} */", slot.offset, slot.name);
+    }
+    for b in &scalars {
+        let w = b.wake.unwrap_or(0);
+        let _ = writeln!(s, "    {{ /* {} */", b.name);
+        let _ = writeln!(s, "        {} v = 0;", b.ct);
+        let _ = writeln!(s, "        uint8_t q = 0;");
+        let _ = writeln!(s, "        int64_t t = now;");
+        let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &t) ? 1 : 0;", b.function);
+        let _ = writeln!(s, "        if (got != a->wake_got[{w}]) return 1;");
+        let _ =
+            writeln!(s, "        if (got && (q != a->wake_q[{w}] || memcmp(&v, a->wake_v[{w}], sizeof v))) return 1;");
+        let name = &p.channels[b.channel].name;
+        let aged = (
+            p.channels[b.channel].attrs.max_age,
+            crate::parts::age_offset(p, name),
+            crate::parts::quality_offset(p, name),
+        );
+        if let (Some(max), Some(age), Some(q)) = aged {
+            // Wie `aging` an dieser Grenze: alle Ticks seit dem letzten.
+            let _ = writeln!(s, "        if (!got && a->image[{q}] != 2 && a->image[{q}] != 3) {{");
+            let _ = writeln!(s, "            long long at = *(long long *)(a->image + {age});");
+            let _ = writeln!(
+                s,
+                "            long long d = k - a->tick > {}LL ? {max}LL : (k - a->tick) * {tick}LL;",
+                i64::MAX / tick.max(1),
+                max = i64::MAX
+            );
+            let _ = writeln!(s, "            if (at > {}LL - d || at + d > {max}LL) return 1;", i64::MAX);
+            let _ = writeln!(s, "        }}");
+        }
+        let _ = writeln!(s, "    }}");
+    }
+    for b in &streams {
+        let w = b.wake.unwrap_or(0);
+        let _ = writeln!(s, "    {{ /* {} */", b.name);
+        let _ = writeln!(s, "        if (a->wake_held[{w}]) return 1;");
+        let _ = writeln!(s, "        long long last = a->edge_tracks[{}].last_seq;", b.channel);
+        let _ = writeln!(s, "        int64_t t = now;");
+        let _ = writeln!(s, "        int64_t seq = last == (-9223372036854775807LL - 1) ? 0 : last + 1;");
+        let _ = writeln!(s, "        int32_t len = 0;");
+        let _ = writeln!(
+            s,
+            "        if ({}(a->user, now, a->edge_pool + {}, {}, &len, &t, &seq)) {{",
+            b.function, b.offset, b.cap
+        );
+        let _ = writeln!(
+            s,
+            "            a->wake_held[{w}] = 1; a->wake_len[{w}] = len; a->wake_t[{w}] = t; a->wake_seq[{w}] = seq;"
+        );
+        let _ = writeln!(s, "            return 1;");
+        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "    }}");
+    }
+    let _ = writeln!(s, "    (void)a; (void)now;");
+    let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "}}");
+    // Ein Eintritt in einen laufenden weckt: Frueher zu wecken ist nie falsch.
+    locked(s, x, "uint8_t", "woken", "int64_t k", "k", "1");
 }
 
 /// Die Nummer, mit der `P_next_run` ein Ende meldet: die von
@@ -1012,23 +1112,40 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
     // Die Maschinen zaehlen ihre Aktivierungen in den Ticks `tick + 1 ..
     // tick + n` aus dem Tick des Rahmens (`P_now`, FB-429); er rueckt darum
     // erst nach ihnen vor.
+    // Die Abtastungen altern in den geschlafenen Ticks wie in leeren
+    // Schritten (`Run::skip` im Interpreter): Ein Input ohne Lieferung ist
+    // danach so alt, wie er ohne Schlaf waere.
     let _ = writeln!(s, "static void takt_advance(struct {x}_arena *a, int64_t n) {{");
     for m in driven {
         let _ = writeln!(s, "    {x}_{0}_advance(a, n);", m.name);
     }
+    crate::parts::aging_slept(s, p, layout, "    ");
     let _ = writeln!(s, "    a->tick += n;");
     let _ = writeln!(s, "}}");
     locked(s, x, "void", "advance", "int64_t n", "n", "");
 
-    // 8.4: die Tunables ueber den Weg der Schleife (`Program::tune`).
+    // 8.4: die Tunables ueber den Weg der Schleife (`Program::tune`), mit
+    // ihrer Zeile im Golden-Trace an der Grenze von Tick `k`.
     crate::parts::tune(s, p, layout, x);
+    let _ = writeln!(
+        s,
+        "static void takt_tune_trace(int64_t k, uint32_t param, const unsigned char *v, int32_t len, int32_t accepted);"
+    );
+    let _ = writeln!(
+        s,
+        "static int32_t takt_tune(struct {x}_arena *a, int64_t k, uint32_t param, const unsigned char *v, int32_t len) {{"
+    );
+    let _ = writeln!(s, "    int32_t r = takt_tune_value(a, param, v, len);");
+    let _ = writeln!(s, "    takt_tune_trace(k, param, v, len, r);");
+    let _ = writeln!(s, "    return r;");
+    let _ = writeln!(s, "}}");
     locked(
         s,
         x,
         "int32_t",
         "tune",
-        "uint32_t param, const void *value, int32_t len",
-        "param, (const unsigned char *)value, len",
+        "int64_t k, uint32_t param, const void *value, int32_t len",
+        "k, param, (const unsigned char *)value, len",
         "0",
     );
 
@@ -1079,6 +1196,11 @@ fn telemetry(
 ) {
     if diagnostics == takt_llvm::Diagnostics::None {
         let _ = writeln!(t.code, "void {x}_dump(struct {x}_arena *a, int32_t all) {{ (void)a; (void)all; }}\n");
+        let _ = writeln!(
+            t.code,
+            "static void takt_tune_trace(int64_t k, uint32_t param, const unsigned char *v, int32_t len, \
+             int32_t accepted) {{ (void)k; (void)param; (void)v; (void)len; (void)accepted; }}\n"
+        );
         program_counters(&mut t.code, p, driven, x);
         sample(t, p, layout, x);
         commit(&mut t.code, p, layout, x);
@@ -1089,6 +1211,7 @@ fn telemetry(
     let s = &mut t.code;
     let _ = writeln!(s, "/* Die Ausgaenge als Trace-Zeilen (grammar/trace.md); ohne `all` nur die geaenderten. */");
     let _ = writeln!(s, "{}", crate::parts::DURATION_C);
+    crate::parts::tune_trace(s, p, layout);
     let _ = writeln!(s, "struct takt_variant;");
     let _ = writeln!(
         s,
@@ -1509,21 +1632,46 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "        {} v = 0;", b.ct);
         let _ = writeln!(s, "        uint8_t q = 0;");
         let _ = writeln!(s, "        int64_t t = now;");
-        let _ = writeln!(s, "        if ({}(a->user, now, &v, &q, &t))", b.function);
+        let _ = writeln!(s, "        _Bool got = {}(a->user, now, &v, &q, &t);", b.function);
         // `Bad` kommt ohne Wert (12.6 Zeile 2); sein Grund ist der Treiber.
         let _ = writeln!(
             s,
-            "            takt_edge_reading(a, {}, &v, (int)sizeof v, {}, q, q == 3 ? 3 : 0, q != 3, t, 0LL);",
+            "        if (got) takt_edge_reading(a, {}, &v, (int)sizeof v, {}, q, q == 3 ? 3 : 0, q != 3, t, 0LL);",
             b.channel, b.number
         );
+        // 9.9: Was dieser Tick las, vergleicht `P_woken` im Schlaf.
+        if let Some(w) = b.wake {
+            let _ = writeln!(
+                s,
+                "        a->wake_got[{w}] = got; a->wake_q[{w}] = q; memcpy(a->wake_v[{w}], &v, sizeof v);"
+            );
+        }
         let _ = writeln!(s, "    }}");
     }
-    let mut off = 0u64;
     for b in &streams {
+        let off = b.offset;
         let _ = writeln!(s, "    {{ /* {} */", b.name);
         let _ = writeln!(s, "        long long last = a->edge_tracks[{}].last_seq;", b.channel);
         let _ = writeln!(s, "        long long next = last == (-9223372036854775807LL - 1) ? 0 : last + 1;");
-        let _ = writeln!(s, "        for (int i = 0; i < {}; i++) {{", b.polls);
+        let _ = writeln!(s, "        int i = 0;");
+        // 9.9: Das Element, das `P_woken` an dieser Grenze las, kommt zuerst;
+        // es steht schon auf dem ersten Platz.
+        if let Some(w) = b.wake {
+            let _ = writeln!(s, "        if (a->wake_held[{w}]) {{");
+            let _ = writeln!(s, "            int32_t len = a->wake_len[{w}];");
+            let _ = writeln!(s, "            a->wake_held[{w}] = 0;");
+            let _ = writeln!(s, "            if (len < 0) len = 0;");
+            let _ = writeln!(s, "            if (len > {0}) len = {0};", b.keep);
+            let _ = writeln!(s, "            next = a->wake_seq[{w}] + 1;");
+            let _ = writeln!(
+                s,
+                "            takt_edge_element(a, {}, a->edge_pool + {off}, len, a->wake_t[{w}], a->wake_seq[{w}]);",
+                b.channel
+            );
+            let _ = writeln!(s, "            i = 1;");
+            let _ = writeln!(s, "        }}");
+        }
+        let _ = writeln!(s, "        for (; i < {}; i++) {{", b.polls);
         let _ = writeln!(s, "            unsigned char *buf = a->edge_pool + {off} + i * {};", b.cap);
         let _ = writeln!(s, "            int32_t len = 0;");
         let _ = writeln!(s, "            int64_t t = now, seq = next;");
@@ -1534,7 +1682,6 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "            takt_edge_element(a, {}, buf, len, t, seq);", b.channel);
         let _ = writeln!(s, "        }}");
         let _ = writeln!(s, "    }}");
-        off += u64::from(b.polls) * u64::from(b.cap);
     }
     // 8.8, FB-124: `tx.idle` zu Tickbeginn — der eigene Puffer leer
     // (`tx_busy`, beim Commit gesetzt) und der Sender fertig nach seinem
@@ -1713,6 +1860,8 @@ struct BoundScalar {
     ct: &'static str,
     /// Art, `as_i64` und `as_f64` des Werts `v` fuer den Rand.
     number: String,
+    /// Der Platz unter den Wake-Quellen (5.10), wenn der Kanal eine ist.
+    wake: Option<usize>,
 }
 
 /// Die an Hardware gebundenen Skalare, ohne die, die ein `sim`-Output
@@ -1720,7 +1869,7 @@ struct BoundScalar {
 fn bound_scalars(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundScalar> {
     use takt_mir::types::Type;
     let fed = crate::parts::sim_fed_inputs(p);
-    layout
+    let mut out: Vec<BoundScalar> = layout
         .inputs
         .iter()
         .filter_map(|slot| {
@@ -1738,9 +1887,22 @@ fn bound_scalars(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundScalar> {
                 Type::Float { .. } => "2, 0LL, (double)v".to_string(),
                 _ => "0, 0LL, 0.0".to_string(),
             };
-            Some(BoundScalar { name: slot.name.clone(), channel, function, ct, number })
+            Some(BoundScalar { name: slot.name.clone(), channel, function, ct, number, wake: None })
         })
-        .collect()
+        .collect();
+    number_wake(p, out.iter_mut().map(|b| (b.channel, &mut b.wake)));
+    out
+}
+
+/// Numeriert die Wake-Quellen unter `bound` in ihrer Reihenfolge.
+fn number_wake<'a>(p: &Program, bound: impl Iterator<Item = (usize, &'a mut Option<usize>)>) {
+    let mut n = 0;
+    for (channel, wake) in bound {
+        if p.channels[channel].attrs.wake {
+            *wake = Some(n);
+            n += 1;
+        }
+    }
 }
 
 /// Ein Eingabestrom, dessen Elemente ein Treiber des Boards liefert.
@@ -1758,13 +1920,18 @@ struct BoundStream {
     keep: u32,
     /// `MAXPT + 1`: so oft fragt der Rahmen je Tick.
     polls: u32,
+    /// Der Versatz seiner Plaetze in `edge_pool`.
+    offset: u64,
+    /// Der Platz unter den Wake-Quellen (5.10), wenn der Strom eine ist.
+    wake: Option<usize>,
 }
 
 /// Die an Hardware gebundenen Eingabestroeme, ohne die gekoppelten (8.3).
 fn bound_streams(p: &Program, x: &Prefix) -> Vec<BoundStream> {
     use takt_mir::program::{Binding, Direction};
     use takt_mir::types::Type;
-    p.channels
+    let mut out: Vec<BoundStream> = p
+        .channels
         .iter()
         .enumerate()
         .filter_map(|(channel, c)| {
@@ -1784,9 +1951,18 @@ fn bound_streams(p: &Program, x: &Prefix) -> Vec<BoundStream> {
                 cap: n.saturating_add(1),
                 keep: if text { n } else { n.saturating_add(1) },
                 polls: takt_hal::edge::maxpt_of(c, p.config.tick).unwrap_or(1).saturating_add(1),
+                offset: 0,
+                wake: None,
             })
         })
-        .collect()
+        .collect();
+    let mut offset = 0u64;
+    for b in &mut out {
+        b.offset = offset;
+        offset += u64::from(b.polls) * u64::from(b.cap);
+    }
+    number_wake(p, out.iter_mut().map(|b| (b.channel, &mut b.wake)));
+    out
 }
 
 /// Wie viele Lieferungen ein Tick hoechstens bringt: je Skalar eine, je

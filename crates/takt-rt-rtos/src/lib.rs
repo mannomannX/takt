@@ -25,7 +25,7 @@ use core::cell::Cell;
 use core::future::Future;
 
 use takt_rt_baremetal::{Port, Stats, Telemetry, Trace};
-use takt_rt_core::{Clock, Nvm, Persist, Program, Runtime, Watchdog};
+use takt_rt_core::{Clock, Nvm, Persist, Program, Runtime, Tunables, Watchdog};
 
 /// Die Benachrichtigung je Tickgrenze, die die Timer-ISR der Takt-Aufgabe
 /// gibt.
@@ -91,7 +91,9 @@ impl Clock for LogicalTime<'_> {
 /// Die Takt-Aufgabe (12.8, 12.11): Am Start und auf jede gemeldete Grenze
 /// rechnet der Kern, was faellig ist, und bestaetigt im Schlaf den Watchdog;
 /// bis zur Grenze der Senke oder bis das Programm seinen Lauf beendet
-/// (12.7). An der Grenze schreibt das Journal synchron.
+/// (12.7). An der Grenze schreibt das Journal synchron. Die Tunables (8.4)
+/// gehen vor dem Schritt ihrer Grenze in das Programm, im Schlaf wecken sie
+/// (9.9).
 ///
 /// Die erste Frist ist der Start (`Runtime::new`): Tick 0 rechnet sofort,
 /// nicht erst an der ersten Grenze des Timers — sonst begaenne er eine
@@ -99,6 +101,7 @@ impl Clock for LogicalTime<'_> {
 pub async fn run<G, C, W, F, N, P, B, const R: usize>(
     rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
     mut persist: Option<&mut Persist<'_, N>>,
+    mut tunables: Option<&mut dyn Tunables>,
     boundary: &mut B,
 ) -> Stats
 where
@@ -111,11 +114,15 @@ where
     B: Boundary,
 {
     let limit = rt.sink.limit();
+    if limit != 0 {
+        rt.end_at(limit);
+    }
     loop {
-        match persist.as_deref_mut() {
-            Some(p) => rt.service_persisting(p),
-            None => rt.service(),
+        let source: Option<&mut dyn Tunables> = match tunables.as_mut() {
+            Some(t) => Some(&mut **t),
+            None => None,
         };
+        rt.service_with(persist.as_deref_mut(), source);
         if rt.ended().is_some() || (limit != 0 && rt.tick_number() >= limit) {
             break;
         }
@@ -224,7 +231,7 @@ mod tests {
         let now: &'static Cell<i64> = std::boxed::Box::leak(std::boxed::Box::new(Cell::new(0)));
         let mut rt =
             Runtime::new(program, Timer(now), Kicks::default(), quiet(limit), Profile::BAREMETAL, T0, Policy::Fault);
-        let stats = block_on(run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, &mut Isr(now)));
+        let stats = block_on(run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, None, &mut Isr(now)));
         (stats, rt)
     }
 
@@ -271,7 +278,7 @@ mod tests {
             T0,
             Policy::Fault,
         );
-        let stats = block_on(run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, &mut Late(now)));
+        let stats = block_on(run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, None, &mut Late(now)));
         assert_eq!((rt.program.ticks, rt.watchdog.0), (7, 7), "jeder Tick, jeder bestaetigt");
         assert_eq!(stats.overruns, 2, "Tick 1 und Tick 4");
         assert_eq!(rt.overrun().worst_drift, 2 * T0, "der erste einer Dreiergruppe liegt zwei Perioden zurueck");
@@ -316,7 +323,7 @@ mod tests {
             Policy::Fault,
         );
         persist.load(&mut rt.program);
-        let stats = block_on(run(&mut rt, Some(&mut persist), &mut Isr(now)));
+        let stats = block_on(run(&mut rt, Some(&mut persist), None, &mut Isr(now)));
         assert_eq!((stats.flushed, stats.next_run), (true, Some(takt_rt_core::NextRun::Now)));
         let nvm = persist.into_journal().into_inner();
         let mut buf = [0u8; 128];
@@ -340,8 +347,12 @@ mod tests {
             T0,
             Policy::Fault,
         );
-        let stats =
-            block_on(run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, &mut Logical::new(Isr(&wall), &logical, T0)));
+        let stats = block_on(run(
+            &mut rt,
+            None::<&mut Persist<'_, FakeNvm<0>>>,
+            None,
+            &mut Logical::new(Isr(&wall), &logical, T0),
+        ));
         assert_eq!((rt.program.ticks, stats.overruns), (4, 0));
         assert_eq!(logical.get(), 3 * T0, "Tick k beginnt bei k * T0");
     }

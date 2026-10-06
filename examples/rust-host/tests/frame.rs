@@ -2,8 +2,8 @@
 //! Regel ein kleines Programm in `takt/`, ohne Treiber, in logischer Zeit.
 
 use rust_host::{
-    Bits, Host, Overfull, Script, byte_ring, drop_oldest, exit_fault, faulted_pending, float_elements, idle_multirate,
-    lifecycle, long_line, overflow_late, overfull_tx, sys_inputs, tuning,
+    Bits, Host, Once, Overfull, Script, aging, byte_ring, drop_oldest, exit_fault, faulted_pending, float_elements,
+    idle_multirate, lifecycle, long_line, overflow_late, overfull_tx, sys_inputs, tuning,
 };
 
 fn agrees(name: &str, trace: &str, ticks: u64) {
@@ -125,7 +125,7 @@ fn an_overlong_line_arrives_truncated_like_in_the_interpreter() {
     let trace = takt_embed::testing::run(long_line::Program::init(&mut arena, &mut line), long_line::TICK_NS, 4);
     assert!(trace.contains("out len 16"), "auf sechzehn gekuerzt:\n{trace}");
     assert!(trace.contains("t=1 out cut 1"), "`.truncated` meldet das Kuerzen (KON2-028):\n{trace}");
-    agrees_with("long_line","t=1 in rx \"0123456789ABCDEFXXXX\"\n", &trace, 4);
+    agrees_with("long_line", "t=1 in rx \"0123456789ABCDEFXXXX\"\n", &trace, 4);
 }
 
 /// **Die Eingaenge von `sys` stellt der Wirt** (12.7, 12.11, GEN-037): Sie
@@ -222,33 +222,43 @@ fn sleep_over_machines_with_their_own_period_is_invisible() {
     agrees("idle_multirate", &trace, 150);
 }
 
-/// Saetze von Tunables je Tick des Traces, in kanonischer Byteform (5.9).
-struct Sets(Vec<(u64, Vec<u8>)>);
+/// Saetze von Tunables je Tick des Traces: Parameter und Wert in
+/// kanonischer Byteform (5.9).
+struct Sets(Vec<(u64, u32, Vec<u8>)>);
 
 impl takt_embed::rt::Tunables for Sets {
     fn poll(&mut self, k: u64, apply: &mut dyn FnMut(u32, &[u8])) {
         // Grenze `k` der Schleife ist Tick `k + 1` des Traces.
-        for (_, value) in self.0.iter().filter(|(t, _)| *t == k + 1) {
-            apply(0, value);
+        for (_, param, value) in self.0.iter().filter(|(t, _, _)| *t == k + 1) {
+            apply(*param, value);
         }
     }
 }
 
-/// **Tunables gehen ueber die Schleife in das Programm** (8.4, KON1-014,
-/// RT-019): `GAIN = 7` wirkt ab Tick 3, `200` und `101` liegen ausserhalb
-/// der Range und bleiben ohne Wirkung, `100` an der Grenze wirkt, ein Wert
-/// in falscher Laenge ebenso wenig wie ein fremder; der Trace gleicht dem
-/// Interpreter mit den `tune`-Zeilen.
+/// **Tunables gehen ueber die Schleife in das Programm, und jeder Satz
+/// steht im Trace** (8.4, 12.5, KON1-014, RT-019, FB-389): je ein Wert
+/// fuer Ganzzahl, Zahl mit Einheit, Dauer, Enum und `bool`; `200`, `101`
+/// und `11 bar` liegen ausserhalb der Range und bleiben ohne Wirkung, `100`
+/// an der Grenze wirkt. Der Rahmen schreibt jeden als `tune`-Zeile, einen
+/// verworfenen mit `rejected`; ein Wert in falscher Laenge ist keine
+/// Tune-Zeile. Die Zeilen des Traces sind der Stimulus, mit dem der
+/// Interpreter dieselben Ausgaben rechnet.
 #[test]
 fn tunables_reach_the_program_through_the_loop() {
-    let gain = |v: i64| v.to_le_bytes().to_vec();
+    let int = |v: i64| v.to_le_bytes().to_vec();
+    let float = |v: f64| v.to_le_bytes().to_vec();
     let mut sets = Sets(vec![
-        (3, gain(7)),
-        (5, gain(200)),
-        (6, gain(100)),
-        (7, gain(101)),
-        (8, gain(0)),
-        (9, 3i32.to_le_bytes().to_vec()),
+        (3, 0, int(7)),
+        (3, 1, float(2.5)),
+        (4, 2, int(250_000_000)),
+        (4, 3, int(1)),
+        (5, 4, vec![1]),
+        (5, 0, int(200)),
+        (6, 0, int(100)),
+        (7, 0, int(101)),
+        (7, 1, float(11.0)),
+        (8, 0, int(0)),
+        (9, 0, 3i32.to_le_bytes().to_vec()),
     ]);
     let mut arena = tuning::Arena::new();
     let trace = takt_embed::testing::run_tuned(tuning::Program::init(&mut arena), tuning::TICK_NS, 12, &mut sets);
@@ -259,8 +269,43 @@ fn tunables_reach_the_program_through_the_loop() {
         !trace.contains("level 400") && !trace.contains("level 202") && !trace.contains("t=9 out level"),
         "{trace}"
     );
-    let stim = "t=3 tune GAIN 7\nt=5 tune GAIN 200\nt=6 tune GAIN 100\nt=7 tune GAIN 101\nt=8 tune GAIN 0\n";
-    agrees_with("tuning", stim, &trace, 12);
+    let tunes: Vec<String> = trace
+        .lines()
+        .filter(|l| l.contains(" tune "))
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    assert_eq!(
+        tunes,
+        [
+            "t=3 tune GAIN 7",
+            "t=3 tune LIMIT 2.5 bar",
+            "t=4 tune HOLD 250 ms",
+            "t=4 tune MODE FAST",
+            "t=5 tune ON true",
+            "t=5 tune GAIN 200 rejected",
+            "t=6 tune GAIN 100",
+            "t=7 tune GAIN 101 rejected",
+            "t=7 tune LIMIT 11.0 bar rejected",
+            "t=8 tune GAIN 0",
+        ]
+    );
+    let stim: String = tunes.iter().map(|l| format!("{l}\n")).collect();
+    agrees_with("tuning", &stim, &trace, 12);
+}
+
+/// **Abtastungen altern auch in geschlafenen Ticks** (3.5, 9.9, Satz
+/// 9.9.1): `x` liefert nur in Tick 0, die Maschine schlaeft 100 ms und
+/// liest dann `x.age`. Der Rahmen traegt die geschlafenen Ticks nach wie
+/// leere Schritte, auch das Alter; sonst waere es um sie zu jung, und ein
+/// Input ohne Lieferung veraltete nach dem Schlaf zu spaet.
+#[test]
+fn a_sample_ages_through_the_slept_ticks() {
+    let tick_ns = aging::TICK_NS;
+    let mut device = Once { at: 0, value: 5, tick_ns };
+    let mut arena = aging::Arena::new();
+    let trace = takt_embed::testing::run(aging::Program::init(&mut arena, &mut device), tick_ns, 14);
+    assert!(trace.contains("t=10 out age 100 ms"), "das Alter nach dem Schlaf:\n{trace}");
+    agrees_with("aging", "t=0 in x 5\n", &trace, 14);
 }
 
 /// **Der Byte-Ring laeuft um** (8.6, 9.6, KON2-026): Elemente von ein bis

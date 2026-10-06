@@ -19,7 +19,7 @@ pub mod host;
 pub mod stm32f401;
 
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -223,6 +223,35 @@ pub struct Options {
     /// Interpreter, in dem Plant-Modelle auf dem Board mitlaufen; `Hw`, wenn
     /// die Treiber die Eingaenge speisen.
     pub build: takt_sema::Build,
+    /// Zeilen an die Konsole des Boards, je mit ihrem Abstand zur ersten
+    /// Zeile des Traces (`t=0`): Tunes vom Host (8.4).
+    pub console: Vec<ConsoleLine>,
+}
+
+/// Eine Zeile an die Konsole des Boards: `line`, `after` nach der ersten
+/// Zeile des Traces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsoleLine {
+    /// Der Abstand zur ersten Zeile des Traces.
+    pub after: Duration,
+    /// Die Zeile, mit ihrem Zeilenende.
+    pub line: String,
+}
+
+/// Woran die Erfassung den Beginn des Traces erkennt.
+const TRACE_START: &[u8] = b"t=0 ";
+
+/// Die Konsolenzeile fuer `tune <name> <wert>` (8.4): Index des Parameters
+/// und Wert in kanonischer Byteform als Hexziffern, wie
+/// `takt_rt_baremetal::console` sie liest. Das Board kennt keine Namen und
+/// rechnet keine Dezimalzahl um; Range und Typ prueft sein Rahmen. `None`,
+/// wenn das Programm kein solches Tunable hat oder der Text kein Wert seines
+/// Typs ist.
+pub fn tune_line(p: &takt_mir::program::Program, name: &str, text: &str) -> Option<String> {
+    let index = p.params.iter().position(|q| q.name == name && q.tunable)?;
+    let bytes = crate::harness::tune_bytes(p, index, text)?;
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Some(format!("tune {index} {hex}\n"))
 }
 
 impl Options {
@@ -244,6 +273,13 @@ impl Options {
     /// Derselbe Lauf mit verstellter Fliesskomma-Umgebung ([`Options::hostile_fpu`]).
     pub fn with_hostile_fpu(self) -> Options {
         Options { hostile_fpu: true, ..self }
+    }
+
+    /// Derselbe Lauf, und `after` nach der ersten Zeile des Traces geht
+    /// `line` an die Konsole des Boards.
+    pub fn with_console(mut self, after: Duration, line: &str) -> Options {
+        self.console.push(ConsoleLine { after, line: line.to_string() });
+        self
     }
 
     /// Ein Lauf ueber `ticks` Ticks in Echtzeit, fuer das, was nur die
@@ -646,20 +682,32 @@ pub(crate) fn capture(
     flow: serialport::FlowControl,
     within: Duration,
     fresh: bool,
+    console: &[ConsoleLine],
     start: impl FnOnce() -> Result<(), String>,
 ) -> Result<String, String> {
+    // Kurz: Zwischen zwei Lesevorgaengen schreibt derselbe Faden, was an die
+    // Konsole geht. Ein zweiter Griff auf den Port schriebe unter Windows
+    // erst, wenn das Lesen zurueckkommt — synchrone Zugriffe auf eine Datei
+    // reiht das System hintereinander, und ein Tune kam eine Sekunde zu spaet.
     let mut serial = serialport::new(port, baud)
         .flow_control(flow)
-        .timeout(Duration::from_millis(200))
+        .timeout(Duration::from_millis(20))
         .open()
         .map_err(|e| format!("{port}: {e}"))?;
     let (tx, rx) = mpsc::channel();
+    let (send, lines) = mpsc::channel::<String>();
     let stop = Arc::new(AtomicBool::new(false));
     let reader = std::thread::spawn({
         let stop = Arc::clone(&stop);
         move || {
             let mut buf = [0u8; 4096];
             while !stop.load(Ordering::Relaxed) {
+                while let Ok(line) = lines.try_recv() {
+                    if let Err(e) = serial.write_all(line.as_bytes()).and_then(|()| serial.flush()) {
+                        let _ = tx.send(Err(e.to_string()));
+                        return;
+                    }
+                }
                 match serial.read(&mut buf) {
                     Ok(n) => {
                         if tx.send(Ok(buf[..n].to_vec())).is_err() {
@@ -683,17 +731,37 @@ pub(crate) fn capture(
     // (FB-304) zaehlte falsch.
     let mut raw: Vec<u8> = Vec::new();
     let end = END.as_bytes();
+    // Die Zeilen an die Konsole, ab dem Beginn des Traces gezaehlt.
+    let mut began: Option<Instant> = None;
+    let mut pending: Vec<&ConsoleLine> = console.iter().collect();
+    pending.sort_by_key(|c| c.after);
+    pending.reverse();
     let result = started.and_then(|()| {
         loop {
-            match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            let now = Instant::now();
+            while let (Some(at), Some(next)) = (began, pending.last())
+                && at + next.after <= now
+            {
+                send.send(next.line.clone()).map_err(|_| format!("{port}: der Lesefaden ist beendet"))?;
+                pending.pop();
+            }
+            let until = match (began, pending.last()) {
+                (Some(at), Some(next)) => deadline.min(at + next.after),
+                _ => deadline,
+            };
+            match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
                 Ok(Ok(bytes)) => {
-                    let from = raw.len().saturating_sub(end.len());
+                    let from = raw.len().saturating_sub(end.len().max(TRACE_START.len()));
                     raw.extend_from_slice(&bytes);
+                    if began.is_none() && raw[from..].windows(TRACE_START.len()).any(|w| w == TRACE_START) {
+                        began = Some(Instant::now());
+                    }
                     if raw[from..].windows(end.len()).any(|w| w == end) {
                         break Ok(());
                     }
                 }
                 Ok(Err(e)) => break Err(format!("{port}: {e}")),
+                Err(_) if Instant::now() < deadline => {}
                 Err(_) => break Ok(()),
             }
         }

@@ -21,4 +21,5 @@ fn main() {
     takt_embed::build::Program::new("takt/sys_inputs.takt").drivers("crate::Host").build();
     takt_embed::build::Program::new("takt/float_elements.takt").drivers("crate::Bits").build();
     takt_embed::build::Program::new("takt/overfull_tx.takt").drivers("crate::Overfull").build();
+    takt_embed::build::Program::new("takt/aging.takt").drivers("crate::Once").build();
 }

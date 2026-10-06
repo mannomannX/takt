@@ -1,0 +1,21 @@
+# 3.5, 9.9, Satz 9.9.1: Abtastungen altern auch in geschlafenen Ticks.
+# `x` kommt nur in Tick 0; die Maschine schlaeft 100 ms in `idle` und liest
+# danach das Alter der Abtastung. Ohne Altern der geschlafenen Ticks waere
+# es um sie zu jung.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  x   : int in 0..100 @ hw("io/x") with max_age = 1 s
+output age : Duration      @ sim("o/age")
+
+machine m:
+    initial NAP
+
+    state NAP idle:
+        after 100 ms: -> AWAKE
+
+    state AWAKE:
+        loop:
+            age = x.age

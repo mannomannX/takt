@@ -1,13 +1,25 @@
 # Tunables ueber den Weg der Schleife (8.4, KON1-014): Ein Satz gilt vor dem
 # Schritt seiner Grenze; ein Wert ausserhalb der Range bleibt ohne Wirkung.
+# Jeder Satz steht als `tune`-Zeile im Trace, ein verworfener mit
+# `rejected`, so wie der Interpreter sie als Stimulus liest (12.5).
 
 system:
     language = 1
     tick     = 10 ms
 
-tunable param GAIN : int in 0..100 = 5
+enum Mode: SLOW, FAST
 
-output level : int in 0..1000 @ sim("o/level")
+tunable param GAIN  : int in 0..100 = 5
+tunable param LIMIT : float[bar] in 0..10 bar = 1 bar
+tunable param HOLD  : Duration in 0 ms..1 s = 10 ms
+tunable param MODE  : Mode = SLOW
+tunable param ON    : bool = false
+
+output level : int in 0..1000          @ sim("o/level")
+output limit : float[bar] in 0..10 bar @ sim("o/limit")
+output hold  : Duration                @ sim("o/hold")
+output fast  : bool                    @ sim("o/fast")
+output on    : bool                    @ sim("o/on")
 
 machine m:
     initial RUN
@@ -15,3 +27,7 @@ machine m:
     state RUN:
         loop:
             level = GAIN * 2
+            limit = LIMIT
+            hold = HOLD
+            fast = MODE == FAST
+            on = ON

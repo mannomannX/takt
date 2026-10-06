@@ -6,7 +6,7 @@
 
 use core::marker::PhantomData;
 
-use takt_rt_core::{Clock, NextRun, Nvm, Outputs, Overrun, Persist, Program, Runtime, Sink, Tick, Watchdog};
+use takt_rt_core::{Clock, NextRun, Nvm, Outputs, Overrun, Persist, Program, Runtime, Sink, Tick, Tunables, Watchdog};
 
 use crate::telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 
@@ -135,12 +135,14 @@ where
 }
 
 /// Der Port „eigener Kern“ (12.3, 12.11): wartet auf jede Frist und laesst
-/// den Kern rechnen ([`Runtime::step`]), bis `cadence.limit` erreicht ist
-/// oder das Programm seinen Lauf beendet (`next_run`, 12.7). An der Grenze
-/// schreibt das Journal synchron.
+/// den Kern rechnen ([`Runtime::step_with`]), bis `cadence.limit` erreicht
+/// ist oder das Programm seinen Lauf beendet (`next_run`, 12.7). An der
+/// Grenze schreibt das Journal synchron. Die Tunables (8.4) gehen vor dem
+/// Schritt ihrer Grenze in das Programm, im Schlaf wecken sie (9.9).
 pub fn run<G, C, W, F, N, P, const R: usize>(
     rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
     mut persist: Option<&mut Persist<'_, N>>,
+    mut tunables: Option<&mut dyn Tunables>,
 ) -> Stats
 where
     G: Program,
@@ -151,11 +153,15 @@ where
     P: Port + 'static,
 {
     let limit = rt.sink.limit();
+    if limit != 0 {
+        rt.end_at(limit);
+    }
     while rt.ended().is_none() && (limit == 0 || rt.tick_number() < limit) {
-        match persist.as_deref_mut() {
-            Some(p) => rt.step_persisting(p),
-            None => rt.step(),
+        let source: Option<&mut dyn Tunables> = match tunables.as_mut() {
+            Some(t) => Some(&mut **t),
+            None => None,
         };
+        rt.step_with(persist.as_deref_mut(), source);
     }
     stats(rt, persist)
 }
@@ -302,7 +308,7 @@ mod tests {
         let clock = LogicalClock::new(|| {});
         let trace = Trace::new(cadence, 1_000_000, || None::<&'static mut Telemetry<NoLine, 8>>);
         let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Fault);
-        let stats = run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>);
+        let stats = run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, None);
         (stats, rt.program)
     }
 
@@ -418,7 +424,7 @@ mod tests {
         let mut rt =
             Runtime::new(Counting(0), Shared(&now), NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Alert);
         persist.load(&mut rt.program);
-        let stats = run(&mut rt, Some(&mut persist));
+        let stats = run(&mut rt, Some(&mut persist), None);
         assert!(persist.journal().writes() > 0);
         assert!(rt.overrun().count > 0);
         assert_eq!(stats.overruns, rt.overrun().count, "jeder Ueberlauf steht in der Bilanz");

@@ -20,7 +20,7 @@
 
 #![no_std]
 
-use takt_board_support::edge_probe;
+use takt_board_support::{edge_probe, wake_probe};
 use takt_embed::{Device, Input, Output, Piece, Quality, Sample, StreamInput, StreamOutput};
 
 /// Die Nummer des Ticks, dessen Grenze `now` ist.
@@ -295,6 +295,40 @@ impl<T> Input<T> for Quiet {
     }
 }
 
+// --- Weckereignisse (5.10, 9.9; FB-388) ----------------------------------
+//
+// Zwei Wake-Quellen aus `takt_board_support::wake_probe`, deren Ereignisse
+// das Programm nicht vorher kennt: Im Schlaf sieht sie nur, wer an jeder
+// Grenze abtastet. `wake.takt` liest sie.
+
+/// `wake/level`: steht ab `wake_probe::LEVEL_AT_NS`.
+#[derive(Debug, Default)]
+pub struct WakeLevel;
+
+impl Input<bool> for WakeLevel {
+    fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
+        Some(Sample::good(now >= wake_probe::LEVEL_AT_NS, now))
+    }
+}
+
+/// `wake/bell`: bringt bei `wake_probe::BELL_AT_NS` einmal
+/// `wake_probe::BELL`, an der ersten Grenze danach, die fragt.
+#[derive(Debug, Default)]
+pub struct WakeBell {
+    rung: bool,
+}
+
+impl StreamInput for WakeBell {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        if self.rung || now < wake_probe::BELL_AT_NS {
+            return None;
+        }
+        *buf.first_mut()? = wake_probe::BELL;
+        self.rung = true;
+        Some(Piece { len: 1, t: now, seq: None })
+    }
+}
+
 // --- Das vertragstreue Pruefgeraet (GEN-046) ----------------------------
 //
 // Dieselben Traits, aber ohne Verstoss: Jede Abtastung kommt gut zur
@@ -416,6 +450,21 @@ mod tests {
         let at = edge_probe::TX_OVER_AT as i64;
         assert!((0..16).filter(|k| *k != at).all(|k| EdgeTTx.idle(k * t) == Some(true)));
         assert_eq!(EdgeTTx.idle(at * t), Some(false));
+    }
+
+    /// Der Pegel steht ab seinem Zeitpunkt, die Klingel laeutet einmal, an
+    /// der ersten Grenze danach.
+    #[test]
+    fn the_wake_devices_fire_once_at_their_time() {
+        let t = wake_probe::TICK_NS;
+        let high = |k: &i64| WakeLevel.sample(k * t).is_some_and(|s| s.value);
+        assert_eq!((0..20).find(high), Some(wake_probe::first_tick(wake_probe::LEVEL_AT_NS) as i64));
+        assert_eq!((0..20).filter(high).count(), 20 - 13);
+        let mut bell = WakeBell::default();
+        let mut buf = [0u8; 2];
+        let mut rung = (0..60).filter_map(|k| bell.poll(&mut buf, k * t).map(|_| (k, buf[0])));
+        assert_eq!(rung.next(), Some((wake_probe::first_tick(wake_probe::BELL_AT_NS) as i64, wake_probe::BELL)));
+        assert_eq!(rung.next(), None, "einmal");
     }
 
     /// Die ausdruecklichen Stummel: bestaetigt, lebendig, ohne Lieferung.

@@ -366,8 +366,8 @@ fn build_inner(
     // wie `apply_stimulus` im Interpreter.
     pended(&mut t.code, p, inputs, "        ");
     // 8.4: Ein Tunable gilt ab seiner Tick-Grenze; der Rahmen gibt ihn vor
-    // dem Schritt an `takt_tune`, wie die Schleife des Produktrahmens
-    // (`Runtime::service_with`), und `takt_tune` prueft Typ und Range wie
+    // dem Schritt an `takt_tune_value`, wie die Schleife des Produktrahmens
+    // (`Runtime::service_with`), und `takt_tune_value` prueft Typ und Range wie
     // `apply_stimulus` im Interpreter.
     for stim in inputs {
         let Stimulus::Tune { tick, name, text } = stim else { continue };
@@ -377,7 +377,7 @@ fn build_inner(
         let _ = writeln!(
             t.code,
             "        if (a->tick == {tick}) {{ static const unsigned char v[] = {{ {} }}; \
-             (void)takt_tune(a, {i}u, v, {}); }} /* tune {name} */",
+             (void)takt_tune_value(a, {i}u, v, {}); }} /* tune {name} */",
             list.join(", "),
             bytes.len()
         );
@@ -394,7 +394,7 @@ fn build_inner(
     }
     platform_end(&mut t.code, p, &layout, "        ");
     if sleep {
-        virtual_sleep(&mut t.code, p, &driven, ticks, inputs, x);
+        virtual_sleep(&mut t.code, p, &layout, &driven, ticks, inputs, x);
     }
     let _ = writeln!(t.code, "    }}");
     if next_run_slot(p, &layout).is_some() {
@@ -741,6 +741,7 @@ fn pended(s: &mut String, p: &Program, inputs: &[Stimulus], indent: &str) {
 fn virtual_sleep(
     s: &mut String,
     p: &Program,
+    layout: &takt_frame::layout::Layout,
     driven: &[&takt_mir::machine::Machine],
     ticks: u64,
     inputs: &[Stimulus],
@@ -783,6 +784,8 @@ fn virtual_sleep(
     for m in driven {
         let _ = writeln!(s, "                {x}_{0}_advance(a, n);", m.name);
     }
+    // Die Abtastungen altern wie in leeren Schritten (`Run::skip`).
+    takt_frame::parts::aging_slept(s, p, layout, "                ");
     let _ = writeln!(s, "                printf(\"t=%lld time took=0 drift=0 slept=%lld\\n\", a->tick, n);");
     let _ = writeln!(s, "                a->tick += n;");
     let _ = writeln!(s, "            }}");
@@ -790,9 +793,9 @@ fn virtual_sleep(
 }
 
 /// Der Wert einer `tune`-Zeile in kanonischer Byteform (5.9), wie ihn
-/// `takt_tune` nimmt; `None`, wenn der Text kein Wert des Parametertyps ist.
-/// Die Range prueft `takt_tune` selbst, wie im Produktrahmen.
-fn tune_bytes(p: &Program, index: usize, text: &str) -> Option<Vec<u8>> {
+/// `takt_tune_value` nimmt; `None`, wenn der Text kein Wert des Parametertyps ist.
+/// Die Range prueft `takt_tune_value` selbst, wie im Produktrahmen.
+pub fn tune_bytes(p: &Program, index: usize, text: &str) -> Option<Vec<u8>> {
     let ty = p.params.get(index)?.ty;
     let v = takt_interp::trace::parse_value(text, ty, p).ok()?;
     takt_interp::bytes::encode(p, &v, ty).ok()

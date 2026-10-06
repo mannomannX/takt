@@ -291,7 +291,7 @@ fn persistence_survives_a_reset() {
     let end = last_output(&first, "count").unwrap_or_else(|| panic!("kein `count` im ersten Lauf:\n{first}"));
     assert!(first.contains("flush 1"), "das Journal wurde am Ende nicht geschrieben:\n{first}");
     // Der zweite Lauf: derselbe Chip, ein Reset, das Journal bleibt.
-    let second = board.capture(&elf, TICKS).unwrap_or_else(|e| panic!("{name}, zweiter Lauf: {e}"));
+    let second = board.capture(&elf, &options).unwrap_or_else(|e| panic!("{name}, zweiter Lauf: {e}"));
     let start = second
         .lines()
         .find_map(|l| l.strip_prefix("t=0 out count "))
@@ -462,7 +462,7 @@ fn the_board_reenumerates_its_usb_on_request() {
     let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
     assert_eq!(board.tick_over_jtag(&elf).unwrap_or_else(|e| panic!("{e}")), TICKS as u32, "{first}");
     board.reenumerate().unwrap_or_else(|e| panic!("{e}"));
-    let second = board.capture_once().unwrap_or_else(|e| panic!("{name}, nach der Neuanmeldung: {e}"));
+    let second = board.capture_once(&[]).unwrap_or_else(|e| panic!("{name}, nach der Neuanmeldung: {e}"));
     assert!(second.contains(board::END), "nach der Neuanmeldung:\n{second}");
     let outs = |t: &str| {
         t.lines().filter(|l| l.starts_with("t=") && l.contains(" out ")).map(str::to_string).collect::<Vec<_>>()
@@ -505,6 +505,27 @@ fn the_driver_edge_judges_like_the_interpreter() {
 fn a_stretched_tick_is_runtime_hardware() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_stretched_tick_is_runtime_hardware(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Ein Tune von der Konsole gilt ab seiner Grenze und weckt das Board**
+/// (8.4, 9.9, FB-389): in Echtzeit, der Host schickt waehrend des Schlafs.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn a_tune_from_the_console_wakes_the_board() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_tune_from_the_console_wakes_the_board(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Eine Wake-Quelle weckt an der Grenze nach ihrem Ereignis** (9.9,
+/// FB-388): Das Pruefgeraet hebt einen Pegel und laeutet eine Klingel, die
+/// das Programm nicht vorher kennt.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn a_wake_source_ends_the_sleep() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_wake_source_ends_the_sleep(&mut board);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 

@@ -38,15 +38,16 @@ fn link_reading(version: u32) -> (bool, String) {
     (out.status.success(), text)
 }
 
-/// **Eine Huelle der Version 1 bindet nicht gegen eine Bibliothek der
-/// Version 2** (sie kennt `valve_output_timing` nicht, FB-417), und die
-/// Meldung nennt das Symbol. Die Gegenprobe: Mit dem Symbol der Bibliothek
-/// fehlt es nicht (andere Symbole des Wirts fehlen diesem Programm ohnehin).
+/// **Eine Huelle der Version 2 bindet nicht gegen eine Bibliothek der
+/// Version 3** (sie ruft `valve_tune` ohne den Tick der Trace-Zeile und
+/// kennt `valve_woken` nicht, FB-388, FB-389), und die Meldung nennt das
+/// Symbol. Die Gegenprobe: Mit dem Symbol der Bibliothek fehlt es nicht
+/// (andere Symbole des Wirts fehlen diesem Programm ohnehin).
 #[test]
 fn a_hull_of_another_abi_version_does_not_link() {
-    let (linked, text) = link_reading(1);
+    let (linked, text) = link_reading(2);
     assert!(!linked, "eine fremde Version band:\n{text}");
-    assert!(text.contains("valve_abi_1"), "die Meldung nennt das Symbol:\n{text}");
-    let (_, text) = link_reading(2);
-    assert!(!text.contains("valve_abi_2"), "die eigene Version fehlt nicht:\n{text}");
+    assert!(text.contains("valve_abi_2"), "die Meldung nennt das Symbol:\n{text}");
+    let (_, text) = link_reading(3);
+    assert!(!text.contains("valve_abi_3"), "die eigene Version fehlt nicht:\n{text}");
 }

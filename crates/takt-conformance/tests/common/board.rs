@@ -233,6 +233,108 @@ pub fn a_stretched_tick_is_runtime_hardware(board: &mut dyn Board) -> Vec<String
     failed
 }
 
+/// **Eine Wake-Quelle weckt an der Grenze nach ihrem Ereignis** (5.10, 9.9,
+/// Satz 9.9.1; FB-388). `wake.takt` schlaeft in `idle`-Zustaenden mit
+/// Fristen von 2 s; das Pruefgeraet hebt `level` und laeutet `bell` zu
+/// Zeiten, die das Programm nicht kennt (`wake_probe`). Der Rahmen tastet
+/// die Wake-Quellen an jeder geschlafenen Grenze ab: `up` geht im Tick des
+/// Pegels an, `rung` im Tick nach der Klingel, wie im Interpreter, der die
+/// Lieferungen des Pruefgeraets als Stimulus bekommt. Dazwischen schlaeft
+/// das Board wirklich; ohne Weckereignis stuende es bis zur Frist.
+pub fn a_wake_source_ends_the_sleep(board: &mut dyn Board) -> Vec<String> {
+    use takt_board_support::wake_probe::{BELL, BELL_AT_NS, LEVEL_AT_NS, first_tick};
+    const WAKE_TICKS: u64 = 100;
+    let path = board::root().join("crates/takt-conformance/tests/programs/wake.takt");
+    let options = Options::fresh(WAKE_TICKS);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let (level, bell) = (first_tick(LEVEL_AT_NS), first_tick(BELL_AT_NS));
+    let mut stimulus: String = (0..WAKE_TICKS).map(|k| format!("t={k} in level {}\n", k >= level)).collect();
+    stimulus.push_str(&format!("t={bell} in bell {BELL}\n"));
+    let stimulus = takt_interp::Trace::parse(&stimulus).expect("Stimulus");
+    let run = takt_interp::RunOptions { ticks: WAKE_TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&program(&path), &stimulus, &run).expect("Lauf").trace.render();
+    let mut failed = Vec::new();
+    let diffs = compare(&interpreted, &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
+    }
+    // Der Rahmen schreibt `bool` als Zahl; die Zeile steht im Tick des Ereignisses.
+    for want in [format!("t={level} out up "), format!("t={} out rung {BELL}", bell + 1)] {
+        if !text.lines().any(|l| l.starts_with(&want)) {
+            failed.push(format!("`{want}` fehlt:\n{text}"));
+        }
+    }
+    // Vor dem Pegel und vor der Klingel: zusammen gut dreissig Ticks.
+    let slept: u64 =
+        text.lines().filter_map(|l| l.split_once(" slept=")?.1.split_whitespace().next()?.parse::<u64>().ok()).sum();
+    if slept < 30 {
+        failed.push(format!("nur {slept} Ticks geschlafen:\n{text}"));
+    }
+    eprintln!("{} Weckereignisse: {} Abweichungen, {slept} Ticks geschlafen", board.name(), failed.len());
+    failed
+}
+
+/// **Ein Tune von der Konsole gilt ab seiner Grenze und weckt das Board**
+/// (8.4, 9.9, FB-389). `tune.takt` schlaeft in `idle` mit einer Frist von
+/// 2 s; der Host schickt nach 300 ms `GAIN = 200` und nach 600 ms
+/// `GAIN = 7` an die Konsole. Das Board traegt jeden an der naechsten
+/// Grenze ein und schreibt seine Zeile `tune`, den ersten als verworfen;
+/// der zweite weckt (`when GAIN > 5`). Welcher Tick es ist, weiss nur das
+/// Board: Der Interpreter bekommt seine `tune`-Zeilen als Stimulus und muss
+/// dieselben Ausgaben rechnen (12.5).
+pub fn a_tune_from_the_console_wakes_the_board(board: &mut dyn Board) -> Vec<String> {
+    const TUNE_TICKS: u64 = 150;
+    let path = board::root().join("crates/takt-conformance/tests/programs/tune.takt");
+    let p = program(&path);
+    let line = |text: &str| board::tune_line(&p, "GAIN", text).expect("GAIN ist ein Tunable");
+    let options = Options::timed(TUNE_TICKS)
+        .with_console(std::time::Duration::from_millis(300), &line("200"))
+        .with_console(std::time::Duration::from_millis(600), &line("7"));
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let tunes: Vec<String> = text
+        .lines()
+        .filter(|l| l.starts_with("t=") && l.contains(" tune "))
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    let tick = |l: &str| l.strip_prefix("t=")?.split(' ').next()?.parse::<u64>().ok();
+    let mut failed = Vec::new();
+    match tunes.as_slice() {
+        [rejected, accepted] if rejected.ends_with(" tune GAIN 200 rejected") && accepted.ends_with(" tune GAIN 7") => {
+            let (a, b) = (tick(rejected).unwrap_or(0), tick(accepted).unwrap_or(0));
+            if !(10..b).contains(&a) || b >= TUNE_TICKS - 10 {
+                failed.push(format!("Tunes in den Ticks {a} und {b}, erwartet um 30 und 60:\n{text}"));
+            }
+            for want in [format!("t={b} out up "), format!("t={b} out level 14")] {
+                if !text.lines().any(|l| l.starts_with(&want)) {
+                    failed.push(format!("`{want}` fehlt: Der Tune weckt nicht an seiner Grenze:\n{text}"));
+                }
+            }
+        }
+        _ => failed.push(format!("`tune`-Zeilen {tunes:?}, erwartet `GAIN 200 rejected`, dann `GAIN 7`:\n{text}")),
+    }
+    let stimulus: String = tunes.iter().map(|l| format!("{l}\n")).collect();
+    let stimulus = takt_interp::Trace::parse(&stimulus).expect("Stimulus aus den Zeilen des Boards");
+    let run = takt_interp::RunOptions { ticks: TUNE_TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &run).expect("Lauf").trace.render();
+    let diffs = compare(&interpreted, &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
+    }
+    let slept: u64 =
+        text.lines().filter_map(|l| l.split_once(" slept=")?.1.split_whitespace().next()?.parse::<u64>().ok()).sum();
+    if slept < 30 {
+        failed.push(format!("nur {slept} Ticks geschlafen:\n{text}"));
+    }
+    eprintln!("{} Tunes: {tunes:?}, {slept} Ticks geschlafen", board.name());
+    failed
+}
+
 /// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
 /// `at now + 100 ns` liegt unter der gemessenen Treiberlatenz der Bruecke
 /// in `corpus-try/hw/<board>.hw` und ist ein `TimingFault`, `at now + 1 ms`

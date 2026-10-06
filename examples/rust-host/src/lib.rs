@@ -270,6 +270,30 @@ pub mod idle_multirate {
     include!(env!("TAKT_IDLE_MULTIRATE_RS"));
 }
 
+/// Abtastungen, die in geschlafenen Ticks altern (3.5, 9.9).
+#[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]
+pub mod aging {
+    include!(env!("TAKT_AGING_RS"));
+}
+
+/// Ein Eingang, der nur in einem Tick liefert.
+#[derive(Debug)]
+pub struct Once {
+    /// Der Tick des Traces, in dem er liefert.
+    pub at: u64,
+    /// Der Wert.
+    pub value: i64,
+    /// Die Periode T0.
+    pub tick_ns: i64,
+}
+
+impl aging::Drivers for Once {
+    fn in_io_x(&mut self, now: i64) -> Option<takt_embed::Sample<i64>> {
+        let k = u64::try_from(now / self.tick_ns.max(1)).ok()?;
+        (k == self.at).then(|| takt_embed::Sample::good(self.value, now))
+    }
+}
+
 /// Tunables ueber den Weg der Schleife (8.4), ohne Treiber.
 #[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]
 pub mod tuning {

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::{Board, Bringup, Options, capture, run_bounded};
+use super::{Board, Bringup, ConsoleLine, Options, capture, run_bounded};
 
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-stm32f401",
@@ -81,19 +81,25 @@ impl Stm32f401 {
     /// nach dem Wecken aus dem Tiefschlaf (12.7). Die Leitung bleibt dabei
     /// offen, nur das Board schweigt, solange es schlaeft.
     pub fn listen(&self, within: Duration) -> Result<String, String> {
-        capture(&self.port, BAUD, serialport::FlowControl::Software, within, false, || Ok(()))
+        capture(&self.port, BAUD, serialport::FlowControl::Software, within, false, &[], || Ok(()))
     }
 
     /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
     /// `within` lang — auch einen Lauf, der nicht endet oder ueber Resets
     /// hinweg geht (12.3, 12.7).
     pub fn run_for(&mut self, elf: &Path, within: Duration) -> Result<String, String> {
+        self.run_with(elf, within, &[])
+    }
+
+    /// Wie [`Stm32f401::run_for`]; `console` geht waehrenddessen an die
+    /// Konsole des Boards.
+    fn run_with(&mut self, elf: &Path, within: Duration, console: &[ConsoleLine]) -> Result<String, String> {
         let bin = self.image(elf)?;
         self.to_bootloader()?;
         let address = format!("{APP:#010x}:leave");
         // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
         // Wirt nicht abholt (FB-306).
-        capture(&self.port, BAUD, serialport::FlowControl::Software, within, true, || {
+        capture(&self.port, BAUD, serialport::FlowControl::Software, within, true, console, || {
             let args = ["-a", "0", "-d", DFU_ID, "-s", &address, "-D", &bin.to_string_lossy()];
             run_bounded(&self.dfu_util, &args, DOWNLOAD).map(|_| ()).map_err(|e| format!("{}: {e}", self.dfu_util))
         })
@@ -176,7 +182,7 @@ impl Board for Stm32f401 {
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
-        let text = self.run_for(elf, TRACE)?;
+        let text = self.run_with(elf, TRACE, &options.console)?;
         if text.contains(super::END) {
             super::complete(text, options)
         } else {

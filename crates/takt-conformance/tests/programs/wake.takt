@@ -1,0 +1,35 @@
+# 9.9, Satz 9.9.1, FB-388: Wake-Quellen, deren Ereignisse das Programm
+# nicht vorher kennt. Das Pruefgeraet hebt `level` ab 123,4 ms und laeutet
+# `bell` einmal bei 412,3 ms (`takt_board_support::wake_probe`); dazwischen
+# schlaeft die Maschine in `idle`-Zustaenden mit Fristen von 2 s. Tastet der
+# Rahmen die Wake-Quellen an jeder geschlafenen Grenze ab, wacht er an der
+# Grenze nach dem Ereignis und rechnet wie ohne Schlaf.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  level : bool          @ hw("wake/level") with wake = true
+input  bell  : stream<u8>    @ hw("wake/bell")  with capacity = 4, max_rate = 100 Hz, wake = true
+output up    : bool          @ hw("o/up")       with safe = false
+output rung  : int in 0..255 @ hw("o/sum")      with safe = 0
+
+machine m:
+    initial SLEEP
+
+    state SLEEP idle:
+        when level: -> UP
+        after 2 s: -> UP
+
+    state UP:
+        enter:
+            up = true
+        after 50 ms: -> NAP
+
+    state NAP idle:
+        when bell.count > 0: -> RING
+        after 2 s: -> RING
+
+    state RING:
+        on bell as b:
+            rung = b.data as int

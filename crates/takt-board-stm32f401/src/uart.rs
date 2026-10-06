@@ -19,7 +19,9 @@
 //! derselbe Wunsch wie auf dem ESP32-C6. Wer erst beim naechsten Tick
 //! nachsaehe, faende von vier Bytes am Stueck nur das letzte. Den Chip
 //! zuruecksetzen darf der Interrupt nicht mitten in einem Schritt; er merkt
-//! sich den Wunsch, und das naechste [`Port::flush`] fuehrt ihn aus.
+//! sich den Wunsch, und das naechste [`Port::flush`] fuehrt ihn aus. Jedes
+//! Byte geht ausserdem in ein FIFO, aus dem die Schleife Tunes liest
+//! ([`console_byte`], 8.4).
 //!
 //! **XON/XOFF (FB-306).** Der Adapter hat keinen Rueckstau: Holt der Wirt
 //! unter Last nicht rechtzeitig ab, laeuft ein Puffer ueber, und Bytes
@@ -57,6 +59,11 @@ static TX: ByteFifo<512> = ByteFifo::new();
 
 /// Der Host hat das Board zurueckverlangt; gesetzt vom Interrupt.
 static HANDBACK: AtomicBool = AtomicBool::new(false);
+
+/// Die Gegenrichtung fuer die Schleife: Der Interrupt schreibt, die
+/// Schleife liest. Ist es voll, verwirft der Interrupt das Byte; eine
+/// Tune-Zeile, der es fehlt, ist keine mehr.
+static RX: ByteFifo<256> = ByteFifo::new();
 
 /// Weitersenden und Anhalten (FB-306).
 const XON: u8 = 0x11;
@@ -148,6 +155,7 @@ pub fn on_interrupt() {
                     if magic.feed(b) {
                         HANDBACK.store(true, Ordering::Relaxed);
                     }
+                    let _ = RX.push(b);
                 }
             }
         }
@@ -163,6 +171,12 @@ pub fn on_interrupt() {
             }
         }
     }
+}
+
+/// Das naechste Byte der Gegenrichtung, `None`, wenn keines wartet: die
+/// Quelle der Tunes ([`takt_rt_baremetal::Console`]).
+pub fn console_byte() -> Option<u8> {
+    RX.pop()
 }
 
 impl Port for Usart1 {

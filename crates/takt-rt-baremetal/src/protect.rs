@@ -123,10 +123,28 @@ impl<P: Program, M: Protection> Program for Guarded<P, M> {
         n
     }
 
-    fn tune(&mut self, param: u32, value: &[u8]) {
+    fn tune(&mut self, k: u64, param: u32, value: &[u8]) {
         self.protection.open();
-        self.program.tune(param, value);
+        self.program.tune(k, param, value);
         self.protection.close();
+    }
+
+    /// Eine gemeldete Verletzung weckt wie eine Wake-Quelle (9.9): Sie wirkt
+    /// im Tick an dieser Grenze, wie ohne Schlaf. Das Abtasten darf den
+    /// Programmzustand schreiben (ein Stromelement, das es vorhaelt).
+    fn woken(&mut self, k: u64) -> bool {
+        if self.held.get().is_none() {
+            self.held.set(self.protection.take_violation());
+        }
+        self.protection.open();
+        let woken = self.program.woken(k);
+        self.protection.close();
+        woken || self.held.get().is_some()
+    }
+
+    /// Der Schutz ist selbst eine Quelle von Weckereignissen.
+    fn wake_sources(&self) -> bool {
+        true
     }
 
     fn job_done(&mut self, slot: u32, result: Option<&[u8]>) {
@@ -216,8 +234,12 @@ mod tests {
             self.mark(b'r');
             0
         }
-        fn tune(&mut self, _param: u32, _value: &[u8]) {
+        fn tune(&mut self, _k: u64, _param: u32, _value: &[u8]) {
             self.mark(b'u');
+        }
+        fn woken(&mut self, _k: u64) -> bool {
+            self.mark(b'w');
+            false
         }
         fn job_done(&mut self, _slot: u32, _result: Option<&[u8]>) {
             self.mark(b'j');
@@ -320,7 +342,8 @@ mod tests {
         g.tick(0, 0);
         g.advance(3);
         g.persist_restore(&[1]);
-        g.tune(0, &[2]);
+        g.tune(1, 0, &[2]);
+        g.woken(2);
         g.job_done(0, Some(&[3]));
         g.end();
         g.persist_snapshot(&mut [0; 4]);
@@ -328,7 +351,24 @@ mod tests {
         g.raise_overrun();
         g.raise_hardware();
         g.commit();
-        assert_eq!(&log.borrow()[..len.get()], b"TARUJEsxohc");
+        assert_eq!(&log.borrow()[..len.get()], b"TARUWJEsxohc");
         assert!(!open.get(), "danach wieder geschlossen");
+    }
+
+    /// **Eine Verletzung im Schlaf weckt an der naechsten Grenze** (12.3,
+    /// 9.9): Sie ist ein Runtime-Ereignis wie eine Wake-Quelle, und der Tick
+    /// dort bekommt `Runtime(Hardware)` — wie ohne Schlaf.
+    #[test]
+    fn a_violation_while_asleep_wakes_at_the_next_boundary() {
+        let (log, len, open) = (RefCell::new([0; 16]), Cell::new(0), Cell::new(false));
+        let board = Board { open: &open, pending: Cell::new(None) };
+        let mut g = Guarded::new(Recorder { log: &log, len: &len, open: &open, sleepy: true }, board);
+        assert!(g.wake_sources(), "der Schutz meldet Ereignisse auch ohne Wake-Quelle des Programms");
+        g.tick(0, 0);
+        assert!(!g.woken(1), "ohne Verletzung schlaeft die Schleife weiter");
+        g.protection.pending.set(Some(Violation { region: "Programmzustand", address: 0x2000_0010 }));
+        assert!(g.woken(2));
+        g.tick(2, 0);
+        assert_eq!(&log.borrow()[..len.get()], b"TWWhT", "zugestellt im Tick der Grenze");
     }
 }

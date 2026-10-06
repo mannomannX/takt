@@ -22,15 +22,27 @@
 //!
 //! Die Gegenrichtung liest die Leitung bei jedem Abschicken leer, damit
 //! ein ungelesenes Paket den Host nicht blockiert; steht `TAKT` darin,
-//! setzt sich der Chip zurueck (FB-266).
+//! setzt sich der Chip zurueck (FB-266). Jedes Byte geht ausserdem in ein
+//! FIFO, aus dem die Schleife Tunes liest ([`console_byte`], 8.4).
 
 use esp_hal::Blocking;
 use esp_hal::interrupt::Priority;
 use esp_hal::peripherals::USB_DEVICE;
 use esp_hal::usb::usb_serial_jtag::UsbSerialJtag;
+use takt_board_support::ByteFifo;
 use takt_rt_baremetal::Port;
 
 use crate::usb::{Magic, chip_reset};
+
+/// Die Gegenrichtung fuer die Schleife. Ist es voll, verwirft die Leitung
+/// das Byte; eine Tune-Zeile, der es fehlt, ist keine mehr.
+static RX: ByteFifo<256> = ByteFifo::new();
+
+/// Das naechste Byte der Gegenrichtung, `None`, wenn keines wartet: die
+/// Quelle der Tunes ([`takt_rt_baremetal::Console`]).
+pub fn console_byte() -> Option<u8> {
+    RX.pop()
+}
 
 /// Der Ring vor der Leitung: 2 KiB fangen einen Host ab, der 20 ms
 /// lang nicht liest, bei 500 us Tick und einer Zeitzeile je Tick.
@@ -104,9 +116,11 @@ impl UsbJtag {
             if !regs.ep1_conf().read().serial_out_ep_data_avail().bit_is_set() {
                 return;
             }
-            if self.magic.feed(regs.ep1().read().rdwr_byte().bits()) {
+            let b = regs.ep1().read().rdwr_byte().bits();
+            if self.magic.feed(b) {
                 chip_reset();
             }
+            let _ = RX.push(b);
         }
     }
 }

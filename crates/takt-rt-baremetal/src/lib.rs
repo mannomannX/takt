@@ -35,6 +35,7 @@
 pub mod bench;
 pub mod board;
 pub mod clock;
+pub mod console;
 pub mod protect;
 pub mod run;
 pub mod telemetry;
@@ -42,6 +43,7 @@ pub mod tolerance;
 
 pub use board::{Sleep, TickSource};
 pub use clock::{LogicalClock, TimerClock};
+pub use console::Console;
 pub use protect::{Guarded, Protection, Unprotected, Violation};
 pub use run::{Cadence, JournalStats, NoWatchdog, Stats, Trace, report, run, stats};
 pub use telemetry::{DRAIN_ROUNDS, Port, Telemetry};
