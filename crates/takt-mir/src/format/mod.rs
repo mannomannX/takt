@@ -87,13 +87,16 @@ pub fn read_header(buf: &[u8]) -> Result<(Header, usize), FormatError> {
 
 /// Liest einen Rumpf mit seiner Stringtabelle (Umkehrung von `encode_body`).
 pub fn decode_body(strings: Vec<String>, body: &[u8]) -> Result<Program, FormatError> {
-    let r = Reader::new(strings);
-    let root = Node::parse("Wurzel", body)?;
-    read_one::<Program>(&root, &r, 1)
+    decode_with(&Reader::new(strings), body)
 }
 
-/// Liest eine Datei.
-pub fn read_program(buf: &[u8]) -> Result<(Header, Program), FormatError> {
+fn decode_with(r: &Reader, body: &[u8]) -> Result<Program, FormatError> {
+    let root = Node::parse("Wurzel", body)?;
+    read_one::<Program>(&root, r, 1)
+}
+
+/// Kopf, Stringtabelle und Rumpf einer Datei.
+fn split(buf: &[u8]) -> Result<(Header, Vec<String>, &[u8]), FormatError> {
     let (header, mut pos) = read_header(buf)?;
     let count = get_varint(buf, &mut pos)?;
     let mut strings = Vec::new();
@@ -101,6 +104,23 @@ pub fn read_program(buf: &[u8]) -> Result<(Header, Program), FormatError> {
         strings.push(get_str(buf, &mut pos)?);
     }
     let len = get_varint(buf, &mut pos)?;
-    let body = slice(buf, pos, len)?;
+    Ok((header, strings, slice(buf, pos, len)?))
+}
+
+/// Liest eine Datei.
+pub fn read_program(buf: &[u8]) -> Result<(Header, Program), FormatError> {
+    let (header, strings, body) = split(buf)?;
     Ok((header, decode_body(strings, body)?))
+}
+
+/// Die Felder einer Datei, die dieser Leser nicht kennt und darum
+/// ueberliest (W2), je Knotentyp und Nummer; leer, wenn er jedes versteht.
+/// Ein Feld einer aelteren Datei, das hier steht, hat eine spaetere Version
+/// umnummeriert oder entfernt, und sein Wert faellt still auf den Default
+/// (W5, SEM2-067).
+pub fn unread_fields(buf: &[u8]) -> Result<Vec<(&'static str, u32)>, FormatError> {
+    let (_, strings, body) = split(buf)?;
+    let r = Reader::new(strings);
+    decode_with(&r, body)?;
+    Ok(r.unread())
 }

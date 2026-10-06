@@ -13,8 +13,11 @@
 
 use takt_diag::Policy;
 use takt_interp::{RunOptions, Trace, run};
-use takt_mir::format::{FORMAT_VERSION, read_program};
+use takt_mir::format::{FORMAT_VERSION, read_program, unread_fields, write_program};
 use takt_sema::{Build, Options};
+
+/// Die erste Version mit `vN-full.mir` (SEM2-067).
+const FIRST_FULL: u16 = 18;
 
 fn dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/mir-golden")
@@ -101,4 +104,61 @@ fn every_format_version_names_its_origin() {
         seen.push(version.parse::<u16>().unwrap_or_else(|_| panic!("Version: `{line}`")));
     }
     assert_eq!(seen, (2..=FORMAT_VERSION).collect::<Vec<_>>(), "je Version genau eine Zeile, aufsteigend");
+}
+
+/// Die Konstruktionen eines Programms, eine je Zeile (`takt_mir::census`).
+fn census_text(p: &takt_mir::Program) -> String {
+    takt_mir::census::census(p).iter().map(|c| format!("{c:?}\n")).collect()
+}
+
+/// **Der heutige Leser kennt jedes Feld jeder Golden-Datei** (W5,
+/// SEM2-067): Ein Feld, das er ueberliest, hat eine spaetere Version
+/// umnummeriert oder entfernt, und sein Wert fiele still auf den Default.
+/// Entfernt eine Version ein Feld mit Absicht, nennt dieser Test es mit
+/// seiner Version.
+#[test]
+fn every_field_of_every_golden_file_is_known_today() {
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir())
+        .expect("mir-golden lesbar")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "mir"))
+        .collect();
+    files.sort();
+    // v2 bis vN: Weniger heisst, die Suche ist gebrochen.
+    assert!(files.len() >= usize::from(FORMAT_VERSION) - 1, "nur {} Dateien", files.len());
+    let unread: Vec<String> = files
+        .iter()
+        .filter_map(|path| {
+            let bytes = std::fs::read(path).expect("lesbar");
+            let fields = unread_fields(&bytes).unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+            (!fields.is_empty()).then(|| format!("{}: {fields:?}", path.display()))
+        })
+        .collect();
+    assert!(unread.is_empty(), "ueberlesene Felder:\n{}", unread.join("\n"));
+}
+
+/// **Jede Formatversion ab 18 hat ihr volles Programm** (W5, SEM2-067):
+/// `vN-full.mir` schrieb der Compiler der Version N aus
+/// `takt_mir::sample::full_program`, das jede Konstruktion traegt, und
+/// `vN-full.census` nennt sie. Gelesen traegt die Datei dieselben
+/// Konstruktionen: Eine umnummerierte Variante faende sich unter einer
+/// anderen oder gar nicht. `UPDATE_GOLDEN=1` schreibt die Dateien der
+/// heutigen Version, wenn sie fehlen, und ueberschreibt keine.
+#[test]
+fn every_format_version_keeps_its_full_program() {
+    let current = dir().join(format!("v{FORMAT_VERSION}-full.mir"));
+    if std::env::var_os("UPDATE_GOLDEN").is_some() && !current.exists() {
+        let p = takt_mir::sample::full_program();
+        std::fs::write(&current, write_program(&p, concat!("takt ", env!("CARGO_PKG_VERSION")))).expect("schreiben");
+        std::fs::write(current.with_extension("census"), census_text(&p)).expect("schreiben");
+    }
+    for version in FIRST_FULL..=FORMAT_VERSION {
+        let path = dir().join(format!("v{version}-full.mir"));
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("{}: {e} (`UPDATE_GOLDEN=1` schreibt die Datei der Version)", path.display()));
+        let (header, p) = read_program(&bytes).unwrap_or_else(|e| panic!("v{version}-full: {e:?}"));
+        assert_eq!(header.format_version, version, "v{version}-full: Kopf");
+        let want = std::fs::read_to_string(path.with_extension("census")).expect("Census der Datei");
+        assert_eq!(census_text(&p), want, "v{version}-full: die gelesenen Konstruktionen");
+    }
 }

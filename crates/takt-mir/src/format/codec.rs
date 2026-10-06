@@ -171,6 +171,7 @@ impl<A: Field, B: Field> Field for (A, B) {
     }
     fn read(raw: Raw<'_>, r: &Reader) -> Result<Self> {
         let n = Node::parse(Self::NAME, bytes(raw, Self::NAME)?)?;
+        r.note_unread(&n, &[1, 2]);
         Ok((read_one(&n, r, 1)?, read_one(&n, r, 2)?))
     }
 }
@@ -204,6 +205,7 @@ impl Field for Span {
     }
     fn read(raw: Raw<'_>, r: &Reader) -> Result<Self> {
         let n = Node::parse(Self::NAME, bytes(raw, Self::NAME)?)?;
+        r.note_unread(&n, &[1, 2, 3]);
         Ok(Span { file: FileId(read_one(&n, r, 1)?), start: read_one(&n, r, 2)?, end: read_one(&n, r, 3)? })
     }
 }
@@ -329,6 +331,7 @@ macro_rules! codec_struct {
             fn read(raw: Raw<'_>, r: &Reader) -> Result<Self> {
                 let _depth = r.enter(Self::NAME)?;
                 let n = node(raw, Self::NAME)?;
+                r.note_unread(&n, &[$($tag),*]);
                 Ok($name { $( $field: read_field!(n, r, $tag, $mode), )* })
             }
         }
@@ -411,6 +414,7 @@ macro_rules! codec_enum {
                                 n: &$crate::format::wire::Node<'_>,
                                 r: &$crate::format::wire::Reader,
                             ) -> Result<$name> {
+                                r.note_unread(n, &[0 $( $(, $ttag)* )? $( $(, $stag)* )?]);
                                 Ok($name::$variant
                                     $( ( $( read_field!(n, r, $ttag, $tmode) ),* ) )?
                                     $( { $( $sfield: read_field!(n, r, $stag, $smode) ),* } )?

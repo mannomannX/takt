@@ -259,6 +259,11 @@ impl<'a> Node<'a> {
         Ok(first)
     }
 
+    /// Die Nummern seiner Felder, in Dateireihenfolge.
+    pub fn tags(&self) -> impl Iterator<Item = u32> + '_ {
+        self.fields.iter().map(|(t, _)| *t)
+    }
+
     /// Hoechstens ein Wert.
     pub fn opt(&self, tag: u32) -> Result<Option<Raw<'a>>> {
         let mut it = self.all(tag);
@@ -276,10 +281,12 @@ impl<'a> Node<'a> {
 /// boeswillig, und der rekursive Leser fiele sonst am Stapel.
 pub const MAX_DEPTH: u32 = 1024;
 
-/// Leser: Stringtabelle des Kopfes und die Tiefe, in der er gerade liest.
+/// Leser: Stringtabelle des Kopfes, die Tiefe, in der er gerade liest, und
+/// die Felder, die er ueberlas.
 pub struct Reader {
     strings: Vec<String>,
     depth: std::cell::Cell<u32>,
+    unread: std::cell::RefCell<std::collections::BTreeSet<(&'static str, u32)>>,
 }
 
 /// Eine Ebene des Lesers; sie endet, wenn der Wert gelesen ist.
@@ -294,7 +301,20 @@ impl Drop for Depth<'_> {
 impl Reader {
     /// Leser mit Stringtabelle.
     pub fn new(strings: Vec<String>) -> Self {
-        Reader { strings, depth: std::cell::Cell::new(0) }
+        Reader { strings, depth: std::cell::Cell::new(0), unread: Default::default() }
+    }
+
+    /// Merkt die Felder von `n`, die `known` nicht nennt: Der Leser
+    /// ueberliest sie (W2).
+    pub fn note_unread(&self, n: &Node<'_>, known: &[u32]) {
+        for tag in n.tags().filter(|t| !known.contains(t)) {
+            self.unread.borrow_mut().insert((n.name, tag));
+        }
+    }
+
+    /// Was der Leser ueberlas, je Knotentyp und Feldnummer.
+    pub fn unread(&self) -> Vec<(&'static str, u32)> {
+        self.unread.borrow().iter().copied().collect()
     }
 
     /// Steigt in einen Knoten `name` hinab; jenseits von [`MAX_DEPTH`] ein

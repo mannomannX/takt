@@ -4,7 +4,9 @@
 use takt_mir::census::{all, census};
 use takt_mir::format::codec::Field;
 use takt_mir::format::wire::{Node, Reader, Writer};
-use takt_mir::format::{FORMAT_VERSION, decode_body, encode_body, read_header, read_program, write_program};
+use takt_mir::format::{
+    FORMAT_VERSION, decode_body, encode_body, read_header, read_program, unread_fields, write_program,
+};
 use takt_mir::hash::{logic_hash, program_hash};
 use takt_mir::program::{Binding, Meta};
 use takt_mir::sample::full_program;
@@ -219,6 +221,16 @@ fn unknown_fields_are_skipped_and_missing_lists_are_empty() {
     assert!(block.stmts.is_empty());
     let table = TypeTable::read(root.one(1).expect("Feld 1"), &r).expect("Tabelle ohne Felder");
     assert!(table.list.is_empty());
+    let unread: Vec<u32> = r.unread().iter().filter(|(name, _)| *name == "Block").map(|(_, tag)| *tag).collect();
+    assert_eq!(unread, [97, 98, 99], "der Leser nennt, was er ueberlas");
+}
+
+/// Was der heutige Schreiber schreibt, kennt der heutige Leser ganz (W5):
+/// Das volle Programm hinterlaesst kein ueberlesenes Feld.
+#[test]
+fn todays_reader_knows_every_field_todays_writer_writes() {
+    let bytes = write_program(&full_program(), "takt 0.1.0");
+    assert_eq!(unread_fields(&bytes).expect("lesbar"), Vec::new());
 }
 
 #[test]
