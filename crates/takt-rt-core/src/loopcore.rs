@@ -384,6 +384,14 @@ pub trait Program {
     /// Gibt den Latch an die Treiber (12.1, Schritt 10).
     fn commit(&mut self) {}
 
+    /// `output_timing = boundary` (1.4): Der Latch eines Ticks geht erst an
+    /// der naechsten Tickgrenze an die Treiber, jitterfrei, wie lange der
+    /// Schritt auch rechnete (LET). Die Semantik aendert das nicht: Das
+    /// Programm liest seine Ausgaenge erst im naechsten Tick.
+    fn commit_at_boundary(&self) -> bool {
+        false
+    }
+
     /// Gibt die Ausgaenge in den Trace (12.5, 9.3).
     fn trace(&mut self, _outputs: Outputs) {}
 
@@ -403,7 +411,7 @@ pub trait Program {
 pub struct Next {
     /// Wann `service` wieder gerufen werden will, absolut in Nanosekunden:
     /// die naechste Tickgrenze, mit erlaubtem Schlaf (9.9) die Frist des
-    /// Schlafs.
+    /// Schlafs; haelt der Kern einen Latch (1.4), die naechste Grenze.
     pub deadline: i64,
     /// Ein Job wartet (4.5): Der Job-Kontext soll rechnen.
     pub jobs: bool,
@@ -454,6 +462,9 @@ pub struct Runtime<P, C, W, S> {
     /// Im vorigen Tick ist die Periode uebergelaufen (7.3: der Fault wirkt
     /// im naechsten Tick).
     pending_overrun: bool,
+    /// Der Latch des letzten Ticks wartet auf die naechste Grenze
+    /// (`output_timing = boundary`, 1.4).
+    held: bool,
     /// Verletzungen der Periode in Folge (12.6 Zeile 7).
     period: takt_hal::contract::Period,
     /// Der Anfangszustand ist im Trace, oder das Programm hat ihn beendet.
@@ -492,6 +503,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             tuned: 0,
             beat_from: start,
             pending_overrun: false,
+            held: false,
             period: takt_hal::contract::Period::default(),
             begun: false,
             last: Tick::default(),
@@ -567,6 +579,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     fn wait(&mut self, mut tunables: Option<&mut dyn Tunables>) {
         while self.beat_from < self.deadline {
             self.clock.wait_until(self.beat_from);
+            self.release();
             if self.asleep.is_some() {
                 let j = self.boundary_at(self.beat_from);
                 let changed = reborrow(&mut tunables).is_some_and(|t| self.tune_at(t, j));
@@ -623,6 +636,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // 12.3: Eine Grenze im Schlaf (9.9) bestaetigt den Watchdog, auch
         // ohne Tick; ein Port, der an jeder Grenze ruft, haelt ihn so wach.
         while self.beat_from < self.deadline && self.beat_from <= now {
+            self.release();
             self.watchdog.kick();
             self.beat_from = self.beat_from.saturating_add(self.tick_ns);
         }
@@ -637,13 +651,33 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
                 self.tune_asleep(t, now);
             }
         }
-        Next { deadline: self.deadline, jobs: self.program.dispatch_job(), ended: self.ended }
+        let deadline = if self.held { self.beat_from.min(self.deadline) } else { self.deadline };
+        Next { deadline, jobs: self.program.dispatch_job(), ended: self.ended }
     }
 
     /// Der Beginn von Tick `j`.
     fn boundary(&self, j: u64) -> i64 {
         let periods = i64::try_from(j).unwrap_or(i64::MAX);
         self.start.saturating_add(self.tick_ns.saturating_mul(periods))
+    }
+
+    /// Der Commit nach einem Schritt (12.1): sofort, unter `output_timing =
+    /// boundary` (1.4) an der naechsten Grenze ([`Runtime::release`]).
+    fn commit_or_hold(&mut self) {
+        if self.program.commit_at_boundary() {
+            self.held = true;
+        } else {
+            self.program.commit();
+        }
+    }
+
+    /// An einer Grenze geht ein gehaltener Latch an die Treiber, vor dem
+    /// Abtasten des naechsten Ticks (1.4), im Schlaf an der ersten
+    /// geschlafenen Grenze.
+    fn release(&mut self) {
+        if core::mem::take(&mut self.held) {
+            self.program.commit();
+        }
     }
 
     /// Der erste Tick, der nicht vor `t` beginnt.
@@ -723,7 +757,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         }
         // 1.5, 9.4: Tick 0 committet wie jeder Tick — was der Anfangszustand
         // in den Latch schrieb, erreicht die Treiber vor Tick 1.
-        self.program.commit();
+        self.commit_or_hold();
         let shown = self.sink.outputs(None);
         self.program.trace(shown);
         if let Some(next) = self.program.next_run() {
@@ -752,6 +786,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         tunables: Option<&mut dyn Tunables>,
     ) {
         let began = self.clock.now();
+        self.release();
         // Was vor dem Abtasten geschah, sieht der Schritt selbst (9.9).
         self.clock.woken();
         let drift = began - self.deadline;
@@ -778,7 +813,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // sample_inputs() bis commit_outputs(): die Semantik.
         let now = tick_end(self.k, self.tick_ns);
         self.program.tick(self.k, now);
-        self.program.commit();
+        self.commit_or_hold();
         let took = self.clock.now() - began;
 
         // 7.3: am Raster gemessen — der Schritt endet `drift + took` nach

@@ -31,7 +31,8 @@ fn every_run_lands_in_the_table_and_replays_from_its_recording() {
     let failed = out_dir.join("gain_sweep-008.trace");
     let head = std::fs::read_to_string(&failed).expect("Aufzeichnung");
     let version = format!("#! takt-aufzeichnung {}", takt_interp::record::RECORDING_VERSION);
-    for line in [version.as_str(), "#! profil QUAL", "#! param GAIN 4", "#! param LIMIT 30"] {
+    let compiler = format!("#! compiler {}", env!("CARGO_PKG_VERSION"));
+    for line in [version.as_str(), compiler.as_str(), "#! profil QUAL", "#! param GAIN 4", "#! param LIMIT 30"] {
         assert!(head.contains(line), "{line} fehlt:\n{head}");
     }
     let replay = takt(&["replay", PROGRAM, "--record", failed.to_str().expect("Pfad")]);

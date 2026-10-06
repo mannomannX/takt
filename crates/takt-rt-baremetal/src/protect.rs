@@ -146,6 +146,10 @@ impl<P: Program, M: Protection> Program for Guarded<P, M> {
         self.program.commit();
     }
 
+    fn commit_at_boundary(&self) -> bool {
+        self.program.commit_at_boundary()
+    }
+
     fn trace(&mut self, outputs: Outputs) {
         self.program.trace(outputs);
     }

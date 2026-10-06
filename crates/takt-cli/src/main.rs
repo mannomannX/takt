@@ -2276,7 +2276,8 @@ fn campaign(args: &Args) -> bool {
             let file = std::path::Path::new(dir).join(format!("{}-{:03}.trace", campaign.name, run.id));
             // 12.5: Der Kopf traegt den Speicher, mit dem der Lauf begann.
             let header = takt_interp::record::Header::of(&program, profile.as_deref(), &result.start_params, ticks)
-                .with_store(&program, &options.nvm);
+                .with_store(&program, &options.nvm)
+                .with_compiler(env!("CARGO_PKG_VERSION"));
             let recording = takt_interp::record::Recording { header, inputs: stimulus.clone() }.seal(&result.trace);
             if let Err(e) = std::fs::write(&file, recording.render()) {
                 eprintln!("{}: {e}", file.display());
@@ -2363,7 +2364,8 @@ fn run_cmd(args: &Args) -> bool {
         // 12.5: Der Kopf traegt den Speicher, mit dem der Lauf begann.
         let header =
             takt_interp::record::Header::of(&program, profile_of(args).as_deref(), &result.start_params, ticks)
-                .with_store(&program, &options.nvm);
+                .with_store(&program, &options.nvm)
+                .with_compiler(env!("CARGO_PKG_VERSION"));
         let recording = takt_interp::record::Recording { header, inputs: stimulus }.seal(&result.trace);
         if let Err(e) = std::fs::write(out, recording.render()) {
             eprintln!("{out}: {e}");

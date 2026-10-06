@@ -18,10 +18,11 @@ use common::board::{
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, Options};
 
-/// Was der F401 nicht fasst: `45_journal_cut` haelt ein Flash-Modell mit
-/// zwei Sektoren im RAM, und `.bss` laeuft um gut 47 KiB ueber die 64 KiB
-/// des Chips (Pruefung 39); auf dem C6 laeuft es.
-const TOO_BIG: &[&str] = &["45_journal_cut.takt"];
+/// Was der F401 nicht fasst (Pruefung 39): `45_journal_cut` und
+/// `110_journal_log` halten ein Flash-Modell mit seinen Sektoren im RAM, das
+/// im Build `sim` mitlaeuft; `.bss` laeuft um 47 und 80 KiB ueber die 64 KiB
+/// des Chips. Auf dem C6 laufen beide.
+const TOO_BIG: &[&str] = &["45_journal_cut.takt", "110_journal_log.takt"];
 
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
 /// und sein Port vertragen nur einen Lauf zugleich.
@@ -140,6 +141,26 @@ fn the_board_hands_itself_back_for_the_next_program() {
     assert!(!outs(&first).is_empty(), "keine Ausgaben:\n{first}");
     assert_eq!(outs(&first), outs(&second));
     assert!(last_output(&second, "vent").is_some(), "{second}");
+}
+
+/// **`TOO_BIG` ist, was Pruefung 39 fuer den F401 ablehnt** (11.5,
+/// FB-442): je Programm der Board-Suite im Build `sim`, wie das Board es
+/// baut, gegen `ram` und `flash` aus `corpus-try/hw/stm32f401.hw`. Ein
+/// neues Programm, das nicht passt, faellt so am Wirt auf statt im
+/// Boardlauf, und ein Eintrag, der wieder passt, ebenso.
+#[test]
+fn the_programs_too_big_for_the_board_are_those_check_39_rejects() {
+    let text = std::fs::read_to_string(board::root().join("corpus-try/hw/stm32f401.hw")).expect("hw lesbar");
+    let hw = takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{}: {}", e.line, e.message));
+    let target = hw.target("thumbv7em").expect("Ziel thumbv7em");
+    let rejected: Vec<&str> = board::corpus()
+        .into_iter()
+        .filter(|name| {
+            let p = common::board::program(&board::corpus_path(name));
+            takt_sema::calibrated::check(&p, target, takt_diag::Span::default()).iter().any(|d| d.code == "SC-39")
+        })
+        .collect();
+    assert_eq!(rejected, TOO_BIG);
 }
 
 #[test]

@@ -175,6 +175,7 @@ fn entry_prototypes(x: &Prefix) -> String {
         format!("void {x}_overrun({a});"),
         format!("void {x}_hardware({a});"),
         format!("void {x}_tolerance(int64_t *ns, uint32_t *runs);"),
+        format!("uint8_t {x}_output_timing(void);"),
         format!("int32_t {x}_job_dispatch({a});"),
         format!("void {x}_job_work({a});"),
         format!("int32_t {x}_jobs_busy({a});"),
@@ -822,6 +823,10 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     // 7.1, 12.6 Zeile 7: die Toleranz der Tickquelle fuer die Schleife.
     let (ns, runs) = p.config.tolerance();
     let _ = writeln!(s, "void {x}_tolerance(int64_t *ns, uint32_t *runs) {{ *ns = {ns}LL; *runs = {runs}u; }}");
+    // 1.4: `output_timing` fuer die Schleife; 1 (`boundary`) haelt den
+    // Commit bis zur naechsten Tickgrenze.
+    let boundary = u8::from(p.config.output_timing == takt_mir::program::OutputTiming::Boundary);
+    let _ = writeln!(s, "uint8_t {x}_output_timing(void) {{ return {boundary}u; }}");
     // 12.6 Zeile 6: Was der Commit an Treiberfehlern gesehen hat, wirkt im
     // naechsten Tick, wie ein Ueberlauf.
     let driven_out = driver_outputs(p, layout);

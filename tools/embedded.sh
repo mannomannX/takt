@@ -117,7 +117,10 @@ program_in_binary() {
         exit 1
     fi
     maschine="$(grep -o '^machine [A-Za-z_][A-Za-z0-9_]*' "$bringup/$konfiguriert" | head -1 | cut -d' ' -f2)"
-    if [ -n "$maschine" ] && "$nm" "$bin" 2>/dev/null | grep -q "${maschine}_step"; then
+    # `grep` liest bis zum Ende: `grep -q` hoerte beim ersten Treffer auf,
+    # `nm` schriebe in die geschlossene Leitung, und unter `pipefail` galte
+    # die Pruefung als gescheitert (FB-443).
+    if [ -n "$maschine" ] && "$nm" "$bin" 2>/dev/null | grep "${maschine}_step" >/dev/null; then
         echo "  Programm im Binary: $maschine (aus $konfiguriert)"
     else
         echo "  FEHLER: ${maschine}_step fehlt in $bin — gebaut wurde ein anderes Programm." >&2

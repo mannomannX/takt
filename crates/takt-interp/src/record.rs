@@ -37,8 +37,10 @@ use crate::trace::{LineKind, Trace};
 /// `#! polling-unchecked <maschine>` nennt jede Maschine, deren Polling
 /// ungeprueft freigegeben ist (Pruefung 59), und `#! persist <hex>` traegt
 /// s0 der `persist`-Variablen in der Form des Journals (5.9, 12.5); ohne die
-/// Zeilen gilt ein leerer Speicher, wie Version 3 ihn meinte.
-pub const RECORDING_VERSION: u16 = 4;
+/// Zeilen gilt ein leerer Speicher, wie Version 3 ihn meinte. Version 5:
+/// `#! compiler <version>` nennt die Compiler-Version des Werkzeugs, das
+/// aufzeichnete (11.3); ohne die Zeile ist sie unbekannt, wie in Version 4.
+pub const RECORDING_VERSION: u16 = 5;
 
 /// Der Kopf einer Aufzeichnung (12.5, 11.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +100,9 @@ pub struct Header {
     /// s0 der `persist`-Variablen (12.5) als Hex der Journal-Nutzlast
     /// (`Nvm::snapshot`); `None` fuer einen leeren Speicher.
     pub persist: Option<String>,
+    /// Die Compiler-Version des Werkzeugs, das aufzeichnete (11.3); `None`
+    /// vor Version 5 oder ohne Werkzeug.
+    pub compiler: Option<String>,
 }
 
 impl Header {
@@ -120,7 +125,15 @@ impl Header {
             chain: None,
             polling_unchecked: p.machines.iter().filter(|m| m.polling_unchecked).map(|m| m.name.clone()).collect(),
             persist: None,
+            compiler: None,
         }
+    }
+
+    /// Mit der Compiler-Version des Werkzeugs (11.3): dieselbe, die es in
+    /// die MIR schreibt.
+    pub fn with_compiler(mut self, version: &str) -> Header {
+        self.compiler = Some(version.to_string());
+        self
     }
 
     /// Traegt s0 der `persist`-Variablen ein (12.5): den Speicher, mit dem
@@ -153,6 +166,9 @@ impl Header {
         let mut out = String::new();
         let _ = writeln!(out, "#! takt-aufzeichnung {}", self.version);
         let _ = writeln!(out, "#! edition {}", self.edition);
+        if let Some(c) = &self.compiler {
+            let _ = writeln!(out, "#! compiler {c}");
+        }
         let _ = writeln!(out, "#! logik {}", self.logic);
         let _ = writeln!(out, "#! tick {}", self.tick);
         let _ = writeln!(out, "#! ticks {}", self.ticks);
@@ -220,6 +236,7 @@ impl Header {
             chain: None,
             polling_unchecked: Vec::new(),
             persist: None,
+            compiler: None,
         };
         let mut seen: Vec<&str> = Vec::new();
         for line in text.lines() {
@@ -238,6 +255,7 @@ impl Header {
                     h.version = value.parse().ok().filter(|v| *v >= 1).ok_or_else(|| number("eine Version ab 1"))?;
                 }
                 "edition" => h.edition = value.parse().map_err(|_| number("eine Zahl"))?,
+                "compiler" => h.compiler = Some(value.to_string()),
                 "logik" => h.logic = value.to_string(),
                 "tick" => h.tick = value.parse().ok().filter(|t| *t > 0).ok_or_else(|| number("Nanosekunden"))?,
                 "ticks" => h.ticks = value.parse().map_err(|_| number("eine Zahl"))?,

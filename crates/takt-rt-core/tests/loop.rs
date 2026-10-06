@@ -438,6 +438,8 @@ struct Ordered {
     log: Vec<&'static str>,
     ends_after: Option<u64>,
     ticks: u64,
+    /// `output_timing = boundary` (1.4).
+    boundary: bool,
 }
 
 impl Program for Ordered {
@@ -464,6 +466,10 @@ impl Program for Ordered {
 
     fn commit(&mut self) {
         self.log.push("commit");
+    }
+
+    fn commit_at_boundary(&self) -> bool {
+        self.boundary
     }
 
     fn trace(&mut self, outputs: Outputs) {
@@ -511,6 +517,43 @@ fn the_latch_is_committed_before_the_sleep() {
     rt.clock.0 = 9 * T0;
     rt.service();
     assert_eq!(rt.program.log[4..], ["advance", "trace", "tick", "commit", "trace"]);
+}
+
+/// **`output_timing = boundary` committet an der naechsten Grenze** (1.4,
+/// FB-417): Der Latch des Anfangszustands und jedes Ticks geht erst zu
+/// Beginn des naechsten an die Treiber, vor dessen Schritt; im Schlaf an der
+/// ersten geschlafenen Grenze, zu der `service` den Port darum ruft.
+#[test]
+fn a_boundary_commit_waits_for_the_next_boundary() {
+    let program = Ordered { boundary: true, ..Ordered::default() };
+    let mut rt = Runtime::new(program, Logical(0), Kicks::default(), EveryTick, Profile::BAREMETAL, T0, Policy::Fault);
+    let next = rt.service();
+    assert_eq!(rt.program.log, ["trace", "commit", "tick"], "der Anfangszustand geht vor Tick 1 hinaus");
+    assert_eq!(next.deadline, T0, "der gehaltene Latch ruft den Port an die naechste Grenze, nicht an die Frist");
+    rt.clock.0 = T0;
+    let next = rt.service();
+    assert_eq!(rt.program.log[3..], ["commit"]);
+    assert_eq!(next.deadline, 9 * T0, "danach gilt die Frist des Schlafs");
+    rt.clock.0 = 9 * T0;
+    rt.service();
+    assert_eq!(rt.program.log[4..], ["advance", "trace", "tick", "trace"], "der Latch dieses Ticks wartet wieder");
+}
+
+/// Die wartende Schleife gibt einen gehaltenen Latch an der ersten
+/// geschlafenen Grenze hinaus, nicht erst am Ende des Schlafs; das Ende
+/// eines Laufs ersetzt ihn durch die `safe`-Werte (1.4, 12.7).
+#[test]
+fn a_waiting_loop_commits_a_held_latch_at_the_first_slept_boundary() {
+    let program = Ordered { boundary: true, ..Ordered::default() };
+    let mut rt = Runtime::new(program, Logical(0), Kicks::default(), EveryTick, Profile::BAREMETAL, T0, Policy::Fault);
+    rt.step();
+    rt.step();
+    assert_eq!(rt.program.log, ["trace", "commit", "tick", "commit", "advance", "trace", "tick", "trace"]);
+
+    let program = Ordered { boundary: true, ends_after: Some(1), ..Ordered::default() };
+    let mut rt = Runtime::new(program, Logical(0), Kicks::default(), EveryTick, Profile::BAREMETAL, T0, Policy::Fault);
+    rt.service();
+    assert_eq!(rt.program.log, ["trace", "commit", "tick", "trace", "end", "commit", "trace"]);
 }
 
 /// **Das geordnete Ende gehoert zum Kern** (12.7): Nach dem Tick, der

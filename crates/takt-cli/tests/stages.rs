@@ -201,6 +201,9 @@ fn replay_refuses_a_misspelled_switch_and_a_bad_tick_count() {
     let record = record.to_str().expect("Pfad").to_string();
     let run = takt(&["run", "corpus-try/13_framing.takt", "--ticks", "3", "--record", &record]);
     assert!(run.status.success(), "{}", stderr(&run));
+    // 11.3, FB-421: Der Lauf-Kopf nennt die Compiler-Version, wie die MIR.
+    let head = std::fs::read_to_string(&record).expect("Aufzeichnung");
+    assert!(head.contains(&format!("#! compiler {}\n", env!("CARGO_PKG_VERSION"))), "{head}");
     let typo = takt(&["replay", "corpus-try/13_framing.takt", "--record", &record, "--gloden", &record]);
     assert!(!typo.status.success() && stderr(&typo).contains("unbekannter Schalter `--gloden`"), "{}", stderr(&typo));
     let bad = takt(&["replay", "corpus-try/13_framing.takt", "--record", &record, "--ticks", "abc"]);

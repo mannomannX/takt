@@ -209,6 +209,7 @@ fn the_guarantee_survives_the_recording() {
         chain: None,
         polling_unchecked: Vec::new(),
         persist: None,
+        compiler: None,
     };
     let text = header.render();
     assert!(text.contains("#! runtime echtzeit nein"), "der Befund fehlt: {text}");

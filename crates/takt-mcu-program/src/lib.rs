@@ -41,6 +41,7 @@ unsafe extern "C" {
     fn app_overrun(arena: *mut c_void);
     fn app_hardware(arena: *mut c_void);
     fn app_tolerance(ns: *mut i64, runs: *mut u32);
+    fn app_output_timing() -> u8;
     fn app_dump(arena: *mut c_void, all: i32);
     fn app_pc(arena: *mut c_void);
     fn app_output(arena: *mut c_void, index: i32) -> i64;
@@ -193,6 +194,11 @@ impl Program for Generated {
         // SAFETY: der Rahmen schreibt zwei Zahlen an die uebergebenen Stellen.
         unsafe { app_tolerance(&mut ns, &mut runs) };
         Some(Tolerance { ns, runs })
+    }
+
+    fn commit_at_boundary(&self) -> bool {
+        // SAFETY: liest eine Konstante des Rahmens.
+        unsafe { app_output_timing() == 1 }
     }
 
     fn sleep_allowed(&self) -> bool {

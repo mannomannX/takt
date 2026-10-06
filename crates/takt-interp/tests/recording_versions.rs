@@ -1,6 +1,7 @@
 //! Die Aufzeichnung (12.5) liest ihre Vorversionen (11.3): Version 1
 //! kannte keinen Parametervektor im Kopf, Version 2 traegt ihn, Version 3
-//! dazu Zeitstempel und Folgenummern der Lieferungen (12.6).
+//! dazu Zeitstempel und Folgenummern der Lieferungen (12.6), Version 5 die
+//! Compiler-Version.
 
 use takt_interp::record::{RECORDING_VERSION, Recording};
 
@@ -15,7 +16,7 @@ t=1 in x 1
 
 #[test]
 fn version_one_still_reads_without_a_parameter_vector() {
-    assert_eq!(RECORDING_VERSION, 4, "die Vorversionen dieses Tests sind 1 bis 3");
+    assert_eq!(RECORDING_VERSION, 5, "die Vorversionen dieses Tests sind 1 bis 4");
     let r = Recording::parse(V1).expect("Version 1 ist lesbar");
     assert_eq!(r.header.version, 1);
     assert!(r.header.overrides().is_empty(), "Version 1 nannte nur die Defaults, die ohnehin gelten");
@@ -64,6 +65,23 @@ fn a_broken_header_is_refused() {
         }
     }
     assert!(accepted.is_empty(), "angenommen statt abgelehnt:\n{}", accepted.join("\n"));
+}
+
+/// **Der Kopf nennt die Compiler-Version** (11.3, FB-421) und liest sie
+/// zurueck; eine Aufzeichnung der Version 4 hat keine und liest sich wie
+/// zuvor.
+#[test]
+fn the_header_names_the_compiler() {
+    let v5 = V1.replacen("takt-aufzeichnung 1", "takt-aufzeichnung 5", 1).replacen(
+        "#! edition 1\n",
+        "#! edition 1\n#! compiler 0.1.0\n",
+        1,
+    );
+    let r = Recording::parse(&v5).expect("Version 5 ist lesbar");
+    assert_eq!(r.header.compiler.as_deref(), Some("0.1.0"));
+    assert_eq!(r.render(), v5);
+    let v4 = V1.replacen("takt-aufzeichnung 1", "takt-aufzeichnung 4", 1);
+    assert_eq!(Recording::parse(&v4).expect("Version 4 ist lesbar").header.compiler, None);
 }
 
 /// Eine Aufzeichnung der Version 3 mit Zeitstempel und Folgenummer liest

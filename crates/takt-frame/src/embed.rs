@@ -22,7 +22,7 @@ use crate::drivers::Driver;
 
 /// Die Version der Schnittstelle zwischen Bibliothek und Huelle (12.11):
 /// Sie steht im Symbol `P_abi_<n>` und im Manifest.
-pub const ABI: u32 = 1;
+pub const ABI: u32 = 2;
 
 /// Was das Modul braucht.
 pub struct Module<'a> {
@@ -85,6 +85,7 @@ fn ffi(x: &Prefix) -> String {
         format!("pub fn {x}_overrun(a: *mut c_void);"),
         format!("pub fn {x}_hardware(a: *mut c_void);"),
         format!("pub fn {x}_tolerance(ns: *mut i64, runs: *mut u32);"),
+        format!("pub fn {x}_output_timing() -> u8;"),
         format!("pub fn {x}_job_dispatch(a: *mut c_void) -> i32;"),
         format!("pub fn {x}_job_work(a: *mut c_void);"),
         format!("pub static {x}_abi_{ABI}: u8;"),
@@ -238,6 +239,11 @@ impl takt_embed::rt::Program for Program<'_> {{
         // SAFETY: schreibt zwei Zahlen an die uebergebenen Stellen.
         unsafe {{ ffi::{x}_tolerance(&mut ns, &mut runs) }};
         Some(takt_embed::rt::Tolerance {{ ns, runs }})
+    }}
+
+    fn commit_at_boundary(&self) -> bool {{
+        // SAFETY: liest eine Konstante der Bibliothek.
+        unsafe {{ ffi::{x}_output_timing() == 1 }}
     }}
 
     fn sleep_allowed(&self) -> bool {{
