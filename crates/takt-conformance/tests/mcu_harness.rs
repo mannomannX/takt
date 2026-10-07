@@ -721,6 +721,7 @@ fn a_bound_input_becomes_a_driver_symbol() {
 fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     let src = takt_frame::mcu::build(&corpus("40_jobs.takt")).source;
     for symbol in [
+        "unsigned char *app_job_args(",
         "void app_job_begin(",
         "void app_job_cancel(",
         "int32_t app_job_dispatch(struct app_arena *a)",

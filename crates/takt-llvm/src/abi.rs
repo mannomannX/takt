@@ -67,10 +67,15 @@ impl Abi {
     /// eine zweite Quelle fuer dieselbe Zahl.
     pub const NOW: &'static str = "now";
 
-    /// `job v = f(args)` (4.5): `(machine, slot, native, args, len)` — die
+    /// Wohin die Argumente eines Jobs gehen (4.5): `(machine, slot) -> ptr`,
+    /// der Eingang seines Slots in der Arena. Der erzeugte Code kodiert sie
+    /// dorthin, ohne Puffer auf dem Stack (11.2, FB-455).
+    pub const JOB_ARGS: &'static str = "job_args";
+
+    /// `job v = f(args)` (4.5): `(machine, slot, native, len)`, nachdem die
     /// Argumente als Folge kanonischer Bloecke (je `u32` Laenge, dann die
-    /// Bytes). Die Runtime fuehrt den Job und schreibt `done`/`result` in
-    /// den Slot des Abbilds (`image::job_offset`).
+    /// Bytes) unter [`Abi::JOB_ARGS`] stehen. Die Runtime fuehrt den Job und
+    /// schreibt `done`/`result` in den Slot des Abbilds (`image::job_offset`).
     pub const JOB_BEGIN: &'static str = "job_begin";
 
     /// Ein Fault-Uebergang bricht die Jobs der Maschine ab (5.3):
@@ -163,11 +168,13 @@ impl Abi {
             "declare i64 @{}(ptr readnone, i32) nounwind willreturn memory(none)",
             m.runtime(Abi::JITTER)
         ));
-        // `job_begin` liest die Argumente und schreibt spaeter das Abbild.
+        // `job_args` rechnet nur die Adresse; `job_begin` liest die Argumente
+        // und schreibt spaeter das Abbild.
         m.declare(&format!(
-            "declare void @{}(ptr readnone, i32, i32, i32, ptr, i32) nounwind willreturn",
-            m.runtime(Abi::JOB_BEGIN)
+            "declare ptr @{}(ptr readnone, i32, i32) nounwind willreturn memory(none)",
+            m.runtime(Abi::JOB_ARGS)
         ));
+        m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i32, i32) {RT}", m.runtime(Abi::JOB_BEGIN)));
         m.declare(&format!("declare void @{}(ptr readnone, i32, i32) {RT}", m.runtime(Abi::JOB_CANCEL)));
         // 12.10: Die Runtime liest das Modell und schreibt Ziel und Stroeme.
         m.declare(&format!(

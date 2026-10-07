@@ -1220,6 +1220,37 @@ machine m:
     assert!(takt_mir::analysis::stack::depth(&p, &frames, &unmeasured).is_none(), "ohne Schrittrahmen keine Schranke");
 }
 
+/// **Ein Job rechnet nicht auf dem Schritt-Stack** (4.5, 12.3, FB-459): Der
+/// Schritt reiht ihn nur ein, seine Native laeuft im Job-Kontext auf
+/// `JOB_STACK_BYTES`. Zum Programmanteil zaehlt die Native, die der Schritt
+/// selbst ruft, nicht der Vertrag des Jobs.
+#[test]
+fn a_job_does_not_count_on_the_tick_stack() {
+    let (p, _, _) = compile(
+        "native fn crc32c(b: bytes<256>) -> u32 with cost = {i32: 4000}, stack = 64, total
+native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 9000, duration = 20 ms, total
+
+machine m:
+    var msg : bytes<4096> = default
+    var small : bytes<256> = default
+    var c : u32 = 0
+    initial HASH
+    state HASH:
+        sequence:
+            job v = sha256(msg)
+            until v.done timeout 100 ms -> DONE
+            -> DONE
+    state DONE:
+        loop:
+            c = crc32c(small)
+",
+    );
+    let frames = vec![Some(0u32); p.fns.len()];
+    let machines = [takt_mir::analysis::stack::MachineFrames { step: Some(100), inner: None }];
+    let d = takt_mir::analysis::stack::depth(&p, &frames, &machines).expect("Tiefe");
+    assert_eq!(d.bytes, 100 + 64, "der Vertrag des Jobs zaehlt nicht, der der gerufenen Native schon");
+}
+
 /// Eine erreichbare Funktion ohne gemessenen Rahmen macht die Rechnung
 /// unbekannt.
 ///

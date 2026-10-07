@@ -135,7 +135,11 @@ fn build_takt_program(out: &Path) {
         "das F401 schuetzt die Arena mit seiner MPU: `protect = armv7m_mpu` in der Hardware-Konfiguration (12.3)"
     );
     state_section(out, &built.value("protect_bytes"));
-    tick_stack(out, &built.value("tick_stack_bytes"));
+    // 12.11: Unter RTIC rechnet die Job-Aufgabe auf dem Hauptstack, und die
+    // Takt-Aufgabe unterbricht sie dort; der Hauptstack fasst dann beide (FB-459).
+    let tick: u64 = built.value("tick_stack_bytes").parse().expect("tick_stack_bytes: Zahl");
+    let job: u64 = built.value("job_stack_bytes").parse().expect("job_stack_bytes: Zahl");
+    tick_stack(out, &(tick + if form == "rtos" { job } else { 0 }).to_string());
     // 13.8: Die Bilanz nennt den Anteil des Programms; `takt bench` zieht ihn
     // von der Tiefe ab.
     println!("cargo:rustc-env=TAKT_TICK_STACK_PROGRAM={}", built.value("tick_stack_program"));

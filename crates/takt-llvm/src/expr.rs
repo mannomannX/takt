@@ -404,13 +404,13 @@ pub(crate) fn place_of(
     p: &Program,
     m: &mut Module,
     vars: &dyn Vars,
-) -> Result<String, NotYet> {
+) -> Result<crate::emit::Reg, NotYet> {
     if let Some((ptr, _)) = address_of(e, m, vars) {
-        return Ok(ptr.to_string());
+        return Ok(ptr);
     }
     let tmp = m.alloca(want);
     store(e, &tmp.to_string(), None, p, m, vars)?;
-    Ok(tmp.to_string())
+    Ok(tmp)
 }
 
 /// `x.or(d)` eines grossen Wrappers an seine Stelle: der Wert per
@@ -544,7 +544,7 @@ fn access(
     }
     if let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) {
         let mty = ty::lower(base.ty, p).ok_or(NotYet { what: "`map`" })?;
-        let slots = place_of(base, &mty, p, m, vars)?;
+        let slots = place_of(base, &mty, p, m, vars)?.to_string();
         return map_access(slots, (*key, *value, *cap), (which, args), want, p, m, vars);
     }
     // 11.2: Ein grosser Wrapper wird nicht geladen; sein Flag liegt hinter
@@ -1907,7 +1907,7 @@ pub(crate) fn lower_into(
             let Some(Type::Map { key, value, cap }) = p.types.list.get(base.ty.index()) else { return Ok(false) };
             let want = big().expect("gross");
             let mty = ty::lower(base.ty, p).ok_or(NotYet { what: "`map`" })?;
-            let slots = place_of(base, &mty, p, m, vars)?;
+            let slots = place_of(base, &mty, p, m, vars)?.to_string();
             map_get_into(&slots, (*key, *value, *cap), args, &want, dst, p, m, vars)?;
             Ok(true)
         }

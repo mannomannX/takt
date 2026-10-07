@@ -814,18 +814,20 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// vergangen ist — wie das Modell des Interpreters.
 fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let Some((slots, out_max)) = job_tables(&mut t.code, p, x) else { return };
+    let in_max = takt_frame::parts::job_in_max(p);
     let _ = writeln!(
         t.types,
-        "typedef struct {{ int active; long long due; int out_len; unsigned char out[{out_max}]; }} takt_job;"
+        "typedef struct {{ int active; long long due; int out_len; unsigned char in[{in_max}], out[{out_max}]; }} takt_job;"
     );
     let _ = writeln!(t.fields, "    takt_job jobs[{slots}];");
     let s = &mut t.code;
     let _ = writeln!(
         s,
-        "void {x}_job_begin(struct {x}_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
+        "unsigned char *{x}_job_args(struct {x}_arena *a, int m, int slot) {{ return a->jobs[takt_job_base[m] + slot].in; }}"
     );
+    let _ = writeln!(s, "void {x}_job_begin(struct {x}_arena *a, int m, int slot, int native, int len) {{");
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot; takt_job *j = &a->jobs[i];");
-    job_call(s, p, "args", "len", "j->out", "j->out_len", "    ");
+    job_call(s, p, "j->in", "len", "j->out", "j->out_len", "    ");
     let _ = writeln!(s, "    j->active = 1; j->due = a->tick + takt_job_ticks[i];");
     let _ = writeln!(s, "    takt_job_image(a, i, 0, 0, 2); /* Err(PENDING) */");
     let _ = writeln!(s, "}}");

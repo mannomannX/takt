@@ -2120,7 +2120,7 @@ Ein Aufruf nach der Frist ist Verspätung (`drift`, 7.3); endet der Schritt dadu
 
 1. eine monotone Uhr in Nanosekunden;
 2. einen Schrittkontext, der `service` zu oder nach jeder Frist ruft, nie zweimal zugleich, mit dem Stack `TICK_STACK_BYTES` (12.3); er sichert die FPU-Register über Kontextwechsel und steht in der Priorität über allem, was Takt-Kanäle bedient;
-3. nur wenn das Programm Jobs hat: einen Kontext niedrigerer Priorität, der `job_work` ruft, mit dem Stack `JOB_STACK_BYTES`.
+3. nur wenn das Programm Jobs hat: einen Kontext niedrigerer Priorität, der `job_work` ruft, mit dem Stack `JOB_STACK_BYTES`. Teilen sich Job- und Schrittkontext einen Stack, wie die Aufgaben unter RTIC, unterbricht der Schritt den Job auf diesem Stack, und der Port stellt beide zusammen.
 
 Alles andere verlangt das erzeugte Interface nur, wenn das Programm es nutzt: einen Treiber je gebundener Adresse (8.10, 12.6), ein Gerät für das Journal (5.9), die Kanäle `sys/previous_run` und `sys/next_run` (12.7), eine Meldung an den Watchdog des Wirts, eine Senke für Telemetrie und Aufzeichnung (12.5). Was fehlt, scheitert beim Übersetzen oder Binden; einen Vorgabewert, der still an seine Stelle tritt, gibt es nicht.
 

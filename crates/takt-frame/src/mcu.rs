@@ -674,16 +674,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         let _ = writeln!(s, "int32_t {x}_jobs_busy(struct {x}_arena *a) {{ (void)a; return 0; }}\n");
         return;
     };
-    // So gross wie der Puffer, den der erzeugte Code fuer die Argumente anlegt.
-    let in_max = crate::parts::job_slots(p)
-        .iter()
-        .map(|(_, _, n)| {
-            let params = &p.natives[n.index()].params;
-            params.iter().map(|q| 4 + u64::from(takt_mir::bytes::max_size(p, q.ty).unwrap_or(0))).sum::<u64>()
-        })
-        .max()
-        .unwrap_or(0)
-        .max(4);
+    let in_max = crate::parts::job_in_max(p);
     let names: Vec<String> = crate::parts::job_slots(p)
         .iter()
         .map(|(mi, j, _)| {
@@ -714,11 +705,12 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
 
     let _ = writeln!(
         s,
-        "void {x}_job_begin(struct {x}_arena *a, int m, int slot, int native, const unsigned char *args, int len) {{"
+        "unsigned char *{x}_job_args(struct {x}_arena *a, int m, int slot) {{ return a->jobs[takt_job_base[m] + slot].in; }}"
     );
+    let _ = writeln!(s, "void {x}_job_begin(struct {x}_arena *a, int m, int slot, int native, int len) {{");
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot; {x}_job *j = &a->jobs[i];");
     let _ = writeln!(s, "    if (len > (int)sizeof j->in) len = (int)sizeof j->in;");
-    let _ = writeln!(s, "    memcpy(j->in, args, (size_t)len); j->in_len = len; j->native = native;");
+    let _ = writeln!(s, "    j->in_len = len; j->native = native;");
     let _ = writeln!(s, "    j->state = TAKT_JOB_WAITING; j->gen++; j->order = ++a->job_order;");
     let _ = writeln!(s, "    j->due = a->tick + takt_job_ticks[i];");
     let _ = writeln!(s, "    takt_job_image(a, i, 0, 0, 2); /* Err(PENDING) */");

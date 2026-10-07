@@ -289,11 +289,12 @@ impl Calls {
                     self.expr(a);
                 }
             }
-            StmtKind::Job { args, native, .. } => {
+            // Der Schritt reiht den Job nur ein; die Native rechnet im
+            // Job-Kontext auf `JOB_STACK_BYTES` (4.5, 12.11, FB-459).
+            StmtKind::Job { args, .. } => {
                 for a in args {
                     self.expr(a);
                 }
-                self.natives.push(native.index());
             }
             StmtKind::Observe(o) => self.observe(o),
             _ => {}

@@ -1156,6 +1156,20 @@ pub fn job_slots(p: &Program) -> Vec<(usize, usize, takt_mir::NativeId)> {
         .collect()
 }
 
+/// Wie gross der Eingang eines Job-Slots ist: die kanonischen Bloecke der
+/// Argumente (je `u32` Laenge, dann die Bytes) des groessten Jobs.
+pub fn job_in_max(p: &Program) -> u64 {
+    job_slots(p)
+        .iter()
+        .map(|(_, _, n)| {
+            let params = &p.natives[n.index()].params;
+            params.iter().map(|q| 4 + u64::from(takt_mir::bytes::max_size(p, q.ty).unwrap_or(0))).sum::<u64>()
+        })
+        .max()
+        .unwrap_or(0)
+        .max(4)
+}
+
 /// Was beide Rahmen ueber ihre Jobs wissen (4.5): Versatz jedes Slots im
 /// Abbild, seine Dauer in Ticks, der erste Slot je Maschine und die Helfer
 /// aus `JOBS_C`. Gibt die Zahl der Slots und die groesste Ergebnislaenge

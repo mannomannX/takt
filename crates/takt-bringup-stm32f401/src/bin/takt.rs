@@ -514,7 +514,9 @@ fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
         }
         let stacks = takt_rt_baremetal::Stacks {
             tick: Some(takt_board_stm32f401::stack::high_water()),
-            tick_bound: u32::try_from(app::TICK_STACK_BYTES).ok(),
+            // Unter RTIC liegt die Job-Aufgabe mit auf dem Hauptstack (FB-459).
+            tick_bound: u32::try_from(app::TICK_STACK_BYTES + if cfg!(feature = "rtos") { app::JOB_STACK_BYTES } else { 0 })
+                .ok(),
             tick_program: env!("TAKT_TICK_STACK_PROGRAM").parse().ok(),
             job: takt_board_stm32f401::jobs::high_water(),
             job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),

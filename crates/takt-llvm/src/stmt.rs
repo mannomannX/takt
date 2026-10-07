@@ -675,8 +675,10 @@ fn skip(stream: takt_mir::expr::StreamRef, ctx: &mut Ctx<'_>, m: &mut Module) ->
 }
 
 /// `job v = f(args)` (4.5): Die Argumente gehen als Folge kanonischer
-/// Bloecke (je `u32` Laenge, dann die Bytes) an die Runtime, die den Job
-/// fuehrt und den Slot im Abbild schreibt.
+/// Bloecke (je `u32` Laenge, dann die Bytes) in den Eingang des Slots, von
+/// ihrer Stelle aus kodiert — ein Argument von 4 KiB kostete sonst dreimal
+/// so viel Stack (FB-455). Die Runtime fuehrt den Job und schreibt den Slot
+/// im Abbild.
 fn job_begin(
     handle: takt_mir::VarId,
     native: takt_mir::NativeId,
@@ -687,22 +689,16 @@ fn job_begin(
     let p = ctx.program;
     let slot =
         ctx.machine.layout.job_slots.iter().position(|s| s.handle == handle).ok_or(NotYet { what: "Job-Slot" })?;
-    let n = p.natives.get(native.index()).ok_or(NotYet { what: "native Funktion" })?;
-    let mut cap = 0u64;
-    for q in &n.params {
-        let size = takt_mir::bytes::max_size(p, q.ty).map_err(|_| NotYet { what: "Job-Argument ohne Byteform" })?;
-        cap += 4 + u64::from(size);
-    }
-    let buf = m.alloca(&format!("[{} x i8]", cap.max(1)));
+    let buf =
+        m.inst(&format!("call ptr @{}(ptr %arena, i32 {}, i32 {slot})", m.runtime(Abi::JOB_ARGS), ctx.machine_index));
     let vars = ctx.vars();
     let mut off = m.inst("add i64 0, 0");
     for a in args {
-        let v = lower_expr(a, p, m, &vars)?;
-        let tmp = m.alloca(&v.ty);
-        m.write(&v.ty, &v.value, &tmp.to_string());
+        let want = crate::ty::lower(a.ty, p).ok_or(NotYet { what: "Job-Argument" })?;
+        let src = crate::expr::place_of(a, &want, p, m, &vars)?;
         let body = m.inst(&format!("add i64 {off}, 4"));
         let dst = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {body}"));
-        let len = crate::persist::encode_canonical(p, a.ty, tmp, dst, m)?;
+        let len = crate::persist::encode_canonical(p, a.ty, src, dst, m)?;
         let len32 = m.inst(&format!("trunc i64 {len} to i32"));
         let lenp = m.inst(&format!("getelementptr inbounds i8, ptr {buf}, i64 {off}"));
         m.void_inst(&format!("store i32 {len32}, ptr {lenp}, align 1"));
@@ -710,7 +706,7 @@ fn job_begin(
     }
     let total = m.inst(&format!("trunc i64 {off} to i32"));
     m.void_inst(&format!(
-        "call void @{}(ptr %arena, i32 {}, i32 {slot}, i32 {}, ptr {buf}, i32 {total})",
+        "call void @{}(ptr %arena, i32 {}, i32 {slot}, i32 {}, i32 {total})",
         m.runtime(Abi::JOB_BEGIN),
         ctx.machine_index,
         native.index()
@@ -1044,7 +1040,7 @@ fn for_each(
         takt_mir::stmt::ForVars::Pair(k, v) => {
             let vars = ctx.vars();
             let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese `map`" })?;
-            let slot = crate::expr::place_of(iter, &want, ctx.program, m, &vars)?;
+            let slot = crate::expr::place_of(iter, &want, ctx.program, m, &vars)?.to_string();
             let (kp, _) = place(&Place::Var(*k), ctx, m)?;
             let (vp, _) = place(&Place::Var(*v), ctx, m)?;
             let n = ctx.next_label(m);
@@ -1131,7 +1127,7 @@ fn for_window(
 fn for_items(var: takt_mir::VarId, iter: &Expr, body: &Block, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
     let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese Sammlung" })?;
-    let slot = crate::expr::place_of(iter, &want, ctx.program, m, &vars)?;
+    let slot = crate::expr::place_of(iter, &want, ctx.program, m, &vars)?.to_string();
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
     let k = ctx.next_label(m);
     let bound = crate::machine::each_bound(iter, ctx.program);
@@ -1269,7 +1265,7 @@ fn fn_for_each<V: Slots>(
         takt_mir::stmt::ForVars::One(var) => var,
         takt_mir::stmt::ForVars::Pair(k, v) => {
             let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese `map`" })?;
-            let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?;
+            let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?.to_string();
             let (kp, _) = ctx.vars.slot(*k, m).ok_or(NotYet { what: "Schleifenvariable" })?;
             let (vp, _) = ctx.vars.slot(*v, m).ok_or(NotYet { what: "Schleifenvariable" })?;
             let n = ctx.next_label(m);
@@ -1283,7 +1279,7 @@ fn fn_for_each<V: Slots>(
         }
     };
     let want = ty::lower(iter.ty, ctx.program).ok_or(NotYet { what: "`for` ueber diese Sammlung" })?;
-    let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?;
+    let slot = crate::expr::place_of(iter, &want, ctx.program, m, &ctx.vars)?.to_string();
     let (ptr, ty) = ctx.vars.slot(*var, m).ok_or(NotYet { what: "Schleifenvariable" })?;
     let k = ctx.next_label(m);
     items_loop(&want, &slot, (&ptr.to_string(), &ty), k, m, &mut |m, end_at, _| {
