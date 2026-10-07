@@ -232,6 +232,7 @@ const FLAGS: &[(&str, &[&str])] = &[
             "--emit",
             "--hardware",
             "--import",
+            "--load",
             "--logs",
             "--loop",
             "--natives",
@@ -334,6 +335,7 @@ impl Args {
             "--manifest",
             "--logs",
             "--loop",
+            "--load",
             "--natives",
         ];
         let allowed = FLAGS.iter().find(|(c, _)| *c == command).map(|(_, f)| *f).ok_or_else(|| USAGE.to_string())?;
@@ -1414,38 +1416,55 @@ fn measure(
         out.iram_rodata = Some(s.iram_rodata);
     }
 
-    // Alle Rahmen in einem Durchlauf: die Funktionen und je Maschine ihr
-    // Schritt mit den Schleifen- und Eintrittsfunktionen darunter.
+    out.stack = program_stack(p, &path, &takt_llvm::symbols::Prefix::default()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        None
+    });
     let syms = tools.symbols(&path).unwrap_or_default();
-    let mut names: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
-    names.extend(
-        syms.iter()
-            .filter(|s| matches!(s.kind, 'T' | 't') && p.machines.iter().any(|m| machine_symbol(m, &s.name)))
-            .map(|s| s.name.clone()),
-    );
-    let measured: Vec<Option<u32>> =
-        tools.stack_frames(&path, &names).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
-    // Eine Funktion ohne Symbol ist ueberall eingebettet: ihr Rahmen liegt
-    // in dem des Rufers.
-    let frames: Vec<Option<u32>> = names[..p.fns.len()]
+    let residency = tools
+        .section_ranges(&path)
+        .map(|ranges| takt_llvm::inspect::residency(&syms, &ranges, |n| is_program_symbol(p, n)));
+    if args.value("--object").is_none() {
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("su"));
+    }
+    (out, residency)
+}
+
+/// Die Tiefe des Programms auf dem Schritt-Stack (12.3) aus seinem Objekt:
+/// die Rahmen seiner Funktionen und je Maschine ihr Schritt mit den
+/// Schleifen- und Eintrittsfunktionen darunter, entlang des Aufrufgraphen
+/// der MIR; Natives und Mathematik zaehlen mit ihren Vertraegen. Die Rahmen
+/// schreibt LLVM neben das Objekt (`-fstack-usage`); ohne sie ein Fehler.
+/// `x` ist das Praefix, mit dem das Objekt uebersetzt wurde (12.11).
+pub(crate) fn program_stack(
+    p: &takt_mir::Program,
+    object: &std::path::Path,
+    x: &takt_llvm::symbols::Prefix,
+) -> Result<Option<takt_mir::analysis::stack::Depth>, String> {
+    let usage = takt_llvm::inspect::stack_usage_of(object)?;
+    let names: Vec<String> = p
+        .fns
         .iter()
-        .zip(&measured)
-        .map(|(name, f)| f.or_else(|| (!syms.iter().any(|s| s.name == *name)).then_some(0)))
+        .map(takt_llvm::fns::symbol)
+        .chain(usage.keys().filter(|n| p.machines.iter().any(|m| machine_symbol(m, n, x))).cloned())
         .collect();
-    // Der Schritt ist der Einstieg `takt_<m>_step` (12.11); hat LLVM den
+    let measured: Vec<Option<u32>> = names.iter().map(|n| usage.get(n).and_then(|b| u32::try_from(*b).ok())).collect();
+    // Eine Funktion, die LLVM nicht ausgibt, ist ueberall eingebettet: Ihr
+    // Rahmen liegt in dem des Rufers.
+    let frames: Vec<Option<u32>> = measured[..p.fns.len()].iter().map(|f| Some(f.unwrap_or(0))).collect();
+    // Der Schritt ist der Einstieg `P_<m>_step` (12.11); hat LLVM den
     // Rumpf `<m>_step` nicht eingebettet, liegt dessen Rahmen darunter.
     let machines: Vec<takt_mir::analysis::stack::MachineFrames> = p
         .machines
         .iter()
         .map(|m| {
-            let prefix = takt_llvm::symbols::Prefix::default();
-            let (entry, body) =
-                (takt_llvm::arena::entry_symbol(&prefix, &m.name, "step"), takt_llvm::machine::step_name(m));
+            let (entry, body) = (takt_llvm::arena::entry_symbol(x, &m.name, "step"), takt_llvm::machine::step_name(m));
             let mut mf = takt_mir::analysis::stack::MachineFrames::default();
             let mut below = 0;
             for (name, f) in names.iter().zip(&measured).skip(p.fns.len()) {
                 let Some(f) = *f else { continue };
-                if !machine_symbol(m, name) {
+                if !machine_symbol(m, name, x) {
                     continue;
                 }
                 if *name == entry {
@@ -1460,15 +1479,7 @@ fn measure(
             mf
         })
         .collect();
-    out.stack = takt_mir::analysis::stack::depth(p, &frames, &machines);
-
-    let residency = tools
-        .section_ranges(&path)
-        .map(|ranges| takt_llvm::inspect::residency(&syms, &ranges, |n| is_program_symbol(p, n)));
-    if args.value("--object").is_none() {
-        let _ = std::fs::remove_file(&path);
-    }
-    (out, residency)
+    Ok(takt_mir::analysis::stack::depth(p, &frames, &machines))
 }
 
 /// Das Objekt fuer `takt size --target`: dieselbe Uebersetzung wie
@@ -1498,13 +1509,13 @@ fn object_for_size(p: &takt_mir::Program, target: takt_llvm::Target) -> Option<s
 fn is_program_symbol(p: &takt_mir::Program, name: &str) -> bool {
     let own = takt_llvm::symbols::Prefix::default().name("");
     [own.as_str(), "takt_fn_", "takt_native_"].iter().any(|pre| name.starts_with(pre))
-        || p.machines.iter().any(|m| machine_symbol(m, name))
+        || p.machines.iter().any(|m| machine_symbol(m, name, &takt_llvm::symbols::Prefix::default()))
 }
 
-/// Gehoert das Symbol zur Maschine `m`: ein Einstieg `app_<m>_*` (12.11)
+/// Gehoert das Symbol zur Maschine `m`: ein Einstieg `P_<m>_*` (12.11)
 /// oder ein Rumpf `<m>_*`, den LLVM nicht eingebettet hat?
-fn machine_symbol(m: &takt_mir::machine::Machine, name: &str) -> bool {
-    let (own, entry) = (takt_llvm::fns::sanitized(&m.name), takt_llvm::symbols::Prefix::default().name(""));
+fn machine_symbol(m: &takt_mir::machine::Machine, name: &str, x: &takt_llvm::symbols::Prefix) -> bool {
+    let (own, entry) = (takt_llvm::fns::sanitized(&m.name), x.name(""));
     name.strip_prefix(entry.as_str())
         .unwrap_or(name)
         .strip_prefix(own.as_str())

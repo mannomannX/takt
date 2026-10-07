@@ -14,7 +14,6 @@
 use crate::emit::Module;
 use crate::symbols::Prefix;
 use takt_mir::Program;
-use takt_mir::machine::MachineKind;
 
 /// Was beim Senken nicht ging.
 ///
@@ -147,7 +146,7 @@ fn program_here(
         // Instanzen laufen (5.9). Sie zu senken meldete „Maschine ohne
         // Blattzustand", und das laese sich wie ein Mangel (FB-118). Ein
         // Plant-Modell wird im Hardware-Build nicht gelinkt (8.3).
-        if machine.kind == MachineKind::Template || !p.in_build(takt_mir::MachineId(i as u32)) {
+        if !p.has_code(takt_mir::MachineId(i as u32)) {
             continue;
         }
         let Some(st) = crate::machine::state_struct(machine, p) else {

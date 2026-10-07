@@ -418,7 +418,7 @@ fn kernel_head(label: &str, float: &str, decl: &str, functions: &str, prelude: &
     )
 }
 
-/// Der leere Kern: ein Tick ohne Arbeit, fuer `T_IO` und die Stack-Reserve.
+/// Der leere Kern: ein Tick ohne Arbeit, fuer `T_IO` und den Tick-Jitter.
 pub fn frame_kernel() -> String {
     "# takt bench: Rahmen\nsystem:\n    language = 1\n    tick     = 10 ms\n\noutput digest : int in 0..1 @ \
      hw(\"bench/digest\") with safe = 0\n\nmachine k:\n    initial RUN\n    state RUN:\n        loop:\n            \
@@ -710,6 +710,28 @@ fn write_kernel(name: &str, source: &str) -> Result<PathBuf, String> {
 /// Ticks des Laufs in der Tickschleife: zehn Sekunden bei 10 ms.
 const LOOP_TICKS: u64 = 1000;
 
+/// Der Lastkern der Stack-Reserve (12.3, 13.8): Ausgaben jeder Art in jedem
+/// Tick, das Journal so oft es fertig wird, Log, Alert und ein
+/// Zustandswechsel — die Wege der Runtime, die der leere Kern nicht nimmt.
+pub const LOAD_KERNEL: &str = include_str!("../bench/load.takt");
+
+/// Wie der Lastkern laeuft: in Echtzeit und in logischer Zeit, wo der Trace
+/// nichts verwirft, und beides unter dem RTOS, wenn das Board eines hat.
+fn load_runs(rtos: bool) -> Vec<Options> {
+    let own = [Options::timed(LOOP_TICKS), Options::fresh(LOOP_TICKS)].map(Options::calibrating);
+    let shared = own.clone().map(Options::under_rtos);
+    own.into_iter().chain(shared.into_iter().filter(|_| rtos)).collect()
+}
+
+/// Die Stack-Reserve (12.3) aus Laeufen in der Tickschleife: je Lauf die
+/// Tiefe ohne den Anteil des Programms, den die Bilanz nennt; die tiefste.
+fn stack_reserve<'a>(runs: impl IntoIterator<Item = &'a str>) -> Option<u64> {
+    let counter = crate::board::counter;
+    runs.into_iter()
+        .filter_map(|t| Some(counter(t, "stack")?.saturating_sub(counter(t, "programm").unwrap_or(0))))
+        .max()
+}
+
 /// Was `takt bench` auf einem Board ergibt.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outcome {
@@ -733,8 +755,9 @@ pub struct Outcome {
     pub runs: u64,
     /// Faelle des Subnormal-Vektors mit falschem Ergebnis (4.2).
     pub subnormal: u64,
-    /// Stack-Tiefe des leeren Programms in der Tickschleife unter Last: die
-    /// Reserve fuer Runtime, Treiber und ISRs (12.3).
+    /// Die Reserve fuer Runtime, Treiber und ISRs (12.3): die tiefste
+    /// Stack-Tiefe in der Tickschleife ohne den Anteil des Programms, aus dem
+    /// leeren Kern und dem Lastkern.
     pub stack_reserve: Option<u64>,
     /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
     /// ueberschreitet (7.3).
@@ -746,8 +769,11 @@ pub struct Outcome {
 pub struct Logs {
     /// Die Protokolle des Messprogramms, je Lage eines.
     pub bench: Vec<String>,
-    /// Der leere Kern in der Tickschleife: Stack-Reserve und Jitter.
+    /// Der leere Kern in der Tickschleife: Jitter und Stack-Reserve.
     pub looped: Option<String>,
+    /// Der Lastkern in der Tickschleife, je Lauf ein Protokoll: die
+    /// Stack-Reserve unter Last.
+    pub loads: Vec<String>,
     /// Das Messprogramm `natives`: Ergebnisse und Stack der Natives und der
     /// Mathematik.
     pub natives: Option<String>,
@@ -851,14 +877,14 @@ pub fn import(logs: &Logs) -> Result<Outcome, String> {
         overhead: runs.iter().map(|r| r.overhead.min).max().unwrap_or(0),
         runs: merged.takt.get("frame").map_or(0, |s| s.n / runs.len() as u64),
         subnormal: merged.subnormal,
-        stack_reserve: looped.and_then(|t| crate::board::counter(t, "stack")),
+        stack_reserve: stack_reserve(looped.into_iter().chain(logs.loads.iter().map(String::as_str))),
         tick_jitter_ns: looped.and_then(tick_jitter),
     })
 }
 
 /// Misst auf dem Board: das Messprogramm in jeder Lage des Boards, den leeren
-/// Kern in der Tickschleife und die Natives; liefert die Protokolle, aus
-/// denen [`import`] rechnet.
+/// Kern und den Lastkern in der Tickschleife und die Natives; liefert die
+/// Protokolle, aus denen [`import`] rechnet.
 ///
 /// `log` bekommt je Abbild eine Zeile, damit ein langer Lauf zeigt, wo er
 /// steht.
@@ -873,7 +899,7 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
         log(&format!("Messprogramm in Lage {shift}: {n} Kerne"));
         logs.bench.push(text);
     }
-    let options = Options::timed(LOOP_TICKS);
+    let options = Options::timed(LOOP_TICKS).calibrating();
     let elf = board.build(&frame, &options)?;
     let looped = board.run(&elf, &options)?;
     log(&format!(
@@ -882,6 +908,19 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
         tick_jitter(&looped)
     ));
     logs.looped = Some(looped);
+    let load = write_kernel("load", LOAD_KERNEL)?;
+    for options in load_runs(board.rtos()) {
+        let elf = board.build(&load, &options)?;
+        let text = board.run(&elf, &options)?;
+        log(&format!(
+            "Lastkern{}{}: Stack {:?} Byte, davon Programm {:?}",
+            if options.rtos { " unter RTOS" } else { "" },
+            if options.timed { " in Echtzeit" } else { " in logischer Zeit" },
+            crate::board::counter(&text, "stack"),
+            crate::board::counter(&text, "programm")
+        ));
+        logs.loads.push(text);
+    }
     let natives = natives_text(board, &frame)?;
     log("Natives und Mathematik gerechnet");
     logs.natives = Some(natives);
@@ -1445,12 +1484,28 @@ mod tests {
         s
     }
 
+    /// **Die Reserve ist die tiefste Last ohne ihr Programm** (12.3): Der
+    /// Lastkern reicht tiefer als der leere Kern, aber ein Teil davon ist
+    /// sein eigener Rahmen, den die Bilanz nennt. Ein Protokoll ohne
+    /// `programm` zaehlt ganz.
+    #[test]
+    fn the_reserve_is_the_deepest_load_without_its_program() {
+        let summary = |tail: &str| format!("takt schlief 0 ueberlaeufe 0 {tail}\ntakt end\n");
+        let looped = summary("stack 1000 schranke 4096 programm 16");
+        let loads = [summary("stack 3000 schranke 4096 programm 200"), summary("stack 2500 schranke 4096")];
+        assert_eq!(stack_reserve([looped.as_str()]), Some(984));
+        assert_eq!(stack_reserve(loads.iter().map(String::as_str).chain([looped.as_str()])), Some(2800));
+        assert_eq!(stack_reserve(["takt schlief 0\n"]), None);
+        let logs = Logs { bench: vec![synthetic(0, 6)], looped: Some(looped), loads: loads.to_vec(), natives: None };
+        assert_eq!(import(&logs).unwrap_or_else(|e| panic!("{e}")).stack_reserve, Some(2800));
+    }
+
     /// **Der Import findet die Tabelle wieder**, aus der das Protokoll
     /// entstand: jedes Gewicht, ohne Streckung, jeder Kern unter seiner
     /// Schranke; zwei Lagen geben ihre Gewichte in den Bericht.
     #[test]
     fn an_import_recovers_the_table_it_was_measured_with() {
-        let logs = Logs { bench: vec![synthetic(0, 6), synthetic(8, 9)], looped: None, natives: None };
+        let logs = Logs { bench: vec![synthetic(0, 6), synthetic(8, 9)], ..Logs::default() };
         let o = import(&logs).unwrap_or_else(|e| panic!("{e}"));
         let c = &o.calibration;
         assert_eq!(c.stretch, (1, 1), "{:?}", c.checks.iter().find(|k| k.measured_ps > k.bound_ps));

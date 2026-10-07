@@ -62,7 +62,11 @@ f32_sqrt = 458417
 f64_sqrt = 1286836
 t_io = 3781250
 tick_jitter_ns = 0
-stack_reserve = 4696
+# Stack-Reserve (12.3, 13.8): die tiefste Hochwassermarke des Lastkerns
+# (`bench/load.takt`) in Echtzeit und logischer Zeit, gemalt ab der
+# Tickschleife, ohne seinen Programmanteil. 4,4 KiB davon sind der Rahmen
+# von `main` im Bring-up (FB-458).
+stack_reserve = 6724
 # Interrupts laufen auf dem Stack des unterbrochenen Fadens, also auch auf
 # dem des Jobs; Trap-Rahmen, Verteiler und die Handler einer
 # Prioritaetsstufe brauchen unter 1 KiB, die Reserve verdoppelt das (4.5).

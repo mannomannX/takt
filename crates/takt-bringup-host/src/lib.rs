@@ -180,7 +180,7 @@ pub fn run<P: takt_embed::Program>(mut program: P, tick_ns: i64, alert: bool) ->
     let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, tick_ns, policy);
     let stats = takt_rt_baremetal::run(&mut rt, no_journal(), None);
     if let Some(line) = line() {
-        takt_rt_baremetal::report(line, rt.overrun(), &stats, &JournalStats::default(), None);
+        takt_rt_baremetal::report(line, rt.overrun(), &stats, &JournalStats::default(), &Default::default());
         line.drain(DRAIN_ROUNDS);
     }
     ExitCode::SUCCESS

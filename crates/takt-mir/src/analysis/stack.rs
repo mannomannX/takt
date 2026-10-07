@@ -21,10 +21,10 @@
 //!
 //! **Woher die Rahmengroesse kommt.** Aus dem erzeugten Objekt, nicht aus
 //! der MIR: Wie viele Bytes eine Funktion auf dem Stack nimmt, entscheidet
-//! der Codegen. `takt_llvm::inspect::Binutils::stack_frame` liest sie je
-//! Funktion aus dem Prolog; hier werden sie zusammengesetzt. Ohne Objekt
-//! bleibt die Tiefe unbekannt — wie der Flash-Posten in 11.5, und aus
-//! demselben Grund.
+//! der Codegen, und LLVM schreibt sie beim Uebersetzen neben das Objekt
+//! (`-fstack-usage`, `takt_llvm::inspect::stack_usage_of`); hier werden sie
+//! zusammengesetzt. Ohne Objekt bleibt die Tiefe unbekannt — wie der
+//! Flash-Posten in 11.5, und aus demselben Grund.
 
 use crate::expr::{Expr, ExprKind};
 use crate::machine::{Machine, SeqItem};
@@ -103,7 +103,10 @@ pub fn depth(p: &Program, frames: &Frames, machines: &[MachineFrames]) -> Option
     }
 
     let mut out: Option<Depth> = None;
-    for (m, mf) in p.machines.iter().zip(machines) {
+    // Eine Vorlage und ein Plant-Modell im Hardware-Build haben keinen Code
+    // und darum keinen Schritt im Objekt (8.3, 5.11).
+    let coded = p.machines.iter().zip(machines).enumerate().filter(|(i, _)| p.has_code(crate::MachineId(*i as u32)));
+    for (_, (m, mf)) in coded {
         let mut calls = Calls::default();
         calls.machine(m);
         let leaf = calls.leaf(p);

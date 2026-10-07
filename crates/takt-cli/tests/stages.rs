@@ -66,6 +66,24 @@ fn size_lists_its_items_with_origin() {
     assert!(text.contains("exakt") || text.contains("offen"), "die Herkunft steht dabei:\n{text}");
 }
 
+/// **Ein grosser Rahmen zaehlt ganz** (12.3, FB-454): Der Schritt von
+/// `long_job` legt rund 23 KiB an, RISC-V in zwei Schritten, Thumb mit
+/// `push` und `sub sp`. Die Disassemblierung sah davon 720 Byte; die Rahmen
+/// kommen darum aus LLVM.
+#[test]
+fn size_measures_a_large_frame_whole() {
+    let clang = takt_llvm::toolchain::find().path().cloned();
+    let Some(_) = takt_testkit::require("clang", clang, "clang mit den Zielen ARM und RISC-V") else { return };
+    for target in ["thumbv7em", "riscv32imac"] {
+        let out = takt(&["size", "crates/takt-conformance/tests/programs/long_job.takt", "--target", target]);
+        let text = stdout(&out);
+        assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+        let line = text.lines().find(|l| l.contains("Stack (Programmanteil)")).unwrap_or_else(|| panic!("{text}"));
+        let bytes: u64 = line.split_whitespace().filter_map(|w| w.parse().ok()).next().unwrap_or(0);
+        assert!(bytes >= 20_000 && line.contains("gemessen"), "{target}: {line}");
+    }
+}
+
 /// `size --baseline` (11.5, D1): eine gespeicherte Rechnung ist die
 /// Messlatte; waechst RAM oder Flash, faellt der Aufruf.
 #[test]

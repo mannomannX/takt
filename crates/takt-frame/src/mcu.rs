@@ -613,7 +613,7 @@ pub fn job_stack_bytes(p: &Program, reserve: u32) -> u64 {
 /// Der Typ des Job-Stacks fuer einen Wirt in Rust (12.11): `bytes` Bytes,
 /// an 32 Byte ausgerichtet ([`job_stack_bytes`]). Ob es ihn gibt, steht beim
 /// Erzeugen fest; der Wirt pruefte sonst eine Konstante gegen null.
-pub fn rust_job_stack(bytes: u64) -> String {
+pub fn rust_job_stack(x: &Prefix, bytes: u64) -> String {
     let stack = if bytes == 0 { "None" } else { "Some(&mut self.0[..])" };
     format!(
         "/// Die Groesse des Job-Stacks in Bytes (4.5, 12.11); 0 ohne Jobs.
@@ -621,7 +621,8 @@ pub const JOB_STACK_BYTES: usize = {bytes};
 
 /// Der Stack des Job-Kontexts (4.5): Der Wirt stellt ihn statisch fuer die
 /// Lebensdauer des Programms, wie die Arena; am unteren Ende liegt der
-/// Waechter (12.3).
+/// Waechter (12.3). Unter dem Namen `{x}_job_stack` prueft `takt
+/// check-image` seine Groesse im Abbild.
 #[repr(C, align(32))]
 pub struct JobStack([u8; JOB_STACK_BYTES]);
 

@@ -14,7 +14,7 @@ unsafe extern "C" {
 }
 
 /// Das Muster: kein plausibler Nutzwert, weder null noch `0xFFFF_FFFF`.
-const PATTERN: u32 = 0xC5C5_C5C5;
+pub(crate) const PATTERN: u32 = 0xC5C5_C5C5;
 
 /// Abstand unter dem aktuellen Stackzeiger, der beim Malen frei bleibt:
 /// Das Malen selbst braucht Stack.
@@ -66,6 +66,11 @@ pub fn usage_of(window: usize, f: impl FnOnce()) -> u32 {
         f();
         (sp - deepest(bottom, sp)) as u32
     })
+}
+
+/// Die Tiefe eines gemalten Stacks `[bottom, top)` in Byte, vom oberen Ende.
+pub(crate) fn depth(bottom: usize, top: usize) -> u32 {
+    (top - deepest(bottom, top)) as u32
 }
 
 /// Das unterste Wort zwischen `bottom` und `limit`, das nicht mehr das

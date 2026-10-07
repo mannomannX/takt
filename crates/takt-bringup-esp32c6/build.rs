@@ -136,6 +136,15 @@ fn build_takt_program(out: &Path) -> takt_embed::build::Built {
     // Wo der Tick in der Arena steht, als absolutes Symbol: Die Probe liest
     // ihn ueber JTAG, wenn die Konsole schweigt (`Esp32c6::tick_over_jtag`).
     println!("cargo:rustc-link-arg=--defsym=__takt_tick_at={}", built.value("tick_at"));
+    // 12.3: Der Hauptstack ist der Schritt-Stack; der Linker prueft, dass er
+    // `TICK_STACK_BYTES` fasst (`takt_stack.x`).
+    println!("cargo:rerun-if-changed={}", here.join("takt_stack.x").display());
+    fs::write(out.join("takt_stack.x"), include_bytes!("takt_stack.x")).expect("takt_stack.x schreiben");
+    println!("cargo:rustc-link-arg=--defsym=__takt_tick_stack_bytes={}", built.value("tick_stack_bytes"));
+    println!("cargo:rustc-link-arg=-Ttakt_stack.x");
+    // 13.8: Die Bilanz nennt den Anteil des Programms; `takt bench` zieht ihn
+    // von der Tiefe ab.
+    println!("cargo:rustc-env=TAKT_TICK_STACK_PROGRAM={}", built.value("tick_stack_program"));
     // Was das Board dazulegt: die Millicode-Routinen fuer `-msave-restore`,
     // wie das Programm im RAM.
     let millicode = here.join("millicode.S");

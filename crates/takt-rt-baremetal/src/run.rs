@@ -186,17 +186,34 @@ where
     Stats { slept: rt.sink.slept, overruns: rt.overrun().count, flushed, next_run: rt.ended() }
 }
 
+/// Die Stacks eines Laufs (12.3, 13.8): wie tief jeder unter Last reichte,
+/// gemessen durch Painting, und was das Programm fuer ihn bemisst.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stacks {
+    /// Die Tiefe des Schritt-Stacks in Byte, wenn das Board sie misst; ohne
+    /// den Anteil des Programms die Reserve von Runtime, Treibern und ISRs.
+    pub tick: Option<u32>,
+    /// `TICK_STACK_BYTES` des Programms.
+    pub tick_bound: Option<u32>,
+    /// Der Anteil des Programms daran; `takt bench` zieht ihn von der Tiefe
+    /// ab, und was bleibt, ist die Reserve.
+    pub tick_program: Option<u32>,
+    /// Die Tiefe des Job-Stacks, wenn das Programm einen Job-Faden hat.
+    pub job: Option<u32>,
+    /// `JOB_STACK_BYTES` des Programms.
+    pub job_bound: Option<u32>,
+}
+
 /// Die Bilanz als letzte Zeile, dann `takt end`; leert den Ring.
 ///
-/// `stack` ist die Tiefe des Stacks unter Last in Byte, wenn das Board sie
-/// gemessen hat (Painting, 13.8): Aus dem Lauf eines leeren Programms wird
-/// die Stack-Reserve von Runtime, Treibern und ISRs (12.3).
+/// Die Stacks stehen mit ihren Schranken darin (`stack N schranke M
+/// programm P jobstack J jobschranke K`): Der Host prueft jeden Lauf dagegen.
 pub fn report<P: Port, const R: usize>(
     t: &mut Telemetry<P, R>,
     overrun: &Overrun,
     stats: &Stats,
     journal: &JournalStats,
-    stack: Option<u32>,
+    stacks: &Stacks,
 ) {
     let (dropped, sent) = (u64::from(t.dropped()), u64::from(t.sent()));
     let counts = [
@@ -229,9 +246,19 @@ pub fn report<P: Port, const R: usize>(
     t.write(" ns programmieren ");
     t.write_i64(journal.program_ns);
     t.write(" ns");
-    if let Some(bytes) = stack {
-        t.write(" stack ");
+    for (depth, label, parts) in [
+        (stacks.tick, " stack ", [(" schranke ", stacks.tick_bound), (" programm ", stacks.tick_program)]),
+        (stacks.job, " jobstack ", [(" jobschranke ", stacks.job_bound), ("", None)]),
+    ] {
+        let Some(bytes) = depth else { continue };
+        t.write(label);
         t.write_u64(u64::from(bytes));
+        for (label, n) in parts {
+            if let Some(n) = n {
+                t.write(label);
+                t.write_u64(u64::from(n));
+            }
+        }
     }
     t.newline();
     t.write("takt end");
@@ -458,15 +485,22 @@ mod tests {
         overrun.observe(1_500_000, 1_000_000);
         let stats = Stats { slept: 9, overruns: 3, flushed: true, next_run: None };
         let journal = JournalStats { writes: 4, failures: 1, erase_ns: 12, program_ns: 5 };
-        report(&mut t, &overrun, &stats, &journal, Some(2048));
+        let stacks = Stacks {
+            tick: Some(2048),
+            tick_bound: Some(4096),
+            tick_program: Some(120),
+            job: Some(300),
+            job_bound: None,
+        };
+        report(&mut t, &overrun, &stats, &journal, &stacks);
         let (sent, len) = *line.borrow();
         let text = core::str::from_utf8(&sent[..len]).expect("ASCII");
         assert_eq!(
             text,
             "boot\ntakt trace\r\nt=0 out x 1\n\
              takt schlief 9 ueberlaeufe 3 verspaetet 1 verloren 2 rueckstand 2500000 ns verworfen 0 gesendet 12 \
-             journal geschrieben 4 fehlgeschlagen 1 flush 1 nvm loeschen 12 ns programmieren 5 ns stack 2048\r\n\
-             takt end\r\n"
+             journal geschrieben 4 fehlgeschlagen 1 flush 1 nvm loeschen 12 ns programmieren 5 ns stack 2048 \
+             schranke 4096 programm 120 jobstack 300\r\ntakt end\r\n"
         );
     }
 }

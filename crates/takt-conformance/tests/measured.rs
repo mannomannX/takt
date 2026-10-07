@@ -47,7 +47,7 @@ fn object(p: &Program, dir: &std::path::Path, clang: &std::path::Path) -> Option
     std::fs::write(&ll, common::ir_of(p)).ok()?;
     let mut cmd = std::process::Command::new(clang);
     let out = Clang::deterministic(&mut cmd)
-        .args(["-Wno-override-module", "-O1", "-c"])
+        .args(["-Wno-override-module", "-O1", "-c", "-fstack-usage"])
         .arg(&ll)
         .arg("-o")
         .arg(&obj)
@@ -148,7 +148,7 @@ fn the_flash_share_can_be_measured() {
 }
 
 /// Die Schrittfunktion steht als Symbol im Objekt, und ihr Stackrahmen
-/// ist messbar (12.3).
+/// ist messbar (12.3): LLVM schreibt ihn beim Uebersetzen daneben.
 ///
 /// 12.3 rechnet die Stacktiefe als „laengsten Pfad im azyklischen
 /// Aufrufgraphen plus die `stack`-Vertraege nativer Funktionen". Der
@@ -179,7 +179,9 @@ fn the_step_function_has_a_measurable_frame() {
         symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
     );
 
-    let frame = tools.stack_frame(&obj, &step).expect("`objdump` liest das Objekt des Wirts");
+    let usage = takt_llvm::inspect::stack_usage_of(&obj).expect("`-fstack-usage` schreibt die Rahmen");
+    let body = takt_llvm::machine::step_name(p.machines.first().expect("Maschine"));
+    let frame = [&step, &body].iter().filter_map(|n| usage.get(n.as_str())).sum::<u64>();
     eprintln!("{step}: Stackrahmen {frame} B");
     // Ein Rahmen von null hiesse, die Funktion kaeme mit Registern aus —
     // bei einer Schrittfunktion mit Fensterdurchlauf und Automat waere
@@ -218,9 +220,12 @@ fn the_report_takes_the_measurement() {
     };
     let sections = tools.sections(&obj).expect("`size` liest das Objekt des Wirts");
 
-    let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
-    let frames: Vec<Option<u32>> =
-        tools.stack_frames(&obj, &symbols).into_iter().map(|f| f.and_then(|n| u32::try_from(n).ok())).collect();
+    let usage = takt_llvm::inspect::stack_usage_of(&obj).expect("`-fstack-usage` schreibt die Rahmen");
+    let frames: Vec<Option<u32>> = p
+        .fns
+        .iter()
+        .map(|f| Some(usage.get(&takt_llvm::fns::symbol(f)).map_or(0, |b| u32::try_from(*b).unwrap_or(u32::MAX))))
+        .collect();
     let measured = size::Measured {
         flash: Some(sections.flash()),
         stack: takt_mir::analysis::stack::depth(&p, &frames, &[]),
@@ -234,30 +239,4 @@ fn the_report_takes_the_measurement() {
     assert!(flash.bytes > 0, "und traegt eine Zahl");
     assert!(report.total() > plain.total(), "die Summe waechst um das Gemessene");
     eprintln!("{NAME}: Flash {} B gemessen, Summe {} B", flash.bytes, report.total());
-}
-
-/// Alle Rahmen in einem Durchlauf sind dieselben wie einzeln gelesen.
-///
-/// [`Binutils::stack_frames`] liest die Disassemblierung einmal statt je
-/// Funktion — bei einem Programm mit vielen Funktionen ist das der
-/// Unterschied zwischen einem Aufruf und N. Ein schnellerer Weg, der
-/// andere Zahlen liefert, waere keiner.
-#[test]
-fn reading_all_frames_at_once_agrees_with_reading_them_singly() {
-    let Some(clang) = common::clang_path() else { return };
-    let Some(tools) = common::binutils() else { return };
-    let p = corpus("02_units_and_data.takt");
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-measured-frames");
-    let _ = std::fs::remove_dir_all(&dir);
-    let Some(obj) = object(&p, &dir, &clang) else {
-        panic!("das Objekt liess sich nicht bauen");
-    };
-
-    let symbols: Vec<String> = p.fns.iter().map(takt_llvm::fns::symbol).collect();
-    assert!(!symbols.is_empty(), "02_units_and_data hat Funktionen; ohne sie prueft der Test nichts");
-    let batch = tools.stack_frames(&obj, &symbols);
-    for (i, sym) in symbols.iter().enumerate() {
-        assert_eq!(batch[i], tools.stack_frame(&obj, sym), "`{sym}`: Stapel- und Einzelmessung weichen ab");
-    }
-    eprintln!("{} Funktionen, Rahmen: {batch:?}", symbols.len());
 }

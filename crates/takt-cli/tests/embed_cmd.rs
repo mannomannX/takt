@@ -200,8 +200,12 @@ fn a_protected_arena_is_padded_and_aligned_to_its_region() {
     }
     let dir = scratch("takt-embed-protect");
     let hw = dir.join("board.hw");
-    std::fs::write(&hw, "# takt-hw 14\n[target.thumbv7em]\nprotect = armv7m_mpu\njob_stack_reserve = 3000\n")
-        .expect("hw");
+    std::fs::write(
+        &hw,
+        "# takt-hw 14\n[target.thumbv7em]\nprotect = armv7m_mpu\njob_stack_reserve = 3000\nstack_reserve = 900\n\
+         stack_margin = 100\n",
+    )
+    .expect("hw");
     let source = "corpus-try/40_jobs.takt";
     let out = dir.join("out");
     let run = takt(&[
@@ -244,6 +248,15 @@ fn a_protected_arena_is_padded_and_aligned_to_its_region() {
     assert!(module.contains(&format!("pub const JOB_STACK_BYTES: usize = {job_stack};")), "{module}");
     let header = std::fs::read_to_string(out.join("jobs.h")).expect("Kopf");
     assert!(header.contains(&format!("#define JOBS_JOB_STACK_BYTES {job_stack}u")), "{header}");
+    // 12.3: Der Schritt-Stack ist das Programm aus seinem Objekt, dazu Reserve und Marge.
+    let tick_stack: u64 = value("tick_stack_bytes").parse().expect("Zahl");
+    assert!(tick_stack >= 1000, "Reserve 900 und Marge 100: {tick_stack}");
+    assert_eq!(value("tick_stack_reserve"), "900");
+    assert_eq!(value("tick_stack_program"), (tick_stack - 1000).to_string());
+    assert_eq!(value("tick_stack_margin"), "100");
+    assert!(module.contains(&format!("pub const TICK_STACK_BYTES: usize = {tick_stack};")), "{module}");
+    assert!(header.contains(&format!("#define JOBS_TICK_STACK_BYTES {tick_stack}u")), "{header}");
+    assert_eq!((value("tick_stack_symbol"), value("job_stack_symbol")), ("jobs_tick_stack", "jobs_job_stack"));
 }
 
 /// **Die Kalibrierung eines Tripels steht unter seinem Ziel** (8.10,

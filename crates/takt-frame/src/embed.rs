@@ -32,6 +32,8 @@ pub struct Module<'a> {
     pub consts: &'a str,
     /// Groesse und Ausrichtung der Arena ([`crate::mcu::arena_layout`]).
     pub arena: (u64, u64),
+    /// Die Groesse des Schritt-Stacks (12.3): Programm, Reserve und Marge.
+    pub tick_stack_bytes: u64,
     /// Die Groesse des Job-Stacks ([`crate::mcu::job_stack_bytes`]).
     pub job_stack_bytes: u64,
     /// Der Logik-Hash des Programms ([`crate::mcu::logic_hex`]).
@@ -53,7 +55,16 @@ pub fn rust_module(m: &Module<'_>) -> String {
     let _ = writeln!(s);
     s.push_str(&crate::mcu::rust_arena(bytes, align));
     let _ = writeln!(s);
-    s.push_str(&crate::mcu::rust_job_stack(m.job_stack_bytes));
+    let _ = writeln!(
+        s,
+        "/// Die Groesse des Schritt-Stacks in Bytes (12.3, 12.11): das Programm, die\n\
+         /// Reserve des Ports und die Marge aus der Hardware-Konfiguration. Der Wirt\n\
+         /// stellt ihn: Hauptstack, ISR-Stack oder Stack der Takt-Aufgabe; einen\n\
+         /// statischen unter dem Namen `{x}_tick_stack`, den `takt check-image` prueft.\n\
+         pub const TICK_STACK_BYTES: usize = {};\n",
+        m.tick_stack_bytes
+    );
+    s.push_str(&crate::mcu::rust_job_stack(x, m.job_stack_bytes));
     let _ = writeln!(s);
     s.push_str(&ffi(x, m.logic));
     let _ = writeln!(s);

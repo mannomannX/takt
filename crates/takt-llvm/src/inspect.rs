@@ -14,9 +14,8 @@
 //!   das Gemessene halten — so fiel auf, dass die DFA-Rechnung je Muster
 //!   zaehlte statt je Automat (FB-121).
 //! - **Der Stack-Vertrag** (12.3): „Stack-Tiefe des Programms = laengster
-//!   Pfad im azyklischen Aufrufgraphen." Der Prolog jeder Funktion sagt,
-//!   wie viel sie wirklich nimmt. Das wird mit M5 scharf, wo ein
-//!   Ueberlauf kein Absturz, sondern ein Sicherheitsfall ist.
+//!   Pfad im azyklischen Aufrufgraphen." Wie viel jede Funktion wirklich
+//!   nimmt, schreibt LLVM beim Uebersetzen daneben ([`stack_usage_of`]).
 //! - **Zertifizierung** (13.4): Objektcode gegen Quelle nachvollziehen.
 //!   Das ist v2-Gebiet; hier entsteht nur das Werkzeug dafuer.
 //!
@@ -510,168 +509,43 @@ impl Binutils {
             Command::new(self.tool("objdump")).args(["-d", "-C", "--no-show-raw-insn"]).arg(file).output().ok()?;
         out.status.success().then(|| parse_call_graph(&String::from_utf8_lossy(&out.stdout), &code))
     }
-
-    /// Der Stackbedarf einer Funktion aus ihrem Prolog, in Byte (12.3).
-    ///
-    /// **Was gemessen wird.** Die erste Anpassung des Stackzeigers im
-    /// Prolog: `sub $N, %rsp` auf x86-64, `sub sp, sp, #N` auf aarch64.
-    /// Das ist der Rahmen, den die Funktion *selbst* nimmt — nicht die
-    /// Tiefe des Aufrufbaums. 12.3 rechnet daraus den laengsten Pfad;
-    /// hier entsteht die Zahl je Knoten.
-    ///
-    /// `None` heisst: kein Werkzeug, oder die Funktion steht nicht in der
-    /// Datei. `Some(0)` heisst: Sie hat keinen Rahmen — ein Blatt, das
-    /// mit Registern auskommt.
-    /// Die Rahmengroessen aller genannten Funktionen in einem Durchlauf.
-    ///
-    /// **Einmal lesen statt je Funktion.** [`Binutils::stack_frame`] ruft
-    /// `objdump` fuer jedes Symbol neu; bei einem Programm mit vielen
-    /// Funktionen ist das dieselbe Disassemblierung N-mal. Fuer die
-    /// Stackrechnung (12.3) werden ohnehin alle gebraucht, also entsteht
-    /// die Tabelle in einem Zug.
-    ///
-    /// Die Rueckgabe hat dieselbe Laenge und Reihenfolge wie `symbols`.
-    /// `None` an einer Stelle heisst „nicht gefunden" — die Rechnung
-    /// meldet dann eine unbekannte Tiefe statt einer zu kleinen.
-    pub fn stack_frames(&self, file: &Path, symbols: &[String]) -> Vec<Option<u64>> {
-        let mut out = vec![None; symbols.len()];
-        let Ok(res) = Command::new(self.tool("objdump")).args(["-d", "-r", "--no-show-raw-insn"]).arg(file).output()
-        else {
-            return out;
-        };
-        if !res.status.success() {
-            return out;
-        }
-        let text = String::from_utf8_lossy(&res.stdout);
-
-        // Ein Durchlauf: Beim Funktionskopf merken, welches Symbol gerade
-        // laeuft, und die erste Rahmenanpassung danach nehmen.
-        let mut current: Option<usize> = None;
-        // Was `__riscv_save_N` vor der Rahmenanpassung sichert (`-msave-restore`).
-        let mut saved = 0;
-        for line in text.lines() {
-            if line.contains(">:") && !line.contains("jalr") {
-                // Ein Kopf ohne Rahmenanpassung ist ein Blatt mit Registern.
-                if let Some(i) = current.take()
-                    && out[i].is_none()
-                {
-                    out[i] = Some(saved);
-                }
-                current = symbols.iter().position(|sym| line.contains(&format!("<{sym}>:")));
-                saved = 0;
-                continue;
-            }
-            if current.is_some()
-                && let Some(n) = millicode_save(line)
-            {
-                saved = n;
-            }
-            if let Some(i) = current
-                && out[i].is_none()
-                && let Some(n) = frame_adjust(line)
-            {
-                out[i] = Some(n + saved);
-                current = None;
-            }
-        }
-        if let Some(i) = current
-            && out[i].is_none()
-        {
-            out[i] = Some(saved);
-        }
-        out
-    }
-
-    /// Der Stackrahmen einer Funktion, aus ihrem Prolog gelesen (12.3).
-    ///
-    /// 12.3 rechnet die Tiefe als laengsten Pfad im Aufrufgraphen; hier
-    /// entsteht die Zahl je Knoten.
-    ///
-    /// `None` heisst: kein Werkzeug, oder die Funktion steht nicht in der
-    /// Datei. `Some(0)` heisst: Sie hat keinen Rahmen — ein Blatt, das
-    /// mit Registern auskommt.
-    ///
-    /// Fuer mehrere Funktionen ist [`Binutils::stack_frames`] der Weg: Es
-    /// liest die Disassemblierung einmal statt je Aufruf.
-    pub fn stack_frame(&self, file: &Path, symbol: &str) -> Option<u64> {
-        let out = Command::new(self.tool("objdump")).args(["-d", "--no-show-raw-insn"]).arg(file).output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        let mut in_fn = false;
-        for line in text.lines() {
-            if line.contains(&format!("<{symbol}>:")) {
-                in_fn = true;
-                continue;
-            }
-            if !in_fn {
-                continue;
-            }
-            // Der naechste Funktionskopf beendet die Suche: Ein Prolog
-            // steht am Anfang, und was danach kommt, gehoert nicht mehr
-            // dazu.
-            if line.contains(">:") {
-                return Some(0);
-            }
-            if let Some(n) = frame_adjust(line) {
-                return Some(n);
-            }
-        }
-        in_fn.then_some(0)
-    }
 }
 
-/// Die Stackanpassung einer Zeile, falls sie eine ist.
+/// Die Stackrahmen eines Objekts, wie LLVM sie beim Uebersetzen kennt
+/// (12.3): `-fstack-usage` ([`crate::toolchain::object_flags`]) schreibt
+/// sie neben das Objekt (`P.su`), je Funktion ihren statischen Bedarf samt
+/// gesicherten Registern. Ohne die Datei ist kein Rahmen gemessen.
 ///
-/// Zwei Formen, weil zwei Architekturen: `sub $0x68,%rsp` (x86-64) und
-/// `sub sp, sp, #0x68` (aarch64). Ein `stp x29, x30, [sp, #-N]!`
-/// verschiebt den Zeiger ebenfalls und kommt auf aarch64 zuerst.
-fn frame_adjust(line: &str) -> Option<u64> {
-    // Jede Zeile beginnt mit Adresse und Tabulator (`  2d:\tsub …`); der
-    // Befehl steht dahinter. Ohne das Abtrennen begaenne keine Zeile mit
-    // dem Mnemonic, und jede Pruefung liefe ins Leere.
-    let l = line.split_once('\t').map_or(line, |(_, rest)| rest).replace('\t', " ");
-    let l = l.trim();
-    // x86-64: `sub    $0x68,%rsp`
-    if let Some(rest) = l.strip_prefix("sub").map(str::trim_start)
-        && rest.ends_with("%rsp")
-        && let Some(n) = rest.strip_prefix('$').and_then(|s| s.split(',').next())
-    {
-        return parse_num(n);
-    }
-    // aarch64: `sub sp, sp, #0x68`
-    if l.starts_with("sub") && l.contains("sp, sp, #") {
-        return l.split('#').nth(1).and_then(parse_num);
-    }
-    // aarch64: `stp x29, x30, [sp, #-16]!` — der Prolog legt den Rahmen
-    // beim Sichern an.
-    if (l.starts_with("stp") || l.starts_with("str")) && l.contains("[sp, #-") {
-        return l.split("#-").nth(1).and_then(|s| s.split(']').next()).and_then(parse_num);
-    }
-    // RISC-V: `addi sp, sp, -0x430`
-    if l.starts_with("addi") && l.contains("sp, sp, -") {
-        return l.split("sp, sp, -").nth(1).and_then(parse_num);
-    }
-    None
+/// **Nicht aus der Disassemblierung.** Ein Prolog nennt den Rahmen nicht in
+/// einer Form: RISC-V legt einen grossen in zwei Schritten an (`addi`, dann
+/// `lui` und `sub`), Thumb sichert mit `push` und zieht mit `sub sp` ab. Der
+/// Leser, der die erste Anpassung nahm, mass fuer einen Schritt von 23 200
+/// Byte 720 (FB-454).
+pub fn stack_usage_of(object: &Path) -> Result<BTreeMap<String, u64>, String> {
+    let su = object.with_extension("su");
+    let text = std::fs::read_to_string(&su)
+        .map_err(|e| format!("{}: {e}; die Rahmen schreibt `clang -fstack-usage` (12.3)", su.display()))?;
+    stack_usage(&text).map_err(|e| format!("{}: {e}", su.display()))
 }
 
-/// Die Sicherung von `__riscv_save_N` (`millicode.S`): 16 Byte bis N = 3,
-/// sonst 64 — im Objekt als Relokation, im Abbild als Sprungziel.
-fn millicode_save(line: &str) -> Option<u64> {
-    let at = line.find("__riscv_save_")?;
-    let n: u64 =
-        line[at + "__riscv_save_".len()..].chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()?;
-    Some(if n <= 3 { 16 } else { 64 })
-}
-
-/// Eine Zahl, dezimal oder hexadezimal.
-fn parse_num(s: &str) -> Option<u64> {
-    let t = s.trim();
-    match t.strip_prefix("0x") {
-        Some(hex) => u64::from_str_radix(hex, 16).ok(),
-        None => t.parse().ok(),
+/// Die Zeilen einer `.su`-Datei: `ort:funktion<TAB>byte<TAB>art`. Ein
+/// dynamischer Rahmen ohne Schranke ist ein Fehler: Seine Tiefe steht
+/// nirgends.
+pub fn stack_usage(text: &str) -> Result<BTreeMap<String, u64>, String> {
+    let mut out = BTreeMap::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let bad = || format!("unlesbar: `{line}`");
+        let mut cols = line.split('\t');
+        let (Some(at), Some(bytes), Some(kind)) = (cols.next(), cols.next(), cols.next()) else { return Err(bad()) };
+        let name = at.rsplit(':').next().map(str::trim).filter(|n| !n.is_empty()).ok_or_else(bad)?;
+        let bytes: u64 = bytes.trim().parse().map_err(|_| bad())?;
+        if kind.contains("dynamic") && !kind.contains("bounded") {
+            return Err(format!("`{name}` hat einen dynamischen Rahmen ohne Schranke ({})", kind.trim()));
+        }
+        let slot = out.entry(name.to_string()).or_insert(0);
+        *slot = (*slot).max(bytes);
     }
+    Ok(out)
 }
 
 /// Die Ausgabe von `size -A`: je Zeile Abschnitt, Groesse, Adresse.
@@ -771,6 +645,22 @@ fn is_iram_rodata(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Clang schreibt je Funktion Ort, Bytes und Art; der Name steht
+    /// hinter dem letzten Doppelpunkt, und ein dynamischer Rahmen zaehlt
+    /// nur mit Schranke.
+    #[test]
+    fn stack_usage_reads_clang_lines() {
+        let text = "P.ll:0:0:m_step\t23200\tstatic\nP.ll:0:0:app_m_step\t16\tstatic\n\
+                    P.ll:0:0:f\t48\tdynamic,bounded\n";
+        let usage = stack_usage(text).expect("lesbar");
+        assert_eq!(usage.get("m_step"), Some(&23200));
+        assert_eq!(usage.get("app_m_step"), Some(&16));
+        assert_eq!(usage.get("f"), Some(&48));
+        let e = stack_usage("P.ll:0:0:g\t32\tdynamic\n").expect_err("ohne Schranke");
+        assert!(e.contains("`g`"), "{e}");
+        assert!(stack_usage("kaputt\n").is_err());
+    }
 
     /// `llvm-objdump -d -C` auf dem Bring-up-Abbild des ESP32-C6: Aufrufe
     /// ueber `auipc`/`jalr`, Spruenge innerhalb der Funktion und ueber eine

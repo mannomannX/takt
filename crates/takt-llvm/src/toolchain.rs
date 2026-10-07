@@ -83,8 +83,11 @@ pub fn opt_level_for(triple: &str) -> &'static str {
 /// eine Sektion, auf der MCU `-Os` (`-Oz` kostete am C6 ein Fuenftel der
 /// Schrittzeit), Millicode fuer Prolog und Epilog (RISC-V) und der
 /// Outliner fuer wiederkehrende Befehlsfolgen (plan/codegen-hebel.md A).
+/// Daneben schreibt LLVM die Stackrahmen (`-fstack-usage`), aus denen der
+/// Programmanteil des Stacks entsteht (12.3, [`crate::inspect::stack_usage_of`]).
 pub fn object_flags(triple: &str) -> Vec<&'static str> {
     let mut flags = frame_flags(triple);
+    flags.push("-fstack-usage");
     if triple.starts_with("riscv32") || triple.starts_with("thumb") {
         flags.extend(["-mllvm", "-enable-machine-outliner=always"]);
     }

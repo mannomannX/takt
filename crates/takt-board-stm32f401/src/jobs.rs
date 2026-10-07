@@ -18,7 +18,7 @@
 //! der Faden rechnet (`takt_embed::{Dispatch, Jobs}`).
 
 use core::ptr::write_volatile;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use cortex_m::peripheral::SCB;
 use takt_embed::{Dispatch, Jobs};
@@ -41,6 +41,39 @@ static mut TAKT_JOB_SWITCH: Switch = Switch { current: MAIN, want: MAIN, threads
 
 /// Ob es einen Job-Faden gibt; ohne ihn bleibt der Tick-Interrupt, wie er war.
 static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Der Waechter am unteren Ende des Job-Stacks (12.3): die 32 Byte, die der
+/// Rahmen dafuer bemisst (`takt_frame::mcu::job_stack_bytes`). Gemalt und
+/// gelesen wird erst darueber.
+const GUARD: usize = 32;
+
+/// Unteres und oberes Ende des gemalten Job-Stacks, fuer [`high_water`].
+static PAINTED: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+
+/// Malt den Job-Stack ueber dem Waechter, bevor der Faden ihn benutzt, und
+/// merkt sich seine Grenzen.
+fn paint(stack: &mut [u8]) {
+    let top = stack.as_ptr() as usize + stack.len();
+    let from = GUARD.min(stack.len());
+    let painted = &mut stack[from..];
+    let bottom = painted.as_ptr() as usize;
+    for word in painted.chunks_exact_mut(4) {
+        word.copy_from_slice(&crate::stack::PATTERN.to_ne_bytes());
+    }
+    PAINTED[0].store(bottom as u32, Ordering::Relaxed);
+    PAINTED[1].store(top as u32, Ordering::Relaxed);
+}
+
+/// Wie tief der Job-Stack bisher reichte, in Byte vom oberen Ende (12.3,
+/// 13.8); `None` ohne Job-Faden. Nur, wenn der Faden nicht rechnet: nach dem
+/// Lauf oder aus dem Kontext des Schritts.
+pub fn high_water() -> Option<u32> {
+    if !STARTED.load(Ordering::Acquire) {
+        return None;
+    }
+    let (bottom, top) = (PAINTED[0].load(Ordering::Relaxed), PAINTED[1].load(Ordering::Relaxed));
+    Some(crate::stack::depth(bottom as usize, top as usize))
+}
 
 /// Der Griff, mit dem der Faden des Jobs rechnet: vor `STARTED` gesetzt,
 /// danach nur von diesem Faden benutzt.
@@ -113,6 +146,7 @@ impl<D: Dispatch> JobContext<D> {
     /// Legt den Faden des Jobs auf `stack` an; er beginnt in [`worker`],
     /// sobald die Hauptschleife ihn zum ersten Mal rechnen laesst.
     fn on(stack: &'static mut [u8], dispatch: D) -> JobContext<D> {
+        paint(stack);
         // Die Hardware erwartet beim Verlassen von PendSV einen Rahmen aus
         // acht Worten auf dem PSP: r0–r3, r12, lr, pc, xPSR; der Stack ist
         // auf acht Byte ausgerichtet.

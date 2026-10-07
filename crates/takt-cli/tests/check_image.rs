@@ -41,6 +41,7 @@ enum Host {
     DriverInFlash,
     SecondWritable,
     SmallArena,
+    SmallTickStack,
 }
 
 /// Die Lieferform in `dir`; `None` ohne die Werkzeuge, die das Abbild braucht.
@@ -105,6 +106,10 @@ fn checked(name: &str, host: Host) -> Option<Output> {
     if host == Host::SecondWritable {
         main.push_str("int app_shadow;\n");
     }
+    // 12.3: Den Schritt-Stack stellt dieser Wirt statisch, unter seinem Namen.
+    let tick: u64 = value(&manifest, "tick_stack_bytes").parse().expect("Zahl");
+    let tick = if host == Host::SmallTickStack { tick / 2 } else { tick };
+    main.push_str(&format!("unsigned char app_tick_stack[{tick}] __attribute__((aligned(16)));\n"));
     std::fs::write(dir.join("main.c"), main).expect("Wirt");
     std::fs::write(dir.join("image.ld"), SCRIPT).expect("Skript");
     let image = dir.join("image.elf");
@@ -136,7 +141,14 @@ fn a_well_linked_image_has_no_finding() {
     let Some(out) = checked("clean", Host::Clean) else { return };
     let text = report(&out);
     assert!(out.status.success(), "{text}");
-    for want in ["ABI 4 gebunden", "Logik-Hash", "Arena `app_arena`", "alle im RAM oder ROM", "0 Befunde"] {
+    for want in [
+        "ABI 4 gebunden",
+        "Logik-Hash",
+        "Arena `app_arena`",
+        "alle im RAM oder ROM",
+        "Schritt-Stack `app_tick_stack`",
+        "0 Befunde",
+    ] {
         assert!(text.contains(want), "`{want}` fehlt:\n{text}");
     }
 }
@@ -159,6 +171,16 @@ fn a_second_writable_variable_is_a_finding() {
     let text = report(&out);
     assert!(!out.status.success(), "{text}");
     assert!(text.contains("beschreibbar ausserhalb der Arena: `app_shadow`"), "{text}");
+}
+
+/// **Ein zu kleiner Schritt-Stack** (12.3): Der Wirt stellt ihn unter
+/// seinem Namen, aber mit der Haelfte von `TICK_STACK_BYTES`.
+#[test]
+fn a_too_small_tick_stack_is_a_finding() {
+    let Some(out) = checked("stack", Host::SmallTickStack) else { return };
+    let text = report(&out);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("Schritt-Stack `app_tick_stack` hat") && text.contains("das Programm braucht"), "{text}");
 }
 
 /// **Eine zu kleine Arena**: Der Wirt legte weniger an, als das Programm

@@ -203,6 +203,7 @@ static mut RIG: Option<drivers::Rig> = None;
 
 /// Der Stack des Job-Fadens (4.5): Ihn stellt der Wirt, so gross, wie die
 /// Lieferform sagt; unter seinem Ende liegt der Waechter (12.3).
+#[unsafe(export_name = "app_job_stack")]
 static mut JOB_STACK: app::JobStack = app::JobStack::new();
 
 /// Der Griff, mit dem der Job-Faden oder die Job-Aufgabe rechnet (4.5):
@@ -511,8 +512,14 @@ fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
             let _ = write!(u, "takt fpscr {:#010x}", cortex_m::register::fpscr::read().bits() & 0x07C0_0000);
             u.newline();
         }
-        let stack = Some(takt_board_stm32f401::stack::high_water());
-        takt_rt_baremetal::report(u, rt.overrun(), stats, &JournalStats::default(), stack);
+        let stacks = takt_rt_baremetal::Stacks {
+            tick: Some(takt_board_stm32f401::stack::high_water()),
+            tick_bound: u32::try_from(app::TICK_STACK_BYTES).ok(),
+            tick_program: env!("TAKT_TICK_STACK_PROGRAM").parse().ok(),
+            job: takt_board_stm32f401::jobs::high_water(),
+            job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),
+        };
+        takt_rt_baremetal::report(u, rt.overrun(), stats, &JournalStats::default(), &stacks);
     }
     if limit() == 0 {
         platform(stats.next_run);
@@ -567,8 +574,6 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     // Ein Tiefschlaf mit Rest schlaeft weiter, bevor irgendetwas laeuft (12.7).
     platform::continue_deep_sleep();
     PREVIOUS_RUN.store(platform::previous_run(), Ordering::Relaxed);
-    // Dann: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
-    takt_board_stm32f401::stack::paint();
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
 
@@ -647,6 +652,9 @@ fn main() -> ! {
     let mut program = unsafe { program() };
     let dispatch = program.dispatch();
     let mut jobs = JobContext::start(job_stack, dispatch, hand_over_jobs(&mut program));
+    // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
+    // reichte: gemalt erst hier, Aufbau und Journal zaehlen nicht (12.3).
+    takt_board_stm32f401::stack::paint();
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
         // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
@@ -865,6 +873,9 @@ mod rtic_app {
         takt::spawn().expect("Takt-Aufgabe");
         driver::spawn().expect("Treiber-Aufgabe");
         jobs::spawn().expect("Job-Aufgabe");
+        // Die Abschlusszeile meldet, wie tief der Stack unter den Aufgaben
+        // reichte: gemalt am Ende des Aufbaus (12.3).
+        takt_board_stm32f401::stack::paint();
         let takt = Some((timer, protection, super::TaskBoundary { reached, work: hand_over }));
         (Shared { boundaries: 0 }, Local { boundary, takt, driver_in, driver_out, work })
     }

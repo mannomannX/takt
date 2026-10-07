@@ -2,8 +2,8 @@
 //!
 //! ```text
 //! takt bench --emit embed --target ZIEL [--hardware DATEI.hw] --out VERZEICHNIS
-//! takt bench --import LOG… --target ZIEL [--loop LOG] [--natives LOG] [--board NAME]
-//!            [--hardware DATEI.hw] [--conformance DATEI]
+//! takt bench --import LOG… --target ZIEL [--loop LOG] [--load LOG…] [--natives LOG]
+//!            [--board NAME] [--hardware DATEI.hw] [--conformance DATEI]
 //! takt bench --board stm32f401|esp32c6 [--runs N] [--logs VERZEICHNIS]
 //!            [--hardware DATEI.hw] [--conformance DATEI]
 //! ```
@@ -11,7 +11,8 @@
 //! **Drei Wege, eine Rechnung** (plan/m11.md 2.12). `--emit embed` baut das
 //! Messprogramm als Bibliothek fuer einen Wirt, der einen Zyklenzaehler und
 //! eine Senke stellt; `--import` rechnet aus dem, was die Senke bekam —
-//! dazu, wenn gemessen, die Tickschleife und die Natives —, Tabelle und
+//! dazu, wenn gemessen, die Tickschleife, der Lastkern und die Natives —,
+//! Tabelle und
 //! Bericht; `--board` faehrt beides auf einem eigenen Board und behaelt die
 //! Protokolle unter `--logs`. `--hardware` traegt die Messwerte in die
 //! Konfiguration ein, ohne ihre Kommentare zu verwerfen; `--conformance`
@@ -221,6 +222,7 @@ fn import(args: &Args) -> bool {
         Ok(Logs {
             bench: args.files.iter().map(|f| read(f)).collect::<Result<_, _>>()?,
             looped: args.value("--loop").map(read).transpose()?,
+            loads: args.values("--load").into_iter().map(read).collect::<Result<_, _>>()?,
             natives: args.value("--natives").map(read).transpose()?,
         })
     })();
@@ -282,6 +284,9 @@ fn keep(logs: &Logs, dir: &Path, placements: &[u32]) -> Result<(), String> {
         if let Some(text) = text {
             write(&dir.join(name), text)?;
         }
+    }
+    for (i, text) in logs.loads.iter().enumerate() {
+        write(&dir.join(format!("load-{}.log", i + 1)), text)?;
     }
     println!("  Protokolle: {}", dir.display());
     Ok(())

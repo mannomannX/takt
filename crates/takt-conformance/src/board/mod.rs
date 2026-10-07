@@ -54,6 +54,9 @@ pub const MARK: &str = "takt trace\r\n";
 /// kurzen Trace, und [`crate::compare`] saehe nur, was der Interpreter
 /// danach noch aendert.
 pub(crate) fn complete(text: String, options: &Options) -> Result<String, String> {
+    if !options.calibrating {
+        within_stacks(&text)?;
+    }
     let summary = text.rfind("takt schlief ");
     if let Some(n) = counter(&text, "verworfen").filter(|n| *n > 0) {
         return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"));
@@ -86,6 +89,28 @@ pub(crate) fn complete(text: String, options: &Options) -> Result<String, String
             options.ticks
         )),
     }
+}
+
+/// **Jeder Stack bleibt unter seiner Schranke** (12.3): Die Bilanz nennt
+/// die Tiefe des Schritt- und des Job-Stacks unter Last (Painting) und
+/// `TICK_STACK_BYTES` und `JOB_STACK_BYTES` des Programms. Reicht ein Stack
+/// darueber, war die Schranke falsch — die Reserve des Ports, die Marge oder
+/// der Programmanteil, den die Bilanz mitnennt —, und der Waechter darunter
+/// ist die letzte Linie.
+fn within_stacks(text: &str) -> Result<(), String> {
+    for (depth, bound, what, part) in [
+        ("stack", "schranke", "TICK_STACK_BYTES", Some("programm")),
+        ("jobstack", "jobschranke", "JOB_STACK_BYTES", None),
+    ] {
+        if let (Some(depth), Some(bound)) = (counter(text, depth), counter(text, bound))
+            && depth > bound
+        {
+            let part =
+                part.and_then(|p| counter(text, p)).map_or_else(String::new, |p| format!(", davon Programm {p}"));
+            return Err(format!("der Stack reichte {depth} Byte tief, `{what}` ist {bound}{part} (12.3)"));
+        }
+    }
+    Ok(())
 }
 
 /// Die Zahl hinter `label` in der letzten Bilanzzeile eines Laufs (`takt
@@ -225,6 +250,10 @@ pub struct Options {
     /// Zeilen an die Konsole des Boards, je mit ihrem Abstand zur ersten
     /// Zeile des Traces (`t=0`): Tunes vom Host (8.4).
     pub console: Vec<ConsoleLine>,
+    /// Ein Lauf, der die Stack-Reserve erst misst (13.8): Die Schranke des
+    /// Programms rechnet noch mit der alten Reserve, und [`complete`] haelt
+    /// die Tiefe nicht gegen sie.
+    pub calibrating: bool,
 }
 
 /// Eine Zeile an die Konsole des Boards: `line`, `after` nach der ersten
@@ -287,6 +316,11 @@ impl Options {
         Options { ticks, fresh: true, timed: true, ..Options::default() }
     }
 
+    /// Derselbe Lauf als Messung der Stack-Reserve ([`Options::calibrating`]).
+    pub fn calibrating(self) -> Options {
+        Options { calibrating: true, ..self }
+    }
+
     /// Das Messprogramm mit `runs` Messungen je Reihe, um `shift` Byte
     /// verschoben.
     pub fn bench(runs: u64, shift: u32) -> Options {
@@ -327,6 +361,12 @@ pub trait Board {
     /// Programms in Byte (FB-367). Wer aus dem RAM rechnet, braucht eine.
     fn placements(&self) -> &'static [u32] {
         &[0]
+    }
+
+    /// Ob das Bring-up unter einem RTOS laufen kann ([`Options::rtos`],
+    /// 12.8): Dann misst `takt bench` die Stack-Reserve auch dort.
+    fn rtos(&self) -> bool {
+        false
     }
 }
 
@@ -840,6 +880,15 @@ mod tests {
         assert!(complete(run(body, 25076, body.len()), &any).is_err_and(|e| e.contains("25076")));
         assert!(complete(run(body, 0, body.len()), &any).is_ok());
         assert!(complete("bench takt frame min 1\ntakt end\n".to_string(), &Options::bench(1, 0)).is_ok());
+        // 12.3: ein Stack ueber seiner Schranke ist ein Fehler, darunter keiner.
+        let with = |stacks: &str| run(body, 0, body.len()).replace("stack 2048\r\n", &format!("{stacks}\r\n"));
+        let deep = with("stack 2048 schranke 1024");
+        assert!(complete(deep, &any).is_err_and(|e| e.contains("TICK_STACK_BYTES")));
+        let job = with("stack 512 schranke 1024 jobstack 700 jobschranke 600");
+        assert!(complete(job, &any).is_err_and(|e| e.contains("JOB_STACK_BYTES")));
+        assert!(complete(with("stack 512 schranke 1024 jobstack 500 jobschranke 600"), &any).is_ok());
+        // 13.8: Wer die Reserve misst, haelt die Tiefe nicht gegen die alte.
+        assert!(complete(with("stack 2048 schranke 1024"), &Options::default().calibrating()).is_ok());
     }
 
     /// **Ein Lauf des Programms braucht Marke, Bilanz und alle Ticks**
@@ -907,7 +956,14 @@ mod tests {
         (overrun.late, overrun.lost, overrun.worst_drift) = (1, 2, 2_500_000);
         let stats = takt_rt_baremetal::Stats { slept: 9, overruns: 3, flushed: true, next_run: None };
         let journal = takt_rt_baremetal::JournalStats { writes: 4, failures: 1, erase_ns: 12, program_ns: 5 };
-        takt_rt_baremetal::report(&mut t, &overrun, &stats, &journal, Some(2048));
+        let stacks = takt_rt_baremetal::Stacks {
+            tick: Some(2048),
+            tick_bound: Some(4096),
+            tick_program: Some(120),
+            job: Some(640),
+            job_bound: Some(1056),
+        };
+        takt_rt_baremetal::report(&mut t, &overrun, &stats, &journal, &stacks);
         let text = String::from_utf8(line.into_inner()).expect("ASCII");
         let text = complete(text, &Options::fresh(4)).unwrap_or_else(|e| panic!("{e}"));
         let body = "t=0 time took=0 drift=0 slept=0\r\n".len() * 4;
@@ -925,6 +981,10 @@ mod tests {
             ("nvm loeschen", 12),
             ("programmieren", 5),
             ("stack", 2048),
+            ("schranke", 4096),
+            ("programm", 120),
+            ("jobstack", 640),
+            ("jobschranke", 1056),
         ];
         for (label, want) in counters {
             assert_eq!(counter(&text, label), Some(want), "`{label}` in:\n{text}");

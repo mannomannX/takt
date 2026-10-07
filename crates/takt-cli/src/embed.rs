@@ -120,9 +120,11 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     compile(&c, &obj_frame, e.target, Code::Frame, &flags)?;
     let lib = e.out.join(if e.triple.ends_with("-msvc") { format!("{x}.lib") } else { format!("lib{x}.a") });
     archive(&lib, &[&obj, &obj_frame])?;
+    let tick_stack = tick_stack(e, &obj, &memory)?;
 
     let job_stack = frame.job_stack_bytes;
-    write(&e.out.join(format!("{x}.h")), &header(&frame.header, e.program, x, e.nvm_blocking_ns, job_stack))?;
+    let stacks = Stacks { tick: tick_stack.bytes(), job: job_stack };
+    write(&e.out.join(format!("{x}.h")), &header(&frame.header, e.program, x, e.nvm_blocking_ns, &stacks))?;
     let layout = takt_frame::layout::of(e.program);
     let drivers = takt_frame::drivers::of(e.program, &layout);
     let logic = takt_frame::mcu::logic_hex(e.program);
@@ -130,6 +132,7 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         prefix: x,
         consts: &e.consts_rs,
         arena: (bytes, align),
+        tick_stack_bytes: tick_stack.bytes(),
         job_stack_bytes: job_stack,
         logic: &logic,
         drivers: &drivers,
@@ -144,7 +147,7 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         write(&e.out.join(format!("{x}.lf")), &takt_frame::linker::ldgen_fragment(x))?;
     }
     let placement = Placement { bytes, align, tick_at: frame.tick_at, protect: memory.protect.zip(window) };
-    let layout_lines = Layout { arena: &placement, job_stack, xip };
+    let layout_lines = Layout { arena: &placement, tick_stack: &tick_stack, job_stack, xip };
     write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &layout_lines))?;
     let sys = drivers.iter().filter(|d| d.kind == takt_frame::drivers::Kind::Sys).count();
     println!(
@@ -171,11 +174,64 @@ fn protection(
 }
 
 /// Was der Wirt in seinen Speicher- und Bauplan uebernimmt (12.11): die
-/// Arena, der Job-Stack und ob der Tick-Pfad im RAM liegen muss.
+/// Arena, die Stacks und ob der Tick-Pfad im RAM liegen muss.
 struct Layout<'a> {
     arena: &'a Placement,
+    tick_stack: &'a TickStack,
     job_stack: u64,
     xip: bool,
+}
+
+/// Die Groessen der beiden Stacks, die der Wirt stellt (12.3, 12.11).
+struct Stacks {
+    tick: u64,
+    job: u64,
+}
+
+/// Der Schritt-Stack (12.3): das Programm exakt aus seinem Objekt, dazu die
+/// Reserve des Ports und die Marge aus der Hardware-Konfiguration.
+struct TickStack {
+    /// Was das Programm selbst braucht, entlang seines Aufrufgraphen.
+    program: u64,
+    /// Runtime, Treiber und ISRs des Ports, gemessen (13.8); `None`, wenn
+    /// die Konfiguration keine nennt.
+    reserve: Option<u64>,
+    /// Die Marge, die das Projekt waehlt.
+    margin: u64,
+}
+
+impl TickStack {
+    /// `TICK_STACK_BYTES`; ohne Reserve nur der Anteil des Programms.
+    fn bytes(&self) -> u64 {
+        self.program + self.reserve.unwrap_or(0) + self.margin
+    }
+}
+
+/// Bemisst den Schritt-Stack am Objekt des Programms (12.3).
+///
+/// Ohne Reserve in der Konfiguration ist `TICK_STACK_BYTES` keine Schranke
+/// fuer den Wirt, nur der Anteil des Programms; das Manifest sagt es, und
+/// ausser in logischer Zeit, wo kein Stack des Wirts zu bemessen ist, meldet
+/// der Bau es.
+fn tick_stack(e: &Embed<'_>, obj: &Path, memory: &takt_mir::hardware::Memory) -> Result<TickStack, String> {
+    let Some(depth) = crate::program_stack(e.program, obj, e.prefix)? else {
+        return Err(format!(
+            "{}: der Stack des Programms ist aus seinen Rahmen nicht zu rechnen (12.3)",
+            obj.display()
+        ));
+    };
+    let stack =
+        TickStack { program: depth.bytes, reserve: memory.stack_reserve, margin: memory.stack_margin.unwrap_or(0) };
+    if stack.reserve.is_none() && e.form != Form::Logical {
+        eprintln!(
+            "{}: keine `stack_reserve` fuer {} in der Hardware-Konfiguration; `TICK_STACK_BYTES` ist nur der \
+             Anteil des Programms ({} Byte), ohne Runtime, Treiber und ISRs (12.3, 13.8)",
+            e.out.display(),
+            e.target.name,
+            stack.program
+        );
+    }
+    Ok(stack)
 }
 
 /// Wie die Arena liegt: Groesse, Ausrichtung, die Stelle des Ticks und die
@@ -206,7 +262,7 @@ fn check_form(p: &takt_mir::Program, form: Form) -> Result<(), String> {
 
 /// Der Kopf `P.h`: der Kopf des Rahmens und die Konstanten des Programms,
 /// dieselben wie im Rust-Modul, mit dem Praefix.
-fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns: i64, job_stack: u64) -> String {
+fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns: i64, stacks: &Stacks) -> String {
     let upper = x.as_str().to_uppercase();
     let hash = takt_mir::hash::logic_hash(p);
     let key = u64::from_le_bytes(hash.0[..8].try_into().unwrap_or_default());
@@ -217,8 +273,9 @@ fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns
     let alert = u8::from(p.config.overrun == takt_mir::program::OverrunPolicy::Alert);
     let _ = writeln!(consts, "#define {upper}_OVERRUN_ALERT {alert}");
     let _ = writeln!(consts, "#define {upper}_LOGIC_HASH {key:#018x}ULL");
-    // 4.5, 12.11: Den Job-Stack stellt der Wirt, an 32 Byte ausgerichtet.
-    let _ = writeln!(consts, "#define {upper}_JOB_STACK_BYTES {job_stack}u");
+    // 12.3, 12.11: Beide Stacks stellt der Wirt, den Job-Stack an 32 Byte ausgerichtet.
+    let _ = writeln!(consts, "#define {upper}_TICK_STACK_BYTES {}u", stacks.tick);
+    let _ = writeln!(consts, "#define {upper}_JOB_STACK_BYTES {}u", stacks.job);
     let _ = writeln!(consts, "#define {upper}_PERSIST_BOUND {}u", takt_mir::persist::max_payload(p).unwrap_or(0));
     let min = takt_mir::persist::min_interval_ns(p).unwrap_or(0);
     let _ = writeln!(consts, "#define {upper}_PERSIST_MIN_INTERVAL_NS {min}LL\n");
@@ -256,7 +313,19 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
     let _ = writeln!(s, "arena_symbol = {x}_arena");
     let _ = writeln!(s, "arena_bytes = {}", arena.bytes);
     let _ = writeln!(s, "arena_align = {}", arena.align);
+    // 12.3: der Schritt-Stack mit seiner Herkunft; ohne Reserve nur das Programm.
+    let t = plan.tick_stack;
+    let reserve = t.reserve.map_or_else(|| "none".to_string(), |r| r.to_string());
+    let _ = writeln!(s, "# Schritt-Stack = Programm + Reserve + Marge (12.3)");
+    let _ = writeln!(s, "tick_stack_bytes = {}", t.bytes());
+    let _ = writeln!(s, "tick_stack_program = {}", t.program);
+    let _ = writeln!(s, "tick_stack_reserve = {reserve}");
+    let _ = writeln!(s, "tick_stack_margin = {}", t.margin);
     let _ = writeln!(s, "job_stack_bytes = {}", plan.job_stack);
+    // Stellt der Wirt einen Stack statisch, dann unter diesem Namen: `takt
+    // check-image` prueft seine Groesse (12.3).
+    let _ = writeln!(s, "tick_stack_symbol = {x}_tick_stack");
+    let _ = writeln!(s, "job_stack_symbol = {x}_job_stack");
     // Wo der Tick in der Arena steht: Eine Probe liest ihn, wenn die Leitung schweigt.
     let _ = writeln!(s, "tick_at = {}", arena.tick_at);
     // 12.3: die Schutzregion und wie viel der Arena sie deckt.

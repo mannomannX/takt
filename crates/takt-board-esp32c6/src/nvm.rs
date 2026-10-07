@@ -33,6 +33,17 @@ use crate::TIMER_HZ;
 /// Ein Slot ist ein Sektor.
 pub const SLOT: u32 = FlashStorage::SECTOR_SIZE;
 
+/// Ein Stueck des Journals im RAM, wortausgerichtet: Ein Slice ohne diese
+/// Ausrichtung kopiert `esp-storage` ueber einen Sektorpuffer von 4 KiB auf
+/// dem Stack (`read_nor`, `write_nor`), und der laege unter jedem Tick, der
+/// das Journal schreibt (12.3, FB-456).
+#[repr(C, align(4))]
+struct Chunk([u8; Chunk::BYTES]);
+
+impl Chunk {
+    const BYTES: usize = 64;
+}
+
 /// Laeuft gerade ein Flash-Zugriff? Ohne `critical-section` serialisiert
 /// nichts sonst; ein zweiter Zugriff waehrend eines laufenden verletzt den
 /// ROM-Treiber.
@@ -131,11 +142,11 @@ impl Nvm for FlashNvm {
         let storage = &mut self.storage;
         let Some((ok, took)) = Self::exclusive(|| {
             let mut ok = true;
-            for chunk in bytes.chunks(64) {
-                let mut word = [0xFFu8; 64];
-                word[..chunk.len()].copy_from_slice(chunk);
-                let n = chunk.len().next_multiple_of(4);
-                ok &= storage.write_nor(at, &word[..n]).is_ok();
+            for part in bytes.chunks(Chunk::BYTES) {
+                let mut chunk = Chunk([0xFF; Chunk::BYTES]);
+                chunk.0[..part.len()].copy_from_slice(part);
+                let n = part.len().next_multiple_of(4);
+                ok &= storage.write_nor(at, &chunk.0[..n]).is_ok();
                 at += n as u32;
             }
             ok
@@ -152,12 +163,22 @@ impl Nvm for FlashNvm {
     }
 
     fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool {
-        if slot > 1 || offset.saturating_add(into.len() as u32) > SLOT {
+        if slot > 1 || offset % 4 != 0 || offset.saturating_add(into.len() as u32) > SLOT {
             return false;
         }
-        let at = self.at(slot, offset);
+        let mut at = self.at(slot, offset);
         let storage = &mut self.storage;
-        Self::exclusive(|| storage.read_nor(at, into).is_ok()).is_some_and(|(ok, _)| ok)
+        Self::exclusive(|| {
+            let mut ok = true;
+            for part in into.chunks_mut(Chunk::BYTES) {
+                let mut chunk = Chunk([0; Chunk::BYTES]);
+                ok &= storage.read_nor(at, &mut chunk.0[..part.len()]).is_ok();
+                part.copy_from_slice(&chunk.0[..part.len()]);
+                at += part.len() as u32;
+            }
+            ok
+        })
+        .is_some_and(|(ok, _)| ok)
     }
 
     fn blocking_ns(&self) -> Option<i64> {

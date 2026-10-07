@@ -15,13 +15,18 @@
 //!    Treiber des Wirts. Ausgenommen sind Wege, die nur in eine Panik
 //!    fuehren.
 //!
+//! 4. die Stacks, die der Wirt statisch unter ihren Namen stellt
+//!    (`tick_stack_symbol`, `job_stack_symbol`): mindestens so gross wie
+//!    `TICK_STACK_BYTES` und `JOB_STACK_BYTES`, der Job-Stack an 32 Byte
+//!    ausgerichtet, weil sein Waechter es verlangt. Einen Stack, den der
+//!    Linker oder ein RTOS stellt, prueft dessen Bau (12.3).
+//!
 //! Das Manifest des Messprogramms von `takt bench` (`# takt-bench 1`, 13.8)
 //! traegt keine Arena und keinen Logik-Hash: Fuer es gilt Punkt 3, mit
 //! `takt_bench_measure` als Einstieg — ein Kern, der aus dem Flash liefe,
 //! maesse den Cache mit.
 //!
-//! Die Stacks prueft Schritt 13, die Antwortzeiten mehrerer Programme eines
-//! Kerns Schritt 16. Jede Zeile traegt ihren Ursprung (11.5): `exakt` aus
+//! Die Antwortzeiten mehrerer Programme eines Kerns prueft Schritt 16. Jede Zeile traegt ihren Ursprung (11.5): `exakt` aus
 //! Symboltabelle und Disassemblierung, `offen`, wo das Abbild es nicht sagt.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -57,6 +62,9 @@ pub(crate) struct Manifest {
     pub(crate) arena_align: u64,
     pub(crate) xip_flash: bool,
     pub(crate) tick_path: Vec<String>,
+    /// Die Stacks: Name im Abbild und Bedarf in Byte (12.3).
+    pub(crate) tick_stack: (String, u64),
+    pub(crate) job_stack: (String, u64),
 }
 
 impl Manifest {
@@ -83,8 +91,16 @@ impl Manifest {
                 ..Manifest::default()
             });
         }
+        // Vor Schritt 13 nannte ein Manifest keinen Schritt-Stack.
+        let stack = |key: &str, default: String| -> Result<(String, u64), String> {
+            let symbol = values.get(format!("{key}_symbol").as_str()).map_or(default, |s| s.to_string());
+            let bytes = values.get(format!("{key}_bytes").as_str()).map(|v| v.parse::<u64>()).transpose();
+            Ok((symbol, bytes.map_err(|e| format!("`{key}_bytes`: {e}"))?.unwrap_or(0)))
+        };
         Ok(Manifest {
             bench: false,
+            tick_stack: stack("tick_stack", format!("{prefix}_tick_stack"))?,
+            job_stack: stack("job_stack", format!("{prefix}_job_stack"))?,
             arena_symbol: values.get("arena_symbol").map_or_else(|| format!("{prefix}_arena"), |s| s.to_string()),
             abi: get("abi")?.to_string(),
             logic_hash: get("logic_hash")?.to_string(),
@@ -203,7 +219,7 @@ pub(crate) fn check(image: &Image, m: &Manifest, library: &BTreeSet<String>, are
         .symbols
         .iter()
         .filter(|s| matches!(s.kind, 'D' | 'd' | 'B' | 'b' | 'G' | 'g' | 'S' | 's'))
-        .filter(|s| s.name != m.arena_symbol && !in_arena(s))
+        .filter(|s| s.name != m.arena_symbol && s.name != m.tick_stack.0 && s.name != m.job_stack.0 && !in_arena(s))
         .filter(|s| takt_owned(&s.name, x, library))
         .collect();
     if stray.is_empty() {
@@ -220,7 +236,39 @@ pub(crate) fn check(image: &Image, m: &Manifest, library: &BTreeSet<String>, are
     if m.xip_flash {
         out.extend(tick_path_in_ram(image, m));
     }
+
+    // 4. Die Stacks, die der Wirt unter ihren Namen stellt.
+    for ((symbol, bytes), what, align) in [(&m.tick_stack, "Schritt-Stack", 1), (&m.job_stack, "Job-Stack", 32)] {
+        if *bytes == 0 {
+            continue;
+        }
+        out.push(match by_name.get(symbol.as_str()) {
+            Some(s) if s.size < *bytes => {
+                finding(format!("{x}: {what} `{symbol}` hat {} Byte, das Programm braucht {bytes} (12.3)", s.size))
+            }
+            Some(s) if s.address % align != 0 => {
+                finding(format!("{x}: {what} `{symbol}` liegt an {:#x}, nicht an {align} Byte ausgerichtet", s.address))
+            }
+            Some(s) => exact(format!("{x}: {what} `{symbol}` {} Byte an {:#x}, gebraucht {bytes}", s.size, s.address)),
+            None => open(format!(
+                "{x}: {what} ohne Symbol `{symbol}`; den Stack stellt der Linker oder ein RTOS, und dessen Bau prueft \
+                 {bytes} Byte"
+            )),
+        });
+    }
     out
+}
+
+/// Die Adressbereiche, die der Wirt einem Programm stellt: Arena und, wo er
+/// sie unter ihren Namen stellt, die Stacks. Was darin liegt, ist kein
+/// beschreibbares Symbol ausserhalb (Punkt 2).
+pub(crate) fn regions(image: &Image, manifests: &[&Manifest]) -> Vec<(u64, u64)> {
+    let names: Vec<&str> = manifests
+        .iter()
+        .filter(|m| !m.bench)
+        .flat_map(|m| [m.arena_symbol.as_str(), m.tick_stack.0.as_str(), m.job_stack.0.as_str()])
+        .collect();
+    image.symbols.iter().filter(|s| names.contains(&s.name.as_str())).map(|s| (s.address, s.size)).collect()
 }
 
 /// Gehoert ein Symbol zu Takt: definiert in der Bibliothek, mit dem
@@ -361,12 +409,7 @@ pub(crate) fn run(image_path: &Path, manifests: &[&str]) -> bool {
         return false;
     };
     let image = Image { symbols, sections, graph: tools.call_graph(image_path) };
-    let arenas: Vec<(u64, u64)> = parsed
-        .iter()
-        .filter(|(_, m)| !m.bench)
-        .filter_map(|(_, m)| image.symbols.iter().find(|s| s.name == m.arena_symbol))
-        .map(|s| (s.address, s.size))
-        .collect();
+    let arenas = regions(&image, &parsed.iter().map(|(_, m)| m).collect::<Vec<_>>());
     let mut lines = Vec::new();
     for (path, m) in &parsed {
         let library: BTreeSet<String> = match library_of(path, &m.prefix) {
@@ -393,6 +436,8 @@ mod tests {
     fn manifest() -> Manifest {
         Manifest {
             bench: false,
+            tick_stack: ("app_tick_stack".into(), 0),
+            job_stack: ("app_job_stack".into(), 0),
             prefix: "app".into(),
             abi: "4".into(),
             logic_hash: "ab12".into(),
@@ -522,6 +567,35 @@ mod tests {
         let mut m = manifest();
         m.abi = "5".into();
         assert!(findings(&check(&clean(), &m, &BTreeSet::new(), &[]))[0].contains("`app_abi_5` fehlt"));
+    }
+
+    /// **Punkt 4:** Ein Stack unter seinem Namen ist mindestens so gross wie
+    /// gebraucht, der Job-Stack ausgerichtet; ohne Symbol bleibt er offen.
+    #[test]
+    fn a_named_stack_is_checked_by_size_and_alignment() {
+        let mut m = manifest();
+        m.tick_stack.1 = 2048;
+        m.job_stack.1 = 1056;
+        let image = |tick: u64, job_at: u64| Image {
+            symbols: vec![symbol("app_tick_stack", 0x2000_1000, tick, 'B'), symbol("app_job_stack", job_at, 1056, 'B')],
+            ..Image::default()
+        };
+        let lines = |i: &Image| check(i, &m, &BTreeSet::new(), &regions(i, &[&m]));
+        let fine = lines(&image(2048, 0x2000_2000));
+        assert!(
+            fine.iter().any(|l| l.origin == Origin::Exact && l.text.contains("Schritt-Stack `app_tick_stack` 2048"))
+        );
+        assert!(fine.iter().any(|l| l.origin == Origin::Exact && l.text.contains("Job-Stack `app_job_stack`")));
+        assert!(!fine.iter().any(|l| l.text.contains("beschreibbar ausserhalb")), "Stacks sind Bereiche des Wirts");
+        let small = lines(&image(1024, 0x2000_2000));
+        assert!(small.iter().any(|l| l.origin == Origin::Finding && l.text.contains("hat 1024 Byte")), "{small:?}");
+        let skewed = lines(&image(2048, 0x2000_2010));
+        assert!(
+            skewed.iter().any(|l| l.origin == Origin::Finding && l.text.contains("nicht an 32 Byte")),
+            "{skewed:?}"
+        );
+        let none = check(&Image::default(), &m, &BTreeSet::new(), &[]);
+        assert!(none.iter().any(|l| l.origin == Origin::Open && l.text.contains("ohne Symbol `app_tick_stack`")));
     }
 
     /// Das Manifest des Messprogramms nennt nur Lage und Einstieg; geprueft

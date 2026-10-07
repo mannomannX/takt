@@ -44,7 +44,10 @@ i64_div = 2066648
 f32_div = 491296
 f64_div = 3384594
 tick_jitter_ns = 0
-stack_reserve = 1116
+# Stack-Reserve (12.3, 13.8): die tiefste Hochwassermarke des Lastkerns
+# (`bench/load.takt`) in Echtzeit und logischer Zeit, auch unter RTIC,
+# gemalt ab der Tickschleife, ohne seinen Programmanteil.
+stack_reserve = 2920
 f32_fma = 268349
 f64_fma = 6517037
 f32_sqrt = 456284

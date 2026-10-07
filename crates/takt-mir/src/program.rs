@@ -597,6 +597,12 @@ impl Program {
         self.config.build == Build::Sim || !self.is_plant_model(id)
     }
 
+    /// Ob die Maschine eigenen Code bekommt: keine Vorlage — nur ihre
+    /// Instanzen laufen (5.11) — und im Build (8.3).
+    pub fn has_code(&self, id: MachineId) -> bool {
+        self.machines[id.0 as usize].kind != crate::machine::MachineKind::Template && self.in_build(id)
+    }
+
     /// Leeres Programm.
     pub fn new(config: Config) -> Self {
         Program {

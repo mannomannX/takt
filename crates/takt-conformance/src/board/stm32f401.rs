@@ -195,6 +195,11 @@ impl Board for Stm32f401 {
     fn placements(&self) -> &'static [u32] {
         &[0, 8, 24]
     }
+
+    /// RTIC (12.8): Takt als Aufgabe, darueber Funk-ISR und Treiber-Aufgabe.
+    fn rtos(&self) -> bool {
+        true
+    }
 }
 
 /// Ob ein Rohabbild in den Anwendungsbereich gehoert.

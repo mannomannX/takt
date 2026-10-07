@@ -1,0 +1,46 @@
+system:
+    language = 1
+    tick     = 10 ms
+    overrun  = alert
+
+# takt bench: der Lastkern der Stack-Reserve (12.3, 13.8). Er nimmt die
+# Wege der Runtime, die ein leerer Kern nicht nimmt: In jedem Tick gehen
+# eine Ganzzahl, eine Gleitkommazahl und ein Wahrheitswert hinaus, das
+# Journal schreibt, sooft es fertig wird (`min_interval = 0 s`), Log und
+# Alert kommen regelmaessig, ebenso ein Zustandswechsel. `overrun = alert`,
+# weil ein Journal, das den Tick anhaelt, sonst den Lauf beendete.
+#
+# Der tiefste Weg des Traces ist eine Gleitkommazahl, fuer die Grisu keine
+# kuerzeste Ziffernfolge findet: `core::fmt` rechnet sie mit Dragon und
+# Bignums nach, auf x86_64 1672 statt 248 Byte Stack. `cycles / 569`
+# trifft ihn schon im ersten Tick (1/569) und bei 203 und 230 wieder.
+
+output count : int in 0..511     @ hw("bench/count") with safe = 0
+output level : float in 0.0..1.0 @ hw("bench/level") with safe = 0.0
+output odd   : bool              @ hw("bench/odd")   with safe = false
+
+machine k:
+    persist var cycles : int in 0..511 = 0 with min_interval = 0 s
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if cycles < 511:
+                cycles = cycles + 1
+            else:
+                cycles = 0
+            count = cycles
+            level = (cycles as float) / 569.0
+            odd = cycles % 2 == 1
+            if cycles % 50 == 0:
+                log "Last {cycles} {level}"
+            alert cycles % 100 < 10, "Lastkern"
+
+        after 1 s: -> REST
+
+    state REST:
+        enter:
+            log "Pause {cycles}"
+
+        after 10 ms: -> RUN

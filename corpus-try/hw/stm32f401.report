@@ -3,7 +3,7 @@
 # Streuungen als `min mean max` in Zyklen.
 
 [run]
-date = "2026-10-06"
+date = "2026-10-07"
 board = "stm32f401"
 target = "thumbv7em"
 profile = "baremetal"
@@ -16,7 +16,7 @@ placements = 0 8 24
 [calibration]
 t_io_ps = 8345239
 stretch = 40238095/38479771
-stack_reserve = 1116
+stack_reserve = 2920
 subnormal_failures = 0
 overhead = 42
 

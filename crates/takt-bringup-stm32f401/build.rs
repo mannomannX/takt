@@ -135,6 +135,10 @@ fn build_takt_program(out: &Path) {
         "das F401 schuetzt die Arena mit seiner MPU: `protect = armv7m_mpu` in der Hardware-Konfiguration (12.3)"
     );
     state_section(out, &built.value("protect_bytes"));
+    tick_stack(out, &built.value("tick_stack_bytes"));
+    // 13.8: Die Bilanz nennt den Anteil des Programms; `takt bench` zieht ihn
+    // von der Tiefe ab.
+    println!("cargo:rustc-env=TAKT_TICK_STACK_PROGRAM={}", built.value("tick_stack_program"));
     println!("cargo:rustc-link-arg=--icf=all");
 }
 
@@ -171,6 +175,16 @@ fn state_section(out: &Path, protected: &str) {
     fs::write(out.join("takt_state.x"), include_bytes!("takt_state.x")).expect("takt_state.x schreiben");
     println!("cargo:rustc-link-arg=--defsym=__takt_state_size={protected}");
     println!("cargo:rustc-link-arg=-Ttakt_state.x");
+}
+
+/// Der Hauptstack ist der Schritt-Stack (12.3): Der Linker prueft, dass
+/// zwischen dem Waechter und `_stack_start` `TICK_STACK_BYTES` Platz haben
+/// (`takt_stack.x`).
+fn tick_stack(out: &Path, bytes: &str) {
+    println!("cargo:rerun-if-changed=takt_stack.x");
+    fs::write(out.join("takt_stack.x"), include_bytes!("takt_stack.x")).expect("takt_stack.x schreiben");
+    println!("cargo:rustc-link-arg=--defsym=__takt_tick_stack_bytes={bytes}");
+    println!("cargo:rustc-link-arg=-Ttakt_stack.x");
 }
 
 /// Welches Programm gebaut wird.

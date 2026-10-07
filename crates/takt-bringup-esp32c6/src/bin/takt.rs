@@ -190,11 +190,18 @@ static mut RIG: Option<drivers::Rig> = None;
 
 /// Der Stack des Job-Fadens (4.5): Ihn stellt der Wirt, so gross, wie die
 /// Lieferform sagt; unter seinem Ende liegt der Waechter (12.3).
+#[unsafe(export_name = "app_job_stack")]
 static mut JOB_STACK: app::JobStack = app::JobStack::new();
 
 /// Der Griff, mit dem der Job-Faden rechnet (4.5): statisch, weil der Faden
 /// ihn ueber `main` hinaus haelt.
 static mut JOBS: Option<app::Jobs<'static>> = None;
+
+/// Die Puffer des Journals (5.9): der Stand des Programms und der zuletzt
+/// geschriebene. Statisch wie die Arena: Auf dem Hauptstack laegen sie unter
+/// jedem Tick (12.3).
+static mut PERSIST_CURRENT: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
+static mut PERSIST_STORED: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
 
 /// Die Geraete des Boards (12.6): je Adresse der Typ, den `takt-drivers.toml`
 /// nennt. `main` richtet die Peripherie ein; die Geraete erreichen sie ueber
@@ -350,8 +357,14 @@ fn conduct(program: app::Program<'static>, clock: impl Clock, persist: &mut Opti
             let _ = w.stats.report(CORE_HZ, u);
             u.newline();
         }
-        let stack = Some(takt_board_esp32c6::stack::high_water());
-        takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, stack);
+        let stacks = takt_rt_baremetal::Stacks {
+            tick: Some(takt_board_esp32c6::stack::high_water()),
+            tick_bound: u32::try_from(app::TICK_STACK_BYTES).ok(),
+            tick_program: env!("TAKT_TICK_STACK_PROGRAM").parse().ok(),
+            job: takt_board_esp32c6::jobs::high_water(),
+            job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),
+        };
+        takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, &stacks);
     }
     if limit == 0 {
         platform(stats.next_run);
@@ -378,8 +391,6 @@ fn platform(next: Option<NextRun>) {
 
 #[main]
 fn main() -> ! {
-    // Zuerst: Die Abschlusszeile meldet, wie tief der Stack unter Last reichte.
-    takt_board_esp32c6::stack::paint();
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     takt_board_esp32c6::reenumerate_if_requested();
     PREVIOUS_RUN.store(platform::previous_run(), Ordering::Relaxed);
@@ -414,14 +425,16 @@ fn main() -> ! {
 
     // 5.9: s0 kommt aus dem Journal, darum laden vor dem ersten Eintritt.
     // Ohne `persist` im Programm gibt es kein Journal und keinen Flash-Zugriff.
-    let (mut current, mut stored) = ([0u8; PERSIST_BOUND], [0u8; PERSIST_BOUND]);
+    // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck, und nur das
+    // Journal haelt die Puffer.
+    let (current, stored) = unsafe { (&mut *(&raw mut PERSIST_CURRENT), &mut *(&raw mut PERSIST_STORED)) };
     let mut persist = None;
     if PERSIST_BOUND != 0 {
         let mut nvm = FlashNvm::new(peripherals.FLASH, JOURNAL_AT).with_blocking_ns(NVM_BLOCKING_NS);
         if FRESH_JOURNAL && !nvm.wipe() {
             report("journal: loeschen scheiterte");
         }
-        persist = Some(Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), &mut current, &mut stored));
+        persist = Some(Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), current, stored));
     }
     // SAFETY: Arena und Pruefstand gehoeren nur diesem Programm; `main`
     // kehrt nicht zurueck, und ausser ihm greift niemand auf sie zu.
@@ -449,6 +462,9 @@ fn main() -> ! {
     let stack = unsafe { (*(&raw mut JOB_STACK)).bytes() };
     let mut jobs = JobContext::start(stack, dispatch, worker);
     JOB_STACK_BOTTOM.store(jobs.as_ref().map_or(0, JobContext::bottom), Ordering::Relaxed);
+    // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
+    // reichte: gemalt erst hier, Aufbau und Journal zaehlen nicht (12.3).
+    takt_board_esp32c6::stack::paint();
     if LOGICAL {
         // Zwischen den Ticks leert die Schleife die Leitung ganz und rechnet
         // jeden Job zu Ende; dann steht die Uhr auf der Frist. In logischer
