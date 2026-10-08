@@ -21,15 +21,16 @@ fn the_export_writes_both_queries_and_names_the_reach() {
         takt(&["prove", "corpus-try/06_test_harness.takt", "--export", file.to_str().expect("Pfad"), "--depth", "2"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.contains("1 Beweisziele"), "{stdout}");
-    assert!(stdout.contains("Reichweite: `reaches_target` nicht kodiert"), "{stdout}");
+    // Beide Eigenschaften, auch `reaches_target` mit Zeitoperator (FB-374).
+    assert!(stdout.contains("2 Beweisziele") && !stdout.contains("nicht kodiert"), "{stdout}");
     let text = std::fs::read_to_string(&file).expect("Export");
     assert!(text.contains("; BMC") && text.contains("; Induktionsschritt"), "{text}");
     assert!(text.contains("; Eigenschaft `pump_off_when_high`"), "{text}");
-    // Eine Eigenschaft, die `check`-Stelle, zwei Endlichkeitsstellen (B3,
+    assert!(text.contains("; Eigenschaft `reaches_target`"), "{text}");
+    // Zwei Eigenschaften, die `check`-Stelle, zwei Endlichkeitsstellen (B3,
     // 4.2) und drei Lesestellen von `press` (3.5), je BMC und Induktion.
     assert!(text.contains("; Pruefstelle `fin`") && text.contains("; Pruefstelle `valid`"), "{text}");
-    assert_eq!(text.matches("(check-sat)").count(), 14, "{text}");
+    assert_eq!(text.matches("(check-sat)").count(), 16, "{text}");
     let _ = std::fs::remove_dir_all(&out_dir);
 }
 

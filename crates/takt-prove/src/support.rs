@@ -75,9 +75,10 @@ pub fn support(c: Construct) -> Support {
         Construct::Seq(SeqTag::Stmt | SeqTag::Wait | SeqTag::Expect | SeqTag::Repeat | SeqTag::Step) => Yes,
         Construct::Seq(SeqTag::Until) => Partial("kein Timeout-Fault einer Sequenz"),
         Construct::Temporal(TemporalOp::Always | TemporalOp::Never) => Yes,
-        Construct::Temporal(TemporalOp::Eventually | TemporalOp::Stable | TemporalOp::Once) => {
-            No("Zeitoperatoren sind nicht kodiert (FB-374)")
-        }
+        Construct::Temporal(TemporalOp::Once) => Yes,
+        Construct::Temporal(TemporalOp::Eventually | TemporalOp::Stable) => Partial(
+            "beliebig lang als `a implies eventually[d](b)` und `a implies stable[d](b)`, sonst bis 256 Ticks Fenster",
+        ),
         Construct::Feature(f) => feature(f),
     }
 }

@@ -165,9 +165,16 @@ fn vars(t: &Term) -> BTreeSet<String> {
 }
 
 /// Der Kegel der Ziele `roots`: die Variablen, von denen sie abhaengen, und
-/// die Bedingungen, die ihn beruehren. Eine Bedingung mit einer Variablen
-/// im Kegel zieht ihre anderen hinein, denn sie schraenkt ihn ueber sie ein.
-fn cone<'a>(model: &Model, roots: &[&Term], constraints: &[&'a Term]) -> (BTreeSet<String>, Vec<&'a Term>) {
+/// die Bedingungen, die ihn beruehren. Eine Annahme mit einer Variablen im
+/// Kegel zieht ihre anderen hinein, denn sie schraenkt ihn ueber sie ein.
+/// Eine Invariante folgt aus den Uebergaengen; sie bleibt nur, wenn sie
+/// ganz im Kegel liegt, und fehlt sie, ist das Modell nur freier.
+fn cone<'a>(
+    model: &Model,
+    roots: &[&Term],
+    constraints: &[&'a Term],
+    invariants: &[&'a Term],
+) -> (BTreeSet<String>, Vec<&'a Term>) {
     let mut inside: BTreeSet<String> = roots.iter().flat_map(|t| vars(t)).collect();
     let state: Vec<(&str, BTreeSet<String>)> = model
         .state
@@ -191,12 +198,13 @@ fn cone<'a>(model: &Model, roots: &[&Term], constraints: &[&'a Term]) -> (BTreeS
             break;
         }
     }
-    let kept = constraints
+    let mut kept: Vec<&Term> = constraints
         .iter()
         .zip(&bound)
         .filter(|(_, deps)| deps.is_empty() || deps.iter().any(|d| inside.contains(d)))
         .map(|(t, _)| *t)
         .collect();
+    kept.extend(invariants.iter().filter(|t| vars(t).iter().all(|v| inside.contains(v))));
     (inside, kept)
 }
 
@@ -235,13 +243,13 @@ struct Scope<'a> {
 fn scope<'a>(model: &'a Model, targets: &[Target], slice: bool) -> Scope<'a> {
     let properties_only = targets.iter().all(|t| matches!(*t, Target::Property(i) if !model.properties[i].assumption));
     let assumed: Vec<&Goal> = model.properties.iter().filter(|g| g.assumption && properties_only).collect();
-    let constraints: Vec<&Term> =
-        model.assumptions.iter().chain(&model.invariants).chain(assumed.iter().map(|g| &g.formula)).collect();
+    let constraints: Vec<&Term> = model.assumptions.iter().chain(assumed.iter().map(|g| &g.formula)).collect();
+    let invariants: Vec<&Term> = model.invariants.iter().collect();
     if !slice {
         return Scope {
             state: model.state.iter().collect(),
             inputs: model.inputs.iter().collect(),
-            constraints,
+            constraints: constraints.into_iter().chain(invariants).collect(),
             assumed,
         };
     }
@@ -252,7 +260,7 @@ fn scope<'a>(model: &'a Model, targets: &[Target], slice: bool) -> Scope<'a> {
             Target::Check(i) => vec![&model.checks[i].init, &model.checks[i].fires],
         })
         .collect();
-    let (inside, constraints) = cone(model, &roots, &constraints);
+    let (inside, constraints) = cone(model, &roots, &constraints, &invariants);
     Scope {
         state: model.state.iter().filter(|v| inside.contains(&v.name)).collect(),
         inputs: model.inputs.iter().filter(|(n, _)| inside.contains(n)).collect(),

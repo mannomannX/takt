@@ -43,7 +43,9 @@ use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId}
 use crate::eval;
 use crate::term::{Node, Op, Sort, Term};
 
+mod monitor;
 mod value;
+use monitor::Monitor;
 use value::V;
 
 /// Etwas, das die Kodierung nicht abbildet.
@@ -289,6 +291,8 @@ struct Enc<'p> {
     unrolled: i64,
     /// Die Typen der Lokalen des Rumpfs, der gerade eingebettet wird.
     local_types: BTreeMap<VarId, TypeId>,
+    /// Die Monitore der Eigenschaften mit Zeitoperatoren (13.3).
+    monitors: Vec<Monitor>,
 }
 
 /// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
@@ -394,6 +398,10 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     };
     let mut enc = Enc::new(p, order, scope);
     enc.check_reach()?;
+    // Eigenschaften gehoeren zum Ganzen (13.3); eine Maschine allein hat keine.
+    if scope.is_none() {
+        enc.monitors = enc.monitors()?;
+    }
     let init = enc.init()?;
     let init_sites = std::mem::take(&mut enc.sites);
     let pre: Env = init.keys().map(|k| (k.clone(), Term::var(k.clone(), init[k].sort()))).collect();
@@ -480,6 +488,7 @@ impl<'p> Enc<'p> {
             tunes_seen: BTreeSet::new(),
             unrolled: 0,
             local_types: BTreeMap::new(),
+            monitors: Vec::new(),
         }
     }
 }
@@ -589,15 +598,36 @@ impl Enc<'_> {
     }
 
     /// Der Code eines Zustands: seine Variante in `<m>.State`, sonst sein Index.
+    /// Die Varianten von `<m>.State`.
+    fn state_variants(&self, m: MachineId) -> &[takt_mir::types::VariantDef] {
+        let name = format!("{}.State", self.machine(m).name);
+        self.p.enums.iter().find(|e| e.name == name).map_or(&[], |e| e.variants.as_slice())
+    }
+
+    /// Der Code eines Blatts: seine Variante in `<m>.State`; ein Blatt ohne
+    /// eigene, ein Segment einer Sequenz, steht hinter allen Varianten,
+    /// damit kein Code zweimal vorkommt.
     fn code(&self, m: MachineId, s: StateId) -> i64 {
-        let machine = self.machine(m);
-        let name = &machine.states[s.index()].name;
-        self.p
-            .enums
-            .iter()
-            .find(|e| e.name == format!("{}.State", machine.name))
-            .and_then(|e| e.variants.iter().position(|v| v.name == *name))
-            .map_or(s.index() as i64, |i| i as i64)
+        let name = &self.machine(m).states[s.index()].name;
+        let variants = self.state_variants(m);
+        variants.iter().position(|v| v.name == *name).map_or((variants.len() + s.index()) as i64, |i| i as i64)
+    }
+
+    /// `m.state` zum Blattcode `leaf`: die Variante zum letzten Teil des
+    /// Namens, sonst die erste (`state_value`, `publish_function`).
+    fn state_value(&self, m: MachineId, leaf: Term) -> Term {
+        let variants = self.state_variants(m);
+        let mut out = leaf.clone();
+        for l in self.leaves(m) {
+            let name = &self.machine(m).states[l.index()].name;
+            let last = name.rsplit('.').next().unwrap_or(name);
+            let value = variants.iter().position(|v| v.name == last).unwrap_or(0) as i64;
+            let code = self.code(m, l);
+            if value != code {
+                out = Term::ite(Term::eq(leaf.clone(), Term::int(code)), Term::int(value), out);
+            }
+        }
+        out
     }
 
     fn faulted_code(&self, m: MachineId) -> Option<i64> {
@@ -774,9 +804,10 @@ impl Enc<'_> {
                         }
                         self.psi_assumptions.push(Term::or(codes));
                     }
-                    return Ok(x);
+                    return Ok(self.state_value(machine.machine, x));
                 }
-                self.psi(cx, env, machine.machine, &loc, span)?
+                let leaf = self.psi(cx, env, machine.machine, &loc, span)?;
+                self.state_value(machine.machine, leaf)
             }
             ExprKind::Signal { machine, signal } => {
                 if machine.index.is_some() {
@@ -1948,6 +1979,8 @@ impl Enc<'_> {
             cur.insert(OVER.into(), ended.clone());
             cur.insert(ENDED.into(), Term::or(vec![ended, now]));
         }
+        let monitors = self.monitors.clone();
+        self.monitors_next(&monitors, Some(pre), &mut cur)?;
         Ok(cur)
     }
 
@@ -2035,6 +2068,8 @@ impl Enc<'_> {
             env.insert(OVER.into(), Term::bool(false));
             env.insert(ENDED.into(), Enc::ends(&env, &end));
         }
+        let monitors = self.monitors.clone();
+        self.monitors_next(&monitors, None, &mut env)?;
         Ok(env)
     }
 
@@ -2074,6 +2109,10 @@ impl Enc<'_> {
                 self.leaves(m).into_iter().map(|l| Term::eq(leaf.clone(), Term::int(self.code(m, l)))).collect();
             if let Some(c) = self.faulted_code(m) {
                 codes.push(Term::eq(leaf.clone(), Term::int(c)));
+                // Nur der Wechsel nach `FAULTED` setzt diesen Code, und er
+                // setzt das Flag mit (`switch`).
+                let faulted = pre[&self.loc_faulted(m)].clone();
+                out.push(Term::eq(faulted, Term::eq(leaf.clone(), Term::int(c))));
             }
             out.push(Term::or(codes));
             for i in 0..machine.states.len() {
@@ -2102,6 +2141,25 @@ impl Enc<'_> {
                 continue;
             }
             self.typed_loc(pre, &self.loc_out(ChannelId(i as u32)), c.ty, &mut out);
+        }
+        for m in &self.monitors {
+            Enc::monitor_invariants(m, pre, &mut out);
+        }
+        // `FAULTED` ist die Senke (5.3): Der Eintritt setzt die eigenen
+        // Outputs auf `safe`, danach schreibt die Maschine nichts mehr. Ohne
+        // das Lemma bliebe ein `FAULTED` mit offenem Ventil fuer jede Tiefe
+        // ein Gegenbeispiel des Induktionsschritts.
+        for &m in &self.order.clone() {
+            let faulted = pre[&self.loc_faulted(m)].clone();
+            for (i, c) in self.p.channels.clone().iter().enumerate() {
+                let Some(safe) = c.attrs.safe.as_ref().filter(|_| c.dir == Direction::Output && c.owner == Some(m))
+                else {
+                    continue;
+                };
+                let (Ok(safe), Ok(shape)) = (self.const_value(safe), self.shape(c.ty, c.span)) else { continue };
+                let Ok(now) = self.load(pre, &self.loc_out(ChannelId(i as u32)), &shape, c.span) else { continue };
+                out.push(Term::or(vec![faulted.clone().not(), Enc::equal(&now, &safe)]));
+            }
         }
         out
     }
@@ -2367,6 +2425,17 @@ impl Enc<'_> {
     /// `always(φ)`/`never(φ)` ohne Zeitoperatoren als Invariante ueber den
     /// Zustand nach dem Commit und die Eingaben des Ticks.
     fn goal(&mut self, prop: &Property, state: &Env) -> R<Option<Goal>> {
+        if let Some(m) = self.monitors.iter().find(|m| m.name() == prop.name).cloned() {
+            let t = self.monitor_goal(&m, state)?;
+            if m.future() > 0 && state.contains_key(OVER) {
+                self.note(&format!(
+                    "`{}`: die Positionen der letzten {} Ticks vor dem Ende eines Laufs entscheidet das Modell nicht",
+                    prop.name,
+                    m.future()
+                ));
+            }
+            return Ok(Some(self.goal_after_end(prop, t, state)));
+        }
         let (inner, negate) = match &prop.formula {
             TProp::Temporal { op: TemporalOp::Always, inner, .. } => (inner.as_ref(), false),
             TProp::Temporal { op: TemporalOp::Never, inner, .. } => (inner.as_ref(), true),
@@ -2382,13 +2451,17 @@ impl Enc<'_> {
         let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: &before, active: &actives, locals: None };
         let Some(t) = self.tprop(inner, &cx, state)? else { return Ok(None) };
         let t = if negate { t.not() } else { t };
-        // Nach dem Ende eines Laufs (12.7) gibt es keinen Tick, an dem die
-        // Eigenschaft gelten muesste; der Tick des Endes zaehlt noch.
+        Ok(Some(self.goal_after_end(prop, t, state)))
+    }
+
+    /// Nach dem Ende eines Laufs (12.7) gibt es keinen Tick, an dem die
+    /// Eigenschaft gelten muesste; der Tick des Endes zaehlt noch.
+    fn goal_after_end(&self, prop: &Property, t: Term, state: &Env) -> Goal {
         let formula = match state.get(OVER) {
             Some(over) => Term::or(vec![over.clone(), t]),
             None => t,
         };
-        Ok(Some(Goal { name: prop.name.clone(), assumption: prop.assumption, formula }))
+        Goal { name: prop.name.clone(), assumption: prop.assumption, formula }
     }
 
     #[deny(clippy::wildcard_enum_match_arm)]

@@ -219,9 +219,9 @@ Seq(Repeat),ja,ja,nein
 Seq(Step),ja,ja,nein
 Temporal(Always),ja,ja,ja
 Temporal(Never),ja,ja,ja
-Temporal(Eventually),ja,nein: Zeitoperatoren sind nicht kodiert (FB-374),ja
-Temporal(Stable),ja,nein: Zeitoperatoren sind nicht kodiert (FB-374),ja
-Temporal(Once),ja,nein: Zeitoperatoren sind nicht kodiert (FB-374),ja
+Temporal(Eventually),ja,"teilweise: beliebig lang als `a implies eventually[d](b)` und `a implies stable[d](b)`, sonst bis 256 Ticks Fenster",ja
+Temporal(Stable),ja,"teilweise: beliebig lang als `a implies eventually[d](b)` und `a implies stable[d](b)`, sonst bis 256 Ticks Fenster",ja
+Temporal(Once),ja,ja,ja
 Feature(Multirate),ja,ja,ja
 Feature(Phase),ja,ja,ja
 Feature(Follows),ja,ja,ja

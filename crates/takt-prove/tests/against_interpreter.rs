@@ -213,6 +213,13 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
             .iter()
             .map(|v| (v.name.clone(), eval::eval(if k == 0 { &v.init } else { &v.next }, &env)))
             .collect();
+        // Jede Invariante des Modells (Typen, Lemmata, Zaehler der Monitore)
+        // gilt in jedem Zustand eines Laufs; eine falsche verschwiege
+        // Gegenbeispiele.
+        for (i, inv) in model.invariants.iter().enumerate() {
+            let holds = eval::eval(inv, &step);
+            assert_eq!(holds, Val::Bool(true), "{name} t={k}: Invariante {i} verletzt");
+        }
         states.push(step);
     }
     // Der Interpreter schreibt Outputs und Zustaende nur bei Aenderung.
@@ -424,6 +431,40 @@ fn collections_agree() {
     agree_program("collections", &compile("collections", COLLECTIONS), "", 30);
     let past_len = COLLECTIONS.replace("first = b[0] as int if b.len > 0 else -1", "first = b[k % 6] as int");
     agree_program("past_len", &compile("past_len", &past_len), "", 12);
+}
+
+/// `m.state` in einem Segment einer Sequenz ist im Interpreter und im
+/// erzeugten Code die erste Variante; das Modell hielt den Index des
+/// Segments, und der fiel mit dem Code von `FAULTED` zusammen.
+const SEQUENCE_STATE: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+output phase : int @ hw("o/phase") with safe = 0
+
+machine a:
+    initial IDLE
+
+    state IDLE:
+        after 20 ms: -> RUN
+
+    state RUN:
+        sequence:
+            wait 30 ms
+            wait 30 ms
+            -> IDLE
+
+machine b:
+    initial WATCH
+
+    state WATCH:
+        loop:
+            phase = 1 if a.state == RUN else (2 if a.state == IDLE else (3 if a.state == FAULTED else 0))
+"#;
+
+#[test]
+fn the_state_of_a_sequence_segment_agrees() {
+    agree_program("sequence_state", &compile("sequence_state", SEQUENCE_STATE), "", 20);
 }
 
 /// 14.1 (der Hotfire-Test der Referenz) mit den Szenarien des Korpus:
