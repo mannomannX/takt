@@ -116,13 +116,15 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Format => Partial("Ganzzahlen, Wahrheitswerte, Varianten ohne Felder und Text; keine Fliesskommazahl"),
         ExprTag::Ok | ExprTag::Err => Yes,
         ExprTag::Tuple => Partial("nur als Punkt einer konstanten Tabelle von `interp`"),
-        ExprTag::Index2 | ExprTag::Slice => No("Matrizen und Ausschnitte sind nicht kodiert"),
+        ExprTag::Index2 => No("Matrizen sind nicht kodiert"),
+        ExprTag::Slice => Partial("auf Bytes und Vektoren; nicht auf einem Array"),
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
         ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
         ExprTag::Armed | ExprTag::PortRead => No("Trigger und Registerports sind nicht kodiert"),
         ExprTag::Stream => Yes,
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
-        ExprTag::JobState | ExprTag::Decode => No("Jobs und `decode` sind nicht kodiert"),
+        ExprTag::JobState => No("Jobs sind nicht kodiert"),
+        ExprTag::Decode => Partial("ohne Fliesskomma- und `u64`-Felder"),
         ExprTag::NativeCall | ExprTag::MatOp => No("Natives und Matrizen sind nicht kodiert"),
     }
 }
@@ -185,6 +187,7 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Sent => Yes,
         AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
         AccessorTag::Ok | AccessorTag::Err => Yes,
+        AccessorTag::Encode => Partial("ohne Fliesskomma- und `u64`-Felder"),
         AccessorTag::T
         | AccessorTag::Seq
         | AccessorTag::Text
@@ -198,7 +201,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Mean
         | AccessorTag::Rms
         | AccessorTag::Last
-        | AccessorTag::Encode
         | AccessorTag::Get
         | AccessorTag::Armed
         | AccessorTag::Pre

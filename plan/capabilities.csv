@@ -24,8 +24,8 @@ Expr(Armed),ja,nein: Trigger und Registerports sind nicht kodiert,nein
 Expr(PortRead),ja,nein: Trigger und Registerports sind nicht kodiert,ja
 Expr(Field),ja,teilweise: auf Records; nicht auf den Feldern einer Variante,ja
 Expr(Index),ja,"teilweise: auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays",ja
-Expr(Index2),ja,nein: Matrizen und Ausschnitte sind nicht kodiert,ja
-Expr(Slice),ja,nein: Matrizen und Ausschnitte sind nicht kodiert,ja
+Expr(Index2),ja,nein: Matrizen sind nicht kodiert,ja
+Expr(Slice),ja,teilweise: auf Bytes und Vektoren; nicht auf einem Array,ja
 Expr(Accessor),ja,"teilweise: die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung",ja
 Expr(Unary),ja,ja,ja
 Expr(Binary),ja,ja,ja
@@ -33,13 +33,13 @@ Expr(Cond),ja,ja,ja
 Expr(Cast),ja,teilweise: nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma,ja
 Expr(Convert),ja,ja,ja
 Expr(Format),"teilweise: nur in Meldungen und `send`; kein `float`, kein zusammengesetzter Wert","teilweise: Ganzzahlen, Wahrheitswerte, Varianten ohne Felder und Text; keine Fliesskommazahl",ja
-Expr(JobState),ja,nein: Jobs und `decode` sind nicht kodiert,ja
+Expr(JobState),ja,nein: Jobs sind nicht kodiert,ja
 Expr(Stream),teilweise: nur als Empfaenger eines Zugriffs,ja,ja
 Expr(Matches),"teilweise: nur in Handlern, Guards und Bedingungen",teilweise: kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion,ja
 Expr(Call),ja,teilweise: Funktionen aus kodierbaren Anweisungen,ja
 Expr(NativeCall),ja,nein: Natives und Matrizen sind nicht kodiert,ja
 Expr(MatOp),ja,nein: Natives und Matrizen sind nicht kodiert,ja
-Expr(Decode),ja,nein: Jobs und `decode` sind nicht kodiert,ja
+Expr(Decode),ja,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
 Expr(Checked),ja,ja,ja
 Expr(Lift),ja,ja,ja
 Expr(Ok),ja,ja,ja
@@ -145,7 +145,7 @@ Accessor(Max),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Mean),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Rms),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Last),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Encode),teilweise: `encode` nur auf Records,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Encode),teilweise: `encode` nur auf Records,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
 Accessor(Get),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(StartsWith),ja,ja,nein
 Accessor(Contains),ja,ja,nein

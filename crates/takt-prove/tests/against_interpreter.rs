@@ -508,6 +508,8 @@ t={k} in b {}.5 V
         "106_machine_handler.takt" | "72_handler_levels.takt" | "53_stream_kinds.takt" | "88_capture_segments.takt" => {
             (String::new(), 40)
         }
+        // Drahtformat und Ausschnitte (Schritt 27a-5).
+        "52_padding_fields.takt" | "13_framing.takt" | "76_stream_views.takt" => (String::new(), 30),
         _ => return None,
     })
 }
@@ -962,6 +964,128 @@ machine m:
 fn results_agree() {
     let stim: String = (0..=40).map(|j| format!("t={j} in k {}\n", (j * 17) % 101 - 50)).collect();
     agree_program("RESULTS", &compile("RESULTS", RESULTS), &stim, 40);
+}
+
+/// Das Drahtformat (3.7): `decode` mit Konstante, Range, Diskriminante,
+/// Laengenfeld und `align`, verschachtelt in anderer Byte-Reihenfolge;
+/// `encode` des dekodierten und eines geaenderten Records; Ausschnitte
+/// mit berechneten Grenzen, einer davon faultet.
+const WIRE: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+enum Kind layout u8: PING = 0x01, DATA = 0x02, ACK = 0x7F
+enum Bad: BROKEN
+
+record Inner layout big:
+    a : i16
+    b : bool
+
+record Frame layout little, align = 4:
+    magic : u16 = 0xA55A
+    kind  : Kind
+    level : u8 in 0..100
+    temp  : i16
+    inner : Inner
+    pair  : [2] u8
+    n     : u8
+    data  : bytes<6> with len = n
+    tail  : u16
+
+input  rx : stream<bytes<24>> @ hw("bus/rx") with max_rate = 100 Hz, capacity = 2
+
+output ok    : bool                 @ sim("ok")
+output kind  : int in 0..9          @ sim("kind")
+output temp  : int in -40000..40000 @ sim("temp")
+output inner : int in -40000..40000 @ sim("inner")
+output tail  : int in 0..70000      @ sim("tail")
+output sum   : int in 0..99999      @ sim("sum")
+output size  : int in 0..99         @ sim("size")
+output echo  : int in 0..999999     @ sim("echo")
+output moved : int in 0..999999     @ sim("moved")
+output part  : int in 0..99         @ sim("part")
+output tip   : int in 0..999        @ sim("tip")
+
+fn unpack(b: bytes<24>) -> Frame!Bad:
+    var d = Frame.decode(b)
+    if not d.valid:
+        return ERR(BROKEN)
+    var h = d
+    return OK(h)
+
+fn weigh(e: bytes<20>) -> int in 0..999999:
+    var acc : int in 0..999999 = 0
+    for i in range(20):
+        if i >= e.len:
+            break
+        acc = (acc + (e[i] as int) * (i + 1)) % 100000
+    return acc
+
+machine m:
+    fault -> RECOVER
+    var count : int in 0..9999 = 0
+
+    initial RUN
+
+    state RUN:
+        on rx as f:
+            count = (count + 1) % 10000
+            match unpack(f.data):
+                case OK(fr):
+                    ok = true
+                    kind = 1 if fr.kind == PING else (2 if fr.kind == DATA else 3)
+                    temp = fr.temp as int
+                    inner = (fr.inner.a as int) + (1000 if fr.inner.b else 0)
+                    tail = fr.tail as int
+                    sum = fr.data.len * 1000 + (fr.n as int)
+                    var e = fr.encode()
+                    size = e.len
+                    echo = weigh(e)
+                    var g = fr
+                    g.data.clear()
+                    g.tail = 0xBEEF
+                    moved = weigh(g.encode())
+                case ERR(x):
+                    ok = false
+            var s = f.data[2..f.data.len]
+            part = s.len
+            var t = f.data[1..(f.data[0] as int) % 8]
+            tip = t.len * 100 + ((s[0] as int) if s.len > 0 else 0)
+
+    state RECOVER:
+        enter:
+            ok = false
+        after 20 ms: -> RUN
+"#;
+
+#[test]
+fn the_wire_format_agrees() {
+    let frames = [
+        // Gueltig, drei Nutzbytes, `align` fuellt auf 20 Byte.
+        "5aa5023200ff38ff010708 03 aabbcc 3412 000000",
+        // Zu kurz: das Auffuellen fehlt.
+        "5aa5023200ff38ff010708 03 aabbcc 3412",
+        // Falsche Konstante.
+        "5aa4023200ff38ff010708 03 aabbcc 3412 000000",
+        // Unbekannte Diskriminante.
+        "5aa5053200ff38ff010708 03 aabbcc 3412 000000",
+        // Ausserhalb der Range.
+        "5aa5026500ff38ff010708 03 aabbcc 3412 000000",
+        // Laenge ueber der Obergrenze.
+        "5aa5023200ff38ff010708 07 aabbccddeeff11 3412 00",
+        // Keine Nutzbytes: 14 Byte, aufgefuellt auf 16.
+        "5aa57f0a0080000001ff00 00 cdab 0000",
+        // Volle Nutzlast.
+        "5aa5010000010000000102 06 010203040506 ffff",
+        // Der Ausschnitt `[1..]` reicht hinter das Ende und faultet.
+        "07aa",
+        "",
+    ];
+    let mut stim = String::new();
+    for (k, f) in frames.iter().enumerate() {
+        stim.push_str(&format!("t={} in rx 0x{}\n", 3 * k + 1, f.replace(' ', "")));
+    }
+    agree_program("WIRE", &compile("WIRE", WIRE), &stim, 40);
 }
 
 /// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und

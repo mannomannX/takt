@@ -528,6 +528,20 @@ impl Enc<'_> {
                 let [default] = args.as_slice() else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?
             }
+            ExprKind::Accessor { base, accessor: Accessor::Encode, .. } => {
+                let Type::Record(r) = self.p.types.get(base.ty) else { return no("`encode` ohne Record", span) };
+                let r = *r;
+                let v = self.value(base, cx, env, flow)?;
+                self.wire_encode(r, v, span)?
+            }
+            // `decode` faultet nie (3.7); ohne Wert ist der Record null.
+            ExprKind::Decode { record, bytes } => {
+                let b = self.value(bytes, cx, env, flow)?;
+                let (ok, r) = self.wire_decode(*record, b, span)?;
+                let zero = self.zero_value(&shape, span)?.part(1, span)?;
+                V::Node(vec![V::Leaf(ok.clone()), V::ite(&ok, r, zero)])
+            }
+            ExprKind::Slice { base, from, to } => self.slice(base, from, to, cx, env, flow, span)?,
             ExprKind::Call { callee, args } => {
                 let mut xs = Vec::new();
                 for a in args {
@@ -550,7 +564,6 @@ impl Enc<'_> {
             | ExprKind::Armed(_)
             | ExprKind::PortRead(_)
             | ExprKind::Index2 { .. }
-            | ExprKind::Slice { .. }
             | ExprKind::Accessor { .. }
             | ExprKind::Unary { .. }
             | ExprKind::Binary { .. }
@@ -561,7 +574,6 @@ impl Enc<'_> {
             | ExprKind::Matches { .. }
             | ExprKind::NativeCall { .. }
             | ExprKind::MatOp { .. }
-            | ExprKind::Decode { .. }
             | ExprKind::Intrinsic { .. }) => {
                 return no(format!("zusammengesetzter Ausdruck {}", super::node_name(other)), span);
             }
@@ -608,6 +620,52 @@ impl Enc<'_> {
         let (elems, _) = self.places(base.ty, v, span)?;
         let i = self.expr(index, cx, env, flow)?;
         Ok(Enc::select(elems, &i))
+    }
+
+    /// `b[from..to]` auf Bytes oder einem Vektor (`eval.rs`): ausserhalb
+    /// `0 <= from <= to <= len` ein `RangeFault`; der Ausschnitt beginnt bei
+    /// null, dahinter null.
+    #[allow(clippy::too_many_arguments)]
+    fn slice(
+        &mut self,
+        base: &Expr,
+        from: &Expr,
+        to: &Expr,
+        cx: &Cx<'_>,
+        env: &Env,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<V> {
+        let Some(elem) = (match self.p.types.get(base.ty) {
+            Type::Bytes { .. } => Some(None),
+            Type::Vec { elem, .. } => Some(Some(*elem)),
+            _ => None,
+        }) else {
+            return no("Ausschnitt eines Arrays", span);
+        };
+        let v = self.value(base, cx, env, flow)?;
+        let (elems, len) = self.places(base.ty, v, span)?;
+        let len = len.expect("Sammlung");
+        let a = self.expr(from, cx, env, flow)?;
+        let b = self.expr(to, cx, env, flow)?;
+        let fail = Term::or(vec![
+            Term::bin(Op::Lt, a.clone(), Term::int(0)),
+            Term::bin(Op::Lt, b.clone(), a.clone()),
+            Term::bin(Op::Gt, b.clone(), len),
+        ]);
+        flow.exits.push(Exit { cond: Term::and(vec![flow.alive.clone(), fail.clone()]), kind: ExitKind::Fault(None) });
+        flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
+        let n = Term::bin(Op::Sub, b, a.clone());
+        let zero = match elem {
+            Some(t) => self.zero_of(t, span)?,
+            None => V::Leaf(Term::int(0)),
+        };
+        let mut parts = vec![V::Leaf(n.clone())];
+        for j in 0..elems.len() as i64 {
+            let item = Enc::select(elems.clone(), &Term::bin(Op::Add, a.clone(), Term::int(j)));
+            parts.push(V::ite(&Term::bin(Op::Lt, Term::int(j), n.clone()), item, zero.clone()));
+        }
+        Ok(V::Node(parts))
     }
 
     /// Ein skalarer Zugriff auf einen zusammengesetzten Wert: ob ein

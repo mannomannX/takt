@@ -49,6 +49,7 @@ mod stream;
 mod text;
 mod tx;
 mod value;
+mod wire;
 use monitor::Monitor;
 use value::V;
 
