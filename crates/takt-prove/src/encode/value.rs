@@ -111,7 +111,13 @@ impl Enc<'_> {
     /// Ein Typ, dessen Wert im Modell mehr als ein Blatt hat?
     pub(super) fn composite(&self, ty: TypeId) -> bool {
         match self.p.types.get(ty) {
-            Type::Record(_) | Type::Array { .. } | Type::Optional(_) | Type::Bytes { .. } | Type::Vec { .. } => true,
+            Type::Record(_)
+            | Type::Array { .. }
+            | Type::Optional(_)
+            | Type::Bytes { .. }
+            | Type::Vec { .. }
+            | Type::Str { .. }
+            | Type::Line { .. } => true,
             Type::Enum(e) => self.fielded(*e),
             _ => false,
         }
@@ -135,7 +141,7 @@ impl Enc<'_> {
         }
     }
 
-    fn fielded(&self, e: EnumId) -> bool {
+    pub(super) fn fielded(&self, e: EnumId) -> bool {
         self.p.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty())
     }
 
@@ -170,6 +176,8 @@ impl Enc<'_> {
             Type::Optional(t) => {
                 Shape::Node(vec![(".has".into(), Shape::Flag), (".value".into(), self.shape(*t, span)?)])
             }
+            Type::Str { cap } => super::text::text_shape(*cap, false),
+            Type::Line { cap } => super::text::text_shape(*cap, true),
             Type::Enum(e) if self.fielded(*e) => {
                 let def = self.p.enums[e.index()].clone();
                 let mut parts = vec![(".tag".to_string(), Shape::Tag(*e))];
@@ -411,12 +419,16 @@ impl Enc<'_> {
         let shape = self.shape(e.ty, span)?;
         Ok(match &e.kind {
             ExprKind::Default | ExprKind::None => self.zero_value(&shape, span)?,
+            ExprKind::Str(s) => self.text_value(&super::text::Text::literal(s), e.ty, span)?,
+            ExprKind::Format(f) => self.format(f, e.ty, cx, env, flow, span)?,
             ExprKind::Var(v) => {
                 if let Some(local) = cx.locals.as_ref().and_then(|l| l.get(v)) {
                     return Ok(local.clone());
                 }
                 let Some(m) = cx.m else { return no("Variable ausserhalb einer Maschine", span) };
-                self.load(env, &self.loc_var(m, *v), &shape, span)?
+                let at = self.loc_var(m, *v);
+                let stored = self.load(env, &at, &shape, span)?;
+                self.bound_value(&at, stored)
             }
             ExprKind::Output(c) => {
                 let ch = &self.p.channels[c.index()];
@@ -492,7 +504,6 @@ impl Enc<'_> {
             | ExprKind::Int(_)
             | ExprKind::Float(_)
             | ExprKind::Duration(_)
-            | ExprKind::Str(_)
             | ExprKind::Tuple(..)
             | ExprKind::BlockInit { .. }
             | ExprKind::Param(_)
@@ -510,7 +521,6 @@ impl Enc<'_> {
             | ExprKind::Binary { .. }
             | ExprKind::Cast { .. }
             | ExprKind::Convert { .. }
-            | ExprKind::Format(_)
             | ExprKind::JobState { .. }
             | ExprKind::Stream(_)
             | ExprKind::Matches { .. }
@@ -592,8 +602,18 @@ impl Enc<'_> {
                 self.value(base, cx, env, flow)?;
                 Ok(Term::int(len))
             }
-            (Accessor::Len, Type::Bytes { .. } | Type::Vec { .. }) => {
+            (Accessor::Len, Type::Bytes { .. } | Type::Vec { .. } | Type::Str { .. } | Type::Line { .. }) => {
                 self.value(base, cx, env, flow)?.part(0, span)?.leaf(span)
+            }
+            (Accessor::Truncated, Type::Line { cap }) => {
+                let cap = *cap as usize;
+                self.value(base, cx, env, flow)?.part(cap + 1, span)?.leaf(span)
+            }
+            (Accessor::StartsWith | Accessor::Contains, Type::Str { .. } | Type::Line { .. }) => {
+                let [arg] = args else { return no("Zugriff ohne Argument", span) };
+                let s = super::text::Text::of(self.value(base, cx, env, flow)?, span)?;
+                let t = super::text::Text::of(self.value(arg, cx, env, flow)?, span)?;
+                Ok(self.text_test(&s, &t, accessor == Accessor::Contains))
             }
             // `x.wrap_u8()` und Geschwister: modulo 2^n (3.10).
             (Accessor::Wrap(w), Type::Int { .. }) => {

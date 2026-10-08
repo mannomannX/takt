@@ -111,6 +111,34 @@ fn leaves_of(p: &Program, ty: TypeId, text: &str, base: &str, out: &mut Vec<(Str
     Some(())
 }
 
+/// Die Blaetter eines Texts oder einer Bytefolge im Stimulus: Text wie
+/// `parse_value` ihn liest (eine Zeile ueber ihrer Kapazitaet gekuerzt),
+/// Bytes als `0x…`; `None` fuer andere Typen.
+fn text_leaves(p: &Program, ty: TypeId, text: &str, base: &str) -> Option<Vec<(String, Val)>> {
+    let (bytes, cap, truncated) = match p.types.get(ty) {
+        Type::Str { cap } | Type::Line { cap } => match takt_interp::trace::parse_value(text, ty, p).ok()? {
+            takt_interp::Value::Str(s) => (s.into_bytes(), *cap, None),
+            takt_interp::Value::Line { text, truncated } => (text.into_bytes(), *cap, Some(truncated)),
+            _ => return None,
+        },
+        Type::Bytes { cap } => {
+            let hex = text.trim().strip_prefix("0x")?;
+            let bytes: Option<Vec<u8>> =
+                (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok()).collect();
+            (bytes?, *cap, None)
+        }
+        _ => return None,
+    };
+    let mut out = vec![(format!("{base}.len"), Val::Int(bytes.len() as i64))];
+    for i in 0..cap as usize {
+        out.push((format!("{base}[{i}]"), Val::Int(bytes.get(i).copied().map_or(0, i64::from))));
+    }
+    if let Some(t) = truncated {
+        out.push((format!("{base}.truncated"), Val::Bool(t)));
+    }
+    Some(out)
+}
+
 /// Die Teile einer Liste `a, B(c, d), [e]` auf oberster Ebene.
 fn split(text: &str) -> Vec<&str> {
     let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0);
@@ -204,6 +232,8 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
                         let text = sample.value.as_deref().unwrap_or_default();
                         if text.trim() == "0x" {
                             inputs.insert((k, format!("{base}.bad")), Val::Bool(true));
+                        } else if let Some(leaves) = text_leaves(p, elem, text, &format!("{base}.v")) {
+                            inputs.extend(leaves.into_iter().map(|(n, v)| ((k, n), v)));
                         } else {
                             let mut leaves = Vec::new();
                             leaves_of(p, elem, text, &format!("{base}.v"), &mut leaves)
@@ -239,7 +269,8 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
         let step: eval::Env = model
             .state
             .iter()
-            .map(|v| (v.name.clone(), eval::eval(if k == 0 { &v.init } else { &v.next }, &env)))
+            .map(|v| v.name.clone())
+            .zip(eval::eval_all(model.state.iter().map(|v| if k == 0 { &v.init } else { &v.next }), &env))
             .collect();
         // Jede Invariante des Modells (Typen, Lemmata, Zaehler der Monitore)
         // gilt in jedem Zustand eines Laufs; eine falsche verschwiege
@@ -355,6 +386,36 @@ fn case(name: &str) -> Option<(String, u64)> {
             ((0..=50).map(|k| format!("t={k} in tank_p {} bar\n", tank(k))).collect(), 50)
         }
         "27_every.takt" | "75_implicit_checks.takt" => (String::new(), 40),
+        // Zeilen vom Rand (Schritt 27c-2): je Tick eine, wie `MAXPT` erlaubt.
+        "100_dispatch.takt" => {
+            let lines = [
+                "code 42",
+                "code 600",
+                "x ERR 12345 y",
+                "WARN now",
+                "key:value",
+                "plain",
+                "ERR -7",
+                "a:b:c",
+                "äöü:wörd",
+                "code 499",
+                "code -5",
+            ];
+            (lines.iter().enumerate().map(|(k, l)| format!("t={} in rx {l:?}\n", k + 1)).collect(), 20)
+        }
+        // Der letzte Sektor liegt ausserhalb von `last` und faultet im Handler.
+        "23_patterns.takt" => {
+            let lines = ["READY", "Erasing sector 12", "noise", "Erasing sector 7", "Erasing sector 1234"];
+            (lines.iter().enumerate().map(|(k, l)| format!("t={} in rx_log {l:?}\n", 2 * k + 1)).collect(), 16)
+        }
+        "49_record_streams.takt" => (
+            "t=1 in edges Pulse(true, 3)\nt=2 in edges Pulse(false, 2)\nt=3 in edges Pulse(false, 7)\n\
+             t=5 in rx \"go 5\"\nt=6 in rx \"go 12\" t=55000000\nt=7 in rx \"no\"\nt=8 in rx \"stop\"\n\
+             t=9 in edges Pulse(true, 9)\n"
+                .to_string(),
+            14,
+        ),
+        "104_linear_has.takt" | "117_many_text_handlers.takt" | "51_text_into_bytes.takt" => (String::new(), 30),
         // Interne Stroeme (Schritt 27c): Ring, Cursor je Leser, Handler je Ebene.
         "106_machine_handler.takt" | "72_handler_levels.takt" | "53_stream_kinds.takt" | "88_capture_segments.takt" => {
             (String::new(), 40)
@@ -430,7 +491,7 @@ machine reader:
         after 30 ms: -> LISTEN
 "#;
 
-const INPUT_STREAM_STIMULUS: &str = "t=1 in rx Frame(7, false)\nt=1 in rx Frame(3, true)\nt=2 in rx Frame(7, true) t=15000000\nt=3 in rx Frame(5, false)\nt=4 in rx 0x\nt=4 in rx Frame(4, true)\nt=5 in rx Frame(9, true)\nt=5 in rx Frame(1, true)\nt=5 in rx Frame(2, true)\nt=6 in rx Frame(6, true)\nt=12 in rx Frame(7, false) t=118000000\nt=20 in rx Frame(9, true)\nt=21 in rx Frame(1, true)\nt=21 in rx Frame(2, true)\nt=21 in rx Frame(3, true)\nt=22 in rx Frame(4, true)\nt=22 in rx Frame(5, true)\nt=22 in rx Frame(6, true)\n";
+const INPUT_STREAM_STIMULUS: &str = "t=0 in rx Frame(8, true)\nt=1 in rx Frame(7, false)\nt=1 in rx Frame(3, true)\nt=2 in rx Frame(7, true) t=15000000\nt=3 in rx Frame(5, false)\nt=4 in rx 0x\nt=4 in rx Frame(4, true)\nt=5 in rx Frame(9, true)\nt=5 in rx Frame(1, true)\nt=5 in rx Frame(2, true)\nt=6 in rx Frame(6, true)\nt=12 in rx Frame(7, false) t=118000000\nt=20 in rx Frame(9, true)\nt=21 in rx Frame(1, true)\nt=21 in rx Frame(2, true)\nt=21 in rx Frame(3, true)\nt=22 in rx Frame(4, true)\nt=22 in rx Frame(5, true)\nt=22 in rx Frame(6, true)\n";
 
 #[test]
 fn an_input_stream_agrees() {
@@ -568,6 +629,83 @@ fn an_internal_stream_agrees() {
     };
     let stim: String = (0..=30).map(|k| format!("t={k} in burst {}\n", burst(k))).collect();
     agree_program("INTERNAL_STREAM", &compile("INTERNAL_STREAM", INTERNAL_STREAM), &stim, 30);
+}
+
+/// Text (3.9, 8.7): Zeilen vom Rand mit Mustern ueber `int`, `hex`, `word`,
+/// `str<N>` und `{_}`, `matches` und `has`, ein Ueberlauf in `int`, Text
+/// ausserhalb von ASCII, eine gekuerzte Zeile, `starts_with`, `contains`,
+/// ein Formatstring in einen internen Zeilenstrom und `matches … as m` auf
+/// einem Wert.
+const TEXT_STREAM: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  rx   : stream<line<24>> @ hw("u/rx") with max_rate = 300 Hz, capacity = 4
+stream<line<24>> echo with capacity = 4
+
+output code  : int in -999999..999999 @ sim("code")
+output words : int in 0..999          @ sim("words")
+output lens  : int in 0..9999         @ sim("lens")
+output keyed : bool                   @ sim("keyed")
+output tail  : int in 0..99           @ sim("tail")
+output cut   : int in 0..999          @ sim("cut")
+output heard : int in 0..999          @ sim("heard")
+output hexed : int in 0..99999999     @ sim("hexed")
+output odd   : int in 0..999          @ sim("odd")
+
+machine reader:
+    var w   : int in 0..999 = 0
+    var c   : int in 0..999 = 0
+    var o   : int in 0..999 = 0
+    var key : str<64> = ""
+
+    initial RUN
+
+    state RUN:
+        loop:
+            keyed = key == "alpha"
+            if key matches "al{rest:str<8>}" as m:
+                tail = m.rest.len
+
+        on rx matches "code {n:int}" as e:
+            code = min(max(e.n, -999999), 999999)
+            send echo, "c{e.n}"
+
+        on rx matches "hex {h:hex}" as e:
+            hexed = min(e.h, 99999999)
+
+        on rx has "key={k:word};" as e:
+            key = e.k
+            w = (w + 1) % 1000
+            words = w
+
+        on rx has "<{s:str<4>}>" as e:
+            lens = e.s.len + 100 * e.text.len
+
+        on rx as e when e.text.truncated:
+            c = (c + 1) % 1000
+            cut = c
+
+        on rx as e when e.text.starts_with("x") or e.text.contains("yz"):
+            o = (o + 1) % 1000
+            odd = o
+
+machine listener:
+    var n : int in 0..999 = 0
+
+    initial RUN
+
+    state RUN:
+        on echo matches "c{v:int}" as e:
+            n = (n + 1) % 1000
+            heard = min(max(e.v, 0), 999)
+"#;
+
+const TEXT_STREAM_STIMULUS: &str = "t=1 in rx \"code 42\"\nt=1 in rx \"code -7\"\nt=2 in rx \"code 9223372036854775807\"\nt=2 in rx \"code 9223372036854775808\"\nt=3 in rx \"hex 0xff\"\nt=3 in rx \"hex 1A\"\nt=4 in rx \"a key=alpha; b\"\nt=4 in rx \"key=beta;\"\nt=5 in rx \"<äö>\"\nt=5 in rx \"<äöü>\"\nt=5 in rx \"zz<ab>\"\nt=6 in rx \"this line is much longer than twenty-four bytes\"\nt=7 in rx \"xenon\"\nt=7 in rx \"abyzc\"\nt=8 in rx \"key=alphabet;\"\nt=9 in rx \"code +15\"\nt=9 in rx \"code 12x\"\nt=10 in rx \"hex 0x\"\nt=11 in rx \"key=alpha;\"\n";
+
+#[test]
+fn a_text_stream_agrees() {
+    agree_program("TEXT_STREAM", &compile("TEXT_STREAM", TEXT_STREAM), TEXT_STREAM_STIMULUS, 14);
 }
 
 /// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und

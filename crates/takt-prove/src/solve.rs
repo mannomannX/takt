@@ -860,10 +860,42 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
 
 /// Ein Wert aus den Blaettern des Modells in der Textform des Stimulus
 /// (`takt_interp::trace::parse_value`): `Name(a, b)` fuer Records und
-/// Varianten mit Feldern, `[a, b]`, `none`; ein fehlendes Blatt ist null.
+/// Varianten mit Feldern, `[a, b]`, `none`, Text in Anfuehrungszeichen,
+/// Bytes als `0x…`; ein fehlendes Blatt ist null.
 fn element_text(program: &Program, ty: takt_mir::TypeId, base: &str, get: &dyn Fn(&str) -> Option<Val>) -> String {
     let leaf = |at: &str| get(at).unwrap_or(Val::Int(0));
+    let bytes = |at: &str| {
+        let len = match leaf(&format!("{at}.len")) {
+            Val::Int(n) => usize::try_from(n).unwrap_or(0),
+            _ => 0,
+        };
+        (0..len)
+            .map(|i| match leaf(&format!("{at}[{i}]")) {
+                Val::Int(b) => u8::try_from(b).unwrap_or(0),
+                _ => 0,
+            })
+            .collect::<Vec<u8>>()
+    };
     match program.types.get(ty) {
+        Type::Bytes { .. } => format!("0x{}", bytes(base).iter().map(|b| format!("{b:02x}")).collect::<String>()),
+        // Eine gekuerzte Zeile: Der Rand schneidet an der letzten
+        // Zeichengrenze bis zur Kapazitaet (`parse_value`), also folgt ein
+        // Zeichen, das genau dahinter endet.
+        Type::Str { cap } | Type::Line { cap } => {
+            let b = bytes(base);
+            let mut s = String::from_utf8_lossy(&b).into_owned();
+            if get(&format!("{base}.truncated")) == Some(Val::Bool(true)) {
+                let filler = match (*cap as usize + 1).saturating_sub(b.len()) {
+                    1 => Some('x'),
+                    2 => Some('\u{e9}'),
+                    3 => Some('\u{20ac}'),
+                    4 => Some('\u{1f600}'),
+                    _ => None,
+                };
+                s.extend(filler);
+            }
+            format!("{s:?}")
+        }
         Type::Record(r) => {
             let def = &program.records[r.index()];
             let parts: Vec<String> =

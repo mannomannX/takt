@@ -627,3 +627,40 @@ property quiet_is_silent: always(watch.state == QUIET implies not alarm)
     let quiet = reports.iter().find(|r| r.name == "quiet_is_silent").expect("quiet_is_silent");
     assert!(matches!(quiet.verdict, Verdict::Proven { .. }), "{quiet:?}");
 }
+
+/// Text im Gegenbeispiel (M11 Schritt 27c-2): Eine Zeile, auf die das
+/// Muster mit seinem Guard passt, und eine, die der Rand kuerzt; beide
+/// bestaetigt der Interpreter.
+#[test]
+fn a_text_line_is_part_of_the_counterexample() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input rx : stream<line<8>> @ hw(\"u/rx\") with max_rate = 100 Hz, capacity = 1
+
+output level : int in 0..2000 @ hw(\"o/level\") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        on rx matches \"set {n:int}\" as e when e.n >= 0 and e.n < 1000:
+            level = e.n
+        on rx as e when e.text.truncated:
+            level = 2000
+
+property never_high: never(level > 500 and level < 1000)
+property never_cut: never(level == 2000)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 1, &solver, 120).expect("Solver laeuft");
+    let high = reports.iter().find(|r| r.name == "never_high").expect("never_high");
+    let Verdict::Violated { stimulus, .. } = &high.verdict else { panic!("{high:?}") };
+    assert!(stimulus.contains("in rx \"set "), "{stimulus}");
+    let cut = reports.iter().find(|r| r.name == "never_cut").expect("never_cut");
+    assert!(matches!(cut.verdict, Verdict::Violated { .. }), "{cut:?}");
+}

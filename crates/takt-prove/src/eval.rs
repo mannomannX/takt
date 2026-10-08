@@ -66,6 +66,14 @@ pub fn eval(t: &Term, env: &Env) -> Val {
     eval_in(t, env, &mut HashMap::new())
 }
 
+/// Wertet mehrere Terme unter derselben Belegung, mit einem Gedaechtnis
+/// fuer alle: Die Folgezustaende eines Modells teilen den groessten Teil
+/// ihres Graphen.
+pub fn eval_all<'a>(ts: impl IntoIterator<Item = &'a Term>, env: &Env) -> Vec<Val> {
+    let mut memo = HashMap::new();
+    ts.into_iter().map(|t| eval_in(t, env, &mut memo)).collect()
+}
+
 fn eval_in(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
     let key = Rc::as_ptr(&t.0) as usize;
     if let Some(v) = memo.get(&key) {

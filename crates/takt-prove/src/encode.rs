@@ -44,7 +44,9 @@ use crate::eval;
 use crate::term::{Node, Op, Sort, Term};
 
 mod monitor;
+mod pattern;
 mod stream;
+mod text;
 mod value;
 use monitor::Monitor;
 use value::V;
@@ -175,14 +177,15 @@ impl Model {
         for (name, sort) in &self.inputs {
             env.insert(name.clone(), input(0, name).unwrap_or(eval::Val::zero(*sort)));
         }
-        let mut state: eval::Env = self.state.iter().map(|v| (v.name.clone(), eval::eval(&v.init, &env))).collect();
+        let names = || self.state.iter().map(|v| v.name.clone());
+        let mut state: eval::Env = names().zip(eval::eval_all(self.state.iter().map(|v| &v.init), &env)).collect();
         out.push(state.clone());
         for k in 1..=steps {
             let mut env = state.clone();
             for (name, sort) in &self.inputs {
                 env.insert(name.clone(), input(k, name).unwrap_or(eval::Val::zero(*sort)));
             }
-            state = self.state.iter().map(|v| (v.name.clone(), eval::eval(&v.next, &env))).collect();
+            state = names().zip(eval::eval_all(self.state.iter().map(|v| &v.next), &env)).collect();
             out.push(state.clone());
         }
         out
@@ -321,6 +324,9 @@ struct Enc<'p> {
     queued: Vec<stream::Queued>,
     /// Je offene Schleife, wo ein `break` sie verlaesst.
     breaks: Vec<Vec<Term>>,
+    /// Bindungen von `matches … as m` im laufenden Ausdruck: Ort, Typ, Wert
+    /// und wo sie gelten; Lesevorgaenge sehen sie, bevor sie im Zustand stehen.
+    binds: Vec<(String, TypeId, V, Term)>,
 }
 
 /// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
@@ -532,6 +538,7 @@ impl<'p> Enc<'p> {
             marks: Vec::new(),
             queued: Vec::new(),
             breaks: Vec::new(),
+            binds: Vec::new(),
         }
     }
 }
@@ -894,6 +901,15 @@ impl Enc<'_> {
                 let b = self.guarded(&guard, flow, |enc, flow| enc.expr(rhs, cx, env, flow))?;
                 self.binary(*op, a, b, None, span)?
             }
+            // Text gleicht als Text, auch ueber verschiedene Kapazitaeten (`value::same`).
+            ExprKind::Binary { op: op @ (BinaryOp::Eq | BinaryOp::Ne), lhs, rhs }
+                if self.text_type(lhs.ty).is_some() =>
+            {
+                let a = text::Text::of(self.value(lhs, cx, env, flow)?, span)?;
+                let b = text::Text::of(self.value(rhs, cx, env, flow)?, span)?;
+                let eq = a.equal(&b);
+                if *op == BinaryOp::Eq { eq } else { eq.not() }
+            }
             ExprKind::Binary { op: op @ (BinaryOp::Eq | BinaryOp::Ne), lhs, rhs } if self.composite(lhs.ty) => {
                 let a = self.value(lhs, cx, env, flow)?;
                 let b = self.value(rhs, cx, env, flow)?;
@@ -945,6 +961,9 @@ impl Enc<'_> {
                 }
                 self.call(*callee, xs, cx, env, flow, span)?.leaf(span)?
             }
+            ExprKind::Matches { subject, kind, pattern, binding } => {
+                self.value_match(subject, *kind, pattern, *binding, cx, env, flow, span)?
+            }
             other @ (ExprKind::Str(_)
             | ExprKind::None
             | ExprKind::Record { .. }
@@ -958,7 +977,6 @@ impl Enc<'_> {
             | ExprKind::Format(_)
             | ExprKind::JobState { .. }
             | ExprKind::Stream(_)
-            | ExprKind::Matches { .. }
             | ExprKind::NativeCall { .. }
             | ExprKind::MatOp { .. }
             | ExprKind::Decode { .. }
@@ -1392,6 +1410,7 @@ impl Enc<'_> {
                 }
                 StmtKind::If { cond, then, otherwise } => {
                     let c = self.expr(cond, cx, env, flow)?;
+                    self.flush_binds(env)?;
                     let mut env_t = env.clone();
                     let mut ft = Flow::new(Term::and(vec![flow.alive.clone(), c.clone()]));
                     self.block(then, cx, &mut env_t, &mut ft)?;
@@ -1500,6 +1519,7 @@ impl Enc<'_> {
                 | StmtKind::Job { .. }
                 | StmtKind::Arm { .. }) => return no(format!("Anweisung {}", stmt_name(other)), span),
             }
+            self.flush_binds(env)?;
         }
         Ok(())
     }
@@ -1962,6 +1982,7 @@ impl Enc<'_> {
                             Term::bin(Op::Ge, timer, Term::int(needed))
                         }
                     };
+                    self.flush_binds(&mut env)?;
                     let take = Term::and(vec![flow.alive.clone(), fired]);
                     if let Some(hit) = stream_hit {
                         self.take_guard(hit, m, &take, &mut env)?;
@@ -2218,7 +2239,7 @@ impl Enc<'_> {
         let actives: BTreeMap<MachineId, Term> =
             self.actives(pre).into_iter().map(|(m, a)| (m, Term::and(vec![a, running.clone()]))).collect();
         self.aborts.clear();
-        self.deliver(pre, &mut cur)?;
+        self.deliver(Some(pre), &mut cur)?;
         self.delivered = cur.clone();
         self.windows.clear();
         for &m in &self.order.clone() {
@@ -2258,6 +2279,7 @@ impl Enc<'_> {
         env.insert(NOW.into(), self.now.clone());
         self.edges_initial(&mut env)?;
         self.streams_initial(&mut env)?;
+        self.deliver(None, &mut env)?;
         let before = env.clone();
         for &m in &self.order.clone() {
             let machine = self.machine(m).clone();

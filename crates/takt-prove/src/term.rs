@@ -157,6 +157,19 @@ impl Term {
                 (Node::Bool(x), Node::Bool(y)) => return Term::bool(x == y),
                 _ => {}
             },
+            // Wie `eval`: Ganzzahlen wickeln in 64 Bit.
+            (Op::Add | Op::Sub | Op::Lt | Op::Le | Op::Gt | Op::Ge, [a, b]) => {
+                if let (Node::Int(x), Node::Int(y)) = (&*a.0, &*b.0) {
+                    return match op {
+                        Op::Add => Term::int(x.wrapping_add(*y)),
+                        Op::Sub => Term::int(x.wrapping_sub(*y)),
+                        Op::Lt => Term::bool(x < y),
+                        Op::Le => Term::bool(x <= y),
+                        Op::Gt => Term::bool(x > y),
+                        _ => Term::bool(x >= y),
+                    };
+                }
+            }
             _ => {}
         }
         Term::new(Node::App(op, args))

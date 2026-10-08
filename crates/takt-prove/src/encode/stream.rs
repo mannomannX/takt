@@ -14,7 +14,7 @@
 use std::ops::Not;
 
 use takt_diag::Span;
-use takt_mir::expr::{Accessor, Expr, ExprKind, StreamRef};
+use takt_mir::expr::{Accessor, Expr, ExprKind, MatchKind, StreamRef};
 use takt_mir::machine::{Guard, Handler};
 use takt_mir::pattern::Pattern;
 use takt_mir::program::{Binding, Direction, Overflow};
@@ -22,6 +22,7 @@ use takt_mir::stmt::Block;
 use takt_mir::types::Type;
 use takt_mir::{MachineId, TypeId, VarId};
 
+use super::text::Text;
 use super::value::V;
 use super::{Cx, Enc, Env, Exit, ExitKind, Flow, Mode, NOW, R, UNROLL_LIMIT, ite_env, no};
 use crate::term::{Op, Sort, Term};
@@ -35,6 +36,8 @@ pub(super) struct Stream {
     /// Plaetze des Rings: die Kapazitaet in Elementen, gekappt durch die in
     /// Bytes (8.6) — ein Element fester Groesse belegt immer gleich viele.
     cap: u32,
+    /// Die Schranke in Bytes, wenn die Elemente verschieden viele belegen.
+    budget: Option<u32>,
     /// Was der Rand je Tick hoechstens liefert (`MAXPT`, 8.6); ein Strom
     /// eines Schreibers ausserhalb des Modells (13.3) liefert bis zur
     /// Kapazitaet, ein interner sonst nichts.
@@ -179,11 +182,18 @@ impl Enc<'_> {
             };
             let cap = c.attrs.capacity.unwrap_or(16);
             let bytes = c.attrs.capacity_bytes.unwrap_or(cap.saturating_mul(256));
+            let (cap, budget) = self.ring_slots(*elem, cap, bytes, c.span)?;
+            // Ein Record vom Rand steht im Stimulus als `Name(…)`; ein Feld
+            // variabler Laenge hat dort keine Textform.
+            if budget.is_some() && matches!(self.p.types.get(*elem), Type::Record(_)) {
+                return no("Record-Element variabler Laenge vom Rand", c.span);
+            }
             out.push(Stream {
                 key,
                 name: c.name.clone(),
                 elem: *elem,
-                cap: self.ring_slots(*elem, cap, bytes, c.span)?,
+                cap,
+                budget,
                 maxpt: Some(maxpt),
                 overflow: c.attrs.overflow.unwrap_or_default(),
                 wake: c.attrs.wake,
@@ -197,13 +207,14 @@ impl Enc<'_> {
             let key = StreamRef::Internal(takt_mir::StreamId(i as u32));
             let (own, foreign) = readers(key);
             let bytes = s.capacity_bytes.unwrap_or(s.capacity.saturating_mul(256));
-            let cap = self.ring_slots(s.elem, s.capacity, bytes, s.span)?;
+            let (cap, budget) = self.ring_slots(s.elem, s.capacity, bytes, s.span)?;
             let foreign_writer = s.writer.is_some_and(|w| !self.order.contains(&w));
             out.push(Stream {
                 key,
                 name: s.name.clone(),
                 elem: s.elem,
                 cap,
+                budget,
                 maxpt: foreign_writer.then_some(cap),
                 overflow: s.overflow,
                 wake: false,
@@ -216,14 +227,85 @@ impl Enc<'_> {
         Ok(out)
     }
 
-    /// Die Plaetze des Rings: `CAP`, gekappt durch `CAPB` geteilt durch die
-    /// Bytelast eines Elements (`Buffer::push`).
-    fn ring_slots(&self, elem: TypeId, cap: u32, bytes: u32, span: Span) -> R<u32> {
-        let Some(size) = self.element_bytes(elem) else {
-            return no("Stromelemente variabler Laenge", span);
-        };
+    /// Die Plaetze des Rings und, bei Elementen variabler Laenge, die
+    /// Schranke in Bytes (`Buffer::push`). Belegt jedes Element gleich viele
+    /// Bytes, kappt `CAPB` geteilt durch ihre Zahl schon die Plaetze.
+    fn ring_slots(&self, elem: TypeId, cap: u32, bytes: u32, span: Span) -> R<(u32, Option<u32>)> {
         self.shape(elem, span)?;
-        Ok(if size == 0 { cap } else { cap.min(bytes / size) })
+        Ok(match self.element_bytes(elem) {
+            Some(0) => (cap, None),
+            Some(size) => (cap.min(bytes / size), None),
+            None => (cap, Some(bytes)),
+        })
+    }
+
+    /// Die Bytelast eines Werts (`stream::byte_len`): Text und Bytes ihre
+    /// Laenge, ein Record die Summe seiner Felder und mindestens eins, ein
+    /// Array die Summe, ein Vektor die seiner belegten Plaetze, sonst eins.
+    fn byte_load(&self, ty: TypeId, v: &V, span: Span) -> R<Term> {
+        Ok(match self.p.types.get(ty) {
+            Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. } => v.clone().part(0, span)?.leaf(span)?,
+            Type::Record(r) => {
+                let mut sum = Term::int(0);
+                for (i, f) in self.p.records[r.index()].fields.iter().enumerate() {
+                    sum = add(sum, self.byte_load(f.ty, &v.clone().part(i, span)?, span)?);
+                }
+                Term::ite(Term::bin(Op::Lt, sum.clone(), Term::int(1)), Term::int(1), sum)
+            }
+            Type::Array { elem, len } => {
+                let mut sum = Term::int(0);
+                for i in 0..*len as usize {
+                    sum = add(sum, self.byte_load(*elem, &v.clone().part(i, span)?, span)?);
+                }
+                sum
+            }
+            Type::Vec { elem, cap } => {
+                let len = v.clone().part(0, span)?.leaf(span)?;
+                let mut sum = Term::int(0);
+                for i in 0..*cap as usize {
+                    let here = Term::bin(Op::Lt, Term::int(i as i64), len.clone());
+                    let load = self.byte_load(*elem, &v.clone().part(i + 1, span)?, span)?;
+                    sum = add(sum, Term::ite(here, load, Term::int(0)));
+                }
+                sum
+            }
+            _ => Term::int(1),
+        })
+    }
+
+    /// Die Bytes, die der Ring gerade belegt.
+    fn used(&mut self, s: &Stream, env: &Env) -> R<Term> {
+        let span = Span::default();
+        let shape = self.shape(s.elem, span)?;
+        let (head, len) = (env[&loc(s, "head")].clone(), env[&loc(s, "len")].clone());
+        let mut sum = Term::int(0);
+        for i in 0..s.cap {
+            let d = sub(Term::int(i64::from(i)), head.clone());
+            let index =
+                Term::ite(Term::bin(Op::Lt, d.clone(), Term::int(0)), add(d.clone(), Term::int(i64::from(s.cap))), d);
+            let v = self.load(env, &format!("{}.v", slot(s, i)), &shape, span)?;
+            let load = self.byte_load(s.elem, &v, span)?;
+            sum = add(sum, Term::ite(Term::bin(Op::Lt, index, len.clone()), load, Term::int(0)));
+        }
+        Ok(sum)
+    }
+
+    /// Ein Wert als Element eines Stroms (`as_element`): Text in einen
+    /// Bytestrom, Text in eine Zeile anderer Kapazitaet.
+    fn as_element(&self, v: V, from: TypeId, elem: TypeId, span: Span) -> R<V> {
+        if from == elem {
+            return Ok(v);
+        }
+        let textual = |ty| matches!(self.p.types.get(ty), Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. });
+        if !(textual(from) && textual(elem)) {
+            return Ok(v);
+        }
+        let t = Text::of(v, span)?;
+        Ok(match self.p.types.get(elem) {
+            Type::Bytes { cap } | Type::Str { cap } => t.value(*cap, None),
+            Type::Line { cap } => t.value(*cap, Some(Term::bool(false))),
+            _ => return no("Element", span),
+        })
     }
 
     /// Die Bytelast eines Elements fester Groesse (`stream::byte_len` im
@@ -357,24 +439,54 @@ impl Enc<'_> {
         Ok(())
     }
 
-    /// Legt ein Element ab, wo `cond` gilt (`Buffer::push`): Ist der Ring
-    /// voll, verdraengt es unter `drop_oldest` das aelteste, sonst laeuft der
-    /// Strom ueber. Wahr, wo er ueberlief.
+    /// Legt ein Element ab, wo `cond` gilt (`Buffer::push`): Passt es nicht,
+    /// verdraengt es unter `drop_oldest` die aeltesten, sonst laeuft der Strom
+    /// ueber; ein Element ueber der Byteschranke passt nie. Wahr, wo er
+    /// ueberlief.
     fn push(&mut self, s: &Stream, env: &mut Env, cond: &Term, t: &Term, value: &V) -> R<Term> {
-        let full = Term::bin(Op::Ge, env[&loc(s, "len")].clone(), Term::int(i64::from(s.cap)));
+        let span = Span::default();
+        let cap = Term::int(i64::from(s.cap));
+        let size = match s.budget {
+            Some(_) => Some(self.byte_load(s.elem, value, span)?),
+            None => None,
+        };
+        // Passt das Element zu dem, was der Ring jetzt haelt?
+        let fits = |enc: &mut Self, env: &Env| -> R<Term> {
+            let room = Term::bin(Op::Lt, env[&loc(s, "len")].clone(), cap.clone());
+            Ok(match (&size, s.budget) {
+                (Some(size), Some(budget)) => {
+                    let used = enc.used(s, env)?;
+                    Term::and(vec![room, Term::bin(Op::Le, add(used, size.clone()), Term::int(i64::from(budget)))])
+                }
+                _ => room,
+            })
+        };
+        let too_big = match (&size, s.budget) {
+            (Some(size), Some(budget)) => Term::bin(Op::Gt, size.clone(), Term::int(i64::from(budget))),
+            _ => Term::bool(false),
+        };
         if s.overflow != Overflow::DropOldest || s.cap == 0 {
-            let over = Term::and(vec![cond.clone(), full.clone()]);
+            let ok = fits(self, env)?;
+            let over = Term::and(vec![cond.clone(), ok.clone().not()]);
             bump(env, &loc(s, "overflowed"), &over);
-            self.append(s, env, &Term::and(vec![cond.clone(), full.not()]), t, value)?;
+            self.append(s, env, &Term::and(vec![cond.clone(), ok]), t, value)?;
             return Ok(over);
         }
-        let shift = Term::and(vec![cond.clone(), full]);
-        let (head, len) = (env[&loc(s, "head")].clone(), env[&loc(s, "len")].clone());
-        env.insert(loc(s, "head"), Term::ite(shift.clone(), wrap(add(head.clone(), Term::int(1)), s.cap), head));
-        env.insert(loc(s, "len"), Term::ite(shift.clone(), sub(len.clone(), Term::int(1)), len));
-        bump(env, &loc(s, "dropped"), &shift);
-        self.append(s, env, cond, t, value)?;
-        Ok(Term::bool(false))
+        let over = Term::and(vec![cond.clone(), too_big.clone()]);
+        bump(env, &loc(s, "overflowed"), &over);
+        let go = Term::and(vec![cond.clone(), too_big.not()]);
+        // Je Verdraengung ein Element; feste Groesse braucht hoechstens eine.
+        let rounds = if size.is_some() { s.cap } else { 1 };
+        for _ in 0..rounds {
+            let (head, len) = (env[&loc(s, "head")].clone(), env[&loc(s, "len")].clone());
+            let shift =
+                Term::and(vec![go.clone(), Term::bin(Op::Gt, len.clone(), Term::int(0)), fits(self, env)?.not()]);
+            env.insert(loc(s, "head"), Term::ite(shift.clone(), wrap(add(head.clone(), Term::int(1)), s.cap), head));
+            env.insert(loc(s, "len"), Term::ite(shift.clone(), sub(len.clone(), Term::int(1)), len));
+            bump(env, &loc(s, "dropped"), &shift);
+        }
+        self.append(s, env, &go, t, value)?;
+        Ok(over)
     }
 
     /// Ein Element der Lieferung `j` als freie Eingabe.
@@ -391,7 +503,9 @@ impl Enc<'_> {
     /// Das Zustellen zu Tick-Beginn (9.6, `deliver`): was der Rand liefert,
     /// Element fuer Element in den Ring; ein Ueberlauf merkt `StreamOverflow`
     /// fuer jeden Leser vor, der nicht schlaeft oder den der Strom weckt.
-    pub(super) fn deliver(&mut self, pre: &Env, cur: &mut Env) -> R<()> {
+    /// `pre` ist der Zustand davor; im Tick 0 kommt die Lieferung vor dem
+    /// ersten Eintritt (`run`: Stimulus, dann `init`), und niemand schlaeft.
+    pub(super) fn deliver(&mut self, pre: Option<&Env>, cur: &mut Env) -> R<()> {
         for s in self.streams.clone() {
             let Some(bound) = s.maxpt else { continue };
             let n = self.input(format!("i.stream.{}.n", s.name), Sort::Int);
@@ -419,7 +533,10 @@ impl Enc<'_> {
             }
             let over = Term::or(over);
             for &(m, _) in &s.readers {
-                let hit = if s.wake { over.clone() } else { Term::and(vec![over.clone(), self.idle(m, pre).not()]) };
+                let hit = match pre {
+                    Some(pre) if !s.wake => Term::and(vec![over.clone(), self.idle(m, pre).not()]),
+                    _ => over.clone(),
+                };
                 let at = self.loc_pending(m);
                 let old = cur[&at].clone();
                 cur.insert(at, Term::or(vec![old, hit]));
@@ -472,6 +589,30 @@ impl Enc<'_> {
                 let mut leaves = Vec::new();
                 Enc::leaf_locs(&base, &shape, &mut leaves);
                 let used = Term::and(vec![here, bad.not()]);
+                // Text und Bytes: hinter der Laenge null, Text gueltiges UTF-8
+                // (3.9), eine gekuerzte Zeile endet hoechstens ein Zeichen vor
+                // ihrer Kapazitaet (`parse_value` schneidet an einer Zeichengrenze).
+                let (width, text, line) = match self.p.types.get(s.elem) {
+                    Type::Bytes { cap } => (Some(*cap), false, false),
+                    Type::Str { cap } => (Some(*cap), true, false),
+                    Type::Line { cap } => (Some(*cap), true, true),
+                    _ => (None, false, false),
+                };
+                if let Some(width) = width {
+                    let len = Term::var(format!("{base}.len"), Sort::Int);
+                    let bytes: Vec<Term> = (0..width).map(|i| Term::var(format!("{base}[{i}]"), Sort::Int)).collect();
+                    for (i, b) in bytes.iter().enumerate() {
+                        let inside = Term::bin(Op::Lt, Term::int(i as i64), len.clone());
+                        out.push(implies(used.clone(), Term::or(vec![inside, Term::eq(b.clone(), Term::int(0))])));
+                    }
+                    if text {
+                        out.push(implies(used.clone(), super::text::utf8(&Text { len: len.clone(), bytes })));
+                    }
+                    if line {
+                        let cut = Term::and(vec![used.clone(), Term::var(format!("{base}.truncated"), Sort::Bool)]);
+                        out.push(implies(cut, Term::bin(Op::Ge, len, Term::int(i64::from(width) - 3))));
+                    }
+                }
                 for (at, leaf) in leaves {
                     let x = self.input(at, self.leaf_sort(&leaf, span)?);
                     if let Some(inv) = self.leaf_invariant(x.clone(), &leaf) {
@@ -547,11 +688,11 @@ impl Enc<'_> {
 
     /// Die Bindung eines Elements (8.7, `element_record`): die Captures,
     /// dann `.t`, `.seq` und der Inhalt unter `.data` oder `.text`.
-    fn binding(&mut self, ty: TypeId, item: &Item, span: Span) -> R<V> {
+    fn binding(&mut self, ty: TypeId, item: &Item, caps: Vec<V>, span: Span) -> R<V> {
         let Type::Record(r) = self.p.types.get(ty) else { return no("Bindung ohne Record", span) };
         let fields = self.p.records[r.index()].fields.clone();
-        let mut parts = Vec::new();
-        for f in &fields {
+        let mut parts = caps;
+        for f in fields.iter().skip(parts.len()) {
             parts.push(match f.name.as_str() {
                 "t" => V::Leaf(item.t.clone()),
                 "seq" => V::Leaf(item.seq.clone()),
@@ -559,32 +700,37 @@ impl Enc<'_> {
                 _ => self.zero_of(f.ty, span)?,
             });
         }
+        parts.truncate(fields.len());
         Ok(V::Node(parts))
     }
 
-    /// Trifft das Muster eines Handlers oder Guards das Element? Ein
-    /// Record-Muster vergleicht die genannten Felder (8.7).
+    /// Trifft das Muster eines Handlers oder Guards das Element, und was
+    /// bindet es? Ein Record-Muster vergleicht die genannten Felder, ein
+    /// Textmuster laeuft ueber den Text des Elements (8.7).
     fn hits(
         &mut self,
-        pattern: Option<&Pattern>,
+        pattern: Option<(MatchKind, &Pattern)>,
         item: &Item,
         cx: &Cx<'_>,
         env: &Env,
         flow: &mut Flow,
         span: Span,
-    ) -> R<Term> {
+    ) -> R<(Term, Vec<V>)> {
         match pattern {
-            None => Ok(Term::bool(true)),
-            Some(Pattern::Record { fields, .. }) => {
+            None => Ok((Term::bool(true), Vec::new())),
+            Some((_, Pattern::Record { fields, .. })) => {
                 let mut conds = Vec::new();
                 for (index, e) in fields {
                     let want = self.value(e, cx, env, flow)?;
                     let got = item.value.clone().part(*index as usize, span)?;
                     conds.push(Enc::equal(&got, &want));
                 }
-                Ok(Term::and(conds))
+                Ok((Term::and(conds), Vec::new()))
             }
-            Some(Pattern::Text { .. }) => no("Textmuster", span),
+            Some((kind, Pattern::Text { pieces })) => {
+                let text = Text::of(item.value.clone(), span)?;
+                self.text_match(pieces, kind, &text, span)
+            }
         }
     }
 
@@ -611,12 +757,13 @@ impl Enc<'_> {
                 let mut rest = Term::and(vec![flow.alive.clone(), item.present.clone()]);
                 let mut alive = vec![Term::and(vec![flow.alive.clone(), item.present.clone().not()])];
                 for h in &mine {
-                    let hit = self.hits(h.pattern.as_ref().map(|(_, p)| p), item, cx, env, flow, h.span)?;
+                    let pattern = h.pattern.as_ref().map(|(k, p)| (*k, p));
+                    let (hit, caps) = self.hits(pattern, item, cx, env, flow, h.span)?;
                     let cond = Term::and(vec![rest.clone(), hit.clone()]);
                     // Die Bindung steht vor dem Guard, auch wenn er nicht gilt.
                     if let Some(var) = h.binding {
                         let ty = self.machine(m).vars[var.index()].ty;
-                        let v = self.binding(ty, item, h.span)?;
+                        let v = self.binding(ty, item, caps, h.span)?;
                         self.put(env, &self.loc_var(m, var), ty, v, &cond, h.span)?;
                     }
                     let mut fg = Flow::new(cond.clone());
@@ -624,6 +771,7 @@ impl Enc<'_> {
                         Some(g) => self.expr(g, cx, env, &mut fg)?,
                         None => Term::bool(true),
                     };
+                    self.flush_binds(env)?;
                     flow.exits.extend(fg.exits);
                     let fire = Term::and(vec![fg.alive.clone(), g.clone()]);
                     self.mark(m, cursor, fire.clone(), item.seq.clone());
@@ -650,8 +798,8 @@ impl Enc<'_> {
         let m = cx.m.expect("Maschine");
         let (key, pattern, binding, span) = match g {
             Guard::Next { stream, binding } => (*stream, None, Some(*binding), Span::default()),
-            Guard::Match { subject, pattern, binding, .. } => match stream_of(subject) {
-                Some(key) => (key, Some(pattern), *binding, subject.span),
+            Guard::Match { subject, kind, pattern, binding } => match stream_of(subject) {
+                Some(key) => (key, Some((*kind, pattern)), *binding, subject.span),
                 None => return no("Musterabgleich auf einem Wert", subject.span),
             },
             Guard::Expr(e) => return no("Guard ohne Strom", e.span),
@@ -664,13 +812,13 @@ impl Enc<'_> {
         let mut value: Option<V> = None;
         let mut seq = Term::int(-1);
         for item in &w.items {
-            let hit = self.hits(pattern, item, cx, env, flow, span)?;
+            let (hit, caps) = self.hits(pattern, item, cx, env, flow, span)?;
             let first = Term::and(vec![item.present.clone(), hit, found.clone().not()]);
             if let Some((_, ty)) = bound {
                 let v = if matches!(key, StreamRef::Internal(_)) && ty == s.elem {
                     item.value.clone()
                 } else {
-                    self.binding(ty, item, span)?
+                    self.binding(ty, item, caps, span)?
                 };
                 value = Some(match value {
                     None => v,
@@ -725,7 +873,7 @@ impl Enc<'_> {
         for item in &w.items {
             let mut env_k = env.clone();
             let mut fk = Flow::new(Term::and(vec![flow.alive.clone(), item.present.clone()]));
-            let v = self.binding(ty, item, span)?;
+            let v = self.binding(ty, item, Vec::new(), span)?;
             self.put(&mut env_k, &at, ty, v, &fk.alive.clone(), span)?;
             self.mark(m, cursor, fk.alive.clone(), item.seq.clone());
             self.block(body, cx, &mut env_k, &mut fk)?;
@@ -814,13 +962,29 @@ impl Enc<'_> {
         let si = self.stream_index(key, span)?;
         let s = self.streams[si].clone();
         let v = self.value(value, cx, env, flow)?;
-        let mut used = env[&loc(&s, "len")].clone();
+        let v = self.as_element(v, value.ty, s.elem, span)?;
+        let mut count = env[&loc(&s, "len")].clone();
         for q in self.queued.iter().filter(|q| q.stream == si) {
-            used = add(used, Term::ite(q.cond.clone(), Term::int(1), Term::int(0)));
+            count = add(count, Term::ite(q.cond.clone(), Term::int(1), Term::int(0)));
         }
+        let mut full = Term::bin(Op::Ge, count, Term::int(i64::from(s.cap)));
+        let mut too_big = Term::bool(false);
+        if let Some(budget) = s.budget {
+            let size = self.byte_load(s.elem, &v, span)?;
+            let mut bytes = add(self.used(&s, env)?, size.clone());
+            for q in self.queued.clone().iter().filter(|q| q.stream == si) {
+                let load = self.byte_load(s.elem, &q.value, span)?;
+                bytes = add(bytes, Term::ite(q.cond.clone(), load, Term::int(0)));
+            }
+            let budget = Term::int(i64::from(budget));
+            full = Term::or(vec![full, Term::bin(Op::Gt, bytes, budget.clone())]);
+            too_big = Term::bin(Op::Gt, size, budget);
+        }
+        // `drop_oldest` verdraengt beim Zustellen; abgelehnt wird nur, was nie passt.
         let full = match s.overflow {
-            Overflow::DropOldest if s.cap > 0 => Term::bool(false),
-            _ => Term::bin(Op::Ge, used, Term::int(i64::from(s.cap))),
+            Overflow::DropOldest if s.cap > 0 => too_big,
+            Overflow::DropOldest => Term::bool(true),
+            _ => full,
         };
         let fits = Term::and(vec![flow.alive.clone(), full.clone().not()]);
         if s.overflow != Overflow::Drop {
