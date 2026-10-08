@@ -752,9 +752,9 @@ pub(crate) fn encode_padded(
     module: &mut Module,
     vars: &dyn crate::expr::Vars,
 ) -> Result<Reg, NotYet> {
-    let v = crate::expr::lower(e, p, module, vars)?;
-    let tmp = module.alloca(&v.ty);
-    module.void_inst(&format!("store {} {}, ptr {tmp}", v.ty, v.value));
+    // Von der Stelle des Werts, ohne ihn als Ganzes zu laden (FB-455).
+    let ty = crate::ty::lower(e.ty, p).ok_or(NotYet { what: "map-Element ohne Typ" })?;
+    let tmp = crate::expr::place_of(e, &ty, p, module, vars)?;
     let buf = module.alloca(&format!("[{len} x i8]"));
     module.write(&LlvmType::Array(Box::new(LlvmType::Int(8)), len), "zeroinitializer", &buf.to_string());
     encode_canonical(p, e.ty, tmp, buf, module)?;

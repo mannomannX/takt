@@ -278,9 +278,6 @@ pub fn size(p: &Program) -> Size {
         .sum();
     items.push(Item { name: "sched-Warteschlangen".into(), bytes: sched, origin: Origin::Exact });
 
-    let scratch: u64 = allocated.map(|m| u64::from(m.layout.scratch_bytes.unwrap_or(0))).sum();
-    items.push(Item { name: "Scratch je Maschine".into(), bytes: scratch, origin: Origin::Exact });
-
     // 11.5: die vorkompilierten Automaten der Muster (8.7), dazu die
     // Durchlaufautomaten fuer `has` (FB-351). Die Rechnung steht; gefuellt
     // sind die Tabellen erst, wenn der Codegen sie erzeugt — der

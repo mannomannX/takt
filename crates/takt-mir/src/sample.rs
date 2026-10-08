@@ -887,7 +887,6 @@ pub fn full_program() -> Program {
             StreamRef::Fired(tr_cut),
             StreamRef::Var(v_trig),
         ],
-        scratch_bytes: Some(128),
     };
     m.budget = Some(Budget {
         activation: CostVec { i32: 10, ..Default::default() },

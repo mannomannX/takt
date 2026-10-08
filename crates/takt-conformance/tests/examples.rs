@@ -18,7 +18,12 @@
 //! dieselben Adressen schreibt, von denen das Programm liest.
 //! `harness::build_scenario` fuehrt darum alle Maschinen samt dem Szenario,
 //! jede nach ihrer Periode, mit der Bindung `sim` -> `hw` am Ende des Ticks.
+//!
+//! **Unter AddressSanitizer** laufen dieselben Faelle ein zweites Mal
+//! (FB-461): Ein Zugriff neben einen Platz faellt dem Vergleich erst auf,
+//! wenn er einen Wert trifft, den ein Ausgang zeigt.
 
+use takt_conformance::harness;
 use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
 use takt_diag::Policy;
@@ -45,6 +50,32 @@ struct Case {
     scenario: String,
     ticks: u64,
     profile: Option<String>,
+}
+
+impl Case {
+    fn label(&self) -> String {
+        format!("{}/{}", self.example, self.scenario)
+    }
+
+    /// Der Stimulus aus `<szenario>.stim.trace`: als Trace fuer den
+    /// Interpreter, als Eingaben fuer den Rahmen.
+    fn stimulus(&self) -> (Trace, Vec<Stimulus>) {
+        let label = self.label();
+        let path = sim_dir().join(&self.example).join(format!("{}.stim.trace", self.scenario));
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let stimulus = Trace::parse(&text).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let inputs = Stimulus::from_trace(&stimulus).unwrap_or_else(|e| panic!("{label}: {e}"));
+        (stimulus, inputs)
+    }
+
+    /// Das Programm, wie der Rahmen es fuehrt: Den Parametervektor setzt
+    /// er aus den Defaults; das Profil des Falls geht darum vorher in sie
+    /// ein, wie im Interpreter (8.4). `None` ohne Profil.
+    fn profiled(&self, p: &Program) -> Option<Program> {
+        self.profile.as_deref().map(|name| {
+            harness::with_profile(p, name).unwrap_or_else(|| panic!("{}: kein Profil {name}", self.label()))
+        })
+    }
 }
 
 fn sim_dir() -> std::path::PathBuf {
@@ -113,12 +144,9 @@ fn the_reference_examples_agree_on_both_paths() {
     let mut failed = Vec::new();
     let mut gaps_seen = Vec::new();
     for case in &cases {
-        let label = format!("{}/{}", case.example, case.scenario);
+        let label = case.label();
         let p = example(&case.example, case.profile.as_deref());
-        let dir = sim_dir().join(&case.example);
-        let text = std::fs::read_to_string(dir.join(format!("{}.stim.trace", case.scenario))).unwrap_or_default();
-        let stimulus = Trace::parse(&text).unwrap_or_else(|e| panic!("{label}: {e}"));
-        let inputs = Stimulus::from_trace(&stimulus).unwrap_or_else(|e| panic!("{label}: {e}"));
+        let (stimulus, inputs) = case.stimulus();
         let scenario = scenario_machine(&p, &case.scenario);
         let options = RunOptions {
             ticks: case.ticks,
@@ -135,11 +163,7 @@ fn the_reference_examples_agree_on_both_paths() {
         };
         let interpreted = result.trace.render();
         let name = format!("{}_{}", case.example, case.scenario);
-        // Den Parametervektor setzt der Rahmen aus den Defaults; das Profil
-        // des Falls geht darum vorher in sie ein, wie im Interpreter (8.4).
-        let profiled = case.profile.as_deref().map(|name| {
-            takt_conformance::harness::with_profile(&p, name).unwrap_or_else(|| panic!("{label}: kein Profil {name}"))
-        });
+        let profiled = case.profiled(&p);
         let p = profiled.as_ref().unwrap_or(&p);
         let native = match &scenario {
             Some(s) => common::run_native_scenario_with(&clang, p, &name, s, case.ticks, &inputs),
@@ -183,4 +207,32 @@ fn the_reference_examples_agree_on_both_paths() {
             "die Luecke {example} `{output}` ist geschlossen; den Eintrag in `GAPS` entfernen ({why})"
         );
     }
+}
+
+/// **Kein Zugriff daneben** (FB-461): Jeder Fall laeuft im erzeugten Code
+/// unter AddressSanitizer bis zum letzten Tick. Ein Chunk eines
+/// `stream<u8>` lief ueber den Platz seines Lesers hinaus, und der
+/// Nachbarplatz fing ihn unbemerkt auf.
+#[test]
+fn the_reference_examples_run_clean_under_address_sanitizer() {
+    let Some(clang) = common::clang() else { return };
+    let hint = "die Laufzeit von AddressSanitizer (compiler-rt) zu clang installieren";
+    let Some(search) = takt_testkit::require("asan", common::asan_path(&clang), hint) else { return };
+    let mut failed = Vec::new();
+    for case in &cases() {
+        let p = example(&case.example, case.profile.as_deref());
+        let (_, inputs) = case.stimulus();
+        let scenario = scenario_machine(&p, &case.scenario);
+        let profiled = case.profiled(&p);
+        let p = profiled.as_ref().unwrap_or(&p);
+        let h = match &scenario {
+            Some(s) => harness::build_scenario(p, s, case.ticks, &inputs),
+            None => harness::build_restoring(p, None, case.ticks, &inputs, &[]),
+        };
+        let name = format!("asan_{}_{}", case.example, case.scenario);
+        if let Err(e) = common::run_native_sanitized(&clang, p, &name, case.ticks, h, &search) {
+            failed.push(format!("{}:\n{e}", case.label()));
+        }
+    }
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }

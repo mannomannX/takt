@@ -63,13 +63,14 @@ pub fn emit(t: &mut Text, p: &Program, trace: Trace, x: &Prefix) {
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "long long {x}_stream_bind(struct {x}_arena *a, int s, long long cur, int i, void *data, long long *t) {{"
+        "long long {x}_stream_bind(struct {x}_arena *a, int s, long long cur, int i, void *data, long long *t, int cap) {{"
     );
     let _ = writeln!(s, "    int k = takt_int_slot(s);");
-    let _ = writeln!(s, "    return k >= 0 ? takt_int_bind(a, k, cur, i, data, t) : 0;");
+    let _ = writeln!(s, "    return k >= 0 ? takt_int_bind(a, k, cur, i, data, t, cap) : 0;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "long long {x}_stream_at(struct {x}_arena *a, int s, long long cur, int i, void *out) {{");
-    let _ = writeln!(s, "    return {x}_stream_bind(a, s, cur, i, (unsigned char *)out + 8, (long long *)out);");
+    let _ =
+        writeln!(s, "long long {x}_stream_at(struct {x}_arena *a, int s, long long cur, int i, void *out, int cap) {{");
+    let _ = writeln!(s, "    return {x}_stream_bind(a, s, cur, i, (unsigned char *)out + 8, (long long *)out, cap);");
     let _ = writeln!(s, "}}");
     // 9.6: `cur[s, m] = examined + 1`. Der Cursor gehoert der Maschine,
     // und der erzeugte Code fuehrt ihn in seinem Zustand; der Ring gibt
@@ -465,14 +466,16 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "static long long takt_int_bind(struct {x}_arena *a, int k, long long cur, int i, void *data, long long *t) {{"
+        "static long long takt_int_bind(struct {x}_arena *a, int k, long long cur, int i, void *data, long long *t, int cap) {{"
     );
     let _ = writeln!(s, "    int first = takt_int_first(a, k, cur);");
     let _ = writeln!(s, "    if (i < 0 || i >= a->int_n[k] - a->int_new[k] - first) return 0;");
     let _ = writeln!(s, "    const struct {x}_idesc *e = takt_int_desc(a, k, first + i);");
     let _ = writeln!(s, "    unsigned char *p = (unsigned char *)data;");
     let _ = writeln!(s, "    long long when = (long long)(((unsigned long long)e->t_hi << 32) | e->t_lo);");
-    let _ = writeln!(s, "    int len = e->len;");
+    // FB-461: Ein Element ohne Rahmung kann laenger sein als der Platz des
+    // Lesers; geschrieben wird hoechstens, was er fasst.
+    let _ = writeln!(s, "    int len = e->len < cap ? e->len : cap;");
     let _ = writeln!(s, "    unsigned tagged = (unsigned)len | (e->cut ? 0x80000000u : 0u);");
     let _ = writeln!(s, "    memcpy(t, &when, sizeof when);");
     let _ = writeln!(s, "    memcpy(p, &tagged, sizeof tagged);");
@@ -813,10 +816,10 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     let _ = writeln!(s, "    return k >= 0 && !a->tx_busy[k] && !a->tx_hold[k];");
     let _ = writeln!(s, "}}\n");
     // `o.sent` (8.8): `{ i32 len, [CAP x i8] }` an die uebergebene Stelle.
-    let _ = writeln!(s, "int {x}_stream_sent(struct {x}_arena *a, int s, void *out) {{");
+    let _ = writeln!(s, "int {x}_stream_sent(struct {x}_arena *a, int s, void *out, int cap) {{");
     let _ = writeln!(s, "    int k = takt_tx_slot(s);");
     let _ = writeln!(s, "    unsigned char *o = (unsigned char *)out;");
-    let _ = writeln!(s, "    int n = k < 0 ? 0 : a->tx_sent_n[k];");
+    let _ = writeln!(s, "    int n = k < 0 ? 0 : a->tx_sent_n[k] < cap ? a->tx_sent_n[k] : cap;");
     let _ = writeln!(
         s,
         "    o[0] = (unsigned char)n; o[1] = (unsigned char)(n >> 8); o[2] = (unsigned char)(n >> 16); o[3] = (unsigned char)(n >> 24);"

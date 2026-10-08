@@ -129,6 +129,8 @@ pub struct Module {
     pub at: takt_diag::Span,
     /// Das Praefix der externen Namen (12.11, [`crate::symbols`]).
     prefix: crate::symbols::Prefix,
+    /// Jede Funktion traegt `sanitize_address` ([`Module::with_address_sanitizer`]).
+    sanitize: bool,
 }
 
 impl Module {
@@ -177,6 +179,7 @@ impl Module {
             fault_lines: None,
             at: takt_diag::Span::default(),
             prefix: crate::symbols::Prefix::default(),
+            sanitize: false,
         }
     }
 
@@ -229,6 +232,22 @@ impl Module {
         self
     }
 
+    /// Dasselbe Modul fuer einen Lauf unter AddressSanitizer: LLVM
+    /// instrumentiert nur Funktionen mit `sanitize_address`, und ohne
+    /// Schutzzonen um ihre Plaetze bliebe ein Ueberlauf aus dem Rahmen in
+    /// den Stack des erzeugten Codes unsichtbar (FB-461).
+    pub fn with_address_sanitizer(mut self) -> Module {
+        self.sanitize = true;
+        self
+    }
+
+    /// Die Attribute jeder erzeugten Funktion. `nounwind`: Es gibt keine
+    /// Ausnahmen (4.1), und ohne die Zusage traegt jedes Objekt eine
+    /// Abwickeltabelle.
+    pub fn fn_attrs(&self) -> &'static str {
+        if self.sanitize { "nounwind sanitize_address" } else { "nounwind" }
+    }
+
     /// Beginnt eine Funktion.
     ///
     /// Die Parameter bekommen die Register 0 bis n-1; der Zaehler steht
@@ -245,9 +264,7 @@ impl Module {
     }
 
     /// Wie [`Module::begin`], mit Bindung (`internal`) und Attributen je
-    /// Parameter (`noalias`). Jede Funktion ist `nounwind`: Es gibt keine
-    /// Ausnahmen (4.1), und ohne die Zusage traegt jedes Objekt eine
-    /// Abwickeltabelle.
+    /// Parameter (`noalias`); dazu kommen [`Module::fn_attrs`].
     pub fn begin_with(
         &mut self,
         linkage: &str,
@@ -271,7 +288,8 @@ impl Module {
         let extra = if fn_attrs.is_empty() { String::new() } else { format!(" {fn_attrs}") };
         let mut sig = sig;
         sig.push(format!("ptr {}", crate::arena::PARAM));
-        let _ = writeln!(self.body, "\ndefine {linkage}{ret} @{name}({}) nounwind{extra} {{", sig.join(", "));
+        let attrs = self.fn_attrs();
+        let _ = writeln!(self.body, "\ndefine {linkage}{ret} @{name}({}) {attrs}{extra} {{", sig.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
         self.fault_slot = None;
@@ -378,8 +396,8 @@ impl Module {
         sig_text.push(format!("ptr {}", crate::arena::PARAM));
         // Reine Funktionen ruft nur dieses Modul: `internal` laesst LLVM
         // einbetten und Ungenutztes fallen.
-        let _ =
-            writeln!(self.body, "\ndefine internal {} @{name}({}) nounwind {{", sig.llvm_ret(), sig_text.join(", "));
+        let attrs = self.fn_attrs();
+        let _ = writeln!(self.body, "\ndefine internal {} @{name}({}) {attrs} {{", sig.llvm_ret(), sig_text.join(", "));
         self.entry_at = self.body.len();
         self.slots = 0;
         self.fault_slot = None;
@@ -515,8 +533,14 @@ impl Module {
     /// Beendet die Lebensdauer aller Slots seit `from` — am Ende der
     /// Anweisung, in der sie entstanden. Ein Slot lebt nie ueber eine
     /// Anweisung hinaus: Was daraus weiterverwendet wird, ist geladen.
+    /// Ausgenommen ist [`Module::fault_slot`], auch wenn er in dieser
+    /// Anweisung entstand: Die Fault-Pfade spaeterer Anweisungen schreiben
+    /// ihn, und der gemeinsame am Ende liest ihn.
     pub fn end_slots(&mut self, from: u32) {
         for n in from..self.slots {
+            if self.fault_slot == Some(Reg::Named(n)) {
+                continue;
+            }
             self.void_inst(&format!("call void @llvm.lifetime.end.p0(ptr {})", Reg::Named(n)));
         }
     }
@@ -651,7 +675,7 @@ impl Module {
         for sig in &self.intrinsics {
             let _ = writeln!(decls, "declare {sig}");
         }
-        let ports = crate::mmio::definitions(&self.mmio, self.bare_metal, &self.prefix);
+        let ports = crate::mmio::definitions(&self.mmio, self.bare_metal, &self.prefix, self.fn_attrs());
         format!("{}{decls}{}{ports}", self.head, self.body)
     }
 }

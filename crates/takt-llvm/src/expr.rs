@@ -67,6 +67,18 @@ pub trait Vars {
         None
     }
 
+    /// Die Stelle des Werts eines Input-Channels im Prozessabbild: Wer nur
+    /// adressiert, liest einen grossen Eingang ohne Kopie (FB-455).
+    fn input_address(&self, _c: takt_mir::ChannelId, _m: &mut Module) -> Option<(crate::emit::Reg, LlvmType)> {
+        None
+    }
+
+    /// Die Ablage von `last_fault` im Zustand, wo die Maschine es liest
+    /// (5.3): Ein Feld daraus liest nur sich, nicht den ganzen Record.
+    fn last_fault_at(&self, _m: &mut Module) -> Option<crate::emit::Reg> {
+        None
+    }
+
     /// Laedt den Wert eines Input-Channels aus dem Prozessabbild.
     ///
     /// 11.2 gibt der Schrittfunktion dafuer den Zeiger `i`. Die Qualitaet
@@ -396,8 +408,8 @@ fn cond_into(
     Ok(())
 }
 
-/// Die Adresse eines Werts: seine Stelle, sonst ein Platz, in den er
-/// geschrieben wird (11.2).
+/// Die Adresse eines Werts: seine Stelle ([`found_place`]), sonst ein
+/// Platz, in den er geschrieben wird (11.2).
 pub(crate) fn place_of(
     e: &Expr,
     want: &LlvmType,
@@ -405,7 +417,7 @@ pub(crate) fn place_of(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<crate::emit::Reg, NotYet> {
-    if let Some((ptr, _)) = address_of(e, m, vars) {
+    if let Some((ptr, _)) = found_place(e, p, m, vars)? {
         return Ok(ptr);
     }
     let tmp = m.alloca(want);
@@ -536,7 +548,7 @@ fn access(
     // Ein Feld an seiner Stelle wird reduziert, nicht geladen (FB-214).
     let signed = elem_signed(base.ty, p);
     if crate::reduce::reduces(which)
-        && let Some((ptr, ty)) = address_of(base, m, vars)
+        && let Some((ptr, ty)) = checked_address_of(base, m, vars)
         && matches!(ty, LlvmType::Array(..))
         && let Some(r) = crate::reduce::access(which, crate::reduce::Field::At(ptr, ty), signed, want, m)
     {
@@ -1199,8 +1211,8 @@ fn pow_defined(x: &str, y: &str, t: &LlvmType, m: &mut Module) -> String {
 
 /// `R.decode(b)` (3.7).
 ///
-/// Der Puffer liegt als Wert vor; `decode` liest ihn byteweise und
-/// braucht dafuer einen Platz. 11.2 nennt ihn den statischen Scratch —
+/// `decode` liest den Puffer byteweise an seiner Stelle; ein gerechneter
+/// Puffer bekommt einen Temporaerwert (11.2) —
 /// LLVM hebt die `alloca` in den Eintrittsblock und entfernt sie, wo sie
 /// unnoetig ist.
 fn decode(
@@ -1211,15 +1223,8 @@ fn decode(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
-    let (tmp, bty) = match address_of(bytes, m, vars) {
-        Some(at) => at,
-        None => {
-            let b = lower(bytes, p, m, vars)?;
-            let t = m.alloca(&b.ty);
-            m.write(&b.ty, &b.value, &t.to_string());
-            (t, b.ty)
-        }
-    };
+    let bty = ty::lower(bytes.ty, p).ok_or(NotYet { what: "`decode` auf diesem Typ" })?;
+    let tmp = place_of(bytes, &bty, p, m, vars)?;
     let LlvmType::Struct(_) = &bty else { return Err(NotYet { what: "`decode` auf einer Nicht-Sammlung" }) };
     // Die Laenge steht im Kopf der Sammlung (3.9), die Daten dahinter.
     let len_ptr = m.inst(&format!("getelementptr inbounds {bty}, ptr {tmp}, i32 0, i32 0"));
@@ -1879,6 +1884,11 @@ pub(crate) fn lower_into(
     let big = || ty::lower(e.ty, p).filter(LlvmType::indirect);
     match &e.kind {
         ExprKind::Call { callee, args } => call_into(*callee, args, dst, target, p, m, vars),
+        ExprKind::NativeCall { native, args } => native_into(*native, args, dst, p, m, vars),
+        ExprKind::Builtin(takt_mir::expr::Builtin::LastFault) => match vars.last_fault_at(m) {
+            Some(at) => crate::fault::write_into(&at, dst, p, m).map(|()| true),
+            None => Ok(false),
+        },
         ExprKind::Slice { base, from, to } => {
             let want = ty::lower(e.ty, p).ok_or(NotYet { what: "Teilbereich" })?;
             slice_into(base, from, to, &want, dst, p, m, vars)?;
@@ -1962,7 +1972,7 @@ pub(crate) fn store(
         return Ok(());
     }
     if let Some(want) = ty::lower(e.ty, p).filter(LlvmType::indirect)
-        && let Some((src, _)) = address_of(e, m, vars)
+        && let Some((src, _)) = found_place(e, p, m, vars)?
     {
         m.copy(&want, &src.to_string(), dst);
         return Ok(());
@@ -2003,15 +2013,8 @@ fn slice_into(
 ) -> Result<(), NotYet> {
     // Die Quelle wird adressiert, wo sie eine Stelle ist; nur ein
     // gerechneter Wert braucht einen Slot (FB-214).
-    let (src_ptr, xty) = match address_of(base, m, vars) {
-        Some(at) => at,
-        None => {
-            let x = lower(base, p, m, vars)?;
-            let t = m.alloca(&x.ty);
-            m.write(&x.ty, &x.value, &t.to_string());
-            (t, x.ty)
-        }
-    };
+    let xty = ty::lower(base.ty, p).ok_or(NotYet { what: "Teilbereich auf diesem Typ" })?;
+    let src_ptr = place_of(base, &xty, p, m, vars)?;
     let a = lower(from, p, m, vars)?;
     let b = lower(to, p, m, vars)?;
     let src = crate::collection::layout_of(&xty).ok_or(NotYet { what: "Teilbereich einer Nicht-Sammlung" })?;
@@ -2112,9 +2115,9 @@ fn index_of(
     vars: &dyn Vars,
     checked: bool,
 ) -> Result<Lowered, NotYet> {
-    // Eine Stelle wird adressiert; nur ein gerechneter Wert braucht den
-    // Umweg ueber einen Scratch (FB-214).
-    let place = address_of(base, m, vars);
+    // Eine Stelle wird adressiert; nur ein kleiner gerechneter Wert
+    // braucht den Umweg ueber einen Platz (FB-214, FB-455).
+    let place = read_place(base, p, m, vars)?;
     let x_ty = match &place {
         Some((_, ty)) => ty.clone(),
         None => ty::lower(base.ty, p).ok_or(NotYet { what: "Index auf diesem Typ" })?,
@@ -2192,6 +2195,76 @@ fn native_call(
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
     let n = p.natives.get(native.index()).ok_or(NotYet { what: "native Funktion" })?;
+    let (ops, sig) = native_args(args, p, m, vars)?;
+    let symbol = format!("takt_native_{}", crate::fns::sanitized(&n.name));
+    // Ein Skalar kommt als Wert zurueck; einen Byteblock, ein Record oder
+    // ein Feld schreibt die Funktion in kanonischer Form in einen Puffer
+    // des Aufrufers.
+    if returns_buffer(n.ret, p) {
+        let dst = m.alloca(want);
+        native_ret_into(&symbol, n.ret, (ops, sig), &dst.to_string(), p, m)?;
+        let v = m.inst(&format!("load {want}, ptr {dst}"));
+        return Ok(Lowered { value: v.to_string(), ty: want.clone() });
+    }
+    m.needs_intrinsic(&format!("{want} @{symbol}({})", sig.join(", ")));
+    let r = m.inst(&format!("call {want} @{symbol}({})", ops.join(", ")));
+    Ok(Lowered { value: r.to_string(), ty: want.clone() })
+}
+
+/// Eine Native mit grossem Ergebnis an die Stelle `dst`: Die Argumente
+/// liegen schon in ihren Puffern, wenn das Ergebnis `dst` beschreibt, auch
+/// wenn ein Argument `dst` liest (FB-455).
+fn native_into(
+    native: takt_mir::NativeId,
+    args: &[Expr],
+    dst: &str,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<bool, NotYet> {
+    let n = p.natives.get(native.index()).ok_or(NotYet { what: "native Funktion" })?;
+    if !returns_buffer(n.ret, p) || !ty::lower(n.ret, p).is_some_and(|t| t.indirect()) {
+        return Ok(false);
+    }
+    let call = native_args(args, p, m, vars)?;
+    let symbol = format!("takt_native_{}", crate::fns::sanitized(&n.name));
+    native_ret_into(&symbol, n.ret, call, dst, p, m)?;
+    Ok(true)
+}
+
+/// Gibt die Native ihr Ergebnis in einen Puffer des Aufrufers?
+fn returns_buffer(ret: TypeId, p: &Program) -> bool {
+    matches!(p.types.list.get(ret.index()), Some(Type::Bytes { .. } | Type::Record(_) | Type::Array { .. }))
+}
+
+/// Ruft die Native mit Ergebnispuffer und dekodiert ihn nach `dst`.
+fn native_ret_into(
+    symbol: &str,
+    ret: TypeId,
+    (mut ops, mut sig): (Vec<String>, Vec<String>),
+    dst: &str,
+    p: &Program,
+    m: &mut Module,
+) -> Result<(), NotYet> {
+    let buf = canonical_buffer(p, ret, m)?;
+    ops.push(format!("ptr {buf}"));
+    sig.push("ptr".to_string());
+    m.needs_intrinsic(&format!("void @{symbol}({})", sig.join(", ")));
+    m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
+    // Die Stelle als Register, wie `decode_canonical` sie durchreicht.
+    let at = m.inst(&format!("getelementptr inbounds i8, ptr {dst}, i64 0"));
+    crate::persist::decode_canonical(p, ret, buf, at, m)
+}
+
+/// Die Argumente einer Native: Operanden und Signatur. Ein Byteblock geht
+/// als Zeiger auf seine Stelle und Laenge, ein Record oder Feld in
+/// kanonischer Byteform; geladen wird keiner als Ganzes (FB-455).
+fn native_args(
+    args: &[Expr],
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<(Vec<String>, Vec<String>), NotYet> {
     let mut ops = Vec::with_capacity(args.len() + 1);
     let mut sig = Vec::with_capacity(args.len() + 1);
     for a in args {
@@ -2200,17 +2273,10 @@ fn native_call(
             // Ein Byteblock geht als Zeiger und Laenge; sein Wert waere eine
             // Kopie von bis zu mehreren KiB je Aufruf.
             Some(Type::Bytes { .. }) => {
-                let tmp = m.alloca(&vty);
-                match address_of(a, m, vars) {
-                    Some((src, _)) => m.copy(&vty, &src.to_string(), &tmp.to_string()),
-                    None => {
-                        let v = lower(a, p, m, vars)?;
-                        m.write(&v.ty, &v.value, &tmp.to_string());
-                    }
-                }
-                let len_ptr = m.inst(&format!("getelementptr inbounds {vty}, ptr {tmp}, i32 0, i32 0"));
+                let at = place_of(a, &vty, p, m, vars)?;
+                let len_ptr = m.inst(&format!("getelementptr inbounds {vty}, ptr {at}, i32 0, i32 0"));
                 let len = m.inst(&format!("load i32, ptr {len_ptr}"));
-                let data = m.inst(&format!("getelementptr inbounds {vty}, ptr {tmp}, i32 0, i32 1"));
+                let data = m.inst(&format!("getelementptr inbounds {vty}, ptr {at}, i32 0, i32 1"));
                 ops.push(format!("ptr {data}"));
                 ops.push(format!("i32 {len}"));
                 sig.push("ptr".to_string());
@@ -2220,11 +2286,9 @@ fn native_call(
             // die TCB kennt kein Ziel-Layout, und ein Feld als Wert waere
             // keine Form der C-ABI.
             Some(Type::Record(_) | Type::Array { .. }) => {
-                let v = lower(a, p, m, vars)?;
-                let tmp = m.alloca(&v.ty);
-                m.write(&v.ty, &v.value, &tmp.to_string());
+                let at = place_of(a, &vty, p, m, vars)?;
                 let buf = canonical_buffer(p, a.ty, m)?;
-                let len = crate::persist::encode_canonical(p, a.ty, tmp, buf, m)?;
+                let len = crate::persist::encode_canonical(p, a.ty, at, buf, m)?;
                 let len32 = m.inst(&format!("trunc i64 {len} to i32"));
                 ops.push(format!("ptr {buf}"));
                 ops.push(format!("i32 {len32}"));
@@ -2238,28 +2302,7 @@ fn native_call(
             }
         }
     }
-    let symbol = format!("takt_native_{}", crate::fns::sanitized(&n.name));
-    // Ein Skalar kommt als Wert zurueck; einen Byteblock, ein Record oder
-    // ein Feld schreibt die Funktion in kanonischer Form in einen Puffer
-    // des Aufrufers.
-    match p.types.list.get(n.ret.index()) {
-        Some(Type::Bytes { .. } | Type::Record(_) | Type::Array { .. }) => {
-            let buf = canonical_buffer(p, n.ret, m)?;
-            ops.push(format!("ptr {buf}"));
-            sig.push("ptr".to_string());
-            m.needs_intrinsic(&format!("void @{symbol}({})", sig.join(", ")));
-            m.void_inst(&format!("call void @{symbol}({})", ops.join(", ")));
-            let dst = m.alloca(want);
-            crate::persist::decode_canonical(p, n.ret, buf, dst, m)?;
-            let v = m.inst(&format!("load {want}, ptr {dst}"));
-            Ok(Lowered { value: v.to_string(), ty: want.clone() })
-        }
-        _ => {
-            m.needs_intrinsic(&format!("{want} @{symbol}({})", sig.join(", ")));
-            let r = m.inst(&format!("call {want} @{symbol}({})", ops.join(", ")));
-            Ok(Lowered { value: r.to_string(), ty: want.clone() })
-        }
-    }
+    Ok((ops, sig))
 }
 
 /// Ein Puffer fuer die kanonische Form eines Typs, in seiner oberen
@@ -2277,8 +2320,13 @@ fn stream_sent(base: &Expr, want: &LlvmType, m: &mut Module) -> Result<Lowered, 
     let inner = fields.first().ok_or(NotYet { what: "Wrapper ohne Wert" })?.clone();
     let buf = m.alloca(&inner);
     m.write(&inner, "zeroinitializer", &buf.to_string());
-    let n =
-        m.inst(&format!("call i32 @{}(ptr %arena, i32 {}, ptr {buf})", m.runtime(crate::stream::Streams::SENT), c.0));
+    // Was der Puffer nach der Laenge fasst; mehr schreibt die Runtime nicht.
+    let cap = inner.size().saturating_sub(4);
+    let n = m.inst(&format!(
+        "call i32 @{}(ptr %arena, i32 {}, ptr {buf}, i32 {cap})",
+        m.runtime(crate::stream::Streams::SENT),
+        c.0
+    ));
     let v = m.inst(&format!("load {inner}, ptr {buf}"));
     let some = m.inst(&format!("icmp sgt i32 {n}, 0"));
     let with_value = m.inst(&format!("insertvalue {want} undef, {inner} {v}, 0"));
@@ -2369,10 +2417,7 @@ fn stream_peek(base: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: 
     let (read, done) = (format!("peek{k}_lesen"), format!("peek{k}_fertig"));
     m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
     m.label(&read);
-    let seq = m.inst(&format!(
-        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 0, ptr {buf})",
-        m.runtime(crate::stream::Streams::AT)
-    ));
+    let seq = crate::stream::at(p, elem, sid, cur, 0, buf, m)?;
     crate::stream::note_examined(ex_ptr, seq, m);
     crate::stream::copy_payload(buf, out, elem, p, m)?;
     m.void_inst(&format!("br label %{done}"));
@@ -2574,7 +2619,7 @@ fn call_with(
         if let Some(ty) = ty.filter(LlvmType::indirect) {
             let is_target = target.is_some_and(|t| matches!((&a.kind, t), (ExprKind::Var(v), Place::Var(w)) if v == w));
             let copied = is_target && crate::fns::assigned(f, i);
-            let place = if target.is_some_and(|t| reads(a, t)) && !copied { None } else { address_of(a, m, vars) };
+            let place = if target.is_some_and(|t| reads(a, t)) && !copied { None } else { found_place(a, p, m, vars)? };
             let at = match place {
                 Some((src, _)) => src,
                 None => {
@@ -2669,14 +2714,86 @@ fn bytes_literal(
     Ok(Lowered { value: s.to_string(), ty: want.clone() })
 }
 
-/// Die Adresse eines Ausdrucks, wo er eine Stelle bezeichnet (FB-214).
-///
-/// Nur Variablen und Wege darin; alles andere ist ein gerechneter Wert
-/// und hat keinen Ort. `None` heisst „nimm den Wert" — der Aufrufer
-/// faellt dann auf den alten Weg zurueck.
+/// Wo ein Ausdruck schon liegt (FB-214, FB-455): eine Variable oder ein Weg
+/// darin, ein Eingang hinter seiner Gueltigkeitspruefung, und ein Feld
+/// eines grossen gerechneten Werts in dessen Temporaerwert
+/// ([`read_place`]) — `make(k).v` laedt sonst den ganzen Record, um ein
+/// Feld zu lesen. `None` fuer alles andere: Der Aufrufer rechnet den Wert.
+pub(crate) fn found_place(
+    e: &Expr,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Option<(crate::emit::Reg, LlvmType)>, NotYet> {
+    if let Some(at) = checked_address_of(e, m, vars) {
+        return Ok(Some(at));
+    }
+    match &e.kind {
+        ExprKind::Field { base, field } => field_place(base, *field, p, m, vars),
+        _ => Ok(None),
+    }
+}
+
+/// Die Stelle von `base.field`, wo `base` eine hat ([`read_place`]).
+fn field_place(
+    base: &Expr,
+    field: u32,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Option<(crate::emit::Reg, LlvmType)>, NotYet> {
+    let Some((ptr, ty)) = read_place(base, p, m, vars)? else { return Ok(None) };
+    let LlvmType::Struct(fields) = &ty else { return Err(NotYet { what: "Feldzugriff auf Nicht-Record" }) };
+    let inner = fields.get(field as usize).cloned().ok_or(NotYet { what: "Feld ausserhalb des Records" })?;
+    Ok(Some((m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 {field}")), inner)))
+}
+
+/// Wie [`found_place`]; ein grosser gerechneter Wert bekommt einen
+/// Temporaerwert (11.2), statt als Wert zu entstehen. `None` fuer einen
+/// kleinen gerechneten Wert: Der bleibt in Registern.
+pub(crate) fn read_place(
+    e: &Expr,
+    p: &Program,
+    m: &mut Module,
+    vars: &dyn Vars,
+) -> Result<Option<(crate::emit::Reg, LlvmType)>, NotYet> {
+    if let Some(at) = found_place(e, p, m, vars)? {
+        return Ok(Some(at));
+    }
+    let Some(want) = ty::lower(e.ty, p).filter(LlvmType::indirect) else { return Ok(None) };
+    let tmp = m.alloca(&want);
+    store(e, &tmp.to_string(), None, p, m, vars)?;
+    Ok(Some((tmp, want)))
+}
+
+/// Wie [`address_of`], fuer einen Leser, der gleich liest: Ein Eingang
+/// hinter seiner Gueltigkeitspruefung (3.5) bekommt sie hier, vor dem Lesen
+/// an seiner Stelle, statt als Ganzes geladen zu werden (FB-455).
+fn checked_address_of(e: &Expr, m: &mut Module, vars: &dyn Vars) -> Option<(crate::emit::Reg, LlvmType)> {
+    if let ExprKind::Checked { expr: inner, kind: takt_mir::expr::CheckedKind::Valid } = &e.kind
+        && let ExprKind::Input { channel, .. } = &inner.kind
+    {
+        let at = vars.input_address(*channel, m)?;
+        valid_or_fault(*channel, m, vars).ok()?;
+        return Some(at);
+    }
+    address_of(e, m, vars)
+}
+
+/// Die Adresse eines Ausdrucks, wo er eine Stelle bezeichnet (FB-214):
+/// Variablen, Eingaenge und Wege darin. `None` heisst „nimm den Wert".
 pub(crate) fn address_of(e: &Expr, m: &mut Module, vars: &dyn Vars) -> Option<(crate::emit::Reg, LlvmType)> {
     match &e.kind {
         ExprKind::Var(id) => vars.address(*id, m),
+        ExprKind::Input { channel, .. } => vars.input_address(*channel, m),
+        // Die Nachricht von `last_fault` hat in ihrer Ablage schon die
+        // Gestalt von `str<128>` (5.3).
+        ExprKind::Field { base, field: 1 }
+            if matches!(base.kind, ExprKind::Builtin(takt_mir::expr::Builtin::LastFault)) =>
+        {
+            let at = vars.last_fault_at(m)?;
+            Some((crate::fault::message_at(&at, m), crate::arena::text_type()))
+        }
         ExprKind::Field { base, field } => {
             let (ptr, ty) = address_of(base, m, vars)?;
             let LlvmType::Struct(fields) = &ty else { return None };
@@ -2696,17 +2813,19 @@ fn field_of(
     m: &mut Module,
     vars: &dyn Vars,
 ) -> Result<Lowered, NotYet> {
+    // `last_fault.line` liest die Zeile, nicht die Nachricht dazu (5.3).
+    if matches!(base.kind, ExprKind::Builtin(takt_mir::expr::Builtin::LastFault))
+        && let Some(at) = vars.last_fault_at(m)
+    {
+        return crate::fault::component(&at, field, p, m);
+    }
     // 3.8 (Dominanz): Ein Feld auf einem Wrapper meint das Feld des
     // Inhalts. Ausgepackt hat ihn schon der `Checked{Missing}`-Knoten,
     // den die MIR darum herum setzt — hier steht nur noch der Zugriff.
     // Eine Stelle wird adressiert, nicht geladen: `s.f` auf einem
-    // `bytes<1024>` liest sonst 1028 Byte fuer eines (FB-214). Der
-    // Schreibpfad tut das laengst (`place`), der Lesepfad jetzt auch.
-    if let Some((ptr, ty)) = address_of(base, m, vars)
-        && let LlvmType::Struct(fields) = &ty
-        && fields.get(field as usize).is_some()
-    {
-        let at = m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, i32 {field}"));
+    // `bytes<1024>` liest sonst 1028 Byte fuer eines (FB-214), und ein
+    // grosser gerechneter Record entsteht an seiner Stelle (FB-455).
+    if let Some((at, _)) = field_place(base, field, p, m, vars)? {
         let v = m.inst(&format!("load {want}, ptr {at}"));
         return Ok(Lowered { value: v.to_string(), ty: want.clone() });
     }

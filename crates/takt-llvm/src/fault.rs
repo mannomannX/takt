@@ -170,10 +170,10 @@ pub fn record(at: &Reg, code: &str, tick_ns: i64, m: &mut Module) {
     m.label(&done);
 }
 
-/// `last_fault` als Wert des Records `LastFault` (Prelude): Art mit
-/// Nutzlast, Nachricht, Zeile, Tick. Vor dem ersten Fault ist die Art null
-/// — `CHECK_FAILED` ohne Nutzlast wie im Interpreter —, der Rest leer.
-pub fn value(at: &Reg, p: &Program, m: &mut Module) -> Result<Lowered, NotYet> {
+/// Die Gestalt des Records `LastFault` (Prelude): der Typ der Art und die
+/// Zahl ihrer Faecher. Art mit Nutzlast, Nachricht als `str<128>`, Zeile und
+/// Tick als `int`; eine andere Gestalt kennt der Codegen nicht.
+fn shape(p: &Program) -> Result<(LlvmType, u32), NotYet> {
     let record = p.records.iter().find(|r| r.name == "LastFault").ok_or(NotYet { what: "Record `LastFault`" })?;
     let lower = |i: usize| {
         record.fields.get(i).and_then(|f| crate::ty::lower(f.ty, p)).ok_or(NotYet { what: "Feld von `LastFault`" })
@@ -184,39 +184,93 @@ pub fn value(at: &Reg, p: &Program, m: &mut Module) -> Result<Lowered, NotYet> {
     }
     let LlvmType::Struct(parts) = &kind_ty else { return Err(NotYet { what: "`FaultKind` ohne Nutzlast" }) };
     let Some(LlvmType::Array(_, width)) = parts.get(1) else { return Err(NotYet { what: "`FaultKind` ohne Faecher" }) };
+    let width = *width;
     ordinal("FaultKind", KINDS.len(), p)?;
     ordinal("ArithKind", 1, p)?;
     ordinal("RuntimeKind", 1, p)?;
+    Ok((kind_ty, width))
+}
 
+/// Die Adresse der Nachricht im Feld `at`: Ihre Ablage hat die Gestalt von
+/// `str<128>`, also liest sie, wer eine Stelle braucht, ohne Kopie.
+pub fn message_at(at: &Reg, m: &mut Module) -> Reg {
+    m.inst(&format!("getelementptr inbounds {}, ptr {at}, i32 0, i32 3", field_type()))
+}
+
+/// Ein Feld des Records `LastFault` aus der Ablage `at`, ohne die anderen zu
+/// lesen: Art mit Nutzlast (0), Nachricht (1), Zeile (2), Tick (3). Vor dem
+/// ersten Fault ist die Art null — `CHECK_FAILED` ohne Nutzlast wie im
+/// Interpreter —, der Rest leer.
+pub fn component(at: &Reg, field: u32, p: &Program, m: &mut Module) -> Result<Lowered, NotYet> {
+    let (kind_ty, width) = shape(p)?;
     let ty = field_type();
-    let field = |i: u32, m: &mut Module| m.inst(&format!("getelementptr inbounds {ty}, ptr {at}, i32 0, i32 {i}"));
-    let code_ptr = field(0, m);
-    let code = m.inst(&format!("load i32, ptr {code_ptr}"));
-    let none = m.inst(&format!("icmp eq i32 {code}, 0"));
-    let variant = m.inst(&format!("sub i32 {code}, 1"));
-    let variant = m.inst(&format!("and i32 {variant}, 255"));
-    let variant = m.inst(&format!("select i1 {none}, i32 0, i32 {variant}"));
-    let payload = m.inst(&format!("lshr i32 {code}, 8"));
-    let payload = m.inst(&format!("zext i32 {payload} to i64"));
-    let arr = LlvmType::Array(Box::new(LlvmType::Int(64)), *width);
-    let slots = m.inst(&format!("insertvalue {arr} zeroinitializer, i64 {payload}, 0"));
-    let kind = m.inst(&format!("insertvalue {kind_ty} undef, i32 {variant}, 0"));
-    let kind = m.inst(&format!("insertvalue {kind_ty} {kind}, {arr} {slots}, 1"));
+    let slot = |i: u32, m: &mut Module| m.inst(&format!("getelementptr inbounds {ty}, ptr {at}, i32 0, i32 {i}"));
+    match field {
+        0 => {
+            let code_ptr = slot(0, m);
+            let code = m.inst(&format!("load i32, ptr {code_ptr}"));
+            let none = m.inst(&format!("icmp eq i32 {code}, 0"));
+            let variant = m.inst(&format!("sub i32 {code}, 1"));
+            let variant = m.inst(&format!("and i32 {variant}, 255"));
+            let variant = m.inst(&format!("select i1 {none}, i32 0, i32 {variant}"));
+            let payload = m.inst(&format!("lshr i32 {code}, 8"));
+            let payload = m.inst(&format!("zext i32 {payload} to i64"));
+            let arr = LlvmType::Array(Box::new(LlvmType::Int(64)), width);
+            let slots = m.inst(&format!("insertvalue {arr} zeroinitializer, i64 {payload}, 0"));
+            let kind = m.inst(&format!("insertvalue {kind_ty} undef, i32 {variant}, 0"));
+            let kind = m.inst(&format!("insertvalue {kind_ty} {kind}, {arr} {slots}, 1"));
+            Ok(Lowered { value: kind.to_string(), ty: kind_ty })
+        }
+        1 => {
+            let text_ptr = message_at(at, m);
+            let message = m.inst(&format!("load {}, ptr {text_ptr}", text_type()));
+            Ok(Lowered { value: message.to_string(), ty: text_type() })
+        }
+        2 => {
+            let line_ptr = slot(1, m);
+            let line = m.inst(&format!("load i32, ptr {line_ptr}"));
+            let line = m.inst(&format!("zext i32 {line} to i64"));
+            Ok(Lowered { value: line.to_string(), ty: LlvmType::Int(64) })
+        }
+        3 => {
+            let tick_ptr = slot(2, m);
+            let tick = m.inst(&format!("load i64, ptr {tick_ptr}"));
+            Ok(Lowered { value: tick.to_string(), ty: LlvmType::Int(64) })
+        }
+        _ => Err(NotYet { what: "Feld von `LastFault`" }),
+    }
+}
 
-    let text_ptr = field(3, m);
-    let message = m.inst(&format!("load {text_ty}, ptr {text_ptr}"));
-    let line_ptr = field(1, m);
-    let line = m.inst(&format!("load i32, ptr {line_ptr}"));
-    let line = m.inst(&format!("zext i32 {line} to i64"));
-    let tick_ptr = field(2, m);
-    let tick = m.inst(&format!("load i64, ptr {tick_ptr}"));
+/// Der Typ des Records `LastFault` im erzeugten Code.
+fn record_type(p: &Program) -> Result<LlvmType, NotYet> {
+    let (kind_ty, _) = shape(p)?;
+    Ok(LlvmType::Struct(vec![kind_ty, text_type(), LlvmType::Int(64), LlvmType::Int(64)]))
+}
 
-    let want = LlvmType::Struct(vec![kind_ty.clone(), text_ty.clone(), line_ty, tick_ty]);
-    let v = m.inst(&format!("insertvalue {want} undef, {kind_ty} {kind}, 0"));
-    let v = m.inst(&format!("insertvalue {want} {v}, {text_ty} {message}, 1"));
-    let v = m.inst(&format!("insertvalue {want} {v}, i64 {line}, 2"));
-    let v = m.inst(&format!("insertvalue {want} {v}, i64 {tick}, 3"));
-    Ok(Lowered { value: v.to_string(), ty: want })
+/// `last_fault` an seine Stelle `dst`, Feld fuer Feld; die Nachricht als
+/// Kopie, nie als Wert (FB-455).
+pub fn write_into(at: &Reg, dst: &str, p: &Program, m: &mut Module) -> Result<(), NotYet> {
+    let want = record_type(p)?;
+    for field in [0, 2, 3] {
+        let v = component(at, field, p, m)?;
+        let to = m.inst(&format!("getelementptr inbounds {want}, ptr {dst}, i32 0, i32 {field}"));
+        m.write(&v.ty, &v.value, &to.to_string());
+    }
+    let from = message_at(at, m);
+    let to = m.inst(&format!("getelementptr inbounds {want}, ptr {dst}, i32 0, i32 1"));
+    m.copy(&text_type(), &from.to_string(), &to.to_string());
+    Ok(())
+}
+
+/// `last_fault` als Wert des Records `LastFault`, wo nur ein Wert geht.
+pub fn value(at: &Reg, p: &Program, m: &mut Module) -> Result<Lowered, NotYet> {
+    let want = record_type(p)?;
+    let mut v = "undef".to_string();
+    for field in 0..4 {
+        let c = component(at, field, p, m)?;
+        v = m.inst(&format!("insertvalue {want} {v}, {} {}, {field}", c.ty, c.value)).to_string();
+    }
+    Ok(Lowered { value: v, ty: want })
 }
 
 /// Traegt jede der ersten `n` Varianten des Prelude-Enums `name` ihre

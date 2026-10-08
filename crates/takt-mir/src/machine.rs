@@ -504,8 +504,6 @@ pub struct Layout {
     pub output_queues: Vec<ChannelId>,
     /// Gelesene Streams mit Cursor `cur[s, m]` (9.6).
     pub cursors: Vec<StreamRef>,
-    /// Statischer Scratch in Bytes (11.2), aus M3.
-    pub scratch_bytes: Option<u32>,
 }
 
 /// Herkunft einer Instanzmaschine.

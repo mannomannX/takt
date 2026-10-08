@@ -58,13 +58,6 @@ machine m:
 ";
 
 #[test]
-fn the_scratch_of_the_largest_operation_is_recorded() {
-    let (p, _) = compile(KALMAN).expect("uebersetzt");
-    // `solve` einer 2×2 in f64: LU 32 Byte, Loesung 16 Byte, zwei Zeilenindizes.
-    assert_eq!(p.expect("Programm").machines[0].layout.scratch_bytes, Some(56));
-}
-
-#[test]
 fn a_kalman_step_computes_through_the_library() {
     let t = trace(KALMAN);
     for line in [
@@ -320,7 +313,6 @@ fn solve_faults_in_the_tick_its_matrix_becomes_singular() {
     let src = include_str!("../../../corpus-try/108_singular_solve.takt");
     let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let p = takt_sema::compile(src, &options).program.expect("Programm");
-    assert_eq!(p.machines[0].layout.scratch_bytes, Some(56));
     let t = run(&p, &Trace::default(), &RunOptions { ticks: 5, ..Default::default() }).expect("Lauf").trace.render();
     for line in [
         "t=0 out x1 0.3333333333333333",

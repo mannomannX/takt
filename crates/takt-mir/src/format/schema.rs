@@ -280,7 +280,7 @@ codec_struct!(BlockInstance { 1 one var, 2 one block, 3 one count });
 codec_struct!(JobSlot { 1 one handle, 2 one native });
 codec_struct!(Layout {
     1 rep timers, 2 rep every_counters, 3 rep viol_sites, 4 rep block_instances, 5 one jobs_max, 6 rep saved_paths,
-    7 rep trigger_flags, 8 rep output_queues, 9 rep cursors, 10 opt scratch_bytes, 11 rep job_slots,
+    7 rep trigger_flags, 8 rep output_queues, 9 rep cursors, 11 rep job_slots,
 });
 codec_struct!(InstanceInfo { 1 one template, 2 rep args, 3 opt array });
 codec_enum!(MachineKind { 0 Regular, 1 Template, 2 Instance(1 one i), 3 Scenario });

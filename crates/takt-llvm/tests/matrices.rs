@@ -30,9 +30,6 @@ fn the_matrix_corpus_lowers_completely() {
     assert!(ir.contains("call double @llvm.fabs.f64("), "Spaltenpivot ueber den Betrag");
     assert!(ir.contains("call double @llvm.sqrt.f64("), "Cholesky");
     assert!(ir.contains("label %fault_geometry_"), "ein Pivot null springt in den Fault-Pfad");
-    // `solve` einer 2×2 (56 Byte) und `inv` einer 1×1 (20 Byte), je Maschine das Maximum.
-    let scratch: Vec<Option<u32>> = p.machines.iter().map(|m| m.layout.scratch_bytes).collect();
-    assert_eq!(scratch, vec![Some(56), Some(20)]);
 }
 
 #[test]

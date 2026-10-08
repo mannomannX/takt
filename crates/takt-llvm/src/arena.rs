@@ -272,7 +272,8 @@ pub fn entry(symbol: &str, body: &str, e: Shape, state: u64, arena: &Arena, m: &
     } else {
         format!("  %r = call {} @{body}({})\n  ret {} %r", e.ret, args.join(", "), e.ret)
     };
-    m.declare(&format!("\ndefine {} @{symbol}({}) nounwind {{\n{lines}{call}\n}}", e.ret, params.join(", ")));
+    let attrs = m.fn_attrs();
+    m.declare(&format!("\ndefine {} @{symbol}({}) {attrs} {{\n{lines}{call}\n}}", e.ret, params.join(", ")));
 }
 
 /// Die Einstiege einer Maschine, die der Rahmen ruft, mit ihrer Endung:

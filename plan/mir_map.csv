@@ -379,7 +379,6 @@ PAR-8.7-Sequenzen_und_Übergänge,Knoten,Guard::Match,
 PAR-8.7-Garantien_und_Budget,Rationale,,
 PAR-9.4-Bemerkung_Loop_Sprache,Rationale,,
 PAR-11.2-Große_Werte,Runtime,takt-llvm,
-PAR-11.2-Statischer_Scratch,Knoten,Layout,scratch_bytes
 PAR-11.2-Overlay_exklusiver_Zustandsspeicher,Knoten,VarScope::State,Lifted ebenso
 PAR-11.2-DFA_Tabellen,Knoten,Dfa,
 PAR-11.3-Compile_Zeit_Auswertung,Runtime,takt-interp,

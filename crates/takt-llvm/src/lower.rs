@@ -90,21 +90,22 @@ pub fn program_with_diagnostics(
     instrument: crate::target::Instrument,
     diagnostics: crate::target::Diagnostics,
 ) -> Lowered {
-    takt_diag::stack::with_deep_stack(|| program_here(p, triple, prefix, instrument, diagnostics))
-}
-
-/// [`program_with_diagnostics`] auf dem Stapel des Aufrufers.
-fn program_here(
-    p: &Program,
-    triple: &str,
-    prefix: &Prefix,
-    instrument: crate::target::Instrument,
-    diagnostics: crate::target::Diagnostics,
-) -> Lowered {
-    let mut m = Module::new(prefix.as_str(), triple)
+    let m = Module::new(prefix.as_str(), triple)
         .with_prefix(prefix)
         .with_instrument(instrument)
         .with_diagnostics(diagnostics);
+    takt_diag::stack::with_deep_stack(|| program_into(p, m))
+}
+
+/// Wie [`program`], fuer einen Lauf unter AddressSanitizer
+/// ([`Module::with_address_sanitizer`]); nur fuer Tests auf dem Wirt.
+pub fn program_sanitized(p: &Program, triple: &str, prefix: &Prefix) -> Lowered {
+    let m = Module::new(prefix.as_str(), triple).with_prefix(prefix).with_address_sanitizer();
+    takt_diag::stack::with_deep_stack(|| program_into(p, m))
+}
+
+/// Senkt `p` in das vorbereitete Modul, auf dem Stapel des Aufrufers.
+fn program_into(p: &Program, mut m: Module) -> Lowered {
     let mut skipped = Vec::new();
     let mut without_persist = Vec::new();
 
@@ -207,7 +208,7 @@ fn program_here(
         if let Err(e) = crate::monitor::monitor_function(i, prop, p, &mut m) {
             skipped.push(Skipped { machine: format!("monitor {}", prop.name), reason: e.what.to_string() });
         } else if let Some(state) = arena.monitor(i) {
-            let (symbol, body) = (crate::arena::monitor_symbol(prefix, i), format!("monitor_{i}"));
+            let (symbol, body) = (crate::arena::monitor_symbol(m.prefix(), i), format!("monitor_{i}"));
             crate::arena::entry(&symbol, &body, crate::arena::MONITOR, state.offset, &arena, &mut m);
         }
     }

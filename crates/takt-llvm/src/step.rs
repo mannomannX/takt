@@ -768,8 +768,12 @@ fn init_var(v: takt_mir::VarId, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(),
     }
     let declared = def.ty;
     let vars = ctx.vars();
-    let value = crate::expr::lower(&init, ctx.program, m, &vars)?;
     let ptr = ctx.field(Role::Var, v.index(), m).ok_or(NotYet { what: "Variable im Zustand" })?;
+    // Ein grosser Anfangswert entsteht an seiner Stelle (FB-455).
+    if crate::ty::storage(declared, ctx.program).is_some_and(|t| t.indirect()) {
+        return crate::expr::store(&init, &ptr.to_string(), None, ctx.program, m, &vars);
+    }
+    let value = crate::expr::lower(&init, ctx.program, m, &vars)?;
     let ty = crate::ty::storage(declared, ctx.program).unwrap_or_else(|| value.ty.clone());
     let value = crate::expr::fit(value, &ty, m);
     m.write(&value.ty, &value.value, &ptr.to_string());
@@ -1137,8 +1141,9 @@ fn advance_loop(module: &mut Module) {
     if module.has_declared("@takt_advance_timers(") {
         return;
     }
-    module.declare(
-        "define internal void @takt_advance_timers(ptr %timers, i32 %n, i64 %delta) noinline nounwind {
+    let attrs = module.fn_attrs();
+    module.declare(&format!(
+        "define internal void @takt_advance_timers(ptr %timers, i32 %n, i64 %delta) noinline {attrs} {{
   br label %kopf
 kopf:
   %i = phi i32 [ 0, %0 ], [ %i1, %zelle ]
@@ -1153,10 +1158,10 @@ zelle:
   br label %kopf, !llvm.loop !9000
 ende:
   ret void
-}
-!9000 = distinct !{!9000, !9001}
-!9001 = !{!\"llvm.loop.unroll.disable\"}",
-    );
+}}
+!9000 = distinct !{{!9000, !9001}}
+!9001 = !{{!\"llvm.loop.unroll.disable\"}}"
+    ));
 }
 
 /// `<maschine>_idle(st) -> i1`: Ist die Maschine bereit zu schlafen (9.9)?
@@ -1493,8 +1498,9 @@ fn deadline_search(module: &mut Module) {
     if module.has_declared("@takt_deadline_of(") {
         return;
     }
+    let attrs = module.fn_attrs();
     module.declare(&format!(
-        "define internal i64 @takt_deadline_of(ptr %timers, ptr %table, i32 %n, i8 %leaf) nounwind {{
+        "define internal i64 @takt_deadline_of(ptr %timers, ptr %table, i32 %n, i8 %leaf) {attrs} {{
   br label %kopf
 kopf:
   %i = phi i32 [ 0, %0 ], [ %i1, %weiter ]
@@ -1847,10 +1853,7 @@ fn dispatch(handlers: &[takt_mir::machine::Handler], ctx: &mut Ctx<'_>, m: &mut 
         m.label(&body);
         let seq = match (direct, buf) {
             (Some(var), _) => bind_direct(var, sid, &cur, &i, elem, ctx, m)?,
-            (None, Some(buf)) => m.inst(&format!(
-                "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
-                m.runtime(crate::stream::Streams::AT)
-            )),
+            (None, Some(buf)) => crate::stream::at(ctx.program, elem, sid, cur, i, buf, m)?,
             (None, None) => return Err(NotYet { what: "Scratch" }),
         };
         // 9.6: Auch ein Element ohne passenden Handler gilt als
@@ -1894,10 +1897,7 @@ fn next_element(
     m.label(&take);
     let seq = match buf {
         Some(buf) => {
-            let seq = m.inst(&format!(
-                "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 0, ptr {buf})",
-                m.runtime(crate::stream::Streams::AT)
-            ));
+            let seq = crate::stream::at(ctx.program, elem, sid, cur, 0, buf, m)?;
             bind_element(binding, buf, seq, elem, ctx, m)?;
             seq
         }
@@ -1938,8 +1938,9 @@ pub(crate) fn bind_direct(
         }
     }
     let (Some(t_ptr), Some(data_ptr)) = (t_ptr, data_ptr) else { return Err(NotYet { what: "Bindung ohne Inhalt" }) };
+    let cap = crate::stream::payload_cap(p, elem)?;
     let seq = m.inst(&format!(
-        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {data_ptr}, ptr {t_ptr})",
+        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {data_ptr}, ptr {t_ptr}, i32 {cap})",
         m.runtime(crate::stream::Streams::BIND)
     ));
     if let Some(seq_ptr) = seq_ptr {
@@ -2247,10 +2248,7 @@ fn match_guard(
     m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{done}"));
 
     m.label(&body);
-    let seq = m.inst(&format!(
-        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
-        m.runtime(crate::stream::Streams::AT)
-    ));
+    let seq = crate::stream::at(ctx.program, elem, sid, cur, i, buf, m)?;
     if let Some(v) = binding {
         bind_element(v, buf, seq, elem, ctx, m)?;
     }
@@ -2589,10 +2587,7 @@ fn one_trigger(
     let go_on = m.inst(&format!("icmp slt i32 {i}, {n}"));
     m.void_inst(&format!("br i1 {go_on}, label %{body}, label %{end_at}"));
     m.label(&body);
-    let seq = m.inst(&format!(
-        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
-        m.runtime(crate::stream::Streams::AT)
-    ));
+    let seq = crate::stream::at(ctx.program, elem, sid, cur, i, buf, m)?;
     // 7.5: Der Trigger fuehrt seinen eigenen Cursor; was er gesehen hat,
     // sieht er nicht wieder.
     let next_seq = m.inst(&format!("add i64 {seq}, 1"));
@@ -2787,8 +2782,16 @@ impl crate::expr::Vars for EventVars<'_> {
         self.inner.var(id, m)
     }
 
+    fn last_fault_at(&self, m: &mut Module) -> Option<crate::emit::Reg> {
+        self.inner.last_fault_at(m)
+    }
+
     fn input(&self, c: takt_mir::ChannelId, m: &mut Module) -> Option<crate::expr::Lowered> {
         self.inner.input(c, m)
+    }
+
+    fn input_address(&self, c: takt_mir::ChannelId, m: &mut Module) -> Option<(crate::emit::Reg, crate::ty::LlvmType)> {
+        self.inner.input_address(c, m)
     }
 
     fn param(&self, id: takt_mir::ParamId, m: &mut Module) -> Option<crate::expr::Lowered> {

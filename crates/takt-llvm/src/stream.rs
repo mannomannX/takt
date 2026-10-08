@@ -45,12 +45,14 @@ impl Streams {
     /// der Sammlungsform `{ i32 len, [N x i8] }`, ein Record in der
     /// kanonischen Byteform (plan/m6.md 2.2). Bei einem `line<N>` meldet
     /// das Bit 31 der Laenge, dass der Rand gekuerzt hat
-    /// ([`TRUNCATED`](Self::TRUNCATED), 3.9).
+    /// ([`TRUNCATED`](Self::TRUNCATED), 3.9). Das letzte Argument ist die
+    /// Nutzlast des Platzes; mehr schreibt die Runtime nie ([`at`], FB-461).
     pub const AT: &'static str = "stream_at";
 
     /// Schreibt das `i`-te Element ohne Umweg: `{ i32 len, [N x i8] }`
     /// an die erste Stelle, `t` an die zweite; liefert `seq`. Fuer Text
-    /// und Bytes, deren Ringform die Sammlungsform ist (FB-214 C6).
+    /// und Bytes, deren Ringform die Sammlungsform ist (FB-214 C6). Das
+    /// letzte Argument ist `N`.
     pub const BIND: &'static str = "stream_bind";
 
     /// Versatz der Laenge in dem, was `AT` schreibt.
@@ -107,11 +109,11 @@ impl Streams {
             m.runtime(Streams::COUNT)
         ));
         m.declare(&format!(
-            "declare i64 @{}(ptr readnone, i32, i64, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            "declare i64 @{}(ptr readnone, i32, i64, i32, ptr, i32) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
             m.runtime(Streams::AT)
         ));
         m.declare(&format!(
-            "declare i64 @{}(ptr readnone, i32, i64, i32, ptr, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            "declare i64 @{}(ptr readnone, i32, i64, i32, ptr, ptr, i32) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
             m.runtime(Streams::BIND)
         ));
         m.declare(&format!(
@@ -123,7 +125,7 @@ impl Streams {
             m.runtime(Streams::SEND)
         ));
         m.declare(&format!(
-            "declare i32 @{}(ptr readnone, i32, ptr) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
+            "declare i32 @{}(ptr readnone, i32, ptr, i32) nounwind willreturn memory(argmem: write, inaccessiblemem: read)",
             m.runtime(Streams::SENT)
         ));
         m.declare(&format!(
@@ -193,6 +195,27 @@ pub fn split_truncation(dst: Reg, cap: u32, m: &mut Module) {
     m.void_inst(&format!("store i32 {clean}, ptr {dst}"));
     let flag = m.inst(&format!("getelementptr inbounds i8, ptr {dst}, i64 {}", 4 + cap));
     m.void_inst(&format!("store i1 {cut}, ptr {flag}"));
+}
+
+/// `P_stream_at`: das `i`-te Element des Fensters ab `cur` nach `buf`, einem
+/// Platz aus [`scratch`]; liefert `seq`. Die Runtime erfaehrt, wie viel
+/// Nutzlast der Platz fasst, und schreibt nie mehr: Ein Element ohne Rahmung
+/// kann laenger sein als sein Typ, etwa ein Chunk eines `stream<u8>`, und lief
+/// sonst ueber den Platz hinaus (FB-461).
+pub fn at(
+    p: &Program,
+    elem: TypeId,
+    sid: impl core::fmt::Display,
+    cur: impl core::fmt::Display,
+    i: impl core::fmt::Display,
+    buf: Reg,
+    m: &mut Module,
+) -> Result<Reg, NotYet> {
+    let cap = payload_cap(p, elem)?;
+    Ok(m.inst(&format!(
+        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf}, i32 {cap})",
+        m.runtime(Streams::AT)
+    )))
 }
 
 /// Ein Platz fuer ein Element, wie `P_stream_at` es schreibt.

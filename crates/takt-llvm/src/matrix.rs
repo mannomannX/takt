@@ -6,8 +6,8 @@
 //! bitidentisch rechnen (4.2, Satz 9.4.4). Die Form steht zur
 //! Uebersetzungszeit fest, also sind die Schleifen ausgerollt; nur die
 //! Pivotzeile ist ein Laufzeitwert. Was einen Platz braucht — die LU, die
-//! Loesung, die rechte Seite —, liegt im statischen Scratch (11.2), den
-//! die Sema in `Layout::scratch_bytes` ausweist. Ein Pivot null springt
+//! Loesung, die rechte Seite —, ist ein Temporaerwert seiner Anweisung
+//! (11.2). Ein Pivot null springt
 //! bei `inv` und `solve` in den Fault-Pfad (`ArithmeticFault(Singular)`);
 //! `det` liefert dann null und `cholesky` `none`, wie der Interpreter.
 

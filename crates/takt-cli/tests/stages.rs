@@ -84,6 +84,42 @@ fn a_job_argument_costs_no_stack() {
     }
 }
 
+/// **Ein Temporaerwert lebt bis zum Ende seines Statements** (11.2): Drei
+/// Anweisungen mit je einem gerechneten Feld von 2 KiB brauchen nicht mehr
+/// Stack als eine, weil LLVM Plaetze mit getrennter Lebensdauer
+/// uebereinanderlegt. Ein Literal statt eines Aufrufs: Ob LLVM einen
+/// Aufruf einbettet, entscheidet sonst mit ueber den Rahmen.
+#[test]
+fn temporaries_of_successive_statements_share_their_place() {
+    let clang = takt_llvm::toolchain::find().path().cloned();
+    let Some(_) = takt_testkit::require("clang", clang, "clang mit den Zielen ARM und RISC-V") else { return };
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-temps-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let field: Vec<String> = (0..256).map(|i| format!("k + {i}")).collect();
+    let field = field.join(", ");
+    let share = |statements: usize, target: &str| {
+        let outputs: String = (0..statements).map(|i| format!("output o{i} : int @ sim(\"o{i}\")\n")).collect();
+        let body: String =
+            (0..statements).map(|i| format!("            o{i} = [{field}][(k + {i}) % 256]\n")).collect();
+        let source = format!(
+            "system:\n    language = 1\n    tick     = 10 ms\n\n{outputs}\nmachine m:\n    var k : int in 0..255 = 0\n\n    \
+             initial RUN\n\n    state RUN:\n        loop:\n            k = (k + 1) % 256\n{body}"
+        );
+        let file = dir.join(format!("temps_{statements}.takt"));
+        std::fs::write(&file, source).expect("Quelle");
+        let out = takt(&["size", &file.to_string_lossy(), "--target", target]);
+        let text = stdout(&out);
+        assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+        let line = text.lines().find(|l| l.contains("Stack (Programmanteil)")).unwrap_or_else(|| panic!("{text}"));
+        line.split_whitespace().filter_map(|w| w.parse::<u64>().ok()).next().unwrap_or(0)
+    };
+    for target in ["thumbv7em", "riscv32imac"] {
+        let (one, three) = (share(1, target), share(3, target));
+        assert!(three <= one + 64, "{target}: eine Anweisung {one} Byte, drei {three}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `size --baseline` (11.5, D1): eine gespeicherte Rechnung ist die
 /// Messlatte; waechst RAM oder Flash, faellt der Aufruf.
 #[test]
@@ -256,7 +292,7 @@ fn size_sums_exactly_the_items_that_are_not_open() {
         }
         items += 1;
     }
-    assert!(items >= 10, "{text}");
+    assert!(items >= 9, "{text}");
     let total = text.lines().find(|l| l.trim_start().starts_with("Summe")).expect("Summe");
     assert_eq!(total.split_whitespace().nth(1), Some(sum.to_string().as_str()), "{text}");
 }

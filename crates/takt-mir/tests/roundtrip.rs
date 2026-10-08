@@ -150,11 +150,11 @@ fn the_hashes_of_a_fixed_program_are_pinned() {
         })
         .collect();
     let pinned = [
-        ("Logik-Hash", logic_hash(&p).to_string(), "ee4535bc658cd704eb6118fc4c46b2867ed80045f47fb0a669632f100592d2b0"),
+        ("Logik-Hash", logic_hash(&p).to_string(), "f31c0ebfbd09f3baec971a209a5b419f94b3c4d1dd051f44bd2b832c4d44a91f"),
         (
             "Programm-Hash",
             program_hash(&p).to_string(),
-            "2a1964d654e0d9a99627ce491cfe3d03878931d0a11fdc764978c44540e0b641",
+            "987446b48c7118ba636d1d83f7e60ec895926cbca8ab968fa7e7bd965fc631d5",
         ),
         (
             "Typ-Hashes",

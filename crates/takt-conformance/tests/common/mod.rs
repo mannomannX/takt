@@ -79,7 +79,16 @@ pub fn ir_for(p: &Program, triple: &str) -> String {
     // Programm bindet den erzeugten Code mit). Zwei Fassungen derselben
     // Folge waeren eine Quelle dafuer, dass der Test etwas anderes
     // prueft, als die Werkzeuge erzeugen.
-    let out = takt_llvm::lower::program(p, triple, &takt_llvm::symbols::Prefix::default());
+    complete(takt_llvm::lower::program(p, triple, &takt_llvm::symbols::Prefix::default()))
+}
+
+/// Wie [`ir_of`], fuer einen Lauf unter AddressSanitizer (FB-461).
+pub fn ir_sanitized(p: &Program) -> String {
+    complete(takt_llvm::lower::program_sanitized(p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default()))
+}
+
+/// Die IR einer vollstaendigen Senkung.
+fn complete(out: takt_llvm::lower::Lowered) -> String {
     // Eine Senkung, die etwas auslaesst, ist ein Fehlschlag und keine Notiz
     // auf stderr: Ein Konstrukt, das der Codegen nach einer Regression nicht
     // mehr senkt, nahme sonst seine Programme still aus dem Vergleich
@@ -212,6 +221,48 @@ fn run_native_inner(
 /// ein geteiltes Verzeichnis raeumte dem einen die Dateien des anderen weg
 /// (KON1-007).
 fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harness::Harness) -> Result<String, String> {
+    run_built(clang, p, name, ticks, h, None)
+}
+
+/// Wie die anderen Laeufe, unter AddressSanitizer (FB-461): erzeugter Code
+/// und Rahmen mit Schutzzonen um jeden Platz; ein Zugriff daneben bricht
+/// den Lauf mit dem Bericht des Sanitizers ab. `search` ist der Suchpfad
+/// des Laufs ([`asan_path`]).
+pub fn run_native_sanitized(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    ticks: u64,
+    h: harness::Harness,
+    search: &std::ffi::OsStr,
+) -> Result<String, String> {
+    run_built(clang, p, name, ticks, h, Some(search))
+}
+
+/// Der Suchpfad fuer einen Lauf unter AddressSanitizer: Unter Windows laedt
+/// das Programm die Laufzeit als DLL aus dem Verzeichnis von clang. `None`,
+/// wenn sie dort fehlt.
+pub fn asan_path(clang: &Clang) -> Option<std::ffi::OsString> {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    if !cfg!(windows) {
+        return Some(current);
+    }
+    let out = std::process::Command::new(clang.path()?).arg("-print-resource-dir").output().ok()?;
+    let dir = std::path::PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).join("lib/windows");
+    dir.join("clang_rt.asan_dynamic-x86_64.dll").is_file().then_some(())?;
+    std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&current))).ok()
+}
+
+/// Der gemeinsame Rumpf der Laeufe; `asan` ist der Suchpfad eines Laufs
+/// unter AddressSanitizer.
+fn run_built(
+    clang: &Clang,
+    p: &Program,
+    name: &str,
+    ticks: u64,
+    h: harness::Harness,
+    asan: Option<&std::ffi::OsStr>,
+) -> Result<String, String> {
     static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
@@ -224,26 +275,30 @@ fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harne
     let ll = dir.join("programm.ll");
     let c = dir.join("rahmen.c");
     let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
-    std::fs::write(&ll, ir_of(p)).map_err(|e| e.to_string())?;
+    let ir = if asan.is_some() { ir_sanitized(p) } else { ir_of(p) };
+    std::fs::write(&ll, ir).map_err(|e| e.to_string())?;
     std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
     let natives = harness::native_library()?;
     let mut cmd = std::process::Command::new(path);
-    let build = Clang::deterministic(&mut cmd)
-        .args(["-Wno-override-module", "-O1"])
-        .arg(&ll)
-        .arg(&c)
-        .arg(&natives)
-        .arg("-o")
-        .arg(&exe)
-        .output()
-        .map_err(|e| e.to_string())?;
+    Clang::deterministic(&mut cmd).args(["-Wno-override-module", "-O1"]);
+    if asan.is_some() {
+        cmd.arg("-fsanitize=address");
+    }
+    let build = cmd.arg(&ll).arg(&c).arg(&natives).arg("-o").arg(&exe).output().map_err(|e| e.to_string())?;
     if !build.status.success() {
         return Err(String::from_utf8_lossy(&build.stderr).to_string());
     }
-    let out = std::process::Command::new(&exe).output().map_err(|e| e.to_string())?;
+    let mut run = std::process::Command::new(&exe);
+    if let Some(search) = asan {
+        run.env("PATH", search);
+    }
+    let out = run.output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let _ = std::fs::remove_dir_all(&dir);
+    if asan.is_some() && !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).lines().take(24).collect::<Vec<_>>().join("\n"));
+    }
     finished(&out.status, text).and_then(|text| reaches(text, ticks))
 }
 

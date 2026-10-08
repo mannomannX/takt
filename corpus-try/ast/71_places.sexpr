@@ -5,6 +5,11 @@
   (a: i64)
   (b: i64)
   (c: i64))
+(record Row
+  (v: [12]int)
+  (n: int))
+(enum RowErr
+  (EMPTY))
 (output lo :int @sim("lo"))
 (output hi :int @sim("hi"))
 (output avg :float @sim("avg"))
@@ -15,11 +20,24 @@
 (output table :int @sim("table"))
 (output kept :int @sim("kept"))
 (output grown :int @sim("grown"))
+(output picked :int @sim("picked"))
+(output rown :int @sim("rown"))
+(output matched :int @sim("matched"))
 (fn total (w:Wide) -> i64
   (return (+ (+ (.a w) (.b w)) (.c w))))
 (fn bump (w:Wide) -> Wide
   (= (.a w) (+ (.a w) 100))
   (return w))
+(fn row (k:int) -> Row
+  (var r :Row default)
+  (for i in (range 12)
+    (= (index (.v r) i) (+ (* k 12) i)))
+  (= (.n r) k)
+  (return r))
+(fn checked_row (k:int) -> Row!RowErr
+  (if (== k 0)
+    (return (ERR EMPTY)))
+  (return (OK (call row k))))
 (machine m
   (var bytes8 :[4]u8 (array 200 3 250 7))
   (var window :[12]float (array 1.0 2.0 3.0 4.0 5.0 6.0 7.0 8.0 9.0 10.0 11.0 (- 4.0)))
@@ -50,5 +68,12 @@
       (= tail (+ (* (as (index buf 0) int) 100) (.len buf)))
       (= table (index consts k))
       (var grown_by :[3]int in 0..99 (array k (+ k 1) (+ k 2)))
-      (= grown (index grown_by 2)))
+      (= grown (index grown_by 2))
+      (= picked (index (.v (call row k)) (- 11 k)))
+      (= rown (.n (call row (+ k 1))))
+      (match (call checked_row k)
+        (case (OK r)
+          (= matched (+ (index (.v r) k) (.n r))))
+        (case (ERR e)
+          (= matched (- 1)))))
     (after 1s -> RUN)))

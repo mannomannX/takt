@@ -17,6 +17,13 @@ use takt_mir::types::{FloatWidth, IntWidth, Type};
 /// kopierte der Aufruf ohnehin ueber den Stack.
 pub const INDIRECT_MIN: u64 = 16;
 
+/// Groesser als dies entsteht ein Aggregat nie als SSA-Wert (11.2,
+/// Grundsatz 22, FB-455): Der Codegen schreibt es an seine Stelle und
+/// kopiert von Stelle zu Stelle. Einen Wert legalisiert LLVM in Einzelwerte;
+/// bis zu einer Cache-Zeile, 16 Worten auf den 32-Bit-Zielen, bleiben das
+/// Register, darueber wird es eine Kopie ueber den Stack.
+pub const VALUE_MAX: u64 = 64;
+
 /// Ein LLVM-Typ, so weit der Codegen ihn braucht.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LlvmType {

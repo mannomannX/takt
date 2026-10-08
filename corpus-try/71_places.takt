@@ -7,6 +7,9 @@
 # waere — das Literal, das sein Ziel liest; der Teilbereich, der sich
 # selbst ueberlappt; der Parameter, den der Rumpf aendert. Hier stehen
 # genau diese Raender, und der Interpreter sagt, was richtig ist.
+#
+# Ein grosses Ergebnis entsteht an seiner Stelle, und ein Feld davon wird
+# dort gelesen, nicht als ganzer Wert geladen (FB-455).
 
 system:
     language = 1
@@ -17,16 +20,25 @@ record Wide:
     b : i64
     c : i64
 
-output lo    : int   @ sim("lo")
-output hi    : int   @ sim("hi")
-output avg   : float @ sim("avg")
-output quad  : float @ sim("quad")
-output big   : float @ sim("big")
-output swap  : int   @ sim("swap")
-output tail  : int   @ sim("tail")
-output table : int   @ sim("table")
-output kept  : int   @ sim("kept")
-output grown : int   @ sim("grown")
+record Row:
+    v : [12] int
+    n : int
+
+enum RowErr: EMPTY
+
+output lo      : int   @ sim("lo")
+output hi      : int   @ sim("hi")
+output avg     : float @ sim("avg")
+output quad    : float @ sim("quad")
+output big     : float @ sim("big")
+output swap    : int   @ sim("swap")
+output tail    : int   @ sim("tail")
+output table   : int   @ sim("table")
+output kept    : int   @ sim("kept")
+output grown   : int   @ sim("grown")
+output picked  : int   @ sim("picked")
+output rown    : int   @ sim("rown")
+output matched : int   @ sim("matched")
 
 # Liest den Parameter nur: Er bleibt an der Stelle des Aufrufers.
 fn total(w: Wide) -> i64:
@@ -36,6 +48,20 @@ fn total(w: Wide) -> i64:
 fn bump(w: Wide) -> Wide:
     w.a = w.a + 100
     return w
+
+# 104 Byte: zu gross, um als Wert zu entstehen.
+fn row(k: int) -> Row:
+    var r : Row = default
+    for i in range(12):
+        r.v[i] = k * 12 + i
+    r.n = k
+    return r
+
+# Ein grosses Ergebnis mit Fehler: `match` liest es an seiner Stelle.
+fn checked_row(k: int) -> Row!RowErr:
+    if k == 0:
+        return ERR(EMPTY)
+    return OK(row(k))
 
 machine m:
     var bytes8 : [4] u8 = [200, 3, 250, 7]
@@ -76,5 +102,13 @@ machine m:
             table = consts[k]
             var grown_by : [3] int in 0..99 = [k, k + 1, k + 2]
             grown = grown_by[2]
+            # Teile eines Ergebnisses: ein Element seines Felds, ein Feld.
+            picked = row(k).v[11 - k]
+            rown = row(k + 1).n
+            match checked_row(k):
+                case OK(r):
+                    matched = r.v[k] + r.n
+                case ERR(e):
+                    matched = -1
 
         after 1 s: -> RUN

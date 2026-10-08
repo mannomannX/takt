@@ -40,8 +40,8 @@ fn run_native(name: &str, src: &str, body: &str) -> Option<String> {
     let driver = format!(
         "#include <stdio.h>\n#include <string.h>\nstatic _Alignas(8) unsigned char arena[{bytes}];\n{stubs}\
          int app_stream_count(void *a, int s, long long cur) {{ (void)a; (void)s; return cur <= 10 ? 3 : (int)(13 - cur); }}\n\
-         long long app_stream_at(void *a, int s, long long cur, int i, void *out) {{\n\
-             (void)a; (void)s; memset(out, 0, 12); return (cur < 10 ? 10 : cur) + i; }}\n\
+         long long app_stream_at(void *a, int s, long long cur, int i, void *out, int cap) {{\n\
+             (void)a; (void)s; (void)cap; memset(out, 0, 12); return (cur < 10 ? 10 : cur) + i; }}\n\
          void app_stream_examined(void *a, int s, int m, long long seq) {{ (void)a; (void)s; (void)m;\n\
              printf(\"%lld\\n\", seq); }}\n\
          void app_m_init_vars(void *);\nvoid app_m_enter(void *);\nvoid app_m_step(void *);\n\

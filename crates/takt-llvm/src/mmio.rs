@@ -39,8 +39,14 @@ pub fn name(access: Access, i: usize) -> String {
 }
 
 /// Die Rumpfe der Helfer, die ein Modul ruft; `bare_metal` waehlt die Form,
-/// `prefix` die Namen der Aufrufe in den Rahmen.
-pub fn definitions(helpers: &[(Access, LlvmType)], bare_metal: bool, prefix: &crate::symbols::Prefix) -> String {
+/// `prefix` die Namen der Aufrufe in den Rahmen, `attrs` sind die Attribute
+/// jeder Funktion ([`crate::emit::Module::fn_attrs`]).
+pub fn definitions(
+    helpers: &[(Access, LlvmType)],
+    bare_metal: bool,
+    prefix: &crate::symbols::Prefix,
+    attrs: &str,
+) -> String {
     let mut s = String::new();
     if helpers.is_empty() {
         return s;
@@ -52,21 +58,21 @@ pub fn definitions(helpers: &[(Access, LlvmType)], bare_metal: bool, prefix: &cr
         let _ = match (access, bare_metal) {
             (Access::Read, true) => writeln!(
                 s,
-                "define internal {ty} @{f}(ptr %at, ptr %arena) alwaysinline nounwind {{\n  %v = load volatile {ty}, ptr %at\n  ret {ty} %v\n}}"
+                "define internal {ty} @{f}(ptr %at, ptr %arena) alwaysinline {attrs} {{\n  %v = load volatile {ty}, ptr %at\n  ret {ty} %v\n}}"
             ),
             (Access::Write, true) => writeln!(
                 s,
-                "define internal void @{f}(ptr %at, {ty} %v, ptr %arena) alwaysinline nounwind {{\n  store volatile {ty} %v, ptr %at\n  ret void\n}}"
+                "define internal void @{f}(ptr %at, {ty} %v, ptr %arena) alwaysinline {attrs} {{\n  store volatile {ty} %v, ptr %at\n  ret void\n}}"
             ),
             (Access::Read, false) => writeln!(
                 s,
-                "define internal {ty} @{f}(ptr %at, ptr %arena) nounwind {{\n  %buf = alloca {ty}\n  %addr = ptrtoint ptr %at to i64\n  \
+                "define internal {ty} @{f}(ptr %at, ptr %arena) {attrs} {{\n  %buf = alloca {ty}\n  %addr = ptrtoint ptr %at to i64\n  \
                  call void @{}(ptr %arena, i64 %addr, ptr %buf, i32 {size})\n  %v = load {ty}, ptr %buf\n  ret {ty} %v\n}}",
                 prefix.name(Abi::MMIO_READ)
             ),
             (Access::Write, false) => writeln!(
                 s,
-                "define internal void @{f}(ptr %at, {ty} %v, ptr %arena) nounwind {{\n  %buf = alloca {ty}\n  store {ty} %v, ptr %buf\n  \
+                "define internal void @{f}(ptr %at, {ty} %v, ptr %arena) {attrs} {{\n  %buf = alloca {ty}\n  store {ty} %v, ptr %buf\n  \
                  %addr = ptrtoint ptr %at to i64\n  call void @{}(ptr %arena, i64 %addr, ptr %buf, i32 {size})\n  ret void\n}}",
                 prefix.name(Abi::MMIO_WRITE)
             ),

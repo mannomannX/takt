@@ -107,6 +107,13 @@ fn every_format_version_names_its_origin() {
 }
 
 /// Die Konstruktionen eines Programms, eine je Zeile (`takt_mir::census`).
+/// Felder, die eine Version mit Absicht entfernt hat: Knoten, Nummer und die
+/// Version, ab der kein Schreiber sie mehr schreibt.
+const REMOVED: &[(&str, u32, u16)] = &[
+    // Der statische Scratch je Maschine; gemessen und verworfen (11.2, FB-460).
+    ("Layout", 10, 19),
+];
+
 fn census_text(p: &takt_mir::Program) -> String {
     takt_mir::census::census(p).iter().map(|c| format!("{c:?}\n")).collect()
 }
@@ -115,7 +122,7 @@ fn census_text(p: &takt_mir::Program) -> String {
 /// SEM2-067): Ein Feld, das er ueberliest, hat eine spaetere Version
 /// umnummeriert oder entfernt, und sein Wert fiele still auf den Default.
 /// Entfernt eine Version ein Feld mit Absicht, nennt dieser Test es mit
-/// seiner Version.
+/// seiner Version ([`REMOVED`]).
 #[test]
 fn every_field_of_every_golden_file_is_known_today() {
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir())
@@ -130,7 +137,12 @@ fn every_field_of_every_golden_file_is_known_today() {
         .iter()
         .filter_map(|path| {
             let bytes = std::fs::read(path).expect("lesbar");
-            let fields = unread_fields(&bytes).unwrap_or_else(|e| panic!("{}: {e:?}", path.display()));
+            let version = read_program(&bytes).map_or(0, |(h, _)| h.format_version);
+            let fields: Vec<_> = unread_fields(&bytes)
+                .unwrap_or_else(|e| panic!("{}: {e:?}", path.display()))
+                .into_iter()
+                .filter(|&(node, n)| !REMOVED.iter().any(|&(r, k, since)| r == node && k == n && version < since))
+                .collect();
             (!fields.is_empty()).then(|| format!("{}: {fields:?}", path.display()))
         })
         .collect();

@@ -315,6 +315,18 @@ pub fn image_slot(
     slot: crate::image::Slot,
     m: &mut Module,
 ) -> Option<Lowered> {
+    let (at, ty) = image_slot_at(program, channel, slot, m)?;
+    let v = m.inst(&format!("load {ty}, ptr {at}"));
+    Some(Lowered { value: v.to_string(), ty })
+}
+
+/// Die Stelle eines Felds des Abbild-Eintrags mit seinem Typ.
+pub fn image_slot_at(
+    program: &Program,
+    channel: takt_mir::ChannelId,
+    slot: crate::image::Slot,
+    m: &mut Module,
+) -> Option<(Reg, LlvmType)> {
     let entry = crate::image::entry_type(channel, program)?;
     let LlvmType::Struct(fields) = &entry else { return None };
     let ty = fields.get(slot as usize)?.clone();
@@ -322,11 +334,14 @@ pub fn image_slot(
     // Byteweise adressiert, aber natuerlich ausgerichtet — `image` legt
     // die Eintraege so, und der Rahmen rechnet denselben Versatz.
     let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {}", off + entry.field_offset(slot as usize)));
-    let v = m.inst(&format!("load {ty}, ptr {at}"));
-    Some(Lowered { value: v.to_string(), ty })
+    Some((at, ty))
 }
 
 impl Vars for StateVars<'_> {
+    fn last_fault_at(&self, m: &mut Module) -> Option<Reg> {
+        self.state.field_ptr(&self.machine.name, Role::LastFault, 0, m)
+    }
+
     fn fault_label(&self) -> Option<String> {
         if let Some(f) = &self.fault {
             return Some(f.clone());
@@ -432,6 +447,10 @@ impl Vars for StateVars<'_> {
         self.image_slot(channel, crate::image::Slot::Value, m)
     }
 
+    fn input_address(&self, channel: takt_mir::ChannelId, m: &mut Module) -> Option<(Reg, LlvmType)> {
+        image_slot_at(self.program, channel, crate::image::Slot::Value, m)
+    }
+
     /// Ein Feld des Abbild-Eintrags (3.5).
     fn quality(&self, channel: takt_mir::ChannelId, slot: crate::image::Slot, m: &mut Module) -> Option<Lowered> {
         self.image_slot(channel, slot, m)
@@ -462,7 +481,7 @@ impl Vars for StateVars<'_> {
                 Some(Lowered { value: ns.to_string(), ty: dur })
             }
             B::LastFault => {
-                let at = self.state.field_ptr(&self.machine.name, Role::LastFault, 0, m)?;
+                let at = self.last_fault_at(m)?;
                 crate::fault::value(&at, p, m).ok()
             }
             B::Event => None,
@@ -664,10 +683,7 @@ fn skip(stream: takt_mir::expr::StreamRef, ctx: &mut Ctx<'_>, m: &mut Module) ->
     m.void_inst(&format!("br i1 {some}, label %{read}, label %{done}"));
     m.label(&read);
     let last = m.inst(&format!("sub i32 {n}, 1"));
-    let seq = m.inst(&format!(
-        "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {last}, ptr {buf})",
-        m.runtime(crate::stream::Streams::AT)
-    ));
+    let seq = crate::stream::at(p, elem, sid, cur, last, buf, m)?;
     crate::stream::note_examined(ex_ptr, seq, m);
     m.void_inst(&format!("br label %{done}"));
     m.label(&done);
@@ -764,7 +780,7 @@ fn send(
             );
             // Eine Stelle wird gelesen, wo sie liegt; ein gerechneter Text
             // derselben Form entsteht gleich im Puffer (FB-214).
-            let place = crate::expr::address_of(value, m, &vars);
+            let place = crate::expr::found_place(value, ctx.program, m, &vars)?;
             let at_place = place.is_some();
             if textual && vty == ty && place.is_none() {
                 crate::expr::store(value, &buffer.to_string(), None, ctx.program, m, &vars)?;
@@ -1097,10 +1113,7 @@ fn for_window(
     m.label(&loop_body);
     let seq = match buf {
         Some(buf) => {
-            let seq = m.inst(&format!(
-                "call i64 @{}(ptr %arena, i32 {sid}, i64 {cur}, i32 {i}, ptr {buf})",
-                m.runtime(crate::stream::Streams::AT)
-            ));
+            let seq = crate::stream::at(ctx.program, elem, sid, cur, i, buf, m)?;
             crate::step::bind_element(var, buf, seq, elem, ctx, m)?;
             seq
         }
@@ -2172,23 +2185,22 @@ fn reset_instance(
 /// waere eine andere Semantik, sobald sich zwei Muster ueberschneiden.
 fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
     let vars = ctx.vars();
-    let value = lower_expr(subject, ctx.program, m, &vars)?;
+    let value = Subject::of(subject, ctx.program, m, &vars)?;
     let n = ctx.next_label(m);
     let name = ctx.machine.name.clone();
     let end_at = format!("match{n}_{name}");
     // Verglichen wird, was die Variante unterscheidet: bei `T!E` das Flag
     // (3.8: Wert, Fehler, Flag), bei einem Summentyp mit Feldern die
     // Diskriminante im Feld 0. Ein feldloses Enum *ist* seine Diskriminante.
-    let disc = match (&value.ty, ctx.program.types.list.get(subject.ty.index())) {
+    let disc = match (value.ty(), ctx.program.types.list.get(subject.ty.index())) {
         (LlvmType::Struct(_), Some(takt_mir::types::Type::Result { .. })) => {
-            let d = m.inst(&format!("extractvalue {} {}, 2", value.ty, value.value));
-            Lowered { value: d.to_string(), ty: LlvmType::Int(1) }
+            Lowered { value: value.part(&[2], &LlvmType::Int(1), m), ty: LlvmType::Int(1) }
         }
-        (LlvmType::Struct(_), _) => {
-            let d = m.inst(&format!("extractvalue {} {}, 0", value.ty, value.value));
-            Lowered { value: d.to_string(), ty: LlvmType::Int(32) }
+        (LlvmType::Struct(_), _) => Lowered { value: value.part(&[0], &LlvmType::Int(32), m), ty: LlvmType::Int(32) },
+        (ty, _) => {
+            let ty = ty.clone();
+            Lowered { value: value.part(&[], &ty, m), ty }
         }
-        _ => value.clone(),
     };
     for (i, arm) in arms.iter().enumerate() {
         let hit = format!("case{n}_{i}_{name}");
@@ -2253,6 +2265,69 @@ fn match_stmt(subject: &Expr, arms: &[takt_mir::stmt::Arm], ctx: &mut Ctx<'_>, m
     Ok(())
 }
 
+/// Das Subjekt eines `match`: an seiner Stelle, wo es eine hat oder gross
+/// ist (FB-455), sonst als Wert in Registern. Gelesen wird einmal vor den
+/// Faellen und beim Binden vor dem Rumpf; was ein Rumpf schreibt, sieht
+/// kein anderer Fall.
+enum Subject {
+    Value(Lowered),
+    Place(Reg, LlvmType),
+}
+
+impl Subject {
+    fn of(e: &Expr, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Subject, NotYet> {
+        Ok(match crate::expr::read_place(e, p, m, vars)? {
+            Some((at, ty)) => Subject::Place(at, ty),
+            None => Subject::Value(lower_expr(e, p, m, vars)?),
+        })
+    }
+
+    fn ty(&self) -> &LlvmType {
+        match self {
+            Subject::Value(v) => &v.ty,
+            Subject::Place(_, ty) => ty,
+        }
+    }
+
+    /// Die Adresse des Teils auf dem Weg `path`; `[]` ist das Ganze.
+    fn at(ptr: Reg, ty: &LlvmType, path: &[u32], m: &mut Module) -> Reg {
+        if path.is_empty() {
+            return ptr;
+        }
+        let steps: Vec<String> = path.iter().map(|i| format!("i32 {i}")).collect();
+        m.inst(&format!("getelementptr inbounds {ty}, ptr {ptr}, i32 0, {}", steps.join(", ")))
+    }
+
+    /// Der Teil auf dem Weg `path` als Wert.
+    fn part(&self, path: &[u32], want: &LlvmType, m: &mut Module) -> String {
+        match self {
+            Subject::Value(v) if path.is_empty() => v.value.clone(),
+            Subject::Value(v) => {
+                let steps: Vec<String> = path.iter().map(u32::to_string).collect();
+                m.inst(&format!("extractvalue {} {}, {}", v.ty, v.value, steps.join(", "))).to_string()
+            }
+            Subject::Place(ptr, ty) => {
+                let at = Subject::at(*ptr, ty, path, m);
+                m.inst(&format!("load {want}, ptr {at}")).to_string()
+            }
+        }
+    }
+
+    /// Schreibt den Teil auf dem Weg `path` nach `dst`; ein grosser Teil
+    /// geht von Stelle zu Stelle.
+    fn store_part(&self, path: &[u32], want: &LlvmType, dst: &str, m: &mut Module) {
+        if let Subject::Place(ptr, ty) = self
+            && want.indirect()
+        {
+            let at = Subject::at(*ptr, ty, path, m);
+            m.copy(want, &at.to_string(), dst);
+            return;
+        }
+        let v = self.part(path, want, m);
+        m.void_inst(&format!("store {want} {v}, ptr {dst}"));
+    }
+}
+
 /// Woran eine Variante des `match`-Subjekts zu erkennen ist: bei einem
 /// Enum die Diskriminante aus der MIR, bei `T!E` das Flag (`OK` ist die
 /// Variante 0, `ERR` die Variante 1, 3.8).
@@ -2268,12 +2343,12 @@ fn tag_of(ty: takt_mir::TypeId, variant: u32, p: &Program) -> Option<String> {
 
 /// Bindet die Felder einer Variante an ihre gehobenen Variablen (6.1).
 ///
-/// Die Felder stehen im Wert hinter der Diskriminante; bei einem `T!E`
+/// Die Felder stehen im Subjekt hinter der Diskriminante; bei einem `T!E`
 /// ist das Feld 0 der Wert und Feld 1 der Fehler (3.8). Mehr als ein Feld
 /// braucht den Aufbau der Variante im Wert, den erst die Summentypen mit
 /// Feldern mitbringen.
 fn bind_fields(
-    value: &Lowered,
+    value: &Subject,
     fields: &[takt_mir::VarId],
     subject: takt_mir::TypeId,
     variant: u32,
@@ -2283,19 +2358,18 @@ fn bind_fields(
     if fields.is_empty() {
         return Ok(());
     }
-    let LlvmType::Struct(parts) = &value.ty else { return Err(NotYet { what: "Variante ohne Felder im Wert" }) };
+    let LlvmType::Struct(parts) = value.ty() else { return Err(NotYet { what: "Variante ohne Felder im Wert" }) };
     // Ein Enum mit Feldern: die Faecher hinter der Diskriminante, je Feld
     // eines (11.2).
-    if let (takt_mir::types::Type::Enum(_), Some(arr @ LlvmType::Array(..))) =
+    if let (takt_mir::types::Type::Enum(_), Some(LlvmType::Array(slot_ty, _))) =
         (ctx.program.types.get(subject), parts.get(1))
     {
-        let arr = arr.clone();
-        let payload = m.inst(&format!("extractvalue {} {}, 1", value.ty, value.value));
+        let slot_ty = (**slot_ty).clone();
         for (k, var) in fields.iter().enumerate() {
             let def = ctx.machine.vars.get(var.index()).ok_or(NotYet { what: "Bindung" })?;
             let want = ty::storage(def.ty, ctx.program).ok_or(NotYet { what: "Typ der Bindung" })?;
-            let slot = m.inst(&format!("extractvalue {arr} {payload}, {k}"));
-            let v = crate::expr::from_slot(&slot.to_string(), &want, m);
+            let slot = value.part(&[1, k as u32], &slot_ty, m);
+            let v = crate::expr::from_slot(&slot, &want, m);
             let ptr = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
             m.void_inst(&format!("store {want} {v}, ptr {ptr}"));
         }
@@ -2313,9 +2387,8 @@ fn bind_fields(
     if parts.get(variant as usize) != Some(&want) {
         return Err(NotYet { what: "Feld der Variante" });
     }
-    let v = m.inst(&format!("extractvalue {} {}, {variant}", value.ty, value.value));
     let ptr = ctx.field(Role::Var, var.index(), m).ok_or(NotYet { what: "Bindung im Zustand" })?;
-    m.void_inst(&format!("store {want} {v}, ptr {ptr}"));
+    value.store_part(&[variant], &want, &ptr.to_string(), m);
     Ok(())
 }
 
