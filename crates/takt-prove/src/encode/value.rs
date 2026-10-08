@@ -5,7 +5,9 @@
 //! Laenge und ihre Plaetze bis zur Kapazitaet (`s.m.b.len`, `s.m.b[0]`).
 //! Ein fehlender Wert, die Felder einer anderen Variante und die Plaetze
 //! hinter der Laenge sind null wie im Standardwert des Interpreters
-//! (`Value::default_for`); darum gilt Gleichheit Blatt fuer Blatt.
+//! (`Value::default_for`); darum gilt Gleichheit Blatt fuer Blatt. Ein
+//! Ergebnis `T!E` ist `.is_err`, der Wert und der Fehler — der
+//! Standardwert ist `OK(…)`, das Flag also falsch.
 
 use std::ops::Not;
 
@@ -117,7 +119,8 @@ impl Enc<'_> {
             | Type::Bytes { .. }
             | Type::Vec { .. }
             | Type::Str { .. }
-            | Type::Line { .. } => true,
+            | Type::Line { .. }
+            | Type::Result { .. } => true,
             Type::Enum(e) => self.fielded(*e),
             _ => false,
         }
@@ -139,6 +142,11 @@ impl Enc<'_> {
             Type::Bytes { .. } => Some((None, Bound::Dynamic)),
             _ => None,
         }
+    }
+
+    /// Der Typ eines Enums.
+    fn enum_type(&self, e: EnumId) -> Option<TypeId> {
+        self.p.types.list.iter().position(|t| *t == Type::Enum(e)).map(|i| TypeId(i as u32))
     }
 
     pub(super) fn fielded(&self, e: EnumId) -> bool {
@@ -175,6 +183,14 @@ impl Enc<'_> {
             }
             Type::Optional(t) => {
                 Shape::Node(vec![(".has".into(), Shape::Flag), (".value".into(), self.shape(*t, span)?)])
+            }
+            Type::Result { ok, err } => {
+                let Some(e) = self.enum_type(*err) else { return no("Fehlertyp eines Ergebnisses", span) };
+                Shape::Node(vec![
+                    (".is_err".into(), Shape::Flag),
+                    (".value".into(), self.shape(*ok, span)?),
+                    (".error".into(), self.shape(e, span)?),
+                ])
             }
             Type::Str { cap } => super::text::text_shape(*cap, false),
             Type::Line { cap } => super::text::text_shape(*cap, true),
@@ -475,6 +491,21 @@ impl Enc<'_> {
                 self.variant(e.ty, *variant, values, span)?
             }
             ExprKind::Lift(x) => V::Node(vec![V::Leaf(Term::bool(true)), self.value(x, cx, env, flow)?]),
+            // `OK(x)` und `ERR(e)`: der andere Teil null.
+            ExprKind::Ok(x) | ExprKind::Err(x) => {
+                let V::Node(mut parts) = self.zero_value(&shape, span)? else { return no("Ergebnis", span) };
+                let err = matches!(e.kind, ExprKind::Err(_));
+                parts[0] = V::Leaf(Term::bool(err));
+                parts[if err { 2 } else { 1 }] = self.value(x, cx, env, flow)?;
+                V::Node(parts)
+            }
+            // `r.err`: der Fehler als Optional.
+            ExprKind::Accessor { base, accessor: Accessor::Err, .. }
+                if matches!(self.p.types.get(base.ty), Type::Result { .. }) =>
+            {
+                let r = self.value(base, cx, env, flow)?;
+                V::Node(vec![r.clone().part(0, span)?, r.part(2, span)?])
+            }
             ExprKind::Field { base, field } => self.field(base, *field as usize, cx, env, flow)?,
             ExprKind::Index { base, index } => self.element(base, index, cx, env, flow, span)?,
             ExprKind::Checked { expr: inner, kind } => self.checked_value(kind, inner, e, cx, env, flow)?,
@@ -531,8 +562,6 @@ impl Enc<'_> {
             | ExprKind::NativeCall { .. }
             | ExprKind::MatOp { .. }
             | ExprKind::Decode { .. }
-            | ExprKind::Ok(_)
-            | ExprKind::Err(_)
             | ExprKind::Intrinsic { .. }) => {
                 return no(format!("zusammengesetzter Ausdruck {}", super::node_name(other)), span);
             }
@@ -597,7 +626,10 @@ impl Enc<'_> {
     ) -> R<Term> {
         match (accessor, self.p.types.get(base.ty)) {
             (Accessor::Valid, Type::Optional(_)) => self.value(base, cx, env, flow)?.part(0, span)?.leaf(span),
-            (Accessor::Or, Type::Optional(_)) => {
+            (Accessor::Ok, Type::Result { .. }) => {
+                Ok(self.value(base, cx, env, flow)?.part(0, span)?.leaf(span)?.not())
+            }
+            (Accessor::Or, Type::Optional(_) | Type::Result { .. }) => {
                 let [default] = args else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?.leaf(span)
             }
@@ -698,6 +730,15 @@ impl Enc<'_> {
         Ok(match pattern {
             ArmPattern::Wild => (Term::bool(true), Vec::new()),
             ArmPattern::Variant { variant, .. } => match self.p.types.get(ty) {
+                // `case OK(v)` ist Variante 0, `case ERR(e)` Variante 1.
+                Type::Result { .. } => {
+                    let err = subject.clone().part(0, span)?.leaf(span)?;
+                    if *variant == 0 {
+                        (err.not(), vec![subject.clone().part(1, span)?])
+                    } else {
+                        (err, vec![subject.clone().part(2, span)?])
+                    }
+                }
                 Type::Optional(_) => {
                     let has = subject.clone().part(0, span)?.leaf(span)?;
                     if *variant == 0 { (has, vec![subject.clone().part(1, span)?]) } else { (has.not(), Vec::new()) }
@@ -734,11 +775,14 @@ impl Enc<'_> {
 
     /// `x.or(d)` auf einem Optional: der Ersatz nur, wenn der Wert fehlt.
     fn or_value(&mut self, base: &Expr, default: &Expr, cx: &Cx<'_>, env: &Env, flow: &mut Flow) -> R<V> {
-        if !matches!(self.p.types.get(base.ty), Type::Optional(_)) {
-            return no("`.or` auf diesem Wert", base.span);
-        }
+        let result = match self.p.types.get(base.ty) {
+            Type::Optional(_) => false,
+            Type::Result { .. } => true,
+            _ => return no("`.or` auf diesem Wert", base.span),
+        };
         let v = self.value(base, cx, env, flow)?;
-        let has = v.clone().part(0, base.span)?.leaf(base.span)?;
+        let flag = v.clone().part(0, base.span)?.leaf(base.span)?;
+        let has = if result { flag.not() } else { flag };
         let inner = v.part(1, base.span)?;
         let d = self.guarded(&has.clone().not(), flow, |enc, flow| enc.value(default, cx, env, flow))?;
         Ok(V::ite(&has, inner, d))
@@ -808,12 +852,15 @@ impl Enc<'_> {
         env: &Env,
         flow: &mut Flow,
     ) -> R<V> {
-        if !matches!(self.p.types.get(inner.ty), Type::Optional(_)) {
-            return no("Auspacken dieses Werts", span);
-        }
+        let result = match self.p.types.get(inner.ty) {
+            Type::Optional(_) => false,
+            Type::Result { .. } => true,
+            _ => return no("Auspacken dieses Werts", span),
+        };
         let v = self.value(inner, cx, env, flow)?;
-        let has = v.clone().part(0, span)?.leaf(span)?;
-        self.fault(kind, span, has.not(), cx, flow);
+        let flag = v.clone().part(0, span)?.leaf(span)?;
+        let missing = if result { flag } else { flag.not() };
+        self.fault(kind, span, missing, cx, flow);
         v.part(1, span)
     }
 
@@ -972,11 +1019,59 @@ impl Enc<'_> {
             xs.push(self.value(a, cx, env, flow)?);
         }
         let old = self.place_value(receiver, cx, env, span)?;
+        let (new, done) = self.collection_update(method, ty, cap, old, &xs, span)?;
+        self.assign(receiver, new, cx, env, flow, span)?;
+        if let Some(t) = target {
+            self.assign(t, V::Leaf(done), cx, env, flow, span)?;
+        }
+        Ok(())
+    }
+
+    /// `push`, `append` und `clear` auf einer Lokalen einer Funktion.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn local_collection_method(
+        &mut self,
+        target: Option<&Place>,
+        receiver: &Place,
+        method: Method,
+        args: &[Expr],
+        cx: &mut Cx<'_>,
+        env: &Env,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<()> {
+        let Place::Var(id) = receiver else { return no("Sammlungsmethode auf einem Teil einer Lokalen", span) };
+        let Some(ty) = self.local_types.get(id).copied() else { return no("Lokale", span) };
+        let Some(cap) = self.collection(ty) else { return no("Sammlungsmethode", span) };
+        let mut xs = Vec::new();
+        for a in args {
+            xs.push(self.value(a, cx, env, flow)?);
+        }
+        let Some(old) = cx.locals.as_ref().and_then(|l| l.get(id)).cloned() else { return no("Lokale", span) };
+        let (new, done) = self.collection_update(method, ty, cap, old, &xs, span)?;
+        self.assign_local(receiver, new, cx, env, flow, span)?;
+        if let Some(t) = target {
+            self.assign_local(t, V::Leaf(done), cx, env, flow, span)?;
+        }
+        Ok(())
+    }
+
+    /// Die Sammlung nach `push`, `append` oder `clear` (3.9, `exec.rs`) und
+    /// ob es passte.
+    fn collection_update(
+        &mut self,
+        method: Method,
+        ty: TypeId,
+        cap: u32,
+        old: V,
+        xs: &[V],
+        span: Span,
+    ) -> R<(V, Term)> {
         let shape = self.shape(ty, span)?;
-        let (elems, len) = self.places(ty, old.clone(), span)?;
+        let (elems, len) = self.places(ty, old, span)?;
         let len = len.expect("Sammlung");
         let cap = Term::int(i64::from(cap));
-        let (new, done) = match (method, xs.as_slice()) {
+        Ok(match (method, xs) {
             (Method::Push, [x]) => {
                 let room = Term::bin(Op::Lt, len.clone(), cap);
                 let parts: Vec<V> = elems
@@ -1014,12 +1109,7 @@ impl Enc<'_> {
             }
             (Method::Clear, []) => (self.zero_value(&shape, span)?, Term::bool(true)),
             _ => return no("Sammlungsmethode", span),
-        };
-        self.assign(receiver, new, cx, env, flow, span)?;
-        if let Some(t) = target {
-            self.assign(t, V::Leaf(done), cx, env, flow, span)?;
-        }
-        Ok(())
+        })
     }
 
     fn has_index(&self, place: &Place) -> bool {
@@ -1079,20 +1169,20 @@ impl Enc<'_> {
         if self.unrolled > UNROLL_LIMIT {
             return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
         }
-        self.loops += 1;
         self.breaks.push(Vec::new());
         for (k, item) in items.into_iter().enumerate() {
             let inside = Term::bin(Op::Lt, Term::int(k as i64), len.clone());
             let mut env_k = env.clone();
             let mut fk = Flow::new(Term::and(vec![flow.alive.clone(), inside.clone()]));
             self.put(&mut env_k, var_loc, var_ty, item, &fk.alive.clone(), span)?;
+            self.loop_path.push(k as i64);
             self.block(body, cx, &mut env_k, &mut fk)?;
+            self.loop_path.pop();
             *env = ite_env(&inside, &env_k, env);
             flow.exits.extend(fk.exits);
             flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), inside.not()]), fk.alive]);
         }
         self.left_loop(flow);
-        self.loops -= 1;
         Ok(())
     }
 

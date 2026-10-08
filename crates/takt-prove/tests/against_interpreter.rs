@@ -448,6 +448,23 @@ fn case(name: &str) -> Option<(String, u64)> {
         | "67_bitfield_access.takt"
         | "86_units.takt"
         | "97_fast_math.takt" => (String::new(), 20),
+        // Ergebnisse, `every` und `check … for` in einer Schleife (Schritt 27a-4).
+        "84_defaults.takt" | "93_confirmations.takt" | "54_inout.takt" => (String::new(), 40),
+        // Eine Tabelle mit `interp`: die Zellspannung laeuft ueber alle Abschnitte.
+        "02_units_and_data.takt" => {
+            let stim: String = (0..=40)
+                .map(|k| {
+                    format!(
+                        "t={k} in oven_t {} degC
+t={k} in cell_v {} V
+",
+                        150 + k * 3,
+                        2.8 + f64::from(k) * 0.04
+                    )
+                })
+                .collect();
+            (stim, 40)
+        }
         // Generische Funktionen mit Schleifen und `break` (Schritt 27a-3).
         "62_type_generics.takt" => (
             (0..=20)
@@ -891,6 +908,60 @@ fn primitives_agree() {
         })
         .collect();
     agree_program("PRIMITIVES", &compile("PRIMITIVES", PRIMITIVES), &stim, 40);
+}
+
+/// Ergebnisse `T!E` (3.8): `OK`, `ERR`, `.ok`, `.err`, `.or`, `case` ueber
+/// beide Varianten, der Standardwert `OK(…)` und ein Auspacken eines
+/// Fehlers, das faultet.
+const RESULTS: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+enum Why:
+    SMALL
+    BIG
+
+input  k : int in -50..50 @ hw("i/k")
+
+output okay  : bool          @ sim("okay")
+output value : int           @ sim("value")
+output why   : int in 0..9   @ sim("why")
+output got   : int           @ sim("got")
+output last  : int           @ sim("last")
+
+fn classify(x: int) -> int!Why:
+    if x < -20:
+        return ERR(SMALL)
+    if x > 20:
+        return ERR(BIG)
+    return OK(x * 2)
+
+machine m:
+    var r : int!Why = default
+    var n : int = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            r = classify(k)
+            okay = r.ok
+            value = r.or(-1)
+            why = 1 if r.err.or(BIG) == SMALL else (2 if r.err.valid else 0)
+            match r:
+                case OK(v):
+                    got = v
+                case ERR(e):
+                    got = 100 if e == SMALL else 200
+            n = n + 1
+            if n == 30:
+                last = r
+"#;
+
+#[test]
+fn results_agree() {
+    let stim: String = (0..=40).map(|j| format!("t={j} in k {}\n", (j * 17) % 101 - 50)).collect();
+    agree_program("RESULTS", &compile("RESULTS", RESULTS), &stim, 40);
 }
 
 /// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und

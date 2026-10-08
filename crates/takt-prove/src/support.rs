@@ -111,12 +111,12 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Index => Partial("auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays"),
         ExprTag::Published | ExprTag::StateOf | ExprTag::Signal => Partial("nicht ueber ein Instanz-Array"),
         ExprTag::Cast => Partial("nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma"),
-        ExprTag::Call => Partial("Funktionen mit Rueckgabe, ohne `inout`, aus kodierbaren Anweisungen"),
+        ExprTag::Call => Partial("Funktionen aus kodierbaren Anweisungen"),
         ExprTag::Str => Yes,
         ExprTag::Format => Partial("Ganzzahlen, Wahrheitswerte, Varianten ohne Felder und Text; keine Fliesskommazahl"),
-        ExprTag::Tuple | ExprTag::Index2 | ExprTag::Slice | ExprTag::Ok | ExprTag::Err => {
-            No("Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert")
-        }
+        ExprTag::Ok | ExprTag::Err => Yes,
+        ExprTag::Tuple => Partial("nur als Punkt einer konstanten Tabelle von `interp`"),
+        ExprTag::Index2 | ExprTag::Slice => No("Matrizen und Ausschnitte sind nicht kodiert"),
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
         ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
         ExprTag::Armed | ExprTag::PortRead => No("Trigger und Registerports sind nicht kodiert"),
@@ -155,7 +155,7 @@ fn intrinsic(i: Intrinsic) -> Support {
         | Intrinsic::Exp
         | Intrinsic::Log
         | Intrinsic::Pow => Partial("im Solver uninterpretiert mit den Schranken ihres Wertebereichs"),
-        Intrinsic::Interp => No("Tabellen sind nicht kodiert"),
+        Intrinsic::Interp => Partial("ueber einer konstanten Tabelle"),
     }
 }
 
@@ -163,7 +163,7 @@ fn intrinsic(i: Intrinsic) -> Support {
 fn accessor(a: AccessorTag) -> Support {
     match a {
         AccessorTag::Valid | AccessorTag::Or => {
-            Partial("auf einem Input (3.5) und einem Optional (3.8); nicht auf einem Ergebnis")
+            Partial("auf einem Input (3.5), einem Optional und einem Ergebnis (3.8)")
         }
         AccessorTag::Suspect | AccessorTag::Stale => Partial("auf einem Input (3.5)"),
         // Beobachtungen laesst das Modell aus; nur dort darf ein Programm sie lesen.
@@ -184,9 +184,8 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Idle
         | AccessorTag::Sent => Yes,
         AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
-        AccessorTag::Ok
-        | AccessorTag::Err
-        | AccessorTag::T
+        AccessorTag::Ok | AccessorTag::Err => Yes,
+        AccessorTag::T
         | AccessorTag::Seq
         | AccessorTag::Text
         | AccessorTag::Data
@@ -221,7 +220,7 @@ fn stmt(s: StmtTag) -> Support {
         | StmtTag::Raise
         | StmtTag::Observe
         | StmtTag::Pass => Yes,
-        StmtTag::Check => Partial("`check … for` nicht in einer Schleife"),
+        StmtTag::Check => Yes,
         StmtTag::ForRange => Partial("bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403)"),
         StmtTag::Match => Partial("nicht im Rumpf einer Funktion"),
         StmtTag::MethodCall => {
@@ -233,7 +232,7 @@ fn stmt(s: StmtTag) -> Support {
         StmtTag::Break | StmtTag::Skip => Yes,
         StmtTag::Send => Partial("auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus"),
         StmtTag::Cancel | StmtTag::Arm => No("geplante Ausgaben und Trigger sind nicht kodiert"),
-        StmtTag::Every => Partial("nicht in einer Schleife"),
+        StmtTag::Every => Yes,
         StmtTag::At => No("`at` ist nicht kodiert"),
         StmtTag::Job => No("Jobs sind nicht kodiert"),
     }
@@ -253,12 +252,11 @@ fn ty(t: TypeTag) -> Support {
             "Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes, Records vom \
              Rand fester Groesse; Ausgabestroeme ohne Leser",
         ),
-        TypeTag::Str | TypeTag::Line => Partial("nicht als Typ eines Inputs"),
+        TypeTag::Str | TypeTag::Line | TypeTag::Result => Partial("nicht als Typ eines Inputs"),
+        TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),
         TypeTag::Samples
-        | TypeTag::Table
         | TypeTag::Mat
         | TypeTag::Map
-        | TypeTag::Result
         | TypeTag::Capture
         | TypeTag::HandleJob
         | TypeTag::HandleTrigger => NO_SORT,
@@ -324,7 +322,7 @@ fn feature(f: Feature) -> Support {
         | Feature::FramingFixed => Yes,
         Feature::FaultedTransition => No("Uebergaenge aus FAULTED sind nicht kodiert"),
         Feature::ScopedInstance => No("gescopte Instanzen sind nicht kodiert"),
-        Feature::CheckConfirm => Partial("nicht in einer Schleife"),
+        Feature::CheckConfirm => Yes,
         Feature::CheckWithin => Yes,
         Feature::Trigger | Feature::Port => No("Trigger und Registerports sind nicht kodiert"),
     }

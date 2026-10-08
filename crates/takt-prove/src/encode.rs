@@ -309,8 +309,6 @@ struct Enc<'p> {
     local_types: BTreeMap<VarId, TypeId>,
     /// Die Monitore der Eigenschaften mit Zeitoperatoren (13.3).
     monitors: Vec<Monitor>,
-    /// Wie tief die laufende Anweisung in ausgerollten Schleifen steht.
-    loops: u32,
     /// Grenzen der Zaehler von `check … for`: Ort und Frist in Nanosekunden.
     confirms: Vec<(String, i64)>,
     /// `now` des Ticks, der gerade kodiert wird.
@@ -335,6 +333,20 @@ struct Enc<'p> {
     binds: Vec<(String, TypeId, V, Term)>,
     /// Die uninterpretierten Funktionen des Modells.
     uninterpreted: BTreeSet<String>,
+    /// Die Indizes der ausgerollten Schleifen um die laufende Anweisung,
+    /// aussen zuerst: Der Interpreter fuehrt die Zaehler von `every` und
+    /// `check … for` je Durchlauf (`Counters::at`).
+    loop_path: Vec<i64>,
+    /// Je Maschine die Indexpfade ihrer Zaehler.
+    counter_paths: BTreeMap<MachineId, CounterPaths>,
+}
+
+/// Unter welchen Indexpfaden die Zaehler einer Maschine laufen: je
+/// `every`-Zaehler und je Stelle von `check … for`.
+#[derive(Clone, Debug, Default)]
+struct CounterPaths {
+    every: Vec<Vec<Vec<i64>>>,
+    viol: Vec<Vec<Vec<i64>>>,
 }
 
 /// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
@@ -539,7 +551,6 @@ impl<'p> Enc<'p> {
             unrolled: 0,
             local_types: BTreeMap::new(),
             monitors: Vec::new(),
-            loops: 0,
             confirms: Vec::new(),
             now: Term::int(0),
             streams: Vec::new(),
@@ -551,6 +562,8 @@ impl<'p> Enc<'p> {
             breaks: Vec::new(),
             binds: Vec::new(),
             uninterpreted: BTreeSet::new(),
+            loop_path: Vec::new(),
+            counter_paths: BTreeMap::new(),
         }
     }
 }
@@ -644,14 +657,96 @@ impl Enc<'_> {
     fn loc_sig(&self, m: MachineId, s: usize) -> String {
         format!("s.{}.sig.{}", self.machine(m).name, self.machine(m).signals[s].name)
     }
-    /// Der Bestaetigungszaehler einer Stelle von `check … for` (5.6), in ns.
-    fn loc_viol(&self, m: MachineId, site: usize) -> String {
-        format!("s.{}.viol.{site}", self.machine(m).name)
+    /// Der Bestaetigungszaehler einer Stelle von `check … for` (5.6) im
+    /// Durchlauf `path`, in ns.
+    fn loc_viol(&self, m: MachineId, site: usize, path: &[i64]) -> String {
+        at_path(format!("s.{}.viol.{site}", self.machine(m).name), path)
     }
-    /// Der naechste Zeitpunkt eines `every` (5.8), in ns; `-1`, bis er zum
-    /// ersten Mal gelesen wird.
-    fn loc_every(&self, m: MachineId, counter: usize) -> String {
-        format!("s.{}.every.{counter}", self.machine(m).name)
+    /// Der naechste Zeitpunkt eines `every` (5.8) im Durchlauf `path`, in
+    /// ns; `-1`, bis er zum ersten Mal gelesen wird.
+    fn loc_every(&self, m: MachineId, counter: usize, path: &[i64]) -> String {
+        at_path(format!("s.{}.every.{counter}", self.machine(m).name), path)
+    }
+
+    /// Die Indexpfade der Zaehler einer Maschine: die Durchlaeufe aller
+    /// Schleifen um ihre Stelle (Schleifen sind ausgerollt, ihre Laenge steht
+    /// fest).
+    fn paths_of(&mut self, m: MachineId) -> R<CounterPaths> {
+        if let Some(p) = self.counter_paths.get(&m) {
+            return Ok(p.clone());
+        }
+        let machine = self.machine(m).clone();
+        let mut out = CounterPaths {
+            every: vec![Vec::new(); machine.layout.every_counters.len()],
+            viol: vec![Vec::new(); machine.layout.viol_sites.len()],
+        };
+        let mut blocks: Vec<&Block> = vec![&machine.loop_block];
+        blocks.extend(machine.handlers.iter().map(|h| &h.body));
+        for s in &machine.states {
+            blocks.extend([&s.enter, &s.exit, &s.loop_block]);
+            blocks.extend(s.handlers.iter().map(|h| &h.body));
+            blocks.extend(s.transitions.iter().map(|t| &t.actions));
+        }
+        for b in blocks {
+            self.walk_counters(b, &mut Vec::new(), &mut out)?;
+        }
+        self.counter_paths.insert(m, out.clone());
+        Ok(out)
+    }
+
+    fn walk_counters(&mut self, b: &Block, counts: &mut Vec<i64>, out: &mut CounterPaths) -> R<()> {
+        let record = |list: &mut Vec<Vec<i64>>, counts: &[i64]| {
+            let mut paths: Vec<Vec<i64>> = vec![Vec::new()];
+            for &n in counts {
+                paths =
+                    paths.into_iter().flat_map(|p| (0..n.max(0)).map(move |i| [p.clone(), vec![i]].concat())).collect();
+            }
+            for p in paths {
+                if !list.contains(&p) {
+                    list.push(p);
+                }
+            }
+        };
+        for s in &b.stmts {
+            match &s.kind {
+                StmtKind::Every { counter, body, .. } => {
+                    record(&mut out.every[counter.index()], counts);
+                    self.walk_counters(body, counts, out)?;
+                }
+                StmtKind::Check { confirm: Some(c), .. } => record(&mut out.viol[c.site.0 as usize], counts),
+                StmtKind::If { then, otherwise, .. } => {
+                    self.walk_counters(then, counts, out)?;
+                    self.walk_counters(otherwise, counts, out)?;
+                }
+                StmtKind::Match { arms, .. } => {
+                    for a in arms {
+                        self.walk_counters(&a.body, counts, out)?;
+                    }
+                }
+                StmtKind::At { body, .. } => self.walk_counters(body, counts, out)?,
+                StmtKind::ForRange { count, body, .. } => {
+                    counts.push(self.const_int(count)?);
+                    self.walk_counters(body, counts, out)?;
+                    counts.pop();
+                }
+                StmtKind::ForEach { iter, body, .. } => {
+                    let n = match self.p.types.get(iter.ty) {
+                        Type::Array { len, .. } => i64::from(*len),
+                        Type::Bytes { cap } | Type::Vec { cap, .. } => i64::from(*cap),
+                        Type::Stream(_) => match stream::stream_of(iter) {
+                            Some(key) => self.window_slots(key, s.span)?,
+                            None => return no("`for` ueber diesen Strom", s.span),
+                        },
+                        _ => return no("`for` ueber diesen Wert", s.span),
+                    };
+                    counts.push(n);
+                    self.walk_counters(body, counts, out)?;
+                    counts.pop();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
     fn loc_out(&self, c: ChannelId) -> String {
         format!("s.out.{}", self.p.channels[c.index()].name)
@@ -955,6 +1050,7 @@ impl Enc<'_> {
                     _ => return no("Konversion", span),
                 }
             }
+            ExprKind::Intrinsic { op: Intrinsic::Interp, args } => self.interp(args, cx, env, flow, span)?,
             ExprKind::Intrinsic { op, args } => {
                 let mut xs = Vec::new();
                 for a in args {
@@ -1202,6 +1298,41 @@ impl Enc<'_> {
         })
     }
 
+    /// `interp(t, x)` ueber einer konstanten Tabelle (`call.rs`): bis zum
+    /// ersten Punkt sein Wert, ab dem letzten dessen, dazwischen linear im
+    /// ersten Abschnitt, der `x` enthaelt, jede Operation gerundet; ein
+    /// nicht endliches Ergebnis faultet.
+    fn interp(&mut self, args: &[Expr], cx: &Cx<'_>, env: &Env, flow: &mut Flow, span: Span) -> R<Term> {
+        let [table, x] = args else { return no("`interp` ohne Tabelle und Stelle", span) };
+        let ExprKind::Array(items) = &table.kind else { return no("`interp` ueber einer berechneten Tabelle", span) };
+        let mut points = Vec::new();
+        for item in items {
+            let ExprKind::Tuple(px, py) = &item.kind else { return no("Punkt einer Tabelle", item.span) };
+            points.push((self.expr(px, cx, env, flow)?, self.expr(py, cx, env, flow)?));
+        }
+        let x = self.expr(x, cx, env, flow)?;
+        let (Some((x0, y0)), Some((xn, yn))) = (points.first().cloned(), points.last().cloned()) else {
+            return no("leere Tabelle", span);
+        };
+        let mut inner = yn.clone();
+        for pair in points.windows(2).rev() {
+            let ((a, fa), (b, fb)) = (&pair[0], &pair[1]);
+            let dy = Term::bin(Op::FSub, fb.clone(), fa.clone());
+            let dx = Term::bin(Op::FSub, x.clone(), a.clone());
+            let w = Term::bin(Op::FSub, b.clone(), a.clone());
+            let q = Term::bin(Op::FDiv, Term::bin(Op::FMul, dy, dx), w);
+            let r = Term::bin(Op::FAdd, fa.clone(), q);
+            inner = Term::ite(Term::bin(Op::FLe, x.clone(), b.clone()), r, inner);
+        }
+        let below = Term::bin(Op::FLe, x.clone(), x0);
+        let above = Term::bin(Op::FGe, x.clone(), xn);
+        let middle = Term::and(vec![below.clone().not(), above.clone().not()]);
+        let fail = Term::and(vec![flow.alive.clone(), middle, Term::app(Op::IsFinite, vec![inner.clone()]).not()]);
+        flow.exits.push(Exit { cond: fail.clone(), kind: ExitKind::Fault(None) });
+        flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
+        Ok(Term::ite(below, y0, Term::ite(above, yn, inner)))
+    }
+
     /// Eine Einheitenumrechnung (3.2, `eval::convert`): `as(U)` teilt die
     /// Nanosekunden durch die der Einheit, `to(U)` und `to_float(U)` gehen
     /// ueber die Basiseinheit — Versatz der Quelle, der exakte Bruch beider
@@ -1418,10 +1549,9 @@ impl Enc<'_> {
         span: Span,
     ) -> R<V> {
         let f = self.p.fns[callee.index()].clone();
+        // Ein `inout`-Parameter ist die Rueckgabe (3.9); die Sema schreibt
+        // ihn an der Aufrufstelle zurueck.
         let Some(ret) = f.ret else { return no("Funktion ohne Rueckgabe", span) };
-        if f.params.iter().any(|p| p.inout) {
-            return no("`inout`-Parameter", span);
-        }
         let mut locals: BTreeMap<VarId, V> = BTreeMap::new();
         for (i, local) in f.locals.iter().enumerate() {
             let value = match args.get(i) {
@@ -1492,14 +1622,12 @@ impl Enc<'_> {
                 StmtKind::ForRange { var, count, body } => {
                     let n = self.const_int(count)?.max(0);
                     self.unroll_steps(n, s.span)?;
-                    self.loops += 1;
                     self.breaks.push(Vec::new());
                     for i in 0..n {
                         self.set_local(cx, *var, V::Leaf(Term::int(i)), &flow.alive.clone(), s.span)?;
                         self.fn_block(body, cx, env, flow, ret)?;
                     }
                     self.left_loop(flow);
-                    self.loops -= 1;
                 }
                 // Ueber ein Array, Bytes oder einen Vektor: die Variable je
                 // Platz, hinter der Laenge einer Sammlung nichts.
@@ -1512,7 +1640,6 @@ impl Enc<'_> {
                     let v = self.value(iter, cx, env, flow)?;
                     let (items, len) = self.places(iter.ty, v, s.span)?;
                     self.unroll_steps(items.len() as i64, s.span)?;
-                    self.loops += 1;
                     self.breaks.push(Vec::new());
                     for (k, item) in items.into_iter().enumerate() {
                         let inside = match &len {
@@ -1540,7 +1667,6 @@ impl Enc<'_> {
                         flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), inside.not()]), fk.alive]);
                     }
                     self.left_loop(flow);
-                    self.loops -= 1;
                 }
                 StmtKind::Break => match self.breaks.last_mut() {
                     Some(frame) => {
@@ -1549,6 +1675,11 @@ impl Enc<'_> {
                     }
                     None => return no("`break` ausserhalb einer Schleife", s.span),
                 },
+                StmtKind::MethodCall { target, receiver, method, args }
+                    if matches!(method, Method::Push | Method::Append | Method::Clear) =>
+                {
+                    self.local_collection_method(target.as_ref(), receiver, *method, args, cx, env, flow, s.span)?;
+                }
                 StmtKind::Pass | StmtKind::Observe(_) => {}
                 other @ (StmtKind::Check { .. }
                 | StmtKind::Goto(_)
@@ -1594,12 +1725,9 @@ impl Enc<'_> {
                     let failed = match confirm {
                         None => c.clone().not(),
                         Some(confirm) => {
-                            if self.loops > 0 {
-                                return no("`check … for` in einer Schleife", span);
-                            }
                             let d = self.const_int(&confirm.duration)?;
                             let period = i64::from(machine_period(self.machine(m))).saturating_mul(self.p.config.tick);
-                            let loc = self.loc_viol(m, confirm.site.0 as usize);
+                            let loc = self.loc_viol(m, confirm.site.0 as usize, &self.loop_path.clone());
                             let viol = env[&loc].clone();
                             let grown = Term::bin(Op::Add, viol.clone(), Term::int(period));
                             let due = Term::bin(Op::Ge, grown.clone(), Term::int(d));
@@ -1622,9 +1750,6 @@ impl Enc<'_> {
                 // `every d` (5.8): der Rumpf, sobald die Uhr den naechsten
                 // Zeitpunkt erreicht; der rueckt dann um `d` weiter.
                 StmtKind::Every { period, counter, body } => {
-                    if self.loops > 0 {
-                        return no("`every` in einer Schleife", span);
-                    }
                     let d = self.const_int(period)?;
                     let site = self.machine(m).layout.every_counters[counter.index()];
                     let clock = match (site.state, cx.leaf) {
@@ -1635,7 +1760,7 @@ impl Enc<'_> {
                         (Some(_), None) => return no("`every` ohne Zustand", span),
                         (None, _) => self.now.clone(),
                     };
-                    let loc = self.loc_every(m, counter.index());
+                    let loc = self.loc_every(m, counter.index(), &self.loop_path.clone());
                     let stored = env[&loc].clone();
                     let next = Term::ite(Term::bin(Op::Lt, stored.clone(), Term::int(0)), Term::int(d), stored.clone());
                     let fire = Term::bin(Op::Ge, clock, next.clone());
@@ -1704,14 +1829,14 @@ impl Enc<'_> {
                         return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
                     }
                     let loc = self.loc_var(m, *var);
-                    self.loops += 1;
                     self.breaks.push(Vec::new());
                     for i in 0..n {
                         env.insert(loc.clone(), Term::ite(flow.alive.clone(), Term::int(i), env[&loc].clone()));
+                        self.loop_path.push(i);
                         self.block(body, cx, env, flow)?;
+                        self.loop_path.pop();
                     }
                     self.left_loop(flow);
-                    self.loops -= 1;
                 }
                 // Ueber ein Array: die Schleifenvariable traegt je Durchlauf ein Element.
                 StmtKind::ForEach { vars: ForVars::One(var), iter, body }
@@ -1723,14 +1848,14 @@ impl Enc<'_> {
                         return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
                     }
                     let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
-                    self.loops += 1;
                     self.breaks.push(Vec::new());
-                    for item in items {
+                    for (k, item) in items.into_iter().enumerate() {
                         self.put(env, &loc, ty, item, &flow.alive.clone(), span)?;
+                        self.loop_path.push(k as i64);
                         self.block(body, cx, env, flow)?;
+                        self.loop_path.pop();
                     }
                     self.left_loop(flow);
-                    self.loops -= 1;
                 }
                 StmtKind::ForEach { vars: ForVars::One(var), iter, body }
                     if matches!(self.p.types.get(iter.ty), Type::Bytes { .. } | Type::Vec { .. }) =>
@@ -2113,15 +2238,20 @@ impl Enc<'_> {
                 let old = env[&loc].clone();
                 env.insert(loc, Term::ite(flow.alive.clone(), Term::int(0), old));
                 // Bestaetigungs- und `every`-Zaehler des Zustands (9.3, Schritt 3).
+                let paths = self.paths_of(m)?;
                 for (i, _) in machine.layout.viol_sites.iter().enumerate().filter(|(_, c)| c.state == Some(*s)) {
-                    let loc = self.loc_viol(m, i);
-                    let old = env[&loc].clone();
-                    env.insert(loc, Term::ite(flow.alive.clone(), Term::int(0), old));
+                    for p in &paths.viol[i] {
+                        let loc = self.loc_viol(m, i, p);
+                        let old = env[&loc].clone();
+                        env.insert(loc, Term::ite(flow.alive.clone(), Term::int(0), old));
+                    }
                 }
                 for (i, _) in machine.layout.every_counters.iter().enumerate().filter(|(_, c)| c.state == Some(*s)) {
-                    let loc = self.loc_every(m, i);
-                    let old = env[&loc].clone();
-                    env.insert(loc, Term::ite(flow.alive.clone(), Term::int(-1), old));
+                    for p in &paths.every[i] {
+                        let loc = self.loc_every(m, i, p);
+                        let old = env[&loc].clone();
+                        env.insert(loc, Term::ite(flow.alive.clone(), Term::int(-1), old));
+                    }
                 }
                 for v in machine.states[s.index()].vars.clone() {
                     let def = machine.vars[v.index()].clone();
@@ -2581,11 +2711,16 @@ impl Enc<'_> {
             for i in 0..machine.signals.len() {
                 env.insert(self.loc_sig(m, i), Term::bool(false));
             }
-            for i in 0..machine.layout.viol_sites.len() {
-                env.insert(self.loc_viol(m, i), Term::int(0));
+            let paths = self.paths_of(m)?;
+            for (i, list) in paths.viol.iter().enumerate() {
+                for p in list {
+                    env.insert(self.loc_viol(m, i, p), Term::int(0));
+                }
             }
-            for i in 0..machine.layout.every_counters.len() {
-                env.insert(self.loc_every(m, i), Term::int(-1));
+            for (i, list) in paths.every.iter().enumerate() {
+                for p in list {
+                    env.insert(self.loc_every(m, i, p), Term::int(-1));
+                }
             }
         }
         for (loc, ty, value) in self.safe_outputs()? {
@@ -3141,6 +3276,15 @@ fn libm(op: Intrinsic) -> Option<Fun> {
         | Intrinsic::SaturatingSub
         | Intrinsic::Interp => return None,
     })
+}
+
+/// Ein Ort im Durchlauf `path` einer Schleife (`.every.0[1,2]`).
+fn at_path(base: String, path: &[i64]) -> String {
+    if path.is_empty() {
+        return base;
+    }
+    let parts: Vec<String> = path.iter().map(i64::to_string).collect();
+    format!("{base}[{}]", parts.join(","))
 }
 
 /// Die Periode einer Maschine in Ticks (`every`, 5.2).

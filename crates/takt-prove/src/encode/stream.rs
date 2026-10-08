@@ -370,6 +370,11 @@ impl Enc<'_> {
         format!("s.{}.pending", self.machine(m).name)
     }
 
+    /// Wie viele Elemente das Fenster eines Stroms hoechstens hat.
+    pub(super) fn window_slots(&self, key: StreamRef, span: Span) -> R<i64> {
+        Ok(i64::from(self.streams[self.stream_index(key, span)?].cap))
+    }
+
     /// Liest die Maschine einen Eingabestrom, der ueberlaufen kann?
     pub(super) fn has_pending(&self, m: MachineId) -> bool {
         self.streams.iter().any(|s| s.channel && s.readers.iter().any(|(r, _)| *r == m))
@@ -800,7 +805,6 @@ impl Enc<'_> {
             let span = mine[0].span;
             let (cursor, w) = self.window(m, key, span)?;
             self.unroll(w.items.len(), span)?;
-            self.loops += 1;
             for item in &w.items {
                 // Noch kein Handler hat das Element genommen.
                 let mut rest = Term::and(vec![flow.alive.clone(), item.present.clone()]);
@@ -836,7 +840,6 @@ impl Enc<'_> {
                 alive.push(rest);
                 flow.alive = Term::or(alive);
             }
-            self.loops -= 1;
         }
         Ok(())
     }
@@ -917,22 +920,22 @@ impl Enc<'_> {
         let (cursor, w) = self.window(m, key, span)?;
         self.unroll(w.items.len(), span)?;
         let (at, ty) = (self.loc_var(m, var), self.machine(m).vars[var.index()].ty);
-        self.loops += 1;
         self.breaks.push(Vec::new());
-        for item in &w.items {
+        for (j, item) in w.items.iter().enumerate() {
             let mut env_k = env.clone();
             let mut fk = Flow::new(Term::and(vec![flow.alive.clone(), item.present.clone()]));
             let v = self.binding(ty, item, Vec::new(), span)?;
             self.put(&mut env_k, &at, ty, v, &fk.alive.clone(), span)?;
             self.mark(m, cursor, fk.alive.clone(), item.seq.clone());
+            self.loop_path.push(j as i64);
             self.block(body, cx, &mut env_k, &mut fk)?;
+            self.loop_path.pop();
             *env = ite_env(&item.present, &env_k, env);
             flow.exits.extend(fk.exits);
             flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), item.present.clone().not()]), fk.alive]);
         }
         let broke = self.breaks.pop().unwrap_or_default();
         flow.alive = Term::or(std::iter::once(flow.alive.clone()).chain(broke).collect());
-        self.loops -= 1;
         Ok(())
     }
 
