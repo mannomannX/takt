@@ -6,35 +6,110 @@ use std::collections::BTreeMap;
 
 use takt_interp::trace::LineKind;
 use takt_interp::{RunOptions, Trace, run};
-use takt_mir::Program;
 use takt_mir::program::{Binding, Direction};
+use takt_mir::types::Type;
+use takt_mir::{Program, TypeId};
 use takt_prove::{Model, Val, encode, eval};
 
 fn corpus(name: &str) -> Program {
     let path = format!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../corpus-try/{}"), name);
     let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    compile(name, &src)
+}
+
+fn compile(name: &str, src: &str) -> Program {
     let options = takt_sema::Options {
         policy: takt_diag::Policy::default(),
         build: takt_sema::Build::Sim,
         profile: None,
         ..Default::default()
     };
-    let out = takt_sema::compile(&src, &options);
+    let out = takt_sema::compile(src, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));
     out.program.expect("Programm")
 }
 
-/// Der Wert eines Outputs als `Val`: Zahlen und Wahrheitswerte wie im
-/// Trace, ein Enum als seine Diskriminante, wie das Modell es haelt.
-fn output_val(p: &Program, channel: &str, text: &str) -> Option<Val> {
-    if let Some(v) = parse_val(text) {
-        return Some(v);
+/// Die Blaetter eines Werts aus seiner Textform im Trace
+/// (`takt_interp::format::display`), mit den Orten, die das Modell fuer sie
+/// fuehrt: `Name(a, b)` fuer Records und Varianten mit Feldern, `[a, b]`,
+/// `none` fuer ein leeres Optional, sonst sein Wert, Dauern mit Einheit, ein
+/// Enum als Index seiner Variante.
+fn leaves_of(p: &Program, ty: TypeId, text: &str, base: &str, out: &mut Vec<(String, Val)>) -> Option<()> {
+    let text = text.trim();
+    match p.types.get(ty) {
+        Type::Record(r) => {
+            let def = &p.records[r.index()];
+            let inner = text.strip_prefix(def.name.as_str())?.strip_prefix('(')?.strip_suffix(')')?;
+            for (f, t) in def.fields.iter().zip(split(inner)) {
+                leaves_of(p, f.ty, t, &format!("{base}.{}", f.name), out)?;
+            }
+        }
+        Type::Array { elem, .. } => {
+            let inner = text.strip_prefix('[')?.strip_suffix(']')?;
+            for (i, t) in split(inner).into_iter().enumerate() {
+                leaves_of(p, *elem, t, &format!("{base}[{i}]"), out)?;
+            }
+        }
+        Type::Optional(t) => {
+            out.push((format!("{base}.has"), Val::Bool(text != "none")));
+            if text != "none" {
+                leaves_of(p, *t, text, &format!("{base}.value"), out)?;
+            }
+        }
+        Type::Enum(e) => {
+            let def = &p.enums[e.index()];
+            let (name, args) = match text.split_once('(') {
+                Some((n, rest)) => (n, Some(rest.strip_suffix(')')?)),
+                None => (text, None),
+            };
+            let (i, v) = def.variants.iter().enumerate().find(|(_, v)| v.name == name)?;
+            if def.variants.iter().all(|v| v.fields.is_empty()) {
+                out.push((base.to_string(), Val::Int(i as i64)));
+            } else {
+                out.push((format!("{base}.tag"), Val::Int(i as i64)));
+                for (f, t) in v.fields.iter().zip(args.map(split).unwrap_or_default()) {
+                    leaves_of(p, f.ty, t, &format!("{base}.{}.{}", v.name, f.name), out)?;
+                }
+            }
+        }
+        Type::Duration { .. } => {
+            let (n, unit) = text.split_once(' ')?;
+            let factor = match unit {
+                "d" => 86_400_000_000_000,
+                "h" => 3_600_000_000_000,
+                "min" => 60_000_000_000,
+                "s" => 1_000_000_000,
+                "ms" => 1_000_000,
+                "us" => 1_000,
+                "ns" => 1,
+                _ => return None,
+            };
+            out.push((base.to_string(), Val::Int(n.parse::<i64>().ok()? * factor)));
+        }
+        _ => out.push((base.to_string(), parse_val(text)?)),
     }
-    let c = p.channels.iter().find(|c| c.name == channel)?;
-    let takt_mir::types::Type::Enum(e) = p.types.get(c.ty) else { return None };
-    let v = p.enums[e.index()].variants.iter().find(|v| v.name == text.trim())?;
-    Some(Val::Int(v.discriminant))
+    Some(())
+}
+
+/// Die Teile einer Liste `a, B(c, d), [e]` auf oberster Ebene.
+fn split(text: &str) -> Vec<&str> {
+    let (mut out, mut depth, mut start) = (Vec::new(), 0i32, 0);
+    for (i, c) in text.char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(text[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if !text.trim().is_empty() {
+        out.push(text[start..].trim());
+    }
+    out
 }
 
 /// Der Wert einer Trace-Zeile als `Val`.
@@ -74,11 +149,14 @@ fn sim_bindings(p: &Program) -> Vec<(String, String)> {
 /// Tick jeden Output und jedes Blatt. Ein `sim`-gebundener Input liest
 /// den committeten Output des vorigen Ticks (Unit-Delay, 8.3).
 fn agree(name: &str, stimulus: &str, ticks: u64) {
-    let p = corpus(name);
-    let model: Model = encode(&p).unwrap_or_else(|e| panic!("{name}: {}", e.what));
+    agree_program(name, &corpus(name), stimulus, ticks);
+}
+
+fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
+    let model: Model = encode(p).unwrap_or_else(|e| panic!("{name}: {}", e.what));
     let stim = Trace::parse(stimulus).expect("Stimulus");
-    let r = run(&p, &stim, &RunOptions { ticks, ..Default::default() }).expect("Lauf");
-    let bound = sim_bindings(&p);
+    let r = run(p, &stim, &RunOptions { ticks, ..Default::default() }).expect("Lauf");
+    let bound = sim_bindings(p);
     // Eingaben des Modells: Commands im Tick ihrer Zeile, Inputs halten.
     let mut inputs: BTreeMap<(u64, String), Val> = BTreeMap::new();
     let mut held: BTreeMap<String, Val> = BTreeMap::new();
@@ -120,15 +198,34 @@ fn agree(name: &str, stimulus: &str, ticks: u64) {
     }
     // Der Interpreter schreibt Outputs und Zustaende nur bei Aenderung.
     let mut outputs: BTreeMap<String, Val> = BTreeMap::new();
+    let channel_type = |name: &str| p.channels.iter().find(|c| c.name == name).map(|c| c.ty);
     let mut leaves: BTreeMap<String, String> = BTreeMap::new();
     let mut compared = 0usize;
+    // Nach `end` stehen die Outputs auf `safe` (12.7); das Modell fuehrt das
+    // im Zustand danach, also gelten diese Zeilen dort.
+    let mut after_end: Vec<&takt_interp::trace::TraceLine> = Vec::new();
     for k in 0..=ticks {
-        for l in r.trace.lines.iter().filter(|l| l.tick == k) {
+        let lines: Vec<_> =
+            std::mem::take(&mut after_end).into_iter().chain(r.trace.lines.iter().filter(|l| l.tick == k)).collect();
+        let mut ended = false;
+        for l in lines {
+            if ended && l.tick == k {
+                after_end.push(l);
+                continue;
+            }
             match &l.kind {
+                LineKind::End { .. } => ended = true,
                 LineKind::Output { channel, value } => {
-                    let v = output_val(&p, channel, value);
-                    let v = v.unwrap_or_else(|| panic!("{name} t={k}: `{value}` von `{channel}` hat keinen Wert"));
-                    outputs.insert(channel.clone(), v);
+                    let mut leaves = Vec::new();
+                    channel_type(channel)
+                        .and_then(|ty| leaves_of(p, ty, value, &format!("s.out.{channel}"), &mut leaves))
+                        .unwrap_or_else(|| panic!("{name} t={k}: `{value}` von `{channel}` hat keinen Wert"));
+                    // Der neue Wert ersetzt den alten ganz, auch die Felder einer anderen Variante.
+                    let base = format!("s.out.{channel}");
+                    outputs.retain(|loc, _| {
+                        loc != &base && !loc.starts_with(&format!("{base}.")) && !loc.starts_with(&format!("{base}["))
+                    });
+                    outputs.extend(leaves);
                 }
                 LineKind::State { machine, path } => {
                     leaves.insert(machine.clone(), path.rsplit('.').next().unwrap_or(path).to_string());
@@ -143,9 +240,9 @@ fn agree(name: &str, stimulus: &str, ticks: u64) {
             }
         }
         let s = &states[k as usize];
-        for (c, want) in &outputs {
-            let got = s[&format!("s.out.{c}")];
-            assert!(same(got, *want), "{name} t={k}: Output `{c}`: Modell {got:?}, Interpreter {want:?}");
+        for (loc, want) in &outputs {
+            let got = s.get(loc).copied().unwrap_or_else(|| panic!("{name} t={k}: `{loc}` fehlt im Modell"));
+            assert!(same(got, *want), "{name} t={k}: `{loc}`: Modell {got:?}, Interpreter {want:?}");
             compared += 1;
         }
         for (m, want) in &leaves {
@@ -177,6 +274,17 @@ fn case(name: &str) -> Option<(String, u64)> {
         }
         // Ein Block mit Zustand (5.7): `step` eingebettet, der Zustand in Feldern.
         "48_contracts.takt" => ((0..=12).map(|k| format!("t={k} in level {}\n", f64::from(k) - 4.0)).collect(), 12),
+        // Zusammengesetzte Werte (M11 Schritt 27a): Records, Arrays, Enums
+        // mit Feldern, `case` mit Bindungen, Werten und Bereichen.
+        "32_next_run_after.takt"
+        | "35_persist.takt"
+        | "80_payload_variants.takt"
+        | "81_persist_variants.takt"
+        | "83_durations.takt"
+        | "95_boundary_ranges.takt"
+        | "96_record_outputs.takt"
+        | "113_case_ranges.takt" => (String::new(), 20),
+        "89_fault_paths.takt" => ((0..=20).map(|k| format!("t={k} in p {} bar\n", (k * 7) % 100)).collect(), 20),
         _ => return None,
     })
 }
@@ -194,6 +302,58 @@ fn every_program_of_the_prover_suite_agrees() {
             case(name).unwrap_or_else(|| panic!("`{name}` steht in der Suite `beweiser`, hier fehlt sein Fall"));
         agree(name, &stim, ticks);
     }
+}
+
+/// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und
+/// Schreiben, ein Optional, eine Funktion ueber Records.
+const COMPOSITE: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+record Pair:
+    a : int
+    b : [3] int
+
+output sum  : int  @ hw("o/sum")  with safe = 0
+output pick : int  @ hw("o/pick") with safe = 0
+output same : bool @ hw("o/same") with safe = false
+output pair : Pair @ sim("o/pair")
+
+fn rotate(q: Pair) -> Pair:
+    return Pair(a = q.b[0], b = [q.b[1], q.b[2], q.a % 100])
+
+machine m:
+    var k     : int in 0..99 = 0
+    var xs    : [4] int in 0..999 = [1, 2, 3, 4]
+    var p     : Pair = default
+    var maybe : int? = none
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 100
+            xs[k % 4] = (xs[k % 4] + k) % 1000
+            p.a = p.a + 1
+            p.b[k % 3] = k
+            p = rotate(p) if k % 5 == 0 else p
+            pair = p
+            sum = xs[0] + xs[1] + xs[2] + xs[3]
+            if k > 5:
+                maybe = k
+            same = pair == p and xs[1] != xs[2]
+            pick = maybe.or(-1) + xs[k % 4]
+"#;
+
+/// **Zusammengesetzte Werte** (M11 Schritt 27a): Records, Arrays mit
+/// berechnetem Index, Optionals und Funktionen ueber Records rechnen im
+/// Modell wie im Interpreter; ein Index ausserhalb faultet in beiden im
+/// selben Tick.
+#[test]
+fn composite_values_agree() {
+    agree_program("composite", &compile("composite", COMPOSITE), "", 30);
+    let out_of_range = COMPOSITE.replace("pick = maybe.or(-1) + xs[k % 4]", "pick = xs[k % 7]");
+    agree_program("index", &compile("index", &out_of_range), "", 10);
 }
 
 /// 14.1 (der Hotfire-Test der Referenz) mit den Szenarien des Korpus:

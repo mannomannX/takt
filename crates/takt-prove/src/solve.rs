@@ -487,7 +487,8 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
         "ovf" => FaultKind::Arithmetic(ArithKind::Overflow),
         "fin" => FaultKind::Arithmetic(ArithKind::NonFinite),
         "dom" => FaultKind::Arithmetic(ArithKind::Domain),
-        "conv" | "shift" => FaultKind::Range,
+        "conv" | "shift" | "index" => FaultKind::Range,
+        "missing" => FaultKind::MissingValue,
         // Der Lesevorgang eines ungueltigen Inputs (3.5).
         "valid" => FaultKind::SensorFault,
         "check" | "expect" => {
@@ -506,10 +507,11 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
         }
         _ => return None,
     };
-    // Division und Definitionsbereich prueft der Knoten am Operanden, der
-    // Interpreter meldet den Fault an der Operation, die ihn umschliesst.
+    // Division, Definitionsbereich und der Index einer Zuweisungsstelle
+    // prueft der Knoten am Operanden, der Interpreter meldet den Fault an der
+    // Operation oder Anweisung, die ihn umschliesst.
     let at = |s: takt_diag::Span| match site.kind.as_str() {
-        "div" | "dom" => s.start <= site.span.start && site.span.end <= s.end,
+        "div" | "dom" | "index" => s.start <= site.span.start && site.span.end <= s.end,
         _ => s.start == site.span.start && s.end == site.span.end,
     };
     r.faults.iter().find(|f| f.machine == site.machine && f.kind == implicit && at(f.span)).map(|f| f.tick)

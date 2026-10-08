@@ -4,12 +4,12 @@ Expr(Int),ja,ja,ja
 Expr(Float),ja,ja,ja
 Expr(Duration),ja,ja,ja
 Expr(Str),ja,nein: Text ist nicht kodiert,ja
-Expr(None),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(None),ja,ja,ja
 Expr(Default),ja,ja,ja
-Expr(Variant),ja,teilweise: nur Varianten ohne Felder,ja
-Expr(Record),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Array),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Tuple),teilweise: nur als Stuetzstelle von `interp`,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Variant),ja,ja,ja
+Expr(Record),ja,ja,ja
+Expr(Array),ja,ja,ja
+Expr(Tuple),teilweise: nur als Stuetzstelle von `interp`,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
 Expr(BlockInit),teilweise: nur als Anfangswert einer Blockinstanz,teilweise: Blockinstanzen nur ueber ihre Felder,ja
 Expr(Var),ja,ja,ja
 Expr(Param),ja,ja,ja
@@ -22,11 +22,11 @@ Expr(Signal),ja,teilweise: nicht ueber ein Instanz-Array,ja
 Expr(Builtin),ja,ja,ja
 Expr(Armed),ja,nein: Trigger und Registerports sind nicht kodiert,nein
 Expr(PortRead),ja,nein: Trigger und Registerports sind nicht kodiert,ja
-Expr(Field),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Index),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Index2),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Slice),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Accessor),ja,"teilweise: nur die Qualitaet eines Inputs: `.valid`, `.or`, `.suspect`, `.stale`",ja
+Expr(Field),ja,teilweise: auf Records; nicht auf den Feldern einer Variante,ja
+Expr(Index),ja,"teilweise: auf Arrays; nicht auf Bytes, Vektoren, Samples und Channel-Arrays",ja
+Expr(Index2),ja,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
+Expr(Slice),ja,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
+Expr(Accessor),ja,"teilweise: die Qualitaet eines Inputs, ein Optional, die Laenge eines Arrays",ja
 Expr(Unary),ja,ja,ja
 Expr(Binary),ja,ja,ja
 Expr(Cond),ja,ja,ja
@@ -41,9 +41,9 @@ Expr(NativeCall),ja,nein: Natives und Matrizen sind nicht kodiert,ja
 Expr(MatOp),ja,nein: Natives und Matrizen sind nicht kodiert,ja
 Expr(Decode),ja,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
 Expr(Checked),ja,ja,ja
-Expr(Lift),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Ok),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Err),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
+Expr(Lift),ja,ja,ja
+Expr(Ok),ja,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
+Expr(Err),ja,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
 Expr(Intrinsic),ja,ja,ja
 Unary(Neg),ja,ja,ja
 Unary(Not),ja,ja,ja
@@ -83,12 +83,12 @@ Check(DivZero),ja,ja,ja
 Check(Overflow),ja,ja,ja
 Check(NonFinite),ja,ja,ja
 Check(Domain),ja,ja,ja
-Check(Index),ja,nein: Wrapper oder Index,ja
+Check(Index),ja,ja,ja
 Check(Range),ja,ja,ja
 Check(Convert),ja,ja,ja
 Check(Shift),ja,ja,ja
 Check(Valid),ja,ja,ja
-Check(Missing),ja,nein: Wrapper oder Index,ja
+Check(Missing),ja,ja,ja
 Intrinsic(Abs),ja,ja,ja
 Intrinsic(Min),ja,ja,ja
 Intrinsic(Max),ja,ja,ja
@@ -115,20 +115,20 @@ Intrinsic(WrappingMul),ja,nein: Primitive ohne Kodierung,nein
 Intrinsic(SaturatingAdd),ja,nein: Primitive ohne Kodierung,nein
 Intrinsic(SaturatingSub),ja,nein: Primitive ohne Kodierung,nein
 Intrinsic(Interp),teilweise: nur ueber eine Tabelle aus Literalen mit mindestens zwei Stuetzstellen,nein: Primitive ohne Kodierung,ja
-Accessor(Valid),ja,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
-Accessor(Suspect),ja,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
-Accessor(Stale),ja,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
+Accessor(Valid),ja,teilweise: auf einem Input (3.5) und einem Optional (3.8); nicht auf einem Ergebnis,ja
+Accessor(Suspect),ja,teilweise: auf einem Input (3.5),ja
+Accessor(Stale),ja,teilweise: auf einem Input (3.5),ja
 Accessor(Age),ja,"teilweise: nur in Beobachtungen, die das Modell auslaesst",nein
 Accessor(Reason),ja,"teilweise: nur in Beobachtungen, die das Modell auslaesst",ja
-Accessor(Or),teilweise: `.or` nur auf einem Channel oder Wrapper,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
+Accessor(Or),teilweise: `.or` nur auf einem Channel oder Wrapper,teilweise: auf einem Input (3.5) und einem Optional (3.8); nicht auf einem Ergebnis,ja
 Accessor(Ok),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Err),teilweise: `.err` nicht auf `T?`,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(T),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Seq),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Text),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Data),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Len),teilweise: `.len` nur auf Sammlungen,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Count),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Len),teilweise: `.len` nur auf Sammlungen,teilweise: auf Arrays,ja
+Accessor(Count),ja,teilweise: auf Arrays,ja
 Accessor(Dropped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Malformed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Overflowed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -168,8 +168,8 @@ Stmt(Goto),ja,ja,ja
 Stmt(Abort),ja,ja,ja
 Stmt(If),ja,ja,ja
 Stmt(ForRange),ja,teilweise: bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403),ja
-Stmt(ForEach),ja,nein: `for … in` und `break` sind nicht kodiert,ja
-Stmt(Match),ja,teilweise: nur `case` auf Varianten ohne Felder,ja
+Stmt(ForEach),ja,"teilweise: ueber ein Array mit einer Variablen, nicht im Rumpf einer Funktion",ja
+Stmt(Match),ja,teilweise: nicht im Rumpf einer Funktion,ja
 Stmt(Return),ja,ja,ja
 Stmt(Send),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
 Stmt(At),ja,nein: `at` und `every` sind nicht kodiert,ja
@@ -178,24 +178,24 @@ Stmt(Skip),ja,nein: Stroeme und Trigger sind nicht kodiert,nein
 Stmt(Raise),ja,ja,ja
 Stmt(Job),ja,nein: Jobs sind nicht kodiert,ja
 Stmt(Every),ja,nein: `at` und `every` sind nicht kodiert,ja
-Stmt(Break),ja,nein: `for … in` und `break` sind nicht kodiert,ja
+Stmt(Break),ja,nein: `break` ist nicht kodiert,ja
 Stmt(Observe),ja,ja,ja
 Stmt(Arm),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
 Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`",teilweise: nur `step` einer Blockinstanz,ja
 Stmt(Pass),ja,ja,ja
 Place(Var),ja,ja,ja
 Place(Output),ja,ja,ja
-Place(Port),ja,"nein: Zuweisung an Feld, Element oder Port",ja
-Place(Field),ja,"nein: Zuweisung an Feld, Element oder Port",ja
-Place(Index),ja,"nein: Zuweisung an Feld, Element oder Port",ja
-Place(Index2),ja,"nein: Zuweisung an Feld, Element oder Port",ja
+Place(Port),ja,nein: Zuweisung an Port oder Matrixelement,ja
+Place(Field),ja,ja,ja
+Place(Index),ja,ja,ja
+Place(Index2),ja,nein: Zuweisung an Port oder Matrixelement,ja
 Type(Bool),ja,ja,ja
 Type(Int),ja,teilweise: ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen,ja
 Type(Float),ja,ja,ja
 Type(Duration),ja,ja,ja
-Type(Enum),ja,teilweise: nur Enums ohne Felder,ja
-Type(Record),ja,nein: Typ ohne Sorte im Modell,ja
-Type(Array),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Enum),ja,teilweise: mit Feldern nicht als Typ eines Inputs,ja
+Type(Record),ja,teilweise: nicht als Typ eines Inputs,ja
+Type(Array),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Bytes),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Vec),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Str),ja,nein: Typ ohne Sorte im Modell,ja
@@ -204,7 +204,7 @@ Type(Samples),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Table),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Map),ja,nein: Typ ohne Sorte im Modell,ja
-Type(Optional),ja,"teilweise: nur in Beobachtungen, die das Modell auslaesst",ja
+Type(Optional),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Result),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Stream),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Capture),ja,nein: Typ ohne Sorte im Modell,ja
@@ -254,9 +254,9 @@ Feature(CheckConfirm),ja,nein: `check … for` und `within` sind nicht kodiert,j
 Feature(CheckWithin),ja,nein: `check … for` und `within` sind nicht kodiert,ja
 Feature(Expect),ja,ja,ja
 Feature(ArmVariant),ja,ja,ja
-Feature(ArmValues),ja,nein: `case` mit Werten ist nicht kodiert,ja
+Feature(ArmValues),ja,ja,ja
 Feature(ArmWild),ja,ja,ja
-Feature(EnumWithFields),ja,teilweise: Varianten mit Feldern werden weder gebaut noch verglichen,ja
+Feature(EnumWithFields),ja,ja,ja
 Feature(Function),ja,ja,ja
 Feature(Block),ja,ja,ja
 Feature(Native),ja,ja,ja
@@ -265,7 +265,7 @@ Feature(OutputStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
 Feature(InternalStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
 Feature(Command),ja,ja,ja
 Feature(Param),ja,ja,ja
-Feature(Tunable),ja,teilweise: Tunables gelten als ihr Default (FB-372),ja
+Feature(Tunable),ja,ja,ja
 Feature(Profile),ja,ja,ja
 Feature(Property),ja,ja,ja
 Feature(Assumption),ja,ja,ja

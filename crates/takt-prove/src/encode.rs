@@ -36,12 +36,15 @@ use takt_mir::expr::{
 use takt_mir::fns::BlockDef;
 use takt_mir::machine::{FaultTarget, Machine, Target, TransTrigger};
 use takt_mir::program::{Direction, Program, Property};
-use takt_mir::stmt::{ArmPattern, Block, Method, Place, StmtKind};
+use takt_mir::stmt::{Block, ForVars, Method, Place, StmtKind};
 use takt_mir::types::{Const, FloatWidth, HandleKind, IntWidth, Type};
 use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId};
 
 use crate::eval;
 use crate::term::{Node, Op, Sort, Term};
+
+mod value;
+use value::V;
 
 /// Etwas, das die Kodierung nicht abbildet.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,7 +240,7 @@ struct Cx<'a> {
     /// Ist eine Maschine in diesem Tick aktiv (fuer frische Lesevorgaenge).
     active: &'a BTreeMap<MachineId, Term>,
     /// Lokale einer eingebetteten Funktion.
-    locals: Option<BTreeMap<VarId, Term>>,
+    locals: Option<BTreeMap<VarId, V>>,
 }
 
 impl Cx<'_> {
@@ -643,17 +646,23 @@ impl Enc<'_> {
 
     // ------------------------------------------------------------ Ausdruecke
 
-    /// Ein konstanter Ausdruck (Parameter-Defaults, `safe`, `after`).
-    fn const_expr(&mut self, e: &Expr) -> R<Term> {
+    /// Ein konstanter Wert (Parameter-Defaults, `safe`, `after`).
+    fn const_value(&mut self, e: &Expr) -> R<V> {
         let pre = Env::new();
         let active = BTreeMap::new();
         let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: &pre, active: &active, locals: None };
         let mut flow = Flow::new(Term::bool(true));
-        let t = self.expr(e, &cx, &pre, &mut flow)?;
-        if !flow.exits.is_empty() || has_var(&t) {
+        let v = self.value(e, &cx, &pre, &mut flow)?;
+        let mut leaves = Vec::new();
+        v.leaves(&mut leaves);
+        if !flow.exits.is_empty() || leaves.iter().any(|t| has_var(t)) {
             return no("kein konstanter Ausdruck", e.span);
         }
-        Ok(t)
+        Ok(v)
+    }
+
+    fn const_expr(&mut self, e: &Expr) -> R<Term> {
+        self.const_value(e)?.leaf(e.span)
     }
 
     fn const_int(&mut self, e: &Expr) -> R<i64> {
@@ -667,6 +676,9 @@ impl Enc<'_> {
     #[deny(clippy::wildcard_enum_match_arm)]
     fn expr(&mut self, e: &Expr, cx: &Cx<'_>, env: &Env, flow: &mut Flow) -> R<Term> {
         let span = e.span;
+        if self.composite(e.ty) {
+            return no("zusammengesetzter Wert an dieser Stelle", span);
+        }
         let sort = self.sort_of(e.ty, span);
         Ok(match &e.kind {
             ExprKind::Bool(b) => Term::bool(*b),
@@ -680,10 +692,8 @@ impl Enc<'_> {
                 Term::int(i64::from(*variant))
             }
             ExprKind::Var(v) => {
-                if let Some(locals) = &cx.locals {
-                    if let Some(t) = locals.get(v) {
-                        return Ok(t.clone());
-                    }
+                if let Some(local) = cx.locals.as_ref().and_then(|l| l.get(v)) {
+                    return local.clone().leaf(span);
                 }
                 let Some(m) = cx.m else { return no("Variable ausserhalb einer Maschine", span) };
                 env.get(&self.loc_var(m, *v)).cloned().ok_or_else(|| Unsupported { what: "Variable".into(), span })?
@@ -709,6 +719,9 @@ impl Enc<'_> {
             ExprKind::Accessor { base, .. } if matches!(base.kind, ExprKind::Input { .. }) => {
                 self.input_accessor(e, cx, env, flow)?
             }
+            ExprKind::Accessor { base, accessor, args } => self.accessor(base, *accessor, args, cx, env, flow, span)?,
+            ExprKind::Field { base, field } => self.field(base, *field as usize, cx, env, flow)?.leaf(span)?,
+            ExprKind::Index { base, index } => self.element(base, index, cx, env, flow, span)?.leaf(span)?,
             ExprKind::Output(c) => {
                 let ch = &self.p.channels[c.index()];
                 if let Some(owner) = ch.owner.filter(|o| !self.order.contains(o)) {
@@ -801,6 +814,12 @@ impl Enc<'_> {
                 let b = self.guarded(&guard, flow, |enc, flow| enc.expr(rhs, cx, env, flow))?;
                 self.binary(*op, a, b, None, span)?
             }
+            ExprKind::Binary { op: op @ (BinaryOp::Eq | BinaryOp::Ne), lhs, rhs } if self.composite(lhs.ty) => {
+                let a = self.value(lhs, cx, env, flow)?;
+                let b = self.value(rhs, cx, env, flow)?;
+                let eq = Enc::equal(&a, &b);
+                if *op == BinaryOp::Eq { eq } else { eq.not() }
+            }
             ExprKind::Binary { op, lhs, rhs } => {
                 let a = self.expr(lhs, cx, env, flow)?;
                 let b = self.expr(rhs, cx, env, flow)?;
@@ -842,9 +861,9 @@ impl Enc<'_> {
             ExprKind::Call { callee, args } => {
                 let mut xs = Vec::new();
                 for a in args {
-                    xs.push(self.expr(a, cx, env, flow)?);
+                    xs.push(self.value(a, cx, env, flow)?);
                 }
-                self.call(*callee, xs, cx, env, flow, span)?
+                self.call(*callee, xs, cx, env, flow, span)?.leaf(span)?
             }
             other @ (ExprKind::Str(_)
             | ExprKind::None
@@ -854,11 +873,8 @@ impl Enc<'_> {
             | ExprKind::BlockInit { .. }
             | ExprKind::Armed(_)
             | ExprKind::PortRead(_)
-            | ExprKind::Field { .. }
-            | ExprKind::Index { .. }
             | ExprKind::Index2 { .. }
             | ExprKind::Slice { .. }
-            | ExprKind::Accessor { .. }
             | ExprKind::Format(_)
             | ExprKind::JobState { .. }
             | ExprKind::Stream(_)
@@ -1028,7 +1044,8 @@ impl Enc<'_> {
                 self.site(kind, span, fires, cx);
                 return Ok(x);
             }
-            CheckedKind::Missing | CheckedKind::Index { .. } => return no("Wrapper oder Index", span),
+            CheckedKind::Index { len } => return self.index_access(inner, *len, span, kind, cx, env, flow)?.leaf(span),
+            CheckedKind::Missing => return self.unwrap(inner, span, kind, cx, env, flow)?.leaf(span),
         };
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
         self.site(kind, span, cond.clone(), cx);
@@ -1108,29 +1125,29 @@ impl Enc<'_> {
     fn call(
         &mut self,
         callee: takt_mir::FnId,
-        args: Vec<Term>,
+        args: Vec<V>,
         cx: &Cx<'_>,
         env: &Env,
         flow: &mut Flow,
         span: Span,
-    ) -> R<Term> {
+    ) -> R<V> {
         let f = self.p.fns[callee.index()].clone();
         let Some(ret) = f.ret else { return no("Funktion ohne Rueckgabe", span) };
         if f.params.iter().any(|p| p.inout) {
             return no("`inout`-Parameter", span);
         }
-        let mut locals: BTreeMap<VarId, Term> = BTreeMap::new();
+        let mut locals: BTreeMap<VarId, V> = BTreeMap::new();
         for (i, local) in f.locals.iter().enumerate() {
             let value = match args.get(i) {
                 Some(a) => a.clone(),
-                None => Enc::zero(self.sort_of(local.ty, local.span)?),
+                None => self.zero_of(local.ty, local.span)?,
             };
             locals.insert(VarId(i as u32), value);
         }
         let inner =
             Cx { m: cx.m, leaf: cx.leaf, mode: Mode::Entry, pre: cx.pre, active: cx.active, locals: Some(locals) };
         let mut sub = Flow::new(flow.alive.clone());
-        let mut ret_val = Enc::zero(self.sort_of(ret, span)?);
+        let mut ret_val = self.zero_of(ret, span)?;
         let mut env = env.clone();
         let mut inner = inner;
         self.fn_block(&f.body, &mut inner, &mut env, &mut sub, &mut ret_val)?;
@@ -1143,22 +1160,20 @@ impl Enc<'_> {
 
     /// Der Rumpf einer Funktion: Zuweisungen an Lokale, `if`, `return`.
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn fn_block(&mut self, b: &Block, cx: &mut Cx<'_>, env: &mut Env, flow: &mut Flow, ret: &mut Term) -> R<()> {
+    fn fn_block(&mut self, b: &Block, cx: &mut Cx<'_>, env: &mut Env, flow: &mut Flow, ret: &mut V) -> R<()> {
         for s in &b.stmts {
             if flow.alive.is_bool(false) {
                 break;
             }
             match &s.kind {
                 StmtKind::Return(e) => {
-                    let v = self.expr(e, cx, env, flow)?;
-                    *ret = Term::ite(flow.alive.clone(), v, ret.clone());
+                    let v = self.value(e, cx, env, flow)?;
+                    *ret = V::ite(&flow.alive, v, ret.clone());
                     flow.alive = Term::bool(false);
                 }
-                StmtKind::Assign { target: Place::Var(v), value } => {
-                    let val = self.expr(value, cx, env, flow)?;
-                    let locals = cx.locals.as_mut().expect("Lokale");
-                    let old = locals.get(v).cloned().unwrap_or_else(|| Enc::zero(val.sort()));
-                    locals.insert(*v, Term::ite(flow.alive.clone(), val, old));
+                StmtKind::Assign { target, value } => {
+                    let val = self.value(value, cx, env, flow)?;
+                    self.assign_local(target, val, cx, env, flow, s.span)?;
                 }
                 StmtKind::If { cond, then, otherwise } => {
                     let c = self.expr(cond, cx, env, flow)?;
@@ -1172,28 +1187,20 @@ impl Enc<'_> {
                     self.fn_block(otherwise, cx, env, &mut fe, &mut re)?;
                     let else_locals = cx.locals.take().expect("Lokale");
                     let then_locals = then_locals.expect("Lokale");
-                    let merged: BTreeMap<VarId, Term> = then_locals
+                    let merged: BTreeMap<VarId, V> = then_locals
                         .iter()
                         .map(|(k, a)| {
-                            (
-                                *k,
-                                Term::ite(
-                                    c.clone(),
-                                    a.clone(),
-                                    else_locals.get(k).cloned().unwrap_or_else(|| a.clone()),
-                                ),
-                            )
+                            (*k, V::ite(&c, a.clone(), else_locals.get(k).cloned().unwrap_or_else(|| a.clone())))
                         })
                         .collect();
                     cx.locals = Some(merged);
-                    *ret = Term::ite(c, rt, re);
+                    *ret = V::ite(&c, rt, re);
                     flow.exits.extend(ft.exits);
                     flow.exits.extend(fe.exits);
                     flow.alive = Term::or(vec![ft.alive, fe.alive]);
                 }
                 StmtKind::Pass | StmtKind::Observe(_) => {}
-                other @ (StmtKind::Assign { .. }
-                | StmtKind::Check { .. }
+                other @ (StmtKind::Check { .. }
                 | StmtKind::Goto(_)
                 | StmtKind::Abort { .. }
                 | StmtKind::ForRange { .. }
@@ -1228,16 +1235,8 @@ impl Enc<'_> {
             let span = s.span;
             match &s.kind {
                 StmtKind::Assign { target, value } => {
-                    let v = self.expr(value, cx, env, flow)?;
-                    let loc = match target {
-                        Place::Var(id) => self.loc_var(m, *id),
-                        Place::Output(c) => self.loc_out(*c),
-                        Place::Port(_) | Place::Field(..) | Place::Index(..) | Place::Index2(..) => {
-                            return no("Zuweisung an Feld oder Element", span);
-                        }
-                    };
-                    let old = env.get(&loc).cloned().ok_or_else(|| Unsupported { what: "Ort".into(), span })?;
-                    env.insert(loc, Term::ite(flow.alive.clone(), v, old));
+                    let v = self.value(value, cx, env, flow)?;
+                    self.assign(target, v, cx, env, flow, span)?;
                 }
                 StmtKind::Check { cond, confirm, within, target, kind, .. } => {
                     if confirm.is_some() || within.is_some() {
@@ -1277,22 +1276,19 @@ impl Enc<'_> {
                     flow.alive = Term::or(vec![ft.alive, fe.alive]);
                 }
                 StmtKind::Match { subject, arms } => {
-                    let subj = self.expr(subject, cx, env, flow)?;
+                    let subj = self.value(subject, cx, env, flow)?;
                     let mut remaining = flow.alive.clone();
                     let mut merged = env.clone();
                     let mut alive_out = Term::bool(false);
                     for arm in arms {
-                        let cond = match &arm.pattern {
-                            ArmPattern::Variant { variant, fields } if fields.is_empty() => {
-                                Term::eq(subj.clone(), Term::int(i64::from(*variant)))
-                            }
-                            ArmPattern::Wild => Term::bool(true),
-                            ArmPattern::Variant { .. } | ArmPattern::Values(_) => {
-                                return no("`case` mit Werten oder Feldern", arm.span);
-                            }
-                        };
+                        let (cond, payload) = self.arm(&arm.pattern, &subj, subject.ty, cx, env, flow, arm.span)?;
                         let take = Term::and(vec![remaining.clone(), cond.clone()]);
                         let mut env_a = env.clone();
+                        // Die gebundenen Felder sind gehobene Variablen der Maschine.
+                        for (slot, v) in arm.pattern.bound().iter().zip(payload) {
+                            let ty = self.machine(m).vars[slot.index()].ty;
+                            self.put(&mut env_a, &self.loc_var(m, *slot), ty, v, &take, arm.span)?;
+                        }
                         let mut fa = Flow::new(take.clone());
                         self.block(&arm.body, cx, &mut env_a, &mut fa)?;
                         merged = ite_env(&take, &env_a, &merged);
@@ -1312,6 +1308,21 @@ impl Enc<'_> {
                     let loc = self.loc_var(m, *var);
                     for i in 0..n {
                         env.insert(loc.clone(), Term::int(i));
+                        self.block(body, cx, env, flow)?;
+                    }
+                }
+                // Ueber ein Array: die Schleifenvariable traegt je Durchlauf ein Element.
+                StmtKind::ForEach { vars: ForVars::One(var), iter, body }
+                    if matches!(self.p.types.get(iter.ty), Type::Array { .. }) =>
+                {
+                    let V::Node(items) = self.value(iter, cx, env, flow)? else { return no("`for … in`", span) };
+                    self.unrolled = self.unrolled.saturating_add(items.len() as i64);
+                    if self.unrolled > UNROLL_LIMIT {
+                        return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
+                    }
+                    let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
+                    for item in items {
+                        self.put(env, &loc, ty, item, &Term::bool(true), span)?;
                         self.block(body, cx, env, flow)?;
                     }
                 }
@@ -1369,9 +1380,10 @@ impl Enc<'_> {
         env: &mut Env,
         flow: &mut Flow,
     ) -> R<()> {
-        let mut locals: BTreeMap<VarId, Term> = BTreeMap::new();
-        for i in 0..def.params.len() {
-            locals.insert(VarId(i as u32), env[&fields[i].0].clone());
+        let mut locals: BTreeMap<VarId, V> = BTreeMap::new();
+        for (i, (loc, ty)) in fields.iter().enumerate().take(def.params.len()) {
+            let shape = self.shape(*ty, def.span)?;
+            locals.insert(VarId(i as u32), self.load(env, loc, &shape, def.span)?);
         }
         for (j, sv) in def.state_vars.iter().enumerate() {
             let icx = Cx {
@@ -1383,14 +1395,13 @@ impl Enc<'_> {
                 locals: Some(locals.clone()),
             };
             let v = match &sv.init {
-                Some(e) => self.expr(e, &icx, env, flow)?,
-                None => Enc::zero(self.sort_of(sv.ty, sv.span)?),
+                Some(e) => self.value(e, &icx, env, flow)?,
+                None => self.zero_of(sv.ty, sv.span)?,
             };
             let id = VarId((def.params.len() + j) as u32);
             locals.insert(id, v.clone());
             let loc = fields[def.params.len() + j].0.clone();
-            let old = env[&loc].clone();
-            env.insert(loc, Term::ite(flow.alive.clone(), v, old));
+            self.put(env, &loc, sv.ty, v, &flow.alive.clone(), sv.span)?;
         }
         Ok(())
     }
@@ -1417,7 +1428,7 @@ impl Enc<'_> {
         let def = self.p.blocks[bid.index()].clone();
         let mut arg_terms = Vec::new();
         for a in args {
-            arg_terms.push(self.expr(a, cx, env, flow)?);
+            arg_terms.push(self.value(a, cx, env, flow)?);
         }
         let fid = match method {
             Method::Reset => return self.block_reset(&def, &fields, cx, env, flow),
@@ -1429,14 +1440,15 @@ impl Enc<'_> {
         };
         let f = self.p.fns[fid.index()].clone();
         let base = fields.len() as u32;
-        let mut locals: BTreeMap<VarId, Term> = BTreeMap::new();
-        for (i, (loc, _)) in fields.iter().enumerate() {
-            locals.insert(VarId(i as u32), env[loc].clone());
+        let mut locals: BTreeMap<VarId, V> = BTreeMap::new();
+        for (i, (loc, ty)) in fields.iter().enumerate() {
+            let shape = self.shape(*ty, span)?;
+            locals.insert(VarId(i as u32), self.load(env, loc, &shape, span)?);
         }
         for (i, local) in f.locals.iter().enumerate() {
             let value = match arg_terms.get(i) {
                 Some(a) => a.clone(),
-                None => Enc::zero(self.sort_of(local.ty, local.span)?),
+                None => self.zero_of(local.ty, local.span)?,
             };
             locals.insert(VarId(base + i as u32), value);
         }
@@ -1463,30 +1475,21 @@ impl Enc<'_> {
             Cx { m: cx.m, leaf: cx.leaf, mode: Mode::Entry, pre: cx.pre, active: cx.active, locals: Some(locals) };
         let mut sub = Flow::new(call_alive.clone());
         let mut ret = match f.ret {
-            Some(t) => Enc::zero(self.sort_of(t, span)?),
-            None => Term::bool(false),
+            Some(t) => self.zero_of(t, span)?,
+            None => V::Leaf(Term::bool(false)),
         };
         self.fn_block(&f.body, &mut icx, env, &mut sub, &mut ret)?;
         let faults = Term::or(sub.exits.iter().map(|x| x.cond.clone()).collect());
         flow.exits.extend(sub.exits);
         // Der Zustand bleibt, was der Rumpf bis zu einem Fault schrieb.
         let locals = icx.locals.expect("Lokale");
-        for (i, (loc, _)) in fields.iter().enumerate().skip(def.params.len()) {
+        for (i, (loc, ty)) in fields.iter().enumerate().skip(def.params.len()) {
             let v = locals[&VarId(i as u32)].clone();
-            let old = env[loc].clone();
-            env.insert(loc.clone(), Term::ite(call_alive.clone(), v, old));
+            self.put(env, loc, *ty, v, &call_alive, span)?;
         }
         flow.alive = Term::and(vec![call_alive, !faults]);
         if let Some(t) = target {
-            let loc = match t {
-                Place::Var(id) => self.loc_var(m, *id),
-                Place::Output(c) => self.loc_out(*c),
-                Place::Port(_) | Place::Field(..) | Place::Index(..) | Place::Index2(..) => {
-                    return no("Ziel eines Methodenaufrufs", span);
-                }
-            };
-            let old = env[&loc].clone();
-            env.insert(loc, Term::ite(flow.alive.clone(), ret, old));
+            self.assign(t, ret, cx, env, flow, span)?;
         }
         Ok(())
     }
@@ -1498,7 +1501,7 @@ impl Enc<'_> {
             let (Some(fid), false) = (def.step, def.ensures.is_empty()) else { continue };
             let f = self.p.fns[fid.index()].clone();
             let mut vars: Vec<(String, Sort)> = Vec::new();
-            let mut locals: BTreeMap<VarId, Term> = BTreeMap::new();
+            let mut locals: BTreeMap<VarId, V> = BTreeMap::new();
             let mut assume = Vec::new();
             let mut typed = |this: &mut Self, name: String, ty: TypeId, id: VarId| -> R<()> {
                 let sort = this.sort_of(ty, def.span)?;
@@ -1507,7 +1510,7 @@ impl Enc<'_> {
                     assume.push(inv);
                 }
                 vars.push((name, sort));
-                locals.insert(id, t);
+                locals.insert(id, V::Leaf(t));
                 Ok(())
             };
             let mut ok = true;
@@ -1527,8 +1530,8 @@ impl Enc<'_> {
                 continue;
             }
             for (i, local) in f.locals.iter().enumerate().skip(f.params.len()) {
-                let Ok(sort) = self.sort_of(local.ty, local.span) else { continue };
-                locals.insert(VarId(base + i as u32), Enc::zero(sort));
+                let Ok(zero) = self.zero_of(local.ty, local.span) else { continue };
+                locals.insert(VarId(base + i as u32), zero);
             }
             let pre = Env::new();
             let actives = BTreeMap::new();
@@ -1541,7 +1544,7 @@ impl Enc<'_> {
                 assume.push(t);
             }
             let Some(ret_ty) = f.ret else { continue };
-            let mut ret = Enc::zero(self.sort_of(ret_ty, f.span)?);
+            let Ok(mut ret) = self.zero_of(ret_ty, f.span) else { continue };
             self.fn_block(&f.body, &mut cx, &mut env, &mut flow, &mut ret)?;
             let faults = Term::or(flow.exits.iter().map(|x| x.cond.clone()).collect());
             // `result` ist die Lokale hinter den Schrittparametern.
@@ -1613,10 +1616,9 @@ impl Enc<'_> {
                     continue;
                 }
                 if let Some(safe) = c.attrs.safe.clone() {
-                    let v = self.const_expr(&safe)?;
-                    let loc = self.loc_out(ChannelId(i as u32));
-                    let old = env[&loc].clone();
-                    env.insert(loc, Term::ite(flow.alive.clone(), v, old));
+                    let v = self.const_value(&safe)?;
+                    let (loc, ty) = (self.loc_out(ChannelId(i as u32)), c.ty);
+                    self.put(env, &loc, ty, v, &flow.alive.clone(), safe.span)?;
                 }
             }
         } else {
@@ -1631,12 +1633,11 @@ impl Enc<'_> {
                 for v in machine.states[s.index()].vars.clone() {
                     let def = machine.vars[v.index()].clone();
                     let value = match &def.init {
-                        Some(e) => self.expr(e, &entry, env, &mut flow)?,
-                        None => Enc::zero(self.sort_of(def.ty, def.span)?),
+                        Some(e) => self.value(e, &entry, env, &mut flow)?,
+                        None => self.zero_of(def.ty, def.span)?,
                     };
                     let loc = self.loc_var(m, v);
-                    let old = env[&loc].clone();
-                    env.insert(loc, Term::ite(flow.alive.clone(), value, old));
+                    self.put(env, &loc, def.ty, value, &flow.alive.clone(), def.span)?;
                 }
             }
             for s in &entered {
@@ -1835,7 +1836,45 @@ impl Enc<'_> {
             .collect()
     }
 
-    /// Ein Tick des Systems ueber `pre`.
+    /// Wo `sys/next_run` steht und welche Varianten den Lauf beenden (12.7):
+    /// der Ort der Variante und ihre Indizes. Nur, wenn eine kodierte
+    /// Maschine den Output schreibt.
+    fn run_end(&self) -> Option<(String, Vec<i64>)> {
+        let (index, variants) = takt_mir::sys::next_run(self.p)?;
+        let c = &self.p.channels[index];
+        if c.owner.is_some_and(|o| !self.order.contains(&o)) {
+            return None;
+        }
+        let base = self.loc_out(ChannelId(index as u32));
+        let loc = if self.composite(c.ty) { format!("{base}.tag") } else { base };
+        let ending = variants.iter().enumerate().filter(|(_, (_, end))| end.is_some()).map(|(i, _)| i as i64);
+        Some((loc, ending.collect()))
+    }
+
+    /// Beendet der committete Zustand `env` den Lauf?
+    fn ends(env: &Env, (loc, ending): &(String, Vec<i64>)) -> Term {
+        Term::or(ending.iter().map(|i| Term::eq(env[loc].clone(), Term::int(*i))).collect())
+    }
+
+    /// Die Outputs, wie sie zu Beginn und nach dem Ende eines Laufs stehen:
+    /// `safe`, sonst der Standardwert (`eval_safe_outputs`).
+    fn safe_outputs(&mut self) -> R<Vec<(String, TypeId, V)>> {
+        let mut out = Vec::new();
+        for (i, c) in self.p.channels.clone().iter().enumerate() {
+            if c.dir != Direction::Output || c.owner.is_some_and(|o| !self.order.contains(&o)) {
+                continue;
+            }
+            let value = match &c.attrs.safe {
+                Some(e) => self.const_value(e)?,
+                None => self.zero_of(c.ty, c.span)?,
+            };
+            out.push((self.loc_out(ChannelId(i as u32)), c.ty, value));
+        }
+        Ok(out)
+    }
+
+    /// Ein Tick des Systems ueber `pre`. Nach dem Ende eines Laufs (12.7)
+    /// laeuft keine Maschine mehr, und die Outputs stehen auf `safe`.
     fn tick(&mut self, pre: &Env) -> R<Env> {
         let mut cur = pre.clone();
         for &m in &self.order.clone() {
@@ -1843,7 +1882,11 @@ impl Enc<'_> {
                 cur.insert(self.loc_sig(m, i), Term::bool(false));
             }
         }
-        let actives = self.actives(pre);
+        let end = self.run_end();
+        let ended = end.as_ref().map(|_| pre[ENDED].clone());
+        let running = ended.clone().map_or_else(|| Term::bool(true), Term::not);
+        let actives: BTreeMap<MachineId, Term> =
+            self.actives(pre).into_iter().map(|(m, a)| (m, Term::and(vec![a, running.clone()]))).collect();
         self.aborts.clear();
         for &m in &self.order.clone() {
             let active = actives[&m].clone();
@@ -1853,12 +1896,20 @@ impl Enc<'_> {
             let foreign = self.input("i.abort.foreign".into(), Sort::Bool);
             self.aborts.push(foreign);
         }
-        let raised = Term::or(std::mem::take(&mut self.aborts));
+        let raised = Term::and(vec![running, Term::or(std::mem::take(&mut self.aborts))]);
         if !raised.is_bool(false) {
             self.abort_phase(&raised, pre, &actives, &mut cur)?;
         }
         self.advance(&actives, &mut cur);
         self.edges_next(pre, &mut cur)?;
+        if let (Some(end), Some(ended)) = (end, ended) {
+            let now = Enc::ends(&cur, &end);
+            for (loc, ty, safe) in self.safe_outputs()? {
+                self.put(&mut cur, &loc, ty, safe, &ended, Span::default())?;
+            }
+            cur.insert(OVER.into(), ended.clone());
+            cur.insert(ENDED.into(), Term::or(vec![ended, now]));
+        }
         Ok(cur)
     }
 
@@ -1885,25 +1936,20 @@ impl Enc<'_> {
                         return no("Instanz-Array eines Blocks", v.span);
                     };
                     for (loc, ty) in fields {
-                        env.insert(loc, Enc::zero(self.sort_of(ty, v.span)?));
+                        let zero = self.zero_of(ty, v.span)?;
+                        self.init_loc(&mut env, &loc, ty, zero, v.span)?;
                     }
                     continue;
                 }
-                env.insert(self.loc_var(m, VarId(i as u32)), Enc::zero(self.sort_of(v.ty, v.span)?));
+                let zero = self.zero_of(v.ty, v.span)?;
+                self.init_loc(&mut env, &self.loc_var(m, VarId(i as u32)), v.ty, zero, v.span)?;
             }
             for i in 0..machine.signals.len() {
                 env.insert(self.loc_sig(m, i), Term::bool(false));
             }
         }
-        for (i, c) in self.p.channels.iter().enumerate() {
-            if c.dir != Direction::Output || c.owner.is_some_and(|o| !self.order.contains(&o)) {
-                continue;
-            }
-            let value = match c.attrs.safe.clone() {
-                Some(e) => self.const_expr(&e)?,
-                None => Enc::zero(self.sort_of(c.ty, c.span)?),
-            };
-            env.insert(self.loc_out(ChannelId(i as u32)), value);
+        for (loc, ty, value) in self.safe_outputs()? {
+            self.init_loc(&mut env, &loc, ty, value, Span::default())?;
         }
         // `init_vars` liest Ψ mit den Anfangswerten; die Eintritte lesen
         // frisch (7.2), also gilt jede Maschine als aktiv.
@@ -1920,21 +1966,21 @@ impl Enc<'_> {
                     let def = self.p.blocks[block.index()].clone();
                     let mut flow = Flow::new(Term::bool(true));
                     for (k, a) in args.iter().enumerate() {
-                        let t = self.expr(a, &cx, &env, &mut flow)?;
-                        env.insert(fields[k].0.clone(), t);
+                        let v = self.value(a, &cx, &env, &mut flow)?;
+                        self.init_loc(&mut env, &fields[k].0, fields[k].1, v, a.span)?;
                     }
                     self.block_reset(&def, &fields, &cx, &mut env, &mut flow)?;
                     continue;
                 }
                 if let Some(e) = &v.init {
                     let mut flow = Flow::new(Term::bool(true));
-                    let t = self.expr(e, &cx, &env, &mut flow)?;
+                    let value = self.value(e, &cx, &env, &mut flow)?;
                     if !flow.exits.is_empty() {
                         self.note(
                             "ein Fault in einem Anfangswert ist nicht modelliert (der Interpreter bricht den Lauf ab)",
                         );
                     }
-                    env.insert(self.loc_var(m, VarId(i as u32)), t);
+                    self.init_loc(&mut env, &self.loc_var(m, VarId(i as u32)), v.ty, value, e.span)?;
                 }
             }
         }
@@ -1947,6 +1993,10 @@ impl Enc<'_> {
         }
         self.advance(&actives, &mut env);
         self.edges_next(&before, &mut env)?;
+        if let Some(end) = self.run_end() {
+            env.insert(OVER.into(), Term::bool(false));
+            env.insert(ENDED.into(), Enc::ends(&env, &end));
+        }
         Ok(env)
     }
 
@@ -2002,26 +2052,18 @@ impl Enc<'_> {
             for (i, v) in machine.vars.iter().enumerate() {
                 if let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) {
                     for (loc, ty) in fields {
-                        if let Some(t) = pre.get(&loc).cloned().and_then(|x| self.type_invariant(x, ty)) {
-                            out.push(t);
-                        }
+                        self.typed_loc(pre, &loc, ty, &mut out);
                     }
                     continue;
                 }
-                let loc = self.loc_var(m, VarId(i as u32));
-                if let Some(t) = pre.get(&loc).cloned().and_then(|x| self.type_invariant(x, v.ty)) {
-                    out.push(t);
-                }
+                self.typed_loc(pre, &self.loc_var(m, VarId(i as u32)), v.ty, &mut out);
             }
         }
         for (i, c) in self.p.channels.iter().enumerate() {
             if c.dir != Direction::Output {
                 continue;
             }
-            let loc = self.loc_out(ChannelId(i as u32));
-            if let Some(t) = pre.get(&loc).cloned().and_then(|x| self.type_invariant(x, c.ty)) {
-                out.push(t);
-            }
+            self.typed_loc(pre, &self.loc_out(ChannelId(i as u32)), c.ty, &mut out);
         }
         out
     }
@@ -2301,11 +2343,14 @@ impl Enc<'_> {
         }
         let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: &before, active: &actives, locals: None };
         let Some(t) = self.tprop(inner, &cx, state)? else { return Ok(None) };
-        Ok(Some(Goal {
-            name: prop.name.clone(),
-            assumption: prop.assumption,
-            formula: if negate { t.not() } else { t },
-        }))
+        let t = if negate { t.not() } else { t };
+        // Nach dem Ende eines Laufs (12.7) gibt es keinen Tick, an dem die
+        // Eigenschaft gelten muesste; der Tick des Endes zaehlt noch.
+        let formula = match state.get(OVER) {
+            Some(over) => Term::or(vec![over.clone(), t]),
+            None => t,
+        };
+        Ok(Some(Goal { name: prop.name.clone(), assumption: prop.assumption, formula }))
     }
 
     #[deny(clippy::wildcard_enum_match_arm)]
@@ -2356,6 +2401,12 @@ fn outside(x: &Term, width: IntWidth) -> Term {
 
 /// Warum ein `u64` nicht kodiert ist.
 const U64: &str = "`u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen";
+
+/// Hat der Lauf geendet (12.7), in diesem Tick oder davor?
+const ENDED: &str = "s.run.ended";
+
+/// Hatte er schon vor diesem Tick geendet? Dann ist der Tick keiner des Laufs.
+const OVER: &str = "s.run.over";
 
 /// Eine ganzzahlige Grenze einer Range.
 fn int_bound(c: &Const) -> i64 {
