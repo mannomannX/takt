@@ -18,7 +18,7 @@ use takt_mir::types::Type;
 
 use crate::encode::Model;
 use crate::eval::Val;
-use crate::smt::{Query, Target, at, contract_query, query};
+use crate::smt::{Query, Target, assumptions_of, at, contract_query, query};
 
 /// Der gefundene Solver.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +63,19 @@ impl Solver {
         self.path().is_some_and(|p| Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success()))
     }
 
+    /// Name und Version, wie Bericht und Beweisdatei sie fuehren (FB-380):
+    /// `z3 4.13.4`, `cvc5 1.2.0`. Eine andere Version kann anders urteilen.
+    pub fn identity(&self) -> Option<String> {
+        let path = self.path()?;
+        let out = Command::new(path).arg("--version").output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let line = text.lines().next()?.trim();
+        let mut words = line.split_whitespace();
+        let version = words.by_ref().find(|w| w.eq_ignore_ascii_case("version")).and_then(|_| words.next());
+        let name = path.file_stem()?.to_str()?;
+        Some(format!("{name} {}", version.unwrap_or(line)))
+    }
+
     fn is_cvc5(&self) -> bool {
         self.path().and_then(|p| p.file_stem()).and_then(|s| s.to_str()).is_some_and(|s| s.starts_with("cvc5"))
     }
@@ -102,6 +115,8 @@ pub enum Verdict {
     Proven {
         /// Schritte der Induktion.
         k: u32,
+        /// Die `assumption`-Formeln, auf denen der Beweis ruht (13.3).
+        assumptions: Vec<String>,
     },
     /// Ein Gegenbeispiel, im Interpreter bestaetigt.
     Violated {
@@ -128,11 +143,30 @@ pub struct Report {
     pub verdict: Verdict,
 }
 
+impl Report {
+    /// Der Text fuer den Bericht. Eine Annahme, die das Modell nicht
+    /// garantiert, bleibt Annahme: Sie laeuft als Monitor (13.3), und ihr
+    /// Gegenbeispiel ist kein Befund ueber das Programm.
+    pub fn text(&self) -> String {
+        match &self.verdict {
+            Verdict::Violated { at, .. } if self.assumption => format!(
+                "vom Modell nicht garantiert, bleibt Annahme (Gegenbeispiel bei t={at} im Interpreter bestaetigt)"
+            ),
+            v => v.text(),
+        }
+    }
+}
+
 impl Verdict {
     /// Der Text fuer den Bericht.
     pub fn text(&self) -> String {
         match self {
-            Verdict::Proven { k } => format!("bewiesen (k-Induktion, k = {k})"),
+            Verdict::Proven { k, assumptions } if assumptions.is_empty() => format!("bewiesen (k-Induktion, k = {k})"),
+            Verdict::Proven { k, assumptions } => {
+                let names: Vec<String> = assumptions.iter().map(|a| format!("`{a}`")).collect();
+                let word = if names.len() == 1 { "der Annahme" } else { "den Annahmen" };
+                format!("bewiesen (k-Induktion, k = {k}) unter {word} {}", names.join(", "))
+            }
             Verdict::Violated { at, .. } => format!("verletzt bei t={at} (Gegenbeispiel im Interpreter bestaetigt)"),
             Verdict::Unproven { reason } => format!("unbewiesen: {reason}"),
         }
@@ -508,7 +542,7 @@ pub fn prove(
             "unsat" => {
                 let ind = solver.run(&query(model, depth, Target::Property(i), Query::Induction), timeout_s, "ind")?;
                 match answer(&ind) {
-                    "unsat" => Verdict::Proven { k: depth },
+                    "unsat" => Verdict::Proven { k: depth, assumptions: assumptions_of(model, Target::Property(i)) },
                     "sat" => Verdict::Unproven {
                         reason: format!("kein Gegenbeispiel bis Tiefe {depth}, Induktionsschritt offen (k = {depth})"),
                     },

@@ -2055,12 +2055,13 @@ fn prove(args: &Args) -> bool {
     let whole = takt_prove::encode(&program);
     match &whole {
         Ok(model) => {
+            let assumptions = model.properties.iter().filter(|g| g.assumption).count();
             println!(
-                "{path}: {} Zustandsvariablen, {} Eingaben, {} Annahmen, {} Beweisziele",
+                "{path}: {} Zustandsvariablen, {} Eingaben, {} Beweisziele, {} Annahmen",
                 model.state.len(),
                 model.inputs.len(),
-                model.assumptions.len(),
-                model.properties.len()
+                model.properties.len() - assumptions,
+                assumptions
             );
             for n in &model.notes {
                 println!("  Reichweite: {n}");
@@ -2101,6 +2102,10 @@ fn prove(args: &Args) -> bool {
         }
         None => 60,
     };
+    // FB-380: Eine andere Version kann anders urteilen.
+    let identity =
+        solver.identity().unwrap_or_else(|| solver.path().map(|p| p.display().to_string()).unwrap_or_default());
+    println!("  Solver: {identity}");
     let mut ok = true;
     let mut reports = Vec::new();
     if let Ok(model) = &whole {
@@ -2172,7 +2177,7 @@ fn prove(args: &Args) -> bool {
                 .filter(|s| takt_mir::analysis::walk::tag_of_name(&s.kind).is_some())
                 .collect();
             let Some(src) = read(path) else { return false };
-            let text = takt_mir::analysis::proof::render(&takt_mir::review::hash_of(src.as_bytes()), &sites);
+            let text = takt_mir::analysis::proof::render(&takt_mir::review::hash_of(src.as_bytes()), &identity, &sites);
             if let Err(e) = std::fs::write(out, text) {
                 eprintln!("{out}: {e}");
                 return false;
@@ -2182,9 +2187,9 @@ fn prove(args: &Args) -> bool {
     }
     for r in &reports {
         let word = if r.assumption { "assumption" } else { "property" };
-        println!("  {word} {}: {}", r.name, r.verdict.text());
+        println!("  {word} {}: {}", r.name, r.text());
         if let takt_prove::Verdict::Violated { stimulus, .. } = &r.verdict {
-            ok = false;
+            ok &= r.assumption;
             match args.value("--out") {
                 Some(dir) => {
                     let file = std::path::Path::new(dir).join(format!("{}.stim.trace", r.name));

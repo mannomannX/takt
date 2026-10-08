@@ -122,18 +122,20 @@ pub struct Model {
     pub state: Vec<StateVar>,
     /// Eingaben je Tick: `i.<channel>`, `i.cmd.<command>`, `i.now`.
     pub inputs: Vec<(String, Sort)>,
-    /// Annahmen je Tick aus Typen und Rand: Kanal-Ranges, `max_slew`, Ψ.
+    /// Bedingungen der freien Eingaben je Tick: der Rand der Inputs (3.5),
+    /// Ψ, fremde Outputs und Tunables in ihrem Typ. Sie sind Modell, keine
+    /// Annahme — der Rand erzwingt sie (12.6), und was frei ist, ist es
+    /// hoechstens mehr als im Lauf.
     pub assumptions: Vec<Term>,
-    /// `assumption`-Formeln (13.3). Sie beschraenken die Beweisverpflichtung
-    /// der Eigenschaften, nicht die Typsicherheit (3.4): Eine Pruefstelle
-    /// wird ohne sie klassifiziert, sonst liesse eine Beweisdatei eine
-    /// Pruefung aus, die ein Lauf jenseits der Annahme braucht.
-    pub assumed: Vec<Term>,
     /// Invarianten des Zustands aus den Typen (3.4): Ranges, Enums, Blaetter,
     /// Zaehler — sie gelten in jedem erreichbaren Zustand, weil ein Wert
     /// ausserhalb faultet statt gespeichert zu werden.
     pub invariants: Vec<Term>,
-    /// Beweisziele.
+    /// Beweisziele. Eine `assumption` (13.3) ist zugleich Annahme der
+    /// Eigenschaften: Sie beschraenkt deren Beweisverpflichtung, nicht die
+    /// Typsicherheit (3.4) — eine Pruefstelle wird ohne sie klassifiziert,
+    /// sonst liesse eine Beweisdatei eine Pruefung aus, die ein Lauf
+    /// jenseits der Annahme braucht.
     pub properties: Vec<Goal>,
     /// Pruefstellen als Beweisziele (B3).
     pub checks: Vec<CheckSite>,
@@ -411,15 +413,9 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     assumptions.extend(enc.psi_assumptions.clone());
     assumptions.extend(enc.tune_assumptions.clone());
     let scoped = enc.scope.is_some();
-    let mut assumed = Vec::new();
     for prop in p.properties.iter().filter(|_| !scoped) {
         match enc.goal(prop, &pre)? {
-            Some(goal) => {
-                if goal.assumption {
-                    assumed.push(goal.formula.clone());
-                }
-                properties.push(goal);
-            }
+            Some(goal) => properties.push(goal),
             None => enc
                 .notes
                 .push(format!("`{}` nicht kodiert: nur `always(…)`/`never(…)` ohne Zeitoperatoren (2.8)", prop.name)),
@@ -446,7 +442,6 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         state,
         inputs: enc.inputs.into_iter().collect(),
         assumptions,
-        assumed,
         invariants,
         properties,
         checks,
@@ -2157,10 +2152,16 @@ impl Enc<'_> {
     /// werten kurz aus): Was darin faultet, faultet nur, wenn die
     /// Auswertung es erreicht.
     fn guarded<T>(&mut self, guard: &Term, flow: &mut Flow, f: impl FnOnce(&mut Self, &mut Flow) -> R<T>) -> R<T> {
-        let before = flow.alive.clone();
+        let (before, first) = (flow.alive.clone(), flow.exits.len());
         flow.alive = Term::and(vec![before.clone(), guard.clone()]);
         let out = f(self, flow)?;
-        flow.alive = Term::or(vec![Term::and(vec![before, guard.clone().not()]), flow.alive.clone()]);
+        // Ohne neuen Ausgang geht es weiter wie davor; der Term haengt dann
+        // auch nicht am Waechter, und der Kegel einer Anfrage bleibt eng.
+        flow.alive = if flow.exits.len() == first {
+            before
+        } else {
+            Term::or(vec![Term::and(vec![before, guard.clone().not()]), flow.alive.clone()])
+        };
         Ok(out)
     }
 

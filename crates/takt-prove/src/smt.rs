@@ -17,7 +17,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::rc::Rc;
 
-use crate::encode::Model;
+use crate::encode::{Goal, Model, StateVar};
 use crate::term::{Node, Op, Sort, Term};
 
 fn sort_text(s: Sort) -> &'static str {
@@ -219,16 +219,32 @@ pub enum Target {
     Check(usize),
 }
 
-/// Ein Block mit Deklarationen, Uebergaengen und den Anfragen der Ziele.
-/// `ask`: eine Anfrage an den Solver — geschnitten auf den Kegel der Ziele,
-/// bei BMC mit den Eingaben des Gegenbeispiels; sonst das ganze Modell.
-fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth: u32, targets: &[Target], ask: bool) {
-    let steps = depth;
-    // `assumption`-Formeln gelten nur, wo ausschliesslich Eigenschaften
-    // gefragt sind (13.3, 3.4).
-    let properties_only = targets.iter().all(|t| matches!(t, Target::Property(_)));
-    let assumed = model.assumed.iter().filter(|_| properties_only);
-    let constraints: Vec<&Term> = model.assumptions.iter().chain(&model.invariants).chain(assumed).collect();
+/// Was eine Anfrage traegt: Zustand, Eingaben und Bedingungen, dazu die
+/// `assumption`-Formeln darunter.
+struct Scope<'a> {
+    state: Vec<&'a StateVar>,
+    inputs: Vec<&'a (String, Sort)>,
+    constraints: Vec<&'a Term>,
+    assumed: Vec<&'a Goal>,
+}
+
+/// Der Umfang einer Anfrage ueber `targets`; `slice` schneidet auf den
+/// Kegel der Ziele. `assumption`-Formeln gelten nur, wo ausschliesslich
+/// Eigenschaften gefragt sind (13.3, 3.4) — eine Annahme selbst steht ohne
+/// sie, sonst bewiese sie sich.
+fn scope<'a>(model: &'a Model, targets: &[Target], slice: bool) -> Scope<'a> {
+    let properties_only = targets.iter().all(|t| matches!(*t, Target::Property(i) if !model.properties[i].assumption));
+    let assumed: Vec<&Goal> = model.properties.iter().filter(|g| g.assumption && properties_only).collect();
+    let constraints: Vec<&Term> =
+        model.assumptions.iter().chain(&model.invariants).chain(assumed.iter().map(|g| &g.formula)).collect();
+    if !slice {
+        return Scope {
+            state: model.state.iter().collect(),
+            inputs: model.inputs.iter().collect(),
+            constraints,
+            assumed,
+        };
+    }
     let roots: Vec<&Term> = targets
         .iter()
         .flat_map(|t| match *t {
@@ -236,15 +252,27 @@ fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth:
             Target::Check(i) => vec![&model.checks[i].init, &model.checks[i].fires],
         })
         .collect();
-    let (inside, constraints) = if ask {
-        let (inside, kept) = cone(model, &roots, &constraints);
-        (Some(inside), kept)
-    } else {
-        (None, constraints)
-    };
-    let within = |name: &String| inside.as_ref().is_none_or(|c| c.contains(name));
-    let state: Vec<_> = model.state.iter().filter(|v| within(&v.name)).collect();
-    let inputs: Vec<_> = model.inputs.iter().filter(|(n, _)| within(n)).collect();
+    let (inside, constraints) = cone(model, &roots, &constraints);
+    Scope {
+        state: model.state.iter().filter(|v| inside.contains(&v.name)).collect(),
+        inputs: model.inputs.iter().filter(|(n, _)| inside.contains(n)).collect(),
+        assumed: assumed.into_iter().filter(|g| constraints.iter().any(|t| std::ptr::eq(*t, &g.formula))).collect(),
+        constraints,
+    }
+}
+
+/// Die `assumption`-Formeln, auf denen ein Urteil ueber `target` ruht: die
+/// im Kegel seiner Anfrage (13.3, „kein Urteil ohne seine Annahmen").
+pub fn assumptions_of(model: &Model, target: Target) -> Vec<String> {
+    scope(model, &[target], true).assumed.iter().map(|g| g.name.clone()).collect()
+}
+
+/// Ein Block mit Deklarationen, Uebergaengen und den Anfragen der Ziele.
+/// `ask`: eine Anfrage an den Solver — geschnitten auf den Kegel der Ziele,
+/// bei BMC mit den Eingaben des Gegenbeispiels; sonst das ganze Modell.
+fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth: u32, targets: &[Target], ask: bool) {
+    let steps = depth;
+    let Scope { state, inputs, constraints, .. } = scope(model, targets, ask);
     let _ = writeln!(out, "(push 1)");
     let _ = writeln!(out, "; {}", if kind == Query::Induction { "Induktionsschritt" } else { "BMC" });
     for k in 0..=steps {

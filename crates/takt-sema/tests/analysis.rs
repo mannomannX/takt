@@ -1596,6 +1596,7 @@ machine m:
     let hash = takt_mir::review::hash_of(src.as_bytes());
     let proof = Proof {
         program: hash,
+        solver: "z3 4.13.4".into(),
         sites: vec![Site { start: site.span.start, end: site.span.end, kind: "range".into(), k: 3 }],
     };
     let out = takt_sema::compile_with(&src, &options, Some(&proof));
@@ -1944,7 +1945,11 @@ machine m:
         ("fremdes Ende", vec![Site { start: site.span.start, end: site.span.end + 1, kind: "range".into(), k: 3 }]),
         ("leere Liste", Vec::new()),
     ] {
-        let out = takt_sema::compile_with(&src, &options, Some(&Proof { program: program.clone(), sites }));
+        let out = takt_sema::compile_with(
+            &src,
+            &options,
+            Some(&Proof { program: program.clone(), solver: "z3 4.13.4".into(), sites }),
+        );
         assert!(!out.has_errors(), "{what}: {:?}", out.diagnostics);
         assert_eq!(count(&out.report, "Declared"), 1, "{what}: {:?}", out.report.checks);
     }
@@ -1971,6 +1976,7 @@ machine m:
     let site = takt_sema::compile(&src, &options).report.sites[0];
     let proof = Proof {
         program: takt_mir::review::hash_of(src.as_bytes()),
+        solver: "z3 4.13.4".into(),
         sites: vec![Site { start: site.span.start, end: site.span.end, kind: "range".into(), k: 3 }],
     };
     let p = takt_sema::compile_with(&src, &options, Some(&proof)).program.expect("Programm");
@@ -2003,6 +2009,7 @@ machine m:
     let site = takt_sema::compile(&src, &options).report.sites[0];
     let proof = Proof {
         program: takt_mir::review::hash_of(src.as_bytes()),
+        solver: "z3 4.13.4".into(),
         sites: vec![Site { start: site.span.start, end: site.span.end, kind: "range".into(), k: 1 }],
     };
     let p = takt_sema::compile_with(&src, &options, Some(&proof)).program.expect("Programm");

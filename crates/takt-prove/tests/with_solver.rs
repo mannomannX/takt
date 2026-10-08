@@ -68,7 +68,7 @@ fn an_inductive_invariant_is_proven() {
     let model = encode(&p).expect("kodierbar");
     let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
     assert_eq!(reports.len(), 1);
-    assert_eq!(reports[0].verdict, Verdict::Proven { k: 2 }, "{:?}", reports[0]);
+    assert_eq!(reports[0].verdict, Verdict::Proven { k: 2, assumptions: vec![] }, "{:?}", reports[0]);
 }
 
 #[test]
@@ -201,7 +201,8 @@ machine counter:
     assert_eq!(site.verdict, CheckVerdict::Unreachable { k: 5 }, "{site:?}");
 
     let hash = takt_mir::review::hash_of(src.as_bytes());
-    let text = render(&hash, &[Site { start: site.start, end: site.span.end, kind: site.kind.clone(), k: 5 }]);
+    let text =
+        render(&hash, "z3 4.13.4", &[Site { start: site.start, end: site.span.end, kind: site.kind.clone(), k: 5 }]);
     let proof = parse(&text).expect("Beweisdatei");
     let options = takt_sema::Options {
         policy: takt_diag::Policy::default(),
@@ -366,16 +367,22 @@ fn an_assumption_does_not_prove_a_check_away() {
 }
 
 /// INT-021: Dieselbe Eigenschaft ist mit der Annahme bewiesen, ohne sie
-/// verletzt; der Bericht nennt die Annahme als solche.
+/// verletzt; das Urteil nennt die Annahme (13.3, „kein Urteil ohne seine
+/// Annahmen"). Die Annahme selbst steht ohne sich: Frueher setzte ihre
+/// Anfrage sie voraus, und sie hiess „bewiesen". Das Modell garantiert sie
+/// nicht, also bleibt sie Annahme.
 #[test]
 fn an_assumption_proves_what_it_assumes_and_nothing_without_it() {
     let Some(solver) = solver() else { return };
     let p = assumed(true);
     let reports = prove(&encode(&p).expect("kodierbar"), &p, 3, &solver, 60).expect("Solver laeuft");
     let below = reports.iter().find(|r| r.name == "below").expect("below");
-    assert!(matches!(below.verdict, Verdict::Proven { .. }), "{below:?}");
+    assert_eq!(below.verdict, Verdict::Proven { k: 3, assumptions: vec!["small".into()] }, "{below:?}");
+    assert!(below.text().ends_with("unter der Annahme `small`"), "{}", below.text());
     let small = reports.iter().find(|r| r.name == "small").expect("die Annahme steht im Bericht");
     assert!(small.assumption, "{small:?}");
+    assert!(matches!(small.verdict, Verdict::Violated { .. }), "sie bewies sich selbst: {small:?}");
+    assert!(small.text().contains("bleibt Annahme"), "{}", small.text());
     let p = assumed(false);
     let reports = prove(&encode(&p).expect("kodierbar"), &p, 3, &solver, 60).expect("Solver laeuft");
     let below = reports.iter().find(|r| r.name == "below").expect("below");
@@ -419,6 +426,41 @@ machine m:
         .find(|s| s.kind == "range" && (line..next).contains(&(s.start as usize)))
         .unwrap_or_else(|| panic!("keine Range-Stelle an `a`: {sites:?}"));
     assert!(matches!(a.verdict, CheckVerdict::Undecided { .. }), "der Fault von `c` bestaetigte `a`: {a:?}");
+}
+
+/// Ein Urteil nennt nur die Annahmen, von denen es abhaengen kann: die im
+/// Kegel seines Ziels. `calm` beschraenkt einen Input, den `below` nicht
+/// liest.
+#[test]
+fn a_proof_names_only_the_assumptions_it_rests_on() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input x : int in 0..100 @ hw(\"i/x\")
+input z : int in 0..100 @ hw(\"i/z\")
+output y : int @ hw(\"o/y\") with safe = 0
+output w : int @ hw(\"o/w\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            y = x.or(0)
+            w = z.or(0)
+
+assumption small: always(x < 50)
+assumption calm: always(z < 5)
+property below: always(y < 50)
+property quiet: always(w <= 100)
+",
+    );
+    let reports = prove(&encode(&p).expect("kodierbar"), &p, 2, &solver, 60).expect("Solver laeuft");
+    let verdict = |name: &str| reports.iter().find(|r| r.name == name).expect("Bericht").verdict.clone();
+    assert_eq!(verdict("below"), Verdict::Proven { k: 2, assumptions: vec!["small".into()] });
+    assert_eq!(verdict("quiet"), Verdict::Proven { k: 2, assumptions: vec!["calm".into()] });
 }
 
 /// Ein Solver, der auf jede Frage `word` antwortet: `unknown` oder
@@ -521,7 +563,8 @@ fn a_site_is_its_start_its_end_and_its_kind() {
     let start = SHARED_START.find("g[i][j]").expect("Stelle") as u32;
     let end = start + "g[i][j]".len() as u32;
     let hash = takt_mir::review::hash_of(SHARED_START.as_bytes());
-    let proof = parse(&render(&hash, &[Site { start, end, kind: "index".into(), k: 1 }])).expect("Beweisdatei");
+    let proof =
+        parse(&render(&hash, "z3 4.13.4", &[Site { start, end, kind: "index".into(), k: 1 }])).expect("Beweisdatei");
     let after = takt_sema::compile_with(SHARED_START, &options, Some(&proof));
     assert!(!after.has_errors(), "{:?}", after.diagnostics);
     assert_eq!(

@@ -151,6 +151,11 @@ fn a_saved_proof_drops_its_check_from_the_build_and_a_stale_one_is_refused() {
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
     assert!(stdout.contains("range m:18:13: bewiesen unerreichbar"), "{stdout}");
     assert!(stdout.contains(&format!("{proof_path}: 1 bewiesene Stellen")), "{stdout}");
+    // FB-380: Bericht und Beweisdatei nennen Solver und Version.
+    let identity = stdout.lines().find_map(|l| l.trim().strip_prefix("Solver: ")).unwrap_or_else(|| panic!("{stdout}"));
+    assert!(identity.split(' ').nth(1).is_some_and(|v| v.contains('.')), "Name und Version: {identity}");
+    let saved = takt_mir::analysis::proof::parse(&std::fs::read_to_string(&proof).expect("Beweis")).expect("lesbar");
+    assert_eq!(saved.solver, identity);
     let ir = |name: &str, extra: &[&str]| {
         let ll = file.with_file_name(name);
         let out = takt(&[&["build", path, "--emit", "ir", "--out", ll.to_str().expect("Pfad")][..], extra].concat());
