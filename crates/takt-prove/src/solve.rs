@@ -220,8 +220,9 @@ pub fn classify_compositional(
 ) -> Result<(Vec<CheckReport>, Vec<String>), String> {
     let mut out = Vec::new();
     let mut notes = Vec::new();
-    let in_whole =
-        |site: &crate::encode::CheckSite| whole.and_then(|w| w.checks.iter().position(|s| s.start == site.start));
+    let in_whole = |site: &crate::encode::CheckSite| {
+        whole.and_then(|w| w.checks.iter().position(|s| s.span == site.span && s.kind == site.kind))
+    };
     for (i, machine) in program.machines.iter().enumerate() {
         let model = match crate::encode::encode_machine(program, takt_mir::MachineId(i as u32)) {
             Ok(m) => m,
@@ -452,6 +453,7 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
         "ovf" => FaultKind::Arithmetic(ArithKind::Overflow),
         "fin" => FaultKind::Arithmetic(ArithKind::NonFinite),
         "dom" => FaultKind::Arithmetic(ArithKind::Domain),
+        "conv" | "shift" => FaultKind::Range,
         // Der Lesevorgang eines ungueltigen Inputs (3.5).
         "valid" => FaultKind::SensorFault,
         "check" | "expect" => {
@@ -470,10 +472,13 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
         }
         _ => return None,
     };
-    r.faults
-        .iter()
-        .find(|f| f.machine == site.machine && f.kind == implicit && f.span.start == site.start)
-        .map(|f| f.tick)
+    // Division und Definitionsbereich prueft der Knoten am Operanden, der
+    // Interpreter meldet den Fault an der Operation, die ihn umschliesst.
+    let at = |s: takt_diag::Span| match site.kind.as_str() {
+        "div" | "dom" => s.start <= site.span.start && site.span.end <= s.end,
+        _ => s.start == site.span.start && s.end == site.span.end,
+    };
+    r.faults.iter().find(|f| f.machine == site.machine && f.kind == implicit && at(f.span)).map(|f| f.tick)
 }
 
 /// Prueft jede Eigenschaft des Modells.

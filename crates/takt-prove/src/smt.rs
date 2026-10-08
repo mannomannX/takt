@@ -4,8 +4,16 @@
 //! Induktionsschritt ohne Anfangszustand (k-Induktion mit k = Tiefe). Eine
 //! Pruefstelle (`check`, B3) ist ein Ziel ueber den Uebergaengen: Sie
 //! feuert nie.
+//!
+//! Eine Anfrage traegt nur den Kegel ihrer Ziele (cone of influence): die
+//! Variablen, von denen sie ueber Anfangswerte, Uebergaenge und Annahmen
+//! abhaengen. Was draussen liegt, faellt mit seinen Bedingungen weg. Das
+//! nimmt nur Bedingungen fort — ein `unsat` gilt darum fuer das ganze
+//! Modell, ein `sat` bestaetigt der Interpreter. Ein Output, den das Ziel
+//! nicht liest, kostete sonst seine ganze Rechnung, `sqrt` in `Float64`
+//! etwa Minuten.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 use std::rc::Rc;
 
@@ -121,7 +129,75 @@ fn app_text(op: Op, a: &[String]) -> String {
         Op::ToF32 => format!("((_ to_fp 8 24) {rm} {})", a[0]),
         Op::ToF64 => format!("((_ to_fp 11 53) {rm} {})", a[0]),
         Op::IsFinite => format!("(not (or (fp.isNaN {0}) (fp.isInfinite {0})))", a[0]),
+        Op::Wrap { bits, .. } if bits >= 64 => a[0].clone(),
+        Op::Wrap { bits, signed } => {
+            let extend = if signed { "sign_extend" } else { "zero_extend" };
+            format!("((_ {extend} {}) ((_ extract {} 0) {}))", 64 - bits, bits - 1, a[0])
+        }
+        // In 128 Bit ist das Produkt exakt; passt es, ist es die Erweiterung
+        // des Produkts in 64 Bit.
+        Op::MulOverflows => format!(
+            "(not (= ((_ sign_extend 64) (bvmul {0} {1})) (bvmul ((_ sign_extend 64) {0}) ((_ sign_extend 64) {1}))))",
+            a[0], a[1]
+        ),
     }
+}
+
+/// Sammelt die Variablen eines Terms; geteilte Knoten einmal.
+fn vars_of(t: &Term, out: &mut BTreeSet<String>, seen: &mut HashSet<usize>) {
+    match &*t.0 {
+        Node::Var(v, _) => {
+            out.insert(v.clone());
+        }
+        Node::App(_, args) if seen.insert(Rc::as_ptr(&t.0) as usize) => {
+            for a in args {
+                vars_of(a, out, seen);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn vars(t: &Term) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    vars_of(t, &mut out, &mut HashSet::new());
+    out
+}
+
+/// Der Kegel der Ziele `roots`: die Variablen, von denen sie abhaengen, und
+/// die Bedingungen, die ihn beruehren. Eine Bedingung mit einer Variablen
+/// im Kegel zieht ihre anderen hinein, denn sie schraenkt ihn ueber sie ein.
+fn cone<'a>(model: &Model, roots: &[&Term], constraints: &[&'a Term]) -> (BTreeSet<String>, Vec<&'a Term>) {
+    let mut inside: BTreeSet<String> = roots.iter().flat_map(|t| vars(t)).collect();
+    let state: Vec<(&str, BTreeSet<String>)> = model
+        .state
+        .iter()
+        .map(|v| (v.name.as_str(), vars(&v.init).into_iter().chain(vars(&v.next)).collect()))
+        .collect();
+    let bound: Vec<BTreeSet<String>> = constraints.iter().map(|t| vars(t)).collect();
+    loop {
+        let before = inside.len();
+        for (name, deps) in &state {
+            if inside.contains(*name) {
+                inside.extend(deps.iter().cloned());
+            }
+        }
+        for deps in &bound {
+            if deps.iter().any(|d| inside.contains(d)) {
+                inside.extend(deps.iter().cloned());
+            }
+        }
+        if inside.len() == before {
+            break;
+        }
+    }
+    let kept = constraints
+        .iter()
+        .zip(&bound)
+        .filter(|(_, deps)| deps.is_empty() || deps.iter().any(|d| inside.contains(d)))
+        .map(|(t, _)| *t)
+        .collect();
+    (inside, kept)
 }
 
 /// Die Anfrage.
@@ -144,45 +220,56 @@ pub enum Target {
 }
 
 /// Ein Block mit Deklarationen, Uebergaengen und den Anfragen der Ziele.
-fn block(
-    out: &mut String,
-    model: &Model,
-    tag: &'static str,
-    kind: Query,
-    depth: u32,
-    targets: &[Target],
-    values: bool,
-) {
+/// `ask`: eine Anfrage an den Solver — geschnitten auf den Kegel der Ziele,
+/// bei BMC mit den Eingaben des Gegenbeispiels; sonst das ganze Modell.
+fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth: u32, targets: &[Target], ask: bool) {
     let steps = depth;
+    // `assumption`-Formeln gelten nur, wo ausschliesslich Eigenschaften
+    // gefragt sind (13.3, 3.4).
+    let properties_only = targets.iter().all(|t| matches!(t, Target::Property(_)));
+    let assumed = model.assumed.iter().filter(|_| properties_only);
+    let constraints: Vec<&Term> = model.assumptions.iter().chain(&model.invariants).chain(assumed).collect();
+    let roots: Vec<&Term> = targets
+        .iter()
+        .flat_map(|t| match *t {
+            Target::Property(i) => vec![&model.properties[i].formula],
+            Target::Check(i) => vec![&model.checks[i].init, &model.checks[i].fires],
+        })
+        .collect();
+    let (inside, constraints) = if ask {
+        let (inside, kept) = cone(model, &roots, &constraints);
+        (Some(inside), kept)
+    } else {
+        (None, constraints)
+    };
+    let within = |name: &String| inside.as_ref().is_none_or(|c| c.contains(name));
+    let state: Vec<_> = model.state.iter().filter(|v| within(&v.name)).collect();
+    let inputs: Vec<_> = model.inputs.iter().filter(|(n, _)| within(n)).collect();
     let _ = writeln!(out, "(push 1)");
     let _ = writeln!(out, "; {}", if kind == Query::Induction { "Induktionsschritt" } else { "BMC" });
     for k in 0..=steps {
-        for v in &model.state {
+        for v in &state {
             let _ = writeln!(out, "(declare-const {} {})", at(&v.name, k, tag), sort_text(v.sort));
         }
-        for (name, sort) in &model.inputs {
+        for (name, sort) in &inputs {
             let _ = writeln!(out, "(declare-const {} {})", at(name, k, tag), sort_text(*sort));
         }
     }
     let mut p = Printer { out, tag, defs: HashMap::new(), next: 0 };
     if kind == Query::Bmc {
-        for v in &model.state {
+        for v in &state {
             let init = p.name(&v.init, 0, 0);
             let _ = writeln!(p.out, "(assert (= {} {init}))", at(&v.name, 0, tag));
         }
     }
     for k in 0..steps {
-        for v in &model.state {
+        for v in &state {
             let next = p.name(&v.next, k, k + 1);
             let _ = writeln!(p.out, "(assert (= {} {next}))", at(&v.name, k + 1, tag));
         }
     }
-    // `assumption`-Formeln gelten nur, wo ausschliesslich Eigenschaften
-    // gefragt sind (13.3, 3.4).
-    let properties_only = targets.iter().all(|t| matches!(t, Target::Property(_)));
-    let assumed = model.assumed.iter().filter(|_| properties_only);
     for k in 0..=steps {
-        for a in model.assumptions.iter().chain(&model.invariants).chain(assumed.clone()) {
+        for a in &constraints {
             let t = p.name(a, k, k);
             let _ = writeln!(p.out, "(assert {t})");
         }
@@ -224,9 +311,8 @@ fn block(
             let _ = writeln!(p.out, "(assert (not (and {})))", holds.join(" "));
         }
         let _ = writeln!(p.out, "(check-sat)");
-        if values {
-            let names: Vec<String> =
-                (0..=steps).flat_map(|k| model.inputs.iter().map(move |(n, _)| at(n, k, tag))).collect();
+        if ask && kind == Query::Bmc {
+            let names: Vec<String> = (0..=steps).flat_map(|k| inputs.iter().map(move |(n, _)| at(n, k, tag))).collect();
             if !names.is_empty() {
                 let _ = writeln!(p.out, "(get-value ({}))", names.join(" "));
             }
@@ -284,10 +370,10 @@ pub fn contract_query(goal: &crate::encode::ContractGoal) -> String {
 /// des Gegenbeispiels.
 pub fn query(model: &Model, depth: u32, target: Target, kind: Query) -> String {
     let mut out = head(model);
-    let (tag, values) = match kind {
-        Query::Bmc => ("@", true),
-        Query::Induction => ("#", false),
+    let tag = match kind {
+        Query::Bmc => "@",
+        Query::Induction => "#",
     };
-    block(&mut out, model, tag, kind, depth, &[target], values);
+    block(&mut out, model, tag, kind, depth, &[target], true);
     out
 }

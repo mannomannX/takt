@@ -62,6 +62,16 @@ pub enum Op {
     ToF64,
     /// Weder NaN noch unendlich (4.1).
     IsFinite,
+    /// Die unteren `bits` Bits, mit oder ohne Vorzeichen erweitert: die
+    /// Zweierkomplement-Wickelung in eine Breite (`<<`, 3.10).
+    Wrap {
+        /// Breite.
+        bits: u32,
+        /// Vorzeichenbehaftet?
+        signed: bool,
+    },
+    /// Das exakte Produkt zweier `i64` liegt ausserhalb von `i64` (4.1).
+    MulOverflows,
 }
 
 /// Ein Knoten.
@@ -226,7 +236,8 @@ impl Term {
                 | Op::FGt
                 | Op::FGe
                 | Op::FEq
-                | Op::IsFinite => Sort::Bool,
+                | Op::IsFinite
+                | Op::MulOverflows => Sort::Bool,
                 Op::ToF32 => Sort::F32,
                 Op::ToF64 => Sort::F64,
                 Op::Ite => args[1].sort(),
@@ -240,7 +251,8 @@ impl Term {
                 | Op::BitOr
                 | Op::BitXor
                 | Op::Shl
-                | Op::Shr => Sort::Int,
+                | Op::Shr
+                | Op::Wrap { .. } => Sort::Int,
                 Op::FNeg | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FAbs | Op::FSqrt | Op::FFma => {
                     args[0].sort()
                 }

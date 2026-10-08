@@ -30,7 +30,7 @@ Expr(Accessor),ja,"teilweise: nur die Qualitaet eines Inputs: `.valid`, `.or`, `
 Expr(Unary),ja,ja,ja
 Expr(Binary),ja,ja,ja
 Expr(Cond),ja,ja,ja
-Expr(Cast),ja,teilweise: nur zwischen Ganzzahl und Fliesskomma,ja
+Expr(Cast),ja,teilweise: nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma,ja
 Expr(Convert),ja,ja,ja
 Expr(Format),"teilweise: nur in Meldungen und `send`; kein `float`, kein zusammengesetzter Wert",nein: Text ist nicht kodiert,ja
 Expr(JobState),ja,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
@@ -80,13 +80,13 @@ Builtin(TimeInState),ja,teilweise: `time_in_state` nur in einem Zustand,ja
 Builtin(LastFault),"teilweise: `LastFault` nur in der Gestalt `str<128>`, `int`, `int`",nein: eingebaute Groesse ohne Modell,ja
 Builtin(Event),ja,nein: eingebaute Groesse ohne Modell,ja
 Check(DivZero),ja,ja,ja
-Check(Overflow),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
+Check(Overflow),ja,ja,ja
 Check(NonFinite),ja,ja,ja
-Check(Domain),ja,"teilweise: angenommen, nicht modelliert: Definitionsbereich",ja
+Check(Domain),ja,ja,ja
 Check(Index),ja,nein: Wrapper oder Index,ja
 Check(Range),ja,ja,ja
-Check(Convert),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
-Check(Shift),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
+Check(Convert),ja,ja,ja
+Check(Shift),ja,ja,ja
 Check(Valid),ja,ja,ja
 Check(Missing),ja,nein: Wrapper oder Index,ja
 Intrinsic(Abs),ja,ja,ja
@@ -190,7 +190,7 @@ Place(Field),ja,"nein: Zuweisung an Feld, Element oder Port",ja
 Place(Index),ja,"nein: Zuweisung an Feld, Element oder Port",ja
 Place(Index2),ja,"nein: Zuweisung an Feld, Element oder Port",ja
 Type(Bool),ja,ja,ja
-Type(Int),ja,ja,ja
+Type(Int),ja,teilweise: ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen,ja
 Type(Float),ja,ja,ja
 Type(Duration),ja,ja,ja
 Type(Enum),ja,teilweise: nur Enums ohne Felder,ja

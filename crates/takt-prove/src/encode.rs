@@ -19,6 +19,12 @@
 //! jederzeit moeglich. Ein ungueltiger Input faultet beim Lesen wie im
 //! Interpreter (`SensorFault`); `.valid`, `.or`, `.suspect` und `.stale`
 //! lesen die Qualitaet. Tunables sind je Tick frei in ihrer Range (8.4).
+//!
+//! **Jede implizite Pruefung ist ein Fault-Zweig** (4.1): Range, Division,
+//! Endlichkeit, Ueberlauf in der Breite des Ergebnisses, Schiebebetrag,
+//! Konversion und Definitionsbereich, wie der Interpreter sie ausloest.
+//! Ganzzahlen rechnen in 64 Bit mit Vorzeichen; ein `u64` laege jenseits
+//! davon und ist nicht kodiert.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Not;
@@ -31,7 +37,7 @@ use takt_mir::fns::BlockDef;
 use takt_mir::machine::{FaultTarget, Machine, Target, TransTrigger};
 use takt_mir::program::{Direction, Program, Property};
 use takt_mir::stmt::{ArmPattern, Block, Method, Place, StmtKind};
-use takt_mir::types::{Const, FloatWidth, HandleKind, Type};
+use takt_mir::types::{Const, FloatWidth, HandleKind, IntWidth, Type};
 use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId};
 
 use crate::eval;
@@ -523,10 +529,21 @@ impl Enc<'_> {
     fn sort_of(&self, ty: TypeId, span: Span) -> R<Sort> {
         match self.p.types.get(ty) {
             Type::Bool => Ok(Sort::Bool),
+            Type::Int { width: IntWidth::U64, .. } => no(U64, span),
             Type::Int { .. } | Type::Duration { .. } | Type::Enum(_) => Ok(Sort::Int),
             Type::Float { width: FloatWidth::F32, .. } => Ok(Sort::F32),
             Type::Float { width: FloatWidth::F64, .. } => Ok(Sort::F64),
             other => no(format!("Typ {other:?}"), span),
+        }
+    }
+
+    /// Die Breite eines ganzzahligen Typs; eine Dauer rechnet in `i64` (3.3).
+    fn int_width(&self, ty: TypeId, span: Span) -> R<Option<IntWidth>> {
+        match self.p.types.get(ty) {
+            Type::Int { width: IntWidth::U64, .. } => no(U64, span),
+            Type::Int { width, .. } => Ok(Some(*width)),
+            Type::Duration { .. } => Ok(Some(IntWidth::I64)),
+            _ => Ok(None),
         }
     }
 
@@ -787,12 +804,13 @@ impl Enc<'_> {
                 let a = self.expr(lhs, cx, env, flow)?;
                 let guard = if *op == BinaryOp::And { a.clone() } else { a.clone().not() };
                 let b = self.guarded(&guard, flow, |enc, flow| enc.expr(rhs, cx, env, flow))?;
-                self.binary(*op, a, b, span)?
+                self.binary(*op, a, b, None, span)?
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 let a = self.expr(lhs, cx, env, flow)?;
                 let b = self.expr(rhs, cx, env, flow)?;
-                self.binary(*op, a, b, span)?
+                let width = self.int_width(lhs.ty, span)?;
+                self.binary(*op, a, b, width, span)?
             }
             ExprKind::Cond { cond, then, otherwise } => {
                 let c = self.expr(cond, cx, env, flow)?;
@@ -800,19 +818,7 @@ impl Enc<'_> {
                 let b = self.guarded(&c.clone().not(), flow, |enc, flow| enc.expr(otherwise, cx, env, flow))?;
                 Term::ite(c, a, b)
             }
-            // Der Lesevorgang faultet selbst (3.5); der Knoten ist die Stelle,
-            // an der Codegen und Beweisdatei ihn fuehren (11.3).
-            ExprKind::Checked { expr, kind: kind @ CheckedKind::Valid } => {
-                let first = flow.exits.len();
-                let x = self.expr(expr, cx, env, flow)?;
-                let fires = Term::or(flow.exits[first..].iter().map(|x| x.cond.clone()).collect());
-                self.site(kind, span, fires, cx);
-                x
-            }
-            ExprKind::Checked { expr, kind } => {
-                let x = self.expr(expr, cx, env, flow)?;
-                self.checked(kind, x, span, cx, flow)?
-            }
+            ExprKind::Checked { expr: inner, kind } => self.checked(kind, inner, e, cx, env, flow)?,
             ExprKind::Convert { expr, kind, .. } => {
                 let x = self.expr(expr, cx, env, flow)?;
                 match kind {
@@ -889,8 +895,10 @@ impl Enc<'_> {
         Ok(Term::ite(active, new, old))
     }
 
+    /// Ein zweistelliger Operator; `width` ist die Breite eines ganzzahligen
+    /// linken Operanden und damit des Ergebnisses einer Rechnung (3.10).
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn binary(&mut self, op: BinaryOp, a: Term, b: Term, span: Span) -> R<Term> {
+    fn binary(&mut self, op: BinaryOp, a: Term, b: Term, width: Option<IntWidth>, span: Span) -> R<Term> {
         let float = matches!(a.sort(), Sort::F32 | Sort::F64);
         Ok(match op {
             BinaryOp::And => Term::and(vec![a, b]),
@@ -911,7 +919,11 @@ impl Enc<'_> {
             BinaryOp::BitAnd => Term::bin(Op::BitAnd, a, b),
             BinaryOp::BitOr => Term::bin(Op::BitOr, a, b),
             BinaryOp::BitXor => Term::bin(Op::BitXor, a, b),
-            BinaryOp::Shl => Term::bin(Op::Shl, a, b),
+            // `<<` wickelt in die Breite (3.10); `>>` bleibt in ihr.
+            BinaryOp::Shl => {
+                let width = width.unwrap_or(IntWidth::I64);
+                Term::app(Op::Wrap { bits: width.bits(), signed: width.signed() }, vec![Term::bin(Op::Shl, a, b)])
+            }
             BinaryOp::Shr => Term::bin(Op::Shr, a, b),
             other => return no(format!("Operator `{other:?}`"), span),
         })
@@ -940,37 +952,142 @@ impl Enc<'_> {
         })
     }
 
-    /// Eine implizite Pruefung (4.1): Range und Division sind Fault-Zweige,
-    /// Nichtendlichkeit ebenso; Ueberlauf und Gueltigkeit sind Annahmen.
+    /// Eine implizite Pruefung (4.1) als Fault-Zweig: Die Stelle feuert, wo
+    /// die Operation im Interpreter faultet. `node` ist der Pruefknoten,
+    /// `inner` was er umschliesst.
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn checked(&mut self, kind: &CheckedKind, x: Term, span: Span, cx: &Cx<'_>, flow: &mut Flow) -> R<Term> {
-        let fail = match kind {
+    fn checked(
+        &mut self,
+        kind: &CheckedKind,
+        inner: &Expr,
+        node: &Expr,
+        cx: &Cx<'_>,
+        env: &Env,
+        flow: &mut Flow,
+    ) -> R<Term> {
+        let span = node.span;
+        let (value, fail) = match kind {
             // Die Intervallanalyse hat sie bewiesen (3.4).
-            CheckedKind::Range(r) if r.origin == takt_mir::types::RangeOrigin::Proven => return Ok(x),
+            CheckedKind::Range(r) if r.origin == takt_mir::types::RangeOrigin::Proven => {
+                return self.expr(inner, cx, env, flow);
+            }
             CheckedKind::Range(r) => {
+                let x = self.expr(inner, cx, env, flow)?;
                 let (lo, hi) = (self.bound(&r.lo, x.sort()), self.bound(&r.hi, x.sort()));
                 let (ge, le) = if x.sort() == Sort::Int { (Op::Ge, Op::Le) } else { (Op::FGe, Op::FLe) };
-                Term::and(vec![Term::bin(ge, x.clone(), lo), Term::bin(le, x.clone(), hi)]).not()
+                let fail = Term::and(vec![Term::bin(ge, x.clone(), lo), Term::bin(le, x.clone(), hi)]).not();
+                (x, fail)
             }
-            CheckedKind::DivZero => Term::eq(x.clone(), Term::int(0)),
-            CheckedKind::NonFinite => Term::app(Op::IsFinite, vec![x.clone()]).not(),
-            CheckedKind::Overflow | CheckedKind::Shift | CheckedKind::Convert => {
-                self.note("Ganzzahlueberlauf (i64) und Schiebebetraege nicht modelliert");
-                return Ok(x);
+            CheckedKind::DivZero => {
+                let x = self.expr(inner, cx, env, flow)?;
+                let fail = Term::eq(x.clone(), Term::int(0));
+                (x, fail)
             }
+            CheckedKind::NonFinite => {
+                let x = self.expr(inner, cx, env, flow)?;
+                let fail = Term::app(Op::IsFinite, vec![x.clone()]).not();
+                (x, fail)
+            }
+            CheckedKind::Overflow => self.overflow(inner, node.ty, cx, env, flow)?,
+            // Der Betrag liegt in `0..Breite-1`, sonst ein Range-Fault (3.10).
+            CheckedKind::Shift => {
+                let ExprKind::Binary { op, lhs, rhs } = &inner.kind else {
+                    return no("Schiebepruefung ohne Operator", span);
+                };
+                let width = self.int_width(node.ty, span)?.unwrap_or(IntWidth::I64);
+                let a = self.expr(lhs, cx, env, flow)?;
+                let b = self.expr(rhs, cx, env, flow)?;
+                let fail = Term::or(vec![
+                    Term::bin(Op::Lt, b.clone(), Term::int(0)),
+                    Term::bin(Op::Ge, b.clone(), Term::int(i64::from(width.bits()))),
+                ]);
+                (self.binary(*op, a, b, Some(width), span)?, fail)
+            }
+            // `as` in eine engere Breite: Der Wert muss hineinpassen (3.10).
+            CheckedKind::Convert => {
+                let ExprKind::Cast { expr: x, to } = &inner.kind else {
+                    return no("Konversionspruefung ohne `as`", span);
+                };
+                let (Some(_), Some(width)) = (self.int_width(x.ty, span)?, self.int_width(*to, span)?) else {
+                    return no("Konversion", span);
+                };
+                let v = self.expr(x, cx, env, flow)?;
+                let fail = outside(&v, width);
+                (v, fail)
+            }
+            // `sqrt` unter null (4.2); der Knoten umschliesst das Argument.
             CheckedKind::Domain => {
-                self.note("Definitionsbereich von `sqrt`/`log` nicht modelliert");
+                let x = self.expr(inner, cx, env, flow)?;
+                if x.sort() == Sort::Int {
+                    return no("Definitionsbereich einer Ganzzahl", span);
+                }
+                let fail = Term::bin(Op::FLt, x.clone(), Enc::zero(x.sort()));
+                (x, fail)
+            }
+            // Der Lesevorgang faultet selbst (3.5, `read_input`); der Knoten
+            // ist die Stelle, an der Codegen und Beweisdatei ihn fuehren (11.3).
+            CheckedKind::Valid => {
+                let first = flow.exits.len();
+                let x = self.expr(inner, cx, env, flow)?;
+                let fires = Term::or(flow.exits[first..].iter().map(|x| x.cond.clone()).collect());
+                self.site(kind, span, fires, cx);
                 return Ok(x);
             }
-            // Im Lesevorgang des Inputs (`read_input`).
-            CheckedKind::Valid => return Ok(x),
             CheckedKind::Missing | CheckedKind::Index { .. } => return no("Wrapper oder Index", span),
         };
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
         self.site(kind, span, cond.clone(), cx);
         flow.exits.push(Exit { cond, kind: ExitKind::Fault(None) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
-        Ok(x)
+        Ok(value)
+    }
+
+    /// Der Wert einer Rechnung unter `Checked{Overflow}` und wann sie in der
+    /// Breite ihres Ergebnisses ueberlaeuft (4.1, 3.10). Operanden schmaler
+    /// Breiten liegen in ihr und rechnen in 64 Bit exakt; ein Produkt zweier
+    /// `u32` ueber 2^63 erscheint negativ und liegt ebenso ausserhalb. In 64
+    /// Bit entscheiden die Vorzeichen.
+    fn overflow(&mut self, inner: &Expr, ty: TypeId, cx: &Cx<'_>, env: &Env, flow: &mut Flow) -> R<(Term, Term)> {
+        let span = inner.span;
+        let Some(width) = self.int_width(ty, span)? else { return no("Ueberlauf ohne Ganzzahl", span) };
+        let narrow = width.bits() < 64;
+        let neg = |t: &Term| Term::bin(Op::Lt, t.clone(), Term::int(0));
+        let min = |x: &Term| Term::eq(x.clone(), Term::int(i64::MIN));
+        Ok(match &inner.kind {
+            ExprKind::Binary { op, lhs, rhs } => {
+                let a = self.expr(lhs, cx, env, flow)?;
+                let b = self.expr(rhs, cx, env, flow)?;
+                let r = self.binary(*op, a.clone(), b.clone(), Some(width), span)?;
+                let fail = match op {
+                    _ if narrow => outside(&r, width),
+                    // Gleiche Vorzeichen der Summanden, und das Ergebnis hat das andere.
+                    BinaryOp::Add => Term::and(vec![Term::eq(neg(&a), neg(&b)), Term::eq(neg(&r), neg(&a)).not()]),
+                    BinaryOp::Sub => {
+                        Term::and(vec![Term::eq(neg(&a), neg(&b)).not(), Term::eq(neg(&r), neg(&a)).not()])
+                    }
+                    BinaryOp::Mul => Term::bin(Op::MulOverflows, a, b),
+                    BinaryOp::Div => Term::and(vec![min(&a), Term::eq(b, Term::int(-1))]),
+                    // `MIN % -1` ist null.
+                    BinaryOp::Rem => Term::bool(false),
+                    _ => return no(format!("Ueberlauf bei `{op:?}`"), span),
+                };
+                (r, fail)
+            }
+            // `-x` und `abs(x)`: Ueberlauf genau bei `MIN`.
+            ExprKind::Unary { op: UnaryOp::Neg, expr: x } => {
+                let x = self.expr(x, cx, env, flow)?;
+                let r = Term::app(Op::Neg, vec![x.clone()]);
+                let fail = if narrow { outside(&r, width) } else { min(&x) };
+                (r, fail)
+            }
+            ExprKind::Intrinsic { op: Intrinsic::Abs, args } if args.len() == 1 => {
+                let x = self.expr(&args[0], cx, env, flow)?;
+                let r = self.intrinsic(Intrinsic::Abs, vec![x.clone()], span)?;
+                let fail = if narrow { outside(&r, width) } else { min(&x) };
+                (r, fail)
+            }
+            _ => return no("Ueberlaufpruefung ohne Operator", span),
+        })
     }
 
     /// Eine Pruefstelle (11.3): `takt prove` zeigt, ob sie je faultet.
@@ -1847,6 +1964,8 @@ impl Enc<'_> {
                 let (lo, hi) = (self.bound(&r.lo, Sort::Int), self.bound(&r.hi, Sort::Int));
                 Term::and(vec![Term::bin(Op::Ge, x.clone(), lo), Term::bin(Op::Le, x, hi)])
             }
+            // Ein schmaler Wert liegt in seiner Breite (3.10).
+            Type::Int { range: None, width, .. } if width.bits() < 64 => outside(&x, *width).not(),
             Type::Float { range: Some(r), .. } => {
                 let s = x.sort();
                 let (lo, hi) = (self.bound(&r.lo, s), self.bound(&r.hi, s));
@@ -1932,6 +2051,12 @@ impl Enc<'_> {
                     let (lo, hi) = (int_bound(&r.lo), int_bound(&r.hi));
                     let outside = if hi < i64::MAX { Some(hi + 1) } else { (lo > i64::MIN).then(|| lo - 1) };
                     (Some((Term::int(lo), Term::int(hi))), outside.map(eval::Val::Int))
+                }
+                // Ohne Range liefert der Rand einen Wert seiner Breite, und
+                // keinen anderen: Eine Verletzung gibt es nicht (3.10).
+                Type::Int { range: None, width, .. } if width.bits() < 64 => {
+                    let (lo, hi) = width_bounds(*width);
+                    (Some((Term::int(lo as i64), Term::int(hi as i64))), None)
                 }
                 Type::Float { range: Some(r), width, .. } => {
                     let hi = match r.hi {
@@ -2218,6 +2343,18 @@ pub fn width_bounds(width: takt_mir::types::IntWidth) -> (i128, i128) {
     let bits = width.bits();
     if width.signed() { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) }
 }
+
+/// Liegt `x` ausserhalb der Breite?
+fn outside(x: &Term, width: IntWidth) -> Term {
+    let (lo, hi) = width_bounds(width);
+    Term::or(vec![
+        Term::bin(Op::Lt, x.clone(), Term::int(lo as i64)),
+        Term::bin(Op::Gt, x.clone(), Term::int(hi as i64)),
+    ])
+}
+
+/// Warum ein `u64` nicht kodiert ist.
+const U64: &str = "`u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen";
 
 /// Eine ganzzahlige Grenze einer Range.
 fn int_bound(c: &Const) -> i64 {

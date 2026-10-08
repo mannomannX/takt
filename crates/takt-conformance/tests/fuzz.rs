@@ -309,4 +309,28 @@ fn a_shift_by_more_than_31_bits_is_not_narrowed() {
     }
 }
 
+/// **`abs` des kleinsten Werts laeuft ueber** (4.1, FB-465): `abs` ist
+/// `-x` fuer negative `x`, und `-MIN` passt in keine Breite. Der Codegen
+/// rief `llvm.abs` ohne Pruefung und lieferte `MIN`, der Interpreter
+/// faultete. In Tick 0 ist `n` 40.
+#[test]
+fn abs_of_the_smallest_value_overflows() {
+    let Some(clang) = common::clang() else { return };
+    for expr in ["abs(n - 40 - 9223372036854775807 - 1)", "(abs((n - 168) as i8) as int)"] {
+        let p = compile(&program(Kind::Int, expr)).unwrap_or_else(|| panic!("`{expr}` uebersetzt nicht"));
+        let interpreted = takt_interp::run(
+            &p,
+            &takt_interp::Trace::default(),
+            &takt_interp::RunOptions { ticks: 1, ..Default::default() },
+        )
+        .expect("Lauf")
+        .trace
+        .render();
+        assert!(interpreted.contains("Overflow"), "`{expr}`:\n{interpreted}");
+        let native = common::run_native_all(&clang, &p, "abs_min", 1).unwrap_or_else(|e| panic!("{e}"));
+        let diffs = compare(&interpreted, &native);
+        assert!(diffs.is_empty(), "`{expr}`: {diffs:?}\n--- nativ ---\n{native}");
+    }
+}
+
 mod common;

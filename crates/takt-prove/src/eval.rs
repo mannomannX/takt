@@ -1,5 +1,5 @@
 //! Konkrete Auswertung der Terme: dieselbe Semantik, die der Drucker nach
-//! SMT-LIB2 traegt — i64 mit Rust-Division, IEEE-754 in der Breite. Damit
+//! SMT-LIB2 traegt — i64 wie `bvsdiv`/`bvsrem`, IEEE-754 in der Breite. Damit
 //! laesst sich die Kodierung ohne Solver gegen den Interpreter pruefen
 //! (plan/m6.md 2.8): Ein Gegenbeispiel des Solvers oder ein Lauf des
 //! Modells muss im Interpreter dasselbe tun.
@@ -84,8 +84,8 @@ pub fn eval(t: &Term, env: &Env) -> Val {
                 Op::Add => Val::Int(a(0).as_int().wrapping_add(a(1).as_int())),
                 Op::Sub => Val::Int(a(0).as_int().wrapping_sub(a(1).as_int())),
                 Op::Mul => Val::Int(a(0).as_int().wrapping_mul(a(1).as_int())),
-                Op::Div => Val::Int(a(0).as_int().checked_div(a(1).as_int()).unwrap_or(-1)),
-                Op::Rem => Val::Int(a(0).as_int().checked_rem(a(1).as_int()).unwrap_or_else(|| a(0).as_int())),
+                Op::Div => Val::Int(sdiv(a(0).as_int(), a(1).as_int())),
+                Op::Rem => Val::Int(srem(a(0).as_int(), a(1).as_int())),
                 Op::Lt => Val::Bool(a(0).as_int() < a(1).as_int()),
                 Op::Le => Val::Bool(a(0).as_int() <= a(1).as_int()),
                 Op::Gt => Val::Bool(a(0).as_int() > a(1).as_int()),
@@ -114,9 +114,35 @@ pub fn eval(t: &Term, env: &Env) -> Val {
                 Op::ToF32 => Val::F32(a(0).as_int() as f32),
                 Op::ToF64 => Val::F64(a(0).as_int() as f64),
                 Op::IsFinite => Val::Bool(a(0).as_f64().is_finite()),
+                Op::Wrap { bits, signed } => Val::Int(wrap(a(0).as_int(), *bits, *signed)),
+                Op::MulOverflows => Val::Bool(a(0).as_int().checked_mul(a(1).as_int()).is_none()),
             }
         }
     }
+}
+
+/// `bvsdiv`: durch null `-1` fuer nichtnegative, `1` fuer negative
+/// Dividenden; `MIN / -1` laeuft um.
+fn sdiv(a: i64, b: i64) -> i64 {
+    match b {
+        0 if a < 0 => 1,
+        0 => -1,
+        _ => a.wrapping_div(b),
+    }
+}
+
+/// `bvsrem`: durch null der Dividend; `MIN % -1` ist null.
+fn srem(a: i64, b: i64) -> i64 {
+    if b == 0 { a } else { a.wrapping_rem(b) }
+}
+
+/// Die unteren `bits` Bits, erweitert wie `Op::Wrap`.
+fn wrap(x: i64, bits: u32, signed: bool) -> i64 {
+    if bits >= 64 {
+        return x;
+    }
+    let shift = 64 - bits;
+    if signed { (x << shift) >> shift } else { ((x as u64) << shift >> shift) as i64 }
 }
 
 fn same(a: Val, b: Val) -> bool {

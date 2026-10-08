@@ -386,11 +386,10 @@ fn an_assumption_proves_what_it_assumes_and_nothing_without_it() {
 /// bestaetigt, wenn der Interpreter an *dieser* Stelle faultet — nicht an
 /// irgendeiner Stelle derselben Art in derselben Maschine.
 ///
-/// `a` liegt hinter einem `u8`-Shift: Der Interpreter wickelt `16 << 4`
-/// auf null, das Modell rechnet heute ohne Umbruch 16 (FB-386, M11
-/// Schritt 26) und findet so einen Pfad, den kein Lauf geht. `c` faultet
-/// in jedem Lauf nach sechs Ticks; dieser Fault darf den Pfad von `a`
-/// nicht bestaetigen.
+/// `a` haengt an `now`, das im Modell je Tick frei ist: Der Solver findet
+/// einen Pfad mit `now` ueber einer Stunde, den kein Lauf von acht Ticks
+/// geht. `c` faultet in jedem Lauf nach sechs Ticks; dieser Fault darf den
+/// Pfad von `a` nicht bestaetigen.
 #[test]
 fn a_path_is_confirmed_only_by_its_own_site() {
     let Some(solver) = solver() else { return };
@@ -401,20 +400,19 @@ fn a_path_is_confirmed_only_by_its_own_site() {
 output y : int @ hw(\"o/y\") with safe = 0
 
 machine m:
-    var x : u8 = 16
     var a : int in 0..14 = 0
     var c : int in 0..5 = 0
     initial RUN
     state RUN:
         loop:
-            a = ((x << 4) >> 4) as int
+            a = c + 14 if now > 1 h else 0
             c = c + 1
             y = a + c
 ";
     let p = compile(src);
     let model = encode(&p).expect("kodierbar");
     let sites = classify(&model, &p, 8, &solver, 60).expect("Solver laeuft");
-    let line = src.find("a = ((x").expect("Zeile von a");
+    let line = src.find("a = c + 14").expect("Zeile von a");
     let next = line + src[line..].find('\n').expect("Zeilenende");
     let a = sites
         .iter()

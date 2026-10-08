@@ -1082,8 +1082,9 @@ fn intrinsic(
         Intrinsic::Abs if !want.is_float() => {
             let x = a(0)?;
             // `abs` auf einem Integer faultet beim kleinsten Wert (4.1);
-            // der `Checked`-Knoten der MIR steht darum herum, und `false`
-            // heisst hier „kein undefiniertes Verhalten".
+            // der `Checked`-Knoten der MIR steht darum herum (`abs_checked`).
+            // Fehlt er, hat die Analyse `MIN` ausgeschlossen, oder die Breite
+            // ist vorzeichenlos; `false` heisst „kein undefiniertes Verhalten".
             m.needs_intrinsic(&format!("{} @llvm.abs.{}({}, i1)", x.ty, x.ty, x.ty));
             m.inst(&format!("call {} @llvm.abs.{}({} {}, i1 false)", x.ty, x.ty, x.ty, x.value))
         }
@@ -1422,6 +1423,10 @@ fn checked_expr(
                 let zero = Expr::new(ExprKind::Int(0), expr.ty, expr.span);
                 overflow_checked(BinaryOp::Sub, &zero, expr, want, p, m, vars)
             }
+            ExprKind::Intrinsic { op: Intrinsic::Abs, args } => match args.as_slice() {
+                [x] => abs_checked(x, want, p, m, vars),
+                _ => Err(NotYet { what: "`abs` ohne Argument" }),
+            },
             _ => Err(NotYet { what: "Ueberlaufpruefung ohne Operator" }),
         },
         K::Shift => match &inner.kind {
@@ -1497,6 +1502,21 @@ fn overflow_checked(
         }
         _ => return Err(NotYet { what: "Ueberlaufpruefung auf diesem Operator" }),
     };
+    Ok(Lowered { value: value.to_string(), ty: want.clone() })
+}
+
+/// `abs` mit Ueberlaufpruefung: Der kleinste Wert hat in seiner Breite
+/// keinen Betrag (4.1, FB-465). Hinter der Pruefung ist er ausgeschlossen,
+/// und `llvm.abs` darf ihn als Gift behandeln.
+fn abs_checked(arg: &Expr, want: &LlvmType, p: &Program, m: &mut Module, vars: &dyn Vars) -> Result<Lowered, NotYet> {
+    let x = lower(arg, p, m, vars)?;
+    let LlvmType::Int(bits) = x.ty else { return Err(NotYet { what: "Ueberlaufpruefung auf Nicht-Ganzzahl" }) };
+    let target = vars
+        .fault_to(FaultKind::Arithmetic(ArithKind::Overflow), m)
+        .ok_or(NotYet { what: "Laufzeitpruefung ohne Fault-Pfad" })?;
+    guard(&format!("icmp ne i{bits} {}, -{}", x.value, 1u128 << (bits - 1)), "ovf", &target, m);
+    m.needs_intrinsic(&format!("i{bits} @llvm.abs.i{bits}(i{bits}, i1)"));
+    let value = m.inst(&format!("call i{bits} @llvm.abs.i{bits}(i{bits} {}, i1 true)", x.value));
     Ok(Lowered { value: value.to_string(), ty: want.clone() })
 }
 

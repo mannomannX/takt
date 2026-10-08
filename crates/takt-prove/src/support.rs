@@ -53,12 +53,16 @@ pub fn support(c: Construct) -> Support {
         Construct::Builtin(Builtin::Now | Builtin::Tick) => Yes,
         Construct::Builtin(Builtin::TimeInState) => Partial("`time_in_state` nur in einem Zustand"),
         Construct::Builtin(Builtin::LastFault | Builtin::Event) => No("eingebaute Groesse ohne Modell"),
-        Construct::Check(CheckTag::DivZero | CheckTag::NonFinite | CheckTag::Range) => Yes,
-        Construct::Check(CheckTag::Overflow | CheckTag::Shift | CheckTag::Convert) => {
-            Partial("angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)")
-        }
-        Construct::Check(CheckTag::Domain) => Partial("angenommen, nicht modelliert: Definitionsbereich"),
-        Construct::Check(CheckTag::Valid) => Yes,
+        Construct::Check(
+            CheckTag::DivZero
+            | CheckTag::NonFinite
+            | CheckTag::Range
+            | CheckTag::Overflow
+            | CheckTag::Shift
+            | CheckTag::Convert
+            | CheckTag::Domain
+            | CheckTag::Valid,
+        ) => Yes,
         Construct::Check(CheckTag::Index | CheckTag::Missing) => No("Wrapper oder Index"),
         Construct::Intrinsic(i) => intrinsic(i),
         Construct::Accessor(a) => accessor(a),
@@ -101,7 +105,7 @@ fn expr(e: ExprTag) -> Support {
         | ExprTag::Intrinsic => Yes,
         ExprTag::Variant => Partial("nur Varianten ohne Felder"),
         ExprTag::Published | ExprTag::StateOf | ExprTag::Signal => Partial("nicht ueber ein Instanz-Array"),
-        ExprTag::Cast => Partial("nur zwischen Ganzzahl und Fliesskomma"),
+        ExprTag::Cast => Partial("nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma"),
         ExprTag::Call => Partial("Funktionen mit Rueckgabe, ohne `inout`, aus kodierbaren Anweisungen"),
         ExprTag::Str | ExprTag::Format => No("Text ist nicht kodiert"),
         ExprTag::None
@@ -229,7 +233,8 @@ fn stmt(s: StmtTag) -> Support {
 #[deny(clippy::wildcard_enum_match_arm)]
 fn ty(t: TypeTag) -> Support {
     match t {
-        TypeTag::Bool | TypeTag::Int | TypeTag::Float | TypeTag::Duration => Yes,
+        TypeTag::Bool | TypeTag::Float | TypeTag::Duration => Yes,
+        TypeTag::Int => Partial("ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen"),
         TypeTag::Enum => Partial("nur Enums ohne Felder"),
         TypeTag::HandleBlock => Partial("Blockinstanzen nur ueber ihre Felder"),
         TypeTag::Record

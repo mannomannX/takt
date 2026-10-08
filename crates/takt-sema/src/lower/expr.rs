@@ -1096,8 +1096,18 @@ impl Lowerer<'_> {
             out.push(Expr::new(ExprKind::Checked { expr: Box::new(x), kind: CheckedKind::Domain }, t, at));
         }
         let e = Expr::new(ExprKind::Intrinsic { op, args: out }, ty, span);
+        let signed = match self.ty(ty) {
+            Type::Int { width, .. } => width.signed(),
+            Type::Duration { .. } => true,
+            _ => false,
+        };
         Some(match op {
             Intrinsic::Sqrt | Intrinsic::Fma | Intrinsic::Interp => self.finite(e),
+            // 4.1: `abs` ist `-x` fuer negative `x`, und `-MIN` laeuft ueber
+            // wie die Negation (FB-465).
+            Intrinsic::Abs if signed => {
+                Expr::new(ExprKind::Checked { expr: Box::new(e), kind: CheckedKind::Overflow }, ty, span)
+            }
             _ => e,
         })
     }
