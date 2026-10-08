@@ -36,7 +36,7 @@ impl V {
     }
 
     /// Der Teil `i`.
-    fn part(self, i: usize, span: Span) -> R<V> {
+    pub(super) fn part(self, i: usize, span: Span) -> R<V> {
         match self {
             V::Node(mut parts) if i < parts.len() => Ok(parts.swap_remove(i)),
             _ => no("Teil eines Werts", span),
@@ -202,7 +202,7 @@ impl Enc<'_> {
             .collect()
     }
 
-    fn leaf_sort(&self, s: &Shape, span: Span) -> R<Sort> {
+    pub(super) fn leaf_sort(&self, s: &Shape, span: Span) -> R<Sort> {
         match s {
             Shape::Leaf(ty) => self.sort_of(*ty, span),
             Shape::Flag => Ok(Sort::Bool),
@@ -472,6 +472,11 @@ impl Enc<'_> {
                 let b = self.guarded(&c.clone().not(), flow, |enc, flow| enc.value(otherwise, cx, env, flow))?;
                 V::ite(&c, a, b)
             }
+            ExprKind::Accessor { base, accessor: Accessor::Peek, .. }
+                if matches!(self.p.types.get(base.ty), Type::Stream(_)) =>
+            {
+                self.peek(base, cx, flow, span)?
+            }
             ExprKind::Accessor { base, accessor: Accessor::Or, args } => {
                 let [default] = args.as_slice() else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?
@@ -589,6 +594,14 @@ impl Enc<'_> {
             }
             (Accessor::Len, Type::Bytes { .. } | Type::Vec { .. }) => {
                 self.value(base, cx, env, flow)?.part(0, span)?.leaf(span)
+            }
+            // `x.wrap_u8()` und Geschwister: modulo 2^n (3.10).
+            (Accessor::Wrap(w), Type::Int { .. }) => {
+                if w.bits() == 64 && !w.signed() {
+                    return no(super::U64, span);
+                }
+                let x = self.expr(base, cx, env, flow)?;
+                Ok(Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![x]))
             }
             _ => no(format!("Zugriff `.{}`", accessor.name()), span),
         }
@@ -993,6 +1006,7 @@ impl Enc<'_> {
             return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
         }
         self.loops += 1;
+        self.breaks.push(Vec::new());
         for (k, item) in items.into_iter().enumerate() {
             let inside = Term::bin(Op::Lt, Term::int(k as i64), len.clone());
             let mut env_k = env.clone();
@@ -1003,6 +1017,7 @@ impl Enc<'_> {
             flow.exits.extend(fk.exits);
             flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), inside.not()]), fk.alive]);
         }
+        self.left_loop(flow);
         self.loops -= 1;
         Ok(())
     }

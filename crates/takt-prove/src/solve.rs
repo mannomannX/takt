@@ -783,7 +783,7 @@ fn parse_values(text: &str, tag: &str) -> BTreeMap<(u32, String), Val> {
 }
 
 /// Das Gegenbeispiel als Stimulus (12.5): Inputs mit ihrer Qualitaet,
-/// Tunables und Commands je Tick.
+/// Stromelemente mit Zeitstempel, Tunables und Commands je Tick.
 ///
 /// Die Qualitaet liefert der Stimulus so, wie der Rand des Interpreters sie
 /// entstehen laesst (3.5): `Good` als Wert, `Suspect` als echte Verletzung
@@ -822,6 +822,28 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
             *since += 1;
             let _ = writeln!(out, "t={k} in {} {line}", c.name);
         }
+        // Ein Element, das sich nicht dekodieren laesst, steht als leere
+        // Byteform (8.6).
+        for c in program.channels.iter().filter(|c| c.dir == Direction::Input) {
+            let Type::Stream(elem) = program.types.get(c.ty) else { continue };
+            let n = match values.get(&(k, format!("i.stream.{}.n", c.name))) {
+                Some(Val::Int(n)) => *n,
+                _ => 0,
+            };
+            for j in 0..n {
+                let base = format!("i.stream.{}.{j}", c.name);
+                let t = match values.get(&(k, format!("{base}.t"))) {
+                    Some(Val::Int(t)) => *t,
+                    _ => 0,
+                };
+                let text = if values.get(&(k, format!("{base}.bad"))) == Some(&Val::Bool(true)) {
+                    "0x".to_string()
+                } else {
+                    element_text(program, *elem, &format!("{base}.v"), &|at| values.get(&(k, at.to_string())).copied())
+                };
+                let _ = writeln!(out, "t={k} in {} {text} t={t}", c.name);
+            }
+        }
         for p in program.params.iter().filter(|p| p.tunable) {
             if let Some(v) = values.get(&(k, format!("i.tune.{}", p.name))) {
                 let _ = writeln!(out, "t={k} tune {} {}", p.name, value_text(program, p.ty, v));
@@ -834,6 +856,56 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
         }
     }
     out
+}
+
+/// Ein Wert aus den Blaettern des Modells in der Textform des Stimulus
+/// (`takt_interp::trace::parse_value`): `Name(a, b)` fuer Records und
+/// Varianten mit Feldern, `[a, b]`, `none`; ein fehlendes Blatt ist null.
+fn element_text(program: &Program, ty: takt_mir::TypeId, base: &str, get: &dyn Fn(&str) -> Option<Val>) -> String {
+    let leaf = |at: &str| get(at).unwrap_or(Val::Int(0));
+    match program.types.get(ty) {
+        Type::Record(r) => {
+            let def = &program.records[r.index()];
+            let parts: Vec<String> =
+                def.fields.iter().map(|f| element_text(program, f.ty, &format!("{base}.{}", f.name), get)).collect();
+            format!("{}({})", def.name, parts.join(", "))
+        }
+        Type::Array { elem, len } => {
+            let parts: Vec<String> =
+                (0..*len).map(|i| element_text(program, *elem, &format!("{base}[{i}]"), get)).collect();
+            format!("[{}]", parts.join(", "))
+        }
+        Type::Optional(inner) => match get(&format!("{base}.has")) {
+            Some(Val::Bool(true)) => element_text(program, *inner, &format!("{base}.value"), get),
+            _ => "none".to_string(),
+        },
+        Type::Enum(e) if program.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty()) => {
+            let def = &program.enums[e.index()];
+            let tag = match leaf(&format!("{base}.tag")) {
+                Val::Int(i) => usize::try_from(i).unwrap_or(0),
+                _ => 0,
+            };
+            let Some(v) = def.variants.get(tag) else { return tag.to_string() };
+            if v.fields.is_empty() {
+                return v.name.clone();
+            }
+            let parts: Vec<String> = v
+                .fields
+                .iter()
+                .map(|f| element_text(program, f.ty, &format!("{base}.{}.{}", v.name, f.name), get))
+                .collect();
+            format!("{}({})", v.name, parts.join(", "))
+        }
+        _ => {
+            let zero = match program.types.get(ty) {
+                Type::Bool => Val::Bool(false),
+                Type::Float { width: takt_mir::types::FloatWidth::F32, .. } => Val::F32(0.0),
+                Type::Float { .. } => Val::F64(0.0),
+                _ => Val::Int(0),
+            };
+            value_text(program, ty, &get(base).unwrap_or(zero))
+        }
+    }
 }
 
 /// Ein Wert in der Textform des Stimulus (12.5).

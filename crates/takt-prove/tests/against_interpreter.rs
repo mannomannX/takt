@@ -176,17 +176,42 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
     let stim = Trace::parse(stimulus).expect("Stimulus");
     let r = run(p, &stim, &RunOptions { ticks, ..Default::default() }).expect("Lauf");
     let bound = sim_bindings(p);
-    // Eingaben des Modells: Commands im Tick ihrer Zeile, Inputs halten.
+    // Eingaben des Modells: Commands im Tick ihrer Zeile, Inputs halten,
+    // Stromelemente je Tick in ihrer Reihenfolge (8.6) — ohne eigenen
+    // Zeitstempel mit dem Ende des Tick-Fensters, `0x` nicht dekodierbar.
     let mut inputs: BTreeMap<(u64, String), Val> = BTreeMap::new();
     let mut held: BTreeMap<String, Val> = BTreeMap::new();
+    let element = |channel: &str| {
+        let c = p.channels.iter().find(|c| c.name == channel && c.dir == Direction::Input)?;
+        match p.types.get(c.ty) {
+            Type::Stream(e) => Some(*e),
+            _ => None,
+        }
+    };
     for k in 0..=ticks {
+        let mut delivered: BTreeMap<String, i64> = BTreeMap::new();
         for l in stim.lines.iter().filter(|l| l.tick == k) {
             match &l.kind {
                 LineKind::Command { name } => {
                     inputs.insert((k, format!("i.cmd.{name}")), Val::Bool(true));
                 }
                 LineKind::Input { channel, sample } => {
-                    if let Some(v) = sample.value.as_deref().and_then(parse_val) {
+                    if let Some(elem) = element(channel) {
+                        let j = delivered.entry(channel.clone()).or_insert(0);
+                        let base = format!("i.stream.{channel}.{j}");
+                        let boundary = i64::try_from(k).expect("Tick") * p.config.tick;
+                        inputs.insert((k, format!("{base}.t")), Val::Int(sample.t.unwrap_or(boundary)));
+                        let text = sample.value.as_deref().unwrap_or_default();
+                        if text.trim() == "0x" {
+                            inputs.insert((k, format!("{base}.bad")), Val::Bool(true));
+                        } else {
+                            let mut leaves = Vec::new();
+                            leaves_of(p, elem, text, &format!("{base}.v"), &mut leaves)
+                                .unwrap_or_else(|| panic!("{name} t={k}: `{text}` ist kein Element von `{channel}`"));
+                            inputs.extend(leaves.into_iter().map(|(n, v)| ((k, n), v)));
+                        }
+                        *j += 1;
+                    } else if let Some(v) = sample.value.as_deref().and_then(parse_val) {
                         held.insert(format!("i.{channel}"), v);
                     }
                 }
@@ -195,6 +220,9 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
         }
         for (n, v) in &held {
             inputs.insert((k, n.clone()), *v);
+        }
+        for (s, n) in delivered {
+            inputs.insert((k, format!("i.stream.{s}.n")), Val::Int(n));
         }
     }
     let mut states: Vec<eval::Env> = Vec::new();
@@ -327,6 +355,10 @@ fn case(name: &str) -> Option<(String, u64)> {
             ((0..=50).map(|k| format!("t={k} in tank_p {} bar\n", tank(k))).collect(), 50)
         }
         "27_every.takt" | "75_implicit_checks.takt" => (String::new(), 40),
+        // Interne Stroeme (Schritt 27c): Ring, Cursor je Leser, Handler je Ebene.
+        "106_machine_handler.takt" | "72_handler_levels.takt" | "53_stream_kinds.takt" | "88_capture_segments.takt" => {
+            (String::new(), 40)
+        }
         _ => return None,
     })
 }
@@ -344,6 +376,198 @@ fn every_program_of_the_prover_suite_agrees() {
             case(name).unwrap_or_else(|| panic!("`{name}` steht in der Suite `beweiser`, hier fehlt sein Fall"));
         agree(name, &stim, ticks);
     }
+}
+
+/// Ein Record-Strom vom Rand (8.6, 8.7): ein Record-Muster, ein Handler
+/// mit Guard, ein Element, das sich nicht dekodieren laesst, ein Uebergang
+/// mitten im Fenster, dessen Rest der Folgezustand liest, und zuletzt ein
+/// Ueberlauf, der den Leser faultet.
+const INPUT_STREAM: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+record Frame:
+    id   : u8
+    flag : bool
+
+input  rx : stream<Frame> @ hw("bus/rx") with max_rate = 300 Hz, capacity = 4
+
+output seen   : int in 0..9999  @ sim("seen")
+output last   : int in 0..255   @ sim("last")
+output sevens : int in 0..9999  @ sim("sevens")
+output stats  : int in 0..99999 @ sim("stats")
+output phase  : int in 0..9     @ sim("phase")
+output stamp  : Duration        @ sim("stamp")
+
+machine reader:
+    var n : int in 0..9999 = 0
+    var s : int in 0..9999 = 0
+
+    initial LISTEN
+
+    loop:
+        stats = min(rx.dropped + rx.overflowed * 10 + rx.malformed * 100 + rx.count * 1000, 99999)
+
+    state LISTEN:
+        enter:
+            phase = 1
+
+        on rx matches Frame(id = 7) as e:
+            s = (s + 1) % 10000
+            sevens = s
+            stamp = e.t
+
+        on rx as e when e.data.flag:
+            n = (n + 1) % 10000
+            seen = n
+            last = e.data.id as int
+            if e.data.id == 9:
+                -> HOLD
+
+    state HOLD:
+        enter:
+            phase = 2
+        after 30 ms: -> LISTEN
+"#;
+
+const INPUT_STREAM_STIMULUS: &str = "t=1 in rx Frame(7, false)\nt=1 in rx Frame(3, true)\nt=2 in rx Frame(7, true) t=15000000\nt=3 in rx Frame(5, false)\nt=4 in rx 0x\nt=4 in rx Frame(4, true)\nt=5 in rx Frame(9, true)\nt=5 in rx Frame(1, true)\nt=5 in rx Frame(2, true)\nt=6 in rx Frame(6, true)\nt=12 in rx Frame(7, false) t=118000000\nt=20 in rx Frame(9, true)\nt=21 in rx Frame(1, true)\nt=21 in rx Frame(2, true)\nt=21 in rx Frame(3, true)\nt=22 in rx Frame(4, true)\nt=22 in rx Frame(5, true)\nt=22 in rx Frame(6, true)\n";
+
+#[test]
+fn an_input_stream_agrees() {
+    agree_program("INPUT_STREAM", &compile("INPUT_STREAM", INPUT_STREAM), INPUT_STREAM_STIMULUS, 30);
+}
+
+/// Das Fenster eines Bytestroms (8.6, 9.6): `count`, `peek`, `skip`, `for`
+/// mit `break`, `drop_oldest`, ein `idle`-Zustand, der verwirft, und ein
+/// Strom, der aus ihm weckt.
+const STREAM_WINDOW: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  data : stream<u8> @ hw("bus/data") with max_rate = 200 Hz, capacity = 3, overflow = drop_oldest
+input  bell : stream<u8> @ hw("bus/bell") with max_rate = 100 Hz, capacity = 2, wake = true
+
+output total  : int in 0..99999 @ sim("total")
+output peeked : int in 0..999   @ sim("peeked")
+output counts : int in 0..999   @ sim("counts")
+output missed : int in 0..999   @ sim("missed")
+output rung   : int in 0..999   @ sim("rung")
+output naps   : int in 0..999   @ sim("naps")
+
+machine summer:
+    var sum : int in 0..99999 = 0
+    var r   : int in 0..999 = 0
+    var z   : int in 0..999 = 0
+
+    initial ACTIVE
+
+    state ACTIVE:
+        loop:
+            counts = data.count
+            peeked = data.peek().or(0) as int
+            if data.count == 3 and sum < 70:
+                data.skip()
+            for b in data:
+                sum = (sum + (b.data as int)) % 100000
+                if b.data == 5:
+                    break
+            total = sum
+            missed = min(data.dropped, 999)
+
+        on bell as e:
+            r = min(r + 1, 999)
+            rung = r
+
+        when data.count == 0 and sum > 50 and z < 2: -> NAP
+
+    state NAP idle:
+        enter:
+            z = min(z + 1, 999)
+            naps = z
+        when bell.count > 0: -> ACTIVE
+        after 40 ms: -> ACTIVE
+"#;
+
+const STREAM_WINDOW_STIMULUS: &str = "t=1 in data 1\nt=1 in data 5\nt=2 in data 2\nt=2 in data 3\nt=3 in data 4\nt=3 in data 6\nt=4 in data 7\nt=5 in data 9\nt=5 in data 10\nt=6 in data 11\nt=9 in data 12\nt=9 in data 13\nt=10 in data 14\nt=10 in data 15\nt=11 in bell 1\nt=13 in data 16\nt=15 in bell 2\nt=20 in data 5\nt=20 in data 7\nt=21 in data 8\nt=21 in data 9\nt=30 in data 5\nt=30 in data 5\nt=31 in data 5\nt=31 in data 5\nt=32 in data 5\nt=32 in data 5\nt=40 in bell 3\n";
+
+#[test]
+fn a_stream_window_agrees() {
+    agree_program("STREAM_WINDOW", &compile("STREAM_WINDOW", STREAM_WINDOW), STREAM_WINDOW_STIMULUS, 45);
+}
+
+/// Ein interner Strom (8.6, 9.6): Record-Muster und `s as e` als Guard, eine
+/// Bindung in den Aktionen, `until … timeout` in einer Sequenz und ein
+/// `send`, der ueberlaeuft und den Schreiber faultet.
+const INTERNAL_STREAM: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+record Msg:
+    kind : int in 0..9
+    v    : int in 0..999
+
+input  burst : int in 0..5 @ hw("in/burst")
+stream<Msg> q with capacity = 4, overflow = fault
+
+output got    : int in 0..999  @ sim("got")
+output others : int in 0..9999 @ sim("others")
+output waited : int in 0..999  @ sim("waited")
+output sent   : int in 0..9999 @ sim("sent")
+
+machine writer:
+    var k : int in 0..999 = 0
+    var n : int in 0..9999 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if burst >= 1:
+                send q, Msg(kind = 1, v = k)
+            if burst >= 2:
+                send q, Msg(kind = 3, v = k)
+            if burst >= 3:
+                send q, Msg(kind = 2, v = k)
+            if burst >= 4:
+                send q, Msg(kind = 3, v = k + 1)
+            n = (n + burst) % 10000
+            sent = n
+            k = (k + 1) % 900
+
+machine taker:
+    var c : int in 0..9999 = 0
+    var w : int in 0..999 = 0
+
+    initial WAIT
+
+    state WAIT:
+        when q matches Msg(kind = 3) as m:
+            got = m.data.v
+            -> PAUSE
+        when q as e:
+            c = (c + 1) % 10000
+            others = c
+            -> WAIT
+
+    state PAUSE:
+        sequence:
+            until q as e timeout 30 ms
+            w = min(e.data.v, 999)
+            waited = w
+            -> WAIT
+"#;
+
+#[test]
+fn an_internal_stream_agrees() {
+    let burst = |k: u32| match k {
+        1 | 10 => 1,
+        3 => 2,
+        6 => 3,
+        20 | 21 => 4,
+        _ => 0,
+    };
+    let stim: String = (0..=30).map(|k| format!("t={k} in burst {}\n", burst(k))).collect();
+    agree_program("INTERNAL_STREAM", &compile("INTERNAL_STREAM", INTERNAL_STREAM), &stim, 30);
 }
 
 /// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und

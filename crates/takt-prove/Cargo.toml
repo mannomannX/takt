@@ -11,6 +11,8 @@ takt-diag = { path = "../takt-diag" }
 takt-mir = { path = "../takt-mir" }
 # Ein Gegenbeispiel wird im Interpreter nachgespielt (plan/m6.md 2.8).
 takt-interp = { path = "../takt-interp" }
+# MAXPT eines Stroms wie am Rand des Interpreters (8.6, 12.6).
+takt-hal = { path = "../takt-hal" }
 
 [dev-dependencies]
 # Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).

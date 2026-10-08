@@ -33,13 +33,13 @@ Expr(Cond),ja,ja,ja
 Expr(Cast),ja,teilweise: nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma,ja
 Expr(Convert),ja,ja,ja
 Expr(Format),"teilweise: nur in Meldungen und `send`; kein `float`, kein zusammengesetzter Wert",nein: Text ist nicht kodiert,ja
-Expr(JobState),ja,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
-Expr(Stream),teilweise: nur als Empfaenger eines Zugriffs,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
-Expr(Matches),"teilweise: nur in Handlern, Guards und Bedingungen","nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
+Expr(JobState),ja,"nein: Jobs, Textmuster und `decode` sind nicht kodiert",ja
+Expr(Stream),teilweise: nur als Empfaenger eines Zugriffs,ja,ja
+Expr(Matches),"teilweise: nur in Handlern, Guards und Bedingungen","nein: Jobs, Textmuster und `decode` sind nicht kodiert",ja
 Expr(Call),ja,"teilweise: Funktionen mit Rueckgabe, ohne `inout`, aus kodierbaren Anweisungen",ja
 Expr(NativeCall),ja,nein: Natives und Matrizen sind nicht kodiert,ja
 Expr(MatOp),ja,nein: Natives und Matrizen sind nicht kodiert,ja
-Expr(Decode),ja,"nein: Jobs, Stroeme und Muster sind nicht kodiert",ja
+Expr(Decode),ja,"nein: Jobs, Textmuster und `decode` sind nicht kodiert",ja
 Expr(Checked),ja,ja,ja
 Expr(Lift),ja,ja,ja
 Expr(Ok),ja,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
@@ -128,10 +128,10 @@ Accessor(Seq),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Text),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Data),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Len),teilweise: `.len` nur auf Sammlungen,"teilweise: auf Arrays, Bytes und Vektoren",ja
-Accessor(Count),ja,teilweise: auf Arrays,ja
-Accessor(Dropped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Malformed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Overflowed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Count),ja,teilweise: auf Arrays und Stroemen,ja
+Accessor(Dropped),ja,ja,ja
+Accessor(Malformed),ja,ja,nein
+Accessor(Overflowed),ja,ja,nein
 Accessor(Free),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Jitter),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(TimeWarped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -156,10 +156,10 @@ Accessor(Samples),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Rate),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Remaining),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Truncated),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Peek),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Peek),ja,ja,ja
 Accessor(Sent),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Idle),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Wrap),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Wrap),ja,teilweise: ohne `wrap_u64`,ja
 Match(Matches),ja,nein: Mustervergleich ist nicht kodiert,ja
 Match(Has),ja,nein: Mustervergleich ist nicht kodiert,ja
 Stmt(Assign),ja,ja,ja
@@ -171,16 +171,16 @@ Stmt(ForRange),ja,teilweise: bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-4
 Stmt(ForEach),ja,"teilweise: ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion",ja
 Stmt(Match),ja,teilweise: nicht im Rumpf einer Funktion,ja
 Stmt(Return),ja,ja,ja
-Stmt(Send),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
+Stmt(Send),ja,teilweise: auf interne Stroeme,ja
 Stmt(At),ja,nein: `at` ist nicht kodiert,ja
-Stmt(Cancel),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
-Stmt(Skip),ja,nein: Stroeme und Trigger sind nicht kodiert,nein
+Stmt(Cancel),ja,nein: geplante Ausgaben und Trigger sind nicht kodiert,ja
+Stmt(Skip),ja,ja,nein
 Stmt(Raise),ja,ja,ja
 Stmt(Job),ja,nein: Jobs sind nicht kodiert,ja
 Stmt(Every),ja,teilweise: nicht in einer Schleife,ja
-Stmt(Break),ja,nein: `break` ist nicht kodiert,ja
+Stmt(Break),ja,ja,ja
 Stmt(Observe),ja,ja,ja
-Stmt(Arm),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
+Stmt(Arm),ja,nein: geplante Ausgaben und Trigger sind nicht kodiert,ja
 Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`","teilweise: `step` einer Blockinstanz; `push`, `append`, `clear` auf Bytes und Vektoren ohne Index",ja
 Stmt(Pass),ja,ja,ja
 Place(Var),ja,ja,ja
@@ -206,7 +206,7 @@ Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Map),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Optional),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Result),ja,nein: Typ ohne Sorte im Modell,ja
-Type(Stream),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Stream),ja,"teilweise: Elemente fester Groesse; Eingabestroeme mit `max_rate` und nicht aus einem `sim`-Ausgang, Ausgabestroeme ohne Leser",ja
 Type(Capture),ja,nein: Typ ohne Sorte im Modell,ja
 Type(HandleJob),ja,nein: Typ ohne Sorte im Modell,ja
 Type(HandleTrigger),ja,nein: Typ ohne Sorte im Modell,nein
@@ -232,21 +232,21 @@ Feature(Scenario),ja,ja,ja
 Feature(Persist),ja,ja,ja
 Feature(Signal),ja,ja,ja
 Feature(FaultedTransition),ja,nein: Uebergaenge aus FAULTED sind nicht kodiert,ja
-Feature(MachineHandler),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(MachineHandler),ja,ja,ja
 Feature(ChildStates),ja,ja,ja
 Feature(Idle),ja,ja,ja
 Feature(Resume),ja,ja,ja
 Feature(Exit),ja,ja,ja
 Feature(Sequence),ja,ja,nein
 Feature(ScopedInstance),ja,nein: gescopte Instanzen sind nicht kodiert,ja
-Feature(StateHandler),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(StateHandler),ja,ja,ja
 Feature(StateFaultTarget),ja,ja,ja
-Feature(HandlerPattern),teilweise: kein `{x:float}` im Handler-Muster,nein: Handler und Stroeme sind nicht kodiert,ja
-Feature(HandlerGuard),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(HandlerPattern),teilweise: kein `{x:float}` im Handler-Muster,teilweise: Record-Muster auf Stroemen; keine Textmuster,ja
+Feature(HandlerGuard),ja,ja,ja
 Feature(After),ja,ja,ja
 Feature(GuardExpr),ja,ja,ja
-Feature(GuardMatch),teilweise: kein `{x:float}` im Guard-Muster,nein: Guards mit Muster sind nicht kodiert,ja
-Feature(GuardNext),ja,nein: Guards mit Muster sind nicht kodiert,ja
+Feature(GuardMatch),teilweise: kein `{x:float}` im Guard-Muster,teilweise: Record-Muster auf Stroemen; keine Textmuster,ja
+Feature(GuardNext),ja,ja,ja
 Feature(TargetState),ja,ja,ja
 Feature(TargetFaulted),ja,ja,ja
 Feature(TargetFault),ja,ja,ja
@@ -260,9 +260,9 @@ Feature(EnumWithFields),ja,ja,ja
 Feature(Function),ja,ja,ja
 Feature(Block),ja,ja,ja
 Feature(Native),ja,ja,ja
-Feature(InputStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
-Feature(OutputStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
-Feature(InternalStream),ja,nein: Handler und Stroeme sind nicht kodiert,ja
+Feature(InputStream),ja,"teilweise: Elemente fester Groesse, mit `max_rate`, nicht aus einem `sim`-Ausgang",ja
+Feature(OutputStream),ja,teilweise: ohne `send` und ohne Leser,ja
+Feature(InternalStream),ja,teilweise: Elemente fester Groesse,ja
 Feature(Command),ja,ja,ja
 Feature(Param),ja,ja,ja
 Feature(Tunable),ja,ja,ja
@@ -275,11 +275,11 @@ Feature(Port),ja,nein: Trigger und Registerports sind nicht kodiert,ja
 Feature(Recorded),ja,ja,ja
 Feature(Campaign),ja,ja,ja
 Feature(Node),ja,ja,nein
-Feature(FramingRaw),ja,nein: Handler und Stroeme sind nicht kodiert,ja
-Feature(FramingLines),ja,nein: Handler und Stroeme sind nicht kodiert,ja
-Feature(FramingCobs),ja,nein: Handler und Stroeme sind nicht kodiert,nein
-Feature(FramingLengthPrefixed),ja,nein: Handler und Stroeme sind nicht kodiert,nein
-Feature(FramingFixed),ja,nein: Handler und Stroeme sind nicht kodiert,nein
+Feature(FramingRaw),ja,teilweise: bei Elementen fester Groesse,ja
+Feature(FramingLines),ja,teilweise: bei Elementen fester Groesse,ja
+Feature(FramingCobs),ja,teilweise: bei Elementen fester Groesse,nein
+Feature(FramingLengthPrefixed),ja,teilweise: bei Elementen fester Groesse,nein
+Feature(FramingFixed),ja,teilweise: bei Elementen fester Groesse,nein
 Feature(Label),ja,ja,ja
 Feature(Display),ja,ja,nein
 Feature(Group),ja,ja,nein

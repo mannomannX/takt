@@ -44,6 +44,7 @@ use crate::eval;
 use crate::term::{Node, Op, Sort, Term};
 
 mod monitor;
+mod stream;
 mod value;
 use monitor::Monitor;
 use value::V;
@@ -307,6 +308,19 @@ struct Enc<'p> {
     confirms: Vec<(String, i64)>,
     /// `now` des Ticks, der gerade kodiert wird.
     now: Term,
+    /// Die Stroeme des Modells (8.6).
+    streams: Vec<stream::Stream>,
+    /// Der Zustand nach dem Zustellen des laufenden Ticks: Aus ihm stehen
+    /// die Fenster fest (9.6).
+    delivered: Env,
+    /// Die Fenster des laufenden Ticks je Leser und Cursor.
+    windows: BTreeMap<(MachineId, usize), stream::Window>,
+    /// Was die Konstrukte des laufenden Ticks untersucht haben.
+    marks: Vec<stream::Mark>,
+    /// Die `send` des laufenden Ticks auf interne Stroeme, in ihrer Reihenfolge.
+    queued: Vec<stream::Queued>,
+    /// Je offene Schleife, wo ein `break` sie verlaesst.
+    breaks: Vec<Vec<Term>>,
 }
 
 /// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
@@ -412,6 +426,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     };
     let mut enc = Enc::new(p, order, scope);
     enc.check_reach()?;
+    enc.streams = enc.stream_defs()?;
     // Eigenschaften gehoeren zum Ganzen (13.3); eine Maschine allein hat keine.
     if scope.is_none() {
         enc.monitors = enc.monitors()?;
@@ -440,6 +455,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     let mut assumptions = enc.channel_assumptions()?;
     assumptions.extend(enc.psi_assumptions.clone());
     assumptions.extend(enc.tune_assumptions.clone());
+    assumptions.extend(enc.stream_assumptions()?);
     let scoped = enc.scope.is_some();
     for prop in p.properties.iter().filter(|_| !scoped) {
         match enc.goal(prop, &pre)? {
@@ -510,6 +526,12 @@ impl<'p> Enc<'p> {
             loops: 0,
             confirms: Vec::new(),
             now: Term::int(0),
+            streams: Vec::new(),
+            delivered: Env::new(),
+            windows: BTreeMap::new(),
+            marks: Vec::new(),
+            queued: Vec::new(),
+            breaks: Vec::new(),
         }
     }
 }
@@ -529,9 +551,6 @@ impl Enc<'_> {
     fn check_reach(&self) -> R<()> {
         for &id in &self.order {
             let m = self.machine(id);
-            if !m.handlers.is_empty() || m.states.iter().any(|s| !s.handlers.is_empty()) {
-                return no("Handler auf Stroemen", m.span);
-            }
             if !m.layout.job_slots.is_empty() {
                 return no("Jobs", m.span);
             }
@@ -541,9 +560,6 @@ impl Enc<'_> {
             if m.states.iter().any(|s| !s.instances.is_empty()) {
                 return no("gescopte Instanzen", m.span);
             }
-        }
-        if self.scope.is_none() && !self.p.streams.is_empty() {
-            return no("interne Stroeme", Span::default());
         }
         Ok(())
     }
@@ -779,6 +795,9 @@ impl Enc<'_> {
             }
             ExprKind::Command(c) => self.command(*c),
             ExprKind::Input { channel, .. } => self.read_input(*channel, cx, flow)?,
+            ExprKind::Accessor { base, accessor, .. } if matches!(self.p.types.get(base.ty), Type::Stream(_)) => {
+                self.stream_accessor(base, *accessor, cx, env, span)?
+            }
             ExprKind::Accessor { base, .. } if matches!(base.kind, ExprKind::Input { .. }) => {
                 self.input_accessor(e, cx, env, flow)?
             }
@@ -1416,10 +1435,12 @@ impl Enc<'_> {
                     }
                     let loc = self.loc_var(m, *var);
                     self.loops += 1;
+                    self.breaks.push(Vec::new());
                     for i in 0..n {
-                        env.insert(loc.clone(), Term::int(i));
+                        env.insert(loc.clone(), Term::ite(flow.alive.clone(), Term::int(i), env[&loc].clone()));
                         self.block(body, cx, env, flow)?;
                     }
+                    self.left_loop(flow);
                     self.loops -= 1;
                 }
                 // Ueber ein Array: die Schleifenvariable traegt je Durchlauf ein Element.
@@ -1433,10 +1454,12 @@ impl Enc<'_> {
                     }
                     let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
                     self.loops += 1;
+                    self.breaks.push(Vec::new());
                     for item in items {
-                        self.put(env, &loc, ty, item, &Term::bool(true), span)?;
+                        self.put(env, &loc, ty, item, &flow.alive.clone(), span)?;
                         self.block(body, cx, env, flow)?;
                     }
+                    self.left_loop(flow);
                     self.loops -= 1;
                 }
                 StmtKind::ForEach { vars: ForVars::One(var), iter, body }
@@ -1445,6 +1468,22 @@ impl Enc<'_> {
                     let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
                     self.for_collection(&loc, ty, iter, body, cx, env, flow, span)?;
                 }
+                // Ueber das Fenster eines Stroms (8.7).
+                StmtKind::ForEach { vars: ForVars::One(var), iter, body }
+                    if matches!(self.p.types.get(iter.ty), Type::Stream(_)) =>
+                {
+                    let Some(key) = stream::stream_of(iter) else { return no("`for` ueber diesen Strom", span) };
+                    self.for_window(*var, key, body, cx, env, flow, span)?;
+                }
+                StmtKind::Break => match self.breaks.last_mut() {
+                    Some(frame) => {
+                        frame.push(flow.alive.clone());
+                        flow.alive = Term::bool(false);
+                    }
+                    None => return no("`break` ausserhalb einer Schleife", span),
+                },
+                StmtKind::Send { stream, value, .. } => self.send(*stream, value, cx, env, flow, span)?,
+                StmtKind::Skip(key) => self.skip(*key, cx, flow, span)?,
                 StmtKind::Raise(sig) => {
                     let loc = self.loc_sig(m, sig.index());
                     let old = env.get(&loc).cloned().unwrap_or_else(|| Term::bool(false));
@@ -1456,16 +1495,20 @@ impl Enc<'_> {
                 StmtKind::Observe(_) | StmtKind::Pass => {}
                 other @ (StmtKind::ForEach { .. }
                 | StmtKind::Return(_)
-                | StmtKind::Send { .. }
                 | StmtKind::At { .. }
                 | StmtKind::Cancel(_)
-                | StmtKind::Skip(_)
                 | StmtKind::Job { .. }
-                | StmtKind::Break
                 | StmtKind::Arm { .. }) => return no(format!("Anweisung {}", stmt_name(other)), span),
             }
         }
         Ok(())
+    }
+
+    /// Nach einer ausgerollten Schleife: Wer sie mit `break` verliess, geht
+    /// hinter ihr weiter.
+    fn left_loop(&mut self, flow: &mut Flow) {
+        let broke = self.breaks.pop().unwrap_or_default();
+        flow.alive = Term::or(std::iter::once(flow.alive.clone()).chain(broke).collect());
     }
 
     // ------------------------------------------------------------ Bloecke (5.7)
@@ -1884,16 +1927,34 @@ impl Enc<'_> {
             self.unrolled = 0;
             let mut env = base.clone();
             let mut flow = Flow::new(is.clone());
+            // Ein vorgemerkter `StreamOverflow` kommt vor allem anderen (9.6).
+            if self.has_pending(m) {
+                let at = self.loc_pending(m);
+                let pending = env[&at].clone();
+                flow.exits
+                    .push(Exit { cond: Term::and(vec![is.clone(), pending.clone()]), kind: ExitKind::Fault(None) });
+                flow.alive = Term::and(vec![is.clone(), pending.not()]);
+                env.insert(at, Term::bool(false));
+            }
+            // Handler laufen unmittelbar nach dem `loop:` ihrer Ebene (8.7).
             self.block(&machine.loop_block, &cx, &mut env, &mut flow)?;
+            self.dispatch(&machine.handlers, &cx, &mut env, &mut flow)?;
             let chain = self.chain_to(m, leaf);
             for s in &chain {
                 self.block(&machine.states[s.index()].loop_block, &cx, &mut env, &mut flow)?;
+                self.dispatch(&machine.states[s.index()].handlers, &cx, &mut env, &mut flow)?;
             }
             for s in &chain {
                 for t in &machine.states[s.index()].transitions {
+                    let mut stream_hit = None;
                     let fired = match &t.trigger {
                         TransTrigger::When(takt_mir::machine::Guard::Expr(e)) => self.expr(e, &cx, &env, &mut flow)?,
-                        TransTrigger::When(_) => return no("Guard mit Muster", t.span),
+                        TransTrigger::When(g) => {
+                            let hit = self.stream_guard(g, &cx, &env, &mut flow)?;
+                            let fired = hit.fired.clone();
+                            stream_hit = Some(hit);
+                            fired
+                        }
                         TransTrigger::After(d) => {
                             let ns = self.const_int(d)?;
                             let needed = ((ns + period - 1) / period).max(1);
@@ -1902,6 +1963,9 @@ impl Enc<'_> {
                         }
                     };
                     let take = Term::and(vec![flow.alive.clone(), fired]);
+                    if let Some(hit) = stream_hit {
+                        self.take_guard(hit, m, &take, &mut env)?;
+                    }
                     let entry = cx.entry();
                     let mut sub = Flow::new(take.clone());
                     self.block(&t.actions, &entry, &mut env, &mut sub)?;
@@ -2059,7 +2123,14 @@ impl Enc<'_> {
             hit
         };
         let chain = self.chain_to(m, s);
-        if aborts(&machine.loop_block) || chain.iter().any(|c| aborts(&machine.states[c.index()].loop_block)) {
+        let handled = |hs: &[takt_mir::machine::Handler]| hs.iter().any(|h| aborts(&h.body));
+        if aborts(&machine.loop_block)
+            || handled(&machine.handlers)
+            || chain.iter().any(|c| {
+                let st = &machine.states[c.index()];
+                aborts(&st.loop_block) || handled(&st.handlers)
+            })
+        {
             return None;
         }
         let period = i64::from(machine.period.max(1)).saturating_mul(self.p.config.tick);
@@ -2147,6 +2218,9 @@ impl Enc<'_> {
         let actives: BTreeMap<MachineId, Term> =
             self.actives(pre).into_iter().map(|(m, a)| (m, Term::and(vec![a, running.clone()]))).collect();
         self.aborts.clear();
+        self.deliver(pre, &mut cur)?;
+        self.delivered = cur.clone();
+        self.windows.clear();
         for &m in &self.order.clone() {
             let active = actives[&m].clone();
             self.step_machine(m, &active, pre, &actives, &mut cur)?;
@@ -2159,6 +2233,7 @@ impl Enc<'_> {
         if !raised.is_bool(false) {
             self.abort_phase(&raised, pre, &actives, &mut cur)?;
         }
+        self.advance_streams(&mut cur)?;
         self.advance(&actives, &mut cur);
         self.edges_next(pre, &mut cur)?;
         if let (Some(end), Some(ended)) = (end, ended) {
@@ -2182,6 +2257,7 @@ impl Enc<'_> {
         self.now = Term::int(0);
         env.insert(NOW.into(), self.now.clone());
         self.edges_initial(&mut env)?;
+        self.streams_initial(&mut env)?;
         let before = env.clone();
         for &m in &self.order.clone() {
             let machine = self.machine(m).clone();
@@ -2261,6 +2337,7 @@ impl Enc<'_> {
             self.unrolled = 0;
             self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true))?;
         }
+        self.flush_sends(&mut env)?;
         self.advance(&actives, &mut env);
         self.edges_next(&before, &mut env)?;
         if let Some(end) = self.run_end() {
@@ -2301,6 +2378,7 @@ impl Enc<'_> {
     /// Variablen und Outputs in ihren Ranges.
     fn state_invariants(&mut self, pre: &Env) -> Vec<Term> {
         let mut out = Vec::new();
+        self.stream_invariants(pre, &mut out);
         for &m in &self.order.clone() {
             let machine = self.machine(m).clone();
             let leaf = pre[&self.loc_leaf(m)].clone();

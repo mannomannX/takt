@@ -120,8 +120,9 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
         ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
         ExprTag::Armed | ExprTag::PortRead => No("Trigger und Registerports sind nicht kodiert"),
-        ExprTag::JobState | ExprTag::Stream | ExprTag::Matches | ExprTag::Decode => {
-            No("Jobs, Stroeme und Muster sind nicht kodiert")
+        ExprTag::Stream => Yes,
+        ExprTag::JobState | ExprTag::Matches | ExprTag::Decode => {
+            No("Jobs, Textmuster und `decode` sind nicht kodiert")
         }
         ExprTag::NativeCall | ExprTag::MatOp => No("Natives und Matrizen sind nicht kodiert"),
     }
@@ -166,16 +167,15 @@ fn accessor(a: AccessorTag) -> Support {
         // Beobachtungen laesst das Modell aus; nur dort darf ein Programm sie lesen.
         AccessorTag::Age | AccessorTag::Reason => Partial("nur in Beobachtungen, die das Modell auslaesst"),
         AccessorTag::Len => Partial("auf Arrays, Bytes und Vektoren"),
-        AccessorTag::Count => Partial("auf Arrays"),
+        AccessorTag::Count => Partial("auf Arrays und Stroemen"),
+        AccessorTag::Dropped | AccessorTag::Malformed | AccessorTag::Overflowed | AccessorTag::Peek => Yes,
+        AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
         AccessorTag::Ok
         | AccessorTag::Err
         | AccessorTag::T
         | AccessorTag::Seq
         | AccessorTag::Text
         | AccessorTag::Data
-        | AccessorTag::Dropped
-        | AccessorTag::Malformed
-        | AccessorTag::Overflowed
         | AccessorTag::Free
         | AccessorTag::Jitter
         | AccessorTag::TimeWarped
@@ -184,7 +184,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Bit
         | AccessorTag::Bits
         | AccessorTag::WithBit
-        | AccessorTag::Wrap
         | AccessorTag::Min
         | AccessorTag::Max
         | AccessorTag::Mean
@@ -201,7 +200,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Rate
         | AccessorTag::Remaining
         | AccessorTag::Truncated
-        | AccessorTag::Peek
         | AccessorTag::Sent
         | AccessorTag::Idle => No("Zugriffe sind nicht kodiert (FB-372, FB-373)"),
     }
@@ -227,8 +225,9 @@ fn stmt(s: StmtTag) -> Support {
         StmtTag::ForEach => {
             Partial("ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion")
         }
-        StmtTag::Break => No("`break` ist nicht kodiert"),
-        StmtTag::Send | StmtTag::Cancel | StmtTag::Skip | StmtTag::Arm => No("Stroeme und Trigger sind nicht kodiert"),
+        StmtTag::Break | StmtTag::Skip => Yes,
+        StmtTag::Send => Partial("auf interne Stroeme"),
+        StmtTag::Cancel | StmtTag::Arm => No("geplante Ausgaben und Trigger sind nicht kodiert"),
         StmtTag::Every => Partial("nicht in einer Schleife"),
         StmtTag::At => No("`at` ist nicht kodiert"),
         StmtTag::Job => No("Jobs sind nicht kodiert"),
@@ -245,6 +244,10 @@ fn ty(t: TypeTag) -> Support {
         }
         TypeTag::Int => Partial("ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen"),
         TypeTag::HandleBlock => Partial("Blockinstanzen nur ueber ihre Felder"),
+        TypeTag::Stream => Partial(
+            "Elemente fester Groesse; Eingabestroeme mit `max_rate` und nicht aus einem `sim`-Ausgang, \
+             Ausgabestroeme ohne Leser",
+        ),
         TypeTag::Str
         | TypeTag::Line
         | TypeTag::Samples
@@ -252,7 +255,6 @@ fn ty(t: TypeTag) -> Support {
         | TypeTag::Mat
         | TypeTag::Map
         | TypeTag::Result
-        | TypeTag::Stream
         | TypeTag::Capture
         | TypeTag::HandleJob
         | TypeTag::HandleTrigger => NO_SORT,
@@ -303,21 +305,18 @@ fn feature(f: Feature) -> Support {
         | Feature::Label
         | Feature::Display
         | Feature::Group => Yes,
-        Feature::MachineHandler
-        | Feature::StateHandler
-        | Feature::HandlerPattern
-        | Feature::HandlerGuard
-        | Feature::InputStream
-        | Feature::OutputStream
-        | Feature::InternalStream
-        | Feature::FramingRaw
+        Feature::MachineHandler | Feature::StateHandler | Feature::HandlerGuard | Feature::GuardNext => Yes,
+        Feature::HandlerPattern | Feature::GuardMatch => Partial("Record-Muster auf Stroemen; keine Textmuster"),
+        Feature::InputStream => Partial("Elemente fester Groesse, mit `max_rate`, nicht aus einem `sim`-Ausgang"),
+        Feature::InternalStream => Partial("Elemente fester Groesse"),
+        Feature::OutputStream => Partial("ohne `send` und ohne Leser"),
+        Feature::FramingRaw
         | Feature::FramingLines
         | Feature::FramingCobs
         | Feature::FramingLengthPrefixed
-        | Feature::FramingFixed => No("Handler und Stroeme sind nicht kodiert"),
+        | Feature::FramingFixed => Partial("bei Elementen fester Groesse"),
         Feature::FaultedTransition => No("Uebergaenge aus FAULTED sind nicht kodiert"),
         Feature::ScopedInstance => No("gescopte Instanzen sind nicht kodiert"),
-        Feature::GuardMatch | Feature::GuardNext => No("Guards mit Muster sind nicht kodiert"),
         Feature::CheckConfirm => Partial("nicht in einer Schleife"),
         Feature::CheckWithin => Yes,
         Feature::Trigger | Feature::Port => No("Trigger und Registerports sind nicht kodiert"),

@@ -229,8 +229,9 @@ fn a_reachable_implicit_check_gets_its_path() {
 }
 
 /// 13.3: Je Maschine, mit Ψ als freier Eingabe in seiner Range. Der
-/// Erzeuger hat einen Handler auf einem Strom und ist nicht kodierbar;
-/// der Verbraucher wird trotzdem bewiesen.
+/// Erzeuger rechnet in `u64` und ist nicht kodierbar — die Kodierung
+/// rechnet in 64 Bit mit Vorzeichen —; der Verbraucher wird trotzdem
+/// bewiesen.
 #[test]
 fn a_machine_is_proven_alone_when_the_whole_is_not_encodable() {
     let Some(solver) = solver() else { return };
@@ -239,14 +240,15 @@ fn a_machine_is_proven_alone_when_the_whole_is_not_encodable() {
     language = 1
     tick     = 10 ms
 
-input evt : stream<u8> @ hw(\"i/evt\") with max_rate = 1 kHz, capacity = 16
 output y  : int @ hw(\"o/y\") with safe = 0
 
 machine producer:
     pub var level : int in 0..100 = 0
+    var wide : u64 = 0
     initial RUN
     state RUN:
-        on evt as _e:
+        loop:
+            wide = wide.wrap_u64() + 1
             level = (level + 1) % 101
 
 machine consumer:
@@ -579,4 +581,49 @@ fn a_site_is_its_start_its_end_and_its_kind() {
         1,
         "nur die aeussere Pruefung ueber {start}..{end} faellt weg"
     );
+}
+
+/// Ein Strom im Modell (M11 Schritt 27c): Das Gegenbeispiel liefert ein
+/// Element, auf das der Handler passt, und der Interpreter bestaetigt es;
+/// was der Eintritt zusichert, ist bewiesen.
+#[test]
+fn a_stream_element_is_part_of_the_counterexample() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+record Frame:
+    id : int in 0..9
+
+input rx : stream<Frame> @ hw(\"bus/rx\") with max_rate = 200 Hz, capacity = 4
+
+output alarm : bool @ hw(\"o/alarm\") with safe = false
+
+machine watch:
+    initial QUIET
+
+    state QUIET:
+        enter:
+            alarm = false
+        on rx matches Frame(id = 7) as e:
+            -> LOUD
+
+    state LOUD:
+        enter:
+            alarm = true
+        after 20 ms: -> QUIET
+
+property never_loud: never(alarm)
+property quiet_is_silent: always(watch.state == QUIET implies not alarm)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    let loud = reports.iter().find(|r| r.name == "never_loud").expect("never_loud");
+    let Verdict::Violated { stimulus, .. } = &loud.verdict else { panic!("{loud:?}") };
+    assert!(stimulus.contains("in rx Frame(7) t="), "{stimulus}");
+    let quiet = reports.iter().find(|r| r.name == "quiet_is_silent").expect("quiet_is_silent");
+    assert!(matches!(quiet.verdict, Verdict::Proven { .. }), "{quiet:?}");
 }
