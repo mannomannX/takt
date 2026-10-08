@@ -289,10 +289,19 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
     // Nach `end` stehen die Outputs auf `safe` (12.7); das Modell fuehrt das
     // im Zustand danach, also gelten diese Zeilen dort.
     let mut after_end: Vec<&takt_interp::trace::TraceLine> = Vec::new();
+    // Ausgabestroeme: Was der Treiber abholt, steht je Tick als eigene Zeile
+    // (8.8); ohne Zeile hat er nichts abgeholt.
+    let tx: Vec<String> = p
+        .channels
+        .iter()
+        .filter(|c| c.dir == Direction::Output && matches!(p.types.get(c.ty), Type::Stream(_)))
+        .map(|c| c.name.clone())
+        .collect();
     for k in 0..=ticks {
         let lines: Vec<_> =
             std::mem::take(&mut after_end).into_iter().chain(r.trace.lines.iter().filter(|l| l.tick == k)).collect();
         let mut ended = false;
+        let mut sent: BTreeMap<String, Vec<i64>> = tx.iter().map(|o| (o.clone(), Vec::new())).collect();
         for l in lines {
             if ended && l.tick == k {
                 after_end.push(l);
@@ -300,6 +309,12 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
             }
             match &l.kind {
                 LineKind::End { .. } => ended = true,
+                LineKind::Output { channel, value } if tx.contains(channel) => {
+                    let items = split(value.strip_prefix('[').and_then(|v| v.strip_suffix(']')).unwrap_or(value));
+                    let bytes = items.iter().map(|b| i64::from_str_radix(b.trim_start_matches("0x"), 16));
+                    let bytes: Result<Vec<i64>, _> = bytes.collect();
+                    sent.insert(channel.clone(), bytes.unwrap_or_else(|_| panic!("{name} t={k}: `{value}`")));
+                }
                 LineKind::Output { channel, value } => {
                     let mut leaves = Vec::new();
                     channel_type(channel)
@@ -325,6 +340,14 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
             }
         }
         let s = &states[k as usize];
+        for (o, bytes) in &sent {
+            let got = |part: &str| s.get(&format!("s.tx.{o}.{part}")).copied();
+            assert_eq!(got("sent.len"), Some(Val::Int(bytes.len() as i64)), "{name} t={k}: Laenge von `{o}`");
+            for (j, b) in bytes.iter().enumerate() {
+                assert_eq!(got(&format!("sent[{j}]")), Some(Val::Int(*b)), "{name} t={k}: Byte {j} von `{o}`");
+            }
+            compared += 1;
+        }
         for (loc, want) in &outputs {
             let got = s.get(loc).copied().unwrap_or_else(|| panic!("{name} t={k}: `{loc}` fehlt im Modell"));
             assert!(same(got, *want), "{name} t={k}: `{loc}`: Modell {got:?}, Interpreter {want:?}");
@@ -416,6 +439,14 @@ fn case(name: &str) -> Option<(String, u64)> {
             14,
         ),
         "104_linear_has.takt" | "117_many_text_handlers.takt" | "51_text_into_bytes.takt" => (String::new(), 30),
+        // Ausgabestroeme (Schritt 27c-3): Sendepuffer, Abholen je Tick,
+        // `free`, `idle`, `sent`, ein `sim`-gespeister Eingabestrom.
+        "24_send_has.takt" => {
+            let lines = ["no error", "an ERR here", "ERR", "plain", "ERRERR"];
+            (lines.iter().enumerate().map(|(k, l)| format!("t={} in rx {l:?}\n", 2 * k + 1)).collect(), 14)
+        }
+        "43_sent.takt" => ("t=2 cmd go\n".to_string(), 12),
+        "25_format.takt" | "79_byte_literals.takt" | "92_idle_streams.takt" | "118_tx_idle.takt" => (String::new(), 40),
         // Interne Stroeme (Schritt 27c): Ring, Cursor je Leser, Handler je Ebene.
         "106_machine_handler.takt" | "72_handler_levels.takt" | "53_stream_kinds.takt" | "88_capture_segments.takt" => {
             (String::new(), 40)
@@ -706,6 +737,63 @@ const TEXT_STREAM_STIMULUS: &str = "t=1 in rx \"code 42\"\nt=1 in rx \"code -7\"
 #[test]
 fn a_text_stream_agrees() {
     agree_program("TEXT_STREAM", &compile("TEXT_STREAM", TEXT_STREAM), TEXT_STREAM_STIMULUS, 14);
+}
+
+/// Sendepuffer (8.8): `overflow = drop` verwirft, was nicht passt, ein
+/// zu grosser `send` faultet den Schreiber, der Puffer leert sich danach
+/// weiter; ein `sim`-gespeister Bytestrom liest, was der Treiber abholt.
+const TX_STREAMS: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  frames     : stream<bytes<4>> @ hw("bus/frames") with capacity = 4, max_rate = 100 Hz
+output frames_sim : stream<bytes<4>> @ sim("bus/frames") with max_rate = 400 Hz, capacity = 8
+output tx         : stream<u8>       @ hw("u/tx")       with max_rate = 100 Hz, capacity = 4
+output lossy      : stream<u8>       @ hw("u/lossy")    with max_rate = 100 Hz, capacity = 3, overflow = drop
+
+output seen : int in 0..999 @ sim("seen")
+output size : int in 0..99  @ sim("size")
+output head : int in 0..255 @ sim("head")
+output room : int in 0..9   @ sim("room")
+
+machine pump:
+    var k : int in 0..255 = 0
+    var b : bytes<4> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 200
+            b.clear()
+            b.push(k as u8)
+            if k % 2 == 0:
+                b.push(0x7F)
+            send frames_sim, b
+            send lossy, [1, 2]
+            room = lossy.free
+        after 50 ms: -> HOT
+
+    state HOT:
+        loop:
+            send tx, [1, 2, 3]
+
+machine reader:
+    var n : int in 0..999 = 0
+
+    initial RUN
+
+    state RUN:
+        on frames as f:
+            n = (n + 1) % 1000
+            seen = n
+            size = f.data.len
+            head = f.data[0] as int
+"#;
+
+#[test]
+fn send_buffers_agree() {
+    agree_program("TX_STREAMS", &compile("TX_STREAMS", TX_STREAMS), "", 12);
 }
 
 /// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und

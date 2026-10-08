@@ -47,6 +47,7 @@ mod monitor;
 mod pattern;
 mod stream;
 mod text;
+mod tx;
 mod value;
 use monitor::Monitor;
 use value::V;
@@ -313,6 +314,8 @@ struct Enc<'p> {
     now: Term,
     /// Die Stroeme des Modells (8.6).
     streams: Vec<stream::Stream>,
+    /// Die Ausgabestroeme der kodierten Maschinen (8.8).
+    txs: Vec<tx::Tx>,
     /// Der Zustand nach dem Zustellen des laufenden Ticks: Aus ihm stehen
     /// die Fenster fest (9.6).
     delivered: Env,
@@ -432,6 +435,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     };
     let mut enc = Enc::new(p, order, scope);
     enc.check_reach()?;
+    enc.txs = enc.tx_defs()?;
     enc.streams = enc.stream_defs()?;
     // Eigenschaften gehoeren zum Ganzen (13.3); eine Maschine allein hat keine.
     if scope.is_none() {
@@ -533,6 +537,7 @@ impl<'p> Enc<'p> {
             confirms: Vec::new(),
             now: Term::int(0),
             streams: Vec::new(),
+            txs: Vec::new(),
             delivered: Env::new(),
             windows: BTreeMap::new(),
             marks: Vec::new(),
@@ -2210,7 +2215,9 @@ impl Enc<'_> {
     fn safe_outputs(&mut self) -> R<Vec<(String, TypeId, V)>> {
         let mut out = Vec::new();
         for (i, c) in self.p.channels.clone().iter().enumerate() {
-            if c.dir != Direction::Output || c.owner.is_some_and(|o| !self.order.contains(&o)) {
+            // Ein Ausgabestrom hat keinen Latch; sein Puffer gehoert dem Treiber (8.8).
+            let stream = matches!(self.p.types.get(c.ty), Type::Stream(_));
+            if c.dir != Direction::Output || stream || c.owner.is_some_and(|o| !self.order.contains(&o)) {
                 continue;
             }
             let value = match &c.attrs.safe {
@@ -2256,6 +2263,7 @@ impl Enc<'_> {
         }
         self.advance_streams(&mut cur)?;
         self.advance(&actives, &mut cur);
+        self.drain_tx(&mut cur);
         self.edges_next(pre, &mut cur)?;
         if let (Some(end), Some(ended)) = (end, ended) {
             let now = Enc::ends(&cur, &end);
@@ -2279,6 +2287,7 @@ impl Enc<'_> {
         env.insert(NOW.into(), self.now.clone());
         self.edges_initial(&mut env)?;
         self.streams_initial(&mut env)?;
+        self.tx_initial(&mut env);
         self.deliver(None, &mut env)?;
         let before = env.clone();
         for &m in &self.order.clone() {
@@ -2361,6 +2370,7 @@ impl Enc<'_> {
         }
         self.flush_sends(&mut env)?;
         self.advance(&actives, &mut env);
+        self.drain_tx(&mut env);
         self.edges_next(&before, &mut env)?;
         if let Some(end) = self.run_end() {
             env.insert(OVER.into(), Term::bool(false));
@@ -2401,6 +2411,7 @@ impl Enc<'_> {
     fn state_invariants(&mut self, pre: &Env) -> Vec<Term> {
         let mut out = Vec::new();
         self.stream_invariants(pre, &mut out);
+        self.tx_invariants(pre, &mut out);
         for &m in &self.order.clone() {
             let machine = self.machine(m).clone();
             let leaf = pre[&self.loc_leaf(m)].clone();

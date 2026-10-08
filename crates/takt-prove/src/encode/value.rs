@@ -489,6 +489,10 @@ impl Enc<'_> {
             {
                 self.peek(base, cx, flow, span)?
             }
+            ExprKind::Accessor { base, accessor: Accessor::Sent, .. } => match self.tx_channel(base) {
+                Some(c) => self.tx_accessor(c, Accessor::Sent, e.ty, cx, env, span)?,
+                None => return no("`.sent` ohne Ausgabestrom", span),
+            },
             ExprKind::Accessor { base, accessor: Accessor::Or, args } => {
                 let [default] = args.as_slice() else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?

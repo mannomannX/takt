@@ -169,7 +169,13 @@ fn accessor(a: AccessorTag) -> Support {
         AccessorTag::Len => Partial("auf Arrays, Bytes, Vektoren und Text"),
         AccessorTag::StartsWith | AccessorTag::Contains | AccessorTag::Truncated => Yes,
         AccessorTag::Count => Partial("auf Arrays und Stroemen"),
-        AccessorTag::Dropped | AccessorTag::Malformed | AccessorTag::Overflowed | AccessorTag::Peek => Yes,
+        AccessorTag::Dropped
+        | AccessorTag::Malformed
+        | AccessorTag::Overflowed
+        | AccessorTag::Peek
+        | AccessorTag::Free
+        | AccessorTag::Idle
+        | AccessorTag::Sent => Yes,
         AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
         AccessorTag::Ok
         | AccessorTag::Err
@@ -177,7 +183,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Seq
         | AccessorTag::Text
         | AccessorTag::Data
-        | AccessorTag::Free
         | AccessorTag::Jitter
         | AccessorTag::TimeWarped
         | AccessorTag::Done
@@ -197,9 +202,7 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Post
         | AccessorTag::Samples
         | AccessorTag::Rate
-        | AccessorTag::Remaining
-        | AccessorTag::Sent
-        | AccessorTag::Idle => No("Zugriffe sind nicht kodiert (FB-372, FB-373)"),
+        | AccessorTag::Remaining => No("Zugriffe sind nicht kodiert (FB-372, FB-373)"),
     }
 }
 
@@ -224,7 +227,7 @@ fn stmt(s: StmtTag) -> Support {
             Partial("ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion")
         }
         StmtTag::Break | StmtTag::Skip => Yes,
-        StmtTag::Send => Partial("auf interne Stroeme"),
+        StmtTag::Send => Partial("auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus"),
         StmtTag::Cancel | StmtTag::Arm => No("geplante Ausgaben und Trigger sind nicht kodiert"),
         StmtTag::Every => Partial("nicht in einer Schleife"),
         StmtTag::At => No("`at` ist nicht kodiert"),
@@ -243,8 +246,8 @@ fn ty(t: TypeTag) -> Support {
         TypeTag::Int => Partial("ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen"),
         TypeTag::HandleBlock => Partial("Blockinstanzen nur ueber ihre Felder"),
         TypeTag::Stream => Partial(
-            "Eingabestroeme mit `max_rate`, nicht aus einem `sim`-Ausgang, Records vom Rand fester Groesse; \
-             Ausgabestroeme ohne Leser",
+            "Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes, Records vom \
+             Rand fester Groesse; Ausgabestroeme ohne Leser",
         ),
         TypeTag::Str | TypeTag::Line => Partial("nicht als Typ eines Inputs"),
         TypeTag::Samples
@@ -304,11 +307,12 @@ fn feature(f: Feature) -> Support {
         | Feature::Group => Yes,
         Feature::MachineHandler | Feature::StateHandler | Feature::HandlerGuard | Feature::GuardNext => Yes,
         Feature::HandlerPattern | Feature::GuardMatch => Partial("kein `{x:float}`"),
-        Feature::InputStream => {
-            Partial("mit `max_rate`, nicht aus einem `sim`-Ausgang; ein Record vom Rand fester Groesse")
-        }
+        Feature::InputStream => Partial(
+            "mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes; ein Record vom Rand fester \
+             Groesse",
+        ),
         Feature::InternalStream => Yes,
-        Feature::OutputStream => Partial("ohne `send` und ohne Leser"),
+        Feature::OutputStream => Partial("ohne Leser; `send` von Text, Bytes, Ganzzahlen und Arrays daraus"),
         Feature::FramingRaw
         | Feature::FramingLines
         | Feature::FramingCobs

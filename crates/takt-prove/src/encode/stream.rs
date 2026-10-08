@@ -53,6 +53,8 @@ pub(super) struct Stream {
     readers: Vec<(MachineId, usize)>,
     /// Liest eine Maschine ausserhalb des Modells mit (13.3)?
     foreign_readers: bool,
+    /// Der Ausgabestrom, der ihn ueber eine `sim`-Bindung speist (8.3).
+    fed: Option<usize>,
 }
 
 /// Ein Platz des Fensters: ob er belegt ist, Nummer, Zeitstempel, Wert.
@@ -170,15 +172,32 @@ impl Enc<'_> {
                 }
                 continue;
             }
-            let fed = self.p.channels.iter().any(|o| {
+            let source = self.p.channels.iter().position(|o| {
                 o.dir == Direction::Output
                     && matches!((&o.binding, &c.binding), (Binding::Sim(a), Binding::Hw(b)) if a == b)
             });
-            if fed {
-                return no("Eingabestrom aus einem `sim`-Ausgang", c.span);
-            }
-            let Some(maxpt) = takt_hal::edge::maxpt_of(c, self.p.config.tick) else {
-                return no("Eingabestrom ohne `max_rate`", c.span);
+            let fed = match source {
+                Some(o) => match self.txs.iter().position(|t| t.channel.index() == o) {
+                    Some(t) => Some(t),
+                    None => return no("Eingabestrom aus dem `sim`-Ausgang einer anderen Maschine", c.span),
+                },
+                None => None,
+            };
+            let maxpt = match fed {
+                // Was der Treiber abholt, kommt ohne Vertrag an (`apply_sim_bindings`).
+                Some(t) => {
+                    let width = self.txs[t].per_tick_bytes();
+                    match self.p.types.get(*elem) {
+                        Type::Int { width: takt_mir::types::IntWidth::U8, .. } => {}
+                        Type::Bytes { cap } if *cap >= width => {}
+                        _ => return no("Eingabestrom aus einem `sim`-Ausgang mit Elementen dieser Art", c.span),
+                    }
+                    None
+                }
+                None => match takt_hal::edge::maxpt_of(c, self.p.config.tick) {
+                    Some(m) => Some(m),
+                    None => return no("Eingabestrom ohne `max_rate`", c.span),
+                },
             };
             let cap = c.attrs.capacity.unwrap_or(16);
             let bytes = c.attrs.capacity_bytes.unwrap_or(cap.saturating_mul(256));
@@ -194,13 +213,14 @@ impl Enc<'_> {
                 elem: *elem,
                 cap,
                 budget,
-                maxpt: Some(maxpt),
+                maxpt,
                 overflow: c.attrs.overflow.unwrap_or_default(),
                 wake: c.attrs.wake,
-                channel: true,
-                decodes: matches!(self.p.types.get(*elem), Type::Record(_)),
+                channel: fed.is_none(),
+                decodes: fed.is_none() && matches!(self.p.types.get(*elem), Type::Record(_)),
                 readers: own,
                 foreign_readers: foreign,
+                fed,
             });
         }
         for (i, s) in self.p.streams.iter().enumerate() {
@@ -222,6 +242,7 @@ impl Enc<'_> {
                 decodes: false,
                 readers: own,
                 foreign_readers: foreign,
+                fed: None,
             });
         }
         Ok(out)
@@ -507,6 +528,10 @@ impl Enc<'_> {
     /// ersten Eintritt (`run`: Stimulus, dann `init`), und niemand schlaeft.
     pub(super) fn deliver(&mut self, pre: Option<&Env>, cur: &mut Env) -> R<()> {
         for s in self.streams.clone() {
+            if let (Some(t), Some(_)) = (s.fed, pre) {
+                self.feed(&s, t, cur)?;
+                continue;
+            }
             let Some(bound) = s.maxpt else { continue };
             let n = self.input(format!("i.stream.{}.n", s.name), Sort::Int);
             let mut over = Vec::new();
@@ -540,6 +565,30 @@ impl Enc<'_> {
                 let at = self.loc_pending(m);
                 let old = cur[&at].clone();
                 cur.insert(at, Term::or(vec![old, hit]));
+            }
+        }
+        Ok(())
+    }
+
+    /// Ein `sim`-gespeister Eingabestrom (8.3, `apply_sim_bindings`): Was der
+    /// Treiber beim letzten Commit abholte, kommt zu Tick-Beginn an, in
+    /// einem `stream<u8>` Byte fuer Byte, sonst als ein Element; ein
+    /// Ueberlauf zaehlt nur.
+    fn feed(&mut self, s: &Stream, t: usize, cur: &mut Env) -> R<()> {
+        let tx = self.txs[t].clone();
+        let sent = self.sent_text(&tx, cur);
+        let now = self.now.clone();
+        match self.p.types.get(s.elem) {
+            Type::Bytes { cap } => {
+                let any = Term::bin(Op::Gt, sent.len.clone(), Term::int(0));
+                let v = sent.value(*cap, None);
+                self.push(s, cur, &any, &now, &v)?;
+            }
+            _ => {
+                for (j, b) in sent.bytes.iter().enumerate() {
+                    let here = Term::bin(Op::Lt, Term::int(j as i64), sent.len.clone());
+                    self.push(s, cur, &here, &now, &V::Leaf(b.clone()))?;
+                }
             }
         }
         Ok(())
@@ -914,6 +963,9 @@ impl Enc<'_> {
         env: &Env,
         span: Span,
     ) -> R<Term> {
+        if let (Some(c), Accessor::Free | Accessor::Idle) = (self.tx_channel(base), acc) {
+            return self.tx_accessor(c, acc, base.ty, cx, env, span)?.leaf(span);
+        }
         let Some(key) = stream_of(base) else { return no("Zugriff ohne Strom", span) };
         let s = self.streams[self.stream_index(key, span)?].clone();
         let m = cx.m.expect("Maschine");
@@ -956,8 +1008,8 @@ impl Enc<'_> {
         flow: &mut Flow,
         span: Span,
     ) -> R<()> {
-        if !matches!(key, StreamRef::Internal(_)) {
-            return no("`send` auf einen Ausgabestrom", span);
+        if let StreamRef::Channel(c) = key {
+            return self.send_tx(c, value, cx, env, flow, span);
         }
         let si = self.stream_index(key, span)?;
         let s = self.streams[si].clone();

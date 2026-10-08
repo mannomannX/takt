@@ -132,7 +132,7 @@ Accessor(Count),ja,teilweise: auf Arrays und Stroemen,ja
 Accessor(Dropped),ja,ja,ja
 Accessor(Malformed),ja,ja,nein
 Accessor(Overflowed),ja,ja,nein
-Accessor(Free),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Free),ja,ja,ja
 Accessor(Jitter),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(TimeWarped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Done),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -157,8 +157,8 @@ Accessor(Rate),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Remaining),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Truncated),ja,ja,nein
 Accessor(Peek),ja,ja,ja
-Accessor(Sent),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Idle),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Sent),ja,ja,ja
+Accessor(Idle),ja,ja,ja
 Accessor(Wrap),ja,teilweise: ohne `wrap_u64`,ja
 Match(Matches),ja,teilweise: kein `{x:float}`,ja
 Match(Has),ja,teilweise: kein `{x:float}`,ja
@@ -171,7 +171,7 @@ Stmt(ForRange),ja,teilweise: bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-4
 Stmt(ForEach),ja,"teilweise: ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion",ja
 Stmt(Match),ja,teilweise: nicht im Rumpf einer Funktion,ja
 Stmt(Return),ja,ja,ja
-Stmt(Send),ja,teilweise: auf interne Stroeme,ja
+Stmt(Send),ja,"teilweise: auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus",ja
 Stmt(At),ja,nein: `at` ist nicht kodiert,ja
 Stmt(Cancel),ja,nein: geplante Ausgaben und Trigger sind nicht kodiert,ja
 Stmt(Skip),ja,ja,nein
@@ -206,7 +206,7 @@ Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Map),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Optional),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Result),ja,nein: Typ ohne Sorte im Modell,ja
-Type(Stream),ja,"teilweise: Eingabestroeme mit `max_rate`, nicht aus einem `sim`-Ausgang, Records vom Rand fester Groesse; Ausgabestroeme ohne Leser",ja
+Type(Stream),ja,"teilweise: Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes, Records vom Rand fester Groesse; Ausgabestroeme ohne Leser",ja
 Type(Capture),ja,nein: Typ ohne Sorte im Modell,ja
 Type(HandleJob),ja,nein: Typ ohne Sorte im Modell,ja
 Type(HandleTrigger),ja,nein: Typ ohne Sorte im Modell,nein
@@ -260,8 +260,8 @@ Feature(EnumWithFields),ja,ja,ja
 Feature(Function),ja,ja,ja
 Feature(Block),ja,ja,ja
 Feature(Native),ja,ja,ja
-Feature(InputStream),ja,"teilweise: mit `max_rate`, nicht aus einem `sim`-Ausgang; ein Record vom Rand fester Groesse",ja
-Feature(OutputStream),ja,teilweise: ohne `send` und ohne Leser,ja
+Feature(InputStream),ja,teilweise: mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes; ein Record vom Rand fester Groesse,ja
+Feature(OutputStream),ja,"teilweise: ohne Leser; `send` von Text, Bytes, Ganzzahlen und Arrays daraus",ja
 Feature(InternalStream),ja,ja,ja
 Feature(Command),ja,ja,ja
 Feature(Param),ja,ja,ja
