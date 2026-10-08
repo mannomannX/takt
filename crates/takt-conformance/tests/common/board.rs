@@ -601,22 +601,36 @@ pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>,
             names.join(", ")
         )];
     }
-    // Das Board braucht nur Schreiben und Lauf. Das naechste Abbild baut
-    // derweil ein zweiter Faden, eines nach dem anderen wie zuvor; ein Lauf
-    // in logischer Zeit verliert dabei keine Zeile (FB-292).
-    let build = board.builder();
+    // Das Board braucht nur Schreiben und Lauf. Die Abbilder bauen derweil
+    // eigene Faeden, je einer in seinem Bauplatz; jeder nimmt das naechste
+    // Programm, sobald er frei ist, und ein Platz, der erst kalt bauen muss,
+    // haelt die anderen nicht auf. Ein Lauf in logischer Zeit verliert dabei
+    // keine Zeile (FB-292).
+    let builders: Vec<_> = (0..board::BUILDS).map(|slot| board.builder(slot)).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
     let mut failed = Vec::new();
     std::thread::scope(|scope| {
-        let (images, built) = std::sync::mpsc::sync_channel(1);
-        let (build, chosen) = (&build, &chosen);
-        scope.spawn(move || {
-            for name in chosen {
-                if images.send(build(&board::corpus_path(name), options)).is_err() {
-                    return;
+        let (images, built) = std::sync::mpsc::channel();
+        for build in &builders {
+            let (images, next, chosen) = (images.clone(), &next, &chosen);
+            scope.spawn(move || {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(name) = chosen.get(i) else { return };
+                    if images.send((i, build(&board::corpus_path(name), options))).is_err() {
+                        return;
+                    }
                 }
+            });
+        }
+        drop(images);
+        let mut ready = std::collections::BTreeMap::new();
+        for (i, name) in chosen.iter().enumerate() {
+            while !ready.contains_key(&i) {
+                let Ok((j, elf)) = built.recv() else { break };
+                ready.insert(j, elf);
             }
-        });
-        for (name, elf) in chosen.iter().zip(built) {
+            let elf = ready.remove(&i).unwrap_or_else(|| Err("die Bau-Faeden endeten".to_string()));
             run_one(board, name, elf, options, &mut failed);
         }
     });

@@ -223,14 +223,22 @@ pub fn archive(out: &Path, name: &str, objs: &[&Path]) {
 /// Binaries desselben Crates. Und nicht ueber den PATH, weil dort ein
 /// fremdes `takt` stehen koennte. **Dasselbe Profil, nicht das neueste**:
 /// Welches Binary gerade juenger ist, entschiede sonst, wer zuletzt
-/// `cargo test` gerufen hat.
+/// `cargo test` gerufen hat. Baut der Harness in einem zweiten
+/// Zielverzeichnis ([`crate::board::BUILDS`]), nennt er das Werkzeug des
+/// ersten ausdruecklich in [`TOOL`].
 pub fn takt() -> PathBuf {
     let exe = if cfg!(windows) { "takt.exe" } else { "takt" };
     let profile = env::var("PROFILE").unwrap_or_else(|_| "release".into());
-    // `OUT_DIR` ist `<target>/[<triple>/]<profil>/build/<crate>-<hash>/out`;
-    // die CLI liegt fuer den Wirt gebaut, also ohne Triple.
-    let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    let found = out.ancestors().skip(1).take(6).map(|dir| dir.join(&profile).join(exe)).find(|p| p.exists());
+    println!("cargo:rerun-if-env-changed={TOOL}");
+    let found = match env::var_os(TOOL) {
+        Some(tool) => Some(PathBuf::from(tool)).filter(|p| p.exists()),
+        // `OUT_DIR` ist `<target>/[<triple>/]<profil>/build/<crate>-<hash>/out`;
+        // die CLI liegt fuer den Wirt gebaut, also ohne Triple.
+        None => {
+            let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+            out.ancestors().skip(1).take(6).map(|dir| dir.join(&profile).join(exe)).find(|p| p.exists())
+        }
+    };
     let Some(takt) = found else { panic!("Das Werkzeug takt fehlt; erst `{}`", build_command(&profile)) };
     // Auch das Werkzeug ist eine Quelle: Ohne diese Zeile baute Cargo nach
     // einer Aenderung am Compiler nicht neu.
@@ -238,6 +246,9 @@ pub fn takt() -> PathBuf {
     assert_fresh(&takt, &profile);
     takt
 }
+
+/// Die Umgebungsvariable, die das Werkzeug ausdruecklich nennt ([`takt`]).
+pub const TOOL: &str = "TAKT_TOOL";
 
 /// Wie das Werkzeug fuer `profile` entsteht; `dev` und `debug` sind Cargos Vorgabe.
 fn build_command(profile: &str) -> String {

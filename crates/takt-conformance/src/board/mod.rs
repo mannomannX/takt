@@ -11,9 +11,10 @@
 //! | Board | Schreiben und Starten | Zurueck, wenn es nicht antwortet |
 //! |---|---|---|
 //! | ESP32-C6 ([`esp32c6`]) | `probe-rs` ueber USB-Serial-JTAG | Chip-Reset auf RTC-Ebene, ueber JTAG oder Konsole (FB-264, FB-266) |
-//! | STM32F401 ([`stm32f401`]) | `dfu-util` ueber den DFU-Bootloader im ROM | `TAKT` auf der Trace-Leitung: Die Anwendung springt in den Bootloader (FB-275) |
+//! | STM32F401 ([`stm32f401`]) | DfuSe ueber den Bootloader im ROM ([`dfuse`]), zurueckgelesen | `TAKT` auf der Trace-Leitung: Die Anwendung springt in den Bootloader (FB-275) |
 //! | Wirt ([`host`]) | ein Prozess, der MCU-Rahmen in logischer Zeit | entfaellt: Der Prozess endet |
 
+pub mod dfuse;
 pub mod esp32c6;
 pub mod host;
 pub mod stm32f401;
@@ -346,6 +347,11 @@ impl Options {
 /// ([`Board::builder`]).
 pub type Builder = Box<dyn Fn(&Path, &Options) -> Result<PathBuf, String> + Send + Sync>;
 
+/// So viele Abbilder entstehen zugleich, jedes in seinem eigenen
+/// Zielverzeichnis: Cargo sperrt ein Zielverzeichnis fuer einen Bau, und die
+/// LTO eines Abbilds rechnet auf einem Kern (FB-464).
+pub const BUILDS: usize = 2;
+
 /// Ein Board am Host.
 pub trait Board {
     /// Der Name in Meldungen und Berichten.
@@ -357,13 +363,13 @@ pub trait Board {
     /// Baut das Bring-up mit `program` und liefert das ELF; das Abbild
     /// kommt aus dem Zwischenspeicher, wenn es dort liegt.
     fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
-        (self.builder())(program, options)
+        (self.builder(0))(program, options)
     }
 
-    /// Wie [`Board::build`], ohne das Board: Damit baut ein zweiter Faden
-    /// das naechste Abbild, waehrend das Board das jetzige schreibt und
-    /// ausfuehrt.
-    fn builder(&self) -> Builder;
+    /// Wie [`Board::build`], ohne das Board und im Bauplatz `slot` (unter
+    /// [`BUILDS`]): Damit bauen andere Faeden die naechsten Abbilder,
+    /// waehrend das Board das jetzige schreibt und ausfuehrt.
+    fn builder(&self, slot: usize) -> Builder;
 
     /// Schreibt das Abbild, startet es und liest den Trace bis [`END`].
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String>;
@@ -389,6 +395,11 @@ pub fn root() -> PathBuf {
 /// Ein Programm des Differentialkorpus.
 pub fn corpus_path(name: &str) -> PathBuf {
     root().join("corpus-try").join(name)
+}
+
+/// Das Zielverzeichnis des Bauplatzes `slot` ab dem zweiten ([`BUILDS`]).
+fn slot_dir(slot: usize) -> PathBuf {
+    crate::target_dir().join("takt-board-build").join(slot.to_string())
 }
 
 /// So oft baut ein Prozess neu, wenn ihm ein anderer das Binary zwischen
@@ -425,7 +436,10 @@ impl Bringup {
     /// Kopie, die ihn traegt; sonst wird neu gebaut. Geprueft wird das ELF:
     /// Das Rohabbild fuer den Bootloader entsteht erst aus ihm, und `objcopy`
     /// laesst die Symbole weg.
-    pub fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
+    ///
+    /// Gebaut wird im Bauplatz `slot` ([`BUILDS`]): ab dem zweiten in einem
+    /// eigenen Zielverzeichnis, in denselben Zwischenspeicher.
+    pub fn build(&self, program: &Path, options: &Options, slot: usize) -> Result<PathBuf, String> {
         let images = crate::target_dir().join("takt-board-images");
         let stand = images.join(format!("{}-{:016x}", self.triple, self.sources()?));
         let key = format!("{:016x}", self.key(program, options)?);
@@ -438,7 +452,7 @@ impl Bringup {
             Ok(takt_board_support::image_key::carries(&elf, &key))
         };
         for _ in 0..ATTEMPTS {
-            let elf = self.build_uncached(program, options, &key)?;
+            let elf = self.build_uncached(program, options, &key, slot)?;
             if !stand.is_dir() {
                 self.forget_stale(&images);
             }
@@ -514,18 +528,27 @@ impl Bringup {
 
     /// `cargo build` des Bring-ups mit dem Programm; `key` landet als Symbol
     /// im ELF.
-    fn build_uncached(&self, program: &Path, options: &Options, key: &str) -> Result<PathBuf, String> {
+    fn build_uncached(&self, program: &Path, options: &Options, key: &str, slot: usize) -> Result<PathBuf, String> {
         let bin = match options.bin {
             Bin::Takt => "takt",
             Bin::Bench { .. } => "bench",
             Bin::Natives => "natives",
         };
+        let target = crate::target_dir();
+        let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
+        // Ein Kern bleibt frei; die Plaetze teilen sich die uebrigen, sonst
+        // reichte ein kalter Bau in zwei Plaetzen an die Auslagerungsgrenze.
+        let cores = std::thread::available_parallelism().map_or(2, std::num::NonZeroUsize::get);
+        let jobs = (cores.saturating_sub(1) / BUILDS).max(1);
         let mut cargo = Command::new("cargo");
         cargo
             .args(["build", "--release", "--target", self.triple, "--bin", bin])
+            .args(["-j", &jobs.to_string()])
             .arg("--message-format=json-render-diagnostics")
             .arg("--manifest-path")
             .arg(root().join(self.dir).join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", if slot == 0 { target } else { slot_dir(slot) })
+            .env(crate::bringup::TOOL, tool)
             .env("TAKT_PROGRAM", program)
             .env("TAKT_TICKS", options.ticks.to_string())
             .env("TAKT_IMAGE_KEY", key)

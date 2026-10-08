@@ -282,8 +282,8 @@ impl Board for Esp32c6 {
         "riscv32imac"
     }
 
-    fn builder(&self) -> Builder {
-        Box::new(|program, options| BRINGUP.build(program, options))
+    fn builder(&self, slot: usize) -> Builder {
+        Box::new(move |program, options| BRINGUP.build(program, options, slot))
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {

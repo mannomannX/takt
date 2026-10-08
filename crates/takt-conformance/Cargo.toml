@@ -21,6 +21,8 @@ takt-sema = { path = "../takt-sema" }
 # Die Boards am Host (`board`): der Trace kommt ueber USB-Serial-JTAG
 # (ESP32-C6) oder einen Adapter an USART1 (STM32F401).
 serialport = { version = "4", default-features = false, optional = true }
+# DfuSe zum Bootloader des F401, ohne `dfu-util` (FB-464).
+nusb = { version = "0.2", optional = true }
 # Der Schluessel im ELF eines Bring-ups (`image_key`, KON1-009).
 takt-board-support = { path = "../takt-board-support", optional = true }
 
@@ -40,7 +42,7 @@ takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 # Die Bring-ups binden nur den C-Rahmen (`mcu`) in ihr Bauskript und
 # lassen die Boards am Host mitsamt der seriellen Schnittstelle weg.
 default = ["board"]
-board = ["dep:serialport", "dep:takt-board-support"]
+board = ["dep:serialport", "dep:takt-board-support", "dep:nusb"]
 
 [lints]
 workspace = true

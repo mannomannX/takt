@@ -214,7 +214,9 @@ impl Board for Host {
         if cfg!(windows) { "x86_64-windows" } else { "x86_64" }
     }
 
-    fn builder(&self) -> Builder {
+    /// Der Wirt baut in einem Zielverzeichnis, eines nach dem anderen
+    /// (`BUILDING`); der Platz zaehlt nicht.
+    fn builder(&self, _slot: usize) -> Builder {
         let host = self.clone();
         Box::new(move |program, options| host.image(program, options))
     }

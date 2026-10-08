@@ -2,16 +2,15 @@
 //!
 //! Geschrieben wird ueber den DFU-Bootloader im ROM, und die Hand braucht
 //! es dafuer nicht: `TAKT` auf der Trace-Leitung laesst die laufende
-//! Anwendung in den Bootloader springen (FB-275), `dfu-util` schreibt das
-//! Abbild hinter den HID-Bootloader von WeAct und startet es. Der Trace
-//! kommt ueber USART1 an den Adapter.
+//! Anwendung in den Bootloader springen (FB-275), [`super::dfuse`] schreibt
+//! das Abbild hinter den HID-Bootloader von WeAct, liest es zurueck und
+//! startet es. Der Trace kommt ueber USART1 an den Adapter.
 //!
 //! Antwortet das Board nicht — ein Programm ohne Leitung, ein Absturz —,
 //! bleibt die Hand: BOOT0 halten, NRST druecken und loslassen, BOOT0
 //! loslassen. Der Lauf wartet eine Minute darauf und sagt es.
 //!
-//! `TAKT_F401_PORT` nennt den Port des Adapters (`COM7`), `TAKT_DFU_UTIL`
-//! den Pfad zu `dfu-util`, wenn er nicht im `PATH` steht.
+//! `TAKT_F401_PORT` nennt den Port des Adapters (`COM7`).
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -20,7 +19,8 @@ use std::time::{Duration, Instant};
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::{Board, Bringup, Builder, ConsoleLine, Options, capture, run_bounded};
+use super::dfuse::Dfuse;
+use super::{Board, Bringup, Builder, ConsoleLine, Options, capture};
 
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-stm32f401",
@@ -42,8 +42,8 @@ const APP_END: u32 = 0x0804_0000;
 /// Das RAM des F401CC.
 const RAM: std::ops::RangeInclusive<u32> = 0x2000_0000..=0x2001_0000;
 
-/// Die DFU-Kennung des ROM-Bootloaders (AN2606).
-const DFU_ID: &str = "0483:df11";
+/// Die USB-Kennung des ROM-Bootloaders (AN2606).
+const DFU: (u16, u16) = (0x0483, 0xdf11);
 
 /// Wie lange der Bootloader nach dem Wunsch auf sich warten lassen darf.
 const HANDBACK: Duration = Duration::from_secs(6);
@@ -51,22 +51,17 @@ const HANDBACK: Duration = Duration::from_secs(6);
 /// Wie lange ein Lauf auf die Hand wartet, wenn das Board nicht antwortet.
 const BY_HAND: Duration = Duration::from_secs(60);
 
-/// Frist fuer Schreiben und Starten.
-const DOWNLOAD: Duration = Duration::from_secs(120);
-
 /// Board 1 am Host.
 #[derive(Clone, Debug)]
 pub struct Stm32f401 {
     port: String,
-    dfu_util: String,
 }
 
 impl Stm32f401 {
     /// Das Board an `TAKT_F401_PORT`; `None` ohne die Variable.
     pub fn from_env() -> Option<Stm32f401> {
         let port = std::env::var("TAKT_F401_PORT").ok()?;
-        let dfu_util = std::env::var("TAKT_DFU_UTIL").unwrap_or_else(|_| "dfu-util".to_string());
-        Some(Stm32f401 { port, dfu_util })
+        Some(Stm32f401 { port })
     }
 
     /// Der Port des Adapters.
@@ -92,21 +87,20 @@ impl Stm32f401 {
     /// Konsole des Boards.
     fn run_with(&mut self, elf: &Path, within: Duration, console: &[ConsoleLine]) -> Result<String, String> {
         let bin = self.image(elf)?;
+        let bytes = std::fs::read(&bin).map_err(|e| format!("{}: {e}", bin.display()))?;
         self.to_bootloader()?;
-        let address = format!("{APP:#010x}:leave");
         // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
         // Wirt nicht abholt (FB-306).
         capture(&self.port, BAUD, serialport::FlowControl::Software, within, true, console, || {
-            let args = ["-a", "0", "-d", DFU_ID, "-s", &address, "-D", &bin.to_string_lossy()];
-            run_bounded(&self.dfu_util, &args, DOWNLOAD).map(|_| ()).map_err(|e| format!("{}: {e}", self.dfu_util))
+            let dfu = Dfuse::open(DFU.0, DFU.1)?;
+            dfu.write(APP, &bytes)?;
+            dfu.leave(APP)
         })
     }
 
     /// Steht das Board im DFU-Bootloader?
     pub fn in_bootloader(&self) -> Result<bool, String> {
-        let listed = run_bounded(&self.dfu_util, &["-l"], Duration::from_secs(15))
-            .map_err(|e| format!("{} -l: {e}", self.dfu_util))?;
-        Ok(listed.contains(&format!("[{DFU_ID}]")))
+        super::dfuse::present(DFU.0, DFU.1)
     }
 
     /// Bringt das Board in den DFU-Bootloader.
@@ -130,7 +124,7 @@ impl Stm32f401 {
         if self.wait_for_bootloader(BY_HAND)? {
             return Ok(());
         }
-        Err(format!("das Board kam nicht in den DFU-Bootloader ({DFU_ID}); siehe plan/f401.md 2"))
+        Err(format!("das Board kam nicht in den DFU-Bootloader ({:04x}:{:04x}); siehe plan/f401.md 2", DFU.0, DFU.1))
     }
 
     /// `TAKT` auf die Leitung: Die laufende Anwendung springt in den Bootloader.
@@ -174,8 +168,8 @@ impl Board for Stm32f401 {
         "thumbv7em"
     }
 
-    fn builder(&self) -> Builder {
-        Box::new(|program, options| BRINGUP.build(program, options))
+    fn builder(&self, slot: usize) -> Builder {
+        Box::new(move |program, options| BRINGUP.build(program, options, slot))
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
@@ -207,7 +201,7 @@ impl Board for Stm32f401 {
 /// Die ersten acht Byte sind die Vektortabelle: Stackzeiger im RAM,
 /// Resetvektor im Anwendungsbereich und ungerade (Thumb). Ein ELF statt
 /// eines Rohabbilds oder ein Abbild fuer `0x0800_0000` faellt hier auf,
-/// bevor `dfu-util` es schreibt.
+/// bevor es geschrieben wird.
 fn check_image(image: &[u8]) -> Result<(), String> {
     let word = |at: usize| image.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let (Some(sp), Some(reset)) = (word(0), word(4)) else {

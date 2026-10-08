@@ -2,8 +2,7 @@
 //! (13.8, Satz 9.4.4; plan/f401.md).
 //!
 //! **Laeuft nur mit Board.** `TAKT_F401_PORT` nennt den Port des Adapters
-//! an USART1 (`COM7`), `TAKT_DFU_UTIL` den Pfad zu `dfu-util`, wenn er
-//! nicht im `PATH` steht; ohne Port wird der Test uebersprungen. Das Board
+//! an USART1 (`COM7`); ohne Port wird der Test uebersprungen. Das Board
 //! braucht keine Hand: Jedes Programm gibt es auf `TAKT` an den
 //! DFU-Bootloader zurueck (FB-275).
 
