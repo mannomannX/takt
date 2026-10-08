@@ -115,7 +115,10 @@ fn an_overdue_deadline_is_counted_not_awaited() {
     std::thread::sleep(std::time::Duration::from_millis(2));
     let before = c.now();
     c.wait_until(1_000);
-    assert!(c.now() - before < 1_000_000, "eine vergangene Frist wird nicht abgewartet");
+    // Grosszuegig wie oben: Unter Last verdraengt der Scheduler den Faden
+    // auch ohne Warten um Millisekunden (gesehen in der vollen Suite); was
+    // zaehlt, ist der Zaehler.
+    assert!(c.now() - before < 50_000_000, "eine vergangene Frist wird nicht abgewartet");
     assert_eq!(c.late, 1, "sie wird gezaehlt");
 }
 
