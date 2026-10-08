@@ -1,0 +1,26 @@
+# Die volle Suite mit `cargo nextest run --workspace`: jeder Test in seinem
+# eigenen Prozess, alle Binaries zugleich statt nacheinander. Doc-Tests hat
+# der Workspace keine; kommen welche dazu, laufen sie mit
+# `cargo test --doc --workspace`.
+
+[profile.default]
+# Ein Kern bleibt frei fuer anderes.
+test-threads = -1
+
+[[profile.default.overrides]]
+# Die langen Binaries zuerst: Begaenne der laengste Test zuletzt, bestimmte
+# er das Ende der Suite.
+filter = """
+    binary(embed) | binary(differential) | binary(fuzz) | binary(fuzz_machines) | binary(mcu_harness)
+    | binary(examples) | binary(mcu_codegen) | binary(diagnostics)
+"""
+priority = 50
+
+[test-groups]
+# Ein Board kennt nur einen Lauf zur Zeit, und beide Suiten laufen
+# nacheinander: Ihre Abbilder bauen im selben Zielverzeichnis.
+boards = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "binary(board_esp32c6) | binary(board_stm32f401)"
+test-group = "boards"

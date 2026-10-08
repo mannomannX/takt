@@ -28,8 +28,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use super::{
-    ATTEMPTS, Bin, Board, END, Options, complete, hash_build_inputs, hash_program, hash_tree, publish_checked, root,
-    run_bounded,
+    ATTEMPTS, Bin, Board, Builder, END, Options, complete, hash_build_inputs, hash_program, hash_tree, publish_checked,
+    root, run_bounded,
 };
 use crate::bringup::WIRING;
 
@@ -214,7 +214,22 @@ impl Board for Host {
         if cfg!(windows) { "x86_64-windows" } else { "x86_64" }
     }
 
-    fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
+    fn builder(&self) -> Builder {
+        let host = self.clone();
+        Box::new(move |program, options| host.image(program, options))
+    }
+
+    fn run(&mut self, exe: &Path, options: &Options) -> Result<String, String> {
+        let program = exe.to_string_lossy();
+        let text = run_bounded(&program, &[&options.ticks.to_string()], RUN).map_err(|e| format!("{program}: {e}"))?;
+        if text.contains(END) { complete(text, options) } else { Err(format!("kein `{END}`; gelesen:\n{text}")) }
+    }
+}
+
+impl Host {
+    /// Das Programm mit dem Wirtsrahmen als ausfuehrbare Datei, aus dem
+    /// Zwischenspeicher oder frisch gebaut ([`Board::build`]).
+    fn image(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
         if options.bin != Bin::Takt || options.timed || options.rtos || options.hostile_fpu {
             return Err("der Wirt kennt nur den Konformitaetslauf in logischer Zeit".into());
         }
@@ -272,12 +287,6 @@ impl Board for Host {
             }
         }
         Err(format!("{key}: {ATTEMPTS}-mal gebaut, jedes Mal hatte ein anderer Prozess das Binary ueberschrieben"))
-    }
-
-    fn run(&mut self, exe: &Path, options: &Options) -> Result<String, String> {
-        let program = exe.to_string_lossy();
-        let text = run_bounded(&program, &[&options.ticks.to_string()], RUN).map_err(|e| format!("{program}: {e}"))?;
-        if text.contains(END) { complete(text, options) } else { Err(format!("kein `{END}`; gelesen:\n{text}")) }
     }
 }
 

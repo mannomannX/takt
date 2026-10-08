@@ -1,6 +1,7 @@
 //! Der Korpus auf einem Board gegen den Interpreter (13.8, Satz 9.4.4).
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use takt_conformance::board::{self, Board, Options};
 use takt_conformance::compare;
@@ -600,34 +601,60 @@ pub fn agreement_with(board: &mut dyn Board, names: &[&str], only: Option<&str>,
             names.join(", ")
         )];
     }
+    // Das Board braucht nur Schreiben und Lauf. Das naechste Abbild baut
+    // derweil ein zweiter Faden, eines nach dem anderen wie zuvor; ein Lauf
+    // in logischer Zeit verliert dabei keine Zeile (FB-292).
+    let build = board.builder();
     let mut failed = Vec::new();
-    for name in chosen {
-        let p = corpus(name);
-        let text = match board.build(&board::corpus_path(name), options).and_then(|elf| board.run(&elf, options)) {
-            Ok(t) => t,
-            Err(e) => {
-                failed.push(format!("{name}: kein Lauf auf dem Board:\n{e}"));
-                continue;
+    std::thread::scope(|scope| {
+        let (images, built) = std::sync::mpsc::sync_channel(1);
+        let (build, chosen) = (&build, &chosen);
+        scope.spawn(move || {
+            for name in chosen {
+                if images.send(build(&board::corpus_path(name), options)).is_err() {
+                    return;
+                }
             }
-        };
-        let interpreted = run_interpreted(&p);
-        let missing: Vec<String> = output_names(&interpreted).difference(&output_names(&text)).cloned().collect();
-        // Ein `f32` schreibt das Board als seinen Wert in `f64` (4.2, FB-356).
-        let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
-        let diffs = compare(&widened, &text);
-        if !missing.is_empty() || !diffs.is_empty() {
-            let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
-            failed.push(format!(
-                "{name}: {} Abweichungen, fehlende Ausgaenge {missing:?}\n{}\n--- Interpreter ---\n{}\n--- Board ---\n{}",
-                diffs.len(),
-                list.join("\n"),
-                interpreted.lines().take(12).collect::<Vec<_>>().join("\n"),
-                text.lines().filter(|l| l.starts_with("t=")).take(12).collect::<Vec<_>>().join("\n")
-            ));
+        });
+        for (name, elf) in chosen.iter().zip(built) {
+            run_one(board, name, elf, options, &mut failed);
         }
-        eprintln!("{} {name}: {} Abweichungen", board.name(), diffs.len());
-    }
+    });
     failed
+}
+
+/// Ein Programm des Vergleichs auf dem Board, mit seinem gebauten Abbild.
+fn run_one(
+    board: &mut dyn Board,
+    name: &str,
+    elf: Result<PathBuf, String>,
+    options: &Options,
+    failed: &mut Vec<String>,
+) {
+    let p = corpus(name);
+    let text = match elf.and_then(|elf| board.run(&elf, options)) {
+        Ok(t) => t,
+        Err(e) => {
+            failed.push(format!("{name}: kein Lauf auf dem Board:\n{e}"));
+            return;
+        }
+    };
+    let interpreted = run_interpreted(&p);
+    let missing: Vec<String> = output_names(&interpreted).difference(&output_names(&text)).cloned().collect();
+    // Ein `f32` schreibt das Board als seinen Wert in `f64` (4.2, FB-356).
+    let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
+    let diffs = compare(&widened, &text);
+    if !missing.is_empty() || !diffs.is_empty() {
+        let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+        failed.push(format!(
+            "{name}: {} Abweichungen, fehlende Ausgaenge {missing:?}\n{}\n--- Interpreter ---\n{}\n--- Board ---\n{}",
+            diffs.len(),
+            list.join("\n"),
+            interpreted.lines().take(12).collect::<Vec<_>>().join("\n"),
+            text.lines().filter(|l| l.starts_with("t=")).take(12).collect::<Vec<_>>().join("\n")
+        ));
+    }
+    eprintln!("{} {name}: {} Abweichungen", board.name(), diffs.len());
 }
 
 /// Programme, deren `f32` die FPU des Boards rechnet: Subnormale

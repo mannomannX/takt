@@ -28,7 +28,9 @@ Testdateien heissen nach dem, was sie pruefen: `examples.rs`,
 
 ## Werkzeuge
 
-- `cargo test --workspace` — die volle Suite
+- `cargo nextest run --workspace` — die volle Suite, jeder Test in seinem
+  Prozess und die Binaries zugleich (`.config/nextest.toml`); `cargo test
+  --workspace` prueft dasselbe, nur nacheinander
 - `cargo clippy --workspace --all-targets` — muss ohne Warnung laufen
 - `cargo fmt --all` — rustfmt, `max_width = 120`
 - `UPDATE_GOLDEN=1 cargo test -p takt-syntax --test sexpr_golden` —

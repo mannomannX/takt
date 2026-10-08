@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::{Board, Bringup, ConsoleLine, Options, capture, run_bounded};
+use super::{Board, Bringup, Builder, ConsoleLine, Options, capture, run_bounded};
 
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-stm32f401",
@@ -174,8 +174,8 @@ impl Board for Stm32f401 {
         "thumbv7em"
     }
 
-    fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
-        BRINGUP.build(program, options)
+    fn builder(&self) -> Builder {
+        Box::new(|program, options| BRINGUP.build(program, options))
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {

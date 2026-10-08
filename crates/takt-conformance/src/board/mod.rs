@@ -342,6 +342,10 @@ impl Options {
     }
 }
 
+/// Baut die Abbilder eines Boards, ohne das Board zu belegen
+/// ([`Board::builder`]).
+pub type Builder = Box<dyn Fn(&Path, &Options) -> Result<PathBuf, String> + Send + Sync>;
+
 /// Ein Board am Host.
 pub trait Board {
     /// Der Name in Meldungen und Berichten.
@@ -352,7 +356,14 @@ pub trait Board {
 
     /// Baut das Bring-up mit `program` und liefert das ELF; das Abbild
     /// kommt aus dem Zwischenspeicher, wenn es dort liegt.
-    fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String>;
+    fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
+        (self.builder())(program, options)
+    }
+
+    /// Wie [`Board::build`], ohne das Board: Damit baut ein zweiter Faden
+    /// das naechste Abbild, waehrend das Board das jetzige schreibt und
+    /// ausfuehrt.
+    fn builder(&self) -> Builder;
 
     /// Schreibt das Abbild, startet es und liest den Trace bis [`END`].
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String>;

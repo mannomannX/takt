@@ -10,13 +10,13 @@
 //! `TAKT_ESP32C6_PORT` nennt den Port der Konsole (`COM4`, `/dev/ttyACM0`).
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::{Board, Bringup, ConsoleLine, Failure, Options, capture, port_listed, run_bounded};
+use super::{Board, Bringup, Builder, ConsoleLine, Failure, Options, capture, port_listed, run_bounded};
 
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-esp32c6",
@@ -282,8 +282,8 @@ impl Board for Esp32c6 {
         "riscv32imac"
     }
 
-    fn build(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
-        BRINGUP.build(program, options)
+    fn builder(&self) -> Builder {
+        Box::new(|program, options| BRINGUP.build(program, options))
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
