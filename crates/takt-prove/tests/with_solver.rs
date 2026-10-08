@@ -47,18 +47,37 @@ fn nested_loops(outer: u32, n: u32) -> Program {
 }
 
 /// **Die Grenze des Ausrollens.** Eine Schleife ueber der Grenze ist
-/// ausser Reichweite, statt die Terme ohne Ende zu vertiefen: `takt prove`
-/// lief bei 1000 × 3000 Durchlaeufen ueber den Stack (FB-403). Darunter
+/// ausser Reichweite, statt das Modell ohne Ende wachsen zu lassen:
+/// `watchdog.takt` rollte 1000 × 3000 Durchlaeufe aus (FB-403). Darunter
 /// kodiert er weiter; der Test braucht keinen Solver.
 #[test]
 fn a_loop_beyond_the_unroll_limit_is_out_of_reach() {
     let limit = u32::try_from(takt_prove::encode::UNROLL_LIMIT).expect("Grenze");
-    for (outer, n) in [(64, 64), (1, limit)] {
+    for (outer, n) in [(64, limit / 64), (1, limit)] {
         let e = encode(&nested_loops(outer, n)).expect_err("ueber der Grenze");
         assert!(e.what.contains("Durchlaeufe"), "{}", e.what);
     }
     let r = encode(&nested_loops(1, limit - 1));
     assert!(r.is_ok(), "an der Grenze: {:?}", r.err());
+}
+
+/// **Tiefe Terme im Stack eines Tests.** Ein Pfad an der Grenze vertieft
+/// den Term des Akkumulators um jeden Durchlauf; Kodieren, Auswerten,
+/// Schreiben als SMT-LIB2 und Abbauen rekursieren nicht ueber die Tiefe.
+/// Vorher sprengten 64 × 64 Durchlaeufe den Stack (FB-403).
+#[test]
+fn a_path_at_the_unroll_limit_fits_the_stack_of_a_test() {
+    let limit = u32::try_from(takt_prove::encode::UNROLL_LIMIT).expect("Grenze");
+    let model = encode(&nested_loops(1, limit - 1)).expect("an der Grenze");
+    let states = model.simulate(3, &|_, _| None);
+    let total = |k: usize| match states[k].get("s.out.total") {
+        Some(takt_prove::Val::Int(t)) => *t,
+        other => panic!("{other:?}"),
+    };
+    // Jeder Tick zaehlt die Durchlaeufe des Pfads modulo 1000.
+    assert_eq!((total(3) - total(2)).rem_euclid(1000), i64::from(limit - 1) % 1000);
+    let text = takt_prove::export(&model, 2);
+    assert!(text.contains("(check-sat)"));
 }
 
 #[test]

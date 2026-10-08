@@ -23,7 +23,7 @@ use takt_diag::Span;
 use takt_mir::expr::{Expr, TProp, TemporalOp};
 use takt_mir::program::Property;
 
-use super::{Cx, Edge, Enc, Env, Flow, Mode, R, UNROLL_LIMIT, no};
+use super::{Cx, Edge, Enc, Env, Flow, Mode, R, no};
 use crate::term::{Op, Term};
 
 /// Eine Formel unter `always` mit Fenstern in Ticks; jedes `once` hat
@@ -162,6 +162,10 @@ fn temporal(f: &TProp) -> bool {
     }
 }
 
+/// Wie viele Ticks der Ring eines Monitors haelt: je Tick und Atom eine
+/// Variable im Zustand.
+const RING_LIMIT: i64 = 256;
+
 impl Enc<'_> {
     /// Die Monitore der Eigenschaften mit Zeitoperatoren unter `always`.
     pub(super) fn monitors(&self) -> R<Vec<Monitor>> {
@@ -212,7 +216,7 @@ impl Enc<'_> {
     fn ring(&self, formula: Mon, span: Span) -> R<Plan> {
         let (future, past) = (formula.future(), formula.past());
         let depth = future + past;
-        if depth > UNROLL_LIMIT {
+        if depth > RING_LIMIT {
             return no(format!("ein Fenster von {depth} Ticks ist fuer den Ring des Monitors zu lang"), span);
         }
         Ok(Plan::Ring { formula, future, depth })

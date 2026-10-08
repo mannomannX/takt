@@ -278,10 +278,10 @@ impl Cx<'_> {
 
 /// Wie viele Schleifendurchlaeufe die Kodierung eines Pfads ausrollt: des
 /// Starts einer Maschine oder ihres Ticks aus einem Blatt. Jeder Durchlauf
-/// vertieft die Terme der Variablen, die er schreibt, und Terme werden
-/// rekursiv gebaut, ausgewertet und abgebaut; ohne Grenze lief `takt prove`
-/// bei 1000 × 3000 Durchlaeufen ueber den Stack (FB-403).
-pub const UNROLL_LIMIT: i64 = 256;
+/// vertieft die Terme der Variablen, die er schreibt; nichts rekursiert
+/// ueber diese Tiefe (`term::post_order`), die Grenze haelt das Modell in
+/// der Groesse, die Auswertung und Solver tragen (FB-403).
+pub const UNROLL_LIMIT: i64 = 4096;
 
 /// Der Kodierer.
 struct Enc<'p> {
@@ -3312,11 +3312,11 @@ fn int_bound(c: &Const) -> i64 {
 }
 
 fn has_var(t: &Term) -> bool {
-    match &*t.0 {
-        Node::Var(..) => true,
-        Node::App(_, args) => args.iter().any(has_var),
-        _ => false,
-    }
+    let leaf = |t: &Term| matches!(&*t.0, Node::Var(..));
+    leaf(t)
+        || crate::term::post_order(t, |_| false)
+            .iter()
+            .any(|n| matches!(&*n.0, Node::App(_, args) if args.iter().any(leaf)))
 }
 
 fn node_name(e: &ExprKind) -> &'static str {

@@ -3,7 +3,13 @@
 //! (plan/m6.md 2.8). Ein Term ist ein geteilter Graph (`Rc`): Die Mischung
 //! der Zweige (`ite`) verweist auf dieselben Teilterme, und der Drucker
 //! benennt jeden Knoten einmal.
+//!
+//! Ein ausgerollter Pfad ist tausende Knoten tief (FB-403); nichts, was
+//! einen Term durchlaeuft oder abbaut, rekursiert darum ueber seine Tiefe:
+//! [`post_order`] liefert die Knoten in der Reihenfolge, in der jeder nur
+//! seine schon behandelten Argumente braucht.
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 /// Sorte eines Terms.
@@ -152,9 +158,54 @@ pub enum Node {
     App(Op, Vec<Term>),
 }
 
+/// Baut die Argumente ohne Rekursion ab: Ein Argument, das nur dieser
+/// Knoten haelt, gibt seine eigenen an den Stapel weiter.
+impl Drop for Node {
+    fn drop(&mut self) {
+        let Node::App(_, args) = self else { return };
+        let mut stack = std::mem::take(args);
+        while let Some(t) = stack.pop() {
+            if let Ok(mut n) = Rc::try_unwrap(t.0)
+                && let Node::App(_, inner) = &mut n
+            {
+                stack.append(inner);
+            }
+        }
+    }
+}
+
 /// Ein geteilter Term.
 #[derive(Clone, Debug)]
 pub struct Term(pub Rc<Node>);
+
+impl Term {
+    /// Die Identitaet des Knotens im geteilten Graphen.
+    pub fn key(&self) -> usize {
+        Rc::as_ptr(&self.0) as usize
+    }
+}
+
+/// Die inneren Knoten unter `root`, jeder einmal und nach seinen
+/// Argumenten; einen Knoten, den `known` schon kennt, laesst sie samt
+/// seinem Graphen aus.
+pub fn post_order(root: &Term, known: impl Fn(&Term) -> bool) -> Vec<Term> {
+    let mut out = Vec::new();
+    let mut expanded = HashSet::new();
+    let mut stack = vec![(root.clone(), false)];
+    while let Some((t, ready)) = stack.pop() {
+        let Node::App(_, args) = &*t.0 else { continue };
+        if ready {
+            out.push(t);
+            continue;
+        }
+        if known(&t) || !expanded.insert(t.key()) {
+            continue;
+        }
+        stack.push((t.clone(), true));
+        stack.extend(args.iter().rev().map(|a| (a.clone(), false)));
+    }
+    out
+}
 
 impl std::ops::Not for Term {
     type Output = Term;
@@ -232,14 +283,16 @@ impl Term {
         Term::new(Node::App(op, args))
     }
 
-    /// `and`, geglaettet; `true` faellt weg, `false` gewinnt.
+    /// `and`; `true` faellt weg, `false` gewinnt. Ein inneres `and` bleibt
+    /// ein geteilter Knoten: Geglaettet kaeme jede Bedingung eines Pfads in
+    /// jede spaetere Konjunktion, und das Modell wuechse mit den Pruefungen
+    /// eines Pfads quadratisch.
     pub fn and(args: Vec<Term>) -> Term {
         let mut out = Vec::new();
         for a in args {
             match &*a.0 {
                 Node::Bool(true) => {}
                 Node::Bool(false) => return Term::bool(false),
-                Node::App(Op::And, inner) => out.extend(inner.iter().cloned()),
                 _ => out.push(a),
             }
         }
@@ -250,14 +303,14 @@ impl Term {
         }
     }
 
-    /// `or`, geglaettet; `false` faellt weg, `true` gewinnt.
+    /// `or`; `false` faellt weg, `true` gewinnt, ein inneres `or` bleibt
+    /// geteilt wie bei [`Term::and`].
     pub fn or(args: Vec<Term>) -> Term {
         let mut out = Vec::new();
         for a in args {
             match &*a.0 {
                 Node::Bool(false) => {}
                 Node::Bool(true) => return Term::bool(true),
-                Node::App(Op::Or, inner) => out.extend(inner.iter().cloned()),
                 _ => out.push(a),
             }
         }
@@ -288,60 +341,63 @@ impl Term {
         matches!(&*self.0, Node::Bool(x) if *x == b)
     }
 
-    /// Die Sorte.
+    /// Die Sorte; ein Zweig und ein Fliesskommaargument tragen sie weiter.
     pub fn sort(&self) -> Sort {
-        match &*self.0 {
-            Node::Bool(_) => Sort::Bool,
-            Node::Int(_) => Sort::Int,
-            Node::F32(_) => Sort::F32,
-            Node::F64(_) => Sort::F64,
-            Node::Var(_, s) => *s,
-            Node::App(op, args) => match op {
-                Op::Not
-                | Op::And
-                | Op::Or
-                | Op::Eq
-                | Op::Lt
-                | Op::Le
-                | Op::Gt
-                | Op::Ge
-                | Op::FLt
-                | Op::FLe
-                | Op::FGt
-                | Op::FGe
-                | Op::FEq
-                | Op::IsFinite
-                | Op::AddOverflows
-                | Op::SubOverflows
-                | Op::MulOverflows => Sort::Bool,
-                Op::ToF32 => Sort::F32,
-                Op::ToF64 => Sort::F64,
-                Op::Ite => args[1].sort(),
-                Op::Neg
-                | Op::Add
-                | Op::Sub
-                | Op::Mul
-                | Op::Div
-                | Op::Rem
-                | Op::BitAnd
-                | Op::BitOr
-                | Op::BitXor
-                | Op::Shl
-                | Op::Shr
-                | Op::Wrap { .. }
-                | Op::FloatToInt => Sort::Int,
-                Op::FNeg
-                | Op::FAdd
-                | Op::FSub
-                | Op::FMul
-                | Op::FDiv
-                | Op::FAbs
-                | Op::FSqrt
-                | Op::FFma
-                | Op::Scale { .. }
-                | Op::Math(_)
-                | Op::Round(_) => args[0].sort(),
-            },
+        let mut t = self;
+        loop {
+            t = match &*t.0 {
+                Node::Bool(_) => return Sort::Bool,
+                Node::Int(_) => return Sort::Int,
+                Node::F32(_) => return Sort::F32,
+                Node::F64(_) => return Sort::F64,
+                Node::Var(_, s) => return *s,
+                Node::App(op, args) => match op {
+                    Op::Not
+                    | Op::And
+                    | Op::Or
+                    | Op::Eq
+                    | Op::Lt
+                    | Op::Le
+                    | Op::Gt
+                    | Op::Ge
+                    | Op::FLt
+                    | Op::FLe
+                    | Op::FGt
+                    | Op::FGe
+                    | Op::FEq
+                    | Op::IsFinite
+                    | Op::AddOverflows
+                    | Op::SubOverflows
+                    | Op::MulOverflows => return Sort::Bool,
+                    Op::ToF32 => return Sort::F32,
+                    Op::ToF64 => return Sort::F64,
+                    Op::Ite => &args[1],
+                    Op::Neg
+                    | Op::Add
+                    | Op::Sub
+                    | Op::Mul
+                    | Op::Div
+                    | Op::Rem
+                    | Op::BitAnd
+                    | Op::BitOr
+                    | Op::BitXor
+                    | Op::Shl
+                    | Op::Shr
+                    | Op::Wrap { .. }
+                    | Op::FloatToInt => return Sort::Int,
+                    Op::FNeg
+                    | Op::FAdd
+                    | Op::FSub
+                    | Op::FMul
+                    | Op::FDiv
+                    | Op::FAbs
+                    | Op::FSqrt
+                    | Op::FFma
+                    | Op::Scale { .. }
+                    | Op::Math(_)
+                    | Op::Round(_) => &args[0],
+                },
+            };
         }
     }
 }

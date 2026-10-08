@@ -15,10 +15,9 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
-use std::rc::Rc;
 
 use crate::encode::{Goal, Model, StateVar};
-use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
+use crate::term::{Fun, Node, Op, Rounding, Sort, Term, post_order};
 
 fn sort_text(s: Sort) -> &'static str {
     match s {
@@ -53,8 +52,17 @@ struct Printer<'a> {
 }
 
 impl Printer<'_> {
-    /// Der Name eines Terms; innere Knoten bekommen ein `define-fun`.
+    /// Der Name eines Terms; innere Knoten bekommen ein `define-fun`, jeder
+    /// nach seinen Argumenten ([`post_order`]).
     fn name(&mut self, t: &Term, state: u32, input: u32) -> String {
+        for n in post_order(t, |n| self.defs.contains_key(&(n.key(), state, input))) {
+            self.define(&n, state, input);
+        }
+        self.atom(t, state, input)
+    }
+
+    /// Der Name eines Blatts oder eines schon definierten Knotens.
+    fn atom(&self, t: &Term, state: u32, input: u32) -> String {
         match &*t.0 {
             Node::Bool(b) => b.to_string(),
             Node::Int(i) => {
@@ -75,38 +83,37 @@ impl Printer<'_> {
                     at(v, state, self.tag)
                 }
             }
-            Node::App(op, args) => {
-                let key = (Rc::as_ptr(&t.0) as usize, state, input);
-                if let Some(n) = self.defs.get(&key) {
-                    return n.clone();
-                }
-                let parts: Vec<String> = args.iter().map(|a| self.name(a, state, input)).collect();
-                let sort = t.sort();
-                let body = match op {
-                    Op::Math(f) => {
-                        let fun = format!("|math.{}.{}|", f.name(), sort_text(sort).replace(['(', ')', ' ', '_'], ""));
-                        if self.declared.insert(fun.clone()) {
-                            let domain = vec![sort_text(sort); parts.len()].join(" ");
-                            let _ = writeln!(self.out, "(declare-fun {fun} ({domain}) {})", sort_text(sort));
-                        }
-                        format!("({fun} {})", parts.join(" "))
-                    }
-                    Op::Scale { num, den } => {
-                        let (e, s) = if sort == Sort::F32 { (8, 24) } else { (11, 53) };
-                        format!("((_ to_fp {e} {s}) RNE (/ (* (fp.to_real {}) {num}.0) {den}.0))", parts[0])
-                    }
-                    _ => app_text(*op, &parts),
-                };
-                let n = format!("|d{}{}|", self.tag, self.next);
-                self.next += 1;
-                let _ = writeln!(self.out, "(define-fun {n} () {} {body})", sort_text(sort));
-                if let Op::Math(f) = op {
-                    let _ = writeln!(self.out, "(assert {})", math_bound(*f, &n, sort));
-                }
-                self.defs.insert(key, n.clone());
-                n
-            }
+            Node::App(..) => self.defs.get(&(t.key(), state, input)).cloned().expect("vor dem Knoten definiert"),
         }
+    }
+
+    /// Das `define-fun` eines inneren Knotens, dessen Argumente benannt sind.
+    fn define(&mut self, t: &Term, state: u32, input: u32) {
+        let Node::App(op, args) = &*t.0 else { return };
+        let parts: Vec<String> = args.iter().map(|a| self.atom(a, state, input)).collect();
+        let sort = t.sort();
+        let body = match op {
+            Op::Math(f) => {
+                let fun = format!("|math.{}.{}|", f.name(), sort_text(sort).replace(['(', ')', ' ', '_'], ""));
+                if self.declared.insert(fun.clone()) {
+                    let domain = vec![sort_text(sort); parts.len()].join(" ");
+                    let _ = writeln!(self.out, "(declare-fun {fun} ({domain}) {})", sort_text(sort));
+                }
+                format!("({fun} {})", parts.join(" "))
+            }
+            Op::Scale { num, den } => {
+                let (e, s) = if sort == Sort::F32 { (8, 24) } else { (11, 53) };
+                format!("((_ to_fp {e} {s}) RNE (/ (* (fp.to_real {}) {num}.0) {den}.0))", parts[0])
+            }
+            _ => app_text(*op, &parts),
+        };
+        let n = format!("|d{}{}|", self.tag, self.next);
+        self.next += 1;
+        let _ = writeln!(self.out, "(define-fun {n} () {} {body})", sort_text(sort));
+        if let Op::Math(f) = op {
+            let _ = writeln!(self.out, "(assert {})", math_bound(*f, &n, sort));
+        }
+        self.defs.insert((t.key(), state, input), n);
     }
 }
 
@@ -207,24 +214,20 @@ fn app_text(op: Op, a: &[String]) -> String {
     }
 }
 
-/// Sammelt die Variablen eines Terms; geteilte Knoten einmal.
-fn vars_of(t: &Term, out: &mut BTreeSet<String>, seen: &mut HashSet<usize>) {
-    match &*t.0 {
-        Node::Var(v, _) => {
-            out.insert(v.clone());
-        }
-        Node::App(_, args) if seen.insert(Rc::as_ptr(&t.0) as usize) => {
-            for a in args {
-                vars_of(a, out, seen);
-            }
-        }
-        _ => {}
-    }
-}
-
+/// Die Variablen eines Terms; geteilte Knoten einmal.
 fn vars(t: &Term) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    vars_of(t, &mut out, &mut HashSet::new());
+    let mut seen = HashSet::new();
+    let mut stack = vec![t.clone()];
+    while let Some(t) = stack.pop() {
+        match &*t.0 {
+            Node::Var(v, _) => {
+                out.insert(v.clone());
+            }
+            Node::App(_, args) if seen.insert(t.key()) => stack.extend(args.iter().cloned()),
+            _ => {}
+        }
+    }
     out
 }
 
@@ -547,19 +550,24 @@ impl LetPrinter {
         LetPrinter { tag, binds: Vec::new(), names: HashMap::new() }
     }
 
+    /// Der Name eines Terms; innere Knoten bekommen eine Bindung, jeder
+    /// nach seinen Argumenten ([`post_order`]). `None` ausserhalb des
+    /// Fragments.
     fn name(&mut self, t: &Term, state: u32, input: u32) -> Option<String> {
+        for n in post_order(t, |n| self.names.contains_key(&(n.key(), state, input))) {
+            let Node::App(op, args) = &*n.0 else { continue };
+            let parts: Vec<String> = args.iter().map(|a| self.atom(a, state, input)).collect::<Option<_>>()?;
+            let name = format!("|l{}{}|", self.tag, self.binds.len());
+            self.binds.push((name.clone(), lia_text(*op, &parts)?));
+            self.names.insert((n.key(), state, input), name);
+        }
+        self.atom(t, state, input)
+    }
+
+    /// Der Name eines Blatts oder eines schon gebundenen Knotens.
+    fn atom(&self, t: &Term, state: u32, input: u32) -> Option<String> {
         Some(match &*t.0 {
-            Node::App(op, args) => {
-                let key = (Rc::as_ptr(&t.0) as usize, state, input);
-                if let Some(n) = self.names.get(&key) {
-                    return Some(n.clone());
-                }
-                let parts: Vec<String> = args.iter().map(|a| self.name(a, state, input)).collect::<Option<_>>()?;
-                let n = format!("|l{}{}|", self.tag, self.binds.len());
-                self.binds.push((n.clone(), lia_text(*op, &parts)?));
-                self.names.insert(key, n.clone());
-                n
-            }
+            Node::App(..) => self.names.get(&(t.key(), state, input)).cloned().expect("vor dem Knoten gebunden"),
             Node::Var(_, Sort::F32 | Sort::F64) | Node::F32(_) | Node::F64(_) => return None,
             Node::Var(v, _) if v.starts_with("i.") => at(v, input, self.tag),
             Node::Var(v, _) => at(v, state, self.tag),

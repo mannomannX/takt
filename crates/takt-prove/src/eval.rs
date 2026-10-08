@@ -5,7 +5,6 @@
 //! Modells muss im Interpreter dasselbe tun.
 
 use std::collections::{BTreeMap, HashMap};
-use std::rc::Rc;
 
 use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
@@ -74,101 +73,135 @@ pub fn eval_all<'a>(ts: impl IntoIterator<Item = &'a Term>, env: &Env) -> Vec<Va
     ts.into_iter().map(|t| eval_in(t, env, &mut memo)).collect()
 }
 
+/// Ein Stapel statt Rekursion: Ein ausgerollter Pfad ist tausende Knoten
+/// tief (FB-403). Ein Knoten, dem ein Argument fehlt, legt sich mit ihm
+/// zurueck auf den Stapel; `ite` wertet nur den genommenen Zweig, `and`
+/// und `or` brechen ab, sobald ihr Wert feststeht.
 fn eval_in(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
-    let key = Rc::as_ptr(&t.0) as usize;
-    if let Some(v) = memo.get(&key) {
-        return *v;
+    let mut stack = vec![(t.clone(), 0)];
+    while let Some((n, from)) = stack.pop() {
+        if !memo.contains_key(&n.key())
+            && let Some(v) = visit(&n, from, env, memo, &mut stack)
+        {
+            memo.insert(n.key(), v);
+        }
     }
-    let v = eval_node(t, env, memo);
-    memo.insert(key, v);
-    v
+    memo[&t.key()]
 }
 
-fn eval_node(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
+/// Der Wert von `t`, wenn seine Argumente bekannt sind; sonst legt er sich
+/// und das naechste fehlende Argument auf den Stapel. `from` ist bei `and`
+/// und `or` das erste noch ungepruefte Argument.
+fn visit(t: &Term, from: usize, env: &Env, memo: &HashMap<usize, Val>, stack: &mut Vec<(Term, usize)>) -> Option<Val> {
+    let Node::App(op, args) = &*t.0 else { return Some(leaf(t, env)) };
+    let known = |a: &Term| memo.get(&a.key()).copied();
+    let mut wait = |a: &Term, from: usize| {
+        stack.push((t.clone(), from));
+        stack.push((a.clone(), 0));
+        None
+    };
+    match op {
+        Op::Ite => {
+            let Some(c) = known(&args[0]) else { return wait(&args[0], 0) };
+            let pick = &args[if c.as_bool() { 1 } else { 2 }];
+            known(pick).or_else(|| wait(pick, 0))
+        }
+        Op::And | Op::Or => {
+            let decisive = matches!(op, Op::Or);
+            for (i, a) in args.iter().enumerate().skip(from) {
+                match known(a) {
+                    Some(v) if v.as_bool() == decisive => return Some(Val::Bool(decisive)),
+                    Some(_) => {}
+                    None => return wait(a, i),
+                }
+            }
+            Some(Val::Bool(!decisive))
+        }
+        _ => match args.iter().find(|a| known(a).is_none()) {
+            Some(a) => wait(a, 0),
+            None => Some(apply(*op, args, memo)),
+        },
+    }
+}
+
+fn leaf(t: &Term, env: &Env) -> Val {
     match &*t.0 {
         Node::Bool(b) => Val::Bool(*b),
         Node::Int(i) => Val::Int(*i),
         Node::F32(f) => Val::F32(*f),
         Node::F64(f) => Val::F64(*f),
         Node::Var(name, sort) => env.get(name).copied().unwrap_or(Val::zero(*sort)),
-        Node::App(op, args) => {
-            let mut a = |i: usize| eval_in(&args[i], env, memo);
-            match op {
-                Op::Not => Val::Bool(!a(0).as_bool()),
-                Op::And => Val::Bool(args.iter().all(|x| eval_in(x, env, memo).as_bool())),
-                Op::Or => Val::Bool(args.iter().any(|x| eval_in(x, env, memo).as_bool())),
-                Op::Eq => Val::Bool(same(a(0), a(1))),
-                Op::Ite => {
-                    if a(0).as_bool() {
-                        a(1)
-                    } else {
-                        a(2)
-                    }
-                }
-                Op::Neg => Val::Int(a(0).as_int().wrapping_neg()),
-                Op::Add => Val::Int(a(0).as_int().wrapping_add(a(1).as_int())),
-                Op::Sub => Val::Int(a(0).as_int().wrapping_sub(a(1).as_int())),
-                Op::Mul => Val::Int(a(0).as_int().wrapping_mul(a(1).as_int())),
-                Op::Div => Val::Int(sdiv(a(0).as_int(), a(1).as_int())),
-                Op::Rem => Val::Int(srem(a(0).as_int(), a(1).as_int())),
-                Op::Lt => Val::Bool(a(0).as_int() < a(1).as_int()),
-                Op::Le => Val::Bool(a(0).as_int() <= a(1).as_int()),
-                Op::Gt => Val::Bool(a(0).as_int() > a(1).as_int()),
-                Op::Ge => Val::Bool(a(0).as_int() >= a(1).as_int()),
-                Op::BitAnd => Val::Int(a(0).as_int() & a(1).as_int()),
-                Op::BitOr => Val::Int(a(0).as_int() | a(1).as_int()),
-                Op::BitXor => Val::Int(a(0).as_int() ^ a(1).as_int()),
-                // Wie `bvshl`/`bvashr`: Der Betrag zaehlt ohne Vorzeichen, ab
-                // 64 ist alles hinausgeschoben.
-                Op::Shl => {
-                    let (x, n) = (a(0).as_int(), a(1).as_int() as u64);
-                    Val::Int(if n >= 64 { 0 } else { x << n })
-                }
-                Op::Shr => {
-                    let (x, n) = (a(0).as_int(), a(1).as_int() as u64);
-                    Val::Int(if n >= 64 { x >> 63 } else { x >> n })
-                }
-                Op::FNeg => fp1(a(0), |x| -x, |x| -x),
-                Op::FAbs => fp1(a(0), f64::abs, f32::abs),
-                Op::FSqrt => fp1(a(0), f64::sqrt, f32::sqrt),
-                Op::FAdd => fp2(a(0), a(1), |x, y| x + y, |x, y| x + y),
-                Op::FSub => fp2(a(0), a(1), |x, y| x - y, |x, y| x - y),
-                Op::FMul => fp2(a(0), a(1), |x, y| x * y, |x, y| x * y),
-                Op::FDiv => fp2(a(0), a(1), |x, y| x / y, |x, y| x / y),
-                Op::FFma => match (a(0), a(1), a(2)) {
-                    (Val::F32(x), Val::F32(y), Val::F32(z)) => Val::F32(x.mul_add(y, z)),
-                    (x, y, z) => Val::F64(x.as_f64().mul_add(y.as_f64(), z.as_f64())),
-                },
-                Op::FLt => Val::Bool(a(0).as_f64() < a(1).as_f64()),
-                Op::FLe => Val::Bool(a(0).as_f64() <= a(1).as_f64()),
-                Op::FGt => Val::Bool(a(0).as_f64() > a(1).as_f64()),
-                Op::FGe => Val::Bool(a(0).as_f64() >= a(1).as_f64()),
-                Op::FEq => Val::Bool(a(0).as_f64() == a(1).as_f64()),
-                Op::ToF32 => Val::F32(a(0).as_int() as f32),
-                Op::ToF64 => Val::F64(a(0).as_int() as f64),
-                Op::IsFinite => Val::Bool(a(0).as_f64().is_finite()),
-                Op::Wrap { bits, signed } => Val::Int(wrap(a(0).as_int(), *bits, *signed)),
-                Op::AddOverflows => Val::Bool(a(0).as_int().checked_add(a(1).as_int()).is_none()),
-                Op::SubOverflows => Val::Bool(a(0).as_int().checked_sub(a(1).as_int()).is_none()),
-                Op::MulOverflows => Val::Bool(a(0).as_int().checked_mul(a(1).as_int()).is_none()),
-                Op::Scale { num, den } => match a(0) {
-                    Val::F32(x) => Val::F32(libtaktm::scale_f32(x, *num, *den)),
-                    x => Val::F64(libtaktm::scale_f64(x.as_f64(), *num, *den)),
-                },
-                Op::Math(f) => {
-                    let x = a(0);
-                    let y = if args.len() > 1 { a(1) } else { Val::F64(0.0) };
-                    math(*f, x, y)
-                }
-                Op::Round(r) => rounded(*r, a(0)),
-                Op::FloatToInt => Val::Int(a(0).as_f64() as i64),
-            }
-        }
+        Node::App(..) => unreachable!("kein Blatt"),
     }
 }
 
-/// `bvsdiv`: durch null `-1` fuer nichtnegative, `1` fuer negative
-/// Dividenden; `MIN / -1` laeuft um.
+/// Eine Operation ueber ihren bekannten Argumenten.
+fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
+    let a = |i: usize| memo[&args[i].key()];
+    match op {
+        Op::Ite | Op::And | Op::Or => unreachable!("im Stapel ausgewertet"),
+        Op::Not => Val::Bool(!a(0).as_bool()),
+        Op::Eq => Val::Bool(same(a(0), a(1))),
+        Op::Neg => Val::Int(a(0).as_int().wrapping_neg()),
+        Op::Add => Val::Int(a(0).as_int().wrapping_add(a(1).as_int())),
+        Op::Sub => Val::Int(a(0).as_int().wrapping_sub(a(1).as_int())),
+        Op::Mul => Val::Int(a(0).as_int().wrapping_mul(a(1).as_int())),
+        Op::Div => Val::Int(sdiv(a(0).as_int(), a(1).as_int())),
+        Op::Rem => Val::Int(srem(a(0).as_int(), a(1).as_int())),
+        Op::Lt => Val::Bool(a(0).as_int() < a(1).as_int()),
+        Op::Le => Val::Bool(a(0).as_int() <= a(1).as_int()),
+        Op::Gt => Val::Bool(a(0).as_int() > a(1).as_int()),
+        Op::Ge => Val::Bool(a(0).as_int() >= a(1).as_int()),
+        Op::BitAnd => Val::Int(a(0).as_int() & a(1).as_int()),
+        Op::BitOr => Val::Int(a(0).as_int() | a(1).as_int()),
+        Op::BitXor => Val::Int(a(0).as_int() ^ a(1).as_int()),
+        // Wie `bvshl`/`bvashr`: Der Betrag zaehlt ohne Vorzeichen, ab
+        // 64 ist alles hinausgeschoben.
+        Op::Shl => {
+            let (x, n) = (a(0).as_int(), a(1).as_int() as u64);
+            Val::Int(if n >= 64 { 0 } else { x << n })
+        }
+        Op::Shr => {
+            let (x, n) = (a(0).as_int(), a(1).as_int() as u64);
+            Val::Int(if n >= 64 { x >> 63 } else { x >> n })
+        }
+        Op::FNeg => fp1(a(0), |x| -x, |x| -x),
+        Op::FAbs => fp1(a(0), f64::abs, f32::abs),
+        Op::FSqrt => fp1(a(0), f64::sqrt, f32::sqrt),
+        Op::FAdd => fp2(a(0), a(1), |x, y| x + y, |x, y| x + y),
+        Op::FSub => fp2(a(0), a(1), |x, y| x - y, |x, y| x - y),
+        Op::FMul => fp2(a(0), a(1), |x, y| x * y, |x, y| x * y),
+        Op::FDiv => fp2(a(0), a(1), |x, y| x / y, |x, y| x / y),
+        Op::FFma => match (a(0), a(1), a(2)) {
+            (Val::F32(x), Val::F32(y), Val::F32(z)) => Val::F32(x.mul_add(y, z)),
+            (x, y, z) => Val::F64(x.as_f64().mul_add(y.as_f64(), z.as_f64())),
+        },
+        Op::FLt => Val::Bool(a(0).as_f64() < a(1).as_f64()),
+        Op::FLe => Val::Bool(a(0).as_f64() <= a(1).as_f64()),
+        Op::FGt => Val::Bool(a(0).as_f64() > a(1).as_f64()),
+        Op::FGe => Val::Bool(a(0).as_f64() >= a(1).as_f64()),
+        Op::FEq => Val::Bool(a(0).as_f64() == a(1).as_f64()),
+        Op::ToF32 => Val::F32(a(0).as_int() as f32),
+        Op::ToF64 => Val::F64(a(0).as_int() as f64),
+        Op::IsFinite => Val::Bool(a(0).as_f64().is_finite()),
+        Op::Wrap { bits, signed } => Val::Int(wrap(a(0).as_int(), bits, signed)),
+        Op::AddOverflows => Val::Bool(a(0).as_int().checked_add(a(1).as_int()).is_none()),
+        Op::SubOverflows => Val::Bool(a(0).as_int().checked_sub(a(1).as_int()).is_none()),
+        Op::MulOverflows => Val::Bool(a(0).as_int().checked_mul(a(1).as_int()).is_none()),
+        Op::Scale { num, den } => match a(0) {
+            Val::F32(x) => Val::F32(libtaktm::scale_f32(x, num, den)),
+            x => Val::F64(libtaktm::scale_f64(x.as_f64(), num, den)),
+        },
+        Op::Math(f) => {
+            let x = a(0);
+            let y = if args.len() > 1 { a(1) } else { Val::F64(0.0) };
+            math(f, x, y)
+        }
+        Op::Round(r) => rounded(r, a(0)),
+        Op::FloatToInt => Val::Int(a(0).as_f64() as i64),
+    }
+}
+
 /// Auf eine ganze Zahl gerundet, in der Breite des Werts.
 fn rounded(r: Rounding, v: Val) -> Val {
     match (r, v) {
@@ -223,6 +256,8 @@ fn math(f: Fun, x: Val, y: Val) -> Val {
     }
 }
 
+/// `bvsdiv`: durch null `-1` fuer nichtnegative, `1` fuer negative
+/// Dividenden; `MIN / -1` laeuft um.
 fn sdiv(a: i64, b: i64) -> i64 {
     match b {
         0 if a < 0 => 1,

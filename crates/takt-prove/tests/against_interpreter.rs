@@ -510,6 +510,29 @@ t={k} in b {}.5 V
         }
         // Drahtformat und Ausschnitte (Schritt 27a-5).
         "52_padding_fields.takt" | "13_framing.takt" | "76_stream_views.takt" => (String::new(), 30),
+        // Schleifen ueber der alten Grenze von 256 Durchlaeufen (Schritt 27a-6).
+        "78_length_guards.takt" => (String::new(), 80),
+        // Rahmen mit Kopf, Nutzlast und Pruefsumme: gueltig, zu kurz, fremde
+        // Konstante, Laenge ausserhalb der Range, Laenge ueber dem Rahmen,
+        // falsche Pruefsumme, die volle Nutzlast.
+        "13_protocol_analysis.takt" => {
+            let full = format!("50aa0240f0{}3f00", "01".repeat(64));
+            let frames = [
+                "50aa0103350102 03 05",
+                "50aa01",
+                "51aa0103350102 03 05",
+                "50aa0150350102 03 05",
+                "50aa0109350102 03 05",
+                "50aa0103350102 03 06",
+                &full,
+            ];
+            let stim = frames
+                .iter()
+                .enumerate()
+                .map(|(k, f)| format!("t={} in rx 0x{}\n", 2 * k + 1, f.replace(' ', "")))
+                .collect();
+            (stim, 20)
+        }
         _ => return None,
     })
 }
