@@ -172,7 +172,8 @@ fn parse_val(text: &str) -> Option<Val> {
 fn same(a: Val, b: Val) -> bool {
     match (a, b) {
         (Val::F64(x), Val::F64(y)) => x.to_bits() == y.to_bits(),
-        (Val::F32(x), Val::F64(y)) | (Val::F64(y), Val::F32(x)) => f64::from(x).to_bits() == y.to_bits(),
+        // Der Trace schreibt ein `f32` in seiner kuerzesten Form; gelesen wird es in `f32`.
+        (Val::F32(x), Val::F64(y)) | (Val::F64(y), Val::F32(x)) => x.to_bits() == (y as f32).to_bits(),
         (Val::Int(x), Val::F64(y)) | (Val::F64(y), Val::Int(x)) => (x as f64).to_bits() == y.to_bits(),
         (x, y) => x == y,
     }
@@ -439,6 +440,45 @@ fn case(name: &str) -> Option<(String, u64)> {
             14,
         ),
         "104_linear_has.takt" | "117_many_text_handlers.takt" | "51_text_into_bytes.takt" => (String::new(), 30),
+        // Funktionen aus `libtaktm`, Einheiten und Bits (Schritt 27a-3).
+        "101_correct_math.takt"
+        | "102_correct_math_f32.takt"
+        | "103_math_domains.takt"
+        | "115_affine_unit.takt"
+        | "67_bitfield_access.takt"
+        | "86_units.takt"
+        | "97_fast_math.takt" => (String::new(), 20),
+        // Generische Funktionen mit Schleifen und `break` (Schritt 27a-3).
+        "62_type_generics.takt" => (
+            (0..=20)
+                .map(|k| {
+                    format!(
+                        "t={k} in a {}
+t={k} in b {}.5 V
+",
+                        (k * 13) % 101,
+                        k % 5
+                    )
+                })
+                .collect(),
+            20,
+        ),
+        // Ein Antrieb mit Park-Transformation, Sinus und Kosinus; die Eingaben
+        // je Tick, denn sie veralten nach zwei.
+        "11_foc_drive.takt" => {
+            let mut stim = String::new();
+            for k in 0..=40 {
+                let theta = f64::from(k % 60) * 0.1;
+                stim.push_str(&format!(
+                    "t={k} in i_u 1.5 A\nt={k} in i_v -0.5 A\nt={k} in v_dc 48 V\nt={k} in theta_elec {theta}\n\
+                     t={k} in omega_mech 100 1/s\nt={k} in temp_inverter 25 degC\nt={k} in temp_motor 30 degC\n"
+                ));
+            }
+            stim.push_str("t=2 cmd cmd_start\n");
+            (stim, 40)
+        }
+        // Bytes vom Bus: der Handler setzt ein Bitfeld.
+        "12_bitfields.takt" => ((1..=8).map(|k| format!("t={k} in can_rx {}\n", k * 3)).collect(), 20),
         // Ausgabestroeme (Schritt 27c-3): Sendepuffer, Abholen je Tick,
         // `free`, `idle`, `sent`, ein `sim`-gespeister Eingabestrom.
         "24_send_has.takt" => {
@@ -794,6 +834,63 @@ machine reader:
 #[test]
 fn send_buffers_agree() {
     agree_program("TX_STREAMS", &compile("TX_STREAMS", TX_STREAMS), "", 12);
+}
+
+/// Ganzzahl-Primitive in ihrer Breite (wrapping, saturating auch ueber
+/// `i64` hinaus, Rotation mit beliebigem Betrag), Bits, Rundung auf eine
+/// ganze Zahl und eine affine Einheit.
+const PRIMITIVES: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  k : int in -300..300 @ hw("i/k")
+input  f : float in -1000.0..1000.0 @ hw("i/f")
+input  t : float[degC] in -50..100 degC @ hw("i/t")
+
+output w8   : i8         @ sim("w8")
+output s8   : u8         @ sim("s8")
+output s64  : int        @ sim("s64")
+output rl   : u8         @ sim("rl")
+output rr   : i16        @ sim("rr")
+output bit  : bool       @ sim("bit")
+output bits : int        @ sim("bits")
+output wb   : u8         @ sim("wb")
+output r    : int        @ sim("r")
+output fl   : int        @ sim("fl")
+output ce   : int        @ sim("ce")
+output kelvin : float[K] @ sim("kelvin")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            var a : i8 = ((k % 100) as i8)
+            var b : u8 = (((k + 300) % 256) as u8)
+            w8 = wrapping_add(a, 100 as i8)
+            s8 = saturating_add(b, 200 as u8)
+            s64 = saturating_sub(k * 30000000000000000, 9000000000000000000)
+            rl = rotl(b, (k + 300) % 13)
+            rr = rotr(((k * 97) as i16), k + 303)
+            bit = b.bit((k + 300) % 8)
+            bits = (k * 1000003).bits(20, 4)
+            wb = b.with_bit(3, k % 2 == 0)
+            r = round(f / 7.0)
+            fl = floor(f / 3.0)
+            ce = ceil(f * 1.5)
+            kelvin = t.to(K)
+"#;
+
+#[test]
+fn primitives_agree() {
+    let stim: String = (0..=40)
+        .map(|j| {
+            let k = (j * 37) % 601 - 300;
+            let f = f64::from((j * 91) % 2001 - 1000) / 3.0;
+            format!("t={j} in k {k}\nt={j} in f {f:?}\nt={j} in t {} degC\n", (j * 7) % 150 - 50)
+        })
+        .collect();
+    agree_program("PRIMITIVES", &compile("PRIMITIVES", PRIMITIVES), &stim, 40);
 }
 
 /// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und

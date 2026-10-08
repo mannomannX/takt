@@ -13,6 +13,8 @@ takt-mir = { path = "../takt-mir" }
 takt-interp = { path = "../takt-interp" }
 # MAXPT eines Stroms wie am Rand des Interpreters (8.6, 12.6).
 takt-hal = { path = "../takt-hal" }
+# Die Auswertung rechnet Einheiten und Funktionen wie der Interpreter (3.2, 4.2).
+libtaktm = { path = "../libtaktm" }
 
 [dev-dependencies]
 # Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).

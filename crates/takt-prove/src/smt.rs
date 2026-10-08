@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::rc::Rc;
 
 use crate::encode::{Goal, Model, StateVar};
-use crate::term::{Node, Op, Sort, Term};
+use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
 fn sort_text(s: Sort) -> &'static str {
     match s {
@@ -48,6 +48,8 @@ struct Printer<'a> {
     tag: &'static str,
     defs: HashMap<(usize, u32, u32), String>,
     next: usize,
+    /// Die Funktionen aus `libtaktm`, die schon deklariert sind.
+    declared: BTreeSet<String>,
 }
 
 impl Printer<'_> {
@@ -79,14 +81,53 @@ impl Printer<'_> {
                     return n.clone();
                 }
                 let parts: Vec<String> = args.iter().map(|a| self.name(a, state, input)).collect();
-                let body = app_text(*op, &parts);
+                let sort = t.sort();
+                let body = match op {
+                    Op::Math(f) => {
+                        let fun = format!("|math.{}.{}|", f.name(), sort_text(sort).replace(['(', ')', ' ', '_'], ""));
+                        if self.declared.insert(fun.clone()) {
+                            let domain = vec![sort_text(sort); parts.len()].join(" ");
+                            let _ = writeln!(self.out, "(declare-fun {fun} ({domain}) {})", sort_text(sort));
+                        }
+                        format!("({fun} {})", parts.join(" "))
+                    }
+                    Op::Scale { num, den } => {
+                        let (e, s) = if sort == Sort::F32 { (8, 24) } else { (11, 53) };
+                        format!("((_ to_fp {e} {s}) RNE (/ (* (fp.to_real {}) {num}.0) {den}.0))", parts[0])
+                    }
+                    _ => app_text(*op, &parts),
+                };
                 let n = format!("|d{}{}|", self.tag, self.next);
                 self.next += 1;
-                let _ = writeln!(self.out, "(define-fun {n} () {} {body})", sort_text(t.sort()));
+                let _ = writeln!(self.out, "(define-fun {n} () {} {body})", sort_text(sort));
+                if let Op::Math(f) = op {
+                    let _ = writeln!(self.out, "(assert {})", math_bound(*f, &n, sort));
+                }
                 self.defs.insert(key, n.clone());
                 n
             }
         }
+    }
+}
+
+/// Was der Wertebereich einer Funktion aus `libtaktm` zusichert: Sie ist
+/// eine Funktion (der Solver sieht sie uninterpretiert), und ihr Wert liegt
+/// in diesen Schranken — kein NaN, Sinus und Kosinus in [-1, 1], die
+/// Umkehrfunktionen in einem Intervall um ihren Bildbereich, `exp` nicht
+/// negativ.
+fn math_bound(f: Fun, n: &str, sort: Sort) -> String {
+    let lit = |x: f64| match sort {
+        Sort::F32 => fp_literal(u64::from((x as f32).to_bits()), 8, 23),
+        _ => fp_literal(x.to_bits(), 11, 52),
+    };
+    let within = |lo: f64, hi: f64| format!("(and (fp.leq {} {n}) (fp.leq {n} {}))", lit(lo), lit(hi));
+    match f {
+        Fun::Sin | Fun::Cos => within(-1.0, 1.0),
+        Fun::Asin | Fun::Atan => within(-2.0, 2.0),
+        Fun::Acos => within(0.0, 4.0),
+        Fun::Atan2 => within(-4.0, 4.0),
+        Fun::Exp => format!("(fp.leq {} {n})", lit(0.0)),
+        Fun::Tan | Fun::Log | Fun::Pow => format!("(not (fp.isNaN {n}))"),
     }
 }
 
@@ -151,6 +192,18 @@ fn app_text(op: Op, a: &[String]) -> String {
             "(not (= ((_ sign_extend 64) (bvmul {0} {1})) (bvmul ((_ sign_extend 64) {0}) ((_ sign_extend 64) {1}))))",
             a[0], a[1]
         ),
+        Op::Round(r) => {
+            let mode = match r {
+                Rounding::HalfAway => "RNA",
+                Rounding::Down => "RTN",
+                Rounding::Up => "RTP",
+                Rounding::TowardZero => "RTZ",
+            };
+            format!("(fp.roundToIntegral {mode} {})", a[0])
+        }
+        Op::FloatToInt => format!("((_ fp.to_sbv 64) RTZ {})", a[0]),
+        // Beide schreibt der Drucker selbst: Sie brauchen die Sorte.
+        Op::Scale { .. } | Op::Math(_) => unreachable!("im Drucker behandelt"),
     }
 }
 
@@ -308,7 +361,7 @@ fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth:
             let _ = writeln!(out, "(declare-const {} {})", at(name, k, tag), sort_text(*sort));
         }
     }
-    let mut p = Printer { out, tag, defs: HashMap::new(), next: 0 };
+    let mut p = Printer { out, tag, defs: HashMap::new(), next: 0, declared: BTreeSet::new() };
     if kind == Query::Bmc {
         for v in &state {
             let init = p.name(&v.init, 0, 0);
@@ -408,7 +461,7 @@ pub fn contract_query(goal: &crate::encode::ContractGoal) -> String {
     for (name, sort) in &goal.vars {
         let _ = writeln!(out, "(declare-const |{name}| {})", sort_text(*sort));
     }
-    let mut p = Printer { out: &mut out, tag: "@", defs: HashMap::new(), next: 0 };
+    let mut p = Printer { out: &mut out, tag: "@", defs: HashMap::new(), next: 0, declared: BTreeSet::new() };
     let v = p.name(&goal.violation, 0, 0);
     let _ = writeln!(p.out, "(assert {v})");
     let _ = writeln!(p.out, "(check-sat)");
@@ -470,7 +523,11 @@ fn lia_text(op: Op, a: &[String]) -> Option<String> {
         | Op::FFma
         | Op::ToF32
         | Op::ToF64
-        | Op::IsFinite => return None,
+        | Op::IsFinite
+        | Op::Scale { .. }
+        | Op::Math(_)
+        | Op::Round(_)
+        | Op::FloatToInt => return None,
     })
 }
 
@@ -640,7 +697,7 @@ pub fn houdini(model: &Model, candidates: &[&Term], step: bool) -> String {
             let _ = writeln!(out, "(declare-const {} {})", at(name, k, tag), sort_text(*sort));
         }
     }
-    let mut p = Printer { out: &mut out, tag, defs: HashMap::new(), next: 0 };
+    let mut p = Printer { out: &mut out, tag, defs: HashMap::new(), next: 0, declared: BTreeSet::new() };
     if step {
         for c in candidates {
             let t = p.name(c, 0, 0);

@@ -331,7 +331,8 @@ fn classify_site(
                 Some(at) => CheckVerdict::Reachable { at, stimulus },
                 None => CheckVerdict::Undecided {
                     reason: format!(
-                        "der Solver fand einen Pfad bis Tiefe {depth}, der Interpreter bestaetigt ihn nicht — die Kodierung weicht ab, bitte melden:\n{stimulus}"
+                        "der Solver fand einen Pfad bis Tiefe {depth}, der Interpreter bestaetigt ihn nicht — {}:\n{stimulus}",
+                        unconfirmed(model)
                     ),
                 },
             }
@@ -514,6 +515,20 @@ fn confirm_requires(
     None
 }
 
+/// Warum ein Pfad des Solvers im Interpreter nicht traegt: Sieht der Solver
+/// Funktionen uninterpretiert, kann er ihnen Werte geben, die sie nie
+/// annehmen (4.2); sonst weicht die Kodierung ab.
+fn unconfirmed(model: &Model) -> String {
+    if model.uninterpreted.is_empty() {
+        "die Kodierung weicht ab, bitte melden".to_string()
+    } else {
+        format!(
+            "der Solver sieht {} uninterpretiert, der Pfad kann an ihrem wahren Wert scheitern",
+            model.uninterpreted.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ")
+        )
+    }
+}
+
 /// Spielt den Pfad nach: der Tick, in dem die Stelle im Interpreter feuert.
 ///
 /// Bestaetigt wird nur die Stelle selbst: eine implizite Pruefung durch
@@ -580,7 +595,8 @@ pub fn prove(
                     Some(at) => Verdict::Violated { at, stimulus },
                     None => Verdict::Unproven {
                         reason: format!(
-                            "der Solver fand ein Gegenbeispiel bis Tiefe {depth}, der Interpreter bestaetigt es nicht — die Kodierung weicht ab, bitte melden:\n{stimulus}"
+                            "der Solver fand ein Gegenbeispiel bis Tiefe {depth}, der Interpreter bestaetigt es nicht — {}:\n{stimulus}",
+                            unconfirmed(model)
                         ),
                     },
                 }

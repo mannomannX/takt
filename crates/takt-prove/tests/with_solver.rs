@@ -664,3 +664,39 @@ property never_cut: never(level == 2000)
     let cut = reports.iter().find(|r| r.name == "never_cut").expect("never_cut");
     assert!(matches!(cut.verdict, Verdict::Violated { .. }), "{cut:?}");
 }
+
+/// Funktionen aus `libtaktm` (4.2) sieht der Solver uninterpretiert, mit den
+/// Schranken ihres Wertebereichs: Was die Schranke traegt, ist bewiesen; ein
+/// Pfad, der einen anderen Wert braucht, als die Funktion annimmt, bleibt
+/// offen und sagt warum.
+#[test]
+fn a_bounded_function_proves_its_range_and_keeps_its_paths_open() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input  x : float in -10.0..10.0 @ hw(\"i/x\")
+output y : float @ hw(\"o/y\") with safe = 0.0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            y = sin(x)
+
+property bounded: always(y <= 1.0 and y >= -1.0)
+property small: always(x != 0.0 or y < 0.5)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert_eq!(model.uninterpreted, vec!["sin".to_string()]);
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let bounded = reports.iter().find(|r| r.name == "bounded").expect("bounded");
+    assert!(matches!(bounded.verdict, Verdict::Proven { .. }), "{bounded:?}");
+    let small = reports.iter().find(|r| r.name == "small").expect("small");
+    let Verdict::Unproven { reason } = &small.verdict else { panic!("{small:?}") };
+    assert!(reason.contains("`sin` uninterpretiert"), "{reason}");
+}

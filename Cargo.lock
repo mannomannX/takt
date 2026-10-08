@@ -801,6 +801,7 @@ dependencies = [
 name = "takt-prove"
 version = "0.1.0"
 dependencies = [
+ "libtaktm",
  "takt-conformance",
  "takt-diag",
  "takt-hal",

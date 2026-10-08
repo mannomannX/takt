@@ -66,7 +66,7 @@ Binary(Sub),ja,ja,ja
 Binary(Mul),ja,ja,ja
 Binary(Div),ja,ja,ja
 Binary(Rem),ja,teilweise: `%` nur auf Ganzzahlen,ja
-Convert(To),ja,nein: Einheitenumrechnung `.to`,ja
+Convert(To),ja,ja,ja
 Convert(ToFloat),ja,ja,ja
 Convert(As),teilweise: `as` nicht zwischen allen Typen,ja,ja
 Mat(Transpose),ja,nein: Matrizen sind nicht kodiert,ja
@@ -93,28 +93,28 @@ Intrinsic(Abs),ja,ja,ja
 Intrinsic(Min),ja,ja,ja
 Intrinsic(Max),ja,ja,ja
 Intrinsic(Sqrt),ja,teilweise: nur auf Fliesskomma,ja
-Intrinsic(Sin),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Cos),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Tan),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Asin),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Acos),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Atan),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Atan2),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Exp),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Log),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Pow),ja,nein: Primitive ohne Kodierung,ja
+Intrinsic(Sin),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Cos),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Tan),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Asin),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Acos),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Atan),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Atan2),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Exp),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Log),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
+Intrinsic(Pow),ja,teilweise: im Solver uninterpretiert mit den Schranken ihres Wertebereichs,ja
 Intrinsic(Fma),ja,teilweise: nur auf Fliesskomma,ja
-Intrinsic(Round),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Floor),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(Ceil),ja,nein: Primitive ohne Kodierung,nein
-Intrinsic(Rotl),ja,nein: Primitive ohne Kodierung,nein
-Intrinsic(Rotr),ja,nein: Primitive ohne Kodierung,nein
-Intrinsic(WrappingAdd),ja,nein: Primitive ohne Kodierung,ja
-Intrinsic(WrappingSub),ja,nein: Primitive ohne Kodierung,nein
-Intrinsic(WrappingMul),ja,nein: Primitive ohne Kodierung,nein
-Intrinsic(SaturatingAdd),ja,nein: Primitive ohne Kodierung,nein
-Intrinsic(SaturatingSub),ja,nein: Primitive ohne Kodierung,nein
-Intrinsic(Interp),teilweise: nur ueber eine Tabelle aus Literalen mit mindestens zwei Stuetzstellen,nein: Primitive ohne Kodierung,ja
+Intrinsic(Round),ja,teilweise: nur auf Fliesskomma,ja
+Intrinsic(Floor),ja,teilweise: nur auf Fliesskomma,ja
+Intrinsic(Ceil),ja,teilweise: nur auf Fliesskomma,nein
+Intrinsic(Rotl),ja,ja,nein
+Intrinsic(Rotr),ja,ja,nein
+Intrinsic(WrappingAdd),ja,ja,ja
+Intrinsic(WrappingSub),ja,ja,nein
+Intrinsic(WrappingMul),ja,ja,nein
+Intrinsic(SaturatingAdd),ja,ja,nein
+Intrinsic(SaturatingSub),ja,ja,nein
+Intrinsic(Interp),teilweise: nur ueber eine Tabelle aus Literalen mit mindestens zwei Stuetzstellen,nein: Tabellen sind nicht kodiert,ja
 Accessor(Valid),ja,teilweise: auf einem Input (3.5) und einem Optional (3.8); nicht auf einem Ergebnis,ja
 Accessor(Suspect),ja,teilweise: auf einem Input (3.5),ja
 Accessor(Stale),ja,teilweise: auf einem Input (3.5),ja
@@ -137,9 +137,9 @@ Accessor(Jitter),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(TimeWarped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Done),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Result),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Bit),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Bits),"teilweise: `.bits` nur mit konstanten, geordneten Grenzen","nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(WithBit),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Bit),ja,ja,ja
+Accessor(Bits),"teilweise: `.bits` nur mit konstanten, geordneten Grenzen",ja,ja
+Accessor(WithBit),ja,ja,ja
 Accessor(Min),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Max),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Mean),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja

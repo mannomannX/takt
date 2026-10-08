@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use crate::term::{Node, Op, Sort, Term};
+use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
 /// Ein konkreter Wert.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,8 +118,16 @@ fn eval_node(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
                 Op::BitAnd => Val::Int(a(0).as_int() & a(1).as_int()),
                 Op::BitOr => Val::Int(a(0).as_int() | a(1).as_int()),
                 Op::BitXor => Val::Int(a(0).as_int() ^ a(1).as_int()),
-                Op::Shl => Val::Int(a(0).as_int().wrapping_shl(a(1).as_int() as u32)),
-                Op::Shr => Val::Int(a(0).as_int().wrapping_shr(a(1).as_int() as u32)),
+                // Wie `bvshl`/`bvashr`: Der Betrag zaehlt ohne Vorzeichen, ab
+                // 64 ist alles hinausgeschoben.
+                Op::Shl => {
+                    let (x, n) = (a(0).as_int(), a(1).as_int() as u64);
+                    Val::Int(if n >= 64 { 0 } else { x << n })
+                }
+                Op::Shr => {
+                    let (x, n) = (a(0).as_int(), a(1).as_int() as u64);
+                    Val::Int(if n >= 64 { x >> 63 } else { x >> n })
+                }
                 Op::FNeg => fp1(a(0), |x| -x, |x| -x),
                 Op::FAbs => fp1(a(0), f64::abs, f32::abs),
                 Op::FSqrt => fp1(a(0), f64::sqrt, f32::sqrt),
@@ -143,6 +151,17 @@ fn eval_node(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
                 Op::AddOverflows => Val::Bool(a(0).as_int().checked_add(a(1).as_int()).is_none()),
                 Op::SubOverflows => Val::Bool(a(0).as_int().checked_sub(a(1).as_int()).is_none()),
                 Op::MulOverflows => Val::Bool(a(0).as_int().checked_mul(a(1).as_int()).is_none()),
+                Op::Scale { num, den } => match a(0) {
+                    Val::F32(x) => Val::F32(libtaktm::scale_f32(x, *num, *den)),
+                    x => Val::F64(libtaktm::scale_f64(x.as_f64(), *num, *den)),
+                },
+                Op::Math(f) => {
+                    let x = a(0);
+                    let y = if args.len() > 1 { a(1) } else { Val::F64(0.0) };
+                    math(*f, x, y)
+                }
+                Op::Round(r) => rounded(*r, a(0)),
+                Op::FloatToInt => Val::Int(a(0).as_f64() as i64),
             }
         }
     }
@@ -150,6 +169,60 @@ fn eval_node(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
 
 /// `bvsdiv`: durch null `-1` fuer nichtnegative, `1` fuer negative
 /// Dividenden; `MIN / -1` laeuft um.
+/// Auf eine ganze Zahl gerundet, in der Breite des Werts.
+fn rounded(r: Rounding, v: Val) -> Val {
+    match (r, v) {
+        (Rounding::HalfAway, Val::F32(x)) => Val::F32(x.round()),
+        (Rounding::Down, Val::F32(x)) => Val::F32(x.floor()),
+        (Rounding::Up, Val::F32(x)) => Val::F32(x.ceil()),
+        (Rounding::TowardZero, Val::F32(x)) => Val::F32(x.trunc()),
+        (Rounding::HalfAway, x) => Val::F64(x.as_f64().round()),
+        (Rounding::Down, x) => Val::F64(x.as_f64().floor()),
+        (Rounding::Up, x) => Val::F64(x.as_f64().ceil()),
+        (Rounding::TowardZero, x) => Val::F64(x.as_f64().trunc()),
+    }
+}
+
+/// Eine Funktion aus `libtaktm` in der Breite ihres Arguments, wie der
+/// Interpreter sie ruft (`call::math_f64`, `math_f32`).
+fn math(f: Fun, x: Val, y: Val) -> Val {
+    match x {
+        Val::F32(x) => {
+            let y = match y {
+                Val::F32(y) => y,
+                other => other.as_f64() as f32,
+            };
+            Val::F32(match f {
+                Fun::Sin => libtaktm::sin_f32(x),
+                Fun::Cos => libtaktm::cos_f32(x),
+                Fun::Tan => libtaktm::tan_f32(x),
+                Fun::Asin => libtaktm::asin_f32(x),
+                Fun::Acos => libtaktm::acos_f32(x),
+                Fun::Atan => libtaktm::atan_f32(x),
+                Fun::Atan2 => libtaktm::atan2_f32(x, y),
+                Fun::Exp => libtaktm::exp_f32(x),
+                Fun::Log => libtaktm::log_f32(x),
+                Fun::Pow => libtaktm::pow_f32(x, y),
+            })
+        }
+        x => {
+            let (x, y) = (x.as_f64(), y.as_f64());
+            Val::F64(match f {
+                Fun::Sin => libtaktm::sin_f64(x),
+                Fun::Cos => libtaktm::cos_f64(x),
+                Fun::Tan => libtaktm::tan_f64(x),
+                Fun::Asin => libtaktm::asin_f64(x),
+                Fun::Acos => libtaktm::acos_f64(x),
+                Fun::Atan => libtaktm::atan_f64(x),
+                Fun::Atan2 => libtaktm::atan2_f64(x, y),
+                Fun::Exp => libtaktm::exp_f64(x),
+                Fun::Log => libtaktm::log_f64(x),
+                Fun::Pow => libtaktm::pow_f64(x, y),
+            })
+        }
+    }
+}
+
 fn sdiv(a: i64, b: i64) -> i64 {
     match b {
         0 if a < 0 => 1,

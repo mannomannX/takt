@@ -619,6 +619,56 @@ impl Enc<'_> {
                 let t = super::text::Text::of(self.value(arg, cx, env, flow)?, span)?;
                 Ok(self.text_test(&s, &t, accessor == Accessor::Contains))
             }
+            // Bits einer Ganzzahl (3.7): Eine Stelle ausserhalb der Breite
+            // faultet im Interpreter selbst, ohne Pruefknoten.
+            (Accessor::Bit | Accessor::Bits | Accessor::WithBit, Type::Int { width, .. }) => {
+                let bits = i64::from(width.bits());
+                let x = self.expr(base, cx, env, flow)?;
+                let mut terms = Vec::new();
+                for a in args {
+                    terms.push(self.expr(a, cx, env, flow)?);
+                }
+                let outside = |i: &Term| {
+                    Term::or(vec![
+                        Term::bin(Op::Lt, i.clone(), Term::int(0)),
+                        Term::bin(Op::Ge, i.clone(), Term::int(bits)),
+                    ])
+                };
+                let fail = match (accessor, terms.as_slice()) {
+                    (Accessor::Bits, [hi, lo]) => Term::or(vec![
+                        Term::bin(Op::Lt, lo.clone(), Term::int(0)),
+                        Term::bin(Op::Lt, hi.clone(), lo.clone()),
+                        Term::bin(Op::Ge, hi.clone(), Term::int(bits)),
+                    ]),
+                    (_, [i, ..]) => outside(i),
+                    _ => return no("Bitzugriff ohne Stelle", span),
+                };
+                flow.exits.push(Exit {
+                    cond: Term::and(vec![flow.alive.clone(), fail.clone()]),
+                    kind: ExitKind::Fault(None),
+                });
+                flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
+                let one = Term::int(1);
+                Ok(match (accessor, terms.as_slice()) {
+                    (Accessor::Bit, [i]) => {
+                        let bit = Term::bin(Op::BitAnd, Term::bin(Op::Shr, x, i.clone()), one.clone());
+                        Term::eq(bit, one)
+                    }
+                    (Accessor::Bits, [hi, lo]) => {
+                        let n = Term::bin(Op::Add, Term::bin(Op::Sub, hi.clone(), lo.clone()), one.clone());
+                        let mask = Term::bin(Op::Sub, Term::bin(Op::Shl, one, n), Term::int(1));
+                        Term::bin(Op::BitAnd, Term::bin(Op::Shr, x, lo.clone()), mask)
+                    }
+                    (_, [i, b]) => {
+                        let m = Term::bin(Op::Shl, one, i.clone());
+                        let set = Term::bin(Op::BitOr, x.clone(), m.clone());
+                        let clear = Term::bin(Op::BitAnd, x, Term::bin(Op::BitXor, m, Term::int(-1)));
+                        let y = Term::ite(b.clone(), set, clear);
+                        Term::app(Op::Wrap { bits: width.bits(), signed: width.signed() }, vec![y])
+                    }
+                    _ => return no("Bitzugriff", span),
+                })
+            }
             // `x.wrap_u8()` und Geschwister: modulo 2^n (3.10).
             (Accessor::Wrap(w), Type::Int { .. }) => {
                 if w.bits() == 64 && !w.signed() {

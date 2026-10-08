@@ -41,7 +41,7 @@ use takt_mir::types::{Const, FloatWidth, HandleKind, IntWidth, Type};
 use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId};
 
 use crate::eval;
-use crate::term::{Node, Op, Sort, Term};
+use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
 mod monitor;
 mod pattern;
@@ -162,6 +162,9 @@ pub struct Model {
     /// eines aktiven Blatts und den Zaehlern, die mit ihr laufen. Welche
     /// gelten, entscheidet `solve::lemmas` nach Houdini.
     pub candidates: Vec<Term>,
+    /// Die Funktionen aus `libtaktm`, die der Solver uninterpretiert sieht
+    /// (4.2): Ein Pfad ueber sie kann an ihrem wahren Wert scheitern.
+    pub uninterpreted: Vec<String>,
 }
 
 impl Model {
@@ -330,6 +333,8 @@ struct Enc<'p> {
     /// Bindungen von `matches … as m` im laufenden Ausdruck: Ort, Typ, Wert
     /// und wo sie gelten; Lesevorgaenge sehen sie, bevor sie im Zustand stehen.
     binds: Vec<(String, TypeId, V, Term)>,
+    /// Die uninterpretierten Funktionen des Modells.
+    uninterpreted: BTreeSet<String>,
 }
 
 /// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
@@ -505,6 +510,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         leaves,
         horizon,
         candidates,
+        uninterpreted: enc.uninterpreted.into_iter().collect(),
     })
 }
 
@@ -544,6 +550,7 @@ impl<'p> Enc<'p> {
             queued: Vec::new(),
             breaks: Vec::new(),
             binds: Vec::new(),
+            uninterpreted: BTreeSet::new(),
         }
     }
 }
@@ -934,13 +941,9 @@ impl Enc<'_> {
                 Term::ite(c, a, b)
             }
             ExprKind::Checked { expr: inner, kind } => self.checked(kind, inner, e, cx, env, flow)?,
-            ExprKind::Convert { expr, kind, .. } => {
+            ExprKind::Convert { expr, kind, unit } => {
                 let x = self.expr(expr, cx, env, flow)?;
-                match kind {
-                    ConvertKind::ToFloat => Term::app(if sort? == Sort::F32 { Op::ToF32 } else { Op::ToF64 }, vec![x]),
-                    ConvertKind::As => x,
-                    ConvertKind::To => return no("Einheitenumrechnung `.to`", span),
-                }
+                self.convert(x, *kind, *unit, expr.ty, sort?, span)?
             }
             ExprKind::Cast { expr, .. } => {
                 let x = self.expr(expr, cx, env, flow)?;
@@ -957,7 +960,8 @@ impl Enc<'_> {
                 for a in args {
                     xs.push(self.expr(a, cx, env, flow)?);
                 }
-                self.intrinsic(*op, xs, span)?
+                let arg = args.first().map_or(e.ty, |a| a.ty);
+                self.intrinsic(*op, xs, (e.ty, arg), flow, span)?
             }
             ExprKind::Call { callee, args } => {
                 let mut xs = Vec::new();
@@ -1044,8 +1048,26 @@ impl Enc<'_> {
     }
 
     #[deny(clippy::wildcard_enum_match_arm)]
-    fn intrinsic(&mut self, op: Intrinsic, xs: Vec<Term>, span: Span) -> R<Term> {
+    /// `tys`: der Typ des Ergebnisses und der des ersten Arguments, fuer
+    /// die Breite der Ganzzahl-Primitive.
+    fn intrinsic(
+        &mut self,
+        op: Intrinsic,
+        xs: Vec<Term>,
+        tys: (TypeId, TypeId),
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<Term> {
         let float = xs.first().is_some_and(|x| matches!(x.sort(), Sort::F32 | Sort::F64));
+        // Ein Fault der Primitive selbst (`call.rs`): Definitionsbereich,
+        // nicht endliches Ergebnis, Bereich einer Rundung; ohne Pruefknoten.
+        let fault = |fail: Term, flow: &mut Flow| {
+            flow.exits
+                .push(Exit { cond: Term::and(vec![flow.alive.clone(), fail.clone()]), kind: ExitKind::Fault(None) });
+            flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
+        };
+        let lit = |x: f64, like: &Term| Term::float(x, like.sort());
+        let math = |f: Fun, args: Vec<Term>| Term::app(Op::Math(f), args);
         Ok(match (op, xs.as_slice()) {
             (Intrinsic::Abs, [x]) if float => Term::app(Op::FAbs, vec![x.clone()]),
             (Intrinsic::Abs, [x]) => {
@@ -1062,8 +1084,173 @@ impl Enc<'_> {
             }
             (Intrinsic::Sqrt, [x]) if float => Term::app(Op::FSqrt, vec![x.clone()]),
             (Intrinsic::Fma, [a, b, c]) if float => Term::app(Op::FFma, vec![a.clone(), b.clone(), c.clone()]),
+            (
+                Intrinsic::Sin
+                | Intrinsic::Cos
+                | Intrinsic::Tan
+                | Intrinsic::Asin
+                | Intrinsic::Acos
+                | Intrinsic::Atan
+                | Intrinsic::Exp
+                | Intrinsic::Log,
+                [x],
+            ) if float => {
+                let Some(f) = libm(op) else { return no(format!("Primitive `{op:?}`"), span) };
+                let domain = match f {
+                    Fun::Asin | Fun::Acos => Term::and(vec![
+                        Term::bin(Op::FGe, x.clone(), lit(-1.0, x)),
+                        Term::bin(Op::FLe, x.clone(), lit(1.0, x)),
+                    ]),
+                    Fun::Log => Term::bin(Op::FGt, x.clone(), lit(0.0, x)),
+                    Fun::Sin | Fun::Cos | Fun::Tan | Fun::Atan | Fun::Atan2 | Fun::Exp | Fun::Pow => Term::bool(true),
+                };
+                fault(domain.not(), flow);
+                self.uninterpreted.insert(f.name().to_string());
+                let r = math(f, vec![x.clone()]);
+                fault(Term::app(Op::IsFinite, vec![r.clone()]).not(), flow);
+                r
+            }
+            // 4.1: `pow` ist definiert fuer y = 0, x > 0, x = 0 mit y > 0 und
+            // x < 0 mit ganzem y.
+            (Intrinsic::Atan2 | Intrinsic::Pow, [x, y]) if float => {
+                if op == Intrinsic::Pow {
+                    let zero = lit(0.0, x);
+                    let whole =
+                        Term::bin(Op::FEq, Term::app(Op::Round(Rounding::TowardZero), vec![y.clone()]), y.clone());
+                    let defined = Term::or(vec![
+                        Term::bin(Op::FEq, y.clone(), zero.clone()),
+                        Term::bin(Op::FGt, x.clone(), zero.clone()),
+                        Term::and(vec![
+                            Term::bin(Op::FEq, x.clone(), zero.clone()),
+                            Term::bin(Op::FGt, y.clone(), zero.clone()),
+                        ]),
+                        Term::and(vec![Term::bin(Op::FLt, x.clone(), zero), whole]),
+                    ]);
+                    fault(defined.not(), flow);
+                }
+                let f = if op == Intrinsic::Pow { Fun::Pow } else { Fun::Atan2 };
+                self.uninterpreted.insert(f.name().to_string());
+                let r = math(f, vec![x.clone(), y.clone()]);
+                fault(Term::app(Op::IsFinite, vec![r.clone()]).not(), flow);
+                r
+            }
+            // In der Breite des Ergebnisses gewickelt (`call.rs`).
+            (Intrinsic::WrappingAdd | Intrinsic::WrappingSub | Intrinsic::WrappingMul, [a, b]) if !float => {
+                let w = self.int_width(tys.0, span)?.unwrap_or(IntWidth::I64);
+                let r = if op == Intrinsic::WrappingAdd {
+                    Term::bin(Op::Add, a.clone(), b.clone())
+                } else if op == Intrinsic::WrappingSub {
+                    Term::bin(Op::Sub, a.clone(), b.clone())
+                } else {
+                    Term::bin(Op::Mul, a.clone(), b.clone())
+                };
+                Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![r])
+            }
+            // Auf die Grenzen der Breite geklemmt; in 64 Bit entscheidet der
+            // Ueberlauf die Richtung.
+            (Intrinsic::SaturatingAdd | Intrinsic::SaturatingSub, [a, b]) if !float => {
+                let w = self.int_width(tys.0, span)?.unwrap_or(IntWidth::I64);
+                let (lo, hi) = width_bounds(w);
+                let (lo, hi) = (Term::int(lo as i64), Term::int(hi as i64));
+                let add = op == Intrinsic::SaturatingAdd;
+                let r = Term::bin(if add { Op::Add } else { Op::Sub }, a.clone(), b.clone());
+                let wraps = Term::bin(if add { Op::AddOverflows } else { Op::SubOverflows }, a.clone(), b.clone());
+                let clamped = Term::ite(
+                    Term::bin(Op::Lt, r.clone(), lo.clone()),
+                    lo.clone(),
+                    Term::ite(Term::bin(Op::Gt, r.clone(), hi.clone()), hi.clone(), r),
+                );
+                // Eine Summe ueber `i64` hat das Vorzeichen des ersten Summanden.
+                let up = Term::bin(Op::Ge, a.clone(), Term::int(0));
+                Term::ite(wraps, Term::ite(up, hi, lo), clamped)
+            }
+            // Rotation in der Breite des Arguments, der Betrag modulo der Breite.
+            (Intrinsic::Rotl | Intrinsic::Rotr, [x, n]) if !float => {
+                let w = self.int_width(tys.1, span)?.unwrap_or(IntWidth::I64);
+                let bits = i64::from(w.bits());
+                let mask = if bits >= 64 { Term::int(-1) } else { Term::int((1i64 << bits) - 1) };
+                let r = Term::bin(Op::Rem, n.clone(), Term::int(bits));
+                let n = Term::ite(
+                    Term::bin(Op::Lt, r.clone(), Term::int(0)),
+                    Term::bin(Op::Add, r.clone(), Term::int(bits)),
+                    r,
+                );
+                let u = Term::bin(Op::BitAnd, x.clone(), mask.clone());
+                let back = Term::bin(Op::Sub, Term::int(bits), n.clone());
+                let (first, second) = if op == Intrinsic::Rotl { (Op::Shl, Op::Shr) } else { (Op::Shr, Op::Shl) };
+                let rot = Term::bin(Op::BitOr, Term::bin(first, u.clone(), n), Term::bin(second, u, back));
+                Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![Term::bin(Op::BitAnd, rot, mask)])
+            }
+            // Gerundet, dann als Ganzzahl; ausserhalb von `i64` ein Range-Fault.
+            (Intrinsic::Round | Intrinsic::Floor | Intrinsic::Ceil, [x]) if float => {
+                let mode = if op == Intrinsic::Round {
+                    Rounding::HalfAway
+                } else if op == Intrinsic::Floor {
+                    Rounding::Down
+                } else {
+                    Rounding::Up
+                };
+                let r = Term::app(Op::Round(mode), vec![x.clone()]);
+                let inside = Term::and(vec![
+                    Term::bin(Op::FGe, r.clone(), lit(i64::MIN as f64, x)),
+                    Term::bin(Op::FLt, r.clone(), lit(i64::MAX as f64, x)),
+                ]);
+                fault(inside.not(), flow);
+                Term::app(Op::FloatToInt, vec![r])
+            }
             _ => return no(format!("Primitive `{op:?}`"), span),
         })
+    }
+
+    /// Eine Einheitenumrechnung (3.2, `eval::convert`): `as(U)` teilt die
+    /// Nanosekunden durch die der Einheit, `to(U)` und `to_float(U)` gehen
+    /// ueber die Basiseinheit — Versatz der Quelle, der exakte Bruch beider
+    /// Faktoren einmal gerundet, Versatz des Ziels.
+    fn convert(
+        &self,
+        x: Term,
+        kind: ConvertKind,
+        unit: takt_mir::UnitId,
+        from: TypeId,
+        sort: Sort,
+        span: Span,
+    ) -> R<Term> {
+        let dst = &self.p.units[unit.index()];
+        let constant = |num: i64, den: u64| {
+            let (mag, den) = (u128::from(num.unsigned_abs()), u128::from(den));
+            let sign = if num < 0 { -1.0 } else { 1.0 };
+            match sort {
+                Sort::F32 => Term::float(f64::from(libtaktm::scale_f32(sign as f32, mag, den)), Sort::F32),
+                _ => Term::float(libtaktm::scale_f64(sign, mag, den), Sort::F64),
+            }
+        };
+        let to_float = |x: Term| Term::app(if sort == Sort::F32 { Op::ToF32 } else { Op::ToF64 }, vec![x]);
+        if kind == ConvertKind::As {
+            let per = i128::from(dst.factor.num) * 1_000_000_000 / i128::from(dst.factor.den);
+            return Ok(Term::bin(Op::FDiv, to_float(x), Term::float(per as f64, sort)));
+        }
+        let (factor, offset) = match (kind, self.p.types.get(from)) {
+            (_, Type::Float { unit: Some(u), .. }) | (ConvertKind::ToFloat, Type::Int { unit: Some(u), .. }) => {
+                let src = &self.p.units[u.index()];
+                (src.factor, src.affine_offset)
+            }
+            (ConvertKind::ToFloat, Type::Int { unit: None, .. }) => (takt_mir::types::Rational::int(1), None),
+            _ => return no("`to(U)` ohne Quelleinheit", span),
+        };
+        let mut x = if kind == ConvertKind::ToFloat { to_float(x) } else { x };
+        if let Some(off) = offset {
+            x = Term::bin(Op::FAdd, x, constant(off.num, off.den));
+        }
+        let num = i128::from(factor.num) * i128::from(dst.factor.den);
+        let den = i128::from(factor.den) * i128::from(dst.factor.num);
+        let (Ok(num), Ok(den)) = (u128::try_from(num), u128::try_from(den)) else {
+            return no("Einheitenfaktor nicht positiv", span);
+        };
+        x = Term::app(Op::Scale { num, den }, vec![x]);
+        if let Some(off) = dst.affine_offset {
+            x = Term::bin(Op::FSub, x, constant(off.num, off.den));
+        }
+        Ok(x)
     }
 
     /// Eine implizite Pruefung (4.1) als Fault-Zweig: Die Stelle feuert, wo
@@ -1193,7 +1380,7 @@ impl Enc<'_> {
             }
             ExprKind::Intrinsic { op: Intrinsic::Abs, args } if args.len() == 1 => {
                 let x = self.expr(&args[0], cx, env, flow)?;
-                let r = self.intrinsic(Intrinsic::Abs, vec![x.clone()], span)?;
+                let r = self.intrinsic(Intrinsic::Abs, vec![x.clone()], (args[0].ty, args[0].ty), flow, span)?;
                 let fail = if narrow { outside(&r, width) } else { min(&x) };
                 (r, fail)
             }
@@ -1260,7 +1447,8 @@ impl Enc<'_> {
         Ok(ret_val)
     }
 
-    /// Der Rumpf einer Funktion: Zuweisungen an Lokale, `if`, `return`.
+    /// Der Rumpf einer Funktion: Zuweisungen an Lokale, `if`, `return`,
+    /// ausgerollte Schleifen mit `break`.
     #[deny(clippy::wildcard_enum_match_arm)]
     fn fn_block(&mut self, b: &Block, cx: &mut Cx<'_>, env: &mut Env, flow: &mut Flow, ret: &mut V) -> R<()> {
         for s in &b.stmts {
@@ -1301,11 +1489,70 @@ impl Enc<'_> {
                     flow.exits.extend(fe.exits);
                     flow.alive = Term::or(vec![ft.alive, fe.alive]);
                 }
+                StmtKind::ForRange { var, count, body } => {
+                    let n = self.const_int(count)?.max(0);
+                    self.unroll_steps(n, s.span)?;
+                    self.loops += 1;
+                    self.breaks.push(Vec::new());
+                    for i in 0..n {
+                        self.set_local(cx, *var, V::Leaf(Term::int(i)), &flow.alive.clone(), s.span)?;
+                        self.fn_block(body, cx, env, flow, ret)?;
+                    }
+                    self.left_loop(flow);
+                    self.loops -= 1;
+                }
+                // Ueber ein Array, Bytes oder einen Vektor: die Variable je
+                // Platz, hinter der Laenge einer Sammlung nichts.
+                StmtKind::ForEach { vars: ForVars::One(var), iter, body }
+                    if matches!(
+                        self.p.types.get(iter.ty),
+                        Type::Array { .. } | Type::Bytes { .. } | Type::Vec { .. }
+                    ) =>
+                {
+                    let v = self.value(iter, cx, env, flow)?;
+                    let (items, len) = self.places(iter.ty, v, s.span)?;
+                    self.unroll_steps(items.len() as i64, s.span)?;
+                    self.loops += 1;
+                    self.breaks.push(Vec::new());
+                    for (k, item) in items.into_iter().enumerate() {
+                        let inside = match &len {
+                            Some(len) => Term::bin(Op::Lt, Term::int(k as i64), len.clone()),
+                            None => Term::bool(true),
+                        };
+                        let saved = cx.locals.clone();
+                        let mut fk = Flow::new(Term::and(vec![flow.alive.clone(), inside.clone()]));
+                        self.set_local(cx, *var, item, &fk.alive.clone(), s.span)?;
+                        let mut rk = ret.clone();
+                        self.fn_block(body, cx, env, &mut fk, &mut rk)?;
+                        let after = cx.locals.take().expect("Lokale");
+                        let before = saved.expect("Lokale");
+                        cx.locals = Some(
+                            after
+                                .into_iter()
+                                .map(|(id, a)| {
+                                    let b = before.get(&id).cloned().unwrap_or_else(|| a.clone());
+                                    (id, V::ite(&inside, a, b))
+                                })
+                                .collect(),
+                        );
+                        *ret = V::ite(&inside, rk, ret.clone());
+                        flow.exits.extend(fk.exits);
+                        flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), inside.not()]), fk.alive]);
+                    }
+                    self.left_loop(flow);
+                    self.loops -= 1;
+                }
+                StmtKind::Break => match self.breaks.last_mut() {
+                    Some(frame) => {
+                        frame.push(flow.alive.clone());
+                        flow.alive = Term::bool(false);
+                    }
+                    None => return no("`break` ausserhalb einer Schleife", s.span),
+                },
                 StmtKind::Pass | StmtKind::Observe(_) => {}
                 other @ (StmtKind::Check { .. }
                 | StmtKind::Goto(_)
                 | StmtKind::Abort { .. }
-                | StmtKind::ForRange { .. }
                 | StmtKind::ForEach { .. }
                 | StmtKind::Match { .. }
                 | StmtKind::Send { .. }
@@ -1315,7 +1562,6 @@ impl Enc<'_> {
                 | StmtKind::Raise(_)
                 | StmtKind::Job { .. }
                 | StmtKind::Every { .. }
-                | StmtKind::Break
                 | StmtKind::Arm { .. }
                 | StmtKind::MethodCall { .. }) => {
                     return no(format!("Anweisung {} in einer Funktion", stmt_name(other)), s.span);
@@ -1525,6 +1771,23 @@ impl Enc<'_> {
                 | StmtKind::Arm { .. }) => return no(format!("Anweisung {}", stmt_name(other)), span),
             }
             self.flush_binds(env)?;
+        }
+        Ok(())
+    }
+
+    /// Setzt eine Lokale, wo `alive` gilt.
+    fn set_local(&self, cx: &mut Cx<'_>, var: VarId, v: V, alive: &Term, span: Span) -> R<()> {
+        let locals = cx.locals.as_mut().ok_or_else(|| Unsupported { what: "Lokale".into(), span })?;
+        let Some(old) = locals.get(&var).cloned() else { return no("Lokale", span) };
+        locals.insert(var, V::ite(alive, v, old));
+        Ok(())
+    }
+
+    /// Zaehlt ausgerollte Durchlaeufe gegen [`UNROLL_LIMIT`].
+    fn unroll_steps(&mut self, n: i64, span: Span) -> R<()> {
+        self.unrolled = self.unrolled.saturating_add(n);
+        if self.unrolled > UNROLL_LIMIT {
+            return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
         }
         Ok(())
     }
@@ -2846,6 +3109,39 @@ fn outside(x: &Term, width: IntWidth) -> Term {
 
 /// Warum ein `u64` nicht kodiert ist.
 const U64: &str = "`u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen";
+
+/// Die Funktion aus `libtaktm` hinter einer Primitive (4.2).
+#[deny(clippy::wildcard_enum_match_arm)]
+fn libm(op: Intrinsic) -> Option<Fun> {
+    Some(match op {
+        Intrinsic::Sin => Fun::Sin,
+        Intrinsic::Cos => Fun::Cos,
+        Intrinsic::Tan => Fun::Tan,
+        Intrinsic::Asin => Fun::Asin,
+        Intrinsic::Acos => Fun::Acos,
+        Intrinsic::Atan => Fun::Atan,
+        Intrinsic::Atan2 => Fun::Atan2,
+        Intrinsic::Exp => Fun::Exp,
+        Intrinsic::Log => Fun::Log,
+        Intrinsic::Pow => Fun::Pow,
+        Intrinsic::Abs
+        | Intrinsic::Min
+        | Intrinsic::Max
+        | Intrinsic::Sqrt
+        | Intrinsic::Fma
+        | Intrinsic::Round
+        | Intrinsic::Floor
+        | Intrinsic::Ceil
+        | Intrinsic::Rotl
+        | Intrinsic::Rotr
+        | Intrinsic::WrappingAdd
+        | Intrinsic::WrappingSub
+        | Intrinsic::WrappingMul
+        | Intrinsic::SaturatingAdd
+        | Intrinsic::SaturatingSub
+        | Intrinsic::Interp => return None,
+    })
+}
 
 /// Die Periode einer Maschine in Ticks (`every`, 5.2).
 fn machine_period(m: &Machine) -> u32 {

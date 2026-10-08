@@ -45,8 +45,7 @@ pub fn support(c: Construct) -> Support {
             | BinaryOp::Div,
         ) => Yes,
         Construct::Binary(BinaryOp::Rem) => Partial("`%` nur auf Ganzzahlen"),
-        Construct::Convert(ConvertKind::ToFloat | ConvertKind::As) => Yes,
-        Construct::Convert(ConvertKind::To) => No("Einheitenumrechnung `.to`"),
+        Construct::Convert(ConvertKind::ToFloat | ConvertKind::As | ConvertKind::To) => Yes,
         Construct::Mat(MatOp::Transpose | MatOp::Inv | MatOp::Det | MatOp::Solve | MatOp::Cholesky) => {
             No("Matrizen sind nicht kodiert")
         }
@@ -131,8 +130,21 @@ fn expr(e: ExprTag) -> Support {
 #[deny(clippy::wildcard_enum_match_arm)]
 fn intrinsic(i: Intrinsic) -> Support {
     match i {
-        Intrinsic::Abs | Intrinsic::Min | Intrinsic::Max => Yes,
-        Intrinsic::Sqrt | Intrinsic::Fma => Partial("nur auf Fliesskomma"),
+        Intrinsic::Abs
+        | Intrinsic::Min
+        | Intrinsic::Max
+        | Intrinsic::Rotl
+        | Intrinsic::Rotr
+        | Intrinsic::WrappingAdd
+        | Intrinsic::WrappingSub
+        | Intrinsic::WrappingMul
+        | Intrinsic::SaturatingAdd
+        | Intrinsic::SaturatingSub => Yes,
+        Intrinsic::Sqrt | Intrinsic::Fma | Intrinsic::Round | Intrinsic::Floor | Intrinsic::Ceil => {
+            Partial("nur auf Fliesskomma")
+        }
+        // 4.2: In der Auswertung genau aus `libtaktm`, im Solver eine Funktion
+        // mit den Schranken ihres Wertebereichs.
         Intrinsic::Sin
         | Intrinsic::Cos
         | Intrinsic::Tan
@@ -142,18 +154,8 @@ fn intrinsic(i: Intrinsic) -> Support {
         | Intrinsic::Atan2
         | Intrinsic::Exp
         | Intrinsic::Log
-        | Intrinsic::Pow
-        | Intrinsic::Round
-        | Intrinsic::Floor
-        | Intrinsic::Ceil
-        | Intrinsic::Rotl
-        | Intrinsic::Rotr
-        | Intrinsic::WrappingAdd
-        | Intrinsic::WrappingSub
-        | Intrinsic::WrappingMul
-        | Intrinsic::SaturatingAdd
-        | Intrinsic::SaturatingSub
-        | Intrinsic::Interp => No("Primitive ohne Kodierung"),
+        | Intrinsic::Pow => Partial("im Solver uninterpretiert mit den Schranken ihres Wertebereichs"),
+        Intrinsic::Interp => No("Tabellen sind nicht kodiert"),
     }
 }
 
@@ -167,7 +169,12 @@ fn accessor(a: AccessorTag) -> Support {
         // Beobachtungen laesst das Modell aus; nur dort darf ein Programm sie lesen.
         AccessorTag::Age | AccessorTag::Reason => Partial("nur in Beobachtungen, die das Modell auslaesst"),
         AccessorTag::Len => Partial("auf Arrays, Bytes, Vektoren und Text"),
-        AccessorTag::StartsWith | AccessorTag::Contains | AccessorTag::Truncated => Yes,
+        AccessorTag::StartsWith
+        | AccessorTag::Contains
+        | AccessorTag::Truncated
+        | AccessorTag::Bit
+        | AccessorTag::Bits
+        | AccessorTag::WithBit => Yes,
         AccessorTag::Count => Partial("auf Arrays und Stroemen"),
         AccessorTag::Dropped
         | AccessorTag::Malformed
@@ -187,9 +194,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::TimeWarped
         | AccessorTag::Done
         | AccessorTag::Result
-        | AccessorTag::Bit
-        | AccessorTag::Bits
-        | AccessorTag::WithBit
         | AccessorTag::Min
         | AccessorTag::Max
         | AccessorTag::Mean

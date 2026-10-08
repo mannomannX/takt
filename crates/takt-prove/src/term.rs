@@ -19,6 +19,52 @@ pub enum Sort {
     F64,
 }
 
+/// Eine korrekt gerundete Funktion aus `libtaktm` (4.2): in der Auswertung
+/// genau, im Solver uninterpretiert, mit den Schranken ihres Wertebereichs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum Fun {
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Atan2,
+    Exp,
+    Log,
+    Pow,
+}
+
+impl Fun {
+    /// Der Name im Solver.
+    pub fn name(self) -> &'static str {
+        match self {
+            Fun::Sin => "sin",
+            Fun::Cos => "cos",
+            Fun::Tan => "tan",
+            Fun::Asin => "asin",
+            Fun::Acos => "acos",
+            Fun::Atan => "atan",
+            Fun::Atan2 => "atan2",
+            Fun::Exp => "exp",
+            Fun::Log => "log",
+            Fun::Pow => "pow",
+        }
+    }
+}
+
+/// Die Richtung einer Rundung auf eine ganze Zahl.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
+pub enum Rounding {
+    /// Halbe von null weg (`f64::round`).
+    HalfAway,
+    Down,
+    Up,
+    TowardZero,
+}
+
 /// Operation eines inneren Knotens.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
@@ -76,6 +122,17 @@ pub enum Op {
     SubOverflows,
     /// Das exakte Produkt.
     MulOverflows,
+    /// `x · num / den`, einmal gerundet (`libtaktm::scale`, 3.2).
+    Scale {
+        num: u128,
+        den: u128,
+    },
+    /// Eine Funktion aus `libtaktm`.
+    Math(Fun),
+    /// Auf eine ganze Zahl gerundet, in der Breite des Arguments.
+    Round(Rounding),
+    /// Eine ganzzahlige Fliesskommazahl als Ganzzahl.
+    FloatToInt,
 }
 
 /// Ein Knoten.
@@ -271,10 +328,19 @@ impl Term {
                 | Op::BitXor
                 | Op::Shl
                 | Op::Shr
-                | Op::Wrap { .. } => Sort::Int,
-                Op::FNeg | Op::FAdd | Op::FSub | Op::FMul | Op::FDiv | Op::FAbs | Op::FSqrt | Op::FFma => {
-                    args[0].sort()
-                }
+                | Op::Wrap { .. }
+                | Op::FloatToInt => Sort::Int,
+                Op::FNeg
+                | Op::FAdd
+                | Op::FSub
+                | Op::FMul
+                | Op::FDiv
+                | Op::FAbs
+                | Op::FSqrt
+                | Op::FFma
+                | Op::Scale { .. }
+                | Op::Math(_)
+                | Op::Round(_) => args[0].sort(),
             },
         }
     }
