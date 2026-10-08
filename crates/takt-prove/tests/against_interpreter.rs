@@ -51,6 +51,25 @@ fn leaves_of(p: &Program, ty: TypeId, text: &str, base: &str, out: &mut Vec<(Str
                 leaves_of(p, *elem, t, &format!("{base}[{i}]"), out)?;
             }
         }
+        // Die Laenge, die belegten Plaetze, dahinter null.
+        Type::Bytes { cap } => {
+            let items = split(text.strip_prefix('[')?.strip_suffix(']')?);
+            out.push((format!("{base}.len"), Val::Int(items.len() as i64)));
+            for i in 0..*cap as usize {
+                let byte = match items.get(i) {
+                    Some(t) => i64::from_str_radix(t.strip_prefix("0x")?, 16).ok()?,
+                    None => 0,
+                };
+                out.push((format!("{base}[{i}]"), Val::Int(byte)));
+            }
+        }
+        Type::Vec { elem, .. } => {
+            let items = split(text.strip_prefix('[')?.strip_suffix(']')?);
+            out.push((format!("{base}.len"), Val::Int(items.len() as i64)));
+            for (i, t) in items.into_iter().enumerate() {
+                leaves_of(p, *elem, t, &format!("{base}[{i}]"), out)?;
+            }
+        }
         Type::Optional(t) => {
             out.push((format!("{base}.has"), Val::Bool(text != "none")));
             if text != "none" {
@@ -354,6 +373,57 @@ fn composite_values_agree() {
     agree_program("composite", &compile("composite", COMPOSITE), "", 30);
     let out_of_range = COMPOSITE.replace("pick = maybe.or(-1) + xs[k % 4]", "pick = xs[k % 7]");
     agree_program("index", &compile("index", &out_of_range), "", 10);
+}
+
+/// Bytes und ein Vektor: anhaengen bis zur Kapazitaet, alles oder nichts,
+/// leeren, lesen mit Index, Laenge, `for` ueber die belegten Plaetze.
+const COLLECTIONS: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+output n     : int  @ hw("o/n")     with safe = 0
+output total : int  @ hw("o/total") with safe = 0
+output took  : bool @ hw("o/took")  with safe = false
+output first : int  @ hw("o/first") with safe = 0
+output buf   : bytes<6> @ sim("o/buf")
+
+machine m:
+    var k  : int in 0..99 = 0
+    var b  : bytes<6> = default
+    var vs : vec<int, 3> = default
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 100
+            took = b.push((k % 256) as u8)
+            if k % 4 == 0:
+                var pair : bytes<6> = [1, 2]
+                took = b.append(pair)
+            if k % 7 == 0:
+                b.clear()
+            vs.push(k)
+            if k % 5 == 0:
+                vs.clear()
+            n = b.len * 10 + vs.len
+            var sum : int = 0
+            for x in b:
+                sum = sum + x as int
+            for y in vs:
+                sum = sum + y
+            total = sum
+            first = b[0] as int if b.len > 0 else -1
+            buf = b
+"#;
+
+/// **Sammlungen** (M11 Schritt 27a): Bytes und Vektoren rechnen im Modell
+/// wie im Interpreter; ein Index hinter der Laenge faultet in beiden.
+#[test]
+fn collections_agree() {
+    agree_program("collections", &compile("collections", COLLECTIONS), "", 30);
+    let past_len = COLLECTIONS.replace("first = b[0] as int if b.len > 0 else -1", "first = b[k % 6] as int");
+    agree_program("past_len", &compile("past_len", &past_len), "", 12);
 }
 
 /// 14.1 (der Hotfire-Test der Referenz) mit den Szenarien des Korpus:

@@ -287,6 +287,8 @@ struct Enc<'p> {
     tunes_seen: BTreeSet<String>,
     /// Ausgerollte Schleifendurchlaeufe des laufenden Pfads ([`UNROLL_LIMIT`]).
     unrolled: i64,
+    /// Die Typen der Lokalen des Rumpfs, der gerade eingebettet wird.
+    local_types: BTreeMap<VarId, TypeId>,
 }
 
 /// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
@@ -477,6 +479,7 @@ impl<'p> Enc<'p> {
             tune_assumptions: Vec::new(),
             tunes_seen: BTreeSet::new(),
             unrolled: 0,
+            local_types: BTreeMap::new(),
         }
     }
 }
@@ -1150,7 +1153,10 @@ impl Enc<'_> {
         let mut ret_val = self.zero_of(ret, span)?;
         let mut env = env.clone();
         let mut inner = inner;
+        let types = f.locals.iter().enumerate().map(|(i, l)| (VarId(i as u32), l.ty)).collect();
+        let outer = std::mem::replace(&mut self.local_types, types);
         self.fn_block(&f.body, &mut inner, &mut env, &mut sub, &mut ret_val)?;
+        self.local_types = outer;
         // Die Funktion kehrt zurueck; nur ihre Faults beenden den Aufrufer.
         let faults = Term::or(sub.exits.iter().map(|x| x.cond.clone()).collect());
         flow.exits.extend(sub.exits);
@@ -1326,6 +1332,12 @@ impl Enc<'_> {
                         self.block(body, cx, env, flow)?;
                     }
                 }
+                StmtKind::ForEach { vars: ForVars::One(var), iter, body }
+                    if matches!(self.p.types.get(iter.ty), Type::Bytes { .. } | Type::Vec { .. }) =>
+                {
+                    let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
+                    self.for_collection(&loc, ty, iter, body, cx, env, flow, span)?;
+                }
                 StmtKind::Raise(sig) => {
                     let loc = self.loc_sig(m, sig.index());
                     let old = env.get(&loc).cloned().unwrap_or_else(|| Term::bool(false));
@@ -1385,6 +1397,8 @@ impl Enc<'_> {
             let shape = self.shape(*ty, def.span)?;
             locals.insert(VarId(i as u32), self.load(env, loc, &shape, def.span)?);
         }
+        let types = fields.iter().enumerate().map(|(i, (_, ty))| (VarId(i as u32), *ty)).collect();
+        let outer = std::mem::replace(&mut self.local_types, types);
         for (j, sv) in def.state_vars.iter().enumerate() {
             let icx = Cx {
                 m: cx.m,
@@ -1403,6 +1417,7 @@ impl Enc<'_> {
             let loc = fields[def.params.len() + j].0.clone();
             self.put(env, &loc, sv.ty, v, &flow.alive.clone(), sv.span)?;
         }
+        self.local_types = outer;
         Ok(())
     }
 
@@ -1423,6 +1438,9 @@ impl Enc<'_> {
         span: Span,
     ) -> R<()> {
         let m = cx.m.expect("Maschine");
+        if matches!(method, Method::Push | Method::Append | Method::Clear) {
+            return self.collection_method(target, receiver, method, args, cx, env, flow, span);
+        }
         let Place::Var(inst) = receiver else { return no("Methodenaufruf auf diesem Ziel", span) };
         let Some((bid, fields)) = self.block_fields(m, *inst) else { return no("Methodenaufruf", span) };
         let def = self.p.blocks[bid.index()].clone();
@@ -1478,7 +1496,16 @@ impl Enc<'_> {
             Some(t) => self.zero_of(t, span)?,
             None => V::Leaf(Term::bool(false)),
         };
+        let types = fields
+            .iter()
+            .map(|(_, ty)| *ty)
+            .chain(f.locals.iter().map(|l| l.ty))
+            .enumerate()
+            .map(|(i, ty)| (VarId(i as u32), ty))
+            .collect();
+        let outer = std::mem::replace(&mut self.local_types, types);
         self.fn_block(&f.body, &mut icx, env, &mut sub, &mut ret)?;
+        self.local_types = outer;
         let faults = Term::or(sub.exits.iter().map(|x| x.cond.clone()).collect());
         flow.exits.extend(sub.exits);
         // Der Zustand bleibt, was der Rumpf bis zu einem Fault schrieb.
@@ -1545,7 +1572,18 @@ impl Enc<'_> {
             }
             let Some(ret_ty) = f.ret else { continue };
             let Ok(mut ret) = self.zero_of(ret_ty, f.span) else { continue };
+            let types = def
+                .params
+                .iter()
+                .map(|p| p.ty)
+                .chain(def.state_vars.iter().map(|v| v.ty))
+                .chain(f.locals.iter().map(|l| l.ty))
+                .enumerate()
+                .map(|(i, ty)| (VarId(i as u32), ty))
+                .collect();
+            let outer = std::mem::replace(&mut self.local_types, types);
             self.fn_block(&f.body, &mut cx, &mut env, &mut flow, &mut ret)?;
+            self.local_types = outer;
             let faults = Term::or(flow.exits.iter().map(|x| x.cond.clone()).collect());
             // `result` ist die Lokale hinter den Schrittparametern.
             cx.locals.as_mut().expect("Lokale").insert(VarId(base + f.params.len() as u32), ret);

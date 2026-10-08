@@ -4,7 +4,8 @@
 //! (plan/m6.md 2.8): Ein Gegenbeispiel des Solvers oder ein Lauf des
 //! Modells muss im Interpreter dasselbe tun.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use crate::term::{Node, Op, Sort, Term};
 
@@ -58,8 +59,24 @@ impl Val {
 /// Werte der Variablen.
 pub type Env = BTreeMap<String, Val>;
 
-/// Wertet `t` unter `env`; eine fehlende Variable ist ihr Nullwert.
+/// Wertet `t` unter `env`; eine fehlende Variable ist ihr Nullwert. Jeder
+/// geteilte Knoten wird einmal ausgewertet: Der Term ist ein Graph, und
+/// ohne Gedaechtnis waechst die Arbeit mit der Zahl seiner Pfade.
 pub fn eval(t: &Term, env: &Env) -> Val {
+    eval_in(t, env, &mut HashMap::new())
+}
+
+fn eval_in(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
+    let key = Rc::as_ptr(&t.0) as usize;
+    if let Some(v) = memo.get(&key) {
+        return *v;
+    }
+    let v = eval_node(t, env, memo);
+    memo.insert(key, v);
+    v
+}
+
+fn eval_node(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
     match &*t.0 {
         Node::Bool(b) => Val::Bool(*b),
         Node::Int(i) => Val::Int(*i),
@@ -67,11 +84,11 @@ pub fn eval(t: &Term, env: &Env) -> Val {
         Node::F64(f) => Val::F64(*f),
         Node::Var(name, sort) => env.get(name).copied().unwrap_or(Val::zero(*sort)),
         Node::App(op, args) => {
-            let a = |i: usize| eval(&args[i], env);
+            let mut a = |i: usize| eval_in(&args[i], env, memo);
             match op {
                 Op::Not => Val::Bool(!a(0).as_bool()),
-                Op::And => Val::Bool(args.iter().all(|x| eval(x, env).as_bool())),
-                Op::Or => Val::Bool(args.iter().any(|x| eval(x, env).as_bool())),
+                Op::And => Val::Bool(args.iter().all(|x| eval_in(x, env, memo).as_bool())),
+                Op::Or => Val::Bool(args.iter().any(|x| eval_in(x, env, memo).as_bool())),
                 Op::Eq => Val::Bool(same(a(0), a(1))),
                 Op::Ite => {
                     if a(0).as_bool() {

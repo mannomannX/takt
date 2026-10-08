@@ -108,7 +108,7 @@ fn expr(e: ExprTag) -> Support {
         | ExprTag::Array
         | ExprTag::Lift => Yes,
         ExprTag::Field => Partial("auf Records; nicht auf den Feldern einer Variante"),
-        ExprTag::Index => Partial("auf Arrays; nicht auf Bytes, Vektoren, Samples und Channel-Arrays"),
+        ExprTag::Index => Partial("auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays"),
         ExprTag::Published | ExprTag::StateOf | ExprTag::Signal => Partial("nicht ueber ein Instanz-Array"),
         ExprTag::Cast => Partial("nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma"),
         ExprTag::Call => Partial("Funktionen mit Rueckgabe, ohne `inout`, aus kodierbaren Anweisungen"),
@@ -117,7 +117,7 @@ fn expr(e: ExprTag) -> Support {
             No("Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert")
         }
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
-        ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge eines Arrays"),
+        ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
         ExprTag::Armed | ExprTag::PortRead => No("Trigger und Registerports sind nicht kodiert"),
         ExprTag::JobState | ExprTag::Stream | ExprTag::Matches | ExprTag::Decode => {
             No("Jobs, Stroeme und Muster sind nicht kodiert")
@@ -164,7 +164,8 @@ fn accessor(a: AccessorTag) -> Support {
         AccessorTag::Suspect | AccessorTag::Stale => Partial("auf einem Input (3.5)"),
         // Beobachtungen laesst das Modell aus; nur dort darf ein Programm sie lesen.
         AccessorTag::Age | AccessorTag::Reason => Partial("nur in Beobachtungen, die das Modell auslaesst"),
-        AccessorTag::Len | AccessorTag::Count => Partial("auf Arrays"),
+        AccessorTag::Len => Partial("auf Arrays, Bytes und Vektoren"),
+        AccessorTag::Count => Partial("auf Arrays"),
         AccessorTag::Ok
         | AccessorTag::Err
         | AccessorTag::T
@@ -219,8 +220,12 @@ fn stmt(s: StmtTag) -> Support {
         StmtTag::Check => Partial("ohne `for` und `within`"),
         StmtTag::ForRange => Partial("bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403)"),
         StmtTag::Match => Partial("nicht im Rumpf einer Funktion"),
-        StmtTag::MethodCall => Partial("nur `step` einer Blockinstanz"),
-        StmtTag::ForEach => Partial("ueber ein Array mit einer Variablen, nicht im Rumpf einer Funktion"),
+        StmtTag::MethodCall => {
+            Partial("`step` einer Blockinstanz; `push`, `append`, `clear` auf Bytes und Vektoren ohne Index")
+        }
+        StmtTag::ForEach => {
+            Partial("ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion")
+        }
         StmtTag::Break => No("`break` ist nicht kodiert"),
         StmtTag::Send | StmtTag::Cancel | StmtTag::Skip | StmtTag::Arm => No("Stroeme und Trigger sind nicht kodiert"),
         StmtTag::At | StmtTag::Every => No("`at` und `every` sind nicht kodiert"),
@@ -233,12 +238,12 @@ fn ty(t: TypeTag) -> Support {
     match t {
         TypeTag::Bool | TypeTag::Float | TypeTag::Duration => Yes,
         TypeTag::Enum => Partial("mit Feldern nicht als Typ eines Inputs"),
-        TypeTag::Record | TypeTag::Array | TypeTag::Optional => Partial("nicht als Typ eines Inputs"),
+        TypeTag::Record | TypeTag::Array | TypeTag::Optional | TypeTag::Bytes | TypeTag::Vec => {
+            Partial("nicht als Typ eines Inputs")
+        }
         TypeTag::Int => Partial("ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen"),
         TypeTag::HandleBlock => Partial("Blockinstanzen nur ueber ihre Felder"),
-        TypeTag::Bytes
-        | TypeTag::Vec
-        | TypeTag::Str
+        TypeTag::Str
         | TypeTag::Line
         | TypeTag::Samples
         | TypeTag::Table

@@ -23,10 +23,10 @@ Expr(Builtin),ja,ja,ja
 Expr(Armed),ja,nein: Trigger und Registerports sind nicht kodiert,nein
 Expr(PortRead),ja,nein: Trigger und Registerports sind nicht kodiert,ja
 Expr(Field),ja,teilweise: auf Records; nicht auf den Feldern einer Variante,ja
-Expr(Index),ja,"teilweise: auf Arrays; nicht auf Bytes, Vektoren, Samples und Channel-Arrays",ja
+Expr(Index),ja,"teilweise: auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays",ja
 Expr(Index2),ja,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
 Expr(Slice),ja,"nein: Tupel, Matrizen, Ausschnitte und Ergebnisse sind nicht kodiert",ja
-Expr(Accessor),ja,"teilweise: die Qualitaet eines Inputs, ein Optional, die Laenge eines Arrays",ja
+Expr(Accessor),ja,"teilweise: die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung",ja
 Expr(Unary),ja,ja,ja
 Expr(Binary),ja,ja,ja
 Expr(Cond),ja,ja,ja
@@ -127,7 +127,7 @@ Accessor(T),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Seq),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Text),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Data),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Len),teilweise: `.len` nur auf Sammlungen,teilweise: auf Arrays,ja
+Accessor(Len),teilweise: `.len` nur auf Sammlungen,"teilweise: auf Arrays, Bytes und Vektoren",ja
 Accessor(Count),ja,teilweise: auf Arrays,ja
 Accessor(Dropped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Malformed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -168,7 +168,7 @@ Stmt(Goto),ja,ja,ja
 Stmt(Abort),ja,ja,ja
 Stmt(If),ja,ja,ja
 Stmt(ForRange),ja,teilweise: bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403),ja
-Stmt(ForEach),ja,"teilweise: ueber ein Array mit einer Variablen, nicht im Rumpf einer Funktion",ja
+Stmt(ForEach),ja,"teilweise: ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion",ja
 Stmt(Match),ja,teilweise: nicht im Rumpf einer Funktion,ja
 Stmt(Return),ja,ja,ja
 Stmt(Send),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
@@ -181,7 +181,7 @@ Stmt(Every),ja,nein: `at` und `every` sind nicht kodiert,ja
 Stmt(Break),ja,nein: `break` ist nicht kodiert,ja
 Stmt(Observe),ja,ja,ja
 Stmt(Arm),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
-Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`",teilweise: nur `step` einer Blockinstanz,ja
+Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`","teilweise: `step` einer Blockinstanz; `push`, `append`, `clear` auf Bytes und Vektoren ohne Index",ja
 Stmt(Pass),ja,ja,ja
 Place(Var),ja,ja,ja
 Place(Output),ja,ja,ja
@@ -196,8 +196,8 @@ Type(Duration),ja,ja,ja
 Type(Enum),ja,teilweise: mit Feldern nicht als Typ eines Inputs,ja
 Type(Record),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Array),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Bytes),ja,nein: Typ ohne Sorte im Modell,ja
-Type(Vec),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Bytes),ja,teilweise: nicht als Typ eines Inputs,ja
+Type(Vec),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Str),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Line),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Samples),ja,nein: Typ ohne Sorte im Modell,ja

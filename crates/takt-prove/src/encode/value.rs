@@ -1,19 +1,21 @@
 //! Zusammengesetzte Werte im Modell (M11 Schritt 27a). Ein Record, ein
 //! Array, ein Optional und ein Enum mit Feldern sind ein Baum aus skalaren
 //! Termen; ein Ort im Zustand haelt je Blatt eine Variable (`s.m.r.x`,
-//! `s.m.a[3]`, `s.m.o.has`, `s.m.c.tag`). Ein fehlender Wert und die Felder
-//! einer anderen Variante sind null wie im Standardwert des Interpreters
+//! `s.m.a[3]`, `s.m.o.has`, `s.m.c.tag`). Bytes und Vektoren sind ihre
+//! Laenge und ihre Plaetze bis zur Kapazitaet (`s.m.b.len`, `s.m.b[0]`).
+//! Ein fehlender Wert, die Felder einer anderen Variante und die Plaetze
+//! hinter der Laenge sind null wie im Standardwert des Interpreters
 //! (`Value::default_for`); darum gilt Gleichheit Blatt fuer Blatt.
 
 use std::ops::Not;
 
 use takt_diag::Span;
 use takt_mir::expr::{Accessor, CheckedKind, Expr, ExprKind};
-use takt_mir::stmt::{ArmPattern, Place};
+use takt_mir::stmt::{ArmPattern, Block, Method, Place};
 use takt_mir::types::Type;
 use takt_mir::{EnumId, MachineId, TypeId};
 
-use super::{Cx, Enc, Env, Exit, ExitKind, Flow, R, no};
+use super::{Cx, Enc, Env, Exit, ExitKind, Flow, R, UNROLL_LIMIT, ite_env, no};
 use crate::term::{Op, Sort, Term};
 
 /// Ein Wert im Modell: ein skalarer Term oder seine Teile in der Ordnung
@@ -67,24 +69,69 @@ pub(super) enum Shape {
     Flag,
     /// Die Variante eines Enums mit Feldern, als Index.
     Tag(EnumId),
+    /// Die Laenge einer Sammlung bis zu ihrer Kapazitaet.
+    Count(u32),
+    /// Ein Byte.
+    Byte,
     /// Teile mit ihrem Pfad: `.feld`, `[i]`.
     Node(Vec<(String, Shape)>),
 }
 
-/// Ein Schritt auf dem Weg zu einem Teil.
+/// Die obere Grenze eines Index einer Zuweisungsstelle, geprueft, wenn alle
+/// Indizes ausgewertet sind; `depth` ist ihr Schritt von der Wurzel her.
+#[derive(Clone, Debug)]
+pub(super) struct Pending {
+    kind: CheckedKind,
+    span: Span,
+    index: Term,
+    depth: usize,
+}
+
+/// Wurzel einer Zuweisungsstelle, ihre Indizes von der Wurzel her (`None`
+/// fuer ein Feld) und die noch offenen oberen Grenzen.
+type PlacePath<'a> = (&'a Place, Vec<Option<Term>>, Vec<Pending>);
+
+/// Ein Schritt auf dem Weg zu einem Teil. Ein Index zaehlt ab dem Teil
+/// `offset`: null im Array, eins hinter der Laenge einer Sammlung.
 #[derive(Clone, Debug)]
 pub(super) enum Step {
     Field(usize),
-    Index(Term),
+    Index { index: Term, offset: usize },
+}
+
+/// Die Grenze eines Index: die Laenge des Arrays oder die der Sammlung, die
+/// erst im Wert steht.
+#[derive(Clone, Copy, Debug)]
+enum Bound {
+    Fixed(u32),
+    Dynamic,
 }
 
 impl Enc<'_> {
     /// Ein Typ, dessen Wert im Modell mehr als ein Blatt hat?
     pub(super) fn composite(&self, ty: TypeId) -> bool {
         match self.p.types.get(ty) {
-            Type::Record(_) | Type::Array { .. } | Type::Optional(_) => true,
+            Type::Record(_) | Type::Array { .. } | Type::Optional(_) | Type::Bytes { .. } | Type::Vec { .. } => true,
             Type::Enum(e) => self.fielded(*e),
             _ => false,
+        }
+    }
+
+    /// Eine Sammlung mit Laenge: Bytes und Vektoren, mit ihrer Kapazitaet.
+    fn collection(&self, ty: TypeId) -> Option<u32> {
+        match self.p.types.get(ty) {
+            Type::Bytes { cap } | Type::Vec { cap, .. } => Some(*cap),
+            _ => None,
+        }
+    }
+
+    /// Das Element eines Arrays oder einer Sammlung, mit der Grenze des Index.
+    fn element_of(&self, ty: TypeId) -> Option<(Option<TypeId>, Bound)> {
+        match self.p.types.get(ty) {
+            Type::Array { elem, len } => Some((Some(*elem), Bound::Fixed(*len))),
+            Type::Vec { elem, .. } => Some((Some(*elem), Bound::Dynamic)),
+            Type::Bytes { .. } => Some((None, Bound::Dynamic)),
+            _ => None,
         }
     }
 
@@ -106,6 +153,19 @@ impl Enc<'_> {
             Type::Array { elem, len } => {
                 let s = self.shape(*elem, span)?;
                 Shape::Node((0..*len).map(|i| (format!("[{i}]"), s.clone())).collect())
+            }
+            Type::Bytes { cap } => Shape::Node(
+                std::iter::once((".len".to_string(), Shape::Count(*cap)))
+                    .chain((0..*cap).map(|i| (format!("[{i}]"), Shape::Byte)))
+                    .collect(),
+            ),
+            Type::Vec { elem, cap } => {
+                let s = self.shape(*elem, span)?;
+                Shape::Node(
+                    std::iter::once((".len".to_string(), Shape::Count(*cap)))
+                        .chain((0..*cap).map(|i| (format!("[{i}]"), s.clone())))
+                        .collect(),
+                )
             }
             Type::Optional(t) => {
                 Shape::Node(vec![(".has".into(), Shape::Flag), (".value".into(), self.shape(*t, span)?)])
@@ -146,7 +206,7 @@ impl Enc<'_> {
         match s {
             Shape::Leaf(ty) => self.sort_of(*ty, span),
             Shape::Flag => Ok(Sort::Bool),
-            Shape::Tag(_) => Ok(Sort::Int),
+            Shape::Tag(_) | Shape::Count(_) | Shape::Byte => Ok(Sort::Int),
             Shape::Node(_) => no("zusammengesetzter Wert", span),
         }
     }
@@ -252,6 +312,13 @@ impl Enc<'_> {
                 let n = self.p.enums[e.index()].variants.len() as i64;
                 Some(Term::and(vec![Term::bin(Op::Ge, x.clone(), Term::int(0)), Term::bin(Op::Lt, x, Term::int(n))]))
             }
+            Shape::Count(cap) => Some(Term::and(vec![
+                Term::bin(Op::Ge, x.clone(), Term::int(0)),
+                Term::bin(Op::Le, x, Term::int(i64::from(*cap))),
+            ])),
+            Shape::Byte => {
+                Some(Term::and(vec![Term::bin(Op::Ge, x.clone(), Term::int(0)), Term::bin(Op::Le, x, Term::int(255))]))
+            }
             Shape::Flag | Shape::Node(_) => None,
         }
     }
@@ -272,6 +339,17 @@ impl Enc<'_> {
         )
     }
 
+    /// Die Plaetze und, bei einer Sammlung, ihre Laenge.
+    pub(super) fn places(&self, ty: TypeId, v: V, span: Span) -> R<(Vec<V>, Option<Term>)> {
+        let V::Node(mut parts) = v else { return no("Index", span) };
+        if self.collection(ty).is_none() {
+            return Ok((parts, None));
+        }
+        let rest = parts.split_off(1);
+        let len = parts.pop().expect("Laenge").leaf(span)?;
+        Ok((rest, Some(len)))
+    }
+
     /// Das Element `index` (ohne Pruefung: ausserhalb ist es das letzte).
     fn select(elems: Vec<V>, index: &Term) -> V {
         let mut it = elems.into_iter().enumerate().rev();
@@ -282,7 +360,20 @@ impl Enc<'_> {
         acc
     }
 
-    /// Der Wert mit `new` an der Stelle `steps` (aeusserster Schritt zuerst).
+    /// Der Teil an der Stelle `steps`.
+    fn at(v: V, steps: &[Step], span: Span) -> R<V> {
+        let Some((step, rest)) = steps.split_first() else { return Ok(v) };
+        let part = match (step, v) {
+            (Step::Field(i), v) => v.part(*i, span)?,
+            (Step::Index { index, offset }, V::Node(parts)) => {
+                Enc::select(parts.into_iter().skip(*offset).collect(), index)
+            }
+            _ => return no("Teil eines Werts", span),
+        };
+        Enc::at(part, rest, span)
+    }
+
+    /// Der Wert mit `new` an der Stelle `steps` (der Wurzel naechster Schritt zuerst).
     fn update(v: V, steps: &[Step], new: V, span: Span) -> R<V> {
         let Some((step, rest)) = steps.split_first() else { return Ok(new) };
         let V::Node(mut parts) = v else { return no("Teil eines Werts", span) };
@@ -291,10 +382,11 @@ impl Enc<'_> {
                 let Some(old) = parts.get(*i).cloned() else { return no("Feld", span) };
                 parts[*i] = Enc::update(old, rest, new, span)?;
             }
-            Step::Index(index) => {
-                for (k, part) in parts.iter_mut().enumerate() {
+            Step::Index { index, offset } => {
+                for (k, part) in parts.iter_mut().enumerate().skip(*offset) {
                     let changed = Enc::update(part.clone(), rest, new.clone(), span)?;
-                    *part = V::ite(&Term::eq(index.clone(), Term::int(k as i64)), changed, part.clone());
+                    let here = Term::eq(index.clone(), Term::int((k - offset) as i64));
+                    *part = V::ite(&here, changed, part.clone());
                 }
             }
         }
@@ -355,7 +447,13 @@ impl Enc<'_> {
                 for x in items {
                     parts.push(self.value(x, cx, env, flow)?);
                 }
-                V::Node(parts)
+                if self.collection(e.ty).is_none() {
+                    return Ok(V::Node(parts));
+                }
+                // Eine Sammlung: die Laenge, die Elemente, dahinter null.
+                let V::Node(zero) = self.zero_value(&shape, span)? else { return no("Sammlung", span) };
+                let len = V::Leaf(Term::int(parts.len() as i64));
+                V::Node(std::iter::once(len).chain(parts).chain(zero.into_iter().skip(1 + items.len())).collect())
             }
             ExprKind::Variant { variant, fields, .. } => {
                 let mut values = Vec::new();
@@ -455,10 +553,11 @@ impl Enc<'_> {
         flow: &mut Flow,
         span: Span,
     ) -> R<V> {
-        if !matches!(self.p.types.get(base.ty), Type::Array { .. }) {
+        if !matches!(self.p.types.get(base.ty), Type::Array { .. } | Type::Bytes { .. } | Type::Vec { .. }) {
             return no("Index auf diesem Wert", span);
         }
-        let V::Node(elems) = self.value(base, cx, env, flow)? else { return no("Index", span) };
+        let v = self.value(base, cx, env, flow)?;
+        let (elems, _) = self.places(base.ty, v, span)?;
         let i = self.expr(index, cx, env, flow)?;
         Ok(Enc::select(elems, &i))
     }
@@ -487,6 +586,9 @@ impl Enc<'_> {
                 let len = i64::from(*len);
                 self.value(base, cx, env, flow)?;
                 Ok(Term::int(len))
+            }
+            (Accessor::Len, Type::Bytes { .. } | Type::Vec { .. }) => {
+                self.value(base, cx, env, flow)?.part(0, span)?.leaf(span)
             }
             _ => no(format!("Zugriff `.{}`", accessor.name()), span),
         }
@@ -597,12 +699,12 @@ impl Enc<'_> {
         if matches!(base.kind, ExprKind::Input { .. }) {
             return no("Channel-Array", span);
         }
-        let V::Node(elems) = self.value(base, cx, env, flow)? else { return no("Index", span) };
+        let v = self.value(base, cx, env, flow)?;
+        let (elems, dynamic) = self.places(base.ty, v, span)?;
         let i = self.expr(index, cx, env, flow)?;
-        let fail = Term::or(vec![
-            Term::bin(Op::Lt, i.clone(), Term::int(0)),
-            Term::bin(Op::Ge, i.clone(), Term::int(i64::from(len))),
-        ]);
+        // Eine Sammlung prueft gegen ihre Laenge, nicht gegen die Kapazitaet (`index_value`).
+        let bound = dynamic.unwrap_or_else(|| Term::int(i64::from(len)));
+        let fail = Term::or(vec![Term::bin(Op::Lt, i.clone(), Term::int(0)), Term::bin(Op::Ge, i.clone(), bound)]);
         self.fault(kind, span, fail, cx, flow);
         Ok(Enc::select(elems, &i))
     }
@@ -639,39 +741,268 @@ impl Enc<'_> {
         env: &Env,
         flow: &mut Flow,
         span: Span,
-    ) -> R<(&'a Place, Vec<Step>)> {
-        let mut steps = Vec::new();
-        let mut above = Vec::new();
+    ) -> R<PlacePath<'a>> {
+        let mut indices = Vec::new();
+        let mut pending = Vec::new();
         let mut cur = place;
         loop {
             match cur {
                 Place::Var(_) | Place::Output(_) | Place::Port(_) => break,
-                Place::Field(b, f) => {
-                    steps.push(Step::Field(*f as usize));
+                Place::Field(b, _) => {
+                    indices.push(None);
                     cur = b;
                 }
                 Place::Index(b, i) => {
                     let (index, check) = match &i.kind {
-                        ExprKind::Checked { expr, kind: kind @ CheckedKind::Index { len } } => {
-                            (self.expr(expr, cx, env, flow)?, Some((kind.clone(), i.span, *len)))
+                        ExprKind::Checked { expr, kind: kind @ CheckedKind::Index { .. } } => {
+                            (self.expr(expr, cx, env, flow)?, Some((kind.clone(), i.span)))
                         }
                         _ => (self.expr(i, cx, env, flow)?, None),
                     };
-                    if let Some((kind, span, len)) = check {
+                    if let Some((kind, span)) = check {
                         self.fault(&kind, span, Term::bin(Op::Lt, index.clone(), Term::int(0)), cx, flow);
-                        above.push((kind, span, Term::bin(Op::Ge, index.clone(), Term::int(i64::from(len)))));
+                        pending.push(Pending { kind, span, index: index.clone(), depth: indices.len() });
                     }
-                    steps.push(Step::Index(index));
+                    indices.push(Some(index));
                     cur = b;
                 }
                 Place::Index2(..) => return no("Matrixelement", span),
             }
         }
-        for (kind, span, fail) in above.into_iter().rev() {
-            self.fault(&kind, span, fail, cx, flow);
+        // Von der Wurzel her gezaehlt.
+        indices.reverse();
+        let n = indices.len();
+        for p in &mut pending {
+            p.depth = n - 1 - p.depth;
         }
-        steps.reverse();
-        Ok((cur, steps))
+        pending.reverse();
+        Ok((cur, indices, pending))
+    }
+
+    /// Die Schritte einer Stelle unter einer Wurzel des Typs `ty`, und die
+    /// Grenze je Index: ein Array aus dem Typ, eine Sammlung aus dem Wert.
+    fn typed_steps(&self, place: &Place, indices: Vec<Option<Term>>, ty: TypeId, span: Span) -> R<Vec<(Step, Bound)>> {
+        let mut fields = Vec::new();
+        let mut cur = place;
+        loop {
+            match cur {
+                Place::Field(b, f) => {
+                    fields.push(Some(*f as usize));
+                    cur = b;
+                }
+                Place::Index(b, _) | Place::Index2(b, ..) => {
+                    fields.push(None);
+                    cur = b;
+                }
+                _ => break,
+            }
+        }
+        fields.reverse();
+        let mut ty = ty;
+        let mut out = Vec::new();
+        for (field, index) in fields.into_iter().zip(indices) {
+            match (field, index, self.p.types.get(ty).clone()) {
+                (Some(f), _, Type::Record(r)) => {
+                    out.push((Step::Field(f), Bound::Fixed(0)));
+                    ty = self.p.records[r.index()].fields[f].ty;
+                }
+                (None, Some(index), _) => {
+                    let Some((elem, bound)) = self.element_of(ty) else { return no("Index auf diesem Wert", span) };
+                    let offset = if matches!(bound, Bound::Dynamic) { 1 } else { 0 };
+                    out.push((Step::Index { index, offset }, bound));
+                    // Ein Byte hat keinen eigenen Typ; darunter geht es nicht weiter.
+                    ty = elem.unwrap_or(ty);
+                }
+                _ => return no("Zuweisungsstelle", span),
+            }
+        }
+        Ok(out)
+    }
+
+    /// `old` mit `v` an der Stelle; zuvor die oberen Grenzen der Indizes,
+    /// von der Wurzel her, wie `walk_mut`.
+    #[allow(clippy::too_many_arguments)]
+    fn write_into(
+        &mut self,
+        place: &Place,
+        indices: Vec<Option<Term>>,
+        pending: Vec<Pending>,
+        ty: TypeId,
+        old: &V,
+        v: V,
+        cx: &Cx<'_>,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<V> {
+        let typed = self.typed_steps(place, indices, ty, span)?;
+        let steps: Vec<Step> = typed.iter().map(|(s, _)| s.clone()).collect();
+        for p in pending {
+            let bound = match typed[p.depth].1 {
+                Bound::Fixed(n) => Term::int(i64::from(n)),
+                Bound::Dynamic => Enc::at(old.clone(), &steps[..p.depth], span)?.part(0, span)?.leaf(span)?,
+            };
+            self.fault(&p.kind, p.span, Term::bin(Op::Ge, p.index, bound), cx, flow);
+        }
+        Enc::update(old.clone(), &steps, v, span)
+    }
+
+    /// Der Typ einer Stelle in einer Maschine.
+    fn place_type(&self, place: &Place, cx: &Cx<'_>) -> Option<TypeId> {
+        Some(match place {
+            Place::Var(id) => self.machine(cx.m?).vars[id.index()].ty,
+            Place::Output(c) => self.p.channels[c.index()].ty,
+            Place::Field(b, f) => {
+                let Type::Record(r) = self.p.types.get(self.place_type(b, cx)?) else { return None };
+                self.p.records[r.index()].fields[*f as usize].ty
+            }
+            Place::Index(b, _) => self.element_of(self.place_type(b, cx)?)?.0?,
+            Place::Port(_) | Place::Index2(..) => return None,
+        })
+    }
+
+    /// `push`, `append` und `clear` auf Bytes und Vektoren (3.9, `exec.rs`):
+    /// alles oder nichts, das Ergebnis sagt, ob es passte. Die Stelle hat
+    /// keinen Index, ihr Lesen also keine Wirkung.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn collection_method(
+        &mut self,
+        target: Option<&Place>,
+        receiver: &Place,
+        method: Method,
+        args: &[Expr],
+        cx: &Cx<'_>,
+        env: &mut Env,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<()> {
+        let Some(ty) = self.place_type(receiver, cx) else { return no("Sammlungsmethode", span) };
+        let Some(cap) = self.collection(ty) else { return no("Sammlungsmethode", span) };
+        if self.has_index(receiver) {
+            return no("Sammlungsmethode auf einem Element", span);
+        }
+        let mut xs = Vec::new();
+        for a in args {
+            xs.push(self.value(a, cx, env, flow)?);
+        }
+        let old = self.place_value(receiver, cx, env, span)?;
+        let shape = self.shape(ty, span)?;
+        let (elems, len) = self.places(ty, old.clone(), span)?;
+        let len = len.expect("Sammlung");
+        let cap = Term::int(i64::from(cap));
+        let (new, done) = match (method, xs.as_slice()) {
+            (Method::Push, [x]) => {
+                let room = Term::bin(Op::Lt, len.clone(), cap);
+                let parts: Vec<V> = elems
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, e)| {
+                        let here = Term::and(vec![room.clone(), Term::eq(len.clone(), Term::int(k as i64))]);
+                        V::ite(&here, x.clone(), e)
+                    })
+                    .collect();
+                let grown = Term::ite(room.clone(), Term::bin(Op::Add, len.clone(), Term::int(1)), len);
+                (V::Node(std::iter::once(V::Leaf(grown)).chain(parts).collect()), room)
+            }
+            (Method::Append, [other]) => {
+                let (theirs, their_len) = self.places(ty, other.clone(), span)?;
+                let their_len = their_len.expect("Sammlung");
+                let total = Term::bin(Op::Add, len.clone(), their_len);
+                let fits = Term::bin(Op::Le, total.clone(), cap);
+                let V::Node(zero) = self.zero_value(&shape, span)? else { return no("Sammlung", span) };
+                let parts: Vec<V> = elems
+                    .into_iter()
+                    .zip(zero.into_iter().skip(1))
+                    .enumerate()
+                    .map(|(k, (e, z))| {
+                        let k = Term::int(k as i64);
+                        let from = Term::bin(Op::Sub, k.clone(), len.clone());
+                        let appended =
+                            V::ite(&Term::bin(Op::Lt, k.clone(), total.clone()), Enc::select(theirs.clone(), &from), z);
+                        let next = V::ite(&Term::bin(Op::Lt, k, len.clone()), e.clone(), appended);
+                        V::ite(&fits, next, e)
+                    })
+                    .collect();
+                let grown = Term::ite(fits.clone(), total, len);
+                (V::Node(std::iter::once(V::Leaf(grown)).chain(parts).collect()), fits)
+            }
+            (Method::Clear, []) => (self.zero_value(&shape, span)?, Term::bool(true)),
+            _ => return no("Sammlungsmethode", span),
+        };
+        self.assign(receiver, new, cx, env, flow, span)?;
+        if let Some(t) = target {
+            self.assign(t, V::Leaf(done), cx, env, flow, span)?;
+        }
+        Ok(())
+    }
+
+    fn has_index(&self, place: &Place) -> bool {
+        match place {
+            Place::Field(b, _) => self.has_index(b),
+            Place::Index(..) | Place::Index2(..) => true,
+            Place::Var(_) | Place::Output(_) | Place::Port(_) => false,
+        }
+    }
+
+    /// Der Wert einer Stelle ohne Index.
+    fn place_value(&mut self, place: &Place, cx: &Cx<'_>, env: &Env, span: Span) -> R<V> {
+        let Some(m) = cx.m else { return no("Stelle ausserhalb einer Maschine", span) };
+        let mut fields = Vec::new();
+        let mut cur = place;
+        let base = loop {
+            match cur {
+                Place::Var(id) => break self.loc_var(m, *id),
+                Place::Output(c) => break self.loc_out(*c),
+                Place::Field(b, f) => {
+                    fields.push(*f as usize);
+                    cur = b;
+                }
+                _ => return no("Stelle", span),
+            }
+        };
+        let root = match cur {
+            Place::Var(id) => self.machine(m).vars[id.index()].ty,
+            Place::Output(c) => self.p.channels[c.index()].ty,
+            _ => return no("Stelle", span),
+        };
+        let mut v = self.load(env, &base, &self.shape(root, span)?, span)?;
+        for f in fields.into_iter().rev() {
+            v = v.part(f, span)?;
+        }
+        Ok(v)
+    }
+
+    /// `for x in s` ueber Bytes oder einen Vektor: je Platz ein Durchlauf,
+    /// der nur laeuft, solange der Platz unter der Laenge liegt.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn for_collection(
+        &mut self,
+        var_loc: &str,
+        var_ty: TypeId,
+        iter: &Expr,
+        body: &Block,
+        cx: &Cx<'_>,
+        env: &mut Env,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<()> {
+        let v = self.value(iter, cx, env, flow)?;
+        let (items, len) = self.places(iter.ty, v, span)?;
+        let Some(len) = len else { return no("`for … in`", span) };
+        self.unrolled = self.unrolled.saturating_add(items.len() as i64);
+        if self.unrolled > UNROLL_LIMIT {
+            return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
+        }
+        for (k, item) in items.into_iter().enumerate() {
+            let inside = Term::bin(Op::Lt, Term::int(k as i64), len.clone());
+            let mut env_k = env.clone();
+            let mut fk = Flow::new(Term::and(vec![flow.alive.clone(), inside.clone()]));
+            self.put(&mut env_k, var_loc, var_ty, item, &fk.alive.clone(), span)?;
+            self.block(body, cx, &mut env_k, &mut fk)?;
+            *env = ite_env(&inside, &env_k, env);
+            flow.exits.extend(fk.exits);
+            flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), inside.not()]), fk.alive]);
+        }
+        Ok(())
     }
 
     /// Schreibt `v` an eine Stelle im Zustand einer Maschine, unter `alive`.
@@ -685,7 +1016,7 @@ impl Enc<'_> {
         span: Span,
     ) -> R<()> {
         let m = cx.m.expect("Maschine");
-        let (root, steps) = self.place_steps(place, cx, env, flow, span)?;
+        let (root, indices, pending) = self.place_steps(place, cx, env, flow, span)?;
         let (base, ty) = match root {
             Place::Var(id) => (self.loc_var(m, *id), self.machine(m).vars[id.index()].ty),
             Place::Output(c) => (self.loc_out(*c), self.p.channels[c.index()].ty),
@@ -693,7 +1024,7 @@ impl Enc<'_> {
         };
         let shape = self.shape(ty, span)?;
         let old = self.load(env, &base, &shape, span)?;
-        let new = Enc::update(old.clone(), &steps, v, span)?;
+        let new = self.write_into(place, indices, pending, ty, &old, v, cx, flow, span)?;
         Enc::store(env, &base, &shape, V::ite(&flow.alive, new, old));
         Ok(())
     }
@@ -708,12 +1039,12 @@ impl Enc<'_> {
         flow: &mut Flow,
         span: Span,
     ) -> R<()> {
-        let (root, steps) = self.place_steps(place, cx, env, flow, span)?;
+        let (root, indices, pending) = self.place_steps(place, cx, env, flow, span)?;
         let Place::Var(id) = root else { return no("Zuweisung in einer Funktion", span) };
-        let locals = cx.locals.as_mut().expect("Lokale");
-        let Some(old) = locals.get(id).cloned() else { return no("Lokale", span) };
-        let new = Enc::update(old.clone(), &steps, v, span)?;
-        locals.insert(*id, V::ite(&flow.alive, new, old));
+        let Some(old) = cx.locals.as_ref().and_then(|l| l.get(id)).cloned() else { return no("Lokale", span) };
+        let Some(ty) = self.local_types.get(id).copied() else { return no("Lokale", span) };
+        let new = self.write_into(place, indices, pending, ty, &old, v, cx, flow, span)?;
+        cx.locals.as_mut().expect("Lokale").insert(*id, V::ite(&flow.alive, new, old));
         Ok(())
     }
 }
