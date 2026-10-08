@@ -311,6 +311,22 @@ fn case(name: &str) -> Option<(String, u64)> {
         | "96_record_outputs.takt"
         | "113_case_ranges.takt" => (String::new(), 20),
         "89_fault_paths.takt" => ((0..=20).map(|k| format!("t={k} in p {} bar\n", (k * 7) % 100)).collect(), 20),
+        // `check … for 5 ms`: vier Ticks ueber der Grenze faulten nicht,
+        // elf schon; dazu ein Start.
+        "03_sequences_and_faults.takt" => {
+            let chamber = |k: u32| if (10..14).contains(&k) || (20..31).contains(&k) { 260 } else { 10 };
+            let mut stim: String = (0..=40)
+                .map(|k| format!("t={k} in chamber_p {} bar\nt={k} in supply_p 50 bar\n", chamber(k)))
+                .collect();
+            stim.push_str("t=2 cmd start\n");
+            (stim, 40)
+        }
+        // `check … for 20 ms within 100 ms`: 25 Ticks ueber der Grenze.
+        "14_latency.takt" => {
+            let tank = |k: u32| if (10..35).contains(&k) { 390 } else { 100 };
+            ((0..=50).map(|k| format!("t={k} in tank_p {} bar\n", tank(k))).collect(), 50)
+        }
+        "27_every.takt" | "75_implicit_checks.takt" => (String::new(), 40),
         _ => return None,
     })
 }

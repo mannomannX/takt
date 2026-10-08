@@ -218,7 +218,7 @@ fn stmt(s: StmtTag) -> Support {
         | StmtTag::Raise
         | StmtTag::Observe
         | StmtTag::Pass => Yes,
-        StmtTag::Check => Partial("ohne `for` und `within`"),
+        StmtTag::Check => Partial("`check … for` nicht in einer Schleife"),
         StmtTag::ForRange => Partial("bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403)"),
         StmtTag::Match => Partial("nicht im Rumpf einer Funktion"),
         StmtTag::MethodCall => {
@@ -229,7 +229,8 @@ fn stmt(s: StmtTag) -> Support {
         }
         StmtTag::Break => No("`break` ist nicht kodiert"),
         StmtTag::Send | StmtTag::Cancel | StmtTag::Skip | StmtTag::Arm => No("Stroeme und Trigger sind nicht kodiert"),
-        StmtTag::At | StmtTag::Every => No("`at` und `every` sind nicht kodiert"),
+        StmtTag::Every => Partial("nicht in einer Schleife"),
+        StmtTag::At => No("`at` ist nicht kodiert"),
         StmtTag::Job => No("Jobs sind nicht kodiert"),
     }
 }
@@ -317,7 +318,8 @@ fn feature(f: Feature) -> Support {
         Feature::FaultedTransition => No("Uebergaenge aus FAULTED sind nicht kodiert"),
         Feature::ScopedInstance => No("gescopte Instanzen sind nicht kodiert"),
         Feature::GuardMatch | Feature::GuardNext => No("Guards mit Muster sind nicht kodiert"),
-        Feature::CheckConfirm | Feature::CheckWithin => No("`check … for` und `within` sind nicht kodiert"),
+        Feature::CheckConfirm => Partial("nicht in einer Schleife"),
+        Feature::CheckWithin => Yes,
         Feature::Trigger | Feature::Port => No("Trigger und Registerports sind nicht kodiert"),
     }
 }

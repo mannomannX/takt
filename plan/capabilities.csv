@@ -163,7 +163,7 @@ Accessor(Wrap),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Match(Matches),ja,nein: Mustervergleich ist nicht kodiert,ja
 Match(Has),ja,nein: Mustervergleich ist nicht kodiert,ja
 Stmt(Assign),ja,ja,ja
-Stmt(Check),ja,teilweise: ohne `for` und `within`,ja
+Stmt(Check),ja,teilweise: `check … for` nicht in einer Schleife,ja
 Stmt(Goto),ja,ja,ja
 Stmt(Abort),ja,ja,ja
 Stmt(If),ja,ja,ja
@@ -172,12 +172,12 @@ Stmt(ForEach),ja,"teilweise: ueber ein Array, Bytes oder einen Vektor mit einer 
 Stmt(Match),ja,teilweise: nicht im Rumpf einer Funktion,ja
 Stmt(Return),ja,ja,ja
 Stmt(Send),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
-Stmt(At),ja,nein: `at` und `every` sind nicht kodiert,ja
+Stmt(At),ja,nein: `at` ist nicht kodiert,ja
 Stmt(Cancel),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
 Stmt(Skip),ja,nein: Stroeme und Trigger sind nicht kodiert,nein
 Stmt(Raise),ja,ja,ja
 Stmt(Job),ja,nein: Jobs sind nicht kodiert,ja
-Stmt(Every),ja,nein: `at` und `every` sind nicht kodiert,ja
+Stmt(Every),ja,teilweise: nicht in einer Schleife,ja
 Stmt(Break),ja,nein: `break` ist nicht kodiert,ja
 Stmt(Observe),ja,ja,ja
 Stmt(Arm),ja,nein: Stroeme und Trigger sind nicht kodiert,ja
@@ -250,8 +250,8 @@ Feature(GuardNext),ja,nein: Guards mit Muster sind nicht kodiert,ja
 Feature(TargetState),ja,ja,ja
 Feature(TargetFaulted),ja,ja,ja
 Feature(TargetFault),ja,ja,ja
-Feature(CheckConfirm),ja,nein: `check … for` und `within` sind nicht kodiert,ja
-Feature(CheckWithin),ja,nein: `check … for` und `within` sind nicht kodiert,ja
+Feature(CheckConfirm),ja,teilweise: nicht in einer Schleife,ja
+Feature(CheckWithin),ja,ja,ja
 Feature(Expect),ja,ja,ja
 Feature(ArmVariant),ja,ja,ja
 Feature(ArmValues),ja,ja,ja

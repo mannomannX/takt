@@ -992,6 +992,7 @@ impl Enc<'_> {
         if self.unrolled > UNROLL_LIMIT {
             return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
         }
+        self.loops += 1;
         for (k, item) in items.into_iter().enumerate() {
             let inside = Term::bin(Op::Lt, Term::int(k as i64), len.clone());
             let mut env_k = env.clone();
@@ -1002,6 +1003,7 @@ impl Enc<'_> {
             flow.exits.extend(fk.exits);
             flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), inside.not()]), fk.alive]);
         }
+        self.loops -= 1;
         Ok(())
     }
 

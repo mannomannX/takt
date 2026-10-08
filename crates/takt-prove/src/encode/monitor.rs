@@ -258,6 +258,9 @@ impl Enc<'_> {
     /// falsch (13.5). Seine Lesestellen sind keine Pruefstellen.
     pub(super) fn atom(&mut self, e: &Expr, state: &Env) -> R<Term> {
         let actives = BTreeMap::new();
+        if let Some(now) = state.get(super::NOW) {
+            self.now = now.clone();
+        }
         // Der Rand vor diesem Tick steht in den Kopien `.prev`: Der Zustand
         // nach dem Commit hat die Lieferungen schon verbucht.
         let mut before = state.clone();

@@ -393,14 +393,16 @@ fn an_assumption_proves_what_it_assumes_and_nothing_without_it() {
 /// bestaetigt, wenn der Interpreter an *dieser* Stelle faultet — nicht an
 /// irgendeiner Stelle derselben Art in derselben Maschine.
 ///
-/// `a` haengt an `now`, das im Modell je Tick frei ist: Der Solver findet
-/// einen Pfad mit `now` ueber einer Stunde, den kein Lauf von acht Ticks
-/// geht. `c` faultet in jedem Lauf nach sechs Ticks; dieser Fault darf den
+/// Eine abweichende Kodierung steht hier als Modell eines anderen
+/// Programms mit denselben Stellen: Darin faultet `a` im zweiten Tick, im
+/// Lauf nie. `c` faultet in beiden nach sechs Ticks; dieser Fault darf den
 /// Pfad von `a` nicht bestaetigen.
 #[test]
 fn a_path_is_confirmed_only_by_its_own_site() {
     let Some(solver) = solver() else { return };
-    let src = "system:
+    let src = |cond: &str| {
+        format!(
+            "system:
     language = 1
     tick     = 10 ms
 
@@ -412,20 +414,25 @@ machine m:
     initial RUN
     state RUN:
         loop:
-            a = c + 14 if now > 1 h else 0
+            a = c + 14 if {cond} else 0
             c = c + 1
             y = a + c
-";
-    let p = compile(src);
-    let model = encode(&p).expect("kodierbar");
-    let sites = classify(&model, &p, 8, &solver, 60).expect("Solver laeuft");
-    let line = src.find("a = c + 14").expect("Zeile von a");
-    let next = line + src[line..].find('\n').expect("Zeilenende");
+"
+        )
+    };
+    let (modelled, run) = (src("c < 9"), src("c > 9"));
+    let model = encode(&compile(&modelled)).expect("kodierbar");
+    let sites = classify(&model, &compile(&run), 8, &solver, 60).expect("Solver laeuft");
+    let line = run.find("a = c + 14").expect("Zeile von a");
+    let next = line + run[line..].find('\n').expect("Zeilenende");
     let a = sites
         .iter()
         .find(|s| s.kind == "range" && (line..next).contains(&(s.start as usize)))
         .unwrap_or_else(|| panic!("keine Range-Stelle an `a`: {sites:?}"));
-    assert!(matches!(a.verdict, CheckVerdict::Undecided { .. }), "der Fault von `c` bestaetigte `a`: {a:?}");
+    assert!(
+        matches!(&a.verdict, CheckVerdict::Undecided { reason } if reason.contains("bestaetigt ihn nicht")),
+        "der Fault von `c` bestaetigte `a`: {a:?}"
+    );
 }
 
 /// Ein Urteil nennt nur die Annahmen, von denen es abhaengen kann: die im

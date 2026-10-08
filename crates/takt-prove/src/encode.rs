@@ -125,7 +125,7 @@ pub struct ContractGoal {
 pub struct Model {
     /// Zustand, nach Namen sortiert.
     pub state: Vec<StateVar>,
-    /// Eingaben je Tick: `i.<channel>`, `i.cmd.<command>`, `i.now`.
+    /// Eingaben je Tick: `i.<channel>`, `i.cmd.<command>`.
     pub inputs: Vec<(String, Sort)>,
     /// Bedingungen der freien Eingaben je Tick: der Rand der Inputs (3.5),
     /// Ψ, fremde Outputs und Tunables in ihrem Typ. Sie sind Modell, keine
@@ -301,6 +301,12 @@ struct Enc<'p> {
     local_types: BTreeMap<VarId, TypeId>,
     /// Die Monitore der Eigenschaften mit Zeitoperatoren (13.3).
     monitors: Vec<Monitor>,
+    /// Wie tief die laufende Anweisung in ausgerollten Schleifen steht.
+    loops: u32,
+    /// Grenzen der Zaehler von `check … for`: Ort und Frist in Nanosekunden.
+    confirms: Vec<(String, i64)>,
+    /// `now` des Ticks, der gerade kodiert wird.
+    now: Term,
 }
 
 /// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
@@ -501,6 +507,9 @@ impl<'p> Enc<'p> {
             unrolled: 0,
             local_types: BTreeMap::new(),
             monitors: Vec::new(),
+            loops: 0,
+            confirms: Vec::new(),
+            now: Term::int(0),
         }
     }
 }
@@ -599,6 +608,15 @@ impl Enc<'_> {
     }
     fn loc_sig(&self, m: MachineId, s: usize) -> String {
         format!("s.{}.sig.{}", self.machine(m).name, self.machine(m).signals[s].name)
+    }
+    /// Der Bestaetigungszaehler einer Stelle von `check … for` (5.6), in ns.
+    fn loc_viol(&self, m: MachineId, site: usize) -> String {
+        format!("s.{}.viol.{site}", self.machine(m).name)
+    }
+    /// Der naechste Zeitpunkt eines `every` (5.8), in ns; `-1`, bis er zum
+    /// ersten Mal gelesen wird.
+    fn loc_every(&self, m: MachineId, counter: usize) -> String {
+        format!("s.{}.every.{counter}", self.machine(m).name)
     }
     fn loc_out(&self, c: ChannelId) -> String {
         format!("s.out.{}", self.p.channels[c.index()].name)
@@ -833,10 +851,7 @@ impl Enc<'_> {
             }
             ExprKind::Builtin(b) => match b {
                 Builtin::Tick => Term::int(self.p.config.tick),
-                Builtin::Now => {
-                    self.note("`now` ist eine freie Eingabe je Tick");
-                    self.input("i.now".to_string(), Sort::Int)
-                }
+                Builtin::Now => self.now.clone(),
                 Builtin::TimeInState => {
                     let (Some(m), Some(leaf)) = (cx.m, cx.leaf) else { return no("`time_in_state`", span) };
                     let period = i64::from(self.machine(m).period.max(1)).saturating_mul(self.p.config.tick);
@@ -1283,18 +1298,67 @@ impl Enc<'_> {
                     let v = self.value(value, cx, env, flow)?;
                     self.assign(target, v, cx, env, flow, span)?;
                 }
-                StmtKind::Check { cond, confirm, within, target, kind, .. } => {
-                    if confirm.is_some() || within.is_some() {
-                        return no("`check … for` oder `within`", span);
-                    }
+                // `within d` ist eine Latenzforderung ohne Wirkung im Lauf
+                // (9.4.5, Pruefung 61).
+                StmtKind::Check { cond, confirm, target, kind, .. } => {
                     let c = self.expr(cond, cx, env, flow)?;
-                    let fail = Term::and(vec![flow.alive.clone(), c.clone().not()]);
+                    // `for d` (5.6): erst eine Verletzung ueber die ganze Frist faultet.
+                    let failed = match confirm {
+                        None => c.clone().not(),
+                        Some(confirm) => {
+                            if self.loops > 0 {
+                                return no("`check … for` in einer Schleife", span);
+                            }
+                            let d = self.const_int(&confirm.duration)?;
+                            let period = i64::from(machine_period(self.machine(m))).saturating_mul(self.p.config.tick);
+                            let loc = self.loc_viol(m, confirm.site.0 as usize);
+                            let viol = env[&loc].clone();
+                            let grown = Term::bin(Op::Add, viol.clone(), Term::int(period));
+                            let due = Term::bin(Op::Ge, grown.clone(), Term::int(d));
+                            let next = Term::ite(c.clone(), Term::int(0), Term::ite(due.clone(), Term::int(0), grown));
+                            env.insert(loc.clone(), Term::ite(flow.alive.clone(), next, viol));
+                            if !self.confirms.iter().any(|(l, _)| *l == loc) {
+                                self.confirms.push((loc, d));
+                            }
+                            Term::and(vec![c.clone().not(), due])
+                        }
+                    };
+                    let fail = Term::and(vec![flow.alive.clone(), failed.clone()]);
                     let word = if *kind == takt_mir::stmt::CheckKind::Check { "check" } else { "expect" };
                     let key = (span.start, span.end, word.to_string());
                     self.sites.entry(key.clone()).or_default().push(fail.clone());
                     self.site_info.insert(key, (span, self.machine(m).name.clone()));
                     flow.exits.push(Exit { cond: fail, kind: ExitKind::Fault(*target) });
-                    flow.alive = Term::and(vec![flow.alive.clone(), c]);
+                    flow.alive = Term::and(vec![flow.alive.clone(), failed.not()]);
+                }
+                // `every d` (5.8): der Rumpf, sobald die Uhr den naechsten
+                // Zeitpunkt erreicht; der rueckt dann um `d` weiter.
+                StmtKind::Every { period, counter, body } => {
+                    if self.loops > 0 {
+                        return no("`every` in einer Schleife", span);
+                    }
+                    let d = self.const_int(period)?;
+                    let site = self.machine(m).layout.every_counters[counter.index()];
+                    let clock = match (site.state, cx.leaf) {
+                        (Some(_), Some(leaf)) => {
+                            let ticks = i64::from(machine_period(self.machine(m))).saturating_mul(self.p.config.tick);
+                            Term::bin(Op::Mul, env[&self.loc_timer(m, leaf)].clone(), Term::int(ticks))
+                        }
+                        (Some(_), None) => return no("`every` ohne Zustand", span),
+                        (None, _) => self.now.clone(),
+                    };
+                    let loc = self.loc_every(m, counter.index());
+                    let stored = env[&loc].clone();
+                    let next = Term::ite(Term::bin(Op::Lt, stored.clone(), Term::int(0)), Term::int(d), stored.clone());
+                    let fire = Term::bin(Op::Ge, clock, next.clone());
+                    let moved = Term::ite(fire.clone(), Term::bin(Op::Add, next.clone(), Term::int(d)), next);
+                    env.insert(loc, Term::ite(flow.alive.clone(), moved, stored));
+                    let mut env_b = env.clone();
+                    let mut fb = Flow::new(Term::and(vec![flow.alive.clone(), fire.clone()]));
+                    self.block(body, cx, &mut env_b, &mut fb)?;
+                    *env = ite_env(&fire, &env_b, env);
+                    flow.exits.extend(fb.exits);
+                    flow.alive = Term::or(vec![Term::and(vec![flow.alive.clone(), fire.not()]), fb.alive]);
                 }
                 StmtKind::Goto(t) => {
                     if cx.mode == Mode::Run {
@@ -1351,10 +1415,12 @@ impl Enc<'_> {
                         return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
                     }
                     let loc = self.loc_var(m, *var);
+                    self.loops += 1;
                     for i in 0..n {
                         env.insert(loc.clone(), Term::int(i));
                         self.block(body, cx, env, flow)?;
                     }
+                    self.loops -= 1;
                 }
                 // Ueber ein Array: die Schleifenvariable traegt je Durchlauf ein Element.
                 StmtKind::ForEach { vars: ForVars::One(var), iter, body }
@@ -1366,10 +1432,12 @@ impl Enc<'_> {
                         return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
                     }
                     let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
+                    self.loops += 1;
                     for item in items {
                         self.put(env, &loc, ty, item, &Term::bool(true), span)?;
                         self.block(body, cx, env, flow)?;
                     }
+                    self.loops -= 1;
                 }
                 StmtKind::ForEach { vars: ForVars::One(var), iter, body }
                     if matches!(self.p.types.get(iter.ty), Type::Bytes { .. } | Type::Vec { .. }) =>
@@ -1393,7 +1461,6 @@ impl Enc<'_> {
                 | StmtKind::Cancel(_)
                 | StmtKind::Skip(_)
                 | StmtKind::Job { .. }
-                | StmtKind::Every { .. }
                 | StmtKind::Break
                 | StmtKind::Arm { .. }) => return no(format!("Anweisung {}", stmt_name(other)), span),
             }
@@ -1714,6 +1781,17 @@ impl Enc<'_> {
                 let loc = self.loc_timer(m, *s);
                 let old = env[&loc].clone();
                 env.insert(loc, Term::ite(flow.alive.clone(), Term::int(0), old));
+                // Bestaetigungs- und `every`-Zaehler des Zustands (9.3, Schritt 3).
+                for (i, _) in machine.layout.viol_sites.iter().enumerate().filter(|(_, c)| c.state == Some(*s)) {
+                    let loc = self.loc_viol(m, i);
+                    let old = env[&loc].clone();
+                    env.insert(loc, Term::ite(flow.alive.clone(), Term::int(0), old));
+                }
+                for (i, _) in machine.layout.every_counters.iter().enumerate().filter(|(_, c)| c.state == Some(*s)) {
+                    let loc = self.loc_every(m, i);
+                    let old = env[&loc].clone();
+                    env.insert(loc, Term::ite(flow.alive.clone(), Term::int(-1), old));
+                }
                 for v in machine.states[s.index()].vars.clone() {
                     let def = machine.vars[v.index()].clone();
                     let value = match &def.init {
@@ -2056,6 +2134,8 @@ impl Enc<'_> {
     /// laeuft keine Maschine mehr, und die Outputs stehen auf `safe`.
     fn tick(&mut self, pre: &Env) -> R<Env> {
         let mut cur = pre.clone();
+        self.now = Term::bin(Op::Add, pre[NOW].clone(), Term::int(self.p.config.tick));
+        cur.insert(NOW.into(), self.now.clone());
         for &m in &self.order.clone() {
             for i in 0..self.machine(m).signals.len() {
                 cur.insert(self.loc_sig(m, i), Term::bool(false));
@@ -2098,6 +2178,9 @@ impl Enc<'_> {
     /// erste Eintritt jeder Maschine in Schrittordnung (`Sim::init`).
     fn init(&mut self) -> R<Env> {
         let mut env = Env::new();
+        // `now` ist Tick mal Tickdauer, im Tick 0 also null.
+        self.now = Term::int(0);
+        env.insert(NOW.into(), self.now.clone());
         self.edges_initial(&mut env)?;
         let before = env.clone();
         for &m in &self.order.clone() {
@@ -2127,6 +2210,12 @@ impl Enc<'_> {
             }
             for i in 0..machine.signals.len() {
                 env.insert(self.loc_sig(m, i), Term::bool(false));
+            }
+            for i in 0..machine.layout.viol_sites.len() {
+                env.insert(self.loc_viol(m, i), Term::int(0));
+            }
+            for i in 0..machine.layout.every_counters.len() {
+                env.insert(self.loc_every(m, i), Term::int(-1));
             }
         }
         for (loc, ty, value) in self.safe_outputs()? {
@@ -2268,6 +2357,15 @@ impl Enc<'_> {
         }
         for m in &self.monitors {
             Enc::monitor_invariants(m, pre, &mut out);
+        }
+        // Ein Bestaetigungszaehler erreicht seine Frist nie: Dort faultet er
+        // und beginnt neu.
+        for (loc, d) in &self.confirms {
+            let v = pre[loc].clone();
+            out.push(Term::and(vec![
+                Term::bin(Op::Ge, v.clone(), Term::int(0)),
+                Term::bin(Op::Lt, v, Term::int((*d).max(1))),
+            ]));
         }
         // `FAULTED` ist die Senke (5.3): Der Eintritt setzt die eigenen
         // Outputs auf `safe`, danach schreibt die Maschine nichts mehr. Ohne
@@ -2549,6 +2647,7 @@ impl Enc<'_> {
     /// `always(φ)`/`never(φ)` ohne Zeitoperatoren als Invariante ueber den
     /// Zustand nach dem Commit und die Eingaben des Ticks.
     fn goal(&mut self, prop: &Property, state: &Env) -> R<Option<Goal>> {
+        self.now = state[NOW].clone();
         if let Some(m) = self.monitors.iter().find(|m| m.name() == prop.name).cloned() {
             let t = self.monitor_goal(&m, state)?;
             if m.future() > 0 && state.contains_key(OVER) {
@@ -2636,6 +2735,14 @@ fn outside(x: &Term, width: IntWidth) -> Term {
 
 /// Warum ein `u64` nicht kodiert ist.
 const U64: &str = "`u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen";
+
+/// Die Periode einer Maschine in Ticks (`every`, 5.2).
+fn machine_period(m: &Machine) -> u32 {
+    m.period.max(1)
+}
+
+/// `now` des Ticks, der den Zustand ergab, in Nanosekunden.
+const NOW: &str = "s.now";
 
 /// Hat der Lauf geendet (12.7), in diesem Tick oder davor?
 const ENDED: &str = "s.run.ended";
