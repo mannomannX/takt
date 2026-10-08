@@ -55,3 +55,9 @@ missing_docs = "warn"
 
 [workspace.lints.clippy]
 all = "warn"
+
+[profile.dev]
+# Zeilen statt voller Debuginfo: Die rund 200 Test-Binaries trugen je 110 bis
+# 130 MB PDB, und das Zielverzeichnis lief waehrend eines Laufs voll.
+# Backtraces nennen weiter Datei und Zeile.
+debug = "line-tables-only"
