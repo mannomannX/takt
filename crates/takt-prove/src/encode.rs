@@ -150,6 +150,10 @@ pub struct Model {
     pub notes: Vec<String>,
     /// Je Maschine die Zustandscodes mit Namen.
     pub leaves: BTreeMap<String, Vec<(i64, String)>>,
+    /// Die laengste Frist eines `after` und das laengste Fenster eines
+    /// Monitors, in Ticks (FB-375): Eine k-Induktion mit kleinerem k sieht
+    /// einen Zeitablauf nicht ganz.
+    pub horizon: u32,
 }
 
 impl Model {
@@ -448,6 +452,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         }
         leaves.insert(m.name.clone(), codes);
     }
+    let horizon = enc.horizon()?;
     let mut notes = enc.notes;
     notes.sort();
     notes.dedup();
@@ -461,6 +466,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         contracts,
         notes,
         leaves,
+        horizon,
     })
 }
 
@@ -1097,7 +1103,6 @@ impl Enc<'_> {
         let span = inner.span;
         let Some(width) = self.int_width(ty, span)? else { return no("Ueberlauf ohne Ganzzahl", span) };
         let narrow = width.bits() < 64;
-        let neg = |t: &Term| Term::bin(Op::Lt, t.clone(), Term::int(0));
         let min = |x: &Term| Term::eq(x.clone(), Term::int(i64::MIN));
         Ok(match &inner.kind {
             ExprKind::Binary { op, lhs, rhs } => {
@@ -1106,11 +1111,8 @@ impl Enc<'_> {
                 let r = self.binary(*op, a.clone(), b.clone(), Some(width), span)?;
                 let fail = match op {
                     _ if narrow => outside(&r, width),
-                    // Gleiche Vorzeichen der Summanden, und das Ergebnis hat das andere.
-                    BinaryOp::Add => Term::and(vec![Term::eq(neg(&a), neg(&b)), Term::eq(neg(&r), neg(&a)).not()]),
-                    BinaryOp::Sub => {
-                        Term::and(vec![Term::eq(neg(&a), neg(&b)).not(), Term::eq(neg(&r), neg(&a)).not()])
-                    }
+                    BinaryOp::Add => Term::bin(Op::AddOverflows, a, b),
+                    BinaryOp::Sub => Term::bin(Op::SubOverflows, a, b),
                     BinaryOp::Mul => Term::bin(Op::MulOverflows, a, b),
                     BinaryOp::Div => Term::and(vec![min(&a), Term::eq(b, Term::int(-1))]),
                     // `MIN % -1` ist null.
@@ -1679,6 +1681,13 @@ impl Enc<'_> {
         for s in old[common..].iter().rev() {
             self.block(&machine.states[s.index()].exit, &entry, env, &mut flow)?;
         }
+        // Ein verlassener Zustand vergisst seine Zeit: Gelesen wird sie nur,
+        // solange er aktiv ist (`time_in_state`, `after`), und beim Eintritt
+        // beginnt sie neu. So ist jeder inaktive Timer null, ein Lemma fuer
+        // den Induktionsschritt.
+        for s in &old[common..] {
+            env.insert(self.loc_timer(m, *s), Term::int(0));
+        }
         if target == Target::Faulted {
             for (i, c) in self.p.channels.iter().enumerate() {
                 if c.owner != Some(m) || c.dir != Direction::Output {
@@ -1905,6 +1914,25 @@ impl Enc<'_> {
             .collect()
     }
 
+    /// Die laengste Frist eines `after` der kodierten Maschinen und das
+    /// laengste Fenster eines Monitors, in Ticks.
+    fn horizon(&mut self) -> R<u32> {
+        let mut out = self.monitors.iter().map(Monitor::window).max().unwrap_or(0);
+        for &m in &self.order.clone() {
+            let machine = self.machine(m).clone();
+            let period = i64::from(machine.period.max(1)).saturating_mul(self.p.config.tick);
+            for s in &machine.states {
+                for t in &s.transitions {
+                    if let TransTrigger::After(d) = &t.trigger {
+                        let ns = self.const_int(d)?;
+                        out = out.max(((ns + period - 1) / period).max(1));
+                    }
+                }
+            }
+        }
+        Ok(u32::try_from(out).unwrap_or(u32::MAX))
+    }
+
     /// Wo `sys/next_run` steht und welche Varianten den Lauf beenden (12.7):
     /// der Ort der Variante und ihre Indizes. Nur, wenn eine kodierte
     /// Maschine den Output schreibt.
@@ -2115,9 +2143,20 @@ impl Enc<'_> {
                 out.push(Term::eq(faulted, Term::eq(leaf.clone(), Term::int(c))));
             }
             out.push(Term::or(codes));
+            let faulted = pre[&self.loc_faulted(m)].clone();
             for i in 0..machine.states.len() {
-                let t = pre[&self.loc_timer(m, StateId(i as u32))].clone();
-                out.push(Term::bin(Op::Ge, t, Term::int(0)));
+                let s = StateId(i as u32);
+                let t = pre[&self.loc_timer(m, s)].clone();
+                out.push(Term::bin(Op::Ge, t.clone(), Term::int(0)));
+                // Nur ein Zustand der aktiven Kette hat eine Zeit.
+                let active: Vec<Term> = self
+                    .leaves(m)
+                    .into_iter()
+                    .filter(|l| self.chain_to(m, *l).contains(&s))
+                    .map(|l| Term::eq(leaf.clone(), Term::int(self.code(m, l))))
+                    .collect();
+                let active = Term::and(vec![faulted.clone().not(), Term::or(active)]);
+                out.push(Term::or(vec![active, Term::eq(t, Term::int(0))]));
             }
             if machine.period > 1 {
                 let c = pre[&self.loc_countdown(m)].clone();

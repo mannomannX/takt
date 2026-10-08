@@ -132,6 +132,8 @@ fn eval_node(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
                 Op::ToF64 => Val::F64(a(0).as_int() as f64),
                 Op::IsFinite => Val::Bool(a(0).as_f64().is_finite()),
                 Op::Wrap { bits, signed } => Val::Int(wrap(a(0).as_int(), *bits, *signed)),
+                Op::AddOverflows => Val::Bool(a(0).as_int().checked_add(a(1).as_int()).is_none()),
+                Op::SubOverflows => Val::Bool(a(0).as_int().checked_sub(a(1).as_int()).is_none()),
                 Op::MulOverflows => Val::Bool(a(0).as_int().checked_mul(a(1).as_int()).is_none()),
             }
         }

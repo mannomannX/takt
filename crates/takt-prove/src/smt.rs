@@ -134,6 +134,17 @@ fn app_text(op: Op, a: &[String]) -> String {
             let extend = if signed { "sign_extend" } else { "zero_extend" };
             format!("((_ {extend} {}) ((_ extract {} 0) {}))", 64 - bits, bits - 1, a[0])
         }
+        // Gleiche Vorzeichen der Summanden, und die Summe hat das andere.
+        Op::AddOverflows => format!(
+            "(and (= (bvslt {0} (_ bv0 64)) (bvslt {1} (_ bv0 64))) \
+             (not (= (bvslt (bvadd {0} {1}) (_ bv0 64)) (bvslt {0} (_ bv0 64)))))",
+            a[0], a[1]
+        ),
+        Op::SubOverflows => format!(
+            "(and (not (= (bvslt {0} (_ bv0 64)) (bvslt {1} (_ bv0 64)))) \
+             (not (= (bvslt (bvsub {0} {1}) (_ bv0 64)) (bvslt {0} (_ bv0 64)))))",
+            a[0], a[1]
+        ),
         // In 128 Bit ist das Produkt exakt; passt es, ist es die Erweiterung
         // des Produkts in 64 Bit.
         Op::MulOverflows => format!(
@@ -174,7 +185,7 @@ fn cone<'a>(
     roots: &[&Term],
     constraints: &[&'a Term],
     invariants: &[&'a Term],
-) -> (BTreeSet<String>, Vec<&'a Term>) {
+) -> (BTreeSet<String>, Vec<&'a Term>, Vec<&'a Term>) {
     let mut inside: BTreeSet<String> = roots.iter().flat_map(|t| vars(t)).collect();
     let state: Vec<(&str, BTreeSet<String>)> = model
         .state
@@ -198,14 +209,14 @@ fn cone<'a>(
             break;
         }
     }
-    let mut kept: Vec<&Term> = constraints
+    let kept: Vec<&Term> = constraints
         .iter()
         .zip(&bound)
         .filter(|(_, deps)| deps.is_empty() || deps.iter().any(|d| inside.contains(d)))
         .map(|(t, _)| *t)
         .collect();
-    kept.extend(invariants.iter().filter(|t| vars(t).iter().all(|v| inside.contains(v))));
-    (inside, kept)
+    let invariants = invariants.iter().filter(|t| vars(t).iter().all(|v| inside.contains(v))).copied().collect();
+    (inside, kept, invariants)
 }
 
 /// Die Anfrage.
@@ -232,7 +243,10 @@ pub enum Target {
 struct Scope<'a> {
     state: Vec<&'a StateVar>,
     inputs: Vec<&'a (String, Sort)>,
+    /// Annahmen ueber die Eingaben, `assumption`-Formeln darunter.
     constraints: Vec<&'a Term>,
+    /// Invarianten des Zustands; sie folgen aus den Uebergaengen.
+    invariants: Vec<&'a Term>,
     assumed: Vec<&'a Goal>,
 }
 
@@ -249,7 +263,8 @@ fn scope<'a>(model: &'a Model, targets: &[Target], slice: bool) -> Scope<'a> {
         return Scope {
             state: model.state.iter().collect(),
             inputs: model.inputs.iter().collect(),
-            constraints: constraints.into_iter().chain(invariants).collect(),
+            constraints,
+            invariants,
             assumed,
         };
     }
@@ -260,12 +275,13 @@ fn scope<'a>(model: &'a Model, targets: &[Target], slice: bool) -> Scope<'a> {
             Target::Check(i) => vec![&model.checks[i].init, &model.checks[i].fires],
         })
         .collect();
-    let (inside, constraints) = cone(model, &roots, &constraints, &invariants);
+    let (inside, constraints, invariants) = cone(model, &roots, &constraints, &invariants);
     Scope {
         state: model.state.iter().filter(|v| inside.contains(&v.name)).collect(),
         inputs: model.inputs.iter().filter(|(n, _)| inside.contains(n)).collect(),
         assumed: assumed.into_iter().filter(|g| constraints.iter().any(|t| std::ptr::eq(*t, &g.formula))).collect(),
         constraints,
+        invariants,
     }
 }
 
@@ -280,7 +296,8 @@ pub fn assumptions_of(model: &Model, target: Target) -> Vec<String> {
 /// bei BMC mit den Eingaben des Gegenbeispiels; sonst das ganze Modell.
 fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth: u32, targets: &[Target], ask: bool) {
     let steps = depth;
-    let Scope { state, inputs, constraints, .. } = scope(model, targets, ask);
+    let Scope { state, inputs, constraints, invariants, .. } = scope(model, targets, ask);
+    let constraints: Vec<&Term> = constraints.into_iter().chain(invariants).collect();
     let _ = writeln!(out, "(push 1)");
     let _ = writeln!(out, "; {}", if kind == Query::Induction { "Induktionsschritt" } else { "BMC" });
     for k in 0..=steps {
@@ -400,6 +417,209 @@ pub fn contract_query(goal: &crate::encode::ContractGoal) -> String {
         let _ = writeln!(p.out, "(get-value ({}))", names.join(" "));
     }
     out
+}
+
+/// Die Grenzen von `i64` als ganze Zahlen.
+const I64: (&str, &str) = ("(- 9223372036854775808)", "9223372036854775807");
+
+/// Eine Operation ueber ganzen Zahlen (LIA) fuer die Invariantensuche;
+/// `None` ausserhalb dieses Fragments. Jede Rechnung eines Programms ist
+/// ueberlaufgeprueft, auf einem lebendigen Pfad rechnen ganze Zahlen also
+/// wie 64 Bit; Division und Rest schneiden ab wie in Rust.
+fn lia_text(op: Op, a: &[String]) -> Option<String> {
+    let outside = |x: String| format!("(or (< {x} {}) (> {x} {}))", I64.0, I64.1);
+    let trunc = |x: &str, y: &str| {
+        format!(
+            "(ite (>= {x} 0) (ite (>= {y} 0) (div {x} {y}) (- (div {x} (- {y})))) \
+             (ite (>= {y} 0) (- (div (- {x}) {y})) (div (- {x}) (- {y}))))"
+        )
+    };
+    Some(match op {
+        Op::Not | Op::And | Op::Or | Op::Eq | Op::Ite => app_text(op, a),
+        Op::Neg => format!("(- {})", a[0]),
+        Op::Add => format!("(+ {} {})", a[0], a[1]),
+        Op::Sub => format!("(- {} {})", a[0], a[1]),
+        Op::Mul => format!("(* {} {})", a[0], a[1]),
+        Op::Div => trunc(&a[0], &a[1]),
+        Op::Rem => format!("(- {} (* {} {}))", a[0], a[1], trunc(&a[0], &a[1])),
+        Op::Lt => format!("(< {} {})", a[0], a[1]),
+        Op::Le => format!("(<= {} {})", a[0], a[1]),
+        Op::Gt => format!("(> {} {})", a[0], a[1]),
+        Op::Ge => format!("(>= {} {})", a[0], a[1]),
+        Op::AddOverflows => outside(format!("(+ {} {})", a[0], a[1])),
+        Op::SubOverflows => outside(format!("(- {} {})", a[0], a[1])),
+        Op::MulOverflows => outside(format!("(* {} {})", a[0], a[1])),
+        Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::Wrap { .. }
+        | Op::FNeg
+        | Op::FAdd
+        | Op::FSub
+        | Op::FMul
+        | Op::FDiv
+        | Op::FLt
+        | Op::FLe
+        | Op::FGt
+        | Op::FGe
+        | Op::FEq
+        | Op::FAbs
+        | Op::FSqrt
+        | Op::FFma
+        | Op::ToF32
+        | Op::ToF64
+        | Op::IsFinite => return None,
+    })
+}
+
+/// Ein Term ueber ganzen Zahlen mit `let` statt `define-fun`: In einer
+/// Horn-Klausel sind die Variablen gebunden, und eine Definition auf
+/// oberster Ebene saehe sie nicht. Jeder geteilte Knoten bekommt eine
+/// Bindung, der Text bleibt linear in der Groesse des Graphen; `None`, wenn
+/// ein Knoten ausserhalb des Fragments liegt.
+struct LetPrinter {
+    tag: &'static str,
+    binds: Vec<(String, String)>,
+    names: HashMap<(usize, u32, u32), String>,
+}
+
+impl LetPrinter {
+    fn new(tag: &'static str) -> LetPrinter {
+        LetPrinter { tag, binds: Vec::new(), names: HashMap::new() }
+    }
+
+    fn name(&mut self, t: &Term, state: u32, input: u32) -> Option<String> {
+        Some(match &*t.0 {
+            Node::App(op, args) => {
+                let key = (Rc::as_ptr(&t.0) as usize, state, input);
+                if let Some(n) = self.names.get(&key) {
+                    return Some(n.clone());
+                }
+                let parts: Vec<String> = args.iter().map(|a| self.name(a, state, input)).collect::<Option<_>>()?;
+                let n = format!("|l{}{}|", self.tag, self.binds.len());
+                self.binds.push((n.clone(), lia_text(*op, &parts)?));
+                self.names.insert(key, n.clone());
+                n
+            }
+            Node::Var(_, Sort::F32 | Sort::F64) | Node::F32(_) | Node::F64(_) => return None,
+            Node::Var(v, _) if v.starts_with("i.") => at(v, input, self.tag),
+            Node::Var(v, _) => at(v, state, self.tag),
+            Node::Bool(b) => b.to_string(),
+            Node::Int(i) if *i >= 0 => i.to_string(),
+            Node::Int(i) => format!("(- {})", i.unsigned_abs()),
+        })
+    }
+
+    /// Alle `terms` in einer Konjunktion.
+    fn all(&mut self, terms: &[&Term], state: u32, input: u32) -> Option<Vec<String>> {
+        terms.iter().map(|t| self.name(t, state, input)).collect()
+    }
+
+    /// `body` unter allen Bindungen.
+    fn wrap(self, body: String) -> String {
+        self.binds.into_iter().rev().fold(body, |acc, (n, e)| format!("(let (({n} {e}))\n  {acc})"))
+    }
+}
+
+/// Die Anfrage der Invariantensuche (FB-375): das Transitionssystem als
+/// Horn-Klauseln ueber ganzen Zahlen. `Inv(s, i)` heisst: Zustand `s` ist
+/// erreichbar, mit den Eingaben `i` des Ticks, der ihn ergab. z3 sucht mit
+/// Spacer (PDR) eine induktive Invariante — `sat` heisst, das Ziel gilt in
+/// jeder Tiefe. `None`, wenn der Kegel des Ziels ausserhalb des Fragments
+/// liegt (Fliesskomma, Bitoperationen, Schieben).
+pub fn horn(model: &Model, target: Target) -> Option<String> {
+    let Scope { state, inputs, constraints, invariants, .. } = scope(model, &[target], true);
+    let before: Vec<&Term> = constraints.iter().chain(&invariants).copied().collect();
+    let lia = |s: Sort| match s {
+        Sort::Bool => Some("Bool"),
+        Sort::Int => Some("Int"),
+        Sort::F32 | Sort::F64 => None,
+    };
+    let sorts: Vec<&str> =
+        state.iter().map(|v| lia(v.sort)).chain(inputs.iter().map(|(_, s)| lia(*s))).collect::<Option<_>>()?;
+    let tag = "h";
+    let args = |k: u32| -> String {
+        state
+            .iter()
+            .map(|v| at(&v.name, k, tag))
+            .chain(inputs.iter().map(|(n, _)| at(n, k, tag)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let binders = |steps: &[u32]| -> String {
+        let mut out = Vec::new();
+        for k in steps {
+            out.extend(state.iter().map(|v| format!("({} {})", at(&v.name, *k, tag), lia(v.sort).unwrap_or("Int"))));
+            out.extend(inputs.iter().map(|(n, s)| format!("({} {})", at(n, *k, tag), lia(*s).unwrap_or("Int"))));
+        }
+        out.join(" ")
+    };
+    let rule = |vars: String, body: String| format!("(assert (forall ({vars}) {body}))");
+    let mut out = String::new();
+    let _ = writeln!(out, "; takt prove — Invariantensuche (13.3, FB-375)");
+    let _ = writeln!(out, "(set-logic HORN)");
+    // Quantifizierte Verallgemeinerung: Am Zeitgeber-Programm aus FB-375
+    // 1 s statt 42 s.
+    let _ = writeln!(out, "(set-option :fp.spacer.q3.use_qgen true)");
+    let _ = writeln!(out, "(declare-fun Inv ({}) Bool)", sorts.join(" "));
+    // Der erste Tick: der Anfangszustand aus den Eingaben des Ticks 0.
+    let start = |lp: &mut LetPrinter| -> Option<Vec<String>> {
+        let mut body = Vec::new();
+        for v in &state {
+            body.push(format!("(= {} {})", at(&v.name, 1, tag), lp.name(&v.init, 1, 1)?));
+        }
+        body.extend(lp.all(&constraints, 1, 1)?);
+        Some(body)
+    };
+    // Ein Tick aus einem erreichbaren Zustand mit neuen Eingaben.
+    let step = |lp: &mut LetPrinter| -> Option<Vec<String>> {
+        let mut body = vec![format!("(Inv {})", args(0))];
+        body.extend(lp.all(&before, 0, 0)?);
+        for v in &state {
+            body.push(format!("(= {} {})", at(&v.name, 1, tag), lp.name(&v.next, 0, 1)?));
+        }
+        body.extend(lp.all(&constraints, 1, 1)?);
+        Some(body)
+    };
+    let mut lp = LetPrinter::new(tag);
+    let body = start(&mut lp)?;
+    let _ = writeln!(
+        out,
+        "{}",
+        rule(binders(&[1]), lp.wrap(format!("(=> (and true {}) (Inv {}))", body.join(" "), args(1))))
+    );
+    let mut lp = LetPrinter::new(tag);
+    let body = step(&mut lp)?;
+    let _ = writeln!(
+        out,
+        "{}",
+        rule(binders(&[0, 1]), lp.wrap(format!("(=> (and {}) (Inv {}))", body.join(" "), args(1))))
+    );
+    match target {
+        Target::Property(i) => {
+            let mut lp = LetPrinter::new(tag);
+            let mut body = vec![format!("(Inv {})", args(0))];
+            body.extend(lp.all(&before, 0, 0)?);
+            body.push(format!("(not {})", lp.name(&model.properties[i].formula, 0, 0)?));
+            let _ = writeln!(out, "{}", rule(binders(&[0]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
+        }
+        Target::Check(i) => {
+            let site = &model.checks[i];
+            let mut lp = LetPrinter::new(tag);
+            let mut body = start(&mut lp)?;
+            body.push(lp.name(&site.init, 1, 1)?);
+            let _ = writeln!(out, "{}", rule(binders(&[1]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
+            let mut lp = LetPrinter::new(tag);
+            let mut body = step(&mut lp)?;
+            body.push(lp.name(&site.fires, 0, 1)?);
+            let _ =
+                writeln!(out, "{}", rule(binders(&[0, 1]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
+        }
+    }
+    let _ = writeln!(out, "(check-sat)");
+    Some(out)
 }
 
 /// Die Anfrage eines Ziels fuer den Solver; BMC fragt nach den Eingaben

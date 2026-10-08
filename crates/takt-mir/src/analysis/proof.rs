@@ -27,7 +27,8 @@ pub struct Site {
     pub end: u32,
     /// Art der Pruefung, wie `takt check --checks` sie nennt.
     pub kind: String,
-    /// Induktionstiefe des Beweises.
+    /// Induktionstiefe des Beweises; null, wenn eine induktive Invariante
+    /// bewiesen hat (Spacer).
     pub k: u32,
 }
 

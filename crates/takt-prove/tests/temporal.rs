@@ -105,3 +105,62 @@ fn never_negates_its_formula() {
     proven("never(valve and not once[30 ms](go))");
     violated("never(valve and stable[20 ms](valve))");
 }
+
+/// Das Zeitgeber-Programm aus FB-375: `A` zaehlt je Tick, nach 500 ms
+/// setzt `B` zurueck.
+const TIMER: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+output o : int @ hw(\"o/o\") with safe = 0
+
+machine m:
+    var x : int in 0..1000 = 0
+    initial A
+
+    state A:
+        loop:
+            x = x + 1
+            o = x
+        after 500 ms: -> B
+
+    state B:
+        enter:
+            x = 0
+            o = 0
+        after 10 ms: -> A
+
+property small: always(o <= 60)
+";
+
+/// **FB-375**: Die k-Induktion mit der Vorgabe k = 5 sieht den Zeitablauf
+/// nicht; die Invariantensuche (Horn-Klauseln, Spacer) beweist die
+/// Eigenschaft fuer jede Tiefe.
+#[test]
+fn a_timer_program_is_proven_with_the_default_depth() {
+    let Some(solver) = solver() else { return };
+    let p = compile(TIMER);
+    let model = encode(&p).expect("kodierbar");
+    assert_eq!(model.horizon, 50);
+    let reports = prove(&model, &p, 5, &solver, 60).expect("Solver laeuft");
+    assert_eq!(reports[0].verdict, Verdict::Proven { k: 0, assumptions: vec![] }, "{:?}", reports[0]);
+    assert_eq!(reports[0].verdict.text(), "bewiesen (induktive Invariante, Spacer)");
+}
+
+/// Ausserhalb des ganzzahligen Fragments sucht niemand eine Invariante;
+/// der offene Schritt nennt dann die Tiefe der laengsten Frist.
+#[test]
+fn an_open_step_names_the_depth_of_the_longest_deadline() {
+    let Some(solver) = solver() else { return };
+    let src = TIMER
+        .replace("var x : int in 0..1000 = 0", "var x : float in 0.0..1000.0 = 0.0")
+        .replace("x = x + 1", "x = x + 1.0")
+        .replace("output o : int", "output o : float")
+        .replace("            o = 0\n", "            o = 0.0\n")
+        .replace("always(o <= 60)", "always(o <= 60.0)");
+    let p = compile(&src);
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 5, &solver, 60).expect("Solver laeuft");
+    let Verdict::Unproven { reason } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    assert!(reason.contains("k = 51 (`--depth auto`)"), "{reason}");
+}

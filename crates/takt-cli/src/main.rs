@@ -2035,24 +2035,29 @@ fn gap_lines(path: &str, map: &SourceMap, items: &[&takt_interp::coverage::Item]
 }
 
 /// `takt prove`: die Schrittfunktion als Transitionssystem; `--export
-/// DATEI.smt2` schreibt BMC und Induktionsschritt bis `--depth`, sonst
-/// prueft ein Solver (`--solver`, `TAKT_SOLVER`, `z3`/`cvc5` auf dem PATH)
-/// jede Eigenschaft; ein Gegenbeispiel landet als Stimulus in `--out` (13.3).
+/// DATEI.smt2` schreibt BMC und Induktionsschritt bis `--depth` (`auto`:
+/// die laengste Frist), sonst prueft ein Solver (`--solver`, `TAKT_SOLVER`,
+/// `z3`/`cvc5` auf dem PATH) jede Eigenschaft; ein Gegenbeispiel landet als
+/// Stimulus in `--out` (13.3).
 fn prove(args: &Args) -> bool {
     let Some(path) = args.files.first() else {
         eprintln!("{USAGE}");
         return false;
     };
     let Some(program) = compile_file(path, args) else { return false };
-    let depth = match args.value("--depth").map(str::parse::<u32>) {
-        Some(Ok(n)) => n,
-        Some(Err(e)) => {
-            eprintln!("--depth: {e}");
-            return false;
-        }
+    let whole = takt_prove::encode(&program);
+    // `auto`: so tief, dass die laengste Frist ganz hineinpasst (FB-375).
+    let depth = match args.value("--depth") {
+        Some("auto") => whole.as_ref().map_or(5, |m| m.horizon.saturating_add(1).max(1)),
+        Some(n) => match n.parse::<u32>() {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("--depth: {e}");
+                return false;
+            }
+        },
         None => 5,
     };
-    let whole = takt_prove::encode(&program);
     match &whole {
         Ok(model) => {
             let assumptions = model.properties.iter().filter(|g| g.assumption).count();

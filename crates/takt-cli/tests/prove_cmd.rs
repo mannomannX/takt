@@ -84,7 +84,8 @@ machine m:
 "#;
 
 /// Zwei Variablen, deren Summe immer 5 ist: Die Range-Pruefung von `level`
-/// ist per Induktion unerreichbar, die von `b` bleibt offen.
+/// ist per Induktion unerreichbar, die von `b` erst mit einer induktiven
+/// Invariante (FB-375).
 const SUM: &str = r#"system:
     language = 1
     tick     = 10 ms
@@ -150,8 +151,9 @@ fn a_saved_proof_drops_its_check_from_the_build_and_a_stale_one_is_refused() {
     let out = takt(&["prove", path, "--depth", "4", "--save-proof", proof_path]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.contains("range m:18:13: bewiesen unerreichbar"), "{stdout}");
-    assert!(stdout.contains(&format!("{proof_path}: 1 bewiesene Stellen")), "{stdout}");
+    assert!(stdout.contains("range m:18:13: bewiesen unerreichbar (k-Induktion"), "{stdout}");
+    assert!(stdout.contains("range m:17:17: bewiesen unerreichbar (induktive Invariante, Spacer)"), "{stdout}");
+    assert!(stdout.contains(&format!("{proof_path}: 2 bewiesene Stellen")), "{stdout}");
     // FB-380: Bericht und Beweisdatei nennen Solver und Version.
     let identity = stdout.lines().find_map(|l| l.trim().strip_prefix("Solver: ")).unwrap_or_else(|| panic!("{stdout}"));
     assert!(identity.split(' ').nth(1).is_some_and(|v| v.contains('.')), "Name und Version: {identity}");
@@ -164,7 +166,7 @@ fn a_saved_proof_drops_its_check_from_the_build_and_a_stale_one_is_refused() {
         std::fs::read_to_string(&ll).expect("IR").matches("; Range ").count()
     };
     let plain = ir("plain.ll", &[]);
-    assert_eq!(ir("proven.ll", &["--proof", proof_path]), plain - 1, "eine Range-Pruefung weniger");
+    assert_eq!(ir("proven.ll", &["--proof", proof_path]), plain - 2, "zwei Range-Pruefungen weniger");
     let text = std::fs::read_to_string(&proof).expect("Beweis");
     let stale = file.with_file_name("stale.proof");
     std::fs::write(&stale, text.replacen("program ", "program 0", 1)).expect("Beweis");

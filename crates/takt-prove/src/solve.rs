@@ -18,7 +18,7 @@ use takt_mir::types::Type;
 
 use crate::encode::Model;
 use crate::eval::Val;
-use crate::smt::{Query, Target, assumptions_of, at, contract_query, query};
+use crate::smt::{Query, Target, assumptions_of, at, contract_query, horn, query};
 
 /// Der gefundene Solver.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,9 +111,10 @@ impl Solver {
 /// Das Urteil ueber eine Eigenschaft.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Verdict {
-    /// k-Induktion.
+    /// k-Induktion oder eine induktive Invariante.
     Proven {
-        /// Schritte der Induktion.
+        /// Schritte der Induktion; null, wenn eine induktive Invariante
+        /// bewiesen hat (Spacer, FB-375).
         k: u32,
         /// Die `assumption`-Formeln, auf denen der Beweis ruht (13.3).
         assumptions: Vec<String>,
@@ -157,15 +158,20 @@ impl Report {
     }
 }
 
+/// Wie bewiesen wurde.
+fn method(k: u32) -> String {
+    if k == 0 { "induktive Invariante, Spacer".into() } else { format!("k-Induktion, k = {k}") }
+}
+
 impl Verdict {
     /// Der Text fuer den Bericht.
     pub fn text(&self) -> String {
         match self {
-            Verdict::Proven { k, assumptions } if assumptions.is_empty() => format!("bewiesen (k-Induktion, k = {k})"),
+            Verdict::Proven { k, assumptions } if assumptions.is_empty() => format!("bewiesen ({})", method(*k)),
             Verdict::Proven { k, assumptions } => {
                 let names: Vec<String> = assumptions.iter().map(|a| format!("`{a}`")).collect();
                 let word = if names.len() == 1 { "der Annahme" } else { "den Annahmen" };
-                format!("bewiesen (k-Induktion, k = {k}) unter {word} {}", names.join(", "))
+                format!("bewiesen ({}) unter {word} {}", method(*k), names.join(", "))
             }
             Verdict::Violated { at, .. } => format!("verletzt bei t={at} (Gegenbeispiel im Interpreter bestaetigt)"),
             Verdict::Unproven { reason } => format!("unbewiesen: {reason}"),
@@ -178,7 +184,7 @@ impl Verdict {
 pub enum CheckVerdict {
     /// Bewiesen unerreichbar: kein Pfad bis zur Tiefe, und induktiv.
     Unreachable {
-        /// Schritte der Induktion.
+        /// Schritte der Induktion; null wie bei [`Verdict::Proven`].
         k: u32,
     },
     /// Erreichbar mit Pfad, im Interpreter bestaetigt.
@@ -215,7 +221,7 @@ impl CheckReport {
     /// weil der Interpreter Vertraege nicht prueft (5.7).
     pub fn text(&self) -> String {
         match &self.verdict {
-            CheckVerdict::Unreachable { k } => format!("bewiesen unerreichbar (k-Induktion, k = {k})"),
+            CheckVerdict::Unreachable { k } => format!("bewiesen unerreichbar ({})", method(*k)),
             CheckVerdict::Reachable { at, .. } if self.kind == "requires" => format!(
                 "erreichbar mit Pfad (verletzt bei t={at}; Vertraege prueft der Interpreter nicht, der Pfad ist aus dem Modell)"
             ),
@@ -331,6 +337,36 @@ fn classify_site(
     })
 }
 
+/// Die Invariantensuche nach einem offenen Induktionsschritt (FB-375):
+/// `Some(true)`, wenn z3 eine induktive Invariante findet, `Some(false)`,
+/// wenn es einen Pfad ueber jede Tiefe hinaus gibt, `None` ohne Urteil —
+/// auch ausserhalb des ganzzahligen Fragments und mit cvc5, das keine
+/// Horn-Klauseln liest.
+fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> Result<Option<bool>, String> {
+    let Some(q) = horn(model, target).filter(|_| !solver.is_cvc5()) else { return Ok(None) };
+    let text = solver.run(&q, timeout_s, "horn")?;
+    Ok(match answer(&text) {
+        "sat" => Some(true),
+        "unsat" => Some(false),
+        _ => None,
+    })
+}
+
+/// Warum ein Induktionsschritt offen bleibt, und was er braucht.
+fn open(model: &Model, depth: u32, found: Option<bool>) -> String {
+    if found == Some(false) {
+        return format!(
+            "die Invariantensuche findet einen Pfad ueber Tiefe {depth} hinaus; eine groessere Tiefe zeigt ihn"
+        );
+    }
+    let deadline = if depth > model.horizon {
+        String::new()
+    } else {
+        format!("; die laengste Frist braucht k = {} (`--depth auto`)", model.horizon + 1)
+    };
+    format!("Induktionsschritt offen (k = {depth}){deadline}")
+}
+
 fn induction_verdict(
     model: &Model,
     i: usize,
@@ -341,8 +377,11 @@ fn induction_verdict(
     let ind = solver.run(&query(model, depth, Target::Check(i), Query::Induction), timeout_s, "check-ind")?;
     Ok(match answer(&ind) {
         "unsat" => CheckVerdict::Unreachable { k: depth },
-        "sat" => CheckVerdict::Undecided {
-            reason: format!("kein Pfad bis Tiefe {depth}, Induktionsschritt offen (k = {depth})"),
+        "sat" => match invariant(model, Target::Check(i), solver, timeout_s)? {
+            Some(true) => CheckVerdict::Unreachable { k: 0 },
+            found => CheckVerdict::Undecided {
+                reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, found)),
+            },
         },
         other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
     })
@@ -545,8 +584,11 @@ pub fn prove(
                 let ind = solver.run(&query(model, depth, Target::Property(i), Query::Induction), timeout_s, "ind")?;
                 match answer(&ind) {
                     "unsat" => Verdict::Proven { k: depth, assumptions: assumptions_of(model, Target::Property(i)) },
-                    "sat" => Verdict::Unproven {
-                        reason: format!("kein Gegenbeispiel bis Tiefe {depth}, Induktionsschritt offen (k = {depth})"),
+                    "sat" => match invariant(model, Target::Property(i), solver, timeout_s)? {
+                        Some(true) => Verdict::Proven { k: 0, assumptions: assumptions_of(model, Target::Property(i)) },
+                        found => Verdict::Unproven {
+                            reason: format!("kein Gegenbeispiel bis Tiefe {depth}, {}", open(model, depth, found)),
+                        },
                     },
                     other => Verdict::Unproven { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
                 }

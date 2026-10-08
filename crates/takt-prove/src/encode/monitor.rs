@@ -114,6 +114,16 @@ impl Monitor {
         self.loc(&format!("once{id}"))
     }
 
+    /// Das laengste Fenster des Monitors in Ticks.
+    pub(super) fn window(&self) -> i64 {
+        let onces = self.onces.iter().map(|(_, n)| *n).max().unwrap_or(0);
+        match &self.plan {
+            Plan::Ring { depth, .. } => *depth,
+            Plan::Response { n, .. } => (*n).max(onces),
+            Plan::Past(_) => onces,
+        }
+    }
+
     /// Wie weit die Entscheidung einer Position hinter dem Tick liegt.
     pub(super) fn future(&self) -> i64 {
         match &self.plan {

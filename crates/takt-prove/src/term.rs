@@ -70,7 +70,11 @@ pub enum Op {
         /// Vorzeichenbehaftet?
         signed: bool,
     },
-    /// Das exakte Produkt zweier `i64` liegt ausserhalb von `i64` (4.1).
+    /// Die exakte Summe zweier `i64` liegt ausserhalb von `i64` (4.1).
+    AddOverflows,
+    /// Die exakte Differenz.
+    SubOverflows,
+    /// Das exakte Produkt.
     MulOverflows,
 }
 
@@ -237,6 +241,8 @@ impl Term {
                 | Op::FGe
                 | Op::FEq
                 | Op::IsFinite
+                | Op::AddOverflows
+                | Op::SubOverflows
                 | Op::MulOverflows => Sort::Bool,
                 Op::ToF32 => Sort::F32,
                 Op::ToF64 => Sort::F64,
