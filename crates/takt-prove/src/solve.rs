@@ -18,7 +18,8 @@ use takt_mir::types::Type;
 
 use crate::encode::Model;
 use crate::eval::Val;
-use crate::smt::{Query, Target, assumptions_of, at, contract_query, horn, query};
+use crate::smt::{Query, Target, assumptions_of, at, contract_query, horn, houdini, query};
+use crate::term::Term;
 
 /// Der gefundene Solver.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -242,6 +243,7 @@ pub fn classify(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<Vec<CheckReport>, String> {
+    let model = &strengthened(model, solver, timeout_s)?;
     (0..model.checks.len())
         .map(|i| Ok(report(&model.checks[i], classify_site(model, program, i, depth, solver, timeout_s)?)))
         .collect()
@@ -258,6 +260,8 @@ pub fn classify_compositional(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<(Vec<CheckReport>, Vec<String>), String> {
+    let whole = whole.map(|w| strengthened(w, solver, timeout_s)).transpose()?;
+    let whole = whole.as_ref();
     let mut out = Vec::new();
     let mut notes = Vec::new();
     let in_whole = |site: &crate::encode::CheckSite| {
@@ -265,7 +269,7 @@ pub fn classify_compositional(
     };
     for (i, machine) in program.machines.iter().enumerate() {
         let model = match crate::encode::encode_machine(program, takt_mir::MachineId(i as u32)) {
-            Ok(m) => m,
+            Ok(m) => strengthened(&m, solver, timeout_s)?,
             Err(e) => {
                 notes.push(format!("`{}` nicht kodierbar: {}", machine.name, e.what));
                 if let Some(w) = whole {
@@ -564,6 +568,7 @@ pub fn prove(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<Vec<Report>, String> {
+    let model = &strengthened(model, solver, timeout_s)?;
     let mut out = Vec::new();
     for (i, prop) in model.properties.iter().enumerate() {
         let bmc = solver.run(&query(model, depth, Target::Property(i), Query::Bmc), timeout_s, "bmc")?;
@@ -597,6 +602,46 @@ pub fn prove(
         };
         out.push(Report { name: prop.name.clone(), assumption: prop.assumption, verdict });
     }
+    Ok(out)
+}
+
+/// Die Hilfslemmata (Houdini, FB-375): die Kandidaten des Modells, die im
+/// Anfangszustand gelten und zusammen induktiv sind. Was in einer Runde
+/// fallen kann, faellt, bis der Rest haelt; was bleibt, gilt in jedem
+/// erreichbaren Zustand.
+pub fn lemmas(model: &Model, solver: &Solver, timeout_s: u64) -> Result<Vec<Term>, String> {
+    let mut cands = surviving(model, solver, timeout_s, model.candidates.iter().collect(), false)?;
+    loop {
+        let before = cands.len();
+        cands = surviving(model, solver, timeout_s, cands, true)?;
+        if cands.len() == before {
+            return Ok(cands.into_iter().cloned().collect());
+        }
+    }
+}
+
+/// Die Kandidaten, die eine Runde nicht fallen laesst (`smt::houdini`).
+fn surviving<'a>(
+    model: &Model,
+    solver: &Solver,
+    timeout_s: u64,
+    cands: Vec<&'a Term>,
+    step: bool,
+) -> Result<Vec<&'a Term>, String> {
+    if cands.is_empty() {
+        return Ok(cands);
+    }
+    let text = solver.run(&houdini(model, &cands, step), timeout_s, "lemma")?;
+    let answers: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    // Ohne Antwort faellt ein Kandidat: Nur was bewiesen haelt, wird Lemma.
+    Ok(cands.into_iter().enumerate().filter(|(i, _)| answers.get(*i) == Some(&"unsat")).map(|(_, c)| c).collect())
+}
+
+/// Das Modell mit seinen Hilfslemmata unter den Invarianten.
+pub fn strengthened(model: &Model, solver: &Solver, timeout_s: u64) -> Result<Model, String> {
+    let mut out = model.clone();
+    out.invariants.extend(lemmas(model, solver, timeout_s)?);
+    out.candidates.clear();
     Ok(out)
 }
 

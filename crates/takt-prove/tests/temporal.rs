@@ -133,9 +133,9 @@ machine m:
 property small: always(o <= 60)
 ";
 
-/// **FB-375**: Die k-Induktion mit der Vorgabe k = 5 sieht den Zeitablauf
-/// nicht; die Invariantensuche (Horn-Klauseln, Spacer) beweist die
-/// Eigenschaft fuer jede Tiefe.
+/// **FB-375**: Die k-Induktion mit der Vorgabe k = 5 sah den Zeitablauf
+/// nicht. Mit dem Hilfslemma, dass `x` mit der Zeit in `A` laeuft (Houdini),
+/// ist die Eigenschaft bewiesen; ohne es fand Spacer die Invariante.
 #[test]
 fn a_timer_program_is_proven_with_the_default_depth() {
     let Some(solver) = solver() else { return };
@@ -143,8 +143,7 @@ fn a_timer_program_is_proven_with_the_default_depth() {
     let model = encode(&p).expect("kodierbar");
     assert_eq!(model.horizon, 50);
     let reports = prove(&model, &p, 5, &solver, 60).expect("Solver laeuft");
-    assert_eq!(reports[0].verdict, Verdict::Proven { k: 0, assumptions: vec![] }, "{:?}", reports[0]);
-    assert_eq!(reports[0].verdict.text(), "bewiesen (induktive Invariante, Spacer)");
+    assert!(matches!(reports[0].verdict, Verdict::Proven { .. }), "{:?}", reports[0]);
 }
 
 /// Ausserhalb des ganzzahligen Fragments sucht niemand eine Invariante;
@@ -163,4 +162,84 @@ fn an_open_step_names_the_depth_of_the_longest_deadline() {
     let reports = prove(&model, &p, 5, &solver, 60).expect("Solver laeuft");
     let Verdict::Unproven { reason } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
     assert!(reason.contains("k = 51 (`--depth auto`)"), "{reason}");
+}
+
+/// Die vier Eigenschaften aus 13.3 an einem Programm in ihrem Sinn: Zuenden
+/// nur mit offenem Brennstoff, aus `SAFE` zurueck nach `IDLE`, das Ventil
+/// flattert nicht, geschaerft vor dem Zuenden. Ein Abbruch waehrend des
+/// Feuerns schliesst das Ventil sofort.
+const HOTFIRE: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+enum ValveCmd: CLOSED, OPEN
+
+command prepare
+command fire
+command abort_test
+
+output fuel_main : ValveCmd @ hw(\"o/fuel\")  with safe = CLOSED
+output valve     : ValveCmd @ hw(\"o/valve\") with safe = CLOSED
+output igniter   : bool     @ hw(\"o/ign\")   with safe = false
+output armed     : bool     @ hw(\"o/armed\") with safe = false
+
+machine hotfire:
+    fault -> SAFE
+    initial IDLE
+
+    state IDLE:
+        enter:
+            armed = false
+        when prepare: -> ARMED
+
+    state ARMED:
+        enter:
+            armed = true
+        when fire: -> FIRING
+
+    state FIRING:
+        enter:
+            fuel_main = OPEN
+            valve = OPEN
+        loop:
+            if abort_test:
+                abort \"operator abort\"
+        after 30 ms: -> IGNITE
+
+    state IGNITE:
+        enter:
+            igniter = true
+        loop:
+            if abort_test:
+                abort \"operator abort\"
+        after 100 ms: -> SAFE
+
+    state SAFE:
+        enter:
+            igniter = false
+            fuel_main = CLOSED
+            valve = CLOSED
+        after 5 s: -> IDLE
+
+property no_ignition_without_fuel: always(igniter implies fuel_main == OPEN)
+property abort_recovers: always(hotfire.state == SAFE implies eventually[10 s](hotfire.state == IDLE))
+property no_chatter: always(valve == OPEN implies stable[50 ms](valve == OPEN))
+property armed_before_fire: always(igniter implies once[1 s](armed))
+";
+
+/// **Abnahme von Schritt 27**: Jede der vier Eigenschaften ist entschieden.
+/// `no_chatter` ist verletzbar — ein Abbruch kurz nach dem Oeffnen schliesst
+/// das Ventil vor 50 ms —, die anderen drei gelten.
+#[test]
+fn the_four_properties_of_13_3_are_decided() {
+    let Some(solver) = solver() else { return };
+    let p = compile(HOTFIRE);
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 8, &solver, 120).expect("Solver laeuft");
+    let verdict = |name: &str| reports.iter().find(|r| r.name == name).expect("Bericht").verdict.clone();
+    for name in ["no_ignition_without_fuel", "abort_recovers", "armed_before_fire"] {
+        assert!(matches!(verdict(name), Verdict::Proven { .. }), "{name}: {:?}", verdict(name));
+    }
+    let Verdict::Violated { stimulus, .. } = verdict("no_chatter") else { panic!("{:?}", verdict("no_chatter")) };
+    assert!(stimulus.contains("cmd abort_test"), "{stimulus}");
 }

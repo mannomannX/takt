@@ -622,6 +622,54 @@ pub fn horn(model: &Model, target: Target) -> Option<String> {
     Some(out)
 }
 
+/// Eine Pruefrunde nach Houdini (FB-375): `step = false` fragt je Kandidat,
+/// ob er im Anfangszustand fallen kann; `step = true`, ob er nach einem
+/// Tick aus einem Zustand fallen kann, in dem alle gelten. Je Kandidat eine
+/// Antwort, in ihrer Reihenfolge.
+pub fn houdini(model: &Model, candidates: &[&Term], step: bool) -> String {
+    let tag = "@";
+    let mut out = String::new();
+    let _ = writeln!(out, "; takt prove — Hilfslemmata (Houdini, FB-375)");
+    let _ = writeln!(out, "(set-logic ALL)");
+    let steps: &[u32] = if step { &[0, 1] } else { &[0] };
+    for &k in steps {
+        for v in &model.state {
+            let _ = writeln!(out, "(declare-const {} {})", at(&v.name, k, tag), sort_text(v.sort));
+        }
+        for (name, sort) in &model.inputs {
+            let _ = writeln!(out, "(declare-const {} {})", at(name, k, tag), sort_text(*sort));
+        }
+    }
+    let mut p = Printer { out: &mut out, tag, defs: HashMap::new(), next: 0 };
+    if step {
+        for c in candidates {
+            let t = p.name(c, 0, 0);
+            let _ = writeln!(p.out, "(assert {t})");
+        }
+        for v in &model.state {
+            let next = p.name(&v.next, 0, 1);
+            let _ = writeln!(p.out, "(assert (= {} {next}))", at(&v.name, 1, tag));
+        }
+    } else {
+        for v in &model.state {
+            let init = p.name(&v.init, 0, 0);
+            let _ = writeln!(p.out, "(assert (= {} {init}))", at(&v.name, 0, tag));
+        }
+    }
+    for &k in steps {
+        for c in model.assumptions.iter().chain(&model.invariants) {
+            let t = p.name(c, k, k);
+            let _ = writeln!(p.out, "(assert {t})");
+        }
+    }
+    let last = *steps.last().expect("Schritt");
+    for c in candidates {
+        let t = p.name(c, last, last);
+        let _ = writeln!(p.out, "(push 1)\n(assert (not {t}))\n(check-sat)\n(pop 1)");
+    }
+    out
+}
+
 /// Die Anfrage eines Ziels fuer den Solver; BMC fragt nach den Eingaben
 /// des Gegenbeispiels.
 pub fn query(model: &Model, depth: u32, target: Target, kind: Query) -> String {

@@ -114,6 +114,16 @@ impl Monitor {
         self.loc(&format!("once{id}"))
     }
 
+    /// Die Zaehler des Monitors; `true` beim Zaehler einer Antwort, der
+    /// ohne offene Pflicht `-1` ist.
+    pub(super) fn counters(&self) -> Vec<(String, bool)> {
+        let mut out: Vec<(String, bool)> = self.onces.iter().map(|(id, _)| (self.once(*id), false)).collect();
+        if let Plan::Response { .. } = self.plan {
+            out.push((self.loc("wait"), true));
+        }
+        out
+    }
+
     /// Das laengste Fenster des Monitors in Ticks.
     pub(super) fn window(&self) -> i64 {
         let onces = self.onces.iter().map(|(_, n)| *n).max().unwrap_or(0);

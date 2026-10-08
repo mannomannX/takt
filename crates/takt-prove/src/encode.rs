@@ -154,6 +154,10 @@ pub struct Model {
     /// Monitors, in Ticks (FB-375): Eine k-Induktion mit kleinerem k sieht
     /// einen Zeitablauf nicht ganz.
     pub horizon: u32,
+    /// Kandidaten fuer Hilfslemmata (FB-375): Beziehungen zwischen der Zeit
+    /// eines aktiven Blatts und den Zaehlern, die mit ihr laufen. Welche
+    /// gelten, entscheidet `solve::lemmas` nach Houdini.
+    pub candidates: Vec<Term>,
 }
 
 impl Model {
@@ -412,6 +416,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     let next = enc.tick(&pre)?;
     let tick_sites = std::mem::take(&mut enc.sites);
     let invariants = enc.state_invariants(&pre);
+    let candidates = enc.candidates(&pre);
     let contracts = enc.contract_goals()?;
     let checks: Vec<CheckSite> = enc
         .site_info
@@ -467,6 +472,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         notes,
         leaves,
         horizon,
+        candidates,
     })
 }
 
@@ -1914,6 +1920,82 @@ impl Enc<'_> {
             .collect()
     }
 
+    /// Kandidaten fuer Hilfslemmata (Houdini, FB-375): Ist ein Blatt aktiv,
+    /// laeuft ein Zaehler mit seiner Zeit — hoechstens eins davor oder
+    /// dahinter —, und der Zaehler einer Antwort hat keine offene Pflicht.
+    /// Gezaehlt werden die Zaehler der Monitore und die ganzzahligen
+    /// Variablen der Maschine.
+    fn candidates(&self, pre: &Env) -> Vec<Term> {
+        let mut counters: Vec<(Term, bool)> = self
+            .monitors
+            .iter()
+            .flat_map(Monitor::counters)
+            .filter_map(|(loc, wait)| pre.get(&loc).map(|t| (t.clone(), wait)))
+            .collect();
+        let mut out = Vec::new();
+        for &m in &self.order {
+            let machine = self.machine(m);
+            let mine: Vec<(Term, bool)> = machine
+                .vars
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| matches!(self.p.types.get(v.ty), Type::Int { .. } | Type::Duration { .. }))
+                .filter_map(|(i, _)| pre.get(&self.loc_var(m, VarId(i as u32))).map(|t| (t.clone(), false)))
+                .collect();
+            counters.extend(mine);
+            let faulted = pre[&self.loc_faulted(m)].clone();
+            let leaf = pre[&self.loc_leaf(m)].clone();
+            for l in self.leaves(m) {
+                let active = Term::and(vec![faulted.clone().not(), Term::eq(leaf.clone(), Term::int(self.code(m, l)))]);
+                let time = pre[&self.loc_timer(m, l)].clone();
+                for (c, wait) in &counters {
+                    let mut add = |t: Term| out.push(Term::or(vec![active.clone().not(), t]));
+                    for d in [-1, 0, 1] {
+                        add(Term::bin(Op::Le, c.clone(), Term::bin(Op::Add, time.clone(), Term::int(d))));
+                    }
+                    if *wait {
+                        add(Term::eq(c.clone(), Term::int(-1)));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Die Frist, bis zu der der Timer eines aktiven Blatts hoechstens
+    /// laeuft: das kleinste `after` des Blatts. Erreicht der Timer sie, feuert
+    /// es am Anfang des naechsten Ticks, oder ein Sprung davor verlaesst das
+    /// Blatt oder betritt es neu — ein Blatt hat keinen Unterzustand, der es
+    /// aktiv hielte. Nur ein `abort` hinter gesetztem Latch beendet den Tick
+    /// ohne Wechsel; steht eines in einer Schleife der Kette, gilt die
+    /// Frist nicht.
+    fn deadline(&mut self, m: MachineId, s: StateId) -> Option<i64> {
+        let machine = self.machine(m).clone();
+        let state = &machine.states[s.index()];
+        if !state.children.is_empty() {
+            return None;
+        }
+        let aborts = |b: &Block| {
+            let mut hit = false;
+            b.walk(&mut |st| hit |= matches!(st.kind, StmtKind::Abort { .. }));
+            hit
+        };
+        let chain = self.chain_to(m, s);
+        if aborts(&machine.loop_block) || chain.iter().any(|c| aborts(&machine.states[c.index()].loop_block)) {
+            return None;
+        }
+        let period = i64::from(machine.period.max(1)).saturating_mul(self.p.config.tick);
+        let mut out: Option<i64> = None;
+        for t in &state.transitions {
+            if let TransTrigger::After(d) = &t.trigger {
+                let ns = self.const_int(d).ok()?;
+                let needed = ((ns + period - 1) / period).max(1);
+                out = Some(out.map_or(needed, |o| o.min(needed)));
+            }
+        }
+        out
+    }
+
     /// Die laengste Frist eines `after` der kodierten Maschinen und das
     /// laengste Fenster eines Monitors, in Ticks.
     fn horizon(&mut self) -> R<u32> {
@@ -2156,7 +2238,10 @@ impl Enc<'_> {
                     .map(|l| Term::eq(leaf.clone(), Term::int(self.code(m, l))))
                     .collect();
                 let active = Term::and(vec![faulted.clone().not(), Term::or(active)]);
-                out.push(Term::or(vec![active, Term::eq(t, Term::int(0))]));
+                out.push(Term::or(vec![active.clone(), Term::eq(t.clone(), Term::int(0))]));
+                if let Some(n) = self.deadline(m, s) {
+                    out.push(Term::or(vec![active.not(), Term::bin(Op::Le, t, Term::int(n))]));
+                }
             }
             if machine.period > 1 {
                 let c = pre[&self.loc_countdown(m)].clone();
