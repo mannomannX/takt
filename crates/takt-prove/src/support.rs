@@ -58,7 +58,7 @@ pub fn support(c: Construct) -> Support {
             Partial("angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)")
         }
         Construct::Check(CheckTag::Domain) => Partial("angenommen, nicht modelliert: Definitionsbereich"),
-        Construct::Check(CheckTag::Valid) => Partial("angenommen: Inputs gelten als gueltig (FB-372)"),
+        Construct::Check(CheckTag::Valid) => Yes,
         Construct::Check(CheckTag::Index | CheckTag::Missing) => No("Wrapper oder Index"),
         Construct::Intrinsic(i) => intrinsic(i),
         Construct::Accessor(a) => accessor(a),
@@ -116,7 +116,7 @@ fn expr(e: ExprTag) -> Support {
         | ExprTag::Ok
         | ExprTag::Err => No("zusammengesetzte Werte sind nicht kodiert"),
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
-        ExprTag::Accessor => No("Zugriffe sind nicht kodiert"),
+        ExprTag::Accessor => Partial("nur die Qualitaet eines Inputs: `.valid`, `.or`, `.suspect`, `.stale`"),
         ExprTag::Armed | ExprTag::PortRead => No("Trigger und Registerports sind nicht kodiert"),
         ExprTag::JobState | ExprTag::Stream | ExprTag::Matches | ExprTag::Decode => {
             No("Jobs, Stroeme und Muster sind nicht kodiert")
@@ -157,13 +157,12 @@ fn intrinsic(i: Intrinsic) -> Support {
 #[deny(clippy::wildcard_enum_match_arm)]
 fn accessor(a: AccessorTag) -> Support {
     match a {
-        AccessorTag::Valid
-        | AccessorTag::Suspect
-        | AccessorTag::Stale
-        | AccessorTag::Age
-        | AccessorTag::Reason
-        | AccessorTag::Or
-        | AccessorTag::Ok
+        AccessorTag::Valid | AccessorTag::Suspect | AccessorTag::Stale | AccessorTag::Or => {
+            Partial("auf einem Input (3.5); auf einem Wrapper nicht kodiert")
+        }
+        // Beobachtungen laesst das Modell aus; nur dort darf ein Programm sie lesen.
+        AccessorTag::Age | AccessorTag::Reason => Partial("nur in Beobachtungen, die das Modell auslaesst"),
+        AccessorTag::Ok
         | AccessorTag::Err
         | AccessorTag::T
         | AccessorTag::Seq
@@ -243,12 +242,13 @@ fn ty(t: TypeTag) -> Support {
         | TypeTag::Table
         | TypeTag::Mat
         | TypeTag::Map
-        | TypeTag::Optional
         | TypeTag::Result
         | TypeTag::Stream
         | TypeTag::Capture
         | TypeTag::HandleJob
         | TypeTag::HandleTrigger => NO_SORT,
+        // `x.reason` ist ein `Reason?` und steht nur in Beobachtungen.
+        TypeTag::Optional => Partial("nur in Beobachtungen, die das Modell auslaesst"),
     }
 }
 

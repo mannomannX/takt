@@ -2161,9 +2161,12 @@ fn prove(args: &Args) -> bool {
             let sites: Vec<takt_mir::analysis::proof::Site> = checks
                 .iter()
                 .filter_map(|c| match c.verdict {
-                    takt_prove::CheckVerdict::Unreachable { k } => {
-                        Some(takt_mir::analysis::proof::Site { start: c.start, kind: c.kind.clone(), k })
-                    }
+                    takt_prove::CheckVerdict::Unreachable { k } => Some(takt_mir::analysis::proof::Site {
+                        start: c.start,
+                        end: c.span.end,
+                        kind: c.kind.clone(),
+                        k,
+                    }),
                     _ => None,
                 })
                 .filter(|s| takt_mir::analysis::walk::tag_of_name(&s.kind).is_some())

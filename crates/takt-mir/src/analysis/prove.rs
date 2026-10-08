@@ -21,24 +21,22 @@ use crate::types::{Range, RangeOrigin};
 #[derive(Default)]
 pub struct Proofs {
     /// Stellen und Art der erlassenen Pruefungen.
-    pub dropped: BTreeSet<(u32, u32, u8)>,
+    pub dropped: BTreeSet<(Key, u8)>,
     /// Stellen, die ein Besuch (etwa eine abgerollte Runde) nicht erlassen
     /// hat: dort bleibt die Pruefung.
-    pub kept: BTreeSet<(u32, u32, u8)>,
+    pub kept: BTreeSet<(Key, u8)>,
     /// Bewiesenes Intervall je Stelle, ueber alle Besuche vereinigt.
-    pub ranges: BTreeMap<(u32, u32), Range>,
+    pub ranges: BTreeMap<Key, Range>,
 }
 
 impl Proofs {
     /// Sammelt die Ergebnisse eines Durchlaufs.
     pub fn add(&mut self, proven: &[(Span, u8)], kept: &[(Span, u8)], ranges: &[(Span, Range)]) {
         for (s, k) in proven {
-            let (f, at) = key(*s);
-            self.dropped.insert((f, at, *k));
+            self.dropped.insert((key(*s), *k));
         }
         for (s, k) in kept {
-            let (f, at) = key(*s);
-            self.kept.insert((f, at, *k));
+            self.kept.insert((key(*s), *k));
         }
         for (s, r) in ranges {
             let k = key(*s);
@@ -59,8 +57,7 @@ impl Proofs {
 
     /// Ist die Pruefung an dieser Stelle in jedem Besuch bewiesen?
     fn is_dropped(&self, s: Span, kind: &CheckedKind) -> bool {
-        let (f, at) = key(s);
-        let k = (f, at, tag(kind));
+        let k = (key(s), tag(kind));
         self.dropped.contains(&k) && !self.kept.contains(&k)
     }
 
@@ -70,10 +67,15 @@ impl Proofs {
     }
 }
 
-/// Eine Stelle als Schluessel; die Datei-Id gehoert dazu, weil das Prelude
-/// dieselben Offsets belegen kann.
-fn key(s: Span) -> (u32, u32) {
-    (s.file.0, s.start)
+/// Eine Stelle als Schluessel: Datei, Anfang und Ende. Die Datei-Id gehoert
+/// dazu, weil das Prelude dieselben Offsets belegen kann; das Ende, weil
+/// ineinanderliegende Ausdruecke denselben Anfang haben (`a + 1 + b`), und
+/// ein Beweis fuer den inneren den aeusseren sonst mit erliesse (FB-393).
+pub type Key = (u32, u32, u32);
+
+/// Der Schluessel einer Stelle ([`Key`]).
+pub fn key(s: Span) -> Key {
+    (s.file.0, s.start, s.end)
 }
 
 /// Schreibt die Beweise in die MIR: erlassene Pruefungen verschwinden,

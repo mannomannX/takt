@@ -452,6 +452,8 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
         "ovf" => FaultKind::Arithmetic(ArithKind::Overflow),
         "fin" => FaultKind::Arithmetic(ArithKind::NonFinite),
         "dom" => FaultKind::Arithmetic(ArithKind::Domain),
+        // Der Lesevorgang eines ungueltigen Inputs (3.5).
+        "valid" => FaultKind::SensorFault,
         "check" | "expect" => {
             let name = format!("{} @{}", site.kind, site.start);
             let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, site.machine.clone(), name));
@@ -652,26 +654,50 @@ fn parse_values(text: &str, tag: &str) -> BTreeMap<(u32, String), Val> {
     out
 }
 
-/// Das Gegenbeispiel als Stimulus (12.5): Inputs und Commands je Tick.
+/// Das Gegenbeispiel als Stimulus (12.5): Inputs mit ihrer Qualitaet,
+/// Tunables und Commands je Tick.
+///
+/// Die Qualitaet liefert der Stimulus so, wie der Rand des Interpreters sie
+/// entstehen laesst (3.5): `Good` als Wert, `Suspect` als echte Verletzung
+/// unter `debounce` (der Rand haelt dann den letzten guten Wert), `Stale`
+/// ohne Wert, `Bad` mit Wert vom Treiber, der den Bezugspunkt loescht.
 pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth: u32) -> String {
+    use crate::encode::quality;
+    let edges = crate::encode::input_edges(program).unwrap_or_default();
+    // Je Kanal der letzte gute Wert und die Ticks seither, wie der Rand sie fuehrt.
+    let mut gates: BTreeMap<String, (Option<Val>, i64)> = BTreeMap::new();
     let mut out = String::new();
     for k in 0..=depth {
         for c in program.channels.iter().filter(|c| c.dir == Direction::Input) {
             let Some(v) = values.get(&(k, format!("i.{}", c.name))) else { continue };
-            let text = match (program.types.get(c.ty), v) {
-                (Type::Bool, Val::Bool(b)) => b.to_string(),
-                (Type::Enum(e), Val::Int(i)) => program.enums[e.index()]
-                    .variants
-                    .get(*i as usize)
-                    .map(|v| v.name.clone())
-                    .unwrap_or_else(|| i.to_string()),
-                (Type::Duration { .. }, Val::Int(i)) => format!("{i} ns"),
-                (_, Val::Int(i)) => i.to_string(),
-                (_, Val::F64(f)) => format!("{f:?}"),
-                (_, Val::F32(f)) => format!("{f:?}"),
-                (_, Val::Bool(b)) => b.to_string(),
+            let q = match values.get(&(k, format!("i.{}.q", c.name))) {
+                Some(Val::Int(q)) => *q,
+                _ => quality::GOOD,
             };
-            let _ = writeln!(out, "t={k} in {} {text}", c.name);
+            let (last, since) = gates.entry(c.name.clone()).or_insert((None, 0));
+            let line = match q {
+                quality::SUSPECT => {
+                    let edge = edges.iter().find(|e| e.name == c.name);
+                    let wrong = edge.and_then(|e| e.violation(last.as_ref(), *since)).unwrap_or(*v);
+                    value_text(program, c.ty, &wrong)
+                }
+                quality::STALE => "stale".to_string(),
+                quality::BAD => {
+                    *last = None;
+                    format!("{} bad", value_text(program, c.ty, v))
+                }
+                _ => {
+                    (*last, *since) = (Some(*v), -1);
+                    value_text(program, c.ty, v)
+                }
+            };
+            *since += 1;
+            let _ = writeln!(out, "t={k} in {} {line}", c.name);
+        }
+        for p in program.params.iter().filter(|p| p.tunable) {
+            if let Some(v) = values.get(&(k, format!("i.tune.{}", p.name))) {
+                let _ = writeln!(out, "t={k} tune {} {}", p.name, value_text(program, p.ty, v));
+            }
         }
         for c in &program.commands {
             if values.get(&(k, format!("i.cmd.{}", c.name))) == Some(&Val::Bool(true)) {
@@ -680,6 +706,21 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
         }
     }
     out
+}
+
+/// Ein Wert in der Textform des Stimulus (12.5).
+fn value_text(program: &Program, ty: takt_mir::TypeId, v: &Val) -> String {
+    match (program.types.get(ty), v) {
+        (Type::Bool, Val::Bool(b)) => b.to_string(),
+        (Type::Enum(e), Val::Int(i)) => {
+            program.enums[e.index()].variants.get(*i as usize).map(|v| v.name.clone()).unwrap_or_else(|| i.to_string())
+        }
+        (Type::Duration { .. }, Val::Int(i)) => format!("{i} ns"),
+        (_, Val::Int(i)) => i.to_string(),
+        (_, Val::F64(f)) => format!("{f:?}"),
+        (_, Val::F32(f)) => format!("{f:?}"),
+        (_, Val::Bool(b)) => b.to_string(),
+    }
 }
 
 /// Spielt das Gegenbeispiel im Interpreter nach: die Verletzungsposition,

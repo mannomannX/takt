@@ -1594,7 +1594,10 @@ machine m:
     let src = format!("{HEAD}{OUT}{body}");
     let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
     let hash = takt_mir::review::hash_of(src.as_bytes());
-    let proof = Proof { program: hash, sites: vec![Site { start: site.span.start, kind: "range".into(), k: 3 }] };
+    let proof = Proof {
+        program: hash,
+        sites: vec![Site { start: site.span.start, end: site.span.end, kind: "range".into(), k: 3 }],
+    };
     let out = takt_sema::compile_with(&src, &options, Some(&proof));
     assert!(!out.has_errors(), "{:?}", out.diagnostics);
     assert_eq!(count(&out.report, "Declared"), 0, "die bewiesene Stelle zaehlt nicht mehr: {:?}", out.report.checks);
@@ -1936,8 +1939,9 @@ machine m:
     let site = takt_sema::compile(&src, &options).report.sites[0];
     let program = takt_mir::review::hash_of(src.as_bytes());
     for (what, sites) in [
-        ("fremde Art", vec![Site { start: site.span.start, kind: "div".into(), k: 3 }]),
-        ("fremder Versatz", vec![Site { start: site.span.start + 1, kind: "range".into(), k: 3 }]),
+        ("fremde Art", vec![Site { start: site.span.start, end: site.span.end, kind: "div".into(), k: 3 }]),
+        ("fremder Versatz", vec![Site { start: site.span.start + 1, end: site.span.end, kind: "range".into(), k: 3 }]),
+        ("fremdes Ende", vec![Site { start: site.span.start, end: site.span.end + 1, kind: "range".into(), k: 3 }]),
         ("leere Liste", Vec::new()),
     ] {
         let out = takt_sema::compile_with(&src, &options, Some(&Proof { program: program.clone(), sites }));
@@ -1967,7 +1971,7 @@ machine m:
     let site = takt_sema::compile(&src, &options).report.sites[0];
     let proof = Proof {
         program: takt_mir::review::hash_of(src.as_bytes()),
-        sites: vec![Site { start: site.span.start, kind: "range".into(), k: 3 }],
+        sites: vec![Site { start: site.span.start, end: site.span.end, kind: "range".into(), k: 3 }],
     };
     let p = takt_sema::compile_with(&src, &options, Some(&proof)).program.expect("Programm");
     let stimulus = Trace::parse("").expect("leer");
@@ -1999,7 +2003,7 @@ machine m:
     let site = takt_sema::compile(&src, &options).report.sites[0];
     let proof = Proof {
         program: takt_mir::review::hash_of(src.as_bytes()),
-        sites: vec![Site { start: site.span.start, kind: "range".into(), k: 1 }],
+        sites: vec![Site { start: site.span.start, end: site.span.end, kind: "range".into(), k: 1 }],
     };
     let p = takt_sema::compile_with(&src, &options, Some(&proof)).program.expect("Programm");
     let plain = takt_interp::run(&p, &Trace::parse("").expect("leer"), &RunOptions { ticks: 6, ..Default::default() });

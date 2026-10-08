@@ -92,7 +92,7 @@ impl Report {
 /// `certification` ist jede unbewiesene implizite Pruefung im Programm des
 /// Nutzers ein Fehler (3.4: „Zertifizierungsprojekte eskalieren die
 /// Kennzahl zu Fehlern").
-pub fn analyze(program: &mut Program, external: &[(u32, u8)], certification: bool) -> (Vec<Diagnostic>, Report) {
+pub fn analyze(program: &mut Program, external: &[(u32, u32, u8)], certification: bool) -> (Vec<Diagnostic>, Report) {
     let mut diags = Vec::new();
     let mut report = Report::default();
     let mut all: Vec<ImplicitCheck> = Vec::new();
@@ -113,11 +113,11 @@ pub fn analyze(program: &mut Program, external: &[(u32, u8)], certification: boo
     // Was bewiesen ist, verschwindet aus der MIR; die Intervalle bleiben als
     // Annotation stehen (3.4).
     prove::apply(program, &proofs);
+    // Eine Beweisdatei gilt fuer die Quelle, deren Hash sie traegt, und nur
+    // fuer sie (FB-393).
     if !external.is_empty() {
         let mut given = prove::Proofs::default();
-        for file in &user {
-            given.dropped.extend(external.iter().map(|(start, tag)| (*file, *start, *tag)));
-        }
+        given.dropped.extend(external.iter().map(|(start, end, tag)| ((proof::SOURCE, *start, *end), *tag)));
         prove::apply(program, &given);
     }
     diags.extend(faulted_guards(program));
@@ -125,13 +125,12 @@ pub fn analyze(program: &mut Program, external: &[(u32, u8)], certification: boo
     // Eine Pruefung ist eine *Stelle* im Programm, keine Ausfuehrung: Ein
     // abgerollter Schleifenkoerper besucht dieselbe Stelle mehrfach, zaehlt
     // aber einmal. Warnt einer der Besuche, warnt die Stelle.
-    let mut seen: BTreeMap<(u32, u32, u8), ImplicitCheck> = BTreeMap::new();
+    let mut seen: BTreeMap<(prove::Key, u8), ImplicitCheck> = BTreeMap::new();
     for c in &all {
-        if user.contains(&c.span.file.0) && external.contains(&(c.span.start, c.tag)) {
+        if c.span.file.0 == proof::SOURCE && external.contains(&(c.span.start, c.span.end, c.tag)) {
             continue;
         }
-        let key = (c.span.file.0, c.span.start, c.tag);
-        seen.entry(key)
+        seen.entry((prove::key(c.span), c.tag))
             .and_modify(|e| {
                 e.warns |= c.warns;
                 e.relational |= c.relational;

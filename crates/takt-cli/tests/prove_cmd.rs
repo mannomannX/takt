@@ -26,10 +26,10 @@ fn the_export_writes_both_queries_and_names_the_reach() {
     let text = std::fs::read_to_string(&file).expect("Export");
     assert!(text.contains("; BMC") && text.contains("; Induktionsschritt"), "{text}");
     assert!(text.contains("; Eigenschaft `pump_off_when_high`"), "{text}");
-    // Eine Eigenschaft, die `check`-Stelle und zwei Endlichkeitsstellen
-    // (B3, 4.2), je BMC und Induktion.
-    assert!(text.contains("; Pruefstelle `fin`"), "{text}");
-    assert_eq!(text.matches("(check-sat)").count(), 8, "{text}");
+    // Eine Eigenschaft, die `check`-Stelle, zwei Endlichkeitsstellen (B3,
+    // 4.2) und drei Lesestellen von `press` (3.5), je BMC und Induktion.
+    assert!(text.contains("; Pruefstelle `fin`") && text.contains("; Pruefstelle `valid`"), "{text}");
+    assert_eq!(text.matches("(check-sat)").count(), 14, "{text}");
     let _ = std::fs::remove_dir_all(&out_dir);
 }
 
@@ -116,12 +116,20 @@ fn a_violated_property_fails_and_its_stimulus_replays() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!out.status.success(), "eine verletzte Eigenschaft besteht nicht:\n{stdout}");
     assert!(stdout.contains("property bounded: bewiesen (k-Induktion"), "{stdout}");
-    assert!(stdout.contains("property small: verletzt bei t=2"), "{stdout}");
+    // Welches Gegenbeispiel der Solver findet, steht ihm frei; nachgespielt
+    // verletzt es die Eigenschaft im selben Tick.
+    let at: u64 = stdout
+        .split("property small: verletzt bei t=")
+        .nth(1)
+        .and_then(|rest| rest.split(' ').next())
+        .and_then(|t| t.parse().ok())
+        .unwrap_or_else(|| panic!("{stdout}"));
     let stim = out_dir.join("small.stim.trace");
     assert!(stdout.contains(&format!("Gegenbeispiel: {}", stim.display())), "{stdout}");
-    let sim = takt(&["sim", path, "--ticks", "4", "--stim", stim.to_str().expect("Pfad")]);
+    let ticks = (at + 2).to_string();
+    let sim = takt(&["sim", path, "--ticks", &ticks, "--stim", stim.to_str().expect("Pfad")]);
     let trace = String::from_utf8_lossy(&sim.stdout);
-    assert!(trace.contains("t=2 property small violated"), "{trace}");
+    assert!(trace.contains(&format!("t={at} property small violated")), "{trace}");
     assert!(!sim.status.success(), "{trace}");
     let again = takt(&["prove", path, "--depth", "6"]);
     assert!(!again.status.success(), "ohne --out bleibt das Urteil");

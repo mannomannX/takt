@@ -90,12 +90,14 @@ fn a_reachable_check_gets_its_path() {
     let Some(solver) = solver() else { return };
     let p = corpus_with("01_minimal.takt", "");
     let model = encode(&p).expect("kodierbar");
-    assert_eq!(model.checks.len(), 1);
+    // Dazu die Lesestellen von `tank_p` (3.5): Ein ungueltiger Druck faultet.
+    assert_eq!(model.checks.iter().filter(|c| c.kind == "check").count(), 1);
     let reports = classify(&model, &p, 3, &solver, 60).expect("Solver laeuft");
-    let CheckVerdict::Reachable { at, stimulus } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    let check = reports.iter().find(|r| r.kind == "check").expect("die `check`-Stelle");
+    let CheckVerdict::Reachable { at, stimulus } = &check.verdict else { panic!("{check:?}") };
     assert!(*at <= 3, "{at}");
     assert!(stimulus.contains("cmd start"), "{stimulus}");
-    assert_eq!((reports[0].kind.as_str(), reports[0].machine.as_str()), ("check", "tank_guard"));
+    assert_eq!(check.machine, "tank_guard");
 }
 
 /// B3: eine Pruefung, die der Typ schon garantiert, ist bewiesen
@@ -199,7 +201,7 @@ machine counter:
     assert_eq!(site.verdict, CheckVerdict::Unreachable { k: 5 }, "{site:?}");
 
     let hash = takt_mir::review::hash_of(src.as_bytes());
-    let text = render(&hash, &[Site { start: site.start, kind: site.kind.clone(), k: 5 }]);
+    let text = render(&hash, &[Site { start: site.start, end: site.span.end, kind: site.kind.clone(), k: 5 }]);
     let proof = parse(&text).expect("Beweisdatei");
     let options = takt_sema::Options {
         policy: takt_diag::Policy::default(),
@@ -308,16 +310,17 @@ machine m:
 "
         )
     };
+    let check = |sites: Vec<takt_prove::CheckReport>| sites.into_iter().find(|s| s.kind == "check").expect("Stelle");
     let p = compile(&body(" with max_slew = 10.0"));
     let model = encode(&p).expect("kodierbar");
-    assert!(model.state.iter().any(|v| v.name == "s.slew.x.prev"), "der Vortick liegt im Zustand");
-    let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
-    assert_eq!(sites[0].verdict, CheckVerdict::Unreachable { k: 2 }, "{:?}", sites[0]);
+    assert!(model.state.iter().any(|v| v.name == "s.q.x.good.prev"), "der letzte gute Wert liegt im Zustand");
+    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
+    assert_eq!(site.verdict, CheckVerdict::Unreachable { k: 2 }, "{site:?}");
 
     let p = compile(&body(""));
     let model = encode(&p).expect("kodierbar");
-    let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
-    assert!(matches!(sites[0].verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {:?}", sites[0]);
+    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
+    assert!(matches!(site.verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {site:?}");
 }
 
 /// Ein Eingang bis 100, eine Variable bis 60, die ihn uebernimmt; die
@@ -499,33 +502,33 @@ fn index_nodes(p: &Program) -> usize {
     n
 }
 
-/// SYN-025: Der Schluessel einer Stelle ist (Anfang, Art). Zwei
-/// Pruefungen gleicher Art am selben Anfang sind darum ueberall eine
-/// Stelle: im Bericht (`takt check --checks`), in der Beweisdatei und im
-/// Beweiser (Feuern als Oder, `encode.rs`). Festgehalten ist, dass eine
-/// handgeschriebene Stelle beide Pruefungen auslaesst; ein Schluessel mit
-/// dem Ende der Spanne waere eindeutig, aenderte aber das Format der
-/// Beweisdatei (11.3). Der Beweiser selbst kodiert Arrays heute nicht.
+/// **FB-393, SYN-025.** Der Schluessel einer Stelle ist Anfang, Ende und
+/// Art. `g[i][j]` traegt zwei Indexpruefungen mit demselben Anfang, die
+/// innere ueber `g[i]` und die aeussere ueber das Ganze: zwei Stellen im
+/// Bericht (`takt check --checks`), und eine Beweisdatei, die nur die
+/// aeussere nennt, laesst nur sie aus. Mit dem Anfang allein liess ein
+/// Beweis fuer die eine beide fallen.
 #[test]
-fn a_site_names_every_check_of_its_kind_at_its_start() {
+fn a_site_is_its_start_its_end_and_its_kind() {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let before = takt_sema::compile(SHARED_START, &options);
     let p = before.program.as_ref().expect("Programm");
     assert_eq!(index_nodes(p), 2, "zwei Indexpruefungen in der MIR");
     assert_eq!(
         before.report.checks.get("Index").copied(),
-        Some(1),
-        "eine Stelle im Bericht: {:?}",
+        Some(2),
+        "zwei Stellen im Bericht: {:?}",
         before.report.checks
     );
     let start = SHARED_START.find("g[i][j]").expect("Stelle") as u32;
+    let end = start + "g[i][j]".len() as u32;
     let hash = takt_mir::review::hash_of(SHARED_START.as_bytes());
-    let proof = parse(&render(&hash, &[Site { start, kind: "index".into(), k: 1 }])).expect("Beweisdatei");
+    let proof = parse(&render(&hash, &[Site { start, end, kind: "index".into(), k: 1 }])).expect("Beweisdatei");
     let after = takt_sema::compile_with(SHARED_START, &options, Some(&proof));
     assert!(!after.has_errors(), "{:?}", after.diagnostics);
     assert_eq!(
         index_nodes(after.program.as_ref().expect("Programm")),
-        0,
-        "beide Pruefungen am Anfang {start} fielen weg"
+        1,
+        "nur die aeussere Pruefung ueber {start}..{end} faellt weg"
     );
 }

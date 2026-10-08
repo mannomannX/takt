@@ -26,7 +26,7 @@ Expr(Field),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
 Expr(Index),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
 Expr(Index2),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
 Expr(Slice),ja,nein: zusammengesetzte Werte sind nicht kodiert,ja
-Expr(Accessor),ja,nein: Zugriffe sind nicht kodiert,ja
+Expr(Accessor),ja,"teilweise: nur die Qualitaet eines Inputs: `.valid`, `.or`, `.suspect`, `.stale`",ja
 Expr(Unary),ja,ja,ja
 Expr(Binary),ja,ja,ja
 Expr(Cond),ja,ja,ja
@@ -87,7 +87,7 @@ Check(Index),ja,nein: Wrapper oder Index,ja
 Check(Range),ja,ja,ja
 Check(Convert),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
 Check(Shift),ja,"teilweise: angenommen, nicht modelliert: Ueberlauf und Schiebebetraege (FB-372, FB-386)",ja
-Check(Valid),ja,teilweise: angenommen: Inputs gelten als gueltig (FB-372),ja
+Check(Valid),ja,ja,ja
 Check(Missing),ja,nein: Wrapper oder Index,ja
 Intrinsic(Abs),ja,ja,ja
 Intrinsic(Min),ja,ja,ja
@@ -115,12 +115,12 @@ Intrinsic(WrappingMul),ja,nein: Primitive ohne Kodierung,nein
 Intrinsic(SaturatingAdd),ja,nein: Primitive ohne Kodierung,nein
 Intrinsic(SaturatingSub),ja,nein: Primitive ohne Kodierung,nein
 Intrinsic(Interp),teilweise: nur ueber eine Tabelle aus Literalen mit mindestens zwei Stuetzstellen,nein: Primitive ohne Kodierung,ja
-Accessor(Valid),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Suspect),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Stale),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Age),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Reason),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Or),teilweise: `.or` nur auf einem Channel oder Wrapper,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Valid),ja,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
+Accessor(Suspect),ja,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
+Accessor(Stale),ja,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
+Accessor(Age),ja,"teilweise: nur in Beobachtungen, die das Modell auslaesst",nein
+Accessor(Reason),ja,"teilweise: nur in Beobachtungen, die das Modell auslaesst",ja
+Accessor(Or),teilweise: `.or` nur auf einem Channel oder Wrapper,teilweise: auf einem Input (3.5); auf einem Wrapper nicht kodiert,ja
 Accessor(Ok),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(Err),teilweise: `.err` nicht auf `T?`,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
 Accessor(T),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -204,7 +204,7 @@ Type(Samples),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Table),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Map),ja,nein: Typ ohne Sorte im Modell,ja
-Type(Optional),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Optional),ja,"teilweise: nur in Beobachtungen, die das Modell auslaesst",ja
 Type(Result),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Stream),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Capture),ja,nein: Typ ohne Sorte im Modell,ja

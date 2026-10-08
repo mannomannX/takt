@@ -9,9 +9,16 @@
 //!
 //! **Reichweite ehrlich.** Was die Kodierung nicht abbildet — Stroeme,
 //! Handler, Jobs, `every`, `at`, Sammlungen, Zeitoperatoren in Formeln —
-//! meldet sie beim Namen statt es zu naehern; die Annahmen, die sie macht
-//! (Inputs gueltig, kein i64-Ueberlauf, Tunables konstant), stehen als
-//! Notizen im Export.
+//! meldet sie beim Namen statt es zu naehern; was sie annimmt, steht als
+//! Notiz im Modell und im Urteil.
+//!
+//! **Der Rand gehoert zum Modell** (3.5, 12.6, FB-372). Jeder Input traegt
+//! je Tick eine freie Qualitaet: `Good` liegt in der Range und innerhalb
+//! `max_slew` zum letzten guten Wert, `Suspect` haelt ihn und entsteht nur
+//! durch eine echte Verletzung unter `debounce`, `Stale` und `Bad` sind
+//! jederzeit moeglich. Ein ungueltiger Input faultet beim Lesen wie im
+//! Interpreter (`SensorFault`); `.valid`, `.or`, `.suspect` und `.stale`
+//! lesen die Qualitaet. Tunables sind je Tick frei in ihrer Range (8.4).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Not;
@@ -254,18 +261,105 @@ struct Enc<'p> {
     notes: Vec<String>,
     /// `abort` in diesem Tick, je Stelle.
     aborts: Vec<Term>,
-    /// Feuerbedingungen der Pruefstellen der laufenden Phase, je Anfang.
-    sites: BTreeMap<u32, Vec<Term>>,
-    /// Position, Maschine und Art je Pruefstelle.
-    site_info: BTreeMap<u32, (Span, String, String)>,
+    /// Feuerbedingungen der Pruefstellen der laufenden Phase, je Stelle.
+    sites: BTreeMap<SiteKey, Vec<Term>>,
+    /// Position und Maschine je Pruefstelle.
+    site_info: BTreeMap<SiteKey, (Span, String)>,
     /// Nur diese Maschine (13.3): Ψ, fremde Outputs und ein fremder `abort`
     /// sind freie Eingaben je Tick.
     scope: Option<MachineId>,
     /// Was die Typen ueber freie Ψ-Eingaben sagen.
     psi_assumptions: Vec<Term>,
     psi_seen: BTreeSet<String>,
+    /// Was die Typen ueber Tunables sagen; je Tunable einmal.
+    tune_assumptions: Vec<Term>,
+    tunes_seen: BTreeSet<String>,
     /// Ausgerollte Schleifendurchlaeufe des laufenden Pfads ([`UNROLL_LIMIT`]).
     unrolled: i64,
+}
+
+/// Eine Pruefstelle: Anfang, Ende und Art. Zwei Pruefungen koennen denselben
+/// Anfang haben, die Validitaet von `x` und die Endlichkeit von `x - y`
+/// (FB-393).
+type SiteKey = (u32, u32, String);
+
+/// Was der Rand eines Inputs aus seinen Lieferungen macht (3.5, 12.6).
+#[derive(Clone, Debug)]
+pub struct Edge {
+    /// Der Kanal.
+    pub channel: ChannelId,
+    /// Sein Name.
+    pub name: String,
+    sort: Sort,
+    /// Die Range einer guten Lieferung.
+    range: Option<(Term, Term)>,
+    /// Laesst sich die Range mit einem darstellbaren Wert verletzen? Nur dann
+    /// kann sie eine Lieferung `Suspect` machen.
+    violable: bool,
+    /// Ein solcher Wert, fuer den Stimulus.
+    outside: Option<eval::Val>,
+    /// `max_slew` mal Tickdauer, je Tick seit dem letzten guten Wert.
+    slew: Option<f64>,
+    /// `debounce`.
+    debounce: u32,
+}
+
+impl Edge {
+    /// Kann eine Lieferung `Suspect` werden? Nur durch eine Verletzung unter
+    /// `debounce` (3.5).
+    pub fn suspect(&self) -> bool {
+        self.debounce > 0 && (self.violable || self.slew.is_some())
+    }
+
+    /// Braucht der Rand Zustand zwischen den Ticks: den letzten guten Wert?
+    fn stateful(&self) -> bool {
+        self.suspect() || self.slew.is_some()
+    }
+
+    /// Was `max_slew` je Tick an Aenderung zulaesst, um acht ulp geweitet:
+    /// Der Spielraum waechst durch Addition, und gerundet darf er nie enger
+    /// sein als der Rand.
+    fn per_tick(&self) -> Option<f64> {
+        self.slew.map(|s| s * (1.0 + 8.0 * f64::EPSILON))
+    }
+
+    /// Die Teile des Zustands: der letzte gute Wert, ob es ihn gibt, die
+    /// Verletzungen in Folge und der Spielraum fuer `max_slew`.
+    fn parts(&self) -> &'static [&'static str] {
+        if self.slew.is_some() { &["has", "good", "strikes", "room"] } else { &["has", "good", "strikes"] }
+    }
+
+    fn loc(&self, part: &str) -> String {
+        format!("s.q.{}.{part}", self.name)
+    }
+
+    /// Eine Lieferung, die der Rand als Verletzung zaehlt: ausserhalb der
+    /// Range, sonst jenseits `max_slew` zum letzten guten Wert `last`, der
+    /// `since` Ticks zurueckliegt. Daraus wird unter `debounce` `Suspect`.
+    pub fn violation(&self, last: Option<&eval::Val>, since: i64) -> Option<eval::Val> {
+        if let Some(v) = &self.outside {
+            return Some(*v);
+        }
+        let jump = 2.0 * self.slew? * (since + 1) as f64 + 1.0;
+        Some(match last? {
+            eval::Val::Int(x) => eval::Val::Int(x.saturating_add(jump.ceil() as i64)),
+            eval::Val::F64(x) => eval::Val::F64(x + jump),
+            eval::Val::F32(x) => eval::Val::F32(x + jump as f32),
+            eval::Val::Bool(_) => return None,
+        })
+    }
+}
+
+/// Die Qualitaet einer Lieferung als Code im Modell (3.5).
+pub mod quality {
+    /// `Good`.
+    pub const GOOD: i64 = 0;
+    /// `Suspect`.
+    pub const SUSPECT: i64 = 1;
+    /// `Stale`.
+    pub const STALE: i64 = 2;
+    /// `Bad`.
+    pub const BAD: i64 = 3;
 }
 
 /// Kodiert ein Programm.
@@ -285,19 +379,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         Some(m) => vec![m],
         None => takt_mir::analysis::schedule::order(p).unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p)),
     };
-    let mut enc = Enc {
-        p,
-        order,
-        inputs: BTreeMap::new(),
-        notes: Vec::new(),
-        aborts: Vec::new(),
-        sites: BTreeMap::new(),
-        site_info: BTreeMap::new(),
-        scope,
-        psi_assumptions: Vec::new(),
-        psi_seen: BTreeSet::new(),
-        unrolled: 0,
-    };
+    let mut enc = Enc::new(p, order, scope);
     enc.check_reach()?;
     let init = enc.init()?;
     let init_sites = std::mem::take(&mut enc.sites);
@@ -309,20 +391,19 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     let checks: Vec<CheckSite> = enc
         .site_info
         .iter()
-        .map(|(start, (span, machine, kind))| CheckSite {
-            start: *start,
+        .map(|(key, (span, machine))| CheckSite {
+            start: span.start,
             span: *span,
             machine: machine.clone(),
-            kind: kind.clone(),
-            init: Term::or(init_sites.get(start).cloned().unwrap_or_default()),
-            fires: Term::or(tick_sites.get(start).cloned().unwrap_or_default()),
+            kind: key.2.clone(),
+            init: Term::or(init_sites.get(key).cloned().unwrap_or_default()),
+            fires: Term::or(tick_sites.get(key).cloned().unwrap_or_default()),
         })
         .collect();
     let mut properties = Vec::new();
     let mut assumptions = enc.channel_assumptions()?;
-    let (slew, slew_state) = enc.slew_assumptions()?;
-    assumptions.extend(slew);
     assumptions.extend(enc.psi_assumptions.clone());
+    assumptions.extend(enc.tune_assumptions.clone());
     let scoped = enc.scope.is_some();
     let mut assumed = Vec::new();
     for prop in p.properties.iter().filter(|_| !scoped) {
@@ -338,11 +419,10 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
                 .push(format!("`{}` nicht kodiert: nur `always(…)`/`never(…)` ohne Zeitoperatoren (2.8)", prop.name)),
         }
     }
-    let mut state: Vec<StateVar> = init
+    let state: Vec<StateVar> = init
         .iter()
         .map(|(name, i)| StateVar { name: name.clone(), sort: i.sort(), init: i.clone(), next: next[name].clone() })
         .collect();
-    state.extend(slew_state);
     let mut leaves = BTreeMap::new();
     for &id in &enc.order {
         let m = &p.machines[id.index()];
@@ -368,6 +448,33 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         notes,
         leaves,
     })
+}
+
+/// Die Raender der Inputs eines Programms, wie das Modell sie kodiert: Der
+/// Stimulus eines Gegenbeispiels braucht sie, um eine Qualitaet so zu
+/// liefern, wie der Rand des Interpreters sie entstehen laesst.
+pub fn input_edges(p: &Program) -> R<Vec<Edge>> {
+    Enc::new(p, Vec::new(), None).edges()
+}
+
+impl<'p> Enc<'p> {
+    fn new(p: &'p Program, order: Vec<MachineId>, scope: Option<MachineId>) -> Enc<'p> {
+        Enc {
+            p,
+            order,
+            inputs: BTreeMap::new(),
+            notes: Vec::new(),
+            aborts: Vec::new(),
+            sites: BTreeMap::new(),
+            site_info: BTreeMap::new(),
+            scope,
+            psi_assumptions: Vec::new(),
+            psi_seen: BTreeSet::new(),
+            tune_assumptions: Vec::new(),
+            tunes_seen: BTreeSet::new(),
+            unrolled: 0,
+        }
+    }
 }
 
 impl Enc<'_> {
@@ -572,16 +679,23 @@ impl Enc<'_> {
             ExprKind::Param(id) => {
                 let param = &self.p.params[id.index()];
                 if param.tunable {
-                    self.note("Tunables gelten als Konstanten (ihr Default)");
+                    // 8.4: zur Laufzeit gestellt, je Tick ein Wert in seiner Range.
+                    let (name, ty) = (format!("i.tune.{}", param.name), param.ty);
+                    let x = self.input(name.clone(), self.sort_of(ty, span)?);
+                    if self.tunes_seen.insert(name)
+                        && let Some(t) = self.type_invariant(x.clone(), ty)
+                    {
+                        self.tune_assumptions.push(t);
+                    }
+                    return Ok(x);
                 }
                 let default = param.default.clone();
                 self.const_expr(&default)?
             }
             ExprKind::Command(c) => self.command(*c),
-            ExprKind::Input { channel, .. } => {
-                let ch = &self.p.channels[channel.index()];
-                let sort = self.sort_of(ch.ty, span)?;
-                self.input(format!("i.{}", ch.name), sort)
+            ExprKind::Input { channel, .. } => self.read_input(*channel, cx, flow)?,
+            ExprKind::Accessor { base, .. } if matches!(base.kind, ExprKind::Input { .. }) => {
+                self.input_accessor(e, cx, env, flow)?
             }
             ExprKind::Output(c) => {
                 let ch = &self.p.channels[c.index()];
@@ -669,6 +783,12 @@ impl Enc<'_> {
                     (UnaryOp::BitNot, _) => return no("`~`", span),
                 }
             }
+            ExprKind::Binary { op: op @ (BinaryOp::And | BinaryOp::Or), lhs, rhs } => {
+                let a = self.expr(lhs, cx, env, flow)?;
+                let guard = if *op == BinaryOp::And { a.clone() } else { a.clone().not() };
+                let b = self.guarded(&guard, flow, |enc, flow| enc.expr(rhs, cx, env, flow))?;
+                self.binary(*op, a, b, span)?
+            }
             ExprKind::Binary { op, lhs, rhs } => {
                 let a = self.expr(lhs, cx, env, flow)?;
                 let b = self.expr(rhs, cx, env, flow)?;
@@ -676,9 +796,18 @@ impl Enc<'_> {
             }
             ExprKind::Cond { cond, then, otherwise } => {
                 let c = self.expr(cond, cx, env, flow)?;
-                let a = self.expr(then, cx, env, flow)?;
-                let b = self.expr(otherwise, cx, env, flow)?;
+                let a = self.guarded(&c, flow, |enc, flow| enc.expr(then, cx, env, flow))?;
+                let b = self.guarded(&c.clone().not(), flow, |enc, flow| enc.expr(otherwise, cx, env, flow))?;
                 Term::ite(c, a, b)
+            }
+            // Der Lesevorgang faultet selbst (3.5); der Knoten ist die Stelle,
+            // an der Codegen und Beweisdatei ihn fuehren (11.3).
+            ExprKind::Checked { expr, kind: kind @ CheckedKind::Valid } => {
+                let first = flow.exits.len();
+                let x = self.expr(expr, cx, env, flow)?;
+                let fires = Term::or(flow.exits[first..].iter().map(|x| x.cond.clone()).collect());
+                self.site(kind, span, fires, cx);
+                x
             }
             ExprKind::Checked { expr, kind } => {
                 let x = self.expr(expr, cx, env, flow)?;
@@ -833,22 +962,24 @@ impl Enc<'_> {
                 self.note("Definitionsbereich von `sqrt`/`log` nicht modelliert");
                 return Ok(x);
             }
-            CheckedKind::Valid => {
-                self.note("Inputs gelten als gueltig (3.5)");
-                return Ok(x);
-            }
+            // Im Lesevorgang des Inputs (`read_input`).
+            CheckedKind::Valid => return Ok(x),
             CheckedKind::Missing | CheckedKind::Index { .. } => return no("Wrapper oder Index", span),
         };
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
-        // Eine Pruefstelle (11.3): `takt prove` zeigt, ob sie je faultet.
-        self.sites.entry(span.start).or_default().push(cond.clone());
-        if let Some(m) = cx.m {
-            let name = takt_mir::analysis::walk::name(kind).to_string();
-            self.site_info.insert(span.start, (span, self.machine(m).name.clone(), name));
-        }
+        self.site(kind, span, cond.clone(), cx);
         flow.exits.push(Exit { cond, kind: ExitKind::Fault(None) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         Ok(x)
+    }
+
+    /// Eine Pruefstelle (11.3): `takt prove` zeigt, ob sie je faultet.
+    fn site(&mut self, kind: &CheckedKind, span: Span, fires: Term, cx: &Cx<'_>) {
+        let key = (span.start, span.end, takt_mir::analysis::walk::name(kind).to_string());
+        self.sites.entry(key.clone()).or_default().push(fires);
+        if let Some(m) = cx.m {
+            self.site_info.insert(key, (span, self.machine(m).name.clone()));
+        }
     }
 
     fn bound(&self, c: &Const, sort: Sort) -> Term {
@@ -1003,8 +1134,9 @@ impl Enc<'_> {
                     let c = self.expr(cond, cx, env, flow)?;
                     let fail = Term::and(vec![flow.alive.clone(), c.clone().not()]);
                     let word = if *kind == takt_mir::stmt::CheckKind::Check { "check" } else { "expect" };
-                    self.sites.entry(span.start).or_default().push(fail.clone());
-                    self.site_info.insert(span.start, (span, self.machine(m).name.clone(), word.to_string()));
+                    let key = (span.start, span.end, word.to_string());
+                    self.sites.entry(key.clone()).or_default().push(fail.clone());
+                    self.site_info.insert(key, (span, self.machine(m).name.clone()));
                     flow.exits.push(Exit { cond: fail, kind: ExitKind::Fault(*target) });
                     flow.alive = Term::and(vec![flow.alive.clone(), c]);
                 }
@@ -1210,8 +1342,9 @@ impl Enc<'_> {
                 let mut rflow = Flow::new(call_alive.clone());
                 let c = self.expr(r, &rcx, env, &mut rflow)?;
                 let fail = Term::and(vec![call_alive.clone(), !c]);
-                self.sites.entry(span.start).or_default().push(fail);
-                self.site_info.insert(span.start, (span, self.machine(m).name.clone(), "requires".to_string()));
+                let key = (span.start, span.end, "requires".to_string());
+                self.sites.entry(key.clone()).or_default().push(fail);
+                self.site_info.insert(key, (span, self.machine(m).name.clone()));
             }
         }
         let mut icx =
@@ -1613,6 +1746,7 @@ impl Enc<'_> {
             self.abort_phase(&raised, pre, &actives, &mut cur)?;
         }
         self.advance(&actives, &mut cur);
+        self.edges_next(pre, &mut cur)?;
         Ok(cur)
     }
 
@@ -1620,6 +1754,8 @@ impl Enc<'_> {
     /// erste Eintritt jeder Maschine in Schrittordnung (`Sim::init`).
     fn init(&mut self) -> R<Env> {
         let mut env = Env::new();
+        self.edges_initial(&mut env)?;
+        let before = env.clone();
         for &m in &self.order.clone() {
             let machine = self.machine(m).clone();
             env.insert(self.loc_leaf(m), Term::int(self.code(m, machine.initial)));
@@ -1681,6 +1817,11 @@ impl Enc<'_> {
                 if let Some(e) = &v.init {
                     let mut flow = Flow::new(Term::bool(true));
                     let t = self.expr(e, &cx, &env, &mut flow)?;
+                    if !flow.exits.is_empty() {
+                        self.note(
+                            "ein Fault in einem Anfangswert ist nicht modelliert (der Interpreter bricht den Lauf ab)",
+                        );
+                    }
                     env.insert(self.loc_var(m, VarId(i as u32)), t);
                 }
             }
@@ -1693,6 +1834,7 @@ impl Enc<'_> {
             self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true))?;
         }
         self.advance(&actives, &mut env);
+        self.edges_next(&before, &mut env)?;
         Ok(env)
     }
 
@@ -1770,62 +1912,250 @@ impl Enc<'_> {
         out
     }
 
-    /// Kanal-Ranges als Annahmen ueber die Eingaben (13.3).
-    fn channel_assumptions(&mut self) -> R<Vec<Term>> {
+    /// Die Raender der Inputs (3.5): jeder Input-Kanal mit skalarem Wert.
+    fn edges(&self) -> R<Vec<Edge>> {
         let mut out = Vec::new();
-        for c in &self.p.channels {
+        for (i, c) in self.p.channels.iter().enumerate() {
             if c.dir != Direction::Input || matches!(self.p.types.get(c.ty), Type::Stream(_)) {
                 continue;
             }
-            let range = match self.p.types.get(c.ty) {
-                Type::Int { range, .. } | Type::Float { range, .. } | Type::Duration { range } => *range,
+            let sort = self.sort_of(c.ty, c.span)?;
+            let (range, outside) = match self.p.types.get(c.ty) {
+                Type::Int { range: Some(r), width, .. } => {
+                    let (lo, hi) = (int_bound(&r.lo), int_bound(&r.hi));
+                    let (min, max) = width_bounds(*width);
+                    let outside =
+                        if i128::from(hi) < max { Some(hi + 1) } else { (i128::from(lo) > min).then(|| lo - 1) };
+                    (Some((Term::int(lo), Term::int(hi))), outside.map(eval::Val::Int))
+                }
+                Type::Duration { range: Some(r) } => {
+                    let (lo, hi) = (int_bound(&r.lo), int_bound(&r.hi));
+                    let outside = if hi < i64::MAX { Some(hi + 1) } else { (lo > i64::MIN).then(|| lo - 1) };
+                    (Some((Term::int(lo), Term::int(hi))), outside.map(eval::Val::Int))
+                }
+                Type::Float { range: Some(r), width, .. } => {
+                    let hi = match r.hi {
+                        Const::Float(f) => f,
+                        Const::Int(i) | Const::Duration(i) => i as f64,
+                        Const::Bool(_) => 0.0,
+                    };
+                    let beyond = hi + hi.abs().max(1.0);
+                    let outside = match width {
+                        FloatWidth::F32 => eval::Val::F32(beyond as f32),
+                        FloatWidth::F64 => eval::Val::F64(beyond),
+                    };
+                    (Some((self.bound(&r.lo, sort), self.bound(&r.hi, sort))), Some(outside))
+                }
+                _ => (None, None),
+            };
+            let violable = outside.is_some();
+            let tick_s = self.p.config.tick as f64 / 1e9;
+            let slew = match c.attrs.max_slew.as_ref().map(|e| &e.kind) {
+                Some(ExprKind::Float(f)) => Some(*f * tick_s),
+                Some(ExprKind::Int(n)) => Some(*n as f64 * tick_s),
                 _ => None,
             };
-            let sort = self.sort_of(c.ty, c.span)?;
-            let x = self.input(format!("i.{}", c.name), sort);
-            // 4.1: NaN und Unendlich gibt es in der Sprache nicht; der Rand
-            // liefert sie nicht.
-            if matches!(sort, Sort::F32 | Sort::F64) {
-                out.push(Term::app(Op::IsFinite, vec![x.clone()]));
-            }
-            let Some(r) = range else { continue };
-            let (lo, hi) = (self.bound(&r.lo, sort), self.bound(&r.hi, sort));
-            let (ge, le) = if sort == Sort::Int { (Op::Ge, Op::Le) } else { (Op::FGe, Op::FLe) };
-            out.push(Term::and(vec![Term::bin(ge, x.clone(), lo), Term::bin(le, x, hi)]));
+            out.push(Edge {
+                channel: ChannelId(i as u32),
+                name: c.name.clone(),
+                sort,
+                range,
+                violable,
+                outside,
+                slew,
+                debounce: c.attrs.debounce.unwrap_or(0),
+            });
         }
         Ok(out)
     }
 
-    /// `max_slew` als Annahme (13.3): der Betrag der Aenderung je Tick
-    /// hoechstens Rate mal Tickdauer, wie der Rand es erzwingt (12.6). Der
-    /// Wert des Vortick liegt in zwei Zustandsvariablen, weil ein Uebergang
-    /// nur die Eingaben seines eigenen Ticks sieht.
-    fn slew_assumptions(&mut self) -> R<(Vec<Term>, Vec<StateVar>)> {
-        let mut terms = Vec::new();
-        let mut state = Vec::new();
-        let tick_s = self.p.config.tick as f64 / 1e9;
-        for c in &self.p.channels {
-            if c.dir != Direction::Input {
-                continue;
-            }
-            let slew = match c.attrs.max_slew.as_ref().map(|e| &e.kind) {
-                Some(ExprKind::Float(f)) => *f,
-                Some(ExprKind::Int(n)) => *n as f64,
-                _ => continue,
-            };
-            let sort = self.sort_of(c.ty, c.span)?;
-            let x = self.input(format!("i.{}", c.name), sort);
-            let (cur, prev) = (format!("s.slew.{}.cur", c.name), format!("s.slew.{}.prev", c.name));
-            state.push(StateVar { name: cur.clone(), sort, init: x.clone(), next: x.clone() });
-            state.push(StateVar { name: prev.clone(), sort, init: x.clone(), next: Term::var(cur, sort) });
-            let wide = |t: Term| if t.sort() == Sort::F64 { t } else { Term::app(Op::ToF64, vec![t]) };
-            let diff = Term::app(Op::FAbs, vec![Term::bin(Op::FSub, wide(x), wide(Term::var(prev, sort)))]);
-            // Die Schranke je Tick statt der Division des Rands: um vier ulp
-            // geweitet, damit sie nie enger ist als dessen Rundung.
-            let bound = (slew * tick_s) * (1.0 + 4.0 * f64::EPSILON);
-            terms.push(Term::bin(Op::FLe, diff, Term::float(bound, Sort::F64)));
+    fn edge_of(&self, c: ChannelId) -> R<Edge> {
+        let span = self.p.channels[c.index()].span;
+        self.edges()?.into_iter().find(|e| e.channel == c).ok_or_else(|| Unsupported { what: "Input".into(), span })
+    }
+
+    /// Die Qualitaet des Inputs in diesem Tick, eine freie Eingabe.
+    fn quality(&mut self, edge: &Edge) -> Term {
+        self.input(format!("i.{}.q", edge.name), Sort::Int)
+    }
+
+    /// Ist der Input lesbar (3.5: `Good`, oder `Suspect` mit gehaltenem
+    /// Wert)? `pre` traegt den Rand vor diesem Tick.
+    fn readable(&mut self, edge: &Edge, pre: &Env) -> Term {
+        let q = self.quality(edge);
+        let good = Term::eq(q.clone(), Term::int(quality::GOOD));
+        if !edge.suspect() {
+            return good;
         }
-        Ok((terms, state))
+        let held = pre.get(&edge.loc("has")).cloned().unwrap_or_else(|| Term::bool(false));
+        Term::or(vec![good, Term::and(vec![Term::eq(q, Term::int(quality::SUSPECT)), held])])
+    }
+
+    /// Liest einen Input (3.5): Ist er ungueltig, faultet der Lesevorgang
+    /// mit `SensorFault`, wie im Interpreter, auch ohne Pruefknoten.
+    fn read_input(&mut self, c: ChannelId, cx: &Cx<'_>, flow: &mut Flow) -> R<Term> {
+        let edge = self.edge_of(c)?;
+        let x = self.input(format!("i.{}", edge.name), edge.sort);
+        let ok = self.readable(&edge, cx.pre);
+        flow.exits
+            .push(Exit { cond: Term::and(vec![flow.alive.clone(), ok.clone().not()]), kind: ExitKind::Fault(None) });
+        flow.alive = Term::and(vec![flow.alive.clone(), ok]);
+        Ok(x)
+    }
+
+    /// Die Zugriffe auf die Qualitaet eines Inputs (3.5).
+    fn input_accessor(&mut self, e: &Expr, cx: &Cx<'_>, env: &Env, flow: &mut Flow) -> R<Term> {
+        let span = e.span;
+        let ExprKind::Accessor { base, accessor, args } = &e.kind else { return no("Zugriff", span) };
+        let ExprKind::Input { channel: c, .. } = base.kind else { return no("Zugriff", span) };
+        let accessor = *accessor;
+        use takt_mir::expr::Accessor as A;
+        let edge = self.edge_of(c)?;
+        let q = self.quality(&edge);
+        Ok(match accessor {
+            A::Valid => self.readable(&edge, cx.pre),
+            A::Suspect => Term::eq(q, Term::int(quality::SUSPECT)),
+            A::Stale => Term::eq(q, Term::int(quality::STALE)),
+            A::Or => {
+                let [default] = args.as_slice() else { return no("`.or` ohne Ersatz", span) };
+                let ok = self.readable(&edge, cx.pre);
+                let x = self.input(format!("i.{}", edge.name), edge.sort);
+                // Der Ersatz wird nur ausgewertet, wenn der Input ungueltig ist.
+                let d = self.guarded(&ok.clone().not(), flow, |enc, flow| enc.expr(default, cx, env, flow))?;
+                Term::ite(ok, x, d)
+            }
+            other => return no(format!("Zugriff `.{}` auf einen Input", other.name()), span),
+        })
+    }
+
+    /// Wertet `f` nur dort aus, wo `guard` gilt (4.1: `and`, `or`, `?:`
+    /// werten kurz aus): Was darin faultet, faultet nur, wenn die
+    /// Auswertung es erreicht.
+    fn guarded<T>(&mut self, guard: &Term, flow: &mut Flow, f: impl FnOnce(&mut Self, &mut Flow) -> R<T>) -> R<T> {
+        let before = flow.alive.clone();
+        flow.alive = Term::and(vec![before.clone(), guard.clone()]);
+        let out = f(self, flow)?;
+        flow.alive = Term::or(vec![Term::and(vec![before, guard.clone().not()]), flow.alive.clone()]);
+        Ok(out)
+    }
+
+    /// Der Rand vor dem ersten Tick: kein guter Wert, keine Verletzung.
+    fn edges_initial(&self, env: &mut Env) -> R<()> {
+        for edge in self.edges()?.into_iter().filter(Edge::stateful) {
+            env.insert(edge.loc("has"), Term::bool(false));
+            env.insert(edge.loc("good"), Enc::zero(edge.sort));
+            env.insert(edge.loc("strikes"), Term::int(0));
+            if let Some(step) = edge.per_tick() {
+                env.insert(edge.loc("room"), Term::float(step, Sort::F64));
+            }
+            for &part in edge.parts() {
+                let v = env[&edge.loc(part)].clone();
+                env.insert(edge.loc(&format!("{part}.prev")), v);
+            }
+        }
+        Ok(())
+    }
+
+    /// Der Rand nach den Lieferungen dieses Ticks (3.5, `takt_hal::quality::Gate`):
+    /// Eine gute Lieferung wird der letzte gute Wert, eine `Suspect` zaehlt als
+    /// Verletzung, `Bad` loescht den Bezugspunkt, `Stale` aendert nichts.
+    /// `pre` traegt den Stand davor; die Kopien `.prev` halten ihn fuer die
+    /// Annahmen dieses Ticks.
+    fn edges_next(&mut self, pre: &Env, cur: &mut Env) -> R<()> {
+        for edge in self.edges()?.into_iter().filter(Edge::stateful) {
+            let q = self.quality(&edge);
+            let x = self.input(format!("i.{}", edge.name), edge.sort);
+            let is = |code| Term::eq(q.clone(), Term::int(code));
+            let get = |part: &str| pre[&edge.loc(part)].clone();
+            let has = Term::ite(
+                is(quality::GOOD),
+                Term::bool(true),
+                Term::ite(is(quality::BAD), Term::bool(false), get("has")),
+            );
+            let good = Term::ite(is(quality::GOOD), x, get("good"));
+            let strikes = Term::ite(
+                is(quality::SUSPECT),
+                Term::bin(Op::Add, get("strikes"), Term::int(1)),
+                Term::ite(Term::or(vec![is(quality::GOOD), is(quality::BAD)]), Term::int(0), get("strikes")),
+            );
+            let mut next = vec![("has", has), ("good", good), ("strikes", strikes)];
+            // Nach einer guten Lieferung ein Tick Spielraum, sonst einer mehr.
+            if let Some(step) = edge.per_tick() {
+                let step = Term::float(step, Sort::F64);
+                next.push(("room", Term::ite(is(quality::GOOD), step.clone(), Term::bin(Op::FAdd, get("room"), step))));
+            }
+            for (part, value) in next {
+                cur.insert(edge.loc(&format!("{part}.prev")), get(part));
+                cur.insert(edge.loc(part), value);
+            }
+        }
+        Ok(())
+    }
+
+    /// Was der Rand ueber die Lieferungen eines Ticks zusichert (3.5, 12.6):
+    /// Die Qualitaet ist frei; eine gute Lieferung ist endlich, liegt in der
+    /// Range und innerhalb `max_slew` zum letzten guten Wert, gemessen ueber
+    /// die Ticks seit ihm; `Suspect` entsteht nur durch eine Verletzung unter
+    /// `debounce` und haelt den letzten guten Wert.
+    fn channel_assumptions(&mut self) -> R<Vec<Term>> {
+        let mut out = Vec::new();
+        for edge in self.edges()? {
+            let q = self.quality(&edge);
+            let x = self.input(format!("i.{}", edge.name), edge.sort);
+            let is = |code| Term::eq(q.clone(), Term::int(code));
+            let implies = |a: Term, b: Term| Term::or(vec![a.not(), b]);
+            out.push(Term::and(vec![
+                Term::bin(Op::Ge, q.clone(), Term::int(quality::GOOD)),
+                Term::bin(Op::Le, q.clone(), Term::int(quality::BAD)),
+            ]));
+            // Ein ungueltiger Wert ist unbeobachtbar: Lesen faultet, `.or`
+            // nimmt den Ersatz, ein Atom ist falsch, der Rand verbucht ihn
+            // nicht. Er steht darum fest, statt dem Solver jedes Bitmuster
+            // zur Wahl zu lassen.
+            let held = if edge.suspect() {
+                Term::and(vec![is(quality::SUSPECT), Term::var(edge.loc("has.prev"), Sort::Bool)])
+            } else {
+                Term::bool(false)
+            };
+            let zero = match edge.sort {
+                Sort::F32 | Sort::F64 => Term::bin(Op::FEq, x.clone(), Enc::zero(edge.sort)),
+                _ => Term::eq(x.clone(), Enc::zero(edge.sort)),
+            };
+            out.push(implies(Term::or(vec![is(quality::GOOD), held]).not(), zero));
+            // 4.1: NaN und Unendlich gibt es in der Sprache nicht.
+            if matches!(edge.sort, Sort::F32 | Sort::F64) {
+                out.push(implies(is(quality::GOOD), Term::app(Op::IsFinite, vec![x.clone()])));
+            }
+            if let Some((lo, hi)) = &edge.range {
+                let (ge, le) = if edge.sort == Sort::Int { (Op::Ge, Op::Le) } else { (Op::FGe, Op::FLe) };
+                let inside =
+                    Term::and(vec![Term::bin(ge, x.clone(), lo.clone()), Term::bin(le, x.clone(), hi.clone())]);
+                out.push(implies(is(quality::GOOD), inside));
+            }
+            let prev = |part: &str, sort| Term::var(edge.loc(&format!("{part}.prev")), sort);
+            if edge.slew.is_some() {
+                let wide = |t: Term| if t.sort() == Sort::F64 { t } else { Term::app(Op::ToF64, vec![t]) };
+                let diff =
+                    Term::app(Op::FAbs, vec![Term::bin(Op::FSub, wide(x.clone()), wide(prev("good", edge.sort)))]);
+                let within = Term::bin(Op::FLe, diff, prev("room", Sort::F64));
+                out.push(implies(Term::and(vec![is(quality::GOOD), prev("has", Sort::Bool)]), within));
+            }
+            if edge.suspect() {
+                let room = Term::bin(Op::Lt, prev("strikes", Sort::Int), Term::int(i64::from(edge.debounce)));
+                let cause = if edge.violable { Term::bool(true) } else { prev("has", Sort::Bool) };
+                out.push(implies(is(quality::SUSPECT), Term::and(vec![room, cause])));
+                let held = Term::eq(x.clone(), prev("good", edge.sort));
+                let held = if edge.sort == Sort::Int || edge.sort == Sort::Bool {
+                    held
+                } else {
+                    Term::bin(Op::FEq, x.clone(), prev("good", edge.sort))
+                };
+                out.push(implies(Term::and(vec![is(quality::SUSPECT), prev("has", Sort::Bool)]), held));
+            } else {
+                out.push(is(quality::SUSPECT).not());
+            }
+        }
+        Ok(out)
     }
 
     /// `always(φ)`/`never(φ)` ohne Zeitoperatoren als Invariante ueber den
@@ -1837,7 +2167,13 @@ impl Enc<'_> {
             _ => return Ok(None),
         };
         let actives = BTreeMap::new();
-        let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: state, active: &actives, locals: None };
+        // Der Rand vor diesem Tick steht in den Kopien `.prev`: Der Zustand
+        // nach dem Commit hat die Lieferungen schon verbucht.
+        let mut before = state.clone();
+        for edge in self.edges()?.into_iter().filter(Edge::stateful) {
+            before.insert(edge.loc("has"), Term::var(edge.loc("has.prev"), Sort::Bool));
+        }
+        let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: &before, active: &actives, locals: None };
         let Some(t) = self.tprop(inner, &cx, state)? else { return Ok(None) };
         Ok(Some(Goal {
             name: prop.name.clone(),
@@ -1874,6 +2210,21 @@ impl Enc<'_> {
             }
             TProp::Temporal { .. } => return Ok(None),
         }))
+    }
+}
+
+/// Der Wertebereich einer Ganzzahlbreite (3.10), wie `takt_interp::arith::bounds`.
+pub fn width_bounds(width: takt_mir::types::IntWidth) -> (i128, i128) {
+    let bits = width.bits();
+    if width.signed() { (-(1i128 << (bits - 1)), (1i128 << (bits - 1)) - 1) } else { (0, (1i128 << bits) - 1) }
+}
+
+/// Eine ganzzahlige Grenze einer Range.
+fn int_bound(c: &Const) -> i64 {
+    match c {
+        Const::Int(i) | Const::Duration(i) => *i,
+        Const::Float(f) => *f as i64,
+        Const::Bool(b) => i64::from(*b),
     }
 }
 
