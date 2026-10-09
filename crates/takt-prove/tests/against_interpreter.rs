@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use takt_interp::trace::LineKind;
-use takt_interp::value::{Quality, Seen, Value};
+use takt_interp::value::{Quality, Sample, Seen, Value};
 use takt_interp::{RunOptions, Trace, run};
 use takt_mir::program::Direction;
 use takt_mir::types::Type;
@@ -212,7 +212,7 @@ fn same(a: Val, b: Val) -> bool {
 fn sample_inputs(name: &str, seen: &Seen, out: &mut Vec<(String, Val)>) {
     use takt_prove::encode::quality;
     let s = &seen.sample;
-    out.push((format!("i.{name}.held"), Val::Bool(!seen.fresh)));
+    out.push((format!("i.{name}.held"), Val::Bool(seen.delivery.is_none())));
     let q = match s.quality {
         Quality::Good => quality::GOOD,
         Quality::Suspect => quality::SUSPECT,
@@ -222,20 +222,35 @@ fn sample_inputs(name: &str, seen: &Seen, out: &mut Vec<(String, Val)>) {
     out.push((format!("i.{name}.q"), Val::Int(q)));
     // Der Wert einer ungueltigen Lieferung ist unbeobachtbar und im Modell
     // null; eine gehaltene, die `Stale` wurde, traegt ihren weiter.
-    let carried = s.quality == Quality::Stale && !seen.fresh;
-    if !matches!(s.quality, Quality::Good | Quality::Suspect) && !carried {
-        return;
+    let carried = s.quality == Quality::Stale && seen.delivery.is_none();
+    let visible = matches!(s.quality, Quality::Good | Quality::Suspect) || carried;
+    match &s.value {
+        // 8.9: das Array, das die Maschinen lesen, und was der Rand pruefte
+        // — eine Lieferung mit Werten, die er `Good` oder `Suspect` nannte.
+        Some(Value::Samples(items)) if visible => {
+            out.push((format!("i.{name}.v"), Val::Bool(true)));
+            out.extend(items.iter().enumerate().filter_map(|(j, x)| Some((format!("i.{name}[{j}]"), val_of(x)?))));
+        }
+        Some(v) if visible => out.extend(val_of(v).map(|v| (format!("i.{name}"), v))),
+        _ => {}
     }
-    let v = match &s.value {
-        Some(Value::Bool(b)) => Val::Bool(*b),
-        Some(Value::Int(x) | Value::Duration(x)) => Val::Int(*x),
-        Some(Value::UInt(x)) => Val::Int(*x as i64),
-        Some(Value::F32(x)) => Val::F32(*x),
-        Some(Value::F64(x)) => Val::F64(*x),
-        Some(Value::Enum { variant, .. }) => Val::Int(i64::from(*variant)),
-        _ => return,
-    };
-    out.push((format!("i.{name}"), v));
+    let checked = seen.delivery.is_some() && matches!(s.quality, Quality::Good | Quality::Suspect);
+    if let Some(Sample { value: Some(Value::Samples(items)), .. }) = seen.delivery.as_ref().filter(|_| checked) {
+        out.extend(items.iter().enumerate().filter_map(|(j, x)| Some((format!("i.{name}.d[{j}]"), val_of(x)?))));
+    }
+}
+
+/// Ein skalarer Wert des Interpreters als `Val`.
+fn val_of(v: &Value) -> Option<Val> {
+    Some(match v {
+        Value::Bool(b) => Val::Bool(*b),
+        Value::Int(x) | Value::Duration(x) => Val::Int(*x),
+        Value::UInt(x) => Val::Int(*x as i64),
+        Value::F32(x) => Val::F32(*x),
+        Value::F64(x) => Val::F64(*x),
+        Value::Enum { variant, .. } => Val::Int(i64::from(*variant)),
+        _ => return None,
+    })
 }
 
 /// Fuehrt Interpreter und Modell mit demselben Stimulus und vergleicht je
@@ -611,6 +626,25 @@ t={k} in b {}.5 V
         ),
         // `resume` (5.12): zurueck in FIRST, dann in SECOND (Schritt 27c-8).
         "60_resume.takt" => ("t=1 cmd pause\nt=3 cmd work\nt=7 cmd pause\nt=9 cmd work\n".to_string(), 12),
+        // Samples (Schritt 27c-10): je Tick ein volles Array, ab Tick 25 ueber `I_MAX`.
+        "04_blocks_and_multirate.takt" => {
+            let mut s = String::from(
+                "t=0 in speed 1500.0
+t=0 in fan_sp_a 40.0
+t=0 in fan_sp_b 60.0
+",
+            );
+            for k in 0..=40u32 {
+                let peak = if k >= 25 { 45.0 } else { 5.0 + f64::from(k) * 0.25 };
+                let items: Vec<String> = (1..=16).map(|j| format!("{:?}", peak * f64::from(j) / 16.0)).collect();
+                s.push_str(&format!(
+                    "t={k} in i_phase [{}]
+",
+                    items.join(", ")
+                ));
+            }
+            (s, 40)
+        }
         // Jobs (Schritt 27c-8): Die Aufzeichnung verlegt die Fertigstellung.
         "40_jobs.takt" => ("t=6 job m v done\n".to_string(), 12),
         // Registerports (Schritt 27c-6).
@@ -1880,6 +1914,60 @@ machine m:
 fn held_samples_agree() {
     let stim = "t=1 in x 50\nt=2 in x 55\nt=4 in x 72\nt=5 in x 200\nt=8 in x 75\nt=9 in x 20 bad\nt=10 in x 30\n";
     agree_program("EDGE", &compile("EDGE", EDGE), stim, 18);
+}
+
+/// Samples (8.9): Reduktionen, `.last`, `.count`, Index und Schleife ueber
+/// das Array; ein Abtastwert ausserhalb der Range macht es `Suspect` mit dem
+/// letzten guten Array, zwei in Folge `Bad`; `max_slew` misst bis zum
+/// ersten guten Abtastwert eines Ticks; ein Tick ohne Lieferung haelt das
+/// Array, ein kurzes ist `Stale`.
+const SAMPLES: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  s : samples<float in -50.0..50.0, 4> @ hw("adc/s") with rate = 400 Hz, max_slew = 1000.0, debounce = 1, max_age = 30 ms
+
+output lo  : float       @ sim("o/lo")
+output hi  : float       @ sim("o/hi")
+output avg : float       @ sim("o/avg")
+output rms : float       @ sim("o/rms")
+output end : float       @ sim("o/end")
+output n   : int in 0..9 @ sim("o/n")
+output sum : float       @ sim("o/sum")
+output q   : int in 0..9 @ sim("o/q")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            q = 1 if s.suspect else (2 if s.stale else (0 if s.valid else 3))
+            if s.valid:
+                lo = s.min()
+                hi = s.max()
+                avg = s.mean()
+                rms = s.rms()
+                end = s.last
+                n = s.count
+                var acc : float = s[1]
+                for x in s:
+                    acc = acc + x
+                sum = acc
+"#;
+
+#[test]
+fn samples_agree() {
+    let stim = "t=1 in s [1.0, 2.0, 3.0, 4.0]\n\
+                t=2 in s [1.5, 2.5, 3.5, 4.5]\n\
+                t=4 in s [9.0, 2.0, 3.0, 4.0]\n\
+                t=5 in s [9.5, 70.0, 9.0, 8.0]\n\
+                t=6 in s [9.0, 70.0, 80.0, 8.0]\n\
+                t=7 in s [1.0, 2.0, 3.0, 4.0]\n\
+                t=8 in s [1.0, 2.0]\n\
+                t=9 in s [30.0, 2.0, 3.0, 4.0]\n\
+                t=10 in s [2.0, 2.0, 2.0, 2.0] bad\n\
+                t=11 in s [-3.0, -2.0, -1.0, 0.5]\n";
+    agree_program("SAMPLES", &compile("SAMPLES", SAMPLES), stim, 18);
 }
 
 #[test]

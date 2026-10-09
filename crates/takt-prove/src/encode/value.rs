@@ -125,7 +125,8 @@ impl Enc<'_> {
             | Type::Line { .. }
             | Type::Result { .. }
             | Type::Map { .. }
-            | Type::Capture { .. } => true,
+            | Type::Capture { .. }
+            | Type::Samples { .. } => true,
             Type::Enum(e) => self.fielded(*e),
             _ => false,
         }
@@ -142,7 +143,7 @@ impl Enc<'_> {
     /// Das Element eines Arrays oder einer Sammlung, mit der Grenze des Index.
     fn element_of(&self, ty: TypeId) -> Option<(Option<TypeId>, Bound)> {
         match self.p.types.get(ty) {
-            Type::Array { elem, len } => Some((Some(*elem), Bound::Fixed(*len))),
+            Type::Array { elem, len } | Type::Samples { elem, len } => Some((Some(*elem), Bound::Fixed(*len))),
             Type::Vec { elem, .. } => Some((Some(*elem), Bound::Dynamic)),
             Type::Bytes { .. } => Some((None, Bound::Dynamic)),
             _ => None,
@@ -169,7 +170,7 @@ impl Enc<'_> {
                 }
                 Shape::Node(parts)
             }
-            Type::Array { elem, len } => {
+            Type::Array { elem, len } | Type::Samples { elem, len } => {
                 let s = self.shape(*elem, span)?;
                 Shape::Node((0..*len).map(|i| (format!("[{i}]"), s.clone())).collect())
             }
@@ -524,6 +525,17 @@ impl Enc<'_> {
             }
             ExprKind::Lift(x) => V::Node(vec![V::Leaf(Term::bool(true)), self.value(x, cx, env, flow)?]),
             ExprKind::PortRead(p) => self.port_value(*p, span)?,
+            ExprKind::Input { channel, .. } if matches!(self.p.types.get(e.ty), Type::Samples { .. }) => {
+                self.samples_value(*channel, cx, flow, span)?
+            }
+            ExprKind::Accessor { base, accessor: Accessor::Or, args }
+                if matches!(self.p.types.get(base.ty), Type::Samples { .. }) =>
+            {
+                let (ExprKind::Input { channel, .. }, [default]) = (&base.kind, args.as_slice()) else {
+                    return no("`.or` auf einem Array", span);
+                };
+                self.samples_or(*channel, default, cx, env, flow)?
+            }
             ExprKind::Builtin(Builtin::LastFault) => {
                 let Some(m) = cx.m else { return no("`last_fault` ausserhalb einer Maschine", span) };
                 let at = self.loc_last_fault(m);
@@ -672,7 +684,10 @@ impl Enc<'_> {
         flow: &mut Flow,
         span: Span,
     ) -> R<V> {
-        if !matches!(self.p.types.get(base.ty), Type::Array { .. } | Type::Bytes { .. } | Type::Vec { .. }) {
+        if !matches!(
+            self.p.types.get(base.ty),
+            Type::Array { .. } | Type::Samples { .. } | Type::Bytes { .. } | Type::Vec { .. }
+        ) {
             return no("Index auf diesem Wert", span);
         }
         let v = self.value(base, cx, env, flow)?;
@@ -753,7 +768,7 @@ impl Enc<'_> {
                 let [default] = args else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?.leaf(span)
             }
-            (Accessor::Len | Accessor::Count, Type::Array { len, .. }) => {
+            (Accessor::Len | Accessor::Count, Type::Array { len, .. } | Type::Samples { len, .. }) => {
                 let len = i64::from(*len);
                 self.value(base, cx, env, flow)?;
                 Ok(Term::int(len))
@@ -842,10 +857,26 @@ impl Enc<'_> {
                 let x = self.expr(base, cx, env, flow)?;
                 Ok(Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![x]))
             }
-            (Accessor::Min | Accessor::Max | Accessor::Mean | Accessor::Rms, Type::Array { elem, .. }) => {
+            (
+                Accessor::Min | Accessor::Max | Accessor::Mean | Accessor::Rms,
+                Type::Array { elem, .. } | Type::Samples { elem, .. },
+            ) => {
                 let sort = self.sort_of(*elem, span)?;
                 let items = self.value(base, cx, env, flow)?;
                 self.reduce(accessor, items, sort, flow, span)
+            }
+            // `.last` (8.9): das letzte Element; ein leeres Array faultet.
+            (Accessor::Last, Type::Array { len, .. } | Type::Samples { len, .. }) => {
+                let items = self.value(base, cx, env, flow)?;
+                let Some(last) = len.checked_sub(1) else {
+                    flow.exits.push(Exit {
+                        cond: flow.alive.clone(),
+                        kind: ExitKind::Fault(None, self.cause(FaultKind::MissingValue, span)),
+                    });
+                    flow.alive = Term::bool(false);
+                    return Ok(Enc::zero(self.sort_of(base.ty, span).unwrap_or(Sort::Int)));
+                };
+                items.part(last as usize, span)?.leaf(span)
             }
             _ => no(format!("Zugriff `.{}`", accessor.name()), span),
         }
@@ -990,14 +1021,22 @@ impl Enc<'_> {
         match kind {
             CheckedKind::Index { len } => self.index_access(inner, *len, node.span, kind, cx, env, flow),
             CheckedKind::Missing => self.unwrap(inner, node.span, kind, cx, env, flow),
+            // Das Lesen eines Arrays aus Abtastwerten faultet selbst (3.5,
+            // `samples_value`); der Knoten ist die Stelle, wie beim Skalar.
+            CheckedKind::Valid => {
+                let first = flow.exits.len();
+                let v = self.value(inner, cx, env, flow)?;
+                let fires = Term::or(flow.exits[first..].iter().map(|x| x.cond.clone()).collect());
+                self.site(kind, node.span, fires, cx);
+                Ok(v)
+            }
             CheckedKind::Range(_)
             | CheckedKind::DivZero
             | CheckedKind::NonFinite
             | CheckedKind::Overflow
             | CheckedKind::Shift
             | CheckedKind::Convert
-            | CheckedKind::Domain
-            | CheckedKind::Valid => no("Pruefung eines zusammengesetzten Werts", node.span),
+            | CheckedKind::Domain => no("Pruefung eines zusammengesetzten Werts", node.span),
         }
     }
 
@@ -1025,7 +1064,7 @@ impl Enc<'_> {
             self.fault(kind, span, fail, cx, flow);
             return Ok(V::Leaf(i));
         };
-        if matches!(base.kind, ExprKind::Input { .. }) {
+        if matches!(base.kind, ExprKind::Input { .. }) && !matches!(self.p.types.get(base.ty), Type::Samples { .. }) {
             return no("Channel-Array", span);
         }
         let v = self.value(base, cx, env, flow)?;

@@ -52,8 +52,9 @@ pub struct Sample {
 pub struct Seen {
     /// Die Abtastung nach dem Rand.
     pub sample: Sample,
-    /// Kam in diesem Tick eine Lieferung an? Sonst gilt die vorige weiter.
-    pub fresh: bool,
+    /// Die Lieferung dieses Ticks, wie sie am Rand ankam; ohne sie gilt die
+    /// vorige Abtastung weiter.
+    pub delivery: Option<Sample>,
 }
 
 impl Sample {
@@ -65,6 +66,11 @@ impl Sample {
     /// Ungueltige Abtastung mit Grund.
     pub fn bad(reason: Reason) -> Self {
         Sample { value: None, quality: Quality::Bad, age: 0, reason: Some(reason) }
+    }
+
+    /// Eine Lieferung ohne Wert (3.5).
+    pub fn stale() -> Self {
+        Sample { value: None, quality: Quality::Stale, age: 0, reason: Some(Reason::Stale) }
     }
 
     /// Gute Abtastung mit Alter 0.

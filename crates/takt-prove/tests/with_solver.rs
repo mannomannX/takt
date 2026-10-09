@@ -746,6 +746,42 @@ fn a_capture_counterexample_is_confirmed() {
     assert!(stimulus.contains("in wave ") && stimulus.contains(";["), "{stimulus}");
 }
 
+/// Ein oversampelter Input (8.9) steht im Gegenbeispiel als Tick-Array; ein
+/// Abtastwert ausserhalb der Range macht es `Suspect`, und der Interpreter
+/// bestaetigt beides.
+#[test]
+fn a_samples_counterexample_is_confirmed() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input  s : samples<float in -50.0..50.0, 4> @ hw(\"adc/s\") with rate = 400 Hz, debounce = 1
+
+output hi   : float @ hw(\"o/hi\") with safe = 0.0
+output odd  : bool  @ hw(\"o/odd\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            hi = s.max() if s.valid else 0.0
+            odd = s.suspect
+
+property low: always(hi < 40.0)
+property clean: never(odd)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    for name in ["low", "clean"] {
+        let report = reports.iter().find(|r| r.name == name).expect("Eigenschaft");
+        let Verdict::Violated { stimulus, .. } = &report.verdict else { panic!("{report:?}") };
+        assert!(stimulus.contains(" in s ["), "{name}: {stimulus}");
+    }
+}
+
 /// Ein Job (4.5), der seine Dauer ueberschreitet, steht im Gegenbeispiel als
 /// Aufzeichnung `job <maschine> <handle> done`, und der Interpreter
 /// bestaetigt es.

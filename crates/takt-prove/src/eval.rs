@@ -301,11 +301,17 @@ fn wrap(x: i64, bits: u32, signed: bool) -> i64 {
     if signed { (x << shift) >> shift } else { ((x as u64) << shift >> shift) as i64 }
 }
 
+/// `=` wie in SMT-LIB: Fliesskomma gleicht aufs Bit, `+0` nicht `-0`, und
+/// es gibt nur ein NaN.
 fn same(a: Val, b: Val) -> bool {
     match (a, b) {
         (Val::Bool(x), Val::Bool(y)) => x == y,
         (Val::Int(x), Val::Int(y)) => x == y,
-        (x, y) => x.as_f64() == y.as_f64(),
+        (Val::F32(x), Val::F32(y)) => (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits(),
+        (x, y) => {
+            let (x, y) = (x.as_f64(), y.as_f64());
+            (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits()
+        }
     }
 }
 

@@ -23,7 +23,7 @@ Expr(Builtin),ja,ja,ja
 Expr(Armed),ja,nein: Trigger sind nicht kodiert,nein
 Expr(PortRead),ja,teilweise: nicht mit einem Strom als Modell des Lesekanals,ja
 Expr(Field),ja,teilweise: auf Records; nicht auf den Feldern einer Variante,ja
-Expr(Index),ja,"teilweise: auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays",ja
+Expr(Index),ja,"teilweise: auf Arrays, Samples, Bytes und Vektoren; nicht auf Channel-Arrays",ja
 Expr(Index2),ja,nein: Matrizen sind nicht kodiert,ja
 Expr(Slice),ja,teilweise: auf Bytes und Vektoren; nicht auf einem Array,ja
 Expr(Accessor),ja,"teilweise: die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung",ja
@@ -128,7 +128,7 @@ Accessor(Seq),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Text),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Data),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Len),teilweise: `.len` nur auf Sammlungen,"teilweise: auf Arrays, Bytes, Vektoren und Text",ja
-Accessor(Count),ja,teilweise: auf Arrays und Stroemen,ja
+Accessor(Count),ja,"teilweise: auf Arrays, Samples und Stroemen",ja
 Accessor(Dropped),ja,ja,ja
 Accessor(Malformed),ja,ja,nein
 Accessor(Overflowed),ja,ja,ja
@@ -140,11 +140,11 @@ Accessor(Result),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Bit),ja,ja,ja
 Accessor(Bits),"teilweise: `.bits` nur mit konstanten, geordneten Grenzen",ja,ja
 Accessor(WithBit),ja,ja,ja
-Accessor(Min),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
-Accessor(Max),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
-Accessor(Mean),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
-Accessor(Rms),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
-Accessor(Last),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Min),ja,ja,ja
+Accessor(Max),ja,ja,ja
+Accessor(Mean),ja,ja,ja
+Accessor(Rms),ja,ja,ja
+Accessor(Last),ja,ja,nein
 Accessor(Encode),teilweise: `encode` nur auf Records,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
 Accessor(Get),ja,ja,ja
 Accessor(StartsWith),ja,ja,nein
@@ -200,7 +200,7 @@ Type(Bytes),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Vec),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Str),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Line),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Samples),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Samples),ja,ja,ja
 Type(Table),ja,teilweise: nur als konstante Tabelle von `interp`,ja
 Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Map),ja,ja,ja

@@ -813,6 +813,10 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
     let mut out = String::new();
     for k in 0..=depth {
         for c in program.channels.iter().filter(|c| c.dir == Direction::Input) {
+            if let Type::Samples { elem, len } = program.types.get(c.ty) {
+                samples_line(values, program, k, &c.name, *elem, *len, &mut out);
+                continue;
+            }
             let Some(v) = values.get(&(k, format!("i.{}", c.name))) else { continue };
             let q = match values.get(&(k, format!("i.{}.q", c.name))) {
                 Some(Val::Int(q)) => *q,
@@ -878,6 +882,34 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
     }
     job_records(values, program, depth, &mut out);
     out
+}
+
+/// Eine Lieferung eines oversampelten Inputs (8.9): die Abtastwerte, die der
+/// Rand prueft; ohne Lieferung keine Zeile, ohne Werte `stale`, vom Treiber
+/// `bad`.
+fn samples_line(
+    values: &BTreeMap<(u32, String), Val>,
+    program: &Program,
+    k: u32,
+    name: &str,
+    elem: takt_mir::TypeId,
+    len: u32,
+    out: &mut String,
+) {
+    let get = |at: String| values.get(&(k, at)).copied();
+    let Some(Val::Int(q)) = get(format!("i.{name}.q")) else { return };
+    if get(format!("i.{name}.held")) == Some(Val::Bool(true)) {
+        return;
+    }
+    let zero = if matches!(program.types.get(elem), Type::Float { .. }) { Val::F64(0.0) } else { Val::Int(0) };
+    let items: Vec<String> =
+        (0..len).map(|j| value_text(program, elem, &get(format!("i.{name}.d[{j}]")).unwrap_or(zero))).collect();
+    let line = match q {
+        crate::encode::quality::STALE => "stale".to_string(),
+        crate::encode::quality::BAD => format!("[{}] bad", items.join(", ")),
+        _ => format!("[{}]", items.join(", ")),
+    };
+    let _ = writeln!(out, "t={k} in {name} {line}");
 }
 
 /// Die Aufzeichnungen der Jobs (4.5) aus den Faelligkeiten des

@@ -62,10 +62,12 @@ pub struct Image {
     /// Inputs, die der Stimulus in diesem Tick gesetzt hat; ihre
     /// `sim`-Bindung ruht so lange (8.3).
     driven: Vec<bool>,
-    /// Inputs mit einer Lieferung in diesem Tick, vom Stimulus, einer
-    /// `sim`-Bindung oder als Degradierung; die anderen halten ihre vorige
-    /// Abtastung, die altert (3.5).
-    pub delivered: Vec<bool>,
+    /// Die Lieferung dieses Ticks je Input, wie sie am Rand ankam: vom
+    /// Stimulus, einer `sim`-Bindung oder als Degradierung. Ohne sie haelt
+    /// der Input seine vorige Abtastung, die altert (3.5).
+    pub delivered: Vec<Option<Sample>>,
+    /// `N` eines Inputs `samples<T, N>`, sonst null (8.9).
+    samples_len: Vec<usize>,
     /// `buf[s]` je Stream-Channel (9.1, 9.6).
     pub channel_bufs: HashMap<ChannelId, Buffer>,
     /// `buf[s]` je internem Stream; was in Tick k gesendet wird, ist ab k+1
@@ -225,7 +227,15 @@ impl Image {
             port_queues: HashMap::new(),
             port_last: HashMap::new(),
             port_writes: Vec::new(),
-            delivered: vec![false; p.channels.len()],
+            delivered: vec![None; p.channels.len()],
+            samples_len: p
+                .channels
+                .iter()
+                .map(|c| match p.types.get(c.ty) {
+                    Type::Samples { len, .. } => *len as usize,
+                    _ => 0,
+                })
+                .collect(),
             driven,
             channel_bufs,
             stream_bufs,
@@ -252,9 +262,9 @@ impl Image {
     /// `now` ist der Zeitstempel der Lieferung in Nanosekunden; `max_slew`
     /// ist eine Rate und braucht ihn.
     pub fn set_input(&mut self, c: ChannelId, sample: Sample, now: i64) {
+        self.delivered[c.index()] = Some(sample.clone());
         self.inputs[c.index()] = self.through_edge(sample, c, now);
         self.driven[c.index()] = true;
-        self.delivered[c.index()] = true;
     }
 
     /// Der Treiber eines Inputs haelt seinen Vertrag nicht (12.6, Zeile 2):
@@ -264,7 +274,7 @@ impl Image {
         self.last_good[c.index()] = None;
         self.inputs[c.index()] = Sample::bad(Reason::Driver);
         self.driven[c.index()] = true;
-        self.delivered[c.index()] = true;
+        self.delivered[c.index()] = Some(Sample::bad(Reason::Driver));
     }
 
     /// Ein Element liess sich nicht decodieren (12.6, Zeile 5): verworfen,
@@ -288,6 +298,13 @@ impl Image {
             self.edge.driver_bad(c);
             self.last_good[c.index()] = None;
             return sample;
+        }
+        // 8.9: „fehlende Samples ergeben Qualitaet `Stale`" — ein Tick-Array
+        // unter `N` gilt nicht, wie im erzeugten Code, der `N` zaehlt.
+        if let Value::Samples(items) = value
+            && items.len() < self.samples_len[c.index()]
+        {
+            return Sample::stale();
         }
         // 8.9: Bei einem oversampelten Kanal traegt das Element die Range;
         // ein einziges Sample ausserhalb macht das ganze Tick-Array `Bad`
@@ -515,15 +532,9 @@ impl Image {
                 }
                 continue;
             }
-            let value = self.committed[out.index()].clone();
-            // 8.9: „fehlende Samples ergeben Qualitaet `Stale`". Ein leeres
-            // Tick-Array heisst, dass der Treiber nichts geliefert hat.
-            let sample = match &value {
-                Value::Samples(items) if items.is_empty() => Sample::bad(Reason::Stale),
-                _ => Sample::good(value),
-            };
+            let sample = Sample::good(self.committed[out.index()].clone());
+            self.delivered[inp.index()] = Some(sample.clone());
             self.inputs[inp.index()] = self.through_edge(sample, inp, now);
-            self.delivered[inp.index()] = true;
         }
         // 12.10: Ein Strom an `mmio/ADR/r` liefert je Lesen ein Element.
         let ports: Vec<(String, ChannelId)> = self
@@ -560,7 +571,7 @@ impl Image {
     /// Laesst alle Inputs um einen Tick altern; ueberschreitet das Alter
     /// `max_age`, wird die Abtastung `Stale` (3.5).
     pub fn age_inputs(&mut self, p: &Program, tick_ns: i64) {
-        self.delivered.fill(false);
+        self.delivered.fill(None);
         for (i, c) in p.channels.iter().enumerate() {
             if c.dir != Direction::Input {
                 continue;

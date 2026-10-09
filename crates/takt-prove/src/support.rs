@@ -111,7 +111,7 @@ fn expr(e: ExprTag) -> Support {
         | ExprTag::Array
         | ExprTag::Lift => Yes,
         ExprTag::Field => Partial("auf Records; nicht auf den Feldern einer Variante"),
-        ExprTag::Index => Partial("auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays"),
+        ExprTag::Index => Partial("auf Arrays, Samples, Bytes und Vektoren; nicht auf Channel-Arrays"),
         ExprTag::Published | ExprTag::StateOf | ExprTag::Signal => Yes,
         ExprTag::Cast => Partial("nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma"),
         ExprTag::Call => Partial("Funktionen aus kodierbaren Anweisungen"),
@@ -184,7 +184,7 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Bit
         | AccessorTag::Bits
         | AccessorTag::WithBit => Yes,
-        AccessorTag::Count => Partial("auf Arrays und Stroemen"),
+        AccessorTag::Count => Partial("auf Arrays, Samples und Stroemen"),
         AccessorTag::Dropped
         | AccessorTag::Malformed
         | AccessorTag::Overflowed
@@ -194,9 +194,7 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Sent => Yes,
         AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
         AccessorTag::Ok | AccessorTag::Err | AccessorTag::Get => Yes,
-        AccessorTag::Min | AccessorTag::Max | AccessorTag::Mean | AccessorTag::Rms => {
-            Partial("ueber einem Array; nicht ueber `samples`")
-        }
+        AccessorTag::Min | AccessorTag::Max | AccessorTag::Mean | AccessorTag::Rms | AccessorTag::Last => Yes,
         AccessorTag::Encode => Partial("ohne Fliesskomma- und `u64`-Felder"),
         AccessorTag::T | AccessorTag::Pre | AccessorTag::Post | AccessorTag::Samples | AccessorTag::Rate => Yes,
         AccessorTag::Seq
@@ -206,7 +204,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::TimeWarped
         | AccessorTag::Done
         | AccessorTag::Result
-        | AccessorTag::Last
         | AccessorTag::Armed
         | AccessorTag::Remaining => No("Zugriffe sind nicht kodiert (FB-372, FB-373)"),
     }
@@ -261,8 +258,8 @@ fn ty(t: TypeTag) -> Support {
         TypeTag::Str | TypeTag::Line | TypeTag::Result => Partial("nicht als Typ eines Inputs"),
         TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),
         TypeTag::Map => Yes,
-        TypeTag::Capture | TypeTag::HandleJob => Yes,
-        TypeTag::Samples | TypeTag::Mat | TypeTag::HandleTrigger => NO_SORT,
+        TypeTag::Capture | TypeTag::HandleJob | TypeTag::Samples => Yes,
+        TypeTag::Mat | TypeTag::HandleTrigger => NO_SORT,
     }
 }
 

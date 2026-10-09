@@ -61,11 +61,14 @@ fn a_sample_outside_the_range_spoils_the_whole_array() {
 }
 
 #[test]
-fn a_short_array_is_read_without_error() {
+fn a_short_array_is_stale() {
     // 8.9: „fehlende Samples ergeben Qualitaet `Stale`" — ein kuerzeres Array
-    // ist der Normalfall, kein Lesefehler des Stimulus.
-    let trace = simulate(OVERSAMPLED, "t=0 in i_dut [0.5 A, 1.0 A]\n", 2);
-    assert!(trace.contains("t=0 out n 2\n"), "zwei Samples: {trace}");
+    // liest der Stimulus ohne Fehler, aber es gilt nicht, wie im erzeugten
+    // Code, der `N` zaehlt. Lesen faultet, `.valid` ist falsch.
+    let trace = simulate(OVERSAMPLED, "t=0 in i_dut [0.5 A, 1.0 A, 2.0 A, 1.2 A]\nt=1 in i_dut [0.5 A, 1.0 A]\n", 2);
+    assert!(trace.contains("t=0 out n 4\n"), "erst vier Samples: {trace}");
+    assert!(trace.contains("t=1 out ok false\n"), "dann ungueltig: {trace}");
+    assert!(trace.contains("t=1 fault watch SensorFault"), "Lesen faultet: {trace}");
 }
 
 #[test]

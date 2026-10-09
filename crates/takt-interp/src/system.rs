@@ -1213,7 +1213,7 @@ impl<'p> Sim<'p> {
                 .inputs
                 .iter()
                 .zip(delivered)
-                .map(|(s, f)| crate::value::Seen { sample: s.clone(), fresh: *f });
+                .map(|(s, d)| crate::value::Seen { sample: s.clone(), delivery: d.clone() });
             seen.push(tick.collect());
         }
     }
