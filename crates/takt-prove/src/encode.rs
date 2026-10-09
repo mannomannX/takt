@@ -52,6 +52,7 @@ mod pattern;
 mod port;
 mod samples;
 mod sched;
+mod scoped;
 mod stream;
 mod text;
 mod tx;
@@ -381,6 +382,9 @@ struct Enc<'p> {
     loop_path: Vec<i64>,
     /// Je Maschine die Indexpfade ihrer Zaehler.
     counter_paths: BTreeMap<MachineId, CounterPaths>,
+    /// Wann eine Maschine in diesem Tick einen Fault-Pfad nahm: Dann laufen
+    /// die `exit:`-Bloecke ihrer gescopten Instanzen nicht (5.11).
+    fault_paths: BTreeMap<MachineId, Vec<Term>>,
 }
 
 /// Unter welchen Indexpfaden die Zaehler einer Maschine laufen: je
@@ -578,6 +582,10 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         if let Some(c) = enc.faulted_code(id) {
             codes.push((c, "FAULTED".to_string()));
         }
+        // 5.11: Eine inaktive gescopte Instanz hat keine Konfiguration.
+        if enc.is_scoped(id) {
+            codes.push((-1, String::new()));
+        }
         leaves.insert(m.name.clone(), codes);
     }
     let horizon = enc.horizon()?;
@@ -648,6 +656,7 @@ impl<'p> Enc<'p> {
             last_fault: BTreeSet::new(),
             loop_path: Vec::new(),
             counter_paths: BTreeMap::new(),
+            fault_paths: BTreeMap::new(),
         }
     }
 }
@@ -670,8 +679,9 @@ impl Enc<'_> {
             if !m.faulted.transitions.is_empty() {
                 return no("Uebergaenge aus FAULTED", m.span);
             }
-            if m.states.iter().any(|s| !s.instances.is_empty()) {
-                return no("gescopte Instanzen", m.span);
+            // 5.11: Der Wiedereintritt setzte auch die Cursor zurueck.
+            if self.is_scoped(id) && !m.layout.cursors.is_empty() {
+                return no("gescopte Instanz, die einen Strom liest", m.span);
             }
         }
         Ok(())
@@ -875,7 +885,12 @@ impl Enc<'_> {
     /// Namens, sonst die erste (`state_value`, `publish_function`).
     fn state_value(&self, m: MachineId, leaf: Term) -> Term {
         let variants = self.state_variants(m);
-        let mut out = leaf.clone();
+        // Ohne Konfiguration die erste Variante (`state_value`, 5.11).
+        let mut out = if self.is_scoped(m) {
+            Term::ite(Term::eq(leaf.clone(), Term::int(-1)), Term::int(0), leaf.clone())
+        } else {
+            leaf.clone()
+        };
         for l in self.leaves(m) {
             let name = &self.machine(m).states[l.index()].name;
             let last = name.rsplit('.').next().unwrap_or(name);
@@ -2639,6 +2654,7 @@ impl Enc<'_> {
                     Target::Fault(kind) => {
                         self.record_fault(m, &self.cause(*kind, Span::default()), &mut out)?;
                         self.clear_on_fault(m, &mut out)?;
+                        self.fault_paths.entry(m).or_default().push(exit.cond.clone());
                         (fault_target, true)
                     }
                     other => (*other, false),
@@ -2648,6 +2664,7 @@ impl Enc<'_> {
             ExitKind::Fault(explicit, cause) => {
                 self.record_fault(m, cause, &mut out)?;
                 self.clear_on_fault(m, &mut out)?;
+                self.fault_paths.entry(m).or_default().push(exit.cond.clone());
                 let t = explicit.unwrap_or(fault_target);
                 self.switch(cx, leaf, t, &mut out, depth, &exit.cond, true)?;
             }
@@ -2658,6 +2675,7 @@ impl Enc<'_> {
                 self.record_fault(m, cause, &mut sw)?;
                 self.clear_on_fault(m, &mut sw)?;
                 let under = Term::and(vec![exit.cond.clone(), !latched.clone()]);
+                self.fault_paths.entry(m).or_default().push(under.clone());
                 self.switch(cx, leaf, fault_target, &mut sw, depth, &under, true)?;
                 out = ite_env(&latched, env, &sw);
             }
@@ -2767,6 +2785,8 @@ impl Enc<'_> {
         for &m in &self.order.clone() {
             let faulted = cur.get(&self.loc_faulted(m)).cloned().expect("faulted");
             let latched = cur.get(&self.loc_latched(m)).cloned().expect("latched");
+            // Eine inaktive gescopte Instanz hat kein Blatt (−1) und nimmt
+            // darum keinen Fault-Pfad (5.11, FB-480).
             let deliver = Term::and(vec![raised.clone(), faulted.not(), latched.not()]);
             if deliver.is_bool(false) {
                 continue;
@@ -2798,11 +2818,13 @@ impl Enc<'_> {
             if machine.period > 1 {
                 let loc = self.loc_countdown(m);
                 let c = cur[&loc].clone();
-                let next = Term::ite(
-                    active.clone(),
-                    Term::int(i64::from(machine.period) - 1),
+                // Eine inaktive gescopte Instanz bleibt bei null stehen.
+                let down = Term::ite(
+                    Term::bin(Op::Gt, c.clone(), Term::int(0)),
                     Term::bin(Op::Sub, c.clone(), Term::int(1)),
+                    Term::int(0),
                 );
+                let next = Term::ite(active.clone(), Term::int(i64::from(machine.period) - 1), down);
                 cur.insert(loc, next);
             }
             let faulted = cur[&self.loc_faulted(m)].clone();
@@ -2823,15 +2845,20 @@ impl Enc<'_> {
         }
     }
 
+    /// `countdown == 0` (7.2); eine gescopte Instanz nur, wenn ihr Scope zu
+    /// Tick-Beginn steht (5.11).
     fn actives(&self, pre: &Env) -> BTreeMap<MachineId, Term> {
         self.order
             .iter()
             .map(|&m| {
-                let active = if self.machine(m).period > 1 {
+                let mut active = if self.machine(m).period > 1 {
                     Term::eq(pre[&self.loc_countdown(m)].clone(), Term::int(0))
                 } else {
                     Term::bool(true)
                 };
+                if self.is_scoped(m) {
+                    active = Term::and(vec![active, pre[&self.loc_scope(m)].clone()]);
+                }
                 (m, active)
             })
             .collect()
@@ -2999,10 +3026,15 @@ impl Enc<'_> {
         self.delivered = cur.clone();
         self.committed = pre.clone();
         self.windows.clear();
+        self.fault_paths.clear();
         for &m in &self.order.clone() {
             let active = actives[&m].clone();
             self.step_machine(m, &active, pre, &actives, &mut cur)?;
         }
+        // 5.11: Der Besitzer ist geschritten — Ein- und Austritte, vor der
+        // Abort-Phase wie im Interpreter.
+        let faults = self.faults_now();
+        self.scoped_lifecycle(&mut cur, &actives, &faults)?;
         if self.scope.is_some() {
             let foreign = self.input("i.abort.foreign".into(), Sort::Bool);
             self.aborts.push(foreign);
@@ -3041,57 +3073,11 @@ impl Enc<'_> {
         self.tx_initial(&mut env);
         self.sched_initial(&mut env)?;
         self.deliver(None, &mut env)?;
+        self.scoped_initial(&mut env);
+        self.fault_paths.clear();
         let before = env.clone();
         for &m in &self.order.clone() {
-            let machine = self.machine(m).clone();
-            env.insert(self.loc_leaf(m), Term::int(self.code(m, machine.initial)));
-            env.insert(self.loc_faulted(m), Term::bool(false));
-            env.insert(self.loc_latched(m), Term::bool(false));
-            if machine.period > 1 {
-                env.insert(self.loc_countdown(m), Term::int(0));
-            }
-            for i in 0..machine.states.len() {
-                env.insert(self.loc_timer(m, StateId(i as u32)), Term::int(0));
-                if machine.states[i].resume {
-                    env.insert(self.loc_saved(m, StateId(i as u32)), Term::int(-1));
-                }
-            }
-            self.jobs_initial(m, &mut env)?;
-            for (i, v) in machine.vars.iter().enumerate() {
-                // Ein Job-Handle hat keinen Wert; sein Lauf steht im Slot.
-                if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Job)) {
-                    continue;
-                }
-                if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Block(_))) {
-                    let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) else {
-                        return no("Instanz-Array eines Blocks", v.span);
-                    };
-                    for (loc, ty) in fields {
-                        let zero = self.zero_of(ty, v.span)?;
-                        self.init_loc(&mut env, &loc, ty, zero, v.span)?;
-                    }
-                    continue;
-                }
-                let zero = self.zero_of(v.ty, v.span)?;
-                self.init_loc(&mut env, &self.loc_var(m, VarId(i as u32)), v.ty, zero, v.span)?;
-            }
-            for i in 0..machine.signals.len() {
-                env.insert(self.loc_sig(m, i), Term::bool(false));
-            }
-            if self.reads_last_fault(m) {
-                self.last_fault_initial(m, &mut env)?;
-            }
-            let paths = self.paths_of(m)?;
-            for (i, list) in paths.viol.iter().enumerate() {
-                for p in list {
-                    env.insert(self.loc_viol(m, i, p), Term::int(0));
-                }
-            }
-            for (i, list) in paths.every.iter().enumerate() {
-                for p in list {
-                    env.insert(self.loc_every(m, i, p), Term::int(-1));
-                }
-            }
+            self.machine_defaults(m, &mut env, true)?;
         }
         for (loc, ty, value) in self.safe_outputs()? {
             self.init_loc(&mut env, &loc, ty, value, Span::default())?;
@@ -3101,44 +3087,28 @@ impl Enc<'_> {
         // frisch (7.2), also gilt jede Maschine als aktiv.
         let actives: BTreeMap<MachineId, Term> = self.order.iter().map(|&m| (m, Term::bool(true))).collect();
         for &m in &self.order.clone() {
-            let machine = self.machine(m).clone();
             let pre = env.clone();
             let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
-            for (i, v) in machine.vars.iter().enumerate() {
-                if let Some(Expr { kind: ExprKind::BlockInit { block, args, .. }, .. }) = &v.init {
-                    // Eine Instanz (5.7): Parameter aus den Argumenten, Zustand aus
-                    // seinen Initialwerten — wie `instantiate_block`.
-                    let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) else { continue };
-                    let def = self.p.blocks[block.index()].clone();
-                    let mut flow = Flow::new(Term::bool(true));
-                    for (k, a) in args.iter().enumerate() {
-                        let v = self.value(a, &cx, &env, &mut flow)?;
-                        self.init_loc(&mut env, &fields[k].0, fields[k].1, v, a.span)?;
-                    }
-                    self.block_reset(&def, &fields, &cx, &mut env, &mut flow)?;
-                    continue;
-                }
-                if let Some(e) = &v.init {
-                    let mut flow = Flow::new(Term::bool(true));
-                    let value = self.value(e, &cx, &env, &mut flow)?;
-                    if !flow.exits.is_empty() {
-                        self.note(
-                            "ein Fault in einem Anfangswert ist nicht modelliert (der Interpreter bricht den Lauf ab)",
-                        );
-                    }
-                    self.init_loc(&mut env, &self.loc_var(m, VarId(i as u32)), v.ty, value, e.span)?;
-                }
-            }
+            self.init_vars(m, &cx, &mut env, &Term::bool(true))?;
         }
+        // 5.11: Eine gescopte Instanz tritt erst ein, wenn ihr Scope steht.
         for &m in &self.order.clone() {
+            if self.is_scoped(m) {
+                continue;
+            }
             let machine = self.machine(m).clone();
             let pre = env.clone();
             let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
             self.unrolled = 0;
             self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true), false)?;
         }
+        let faults = self.faults_now();
+        self.scoped_lifecycle(&mut env, &actives, &faults)?;
         self.flush_sends(&mut env)?;
-        self.advance(&actives, &mut env);
+        // Tick 0 aktiviert jede Maschine mit `phase = 0` (7.2).
+        let started: BTreeMap<MachineId, Term> =
+            self.order.iter().map(|&m| (m, Term::bool(self.machine(m).phase == 0))).collect();
+        self.advance(&started, &mut env);
         self.drain_tx(&mut env);
         self.edges_next(&before, &mut env)?;
         if let Some(end) = self.run_end() {
@@ -3148,6 +3118,102 @@ impl Enc<'_> {
         let monitors = self.monitors.clone();
         self.monitors_next(&monitors, None, &mut env)?;
         Ok(env)
+    }
+
+    /// Der Zustand einer Maschine vor ihrem Eintritt (`MachineState::new`):
+    /// Timer null, `countdown` die Phase, keine Signale, kein Job, die
+    /// Zaehler am Anfang und mit `vars` die Variablen null. Eine gescopte
+    /// Instanz hat keine Konfiguration (−1), die anderen stehen bis zum
+    /// Eintritt auf `initial`.
+    fn machine_defaults(&mut self, m: MachineId, env: &mut Env, vars: bool) -> R<()> {
+        let machine = self.machine(m).clone();
+        let leaf = if self.is_scoped(m) { -1 } else { self.code(m, machine.initial) };
+        env.insert(self.loc_leaf(m), Term::int(leaf));
+        env.insert(self.loc_faulted(m), Term::bool(false));
+        env.insert(self.loc_latched(m), Term::bool(false));
+        if machine.period > 1 {
+            env.insert(self.loc_countdown(m), Term::int(i64::from(machine.phase)));
+        }
+        for i in 0..machine.states.len() {
+            env.insert(self.loc_timer(m, StateId(i as u32)), Term::int(0));
+            if machine.states[i].resume {
+                env.insert(self.loc_saved(m, StateId(i as u32)), Term::int(-1));
+            }
+        }
+        self.jobs_initial(m, env)?;
+        for (i, v) in machine.vars.iter().enumerate().filter(|_| vars) {
+            // Ein Job-Handle hat keinen Wert; sein Lauf steht im Slot.
+            if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Job)) {
+                continue;
+            }
+            if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Block(_))) {
+                let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) else {
+                    return no("Instanz-Array eines Blocks", v.span);
+                };
+                for (loc, ty) in fields {
+                    let zero = self.zero_of(ty, v.span)?;
+                    self.init_loc(env, &loc, ty, zero, v.span)?;
+                }
+                continue;
+            }
+            let zero = self.zero_of(v.ty, v.span)?;
+            self.init_loc(env, &self.loc_var(m, VarId(i as u32)), v.ty, zero, v.span)?;
+        }
+        for i in 0..machine.signals.len() {
+            env.insert(self.loc_sig(m, i), Term::bool(false));
+        }
+        if self.reads_last_fault(m) {
+            self.last_fault_initial(m, env)?;
+        }
+        let paths = self.paths_of(m)?;
+        for (i, list) in paths.viol.iter().enumerate() {
+            for p in list {
+                env.insert(self.loc_viol(m, i, p), Term::int(0));
+            }
+        }
+        for (i, list) in paths.every.iter().enumerate() {
+            for p in list {
+                env.insert(self.loc_every(m, i, p), Term::int(-1));
+            }
+        }
+        Ok(())
+    }
+
+    /// `init_vars`: die Anfangswerte der Variablen, Blockinstanzen aus ihren
+    /// Argumenten (5.7); `under` traegt die Bedingung des Eintritts.
+    fn init_vars(&mut self, m: MachineId, cx: &Cx<'_>, env: &mut Env, under: &Term) -> R<()> {
+        let machine = self.machine(m).clone();
+        for (i, v) in machine.vars.iter().enumerate() {
+            if let Some(Expr { kind: ExprKind::BlockInit { block, args, .. }, .. }) = &v.init {
+                // Eine Instanz (5.7): Parameter aus den Argumenten, Zustand aus
+                // seinen Initialwerten — wie `instantiate_block`.
+                let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) else { continue };
+                let def = self.p.blocks[block.index()].clone();
+                let mut flow = Flow::new(under.clone());
+                for (k, a) in args.iter().enumerate() {
+                    let v = self.value(a, cx, env, &mut flow)?;
+                    self.init_loc(env, &fields[k].0, fields[k].1, v, a.span)?;
+                }
+                self.block_reset(&def, &fields, cx, env, &mut flow)?;
+                continue;
+            }
+            if let Some(e) = &v.init {
+                let mut flow = Flow::new(under.clone());
+                let value = self.value(e, cx, env, &mut flow)?;
+                if !flow.exits.is_empty() {
+                    self.note(
+                        "ein Fault in einem Anfangswert ist nicht modelliert (der Interpreter bricht den Lauf ab)",
+                    );
+                }
+                self.init_loc(env, &self.loc_var(m, VarId(i as u32)), v.ty, value, e.span)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Je Maschine, ob sie in diesem Tick einen Fault-Pfad nahm.
+    fn faults_now(&self) -> BTreeMap<MachineId, Term> {
+        self.fault_paths.iter().map(|(m, conds)| (*m, Term::or(conds.clone()))).collect()
     }
 
     // ------------------------------------------------------------ Eigenschaften
@@ -3186,6 +3252,9 @@ impl Enc<'_> {
             let leaf = pre[&self.loc_leaf(m)].clone();
             let mut codes: Vec<Term> =
                 self.leaves(m).into_iter().map(|l| Term::eq(leaf.clone(), Term::int(self.code(m, l)))).collect();
+            if self.is_scoped(m) {
+                codes.push(Term::eq(leaf.clone(), Term::int(-1)));
+            }
             if let Some(c) = self.faulted_code(m) {
                 codes.push(Term::eq(leaf.clone(), Term::int(c)));
                 // Nur der Wechsel nach `FAULTED` setzt diesen Code, und er

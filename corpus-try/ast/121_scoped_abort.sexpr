@@ -1,0 +1,28 @@
+(system
+  (language 1)
+  (tick 1ms))
+(output a :int in 0..9 @hw("o/a") safe=0)
+(output b :int in 0..9 @hw("o/b") safe=0)
+(machine part (o:output int in 0..9)
+  (fault -> HURT)
+  (initial RUN)
+  (state RUN
+    (enter
+      (= o 1)))
+  (state HURT
+    (enter
+      (= o 7))))
+(machine ctrl
+  (initial FIRST)
+  (state FIRST
+    (instance p part o=a)
+    (after 3ms -> SECOND))
+  (state SECOND
+    (instance q part o=b)))
+(machine stopper
+  (initial WAIT)
+  (state WAIT
+    (after 6ms -> STOP))
+  (state STOP
+    (loop
+      (abort "halt"))))

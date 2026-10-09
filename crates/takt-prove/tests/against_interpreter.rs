@@ -385,6 +385,7 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
         states.push(step);
     }
     // Der Interpreter schreibt Outputs und Zustaende nur bei Aenderung.
+    // Outputs und `pub var`, je Ort im Modell.
     let mut outputs: BTreeMap<String, Val> = BTreeMap::new();
     let channel_type = |name: &str| p.channels.iter().find(|c| c.name == name).map(|c| c.ty);
     let mut leaves: BTreeMap<String, String> = BTreeMap::new();
@@ -432,6 +433,24 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
                 }
                 LineKind::State { machine, path } => {
                     leaves.insert(machine.clone(), path.rsplit('.').next().unwrap_or(path).to_string());
+                }
+                // `pub var` bei Aenderung (T3): der Ort der Variable im Modell.
+                LineKind::Published { machine, var, value } => {
+                    let ty = p
+                        .machines
+                        .iter()
+                        .find(|m| m.name == *machine)
+                        .and_then(|m| m.vars.iter().find(|v| v.name == *var))
+                        .map(|v| v.ty)
+                        .unwrap_or_else(|| panic!("{name} t={k}: `{machine}.{var}` gibt es nicht"));
+                    let base = format!("s.{machine}.v.{var}");
+                    let mut parts = Vec::new();
+                    leaves_of(p, ty, value, &base, &mut parts)
+                        .unwrap_or_else(|| panic!("{name} t={k}: `{value}` von `{machine}.{var}` hat keinen Wert"));
+                    outputs.retain(|loc, _| {
+                        loc != &base && !loc.starts_with(&format!("{base}.")) && !loc.starts_with(&format!("{base}["))
+                    });
+                    outputs.extend(parts);
                 }
                 // Ein Fault fuehrt im selben Tick in sein Ziel (5.3), auch
                 // wenn das Ziel der Zustand ist, in dem er auftrat.
@@ -626,6 +645,17 @@ t={k} in b {}.5 V
         ),
         // `resume` (5.12): zurueck in FIRST, dann in SECOND (Schritt 27c-8).
         "60_resume.takt" => ("t=1 cmd pause\nt=3 cmd work\nt=7 cmd pause\nt=9 cmd work\n".to_string(), 12),
+        // Gescopte Instanzen (Schritt 27c-11): Ein- und Austritt, ein Abort.
+        "63_scoped_instances.takt" => (
+            "t=0 in mode 0
+t=5 in mode 1
+t=9 in mode 0
+t=15 in mode 1
+"
+            .to_string(),
+            25,
+        ),
+        "64_scoped_exit.takt" | "121_scoped_abort.takt" => (String::new(), 20),
         // Samples (Schritt 27c-10): je Tick ein volles Array, ab Tick 25 ueber `I_MAX`.
         "04_blocks_and_multirate.takt" => {
             let mut s = String::from(
@@ -1968,6 +1998,86 @@ fn samples_agree() {
                 t=10 in s [2.0, 2.0, 2.0, 2.0] bad\n\
                 t=11 in s [-3.0, -2.0, -1.0, 0.5]\n";
     agree_program("SAMPLES", &compile("SAMPLES", SAMPLES), stim, 18);
+}
+
+/// Gescopte Instanzen (5.11): Eine Instanz mit `resume`, Periode und Phase
+/// (7.2, auch `ticker` zeigt sie)
+/// schreibt in `exit:` eine `pub var`, die der Trace auch danach zeigt;
+/// sie kehrt ins gemerkte Blatt zurueck, ausser ihr Besitzer verliess den
+/// Zustand ueber einen Fault — dann laufen ihre `exit:`-Bloecke nicht, und
+/// sie beginnt wieder bei `initial`. Ihre Outputs gehen beim Austritt auf
+/// `safe`, ihr Zustand ohne Konfiguration ist die erste Variante.
+const SCOPED: &str = r#"system:
+    language = 1
+    tick     = 1 ms
+
+input  go   : int in 0..3  @ sim("i/go") with max_age = 1 s
+
+output o1   : int in 0..99 @ sim("o/o1") with safe = 0
+output mode : int in 0..9  @ sim("o/mode")
+output tick : int in 0..99 @ sim("o/tick")
+
+machine ticker every 3 ms phase 1 ms:
+    var n : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = min(n + 1, 99)
+            tick = n
+
+machine worker(o: output int in 0..99) every 3 ms phase 2 ms:
+    pub var left : int in 0..99 = 0
+    initial A
+
+    state A:
+        enter:
+            o = 10
+
+        after 6 ms: -> B
+
+        exit:
+            left = 1
+
+    state B:
+        enter:
+            o = 20
+
+        exit:
+            left = 2
+
+machine boss:
+    var z : int in 0..9 = 0
+    fault -> SAFE
+    initial IDLE
+
+    state IDLE:
+        when go == 1: -> WORK
+
+    state WORK:
+        instance w resume = worker(o = o1)
+
+        loop:
+            mode = go
+            if go == 2:
+                z = z + 10
+
+        when go == 0: -> IDLE
+
+    state SAFE:
+        when go == 1: -> WORK
+"#;
+
+#[test]
+fn scoped_instances_agree() {
+    let stim = "t=0 in go 0
+t=1 in go 1
+t=9 in go 0
+t=11 in go 1
+t=17 in go 2
+t=19 in go 1
+";
+    agree_program("SCOPED", &compile("SCOPED", SCOPED), stim, 30);
 }
 
 #[test]

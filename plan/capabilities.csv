@@ -238,7 +238,7 @@ Feature(Idle),ja,ja,ja
 Feature(Resume),ja,ja,ja
 Feature(Exit),ja,ja,ja
 Feature(Sequence),ja,ja,nein
-Feature(ScopedInstance),ja,nein: gescopte Instanzen sind nicht kodiert,ja
+Feature(ScopedInstance),ja,"teilweise: ohne Instanzen, die einen Strom lesen",ja
 Feature(StateHandler),ja,ja,ja
 Feature(StateFaultTarget),ja,ja,ja
 Feature(HandlerPattern),teilweise: kein `{x:float}` im Handler-Muster,teilweise: kein `{x:float}`,ja

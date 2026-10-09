@@ -1,0 +1,45 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# Ein `abort` erreicht nur aktive gescopte Instanzen (5.11): `p` lebt in
+# FIRST, `q` in SECOND. Wenn `stopper` abbricht, steht `ctrl` in SECOND;
+# `q` nimmt seinen Fault-Pfad und stellt `b` auf 7, `p` ist nicht aktiv,
+# und `a` bleibt auf `safe` (FB-480). `ctrl` selbst geht nach FAULTED, und
+# `q` verlaesst seinen Scope ohne `exit:`.
+
+output a : int in 0..9 @ hw("o/a") with safe = 0
+output b : int in 0..9 @ hw("o/b") with safe = 0
+
+machine part(o: output int in 0..9):
+    fault -> HURT
+    initial RUN
+
+    state RUN:
+        enter:
+            o = 1
+
+    state HURT:
+        enter:
+            o = 7
+
+machine ctrl:
+    initial FIRST
+
+    state FIRST:
+        instance p = part(o = a)
+
+        after 3 ms: -> SECOND
+
+    state SECOND:
+        instance q = part(o = b)
+
+machine stopper:
+    initial WAIT
+
+    state WAIT:
+        after 6 ms: -> STOP
+
+    state STOP:
+        loop:
+            abort "halt"

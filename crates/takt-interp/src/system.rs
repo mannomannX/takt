@@ -1549,8 +1549,15 @@ impl<'p> Sim<'p> {
     /// jede inaktive mit einem vorgemerkten Abort- oder Runtime-Fault, nimmt
     /// ihren Fault-Pfad — im selben Tick, unabhaengig von ihrer Periode.
     fn abort_phase(&mut self, tick_ns: i64, active: &[MachineId]) -> Result<(), Trap> {
+        // 5.11: Ein Abort erreicht nur die aktiven gescopten Instanzen; eine
+        // inaktive hat keine Konfiguration, die ihn aufnehmen koennte.
+        let inactive = self.inactive_scoped();
         for id in self.order.clone() {
             let state = &mut self.states[id.index()];
+            if inactive.contains(&id) {
+                state.raised = None;
+                continue;
+            }
             if state.faulted {
                 state.raised = None;
                 continue;

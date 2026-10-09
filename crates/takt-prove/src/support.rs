@@ -321,7 +321,7 @@ fn feature(f: Feature) -> Support {
         | Feature::FramingLengthPrefixed
         | Feature::FramingFixed => Yes,
         Feature::FaultedTransition => No("Uebergaenge aus FAULTED sind nicht kodiert"),
-        Feature::ScopedInstance => No("gescopte Instanzen sind nicht kodiert"),
+        Feature::ScopedInstance => Partial("ohne Instanzen, die einen Strom lesen"),
         Feature::CheckConfirm => Yes,
         Feature::CheckWithin => Yes,
         Feature::Port => Partial("nicht mit einem Strom als Modell des Lesekanals"),
