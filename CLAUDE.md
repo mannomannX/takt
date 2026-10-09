@@ -35,6 +35,8 @@ Testdateien heissen nach dem, was sie pruefen: `examples.rs`,
 - `cargo fmt --all` — rustfmt, `max_width = 120`
 - `UPDATE_GOLDEN=1 cargo test -p takt-syntax --test sexpr_golden` —
   Golden-Dateien neu schreiben, wenn ein Korpusprogramm sich aendert
+- `pwsh tools/prune-target.ps1 [-Apply]` — veraltete Build-Artefakte im
+  Zielverzeichnis (alte Testfassungen, Caches); vor langen Laeufen
 - `cargo run -p takt-cli -- fmt <datei>` — Korpusdateien kanonisch
   formatieren; ein Test prueft das
 
