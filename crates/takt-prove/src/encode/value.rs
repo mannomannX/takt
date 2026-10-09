@@ -190,11 +190,16 @@ impl Enc<'_> {
                 Shape::Node(vec![(".has".into(), Shape::Flag), (".value".into(), self.shape(*t, span)?)])
             }
             Type::Result { ok, err } => {
-                let Some(e) = self.enum_type(*err) else { return no("Fehlertyp eines Ergebnisses", span) };
+                // `JobErr` kennt das Programm oft nur als Fehler von `v.result`.
+                let error = match self.enum_type(*err) {
+                    Some(e) => self.shape(e, span)?,
+                    None if !self.fielded(*err) => Shape::Tag(*err),
+                    None => return no("Fehlertyp eines Ergebnisses", span),
+                };
                 Shape::Node(vec![
                     (".is_err".into(), Shape::Flag),
                     (".value".into(), self.shape(*ok, span)?),
-                    (".error".into(), self.shape(e, span)?),
+                    (".error".into(), error),
                 ])
             }
             Type::Map { key, value, cap } => {
@@ -598,6 +603,7 @@ impl Enc<'_> {
             }
             ExprKind::Slice { base, from, to } => self.slice(base, from, to, cx, env, flow, span)?,
             ExprKind::NativeCall { native, args } => self.native_call(*native, args, cx, env, flow, span)?,
+            ExprKind::JobState { handle, field } => self.job_state(*handle, *field, e.ty, cx, env, span)?,
             ExprKind::Call { callee, args } => {
                 let mut xs = Vec::new();
                 for a in args {
@@ -624,7 +630,6 @@ impl Enc<'_> {
             | ExprKind::Binary { .. }
             | ExprKind::Cast { .. }
             | ExprKind::Convert { .. }
-            | ExprKind::JobState { .. }
             | ExprKind::Stream(_)
             | ExprKind::Matches { .. }
             | ExprKind::MatOp { .. }

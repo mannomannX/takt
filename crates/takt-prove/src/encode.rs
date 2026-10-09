@@ -45,6 +45,7 @@ use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
 mod canon;
 mod fault;
+mod job;
 mod map;
 mod monitor;
 mod pattern;
@@ -172,6 +173,10 @@ pub struct Model {
     /// Die Funktionen aus `libtaktm`, die der Solver uninterpretiert sieht
     /// (4.2): Ein Pfad ueber sie kann an ihrem wahren Wert scheitern.
     pub uninterpreted: Vec<String>,
+    /// Zustand, den ein Gegenbeispiel neben den Eingaben nennt: die
+    /// Faelligkeiten der Jobs, aus denen sein Stimulus die Aufzeichnungen
+    /// baut (4.5).
+    pub observed: Vec<String>,
 }
 
 impl Model {
@@ -328,6 +333,8 @@ struct Enc<'p> {
     /// Was die Typen ueber Tunables sagen; je Tunable einmal.
     tune_assumptions: Vec<Term>,
     tunes_seen: BTreeSet<String>,
+    /// Die Spanne der Verspaetung eines Jobs, je Handle einmal.
+    job_assumptions: Vec<Term>,
     /// Ausgerollte Schleifendurchlaeufe des laufenden Pfads ([`UNROLL_LIMIT`]).
     unrolled: i64,
     /// Die Typen der Lokalen des Rumpfs, der gerade eingebettet wird.
@@ -513,6 +520,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     let mut assumptions = enc.channel_assumptions()?;
     assumptions.extend(enc.psi_assumptions.clone());
     assumptions.extend(enc.tune_assumptions.clone());
+    assumptions.extend(enc.job_assumptions.clone());
     assumptions.extend(enc.stream_assumptions()?);
     let scoped = enc.scope.is_some();
     for prop in p.properties.iter().filter(|_| !scoped) {
@@ -538,6 +546,12 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         leaves.insert(m.name.clone(), codes);
     }
     let horizon = enc.horizon()?;
+    let observed = enc
+        .order
+        .iter()
+        .flat_map(|&m| (0..p.machines[m.index()].layout.job_slots.len()).map(move |i| (m, i)))
+        .map(|(m, i)| enc.loc_job(m, i, "due"))
+        .collect();
     let mut notes = enc.notes;
     notes.sort();
     notes.dedup();
@@ -554,6 +568,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         horizon,
         candidates,
         uninterpreted: enc.uninterpreted.into_iter().collect(),
+        observed,
     })
 }
 
@@ -579,6 +594,7 @@ impl<'p> Enc<'p> {
             psi_seen: BTreeSet::new(),
             tune_assumptions: Vec::new(),
             tunes_seen: BTreeSet::new(),
+            job_assumptions: Vec::new(),
             unrolled: 0,
             local_types: BTreeMap::new(),
             monitors: Vec::new(),
@@ -616,9 +632,6 @@ impl Enc<'_> {
     fn check_reach(&self) -> R<()> {
         for &id in &self.order {
             let m = self.machine(id);
-            if !m.layout.job_slots.is_empty() {
-                return no("Jobs", m.span);
-            }
             if !m.faulted.transitions.is_empty() {
                 return no("Uebergaenge aus FAULTED", m.span);
             }
@@ -683,6 +696,10 @@ impl Enc<'_> {
     }
     fn loc_timer(&self, m: MachineId, s: StateId) -> String {
         format!("s.{}.t.{}", self.machine(m).name, self.machine(m).states[s.index()].name)
+    }
+    /// Das gemerkte Blatt eines `resume`-Zustands (5.12), −1 vor dem ersten Verlassen.
+    fn loc_saved(&self, m: MachineId, s: StateId) -> String {
+        format!("s.{}.saved.{}", self.machine(m).name, self.machine(m).states[s.index()].name)
     }
     fn loc_var(&self, m: MachineId, v: VarId) -> String {
         format!("s.{}.v.{}", self.machine(m).name, self.machine(m).vars[v.index()].name)
@@ -1086,6 +1103,7 @@ impl Enc<'_> {
             ExprKind::NativeCall { native, args } => {
                 self.native_call(*native, args, cx, env, flow, span)?.leaf(span)?
             }
+            ExprKind::JobState { handle, field } => self.job_state(*handle, *field, e.ty, cx, env, span)?.leaf(span)?,
             other @ (ExprKind::Str(_)
             | ExprKind::None
             | ExprKind::Record { .. }
@@ -1097,7 +1115,6 @@ impl Enc<'_> {
             | ExprKind::Index2 { .. }
             | ExprKind::Slice { .. }
             | ExprKind::Format(_)
-            | ExprKind::JobState { .. }
             | ExprKind::Stream(_)
             | ExprKind::MatOp { .. }
             | ExprKind::Decode { .. }
@@ -1408,12 +1425,20 @@ impl Enc<'_> {
         flow: &mut Flow,
         span: Span,
     ) -> R<V> {
+        let mut values = Vec::new();
+        for a in args {
+            values.push(self.value(a, cx, env, flow)?);
+        }
+        self.native_value(id, values, span)
+    }
+
+    /// Das Ergebnis einer Native ueber ihren ausgewerteten Argumenten.
+    fn native_value(&mut self, id: takt_mir::NativeId, args: Vec<V>, span: Span) -> R<V> {
         use takt_native::Native;
         let n = self.p.natives[id.index()].clone();
         let Some(f) = Native::by_name(&n.name) else { return no(format!("Projekt-Native `{}`", n.name), span) };
         let mut blocks = Vec::new();
-        for (a, param) in args.iter().zip(&n.params) {
-            let v = self.value(a, cx, env, flow)?;
+        for (v, param) in args.into_iter().zip(&n.params) {
             let (len, bytes) = match self.p.types.get(param.ty) {
                 Type::Bytes { .. } => {
                     let V::Node(parts) = v else { return no("Bytes", span) };
@@ -2090,11 +2115,11 @@ impl Enc<'_> {
                     }
                 }
                 StmtKind::Cancel(c) => self.cancel_schedule(*c, &flow.alive, env)?,
+                StmtKind::Job { handle, native, args } => {
+                    self.job_start(*handle, *native, args, cx, env, flow, span)?
+                }
                 StmtKind::Observe(_) | StmtKind::Pass => {}
-                other @ (StmtKind::ForEach { .. }
-                | StmtKind::Return(_)
-                | StmtKind::Job { .. }
-                | StmtKind::Arm { .. }) => {
+                other @ (StmtKind::ForEach { .. } | StmtKind::Return(_) | StmtKind::Arm { .. }) => {
                     return no(format!("Anweisung {}", stmt_name(other)), span);
                 }
             }
@@ -2371,11 +2396,61 @@ impl Enc<'_> {
     /// aufgeloest, wie `resolve_m` es tut (Lemma 9.3.1 begrenzt die Tiefe).
     /// `under`: die Bedingung, unter der der Wechsel stattfindet — sie
     /// gehoert in jede Feuerbedingung, die seine Bloecke aufzeichnen.
+    /// `by_fault`: ein Fault-Pfad, der auch einen `resume`-Zustand ueber
+    /// `initial` betritt (5.12).
+    #[allow(clippy::too_many_arguments)]
     fn switch(
         &mut self,
         cx: &Cx<'_>,
         from: Option<StateId>,
         target: Target,
+        env: &mut Env,
+        depth: u32,
+        under: &Term,
+        by_fault: bool,
+    ) -> R<()> {
+        let m = cx.m.expect("Maschine");
+        let resumed = match target {
+            Target::State(s) if !by_fault && self.machine(m).states[s.index()].resume => s,
+            Target::State(s) => return self.switch_path(cx, from, target, self.descend(m, s), env, depth, under),
+            Target::Faulted => return self.switch_path(cx, from, target, Vec::new(), env, depth, under),
+            Target::Fault(_) => return no("Timeout-Fault einer Sequenz", self.machine(m).span),
+        };
+        // 5.12: Ein Uebergang auf einen `resume`-Zustand betritt das gemerkte
+        // Blatt, vor dem ersten Verlassen `initial`; ein Fault-Uebergang immer
+        // `initial`. Je moegliches Blatt ein Zweig.
+        let saved = env[&self.loc_saved(m, resumed)].clone();
+        let base = env.clone();
+        let none = Term::eq(saved.clone(), Term::int(-1));
+        self.switch_path(
+            cx,
+            from,
+            target,
+            self.descend(m, resumed),
+            env,
+            depth,
+            &Term::and(vec![under.clone(), none]),
+        )?;
+        let paths: Vec<Vec<StateId>> =
+            self.leaves(m).into_iter().map(|l| self.chain_to(m, l)).filter(|p| p.contains(&resumed)).collect();
+        for path in paths {
+            let hit = Term::eq(saved.clone(), Term::int(self.code(m, path[path.len() - 1])));
+            let mut branch = base.clone();
+            self.switch_path(cx, from, target, path, &mut branch, depth, &Term::and(vec![under.clone(), hit.clone()]))?;
+            *env = ite_env(&hit, &branch, env);
+        }
+        Ok(())
+    }
+
+    /// `switch` auf die Kette `new`; `target` bestimmt den gemeinsamen
+    /// Vorfahren (9.3).
+    #[allow(clippy::too_many_arguments)]
+    fn switch_path(
+        &mut self,
+        cx: &Cx<'_>,
+        from: Option<StateId>,
+        target: Target,
+        new: Vec<StateId>,
         env: &mut Env,
         depth: u32,
         under: &Term,
@@ -2386,14 +2461,15 @@ impl Enc<'_> {
             return no("Fault-Pfade tiefer als der Fault-Wald (Lemma 9.3.1)", machine.span);
         }
         let old = from.map(|s| self.chain_to(m, s)).unwrap_or_default();
-        let new = match target {
-            Target::Faulted => Vec::new(),
-            Target::State(s) => self.descend(m, s),
-            Target::Fault(_) => return no("Timeout-Fault einer Sequenz", machine.span),
-        };
         let mut common = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
         if let Target::State(s) = target {
             common = common.min(self.chain_to(m, s).len() - 1);
+        }
+        // 5.12: Was verlassen wird, merkt sich sein Blatt.
+        if let Some(&leaf) = old.last() {
+            for s in old[common..].iter().filter(|s| machine.states[s.index()].resume) {
+                env.insert(self.loc_saved(m, *s), Term::int(self.code(m, leaf)));
+            }
         }
         // (1) Die neue Konfiguration steht, bevor ein Block laeuft.
         let new_leaf = new.last().copied();
@@ -2458,6 +2534,10 @@ impl Enc<'_> {
                 }
                 for v in machine.states[s.index()].vars.clone() {
                     let def = machine.vars[v.index()].clone();
+                    // Der Eintritt laesst den Slot eines Job-Handles stehen (`enter_state`).
+                    if matches!(self.p.types.get(def.ty), Type::Handle(HandleKind::Job)) {
+                        continue;
+                    }
                     let value = match &def.init {
                         Some(e) => self.value(e, &entry, env, &mut flow)?,
                         None => self.zero_of(def.ty, def.span)?,
@@ -2507,34 +2587,41 @@ impl Enc<'_> {
             ExitKind::Goto(t) => {
                 out.insert(self.loc_latched(m), Term::bool(false));
                 // Der Timeout einer Sequenz nimmt den Fault-Pfad des Zustands (6.2).
-                let t = match t {
+                let (t, by_fault) = match t {
                     Target::Fault(kind) => {
                         self.record_fault(m, &self.cause(*kind, Span::default()), &mut out)?;
-                        self.clear_schedules(m, &mut out)?;
-                        fault_target
+                        self.clear_on_fault(m, &mut out)?;
+                        (fault_target, true)
                     }
-                    other => *other,
+                    other => (*other, false),
                 };
-                self.switch(cx, leaf, t, &mut out, depth, &exit.cond)?;
+                self.switch(cx, leaf, t, &mut out, depth, &exit.cond, by_fault)?;
             }
             ExitKind::Fault(explicit, cause) => {
                 self.record_fault(m, cause, &mut out)?;
-                self.clear_schedules(m, &mut out)?;
+                self.clear_on_fault(m, &mut out)?;
                 let t = explicit.unwrap_or(fault_target);
-                self.switch(cx, leaf, t, &mut out, depth, &exit.cond)?;
+                self.switch(cx, leaf, t, &mut out, depth, &exit.cond, true)?;
             }
             ExitKind::Abort(cause) => {
                 let latched = env[&self.loc_latched(m)].clone();
                 let mut sw = env.clone();
                 sw.insert(self.loc_latched(m), Term::bool(true));
                 self.record_fault(m, cause, &mut sw)?;
-                self.clear_schedules(m, &mut sw)?;
+                self.clear_on_fault(m, &mut sw)?;
                 let under = Term::and(vec![exit.cond.clone(), !latched.clone()]);
-                self.switch(cx, leaf, fault_target, &mut sw, depth, &under)?;
+                self.switch(cx, leaf, fault_target, &mut sw, depth, &under, true)?;
                 out = ite_env(&latched, env, &sw);
             }
         }
         Ok(out)
+    }
+
+    /// Was jeder Fault-Pfad abraeumt (5.3, `clear_on_fault`): die Jobs der
+    /// Maschine und die Warteschlangen ihrer geplanten Ausgaben.
+    fn clear_on_fault(&self, m: MachineId, env: &mut Env) -> R<()> {
+        self.jobs_cancel(m, env);
+        self.clear_schedules(m, env)
     }
 
     /// Ein Tick einer Maschine (`step_m`), je Blatt ein Zweig.
@@ -2547,6 +2634,7 @@ impl Enc<'_> {
         cur: &mut Env,
     ) -> R<()> {
         let machine = self.machine(m).clone();
+        self.jobs_poll(m, active, cur);
         let base = cur.clone();
         let faulted = base.get(&self.loc_faulted(m)).cloned().expect("faulted");
         let leaf_now = base.get(&self.loc_leaf(m)).cloned().expect("leaf");
@@ -2644,9 +2732,9 @@ impl Enc<'_> {
                 let mut env = base.clone();
                 env.insert(self.loc_latched(m), Term::bool(true));
                 self.record_fault(m, &self.cause(FaultKind::Abort, Span::default()), &mut env)?;
-                self.clear_schedules(m, &mut env)?;
+                self.clear_on_fault(m, &mut env)?;
                 let t = self.fault_target(m, leaf);
-                self.switch(&cx, Some(leaf), t, &mut env, 0, &is)?;
+                self.switch(&cx, Some(leaf), t, &mut env, 0, &is, true)?;
                 merged = ite_env(&is, &env, &merged);
             }
             *cur = merged;
@@ -2916,8 +3004,16 @@ impl Enc<'_> {
             }
             for i in 0..machine.states.len() {
                 env.insert(self.loc_timer(m, StateId(i as u32)), Term::int(0));
+                if machine.states[i].resume {
+                    env.insert(self.loc_saved(m, StateId(i as u32)), Term::int(-1));
+                }
             }
+            self.jobs_initial(m, &mut env)?;
             for (i, v) in machine.vars.iter().enumerate() {
+                // Ein Job-Handle hat keinen Wert; sein Lauf steht im Slot.
+                if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Job)) {
+                    continue;
+                }
                 if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Block(_))) {
                     let Some((_, fields)) = self.block_fields(m, VarId(i as u32)) else {
                         return no("Instanz-Array eines Blocks", v.span);
@@ -2991,7 +3087,7 @@ impl Enc<'_> {
             let pre = env.clone();
             let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
             self.unrolled = 0;
-            self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true))?;
+            self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true), false)?;
         }
         self.flush_sends(&mut env)?;
         self.advance(&actives, &mut env);
@@ -3068,6 +3164,15 @@ impl Enc<'_> {
                     out.push(Term::or(vec![active.not(), Term::bin(Op::Le, t, Term::int(n))]));
                 }
             }
+            // Gemerkt ist ein Blatt unter dem Zustand oder keines.
+            for s in (0..machine.states.len()).map(|i| StateId(i as u32)).filter(|s| machine.states[s.index()].resume) {
+                let saved = pre[&self.loc_saved(m, s)].clone();
+                let mut codes = vec![Term::eq(saved.clone(), Term::int(-1))];
+                for leaf in self.leaves(m).into_iter().filter(|l| self.chain_to(m, *l).contains(&s)) {
+                    codes.push(Term::eq(saved.clone(), Term::int(self.code(m, leaf))));
+                }
+                out.push(Term::or(codes));
+            }
             if machine.period > 1 {
                 let c = pre[&self.loc_countdown(m)].clone();
                 out.push(Term::and(vec![
@@ -3084,6 +3189,7 @@ impl Enc<'_> {
                 }
                 self.typed_loc(pre, &self.loc_var(m, VarId(i as u32)), v.ty, &mut out);
             }
+            self.job_invariants(m, pre, &mut out);
         }
         for (i, c) in self.p.channels.iter().enumerate() {
             if c.dir != Direction::Output {

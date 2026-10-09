@@ -434,7 +434,9 @@ fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth:
         }
         let _ = writeln!(p.out, "(check-sat)");
         if ask && kind == Query::Bmc {
-            let names: Vec<String> = (0..=steps).flat_map(|k| inputs.iter().map(move |(n, _)| at(n, k, tag))).collect();
+            let observed = state.iter().map(|v| &v.name).filter(|n| model.observed.contains(n));
+            let names: Vec<&String> = inputs.iter().map(|(n, _)| n).chain(observed).collect();
+            let names: Vec<String> = (0..=steps).flat_map(|k| names.iter().map(move |n| at(n, k, tag))).collect();
             if !names.is_empty() {
                 let _ = writeln!(p.out, "(get-value ({}))", names.join(" "));
             }

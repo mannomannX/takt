@@ -732,6 +732,47 @@ fn a_capture_counterexample_is_confirmed() {
     assert!(stimulus.contains("in wave ") && stimulus.contains(";["), "{stimulus}");
 }
 
+/// Ein Job (4.5), der seine Dauer ueberschreitet, steht im Gegenbeispiel als
+/// Aufzeichnung `job <maschine> <handle> done`, und der Interpreter
+/// bestaetigt es.
+#[test]
+fn a_late_job_counterexample_is_confirmed() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+native job sha256(b: bytes<16>) -> bytes<32> with cost = 4000, stack = 640, duration = 25 ms, total
+
+output slow : bool @ hw(\"o/slow\") with safe = false
+
+machine m:
+    var msg : bytes<16> = default
+    initial RUN
+
+    state RUN:
+        sequence:
+            job v = sha256(msg)
+            until v.done timeout 50 ms -> SLOW
+            -> DONE
+
+    state SLOW:
+        enter:
+            slow = true
+
+    state DONE:
+        when false: -> RUN
+
+property quick: never(slow)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 8, &solver, 60).expect("Solver laeuft");
+    let Verdict::Violated { stimulus, .. } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    assert!(stimulus.contains(" job m v done"), "{stimulus}");
+}
+
 /// Eine Native der kuratierten Menge (4.5) sieht der Solver wie eine
 /// Funktion aus `libtaktm`: Was ihre Breite traegt, ist bewiesen; ein Pfad
 /// ueber einen Wert, den die Pruefsumme nie annimmt, bleibt offen.

@@ -871,7 +871,47 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
             }
         }
     }
+    job_records(values, program, depth, &mut out);
     out
+}
+
+/// Die Aufzeichnungen der Jobs (4.5) aus den Faelligkeiten des
+/// Gegenbeispiels. Eine Aufzeichnung gilt fuer jeden Lauf, dessen Modell-Tick
+/// nicht nach ihr liegt (`job_start`): Ein puenktlicher Lauf vor einem
+/// verspaeteten steht darum mit seinem eigenen Tick im Stimulus.
+fn job_records(values: &BTreeMap<(u32, String), Val>, program: &Program, depth: u32, out: &mut String) {
+    let tick = program.config.tick.max(1);
+    for m in &program.machines {
+        for slot in &m.layout.job_slots {
+            let handle = &m.vars[slot.handle.index()].name;
+            let loc = format!("s.{}.job.{handle}.due", m.name);
+            let d = program.natives[slot.native.index()].duration.unwrap_or(0).max(0);
+            let span = d.saturating_add(tick - 1) / tick;
+            // Je Lauf Modell-Tick und Faelligkeit; ein Lauf, der die
+            // Faelligkeit seines Vorgaengers uebernimmt, hat keine eigene.
+            let mut runs = Vec::new();
+            let mut prev = -1;
+            for k in 0..=depth {
+                let Some(Val::Int(due)) = values.get(&(k, loc.clone())) else { continue };
+                if *due != prev {
+                    runs.push((i64::from(k) + span, due / tick));
+                    prev = *due;
+                }
+            }
+            let mut records = Vec::new();
+            let mut later = false;
+            for &(modelled, due) in runs.iter().rev() {
+                if due > modelled || later {
+                    records.push(due);
+                }
+                later |= due > modelled;
+            }
+            records.sort_unstable();
+            for r in records {
+                let _ = writeln!(out, "t={r} job {} {handle} done", m.name);
+            }
+        }
+    }
 }
 
 /// Ein Wert aus den Blaettern des Modells in der Textform des Stimulus

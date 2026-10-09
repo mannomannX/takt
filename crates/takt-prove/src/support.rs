@@ -127,11 +127,11 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Armed => No("Trigger sind nicht kodiert"),
         ExprTag::Stream => Yes,
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
-        ExprTag::JobState => No("Jobs sind nicht kodiert"),
+        ExprTag::JobState => Partial("ueber den Natives, die das Modell rechnet; nicht die Kryptofunktionen"),
         ExprTag::Decode => Partial("ohne Fliesskomma- und `u64`-Felder"),
-        ExprTag::NativeCall => {
-            Partial("Pruefsummen und Digests der kuratierten Menge; nicht `sha256_*`, `fft256` und die Jobs")
-        }
+        ExprTag::NativeCall => Partial(
+            "Pruefsummen und Digests der kuratierten Menge; nicht `sha256_*`, `fft256` und die Kryptofunktionen",
+        ),
         ExprTag::MatOp => No("Matrizen sind nicht kodiert"),
     }
 }
@@ -240,7 +240,7 @@ fn stmt(s: StmtTag) -> Support {
         StmtTag::Arm => No("Trigger sind nicht kodiert"),
         StmtTag::Every => Yes,
         StmtTag::At => Yes,
-        StmtTag::Job => No("Jobs sind nicht kodiert"),
+        StmtTag::Job => Partial("ueber den Natives, die das Modell rechnet; nicht die Kryptofunktionen"),
     }
 }
 
@@ -261,8 +261,8 @@ fn ty(t: TypeTag) -> Support {
         TypeTag::Str | TypeTag::Line | TypeTag::Result => Partial("nicht als Typ eines Inputs"),
         TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),
         TypeTag::Map => Yes,
-        TypeTag::Capture => Yes,
-        TypeTag::Samples | TypeTag::Mat | TypeTag::HandleJob | TypeTag::HandleTrigger => NO_SORT,
+        TypeTag::Capture | TypeTag::HandleJob => Yes,
+        TypeTag::Samples | TypeTag::Mat | TypeTag::HandleTrigger => NO_SORT,
     }
 }
 

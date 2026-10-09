@@ -282,6 +282,30 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
             inputs.insert((k, format!("i.stream.{s}.n")), Val::Int(n));
         }
     }
+    // 4.5: Die Verspaetung eines Jobs, der im Tick k startet, bis zur
+    // fruehesten Aufzeichnung ab seinem Modell-Tick (`job_start`).
+    for (n, _) in &model.inputs {
+        let Some((machine, handle)) =
+            n.strip_prefix("i.job.").and_then(|r| r.strip_suffix(".delay")).and_then(|r| r.split_once('.'))
+        else {
+            continue;
+        };
+        let def = p.machines.iter().find(|m| m.name == machine).expect("Maschine eines Jobs");
+        let slot = def.layout.job_slots.iter().find(|s| def.vars[s.handle.index()].name == handle).expect("Job-Slot");
+        let t0 = p.config.tick.max(1);
+        let span = (p.natives[slot.native.index()].duration.unwrap_or(0).max(0) + t0 - 1) / t0;
+        let records: Vec<u64> = stim
+            .lines
+            .iter()
+            .filter(|l| matches!(&l.kind, LineKind::Job { machine: m, handle: h } if m == machine && h == handle))
+            .map(|l| l.tick)
+            .collect();
+        for k in 0..=ticks {
+            let modelled = k + u64::try_from(span).expect("Dauer");
+            let late = records.iter().filter(|&&r| r >= modelled).min().map_or(0, |r| r - modelled);
+            inputs.insert((k, n.clone()), Val::Int(i64::try_from(late).expect("Verspaetung")));
+        }
+    }
     let mut states: Vec<eval::Env> = Vec::new();
     for k in 0..=ticks {
         let mut env = states.last().cloned().unwrap_or_default();
@@ -548,6 +572,10 @@ t={k} in b {}.5 V
                 .to_string(),
             20,
         ),
+        // `resume` (5.12): zurueck in FIRST, dann in SECOND (Schritt 27c-8).
+        "60_resume.takt" => ("t=1 cmd pause\nt=3 cmd work\nt=7 cmd pause\nt=9 cmd work\n".to_string(), 12),
+        // Jobs (Schritt 27c-8): Die Aufzeichnung verlegt die Fertigstellung.
+        "40_jobs.takt" => ("t=6 job m v done\n".to_string(), 12),
         // Registerports (Schritt 27c-6).
         "68_uart_port.takt" | "120_port_writes.takt" => (String::new(), 30),
         // Instanz-Arrays (Schritt 27a-10).
@@ -1358,6 +1386,114 @@ machine m:
 #[test]
 fn natives_agree() {
     agree_program("NATIVES", &compile("NATIVES", NATIVES), "", 20);
+}
+
+/// Jobs (4.5): `a` startet neu, waehrend er laeuft, und uebernimmt die
+/// Aufzeichnung seines Vorgaengers; der erste Lauf von `c` endet puenktlich
+/// vor einem verspaeteten, den ein Fault abbricht, und `resume` fuehrt in die
+/// Sequenz zurueck, die `CANCELLED` liest. `s` laeuft alle zwei Ticks und
+/// sieht die Fertigstellung erst in seiner naechsten Aktivierung.
+const JOBS: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+native job sha256(b: bytes<16>) -> bytes<32> with cost = 4000, stack = 640, duration = 25 ms, total
+native job crc32(b: bytes<16>) -> u32 with cost = 400, stack = 32, duration = 10 ms, total
+native job hmac_sha256(key: bytes<8>, msg: bytes<16>) -> bytes<32> with cost = 8000, stack = 992, duration = 25 ms, total
+
+command hit
+
+output a_done : bool         @ sim("o/a_done")
+output a_err  : JobErr       @ sim("o/a_err")
+output a_word : u32          @ sim("o/a_word")
+output c_done : bool         @ sim("o/c_done")
+output c_err  : JobErr       @ sim("o/c_err")
+output c_sum  : u32          @ sim("o/c_sum")
+output s_done : bool         @ sim("o/s_done")
+output s_word : u32          @ sim("o/s_word")
+output hurt   : int in 0..9  @ sim("o/hurt")
+
+fn first(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
+
+machine m:
+    var msg  : bytes<16> = default
+    var z    : int in 0..9 = 0
+    var turn : int in 0..9 = 0
+    fault -> HURT
+    initial WORK
+
+    state WORK resume:
+        initial RUN
+
+        state RUN:
+            sequence:
+                msg.push(0x61)
+                job a = sha256(msg)
+                job c = crc32(msg)
+                a_err = a.result.err.or(FAILED)
+                c_err = c.result.err.or(FAILED)
+                wait 20 ms
+                msg.push(0x62)
+                job a = sha256(msg)
+                a_err = a.result.err.or(FAILED)
+                c_done = c.done
+                until a.done timeout 1 s -> STUCK
+                a_done = a.done
+                a_err = a.result.err.or(FAILED)
+                a_word = first(a.result.or(default))
+                c_sum = c.result.or(0)
+                job c = crc32(msg)
+                c_done = c.done
+                c_err = c.result.err.or(FAILED)
+                until hit timeout 1 s -> STUCK
+                z = z + 10 * (1 - turn)
+                c_done = c.done
+                c_err = c.result.err.or(FAILED)
+                job a = sha256(msg)
+                until a.done timeout 1 s -> STUCK
+                a_word = first(a.result.or(default))
+                -> DONE
+
+    state HURT:
+        enter:
+            turn = min(turn + 1, 9)
+            hurt = turn
+
+        after 30 ms: -> WORK
+
+    state DONE:
+        when false: -> WORK
+
+    state STUCK:
+        when false: -> WORK
+
+machine s every 20 ms:
+    var key : bytes<8>  = default
+    var msg : bytes<16> = default
+    initial RUN
+
+    state RUN:
+        sequence:
+            msg.push(0x31)
+            job h = hmac_sha256(key, msg)
+            s_done = h.done
+            until h.done timeout 1 s -> STUCK
+            s_done = h.done
+            s_word = first(h.result.or(default))
+            -> DONE
+
+    state DONE:
+        when false: -> RUN
+
+    state STUCK:
+        when false: -> RUN
+"#;
+
+#[test]
+fn jobs_agree() {
+    let stim = "t=1 job m c done\nt=7 job m a done\nt=12 cmd hit\nt=30 job m c done\n";
+    agree_program("JOBS", &compile("JOBS", JOBS), stim, 25);
 }
 
 /// `map<K, V, N>` (3.9): Schluessel mit demselben Heimatplatz (0, 4 und 8
