@@ -436,15 +436,26 @@ impl Outer for MachineEnv<'_, '_> {
 
     /// 12.10: Ein Schreibvorgang wird ein Element des Eingangsstroms
     /// `mmio/ADR/w` — in Reihenfolge, auch mehrere je Tick, sichtbar ab dem
-    /// naechsten Tick (`Image::deliver_port_writes`).
+    /// naechsten Tick (`Image::deliver_port_writes`). Traegt der Strom Bytes,
+    /// ist das Element die kanonische Form des Records, wie im erzeugten Code
+    /// (FB-474).
     fn port_write(&mut self, p: PortId, v: Value) -> EvalResult<()> {
-        let port = &self.loaded.program.ports[p.index()];
+        let program = self.loaded.program;
+        let port = &program.ports[p.index()];
         let want = format!("mmio/{:#x}/w", port.address);
-        let Some(i) = self.loaded.program.channels.iter().position(|c| sim_address(c) == Some(want.clone())) else {
+        let Some(i) = program.channels.iter().position(|c| sim_address(c) == Some(want.clone())) else {
             return Ok(());
         };
+        let value = match self.loaded.ty(program.channels[i].ty) {
+            Type::Stream(e) if matches!(self.loaded.ty(*e), Type::Bytes { .. }) => {
+                let bytes = crate::bytes::encode(program, &v, port.ty)
+                    .map_err(|e| Trap::Bug(format!("Port `{}` ohne kanonische Form ({e:?})", port.name)))?;
+                Value::Bytes(bytes)
+            }
+            _ => v,
+        };
         let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
-        self.image.queue_port_write(ChannelId(i as u32), t, v);
+        self.image.queue_port_write(ChannelId(i as u32), t, value);
         Ok(())
     }
 

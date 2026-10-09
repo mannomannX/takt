@@ -70,7 +70,8 @@ pub fn support(c: Construct) -> Support {
         Construct::Match(MatchKind::Matches | MatchKind::Has) => Partial("kein `{x:float}`"),
         Construct::Stmt(s) => stmt(s),
         Construct::Place(PlaceTag::Var | PlaceTag::Output | PlaceTag::Field | PlaceTag::Index) => Yes,
-        Construct::Place(PlaceTag::Port | PlaceTag::Index2) => No("Zuweisung an Port oder Matrixelement"),
+        Construct::Place(PlaceTag::Port) => Yes,
+        Construct::Place(PlaceTag::Index2) => No("Zuweisung an ein Matrixelement"),
         Construct::Type(t) => ty(t),
         Construct::Seq(
             SeqTag::Stmt | SeqTag::Wait | SeqTag::Expect | SeqTag::Repeat | SeqTag::Step | SeqTag::Until,
@@ -122,7 +123,8 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Slice => Partial("auf Bytes und Vektoren; nicht auf einem Array"),
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
         ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
-        ExprTag::Armed | ExprTag::PortRead => No("Trigger und Registerports sind nicht kodiert"),
+        ExprTag::PortRead => Partial("nicht mit einem Strom als Modell des Lesekanals"),
+        ExprTag::Armed => No("Trigger sind nicht kodiert"),
         ExprTag::Stream => Yes,
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
         ExprTag::JobState => No("Jobs sind nicht kodiert"),
@@ -328,6 +330,7 @@ fn feature(f: Feature) -> Support {
         Feature::ScopedInstance => No("gescopte Instanzen sind nicht kodiert"),
         Feature::CheckConfirm => Yes,
         Feature::CheckWithin => Yes,
-        Feature::Trigger | Feature::Port => No("Trigger und Registerports sind nicht kodiert"),
+        Feature::Port => Partial("nicht mit einem Strom als Modell des Lesekanals"),
+        Feature::Trigger => No("Trigger sind nicht kodiert"),
     }
 }

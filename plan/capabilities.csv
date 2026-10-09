@@ -20,8 +20,8 @@ Expr(Published),ja,ja,ja
 Expr(StateOf),ja,ja,ja
 Expr(Signal),ja,ja,ja
 Expr(Builtin),ja,ja,ja
-Expr(Armed),ja,nein: Trigger und Registerports sind nicht kodiert,nein
-Expr(PortRead),ja,nein: Trigger und Registerports sind nicht kodiert,ja
+Expr(Armed),ja,nein: Trigger sind nicht kodiert,nein
+Expr(PortRead),ja,teilweise: nicht mit einem Strom als Modell des Lesekanals,ja
 Expr(Field),ja,teilweise: auf Records; nicht auf den Feldern einer Variante,ja
 Expr(Index),ja,"teilweise: auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays",ja
 Expr(Index2),ja,nein: Matrizen sind nicht kodiert,ja
@@ -131,7 +131,7 @@ Accessor(Len),teilweise: `.len` nur auf Sammlungen,"teilweise: auf Arrays, Bytes
 Accessor(Count),ja,teilweise: auf Arrays und Stroemen,ja
 Accessor(Dropped),ja,ja,ja
 Accessor(Malformed),ja,ja,nein
-Accessor(Overflowed),ja,ja,nein
+Accessor(Overflowed),ja,ja,ja
 Accessor(Free),ja,ja,ja
 Accessor(Jitter),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(TimeWarped),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -185,10 +185,10 @@ Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethod
 Stmt(Pass),ja,ja,ja
 Place(Var),ja,ja,ja
 Place(Output),ja,ja,ja
-Place(Port),ja,nein: Zuweisung an Port oder Matrixelement,ja
+Place(Port),ja,ja,ja
 Place(Field),ja,ja,ja
 Place(Index),ja,ja,ja
-Place(Index2),ja,nein: Zuweisung an Port oder Matrixelement,ja
+Place(Index2),ja,nein: Zuweisung an ein Matrixelement,ja
 Type(Bool),ja,ja,ja
 Type(Int),ja,teilweise: ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen,ja
 Type(Float),ja,ja,ja
@@ -270,8 +270,8 @@ Feature(Profile),ja,ja,ja
 Feature(Property),ja,ja,ja
 Feature(Assumption),ja,ja,ja
 Feature(Monitor),ja,ja,ja
-Feature(Trigger),ja,nein: Trigger und Registerports sind nicht kodiert,ja
-Feature(Port),ja,nein: Trigger und Registerports sind nicht kodiert,ja
+Feature(Trigger),ja,nein: Trigger sind nicht kodiert,ja
+Feature(Port),ja,teilweise: nicht mit einem Strom als Modell des Lesekanals,ja
 Feature(Recorded),ja,ja,ja
 Feature(Campaign),ja,ja,ja
 Feature(Node),ja,ja,nein

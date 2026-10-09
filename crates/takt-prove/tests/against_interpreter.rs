@@ -525,6 +525,8 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Registerports (Schritt 27c-6).
+        "68_uart_port.takt" | "120_port_writes.takt" => (String::new(), 30),
         // Instanz-Arrays (Schritt 27a-10).
         "74_instance_index.takt" => (String::new(), 20),
         // Records ueber eine `sim`-Bindung (Schritt 27c-5).

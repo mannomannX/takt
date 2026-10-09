@@ -85,13 +85,16 @@ pub(super) struct Mark {
     seq: Term,
 }
 
-/// Ein `send` dieses Ticks auf einen internen Strom.
+/// Ein `send` dieses Ticks auf einen internen Strom oder ein
+/// Schreibvorgang auf einen Port (`port`), der seinen Ueberlauf erst beim
+/// Zustellen zaehlt.
 #[derive(Clone, Debug)]
 pub(super) struct Queued {
-    stream: usize,
-    cond: Term,
-    t: Term,
-    value: V,
+    pub(super) stream: usize,
+    pub(super) cond: Term,
+    pub(super) t: Term,
+    pub(super) value: V,
+    pub(super) port: bool,
 }
 
 /// Was ein Guard ueber einem Strom ergibt (8.7): ob er feuert, die Bindung
@@ -346,7 +349,7 @@ impl Enc<'_> {
         }
     }
 
-    fn stream_index(&self, key: StreamRef, span: Span) -> R<usize> {
+    pub(super) fn stream_index(&self, key: StreamRef, span: Span) -> R<usize> {
         match self.streams.iter().position(|s| s.key == key) {
             Some(i) => Ok(i),
             None => no("Strom", span),
@@ -470,6 +473,12 @@ impl Enc<'_> {
     /// ueber; ein Element ueber der Byteschranke passt nie. Wahr, wo er
     /// ueberlief.
     fn push(&mut self, s: &Stream, env: &mut Env, cond: &Term, t: &Term, value: &V) -> R<Term> {
+        self.push_as(s, env, cond, t, value, s.overflow == Overflow::DropOldest)
+    }
+
+    /// `push` (`StreamBuf::push`): ohne `drop_oldest` verliert ein voller
+    /// Ring das neue Element und zaehlt den Ueberlauf.
+    fn push_as(&mut self, s: &Stream, env: &mut Env, cond: &Term, t: &Term, value: &V, drop_oldest: bool) -> R<Term> {
         let span = Span::default();
         let cap = Term::int(i64::from(s.cap));
         let size = match s.budget {
@@ -491,7 +500,7 @@ impl Enc<'_> {
             (Some(size), Some(budget)) => Term::bin(Op::Gt, size.clone(), Term::int(i64::from(budget))),
             _ => Term::bool(false),
         };
-        if s.overflow != Overflow::DropOldest || s.cap == 0 {
+        if !drop_oldest || s.cap == 0 {
             let ok = fits(self, env)?;
             let over = Term::and(vec![cond.clone(), ok.clone().not()]);
             bump(env, &loc(s, "overflowed"), &over);
@@ -1064,7 +1073,7 @@ impl Enc<'_> {
                 .push(Exit { cond: over, kind: ExitKind::Fault(None, self.cause(FaultKind::StreamOverflow, span)) });
             flow.alive = fits.clone();
         }
-        self.queued.push(Queued { stream: si, cond: fits, t: self.now.clone(), value: v });
+        self.queued.push(Queued { stream: si, cond: fits, t: self.now.clone(), value: v, port: false });
         Ok(())
     }
 
@@ -1132,7 +1141,9 @@ impl Enc<'_> {
     pub(super) fn flush_sends(&mut self, cur: &mut Env) -> R<()> {
         for q in std::mem::take(&mut self.queued) {
             let s = self.streams[q.stream].clone();
-            if s.overflow == Overflow::DropOldest {
+            if q.port {
+                self.push_as(&s, cur, &q.cond, &q.t, &q.value, false)?;
+            } else if s.overflow == Overflow::DropOldest {
                 self.push(&s, cur, &q.cond, &q.t, &q.value)?;
             } else {
                 self.append(&s, cur, &q.cond, &q.t, &q.value)?;

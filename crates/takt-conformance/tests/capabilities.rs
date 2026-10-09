@@ -85,7 +85,6 @@ const UNUSED: &[(&str, &[&str])] = &[
             "Accessor(Age)",
             "Accessor(T)",
             "Accessor(Malformed)",
-            "Accessor(Overflowed)",
             "Accessor(Jitter)",
             "Accessor(Last)",
             "Accessor(StartsWith)",

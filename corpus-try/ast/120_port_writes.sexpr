@@ -1,0 +1,46 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record Reg layout=little
+  (bits flags: u8
+    (ready: bool at 0)
+    (fail: bool at 1))
+  (count: u16))
+(record RegModel layout=little
+  (flags: u8)
+  (count: u16))
+(port dev :Reg @mmio(0x40000000))
+(port bare :Reg @mmio(0x40001000))
+(output dev_r :RegModel @sim("mmio/0x40000000/r"))
+(input dev_w :stream<bytes<4>> @sim("mmio/0x40000000/w") capacity=8 max_rate=200[Hz])
+(output ready :bool @sim("ready"))
+(output count :int in 0..999 @sim("count"))
+(output plain :int in 0..999 @sim("plain"))
+(output got :int in 0..999 @sim("got"))
+(output first :int in 0..255 @sim("first"))
+(output lost :int in 0..999 @sim("lost"))
+(machine model every=10ms
+  (var n :int in 0..99 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= n (% (paren (+ n 1)) 100))
+      (= (.count dev_r) (as n u16))
+      (= (.flags dev_r) (as (paren (% n 2)) u8)))))
+(driver-machine drv
+  (var k :int in 0..99 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (= k (% (paren (+ k 1)) 100))
+      (= ready (.ready (.flags dev)))
+      (= count (as (.count dev) int))
+      (= plain (as (.count bare) int))
+      (= (.fail (.flags dev)) true)
+      (if (== (% k 3) 0)
+        (= dev (Reg flags=1 count=2))
+        (= (.count dev) 7))
+      (= lost (.overflowed dev_w)))
+    (on dev_w as w
+      (= got (% (paren (+ got (.len (.data w)))) 1000))
+      (= first (as (index (.data w) 0) int)))))

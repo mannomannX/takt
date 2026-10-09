@@ -1,0 +1,65 @@
+# 120 — Schreibvorgaenge auf einen Registerport als Elemente (12.10,
+# FB-474): Ein Feld und der ganze Record gehen je als Element in den
+# Schreibstrom `mmio/ADR/w`, in kanonischer Form, wenn er Bytes traegt —
+# im Interpreter wie im erzeugten Code. Ein Port ohne Modell liest den
+# Default. Der Schreibstrom fasst alle Vorgaenge eines Ticks; was ein
+# voller Strom tut, ist offen (FB-475).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+record Reg layout little:
+    flags : u8 with bits:
+        ready : bool at 0
+        fail  : bool at 1
+    count : u16
+
+record RegModel layout little:
+    flags : u8
+    count : u16
+
+port dev : Reg @ mmio(0x40000000)
+port bare : Reg @ mmio(0x40001000)
+
+output dev_r : RegModel         @ sim("mmio/0x40000000/r")
+input  dev_w : stream<bytes<4>> @ sim("mmio/0x40000000/w") with capacity = 8, max_rate = 200 Hz
+
+output ready : bool          @ sim("ready")
+output count : int in 0..999 @ sim("count")
+output plain : int in 0..999 @ sim("plain")
+output got   : int in 0..999 @ sim("got")
+output first : int in 0..255 @ sim("first")
+output lost  : int in 0..999 @ sim("lost")
+
+machine model every 10 ms:
+    var n : int in 0..99 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            n = (n + 1) % 100
+            dev_r.count = n as u16
+            dev_r.flags = (n % 2) as u8
+
+driver machine drv:
+    var k : int in 0..99 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 100
+            ready = dev.flags.ready
+            count = dev.count as int
+            plain = bare.count as int
+            dev.flags.fail = true
+            if k % 3 == 0:
+                dev = Reg(flags = 1, count = 2)
+                dev.count = 7
+            lost = dev_w.overflowed
+
+        on dev_w as w:
+            got = (got + w.data.len) % 1000
+            first = w.data[0] as int

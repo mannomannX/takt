@@ -48,6 +48,7 @@ mod fault;
 mod map;
 mod monitor;
 mod pattern;
+mod port;
 mod sched;
 mod stream;
 mod text;
@@ -344,6 +345,9 @@ struct Enc<'p> {
     /// Der Zustand nach dem Zustellen des laufenden Ticks: Aus ihm stehen
     /// die Fenster fest (9.6).
     delivered: Env,
+    /// Das committete Abbild am Tick-Anfang (`committed_output`), das ein
+    /// Port liest (12.10): vor dem ersten Eintritt die Safe-Werte.
+    committed: Env,
     /// Die Fenster des laufenden Ticks je Leser und Cursor.
     windows: BTreeMap<(MachineId, usize), stream::Window>,
     /// Was die Konstrukte des laufenden Ticks untersucht haben.
@@ -583,6 +587,7 @@ impl<'p> Enc<'p> {
             streams: Vec::new(),
             txs: Vec::new(),
             delivered: Env::new(),
+            committed: Env::new(),
             windows: BTreeMap::new(),
             marks: Vec::new(),
             queued: Vec::new(),
@@ -2856,6 +2861,7 @@ impl Enc<'_> {
         self.aborts.clear();
         self.deliver(Some(pre), &mut cur)?;
         self.delivered = cur.clone();
+        self.committed = pre.clone();
         self.windows.clear();
         for &m in &self.order.clone() {
             let active = actives[&m].clone();
@@ -2946,6 +2952,7 @@ impl Enc<'_> {
         for (loc, ty, value) in self.safe_outputs()? {
             self.init_loc(&mut env, &loc, ty, value, Span::default())?;
         }
+        self.committed = env.clone();
         // `init_vars` liest Ψ mit den Anfangswerten; die Eintritte lesen
         // frisch (7.2), also gilt jede Maschine als aktiv.
         let actives: BTreeMap<MachineId, Term> = self.order.iter().map(|&m| (m, Term::bool(true))).collect();

@@ -503,6 +503,7 @@ impl Enc<'_> {
                 self.variant(e.ty, *variant, values, span)?
             }
             ExprKind::Lift(x) => V::Node(vec![V::Leaf(Term::bool(true)), self.value(x, cx, env, flow)?]),
+            ExprKind::PortRead(p) => self.port_value(*p, span)?,
             ExprKind::Builtin(Builtin::LastFault) => {
                 let Some(m) = cx.m else { return no("`last_fault` ausserhalb einer Maschine", span) };
                 let at = self.loc_last_fault(m);
@@ -597,7 +598,6 @@ impl Enc<'_> {
             | ExprKind::Signal { .. }
             | ExprKind::Builtin(_)
             | ExprKind::Armed(_)
-            | ExprKind::PortRead(_)
             | ExprKind::Index2 { .. }
             | ExprKind::Accessor { .. }
             | ExprKind::Unary { .. }
@@ -1373,7 +1373,15 @@ impl Enc<'_> {
         let (base, ty) = match root {
             Place::Var(id) => (self.loc_var(m, *id), self.machine(m).vars[id.index()].ty),
             Place::Output(c) => (self.loc_out(*c), self.p.channels[c.index()].ty),
-            _ => return no("Zuweisung an einen Port", span),
+            // 12.10: Unter einem Port liegt kein Speicher; der ganze Record
+            // wird gelesen, veraendert und zurueckgeschrieben.
+            Place::Port(p) => {
+                let (p, ty) = (*p, self.p.ports[p.index()].ty);
+                let old = self.port_value(p, span)?;
+                let new = self.write_into(place, indices, pending, ty, &old, v, cx, flow, span)?;
+                return self.port_write(p, new, flow, span);
+            }
+            _ => return no("Zuweisung an diese Stelle", span),
         };
         let shape = self.shape(ty, span)?;
         let old = self.load(env, &base, &shape, span)?;
