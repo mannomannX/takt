@@ -2526,8 +2526,8 @@ pub fn trigger_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         return Ok(());
     }
     let mut ctx = Ctx::new(m, st, p);
-    // Ein Fault in der Trigger-Phase beendet den Lauf, wie ein Trap im
-    // Interpreter: Die Runtime bricht ab (5.4).
+    // 7.5: Ein Fault der Trigger-Phase gehoert der armierenden Maschine;
+    // ausserhalb des Planens endet mit ihm die Phase (FB-484).
     let fault = format!("fault_{}_triggers", m.name);
     ctx.fault = Some(fault.clone());
     for (i, t) in mine {
@@ -2538,13 +2538,23 @@ pub fn trigger_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
     }
     module.void_inst("ret void");
     module.label(&fault);
-    let site = ctx.next_site();
-    module.void_inst(&format!(
-        "call void @{}(ptr %arena, i32 {}, i32 {site})",
-        module.runtime(crate::abi::Abi::ABORT),
-        ctx.machine_index
-    ));
+    let slot = module.fault_slot();
+    let code = module.inst(&format!("load i32, ptr {slot}"));
+    pend(&code.to_string(), &mut ctx, module)?;
+    module.void_inst("ret void");
     module.end(None);
+    Ok(())
+}
+
+/// Merkt der armierenden Maschine einen Fault der Trigger-Phase vor, wenn
+/// noch keiner wartet (7.5, FB-484); ihr Schritt stellt ihn zu Beginn zu
+/// wie einen Stream-Ueberlauf.
+fn pend(code: &str, ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
+    let at = ctx.field(Role::Deliver, 0, m).ok_or(NotYet { what: "`deliver` im Zustand" })?;
+    let old = m.inst(&format!("load i32, ptr {at}"));
+    let free = m.inst(&format!("icmp eq i32 {old}, 0"));
+    let new = m.inst(&format!("select i1 {free}, i32 {code}, i32 {old}"));
+    m.void_inst(&format!("store i32 {new}, ptr {at}"));
     Ok(())
 }
 
@@ -2571,15 +2581,29 @@ fn one_trigger(
     let (skip, head, body, end_at) =
         (format!("t{k}_{name}_aus"), format!("t{k}_{name}"), format!("t{k}_{name}_rumpf"), format!("t{k}_{name}_ende"));
 
-    let armed = m.inst(&format!("load i1, ptr {armed_ptr}"));
-    m.void_inst(&format!("br i1 {armed}, label %{head}, label %{skip}"));
-    m.label(&head);
+    let buf = crate::stream::scratch(ctx.program, elem, m)?;
     let cur = m.inst(&format!("load i64, ptr {cur_ptr}"));
     let n =
         m.inst(&format!("call i32 @{}(ptr %arena, i32 {sid}, i64 {cur})", m.runtime(crate::stream::Streams::COUNT)));
+    let armed = m.inst(&format!("load i1, ptr {armed_ptr}"));
+    let (idle, follow) = (format!("t{k}_{name}_ruht"), format!("t{k}_{name}_folgt"));
+    m.void_inst(&format!("br i1 {armed}, label %{head}, label %{idle}"));
+    // 7.5: Ein nicht armierter Trigger lauscht nicht; sein Cursor folgt
+    // dem Strom, und nach `arm` sieht er nur Neues (FB-484). Die Folge-
+    // nummern koennen nach einem Ueberlauf Luecken haben, also zaehlt die
+    // des letzten Elements.
+    m.label(&idle);
+    let any = m.inst(&format!("icmp sgt i32 {n}, 0"));
+    m.void_inst(&format!("br i1 {any}, label %{follow}, label %{skip}"));
+    m.label(&follow);
+    let last_i = m.inst(&format!("sub i32 {n}, 1"));
+    let last = crate::stream::at(ctx.program, elem, sid, cur, last_i, buf, m)?;
+    let after = m.inst(&format!("add i64 {last}, 1"));
+    m.void_inst(&format!("store i64 {after}, ptr {cur_ptr}"));
+    m.void_inst(&format!("br label %{skip}"));
+    m.label(&head);
     let i_ptr = m.alloca("i32");
     m.void_inst(&format!("store i32 0, ptr {i_ptr}"));
-    let buf = crate::stream::scratch(ctx.program, elem, m)?;
     let loop_head = format!("{head}_schleife");
     m.void_inst(&format!("br label %{loop_head}"));
     m.label(&loop_head);
@@ -2599,7 +2623,18 @@ fn one_trigger(
     m.void_inst(&format!("br i1 {hit}, label %{fire}, label %{step_on}"));
     m.label(&fire);
     m.void_inst(&format!("store i1 false, ptr {armed_ptr}"));
-    plan_outputs(t, &event, ctx, m)?;
+    // Ein Fault beim Rechnen von Zeit und Werten gehoert der armierenden
+    // Maschine; der Trigger hat gefeuert (7.5, FB-484).
+    let (planned, failed) = (format!("{body}_geplant"), format!("{body}_fault"));
+    let outer = ctx.fault.replace(failed.clone());
+    plan_outputs(t, &event, buf, &planned, ctx, m)?;
+    ctx.fault = outer;
+    m.label(&failed);
+    let slot = m.fault_slot();
+    let code = m.inst(&format!("load i32, ptr {slot}"));
+    pend(&code.to_string(), ctx, m)?;
+    m.void_inst(&format!("br label %{planned}"));
+    m.label(&planned);
     emit_fired(t, &event, ctx, m)?;
     m.void_inst(&format!("br label %{end_at}"));
     m.label(&step_on);
@@ -2706,18 +2741,21 @@ fn fill_event(
     Ok(())
 }
 
-/// Die Ausgaben des `then` fuer `event.t + d` planen (7.5, 9.8).
-///
-/// Ein Ueberlauf von `sched` ist hier kein Fault-Zweig wie im `at` einer
-/// Maschine: Der Trigger hat keinen Zustand und kein Fault-Ziel (7.5).
-/// Der Rueckgabewert wird darum verworfen — die Runtime zaehlt ihn.
+/// Die Ausgaben des `then` fuer `event.t + d` planen (7.5, 9.8): erst Zeit
+/// und Werte, dann die Pruefung gegen die emulierte Reaktion
+/// `event.t + bound`, dann je Output der Eintrag; der erste Fault wird der
+/// armierenden Maschine vorgemerkt und beendet das Planen (7.5, FB-484).
+/// Jeder Weg endet bei `done`.
 fn plan_outputs(
     t: &takt_mir::program::Trigger,
     event: &Event,
+    buf: crate::emit::Reg,
+    done: &str,
     ctx: &mut Ctx<'_>,
     m: &mut Module,
 ) -> Result<(), NotYet> {
     let at = lower_with_event(&t.time, event, ctx, m)?;
+    let mut words = Vec::new();
     for s in &t.then.stmts {
         let takt_mir::stmt::StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), value } = &s.kind else {
             return Err(NotYet { what: "`then` mit mehr als Output-Zuweisungen" });
@@ -2729,13 +2767,33 @@ fn plan_outputs(
             crate::ty::LlvmType::Int(n) => m.inst(&format!("sext i{n} {} to i64", v.value)).to_string(),
             _ => return Err(NotYet { what: "Trigger-Ausgabe mit zusammengesetztem Wert" }),
         };
-        let _ = m.inst(&format!(
-            "call i1 @{}(ptr %arena, i32 {}, i64 {}, i64 {word})",
-            m.runtime(crate::abi::Abi::SCHEDULE),
-            c.0,
+        words.push((c.0, word));
+    }
+    let event_t = m.inst(&format!("load i64, ptr {buf}"));
+    let react = m.inst(&format!("add i64 {event_t}, {}", t.bound));
+    let late = m.inst(&format!("icmp slt i64 {}, {react}", at.value));
+    let k = ctx.next_label(m);
+    let (too_late, plan) = (format!("p{k}_spaet"), format!("p{k}_plan"));
+    m.void_inst(&format!("br i1 {late}, label %{too_late}, label %{plan}"));
+    m.label(&too_late);
+    pend(&crate::abi::fault_code(takt_mir::machine::FaultKind::Timing).to_string(), ctx, m)?;
+    m.void_inst(&format!("br label %{done}"));
+    m.label(&plan);
+    for (j, (c, word)) in words.into_iter().enumerate() {
+        let code = m.inst(&format!(
+            "call i32 @{}(ptr %arena, i32 {c}, i64 {}, i64 {word}, i64 {react})",
+            m.runtime(crate::abi::Abi::SCHEDULE_AFTER),
             at.value
         ));
+        let ok = m.inst(&format!("icmp eq i32 {code}, 0"));
+        let (next, refused) = (format!("p{k}_{j}_weiter"), format!("p{k}_{j}_abgelehnt"));
+        m.void_inst(&format!("br i1 {ok}, label %{next}, label %{refused}"));
+        m.label(&refused);
+        pend(&code.to_string(), ctx, m)?;
+        m.void_inst(&format!("br label %{done}"));
+        m.label(&next);
     }
+    m.void_inst(&format!("br label %{done}"));
     Ok(())
 }
 

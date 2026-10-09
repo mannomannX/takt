@@ -833,6 +833,88 @@ fn the_two_implementations_agree_on_triggers() {
     );
 }
 
+/// **Die drei Regeln der Trigger-Phase** (7.5, FB-484), je ein Fall:
+/// `soon 1` kommt, bevor `soon` armiert ist, und loest danach nichts aus;
+/// `soon 2` mit `.t` mitten im Tick plant `event.t + 2 ms`, das vor dem
+/// Tick liegt und doch nicht nach der Reaktion `event.t + bound`; `early 0`
+/// plant vor der Reaktion, und der `TimingFault` geht als vorgemerkter
+/// Fault an `ctrl`, ohne den Lauf zu beenden.
+const TRIGGER_RULES: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+input  dut : stream<line<32>> @ hw(\"u/rx\") with capacity = 8, max_rate = 400 Hz
+
+output a     : bool        @ hw(\"o/a\")     with safe = true
+output b     : bool        @ hw(\"o/b\")     with safe = true
+output phase : int in 0..9 @ hw(\"o/phase\") with safe = 0
+
+trigger soon:
+    when dut matches \"soon {n:int}\"
+    then at event.t + 2 ms: a = false
+    bound 1 ms
+
+trigger early:
+    when dut matches \"early {n:int}\"
+    then at event.t + event.n * 1 us: b = false
+    bound 1 ms
+
+machine ctrl:
+    fault -> HANDLED
+    initial WAIT
+
+    state WAIT:
+        enter:
+            phase = 1
+        after 50 ms: -> ARMED
+
+    state ARMED:
+        enter:
+            phase = 2
+            arm soon
+            arm early
+        when soon.fired as f: -> FIRED
+
+    state FIRED:
+        enter:
+            phase = 3
+
+    state HANDLED:
+        enter:
+            phase = 9
+
+machine late_reader:
+    initial IDLE
+
+    state IDLE:
+        after 200 ms: -> READ
+
+    state READ:
+        on dut as l:
+            pass
+";
+
+#[test]
+fn the_trigger_rules_agree() {
+    let Some(clang) = common::clang() else { return };
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(TRIGGER_RULES, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let stimulus = takt_interp::Trace::parse("t=1 in dut soon 1\nt=7 in dut soon 2 t=65000000\nt=8 in dut early 0\n")
+        .expect("Stimulus");
+    let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    for want in ["t=7 out a false", "fault ctrl Timing", "out phase 9"] {
+        assert!(interpreted.contains(want), "`{want}` fehlt im Interpreter:\n{interpreted}");
+    }
+    assert!(!interpreted.contains("out b false"), "die verspaetete Ausgabe ist geplant:\n{interpreted}");
+    let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
+    let native =
+        common::run_native_all_with(&clang, &p, "trigger_rules", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
 /// **Eine Dauer in einem Record schreibt der Rahmen wie der Interpreter**
 /// (T2): in ihrer groessten ganzzahligen Einheit, als Feld von
 /// `Name(f1, f2)`. Den MCU-Rahmen betrifft das noch nicht, er schreibt

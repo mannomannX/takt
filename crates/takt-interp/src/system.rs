@@ -23,7 +23,35 @@ use crate::value::{EvalResult, Fault, Sample, Trap, Value, bug};
 use takt_mir::TypeId;
 use takt_mir::analysis::schedule;
 
+/// Zeit und Schreibvorgaenge, die ein Trigger plant (7.5).
+type TriggerPlan = (i64, Vec<(ChannelId, Value, Span)>);
+
 impl<'a, 'p> MachineEnv<'a, 'p> {
+    /// Legt einen geplanten Schreibvorgang in `sched[o]` (9.8): Gleiche T
+    /// ueberschreiben einander, sonst faultet ein voller Platz mit
+    /// `ScheduleOverflow`. Den Zeitpunkt hat der Aufrufer geprueft.
+    fn enqueue(&mut self, o: ChannelId, t: i64, v: Value, span: Span) -> EvalResult<()> {
+        let queue = self.image.sched.entry(o).or_default();
+        // Gleiche T: die spaetere Anweisung gewinnt und belegt keinen
+        // weiteren Platz (9.8).
+        if let Some(slot) = queue.iter_mut().find(|(at, _)| *at == t) {
+            slot.1 = v;
+            return Ok(());
+        }
+        if queue.len() as u32 >= MAX_SCHED {
+            let name = self.loaded.program.channels[o.index()].name.clone();
+            return Err(Trap::Fault(Fault::new(
+                FaultKind::ScheduleOverflow,
+                format!("`sched` von `{name}` ist voll ({MAX_SCHED})"),
+                span,
+                self.tick,
+            )));
+        }
+        queue.push((t, v));
+        queue.sort_by_key(|(at, _)| *at);
+        Ok(())
+    }
+
     /// Umgebung einer Maschine fuer diesen Tick.
     pub fn new(
         loaded: &'a Loaded<'p>,
@@ -633,25 +661,7 @@ impl Outer for MachineEnv<'_, '_> {
                 self.tick,
             )));
         }
-        let queue = self.image.sched.entry(o).or_default();
-        // Gleiche T: die spaetere Anweisung gewinnt und belegt keinen
-        // weiteren Platz (9.8).
-        if let Some(slot) = queue.iter_mut().find(|(at, _)| *at == t) {
-            slot.1 = v;
-            return Ok(());
-        }
-        if queue.len() as u32 >= MAX_SCHED {
-            let name = self.loaded.program.channels[o.index()].name.clone();
-            return Err(Trap::Fault(Fault::new(
-                FaultKind::ScheduleOverflow,
-                format!("`sched` von `{name}` ist voll ({MAX_SCHED})"),
-                span,
-                self.tick,
-            )));
-        }
-        queue.push((t, v));
-        queue.sort_by_key(|(at, _)| *at);
-        Ok(())
+        self.enqueue(o, t, v, span)
     }
 
     fn cancel(&mut self, o: ChannelId) -> EvalResult<()> {
@@ -1257,10 +1267,28 @@ impl<'p> Sim<'p> {
             let (Some(owner), fired) = (t.owner, t.fired) else { continue };
             let flags = &self.loaded.program.machines[owner.index()].layout.trigger_flags;
             let Some(slot) = flags.iter().position(|x| x.index() == i) else { continue };
+            // 7.5: Ein nicht armierter Trigger lauscht nicht; sein Cursor
+            // folgt dem Strom, und nach `arm` sieht er nur Neues (FB-484).
             if !self.states[owner.index()].armed.get(slot).copied().unwrap_or(false) {
+                if let Some(last) = self.trigger_window(TriggerId(i as u32)).last() {
+                    self.trigger_cursors[i] = last.seq + 1;
+                }
                 continue;
             }
-            let Some(hit) = self.trigger_fires(TriggerId(i as u32), owner, tick_ns)? else { continue };
+            let hit = match self.trigger_fires(TriggerId(i as u32), owner, tick_ns) {
+                Ok(Some(hit)) => hit,
+                Ok(None) => continue,
+                // Ein Fault vor dem Planen gehoert der armierenden Maschine
+                // und beendet die Phase (7.5, FB-484).
+                Err(Trap::Fault(f)) => {
+                    let state = &mut self.states[owner.index()];
+                    if state.pending.is_none() {
+                        state.pending = Some(f);
+                    }
+                    return Ok(());
+                }
+                Err(other) => return Err(other),
+            };
             self.states[owner.index()].armed[slot] = false;
             let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(tick_ns);
             let bytes = crate::stream::byte_len(&hit);
@@ -1276,18 +1304,8 @@ impl<'p> Sim<'p> {
     /// `fired`: die Captures und `.t` des Ausloesers.
     fn trigger_fires(&mut self, id: TriggerId, owner: MachineId, tick_ns: i64) -> Result<Option<Value>, Trap> {
         let trigger = self.loaded.program.triggers[id.index()].clone();
-        let takt_mir::machine::Guard::Match { subject, kind, pattern, .. } = &trigger.guard else { return Ok(None) };
-        let Some(stream) = stream_of_expr(subject) else { return Ok(None) };
-        // 7.5: mit dem eigenen Cursor des Triggers, nicht dem des
-        // Besitzers — der liest den Quellstrom in der Regel gar nicht.
-        let cursor = self.trigger_cursors[id.index()];
-        let window = match stream {
-            StreamRef::Channel(c) => self.image.channel_bufs.get(&c).map(|b| b.window(cursor)).unwrap_or_default(),
-            StreamRef::Internal(s) => {
-                self.image.stream_bufs.get(s.index()).map(|b| b.window(cursor)).unwrap_or_default()
-            }
-            _ => Vec::new(),
-        };
+        let takt_mir::machine::Guard::Match { kind, pattern, .. } = &trigger.guard else { return Ok(None) };
+        let window = self.trigger_window(id);
         let mut out = Vec::new();
         let mut env =
             MachineEnv::new(&self.loaded, owner, &mut self.states[owner.index()], &mut self.image, &mut out, tick_ns);
@@ -1320,20 +1338,73 @@ impl<'p> Sim<'p> {
         // seine Ausgaben fuer `event.t + d` mit `guard = bound`.
         let event = env.element_record_for(&self.loaded, trigger.fired, &element, caps)?;
         let mut ctx = env.ctx(&self.loaded, self.tick).with_event(event.clone());
-        let at = ctx.eval_duration(&trigger.time)?;
-        let mut writes = Vec::new();
-        for stmt in &trigger.then.stmts {
-            let takt_mir::stmt::StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), value } = &stmt.kind
-            else {
-                return bug("`then` eines Triggers enthaelt mehr als Output-Zuweisungen");
-            };
-            writes.push((*c, ctx.eval(value)?, stmt.span));
-        }
-        for (c, v, span) in writes {
-            env.schedule(c, at, v, span)?;
+        let mut plan = || -> EvalResult<TriggerPlan> {
+            let at = ctx.eval_duration(&trigger.time)?;
+            let mut writes = Vec::new();
+            for stmt in &trigger.then.stmts {
+                let takt_mir::stmt::StmtKind::Assign { target: takt_mir::stmt::Place::Output(c), value } = &stmt.kind
+                else {
+                    return bug("`then` eines Triggers enthaelt mehr als Output-Zuweisungen");
+                };
+                writes.push((*c, ctx.eval(value)?, stmt.span));
+            }
+            Ok((at, writes))
+        };
+        // 7.5: Die Simulation emuliert die Reaktion mit `bound`; eine
+        // Ausgabe vor `event.t + bound` ist verspaetet. Ein Fault der Phase
+        // gehoert der armierenden Maschine und wird ihr vorgemerkt; der
+        // Trigger hat gefeuert, und was noch nicht geplant ist, entfaellt
+        // (FB-484).
+        let mut fault = None;
+        match plan() {
+            Err(Trap::Fault(f)) => fault = Some(f),
+            Err(other) => return Err(other),
+            Ok((at, _)) if at < element.t.saturating_add(trigger.bound) => {
+                fault = Some(Fault::new(
+                    FaultKind::Timing,
+                    format!("`at` von `{}` liegt vor der Reaktion `event.t + bound`", trigger.name),
+                    trigger.time.span,
+                    self.tick,
+                ));
+            }
+            Ok((at, writes)) => {
+                for (c, v, span) in writes {
+                    match env.enqueue(c, at, v, span) {
+                        Ok(()) => {}
+                        Err(Trap::Fault(f)) => {
+                            fault = Some(f);
+                            break;
+                        }
+                        Err(other) => return Err(other),
+                    }
+                }
+            }
         }
         self.observations.extend(out.into_iter().map(|o| (owner, o)));
+        let state = &mut self.states[owner.index()];
+        if state.pending.is_none() {
+            state.pending = fault;
+        }
         Ok(Some(event))
+    }
+
+    /// Das Fenster des Quellstroms eines Triggers ab seinem eigenen Cursor
+    /// (7.5): Er wird mit Ereignisrate ausgewertet und gehoert keiner
+    /// Maschine, also nicht dem Cursor seines Besitzers — der liest den
+    /// Strom in der Regel gar nicht.
+    fn trigger_window(&self, id: TriggerId) -> Vec<Element> {
+        let trigger = &self.loaded.program.triggers[id.index()];
+        let takt_mir::machine::Guard::Match { subject, .. } = &trigger.guard else { return Vec::new() };
+        let cursor = self.trigger_cursors[id.index()];
+        match stream_of_expr(subject) {
+            Some(StreamRef::Channel(c)) => {
+                self.image.channel_bufs.get(&c).map(|b| b.window(cursor)).unwrap_or_default()
+            }
+            Some(StreamRef::Internal(s)) => {
+                self.image.stream_bufs.get(s.index()).map(|b| b.window(cursor)).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Die gescopten Instanzen, die gerade nicht laufen (5.11).

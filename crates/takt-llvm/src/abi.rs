@@ -109,6 +109,12 @@ impl Abi {
     /// Gelegenheit, sie verschieden zu waehlen.
     pub const SCHEDULE: &'static str = "schedule";
 
+    /// Die Ausgabe eines Triggers (7.5): wie [`SCHEDULE`](Self::SCHEDULE),
+    /// doch die Zeit gilt gegen die Reaktion `event.t + bound` aus dem
+    /// letzten Argument, nicht gegen den Tick — `guard = bound`. Liegt sie
+    /// davor, ist es ein `TimingFault`; eine Zeit vor dem Tick ist keiner.
+    pub const SCHEDULE_AFTER: &'static str = "schedule_after";
+
     /// `cancel o` (9.8): verwirft die geplanten Schreibvorgaenge eines
     /// Outputs.
     pub const CANCEL: &'static str = "cancel";
@@ -163,6 +169,7 @@ impl Abi {
         m.declare(&format!("declare void @{}(ptr readnone, i32, i64) {RT}", m.runtime(Abi::PROPERTY)));
         // 9.8: `(channel, T, wert) -> 0 oder die Art des Faults`.
         m.declare(&format!("declare i32 @{}(ptr readnone, i32, i64, i64) {RT}", m.runtime(Abi::SCHEDULE)));
+        m.declare(&format!("declare i32 @{}(ptr readnone, i32, i64, i64, i64) {RT}", m.runtime(Abi::SCHEDULE_AFTER)));
         m.declare(&format!("declare void @{}(ptr readnone, i32) {RT}", m.runtime(Abi::CANCEL)));
         m.declare(&format!(
             "declare i64 @{}(ptr readnone, i32) nounwind willreturn memory(none)",

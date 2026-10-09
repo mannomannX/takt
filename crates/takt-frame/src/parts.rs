@@ -219,12 +219,8 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
     // Das Ergebnis ist null oder die Art des Faults (`abi::fault_code`).
     let timing = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Timing);
     let overflow = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::ScheduleOverflow);
-    let _ = writeln!(s, "int {x}_schedule(struct {x}_arena *a, int o, long long t, long long v) {{");
-    let _ = writeln!(s, "    int q = takt_sched_slot(o);");
-    let _ = writeln!(s, "    if (q < 0) return {overflow};");
-    // 7.5, 9.8: `T <= now + guard(o)` ist ein `TimingFault`.
-    let _ = writeln!(s, "    if (t <= a->tick * {}LL + g_guard[q]) return {timing};", p.config.tick);
-    // Gleiche `T`: die spaetere Anweisung gewinnt (9.8).
+    // Der Eintrag in `sched[q]`: Gleiche `T` ueberschreiben einander (9.8).
+    let _ = writeln!(s, "static int takt_sched_put(struct {x}_arena *a, int q, long long t, long long v) {{");
     let _ = writeln!(s, "    for (int i = 0; i < a->sched_n[q]; i++)");
     let _ = writeln!(s, "        if (a->sched[q][i].t == t) {{ a->sched[q][i].v = v; return 0; }}");
     let _ = writeln!(s, "    if (a->sched_n[q] >= TAKT_K_O) return {overflow};");
@@ -232,6 +228,22 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
     let _ = writeln!(s, "    a->sched[q][a->sched_n[q]].v = v;");
     let _ = writeln!(s, "    a->sched_n[q]++;");
     let _ = writeln!(s, "    return 0;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "int {x}_schedule(struct {x}_arena *a, int o, long long t, long long v) {{");
+    let _ = writeln!(s, "    int q = takt_sched_slot(o);");
+    let _ = writeln!(s, "    if (q < 0) return {overflow};");
+    // 7.5, 9.8: `T <= now + guard(o)` ist ein `TimingFault`.
+    let _ = writeln!(s, "    if (t <= a->tick * {}LL + g_guard[q]) return {timing};", p.config.tick);
+    let _ = writeln!(s, "    return takt_sched_put(a, q, t, v);");
+    let _ = writeln!(s, "}}");
+    // 7.5: Die Ausgabe eines Triggers gilt gegen seine Reaktion
+    // `event.t + bound` (`guard = bound`), nicht gegen den Tick (FB-484).
+    let _ =
+        writeln!(s, "int {x}_schedule_after(struct {x}_arena *a, int o, long long t, long long v, long long react) {{");
+    let _ = writeln!(s, "    int q = takt_sched_slot(o);");
+    let _ = writeln!(s, "    if (q < 0) return {overflow};");
+    let _ = writeln!(s, "    if (t < react) return {timing};");
+    let _ = writeln!(s, "    return takt_sched_put(a, q, t, v);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
