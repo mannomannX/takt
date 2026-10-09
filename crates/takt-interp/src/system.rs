@@ -256,7 +256,7 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
         };
         let message = match &f {
             Some(f) if f.stated => clip(&f.message, LAST_FAULT_MESSAGE),
-            Some(f) => fault_kind_name(f.kind).to_string(),
+            Some(f) => f.kind.prelude_name().to_string(),
             None => String::new(),
         };
         let line = f.as_ref().map_or(0, |f| i64::from(loaded.program.line_of(f.span)));
@@ -297,29 +297,12 @@ fn clip(s: &str, max: usize) -> String {
     s[..n].to_string()
 }
 
-/// Der Name der Variante von `FaultKind` im Prelude.
-fn fault_kind_name(kind: FaultKind) -> &'static str {
-    match kind {
-        FaultKind::CheckFailed => "CHECK_FAILED",
-        FaultKind::Expect => "EXPECT",
-        FaultKind::Timeout => "TIMEOUT",
-        FaultKind::SensorFault => "SENSOR_FAULT",
-        FaultKind::MissingValue => "MISSING_VALUE",
-        FaultKind::Arithmetic(_) => "ARITHMETIC",
-        FaultKind::Range => "RANGE",
-        FaultKind::StreamOverflow => "STREAM_OVERFLOW",
-        FaultKind::Timing => "TIMING",
-        FaultKind::ScheduleOverflow => "SCHEDULE_OVERFLOW",
-        FaultKind::Abort => "ABORT",
-        FaultKind::Runtime(_) => "RUNTIME",
-    }
-}
-
+/// Die Art als Wert von `FaultKind` im Prelude, die Unterart als Feld.
 fn fault_kind_value(loaded: &Loaded<'_>, kind: FaultKind) -> Value {
     let Some(e) = loaded.program.enums.iter().find(|e| e.name == "FaultKind") else {
         return Value::Enum { variant: 0, fields: Vec::new() };
     };
-    let name = fault_kind_name(kind);
+    let name = kind.prelude_name();
     let variant = e.variants.iter().position(|v| v.name == name).unwrap_or(0);
     let fields = match kind {
         FaultKind::Arithmetic(k) => vec![Value::Enum { variant: k as u32, fields: Vec::new() }],
@@ -992,11 +975,16 @@ impl<'p> Sim<'p> {
     /// nicht mehr — `send` hat ihn schon beim Schreiber abgelehnt (8.6).
     /// Ein uebergelaufener Eingabestrom faultet jede Maschine, die ihn liest
     /// (8.6): der Ueberlauf ist ein Fehler des Systems, kein stiller Verlust.
+    /// Zugestellt hat der Fault keine Stelle im Programm (5.3).
     pub fn overflow_channel(&mut self, c: ChannelId) {
         let program = self.loaded.program;
         let name = program.channels[c.index()].name.clone();
-        let span = program.channels[c.index()].span;
-        let f = Fault::new(FaultKind::StreamOverflow, format!("Stream `{name}` uebergelaufen"), span, self.tick);
+        let f = Fault::new(
+            FaultKind::StreamOverflow,
+            format!("Stream `{name}` uebergelaufen"),
+            takt_diag::Span::default(),
+            self.tick,
+        );
         let wakes = program.channels[c.index()].attrs.wake;
         for id in self.order.clone() {
             // 9.6: Einer schlafenden Maschine wird der Ueberlauf nicht

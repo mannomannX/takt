@@ -34,7 +34,7 @@ use takt_mir::expr::{
     BinaryOp, Builtin, CheckedKind, ConvertKind, Expr, ExprKind, Intrinsic, TProp, TemporalOp, UnaryOp,
 };
 use takt_mir::fns::BlockDef;
-use takt_mir::machine::{FaultTarget, Machine, Target, TransTrigger};
+use takt_mir::machine::{ArithKind, FaultKind, FaultTarget, Machine, Target, TransTrigger};
 use takt_mir::program::{Direction, Program, Property};
 use takt_mir::stmt::{Block, ForVars, Method, Place, StmtKind};
 use takt_mir::types::{Const, FloatWidth, HandleKind, IntWidth, Type};
@@ -43,6 +43,7 @@ use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId}
 use crate::eval;
 use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
+mod fault;
 mod monitor;
 mod pattern;
 mod stream;
@@ -50,6 +51,7 @@ mod text;
 mod tx;
 mod value;
 mod wire;
+use fault::Cause;
 use monitor::Monitor;
 use value::V;
 
@@ -212,10 +214,11 @@ fn ite_env(c: &Term, a: &Env, b: &Env) -> Env {
 /// Wie ein Block endet.
 #[derive(Clone, Debug)]
 enum ExitKind {
-    /// `check` verletzt, mit explizitem Ziel oder dem Fault-Ziel des Blatts.
-    Fault(Option<Target>),
+    /// Ein Fault mit seiner Ursache, mit explizitem Ziel (`check … -> X`)
+    /// oder dem Fault-Ziel des Blatts.
+    Fault(Option<Target>, Cause),
     /// `abort`.
-    Abort,
+    Abort(Cause),
     /// `-> q`.
     Goto(Target),
 }
@@ -334,6 +337,8 @@ struct Enc<'p> {
     binds: Vec<(String, TypeId, V, Term)>,
     /// Die uninterpretierten Funktionen des Modells.
     uninterpreted: BTreeSet<String>,
+    /// Die Maschinen, die `last_fault` lesen (5.3).
+    last_fault: BTreeSet<MachineId>,
     /// Die Indizes der ausgerollten Schleifen um die laufende Anweisung,
     /// aussen zuerst: Der Interpreter fuehrt die Zaehler von `every` und
     /// `check … for` je Durchlauf (`Counters::at`).
@@ -453,6 +458,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
     };
     let mut enc = Enc::new(p, order, scope);
     enc.check_reach()?;
+    enc.last_fault = enc.last_fault_readers().into_iter().collect();
     enc.txs = enc.tx_defs()?;
     enc.streams = enc.stream_defs()?;
     // Eigenschaften gehoeren zum Ganzen (13.3); eine Maschine allein hat keine.
@@ -563,6 +569,7 @@ impl<'p> Enc<'p> {
             breaks: Vec::new(),
             binds: Vec::new(),
             uninterpreted: BTreeSet::new(),
+            last_fault: BTreeSet::new(),
             loop_path: Vec::new(),
             counter_paths: BTreeMap::new(),
         }
@@ -909,7 +916,7 @@ impl Enc<'_> {
                 self.const_expr(&default)?
             }
             ExprKind::Command(c) => self.command(*c),
-            ExprKind::Input { channel, .. } => self.read_input(*channel, cx, flow)?,
+            ExprKind::Input { channel, .. } => self.read_input(*channel, cx, flow, span)?,
             ExprKind::Accessor { base, accessor, .. } if matches!(self.p.types.get(base.ty), Type::Stream(_)) => {
                 self.stream_accessor(base, *accessor, cx, env, span)?
             }
@@ -1158,9 +1165,11 @@ impl Enc<'_> {
         let float = xs.first().is_some_and(|x| matches!(x.sort(), Sort::F32 | Sort::F64));
         // Ein Fault der Primitive selbst (`call.rs`): Definitionsbereich,
         // nicht endliches Ergebnis, Bereich einer Rundung; ohne Pruefknoten.
-        let fault = |fail: Term, flow: &mut Flow| {
-            flow.exits
-                .push(Exit { cond: Term::and(vec![flow.alive.clone(), fail.clone()]), kind: ExitKind::Fault(None) });
+        let fault = |fail: Term, cause: Cause, flow: &mut Flow| {
+            flow.exits.push(Exit {
+                cond: Term::and(vec![flow.alive.clone(), fail.clone()]),
+                kind: ExitKind::Fault(None, cause),
+            });
             flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         };
         let lit = |x: f64, like: &Term| Term::float(x, like.sort());
@@ -1201,10 +1210,14 @@ impl Enc<'_> {
                     Fun::Log => Term::bin(Op::FGt, x.clone(), lit(0.0, x)),
                     Fun::Sin | Fun::Cos | Fun::Tan | Fun::Atan | Fun::Atan2 | Fun::Exp | Fun::Pow => Term::bool(true),
                 };
-                fault(domain.not(), flow);
+                fault(domain.not(), self.cause(FaultKind::Arithmetic(ArithKind::Domain), span), flow);
                 self.uninterpreted.insert(f.name().to_string());
                 let r = math(f, vec![x.clone()]);
-                fault(Term::app(Op::IsFinite, vec![r.clone()]).not(), flow);
+                fault(
+                    Term::app(Op::IsFinite, vec![r.clone()]).not(),
+                    self.cause(FaultKind::Arithmetic(ArithKind::NonFinite), span),
+                    flow,
+                );
                 r
             }
             // 4.1: `pow` ist definiert fuer y = 0, x > 0, x = 0 mit y > 0 und
@@ -1223,12 +1236,16 @@ impl Enc<'_> {
                         ]),
                         Term::and(vec![Term::bin(Op::FLt, x.clone(), zero), whole]),
                     ]);
-                    fault(defined.not(), flow);
+                    fault(defined.not(), self.cause(FaultKind::Arithmetic(ArithKind::Domain), span), flow);
                 }
                 let f = if op == Intrinsic::Pow { Fun::Pow } else { Fun::Atan2 };
                 self.uninterpreted.insert(f.name().to_string());
                 let r = math(f, vec![x.clone(), y.clone()]);
-                fault(Term::app(Op::IsFinite, vec![r.clone()]).not(), flow);
+                fault(
+                    Term::app(Op::IsFinite, vec![r.clone()]).not(),
+                    self.cause(FaultKind::Arithmetic(ArithKind::NonFinite), span),
+                    flow,
+                );
                 r
             }
             // In der Breite des Ergebnisses gewickelt (`call.rs`).
@@ -1292,7 +1309,7 @@ impl Enc<'_> {
                     Term::bin(Op::FGe, r.clone(), lit(i64::MIN as f64, x)),
                     Term::bin(Op::FLt, r.clone(), lit(i64::MAX as f64, x)),
                 ]);
-                fault(inside.not(), flow);
+                fault(inside.not(), self.cause(FaultKind::Range, span), flow);
                 Term::app(Op::FloatToInt, vec![r])
             }
             _ => return no(format!("Primitive `{op:?}`"), span),
@@ -1329,7 +1346,8 @@ impl Enc<'_> {
         let above = Term::bin(Op::FGe, x.clone(), xn);
         let middle = Term::and(vec![below.clone().not(), above.clone().not()]);
         let fail = Term::and(vec![flow.alive.clone(), middle, Term::app(Op::IsFinite, vec![inner.clone()]).not()]);
-        flow.exits.push(Exit { cond: fail.clone(), kind: ExitKind::Fault(None) });
+        let cause = self.cause(FaultKind::Arithmetic(ArithKind::NonFinite), span);
+        flow.exits.push(Exit { cond: fail.clone(), kind: ExitKind::Fault(None, cause) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         Ok(Term::ite(below, y0, Term::ite(above, yn, inner)))
     }
@@ -1471,7 +1489,7 @@ impl Enc<'_> {
         };
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
         self.site(kind, span, cond.clone(), cx);
-        flow.exits.push(Exit { cond, kind: ExitKind::Fault(None) });
+        flow.exits.push(Exit { cond, kind: ExitKind::Fault(None, self.cause(kind.fault(), span)) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         Ok(value)
     }
@@ -1720,7 +1738,7 @@ impl Enc<'_> {
                 }
                 // `within d` ist eine Latenzforderung ohne Wirkung im Lauf
                 // (9.4.5, Pruefung 61).
-                StmtKind::Check { cond, confirm, target, kind, .. } => {
+                StmtKind::Check { cond, message, confirm, target, kind, .. } => {
                     let c = self.expr(cond, cx, env, flow)?;
                     // `for d` (5.6): erst eine Verletzung ueber die ganze Frist faultet.
                     let failed = match confirm {
@@ -1745,7 +1763,13 @@ impl Enc<'_> {
                     let key = (span.start, span.end, word.to_string());
                     self.sites.entry(key.clone()).or_default().push(fail.clone());
                     self.site_info.insert(key, (span, self.machine(m).name.clone()));
-                    flow.exits.push(Exit { cond: fail, kind: ExitKind::Fault(*target) });
+                    let fault = if *kind == takt_mir::stmt::CheckKind::Check {
+                        FaultKind::CheckFailed
+                    } else {
+                        FaultKind::Expect
+                    };
+                    let cause = self.stated(fault, message.as_ref(), "check verletzt", cx, env, flow, span)?;
+                    flow.exits.push(Exit { cond: fail, kind: ExitKind::Fault(*target, cause) });
                     flow.alive = Term::and(vec![flow.alive.clone(), failed.not()]);
                 }
                 // `every d` (5.8): der Rumpf, sobald die Uhr den naechsten
@@ -1780,9 +1804,10 @@ impl Enc<'_> {
                         flow.alive = Term::bool(false);
                     }
                 }
-                StmtKind::Abort { .. } => {
+                StmtKind::Abort { message } => {
+                    let cause = self.stated(FaultKind::Abort, message.as_ref(), "abort", cx, env, flow, span)?;
                     self.aborts.push(flow.alive.clone());
-                    flow.exits.push(Exit { cond: flow.alive.clone(), kind: ExitKind::Abort });
+                    flow.exits.push(Exit { cond: flow.alive.clone(), kind: ExitKind::Abort(cause) });
                     flow.alive = Term::bool(false);
                 }
                 StmtKind::If { cond, then, otherwise } => {
@@ -2305,17 +2330,25 @@ impl Enc<'_> {
             ExitKind::Goto(t) => {
                 out.insert(self.loc_latched(m), Term::bool(false));
                 // Der Timeout einer Sequenz nimmt den Fault-Pfad des Zustands (6.2).
-                let t = if matches!(t, Target::Fault(_)) { fault_target } else { *t };
+                let t = match t {
+                    Target::Fault(kind) => {
+                        self.record_fault(m, &self.cause(*kind, Span::default()), &mut out)?;
+                        fault_target
+                    }
+                    other => *other,
+                };
                 self.switch(cx, leaf, t, &mut out, depth, &exit.cond)?;
             }
-            ExitKind::Fault(explicit) => {
+            ExitKind::Fault(explicit, cause) => {
+                self.record_fault(m, cause, &mut out)?;
                 let t = explicit.unwrap_or(fault_target);
                 self.switch(cx, leaf, t, &mut out, depth, &exit.cond)?;
             }
-            ExitKind::Abort => {
+            ExitKind::Abort(cause) => {
                 let latched = env[&self.loc_latched(m)].clone();
                 let mut sw = env.clone();
                 sw.insert(self.loc_latched(m), Term::bool(true));
+                self.record_fault(m, cause, &mut sw)?;
                 let under = Term::and(vec![exit.cond.clone(), !latched.clone()]);
                 self.switch(cx, leaf, fault_target, &mut sw, depth, &under)?;
                 out = ite_env(&latched, env, &sw);
@@ -2350,8 +2383,12 @@ impl Enc<'_> {
             if self.has_pending(m) {
                 let at = self.loc_pending(m);
                 let pending = env[&at].clone();
-                flow.exits
-                    .push(Exit { cond: Term::and(vec![is.clone(), pending.clone()]), kind: ExitKind::Fault(None) });
+                // Zugestellt hat der Ueberlauf keine Stelle (5.3).
+                let cause = self.cause(FaultKind::StreamOverflow, Span::default());
+                flow.exits.push(Exit {
+                    cond: Term::and(vec![is.clone(), pending.clone()]),
+                    kind: ExitKind::Fault(None, cause),
+                });
                 flow.alive = Term::and(vec![is.clone(), pending.not()]);
                 env.insert(at, Term::bool(false));
             }
@@ -2426,6 +2463,7 @@ impl Enc<'_> {
                 let cx = Cx { m: Some(m), leaf: Some(leaf), mode: Mode::Entry, pre, active: actives, locals: None };
                 let mut env = base.clone();
                 env.insert(self.loc_latched(m), Term::bool(true));
+                self.record_fault(m, &self.cause(FaultKind::Abort, Span::default()), &mut env)?;
                 let t = self.fault_target(m, leaf);
                 self.switch(&cx, Some(leaf), t, &mut env, 0, &is)?;
                 merged = ite_env(&is, &env, &merged);
@@ -2712,6 +2750,9 @@ impl Enc<'_> {
             for i in 0..machine.signals.len() {
                 env.insert(self.loc_sig(m, i), Term::bool(false));
             }
+            if self.reads_last_fault(m) {
+                self.last_fault_initial(m, &mut env)?;
+            }
             let paths = self.paths_of(m)?;
             for (i, list) in paths.viol.iter().enumerate() {
                 for p in list {
@@ -2983,12 +3024,14 @@ impl Enc<'_> {
 
     /// Liest einen Input (3.5): Ist er ungueltig, faultet der Lesevorgang
     /// mit `SensorFault`, wie im Interpreter, auch ohne Pruefknoten.
-    fn read_input(&mut self, c: ChannelId, cx: &Cx<'_>, flow: &mut Flow) -> R<Term> {
+    fn read_input(&mut self, c: ChannelId, cx: &Cx<'_>, flow: &mut Flow, span: Span) -> R<Term> {
         let edge = self.edge_of(c)?;
         let x = self.input(format!("i.{}", edge.name), edge.sort);
         let ok = self.readable(&edge, cx.pre);
-        flow.exits
-            .push(Exit { cond: Term::and(vec![flow.alive.clone(), ok.clone().not()]), kind: ExitKind::Fault(None) });
+        flow.exits.push(Exit {
+            cond: Term::and(vec![flow.alive.clone(), ok.clone().not()]),
+            kind: ExitKind::Fault(None, self.cause(FaultKind::SensorFault, span)),
+        });
         flow.alive = Term::and(vec![flow.alive.clone(), ok]);
         Ok(x)
     }

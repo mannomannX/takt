@@ -77,7 +77,7 @@ Mat(Cholesky),ja,nein: Matrizen sind nicht kodiert,ja
 Builtin(Now),ja,ja,ja
 Builtin(Tick),ja,ja,ja
 Builtin(TimeInState),ja,teilweise: `time_in_state` nur in einem Zustand,ja
-Builtin(LastFault),"teilweise: `LastFault` nur in der Gestalt `str<128>`, `int`, `int`",nein: eingebaute Groesse ohne Modell,ja
+Builtin(LastFault),"teilweise: `LastFault` nur in der Gestalt `str<128>`, `int`, `int`",ja,ja
 Builtin(Event),ja,nein: eingebaute Groesse ohne Modell,ja
 Check(DivZero),ja,ja,ja
 Check(Overflow),ja,ja,ja

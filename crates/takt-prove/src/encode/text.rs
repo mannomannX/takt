@@ -171,7 +171,7 @@ impl Text {
     }
 
     /// Kuerzt auf hoechstens `max` Bytes an einer Zeichengrenze (`format::truncate`).
-    fn truncate(&self, max: i64) -> Text {
+    pub(super) fn truncate(&self, max: i64) -> Text {
         let over = Term::bin(Op::Gt, self.len.clone(), int(max));
         // Die groesste Zeichengrenze bis `max`: ein Zeichen hat hoechstens vier Bytes.
         let mut cut = int(0);
@@ -300,12 +300,21 @@ impl Enc<'_> {
         Term::or((0..=s.cap()).map(at).collect())
     }
 
+    /// Ein Formatstring als Wert seines Texttyps.
+    pub(super) fn format(&mut self, f: &Format, ty: TypeId, cx: &Cx<'_>, env: &Env, flow: &Flow, span: Span) -> R<V> {
+        if self.text_type(ty).is_none() {
+            return no("Formatstring ohne Texttyp", span);
+        }
+        let text = self.render(f, cx, env, flow)?;
+        self.text_value(&text, ty, span)
+    }
+
     /// Ein Formatstring (3.9, `format::render`): Platzhalter ausgewertet, ein
     /// Fault darin wird `<invalid>`, das Ergebnis auf `len_max` Bytes an einer
     /// Zeichengrenze gekuerzt.
-    pub(super) fn format(&mut self, f: &Format, ty: TypeId, cx: &Cx<'_>, env: &Env, flow: &Flow, span: Span) -> R<V> {
-        let Some((cap, _)) = self.text_type(ty) else { return no("Formatstring ohne Texttyp", span) };
-        let width = i64::from(f.len_max.max(cap)).saturating_add(64);
+    pub(super) fn render(&mut self, f: &Format, cx: &Cx<'_>, env: &Env, flow: &Flow) -> R<Text> {
+        // Was hinter `len_max` laege, faellt beim Kuerzen weg.
+        let width = i64::from(f.len_max).saturating_add(64);
         let mut out = Text::literal("");
         for piece in &f.pieces {
             let part = match piece {
@@ -341,8 +350,7 @@ impl Enc<'_> {
             let joined = (out.cap() + part.cap()).min(width);
             out = out.concat(&part, joined);
         }
-        let cut = out.truncate(i64::from(f.len_max));
-        self.text_value(&cut, ty, span)
+        Ok(out.truncate(i64::from(f.len_max)))
     }
 
     /// Ein Wert in Textform (`format::display`): Ganzzahlen dezimal, `hex`

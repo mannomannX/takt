@@ -115,6 +115,25 @@ impl FaultKind {
         out
     }
 
+    /// Die Variante von `FaultKind` im Prelude (5.3), die `last_fault.kind`
+    /// traegt; ohne `message` liest ein Programm dort diesen Namen.
+    pub fn prelude_name(self) -> &'static str {
+        match self {
+            Self::CheckFailed => "CHECK_FAILED",
+            Self::Expect => "EXPECT",
+            Self::Timeout => "TIMEOUT",
+            Self::SensorFault => "SENSOR_FAULT",
+            Self::MissingValue => "MISSING_VALUE",
+            Self::Arithmetic(_) => "ARITHMETIC",
+            Self::Range => "RANGE",
+            Self::StreamOverflow => "STREAM_OVERFLOW",
+            Self::Timing => "TIMING",
+            Self::ScheduleOverflow => "SCHEDULE_OVERFLOW",
+            Self::Abort => "ABORT",
+            Self::Runtime(_) => "RUNTIME",
+        }
+    }
+
     /// Der Name im Trace (`grammar/trace.md`): `CheckFailed`,
     /// `Arithmetic(DivZero)`, `Runtime(Overrun)`.
     pub fn name(self) -> String {

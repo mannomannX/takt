@@ -11,6 +11,7 @@ use std::ops::Not;
 
 use takt_diag::Span;
 use takt_mir::expr::{Accessor, Expr, ExprKind};
+use takt_mir::machine::FaultKind;
 use takt_mir::program::{Binding, Direction, Overflow};
 use takt_mir::types::Type;
 use takt_mir::{ChannelId, TypeId};
@@ -211,7 +212,9 @@ impl Enc<'_> {
         let drop = matches!(self.p.channels[c.index()].attrs.overflow, Some(Overflow::Drop));
         let fits = Term::and(vec![flow.alive.clone(), full.clone().not()]);
         if !drop {
-            flow.exits.push(Exit { cond: Term::and(vec![flow.alive.clone(), full]), kind: ExitKind::Fault(None) });
+            let cause = self.cause(FaultKind::StreamOverflow, span);
+            flow.exits
+                .push(Exit { cond: Term::and(vec![flow.alive.clone(), full]), kind: ExitKind::Fault(None, cause) });
             flow.alive = fits.clone();
         }
         let tail = wrap(add(head, len.clone()), t.cap);

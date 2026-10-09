@@ -51,7 +51,8 @@ pub fn support(c: Construct) -> Support {
         }
         Construct::Builtin(Builtin::Now | Builtin::Tick) => Yes,
         Construct::Builtin(Builtin::TimeInState) => Partial("`time_in_state` nur in einem Zustand"),
-        Construct::Builtin(Builtin::LastFault | Builtin::Event) => No("eingebaute Groesse ohne Modell"),
+        Construct::Builtin(Builtin::LastFault) => Yes,
+        Construct::Builtin(Builtin::Event) => No("eingebaute Groesse ohne Modell"),
         Construct::Check(
             CheckTag::DivZero
             | CheckTag::NonFinite

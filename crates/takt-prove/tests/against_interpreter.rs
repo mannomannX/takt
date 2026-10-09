@@ -242,8 +242,19 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
                             inputs.extend(leaves.into_iter().map(|(n, v)| ((k, n), v)));
                         }
                         *j += 1;
-                    } else if let Some(v) = sample.value.as_deref().and_then(parse_val) {
-                        held.insert(format!("i.{channel}"), v);
+                    } else {
+                        // Die Qualitaet haelt wie der Wert (3.5); ohne Angabe `Good`.
+                        use takt_prove::encode::quality;
+                        let q = match sample.quality.as_deref() {
+                            Some("suspect") => quality::SUSPECT,
+                            Some("stale") => quality::STALE,
+                            Some("bad") => quality::BAD,
+                            _ => quality::GOOD,
+                        };
+                        held.insert(format!("i.{channel}.q"), Val::Int(q));
+                        if let Some(v) = sample.value.as_deref().and_then(parse_val) {
+                            held.insert(format!("i.{channel}"), v);
+                        }
                     }
                 }
                 _ => {}
@@ -512,6 +523,8 @@ t={k} in b {}.5 V
         "52_padding_fields.takt" | "13_framing.takt" | "76_stream_views.takt" => (String::new(), 30),
         // Schleifen ueber der alten Grenze von 256 Durchlaeufen (Schritt 27a-6).
         "78_length_guards.takt" => (String::new(), 80),
+        // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
+        "98_last_fault.takt" => (String::new(), 40),
         // Rahmen mit Kopf, Nutzlast und Pruefsumme: gueltig, zu kurz, fremde
         // Konstante, Laenge ausserhalb der Range, Laenge ueber dem Rahmen,
         // falsche Pruefsumme, die volle Nutzlast.
@@ -1109,6 +1122,156 @@ fn the_wire_format_agrees() {
         stim.push_str(&format!("t={} in rx 0x{}\n", 3 * k + 1, f.replace(' ', "")));
     }
     agree_program("WIRE", &compile("WIRE", WIRE), &stim, 40);
+}
+
+/// `last_fault` (5.3) fuer jede Ursache, die 98 nicht hat: Definitionsbereich,
+/// Rundung ausserhalb `int`, Bitstelle, Ausschnitt, ungueltiger Input,
+/// Division durch null, ein vorgemerkter Ueberlauf mit Zeile und Tick des
+/// Kanals, das `abort` einer anderen Maschine und ein voller interner Strom,
+/// dessen Leser noch wartet.
+const LAST_FAULT: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  p  : int in 0..10 @ hw("i/p")
+input  rx : stream<u8>   @ hw("bus/rx") with max_rate = 300 Hz, capacity = 3
+
+stream<u8> box with capacity = 1, overflow = fault
+
+output kind  : int in 0..99  @ sim("o/kind")
+output line  : int in 0..999 @ sim("o/line")
+output stamp : int in 0..999 @ sim("o/stamp")
+output size  : int in 0..200 @ sim("o/size")
+output pkind : int in 0..99  @ sim("o/pkind")
+output pline : int in 0..999 @ sim("o/pline")
+output lkind : int in 0..99  @ sim("o/lkind")
+output lline : int in 0..999 @ sim("o/lline")
+output ltick : int in 0..999 @ sim("o/ltick")
+
+machine m:
+    var turn : int in 0..20 = 0
+    var f    : float = 2.0
+    var b    : bytes<4> = default
+    var k    : int in 0..99 = 0
+    fault -> REPORT
+    initial RUN
+
+    state RUN:
+        loop:
+            k = turn * 10 + 5
+            match turn:
+                case 0:
+                    f = asin(f)
+                case 1:
+                    k = round(f * 1.0e300)
+                case 2:
+                    var x : u8 = 5
+                    k = 1 if x.bit(k) else 2
+                case 3:
+                    var s = b[1..k]
+                    k = s.len
+                case 4:
+                    k = p
+                case 5:
+                    k = 10 / (turn - 5)
+                case _:
+                    pass
+
+    state REPORT:
+        enter:
+            turn = turn + 1
+            match last_fault.kind:
+                case ARITHMETIC(a):
+                    match a:
+                        case DOMAIN:
+                            kind = 21
+                        case DIV_ZERO:
+                            kind = 22
+                        case _:
+                            kind = 29
+                case RANGE:
+                    kind = 7
+                case SENSOR_FAULT:
+                    kind = 3
+                case STREAM_OVERFLOW:
+                    kind = 8
+                case ABORT:
+                    kind = 11
+                case _:
+                    kind = 99
+            line = last_fault.line
+            stamp = last_fault.tick
+            size = last_fault.message.len
+        when turn < 9: -> RUN
+
+machine pusher:
+    fault -> GOT
+    initial PUSH
+
+    state PUSH:
+        loop:
+            send box, 1
+
+    state GOT:
+        enter:
+            match last_fault.kind:
+                case STREAM_OVERFLOW:
+                    pkind = 8
+                case ABORT:
+                    pkind = 11
+                case _:
+                    pkind = 99
+            pline = last_fault.line
+
+machine listener:
+    fault -> HURT
+    initial DOZE
+
+    state DOZE:
+        after 100 ms: -> LISTEN
+
+    state LISTEN:
+        on rx as e:
+            pass
+
+    state HURT:
+        enter:
+            match last_fault.kind:
+                case STREAM_OVERFLOW:
+                    lkind = 8
+                case ABORT:
+                    lkind = 11
+                case _:
+                    lkind = 99
+            lline = last_fault.line
+            ltick = last_fault.tick
+
+machine sink:
+    initial WAIT
+
+    state WAIT:
+        after 1 s: -> READ
+
+    state READ:
+        on box as e:
+            pass
+
+machine other:
+    initial WAIT
+
+    state WAIT:
+        after 150 ms: -> STOP
+
+    state STOP:
+        loop:
+            abort "fertig"
+"#;
+
+#[test]
+fn every_cause_of_last_fault_agrees() {
+    let rx: String = [5, 6].iter().flat_map(|t| (1..=3).map(move |v| format!("t={t} in rx {v}\n"))).collect();
+    let stim = format!("t=0 in p 5 bad\n{rx}");
+    agree_program("LAST_FAULT", &compile("LAST_FAULT", LAST_FAULT), &stim, 24);
 }
 
 /// Ein Record mit Array, ein Array mit berechnetem Index beim Lesen und

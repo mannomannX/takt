@@ -15,7 +15,7 @@ use std::ops::Not;
 
 use takt_diag::Span;
 use takt_mir::expr::{Accessor, Expr, ExprKind, MatchKind, StreamRef};
-use takt_mir::machine::{Guard, Handler};
+use takt_mir::machine::{FaultKind, Guard, Handler};
 use takt_mir::pattern::Pattern;
 use takt_mir::program::{Binding, Direction, Overflow};
 use takt_mir::stmt::Block;
@@ -1045,7 +1045,8 @@ impl Enc<'_> {
         if s.overflow != Overflow::Drop {
             let over = Term::and(vec![flow.alive.clone(), full]);
             bump(env, &loc(&s, "overflowed"), &over);
-            flow.exits.push(Exit { cond: over, kind: ExitKind::Fault(None) });
+            flow.exits
+                .push(Exit { cond: over, kind: ExitKind::Fault(None, self.cause(FaultKind::StreamOverflow, span)) });
             flow.alive = fits.clone();
         }
         self.queued.push(Queued { stream: si, cond: fits, t: self.now.clone(), value: v });

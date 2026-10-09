@@ -12,7 +12,8 @@
 use std::ops::Not;
 
 use takt_diag::Span;
-use takt_mir::expr::{Accessor, CheckedKind, Expr, ExprKind};
+use takt_mir::expr::{Accessor, Builtin, CheckedKind, Expr, ExprKind};
+use takt_mir::machine::FaultKind;
 use takt_mir::stmt::{ArmPattern, Block, Method, Place};
 use takt_mir::types::Type;
 use takt_mir::{EnumId, MachineId, TypeId};
@@ -421,7 +422,7 @@ impl Enc<'_> {
     fn fault(&mut self, kind: &CheckedKind, span: Span, fail: Term, cx: &Cx<'_>, flow: &mut Flow) {
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
         self.site(kind, span, cond.clone(), cx);
-        flow.exits.push(Exit { cond, kind: ExitKind::Fault(None) });
+        flow.exits.push(Exit { cond, kind: ExitKind::Fault(None, self.cause(kind.fault(), span)) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
     }
 
@@ -491,6 +492,11 @@ impl Enc<'_> {
                 self.variant(e.ty, *variant, values, span)?
             }
             ExprKind::Lift(x) => V::Node(vec![V::Leaf(Term::bool(true)), self.value(x, cx, env, flow)?]),
+            ExprKind::Builtin(Builtin::LastFault) => {
+                let Some(m) = cx.m else { return no("`last_fault` ausserhalb einer Maschine", span) };
+                let at = self.loc_last_fault(m);
+                self.load(env, &at, &shape, span)?
+            }
             // `OK(x)` und `ERR(e)`: der andere Teil null.
             ExprKind::Ok(x) | ExprKind::Err(x) => {
                 let V::Node(mut parts) = self.zero_value(&shape, span)? else { return no("Ergebnis", span) };
@@ -582,7 +588,7 @@ impl Enc<'_> {
 
     /// Eine Variante eines Enums mit Feldern: die Variante in Teil 0, ihre
     /// Felder an ihren Stellen, alle anderen null.
-    fn variant(&self, ty: TypeId, variant: u32, fields: Vec<V>, span: Span) -> R<V> {
+    pub(super) fn variant(&self, ty: TypeId, variant: u32, fields: Vec<V>, span: Span) -> R<V> {
         let Type::Enum(e) = self.p.types.get(ty) else { return no("Variante", span) };
         let e = *e;
         let V::Node(mut parts) = self.zero_value(&self.shape(ty, span)?, span)? else { return no("Variante", span) };
@@ -653,7 +659,10 @@ impl Enc<'_> {
             Term::bin(Op::Lt, b.clone(), a.clone()),
             Term::bin(Op::Gt, b.clone(), len),
         ]);
-        flow.exits.push(Exit { cond: Term::and(vec![flow.alive.clone(), fail.clone()]), kind: ExitKind::Fault(None) });
+        flow.exits.push(Exit {
+            cond: Term::and(vec![flow.alive.clone(), fail.clone()]),
+            kind: ExitKind::Fault(None, self.cause(FaultKind::Range, span)),
+        });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         let n = Term::bin(Op::Sub, b, a.clone());
         let zero = match elem {
@@ -735,7 +744,7 @@ impl Enc<'_> {
                 };
                 flow.exits.push(Exit {
                     cond: Term::and(vec![flow.alive.clone(), fail.clone()]),
-                    kind: ExitKind::Fault(None),
+                    kind: ExitKind::Fault(None, self.cause(FaultKind::Range, span)),
                 });
                 flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
                 let one = Term::int(1);

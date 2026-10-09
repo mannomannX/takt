@@ -262,13 +262,14 @@ pub fn step_m(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) -> R
     poll_jobs(loaded, env, tick);
     let mut out = Ok(Out::Normal);
     if !env.state.faulted {
-        // Vorgemerkte Faults zustellen (Operator-Abort, Runtime, 9.6)
+        // Vorgemerkte Faults zustellen (Operator-Abort, Runtime, 9.6); ihr
+        // Tick ist der der Zustellung (5.3).
         if let Some(f) = env.state.pending.take() {
             // Ein unterdrueckter Abort wird verworfen, nicht aufbewahrt: 5.4
             // sagt „ignoriert weitere Aborts". Bewahrt man ihn auf, feuert er
             // nach der naechsten normalen Transition ohne neue Eingabe erneut.
             if deliverable(&f, env) {
-                out = Err(Trap::Fault(f));
+                out = Err(Trap::Fault(Fault { tick, ..f }));
             }
         }
         if matches!(out, Ok(Out::Normal)) {
