@@ -7,12 +7,12 @@ use std::ops::Not;
 
 use takt_diag::Span;
 use takt_mir::TypeId;
-use takt_mir::types::{IntWidth, Type};
+use takt_mir::types::Type;
 
 use super::text::{Text, utf8};
 use super::value::V;
 use super::wire::{pick, put};
-use super::{Enc, R, U64, no};
+use super::{Enc, R, no};
 use crate::term::{Op, Term};
 
 fn int(i: i64) -> Term {
@@ -88,7 +88,6 @@ impl Enc<'_> {
     pub(super) fn canonical(&self, ty: TypeId, v: V, span: Span) -> R<Form> {
         Ok(match self.p.types.get(ty).clone() {
             Type::Bool => Form::fixed(vec![Term::ite(v.leaf(span)?, int(1), int(0))]),
-            Type::Int { width: IntWidth::U64, .. } => return no(U64, span),
             Type::Int { width, .. } => Form::fixed(le_bytes(&v.leaf(span)?, i64::from(width.bits() / 8))),
             Type::Duration { .. } => Form::fixed(le_bytes(&v.leaf(span)?, 8)),
             Type::Enum(e) if !self.fielded(e) => {
@@ -170,7 +169,6 @@ impl Enc<'_> {
                 let valid = Term::or(vec![Term::eq(b.clone(), int(0)), Term::eq(b.clone(), int(1))]);
                 Read { valid, value: V::Leaf(Term::eq(b, int(1))), next: add(at.clone(), int(1)) }
             }
-            Type::Int { width: IntWidth::U64, .. } => return no(U64, span),
             Type::Int { width, .. } => {
                 let n = i64::from(width.bits() / 8);
                 let raw = from_le(bytes, at, n);

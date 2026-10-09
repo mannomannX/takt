@@ -155,10 +155,43 @@ fn a_division_by_zero_faults() {
     reachable(&v, "d 0");
 }
 
-/// Ein `u64` ist nicht kodiert, statt mit Vorzeichen falsch gerechnet.
+/// **`u64` ohne Vorzeichen** (3.10): Die Summe laeuft erst ueber 2^64 − 1
+/// ueber, die Differenz unter null, das Produkt mit dem exakten Wert. Mit
+/// Vorzeichen gerechnet waere schon 2^63 ein Ueberlauf und null minus eins
+/// keiner.
 #[test]
-fn an_unsigned_64_bit_value_is_refused() {
-    let p = program("input x : u64 @ hw(\"x\")", "int", "1", "");
-    let e = encode(&p).expect_err("nicht kodierbar");
-    assert!(e.what.contains("u64"), "{}", e.what);
+fn a_u64_overflows_beyond_its_width_and_below_zero() {
+    let p = program("input x : u64 @ hw(\"x\")", "u64", "x.or(1) + 1", "");
+    let Some(v) = site(&p, "ovf") else { return };
+    reachable(&v, "x 18446744073709551615");
+    let p = program("input x : u64 @ hw(\"x\")", "u64", "x.or(1) - 1", "");
+    let Some(v) = site(&p, "ovf") else { return };
+    reachable(&v, "x 0");
+    let p = program("input x : u64 @ hw(\"x\")", "u64", "x.or(0) * 3", "");
+    let Some(v) = site(&p, "ovf") else { return };
+    reachable(&v, "x ");
+}
+
+/// Ein `u64` ab 2^63 passt in kein `int`; nach `>> 1`, das Nullen
+/// nachschiebt, passt jeder.
+#[test]
+fn a_u64_from_two_to_the_63_does_not_fit_an_int() {
+    let p = program("input x : u64 @ hw(\"x\")", "int", "x.or(0) as int", "");
+    let Some(v) = site(&p, "conv") else { return };
+    reachable(&v, "x ");
+    let p = program("input x : u64 @ hw(\"x\")", "int", "(x.or(0) >> 1) as int", "");
+    let Some(v) = site(&p, "conv") else { return };
+    assert!(matches!(v, CheckVerdict::Unreachable { .. }), "{v:?}");
+}
+
+/// Ein `u64` vergleicht ohne Vorzeichen: Ueber 2^63 − 1 liegt fuer ihn
+/// ein Wert, mit Vorzeichen hielte das Modell `never` fuer bewiesen.
+#[test]
+fn a_u64_compares_without_sign() {
+    let Some(solver) = solver() else { return };
+    let p = program("input x : u64 @ hw(\"x\")", "u64", "x.or(0)", "property small: never(o > 9223372036854775807)");
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let Verdict::Violated { stimulus, .. } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    assert!(stimulus.contains("x "), "{stimulus}");
 }

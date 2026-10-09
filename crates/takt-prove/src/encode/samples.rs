@@ -56,7 +56,7 @@ impl Enc<'_> {
         for x in d {
             let mut bad: Vec<Term> = edge.inside(x).into_iter().map(Not::not).collect();
             if edge.slew.is_some() {
-                let within = self.slew_within(edge, Enc::slew_diff(x, &g.good), gap.clone());
+                let within = self.slew_within(edge, Enc::slew_diff(edge, x, &g.good), gap.clone());
                 bad.push(Term::and(vec![g.has.clone(), g.fresh.clone().not(), within.not()]));
             }
             let bad = Term::or(bad);

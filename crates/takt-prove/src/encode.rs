@@ -34,7 +34,7 @@ use takt_mir::expr::{
     BinaryOp, Builtin, CheckedKind, ConvertKind, Expr, ExprKind, Intrinsic, TProp, TemporalOp, UnaryOp,
 };
 use takt_mir::fns::BlockDef;
-use takt_mir::machine::{ArithKind, FaultKind, FaultTarget, Machine, Target, TransTrigger};
+use takt_mir::machine::{ArithKind, FaultKind, FaultTarget, Machine, Target, TransTrigger, VarScope};
 use takt_mir::program::{Direction, Program, Property};
 use takt_mir::stmt::{Block, ForVars, Method, Place, StmtKind};
 use takt_mir::types::{Const, FloatWidth, HandleKind, IntWidth, Type};
@@ -427,6 +427,8 @@ pub struct Edge {
     /// Sein Name.
     pub name: String,
     sort: Sort,
+    /// Ein `u64`: Range und `max_slew` ohne Vorzeichen.
+    unsigned: bool,
     /// Die Range einer guten Lieferung.
     range: Option<(Term, Term)>,
     /// Laesst sich die Range mit einem darstellbaren Wert verletzen? Nur dann
@@ -495,7 +497,11 @@ impl Edge {
     /// Liegt `x` in der Range? Ohne Range gibt es keine Bedingung.
     fn inside(&self, x: &Term) -> Option<Term> {
         let (lo, hi) = self.range.as_ref()?;
-        let (ge, le) = if self.sort == Sort::Int { (Op::Ge, Op::Le) } else { (Op::FGe, Op::FLe) };
+        let (ge, le) = match self.sort {
+            Sort::Int if self.unsigned => (Op::UGe, Op::ULe),
+            Sort::Int => (Op::Ge, Op::Le),
+            _ => (Op::FGe, Op::FLe),
+        };
         Some(Term::and(vec![Term::bin(ge, x.clone(), lo.clone()), Term::bin(le, x.clone(), hi.clone())]))
     }
 
@@ -512,6 +518,7 @@ impl Edge {
         }
         let jump = 2.0 * self.slew? * (self.tick as f64 / 1e9) * (since + 1) as f64 + 1.0;
         Some(match last? {
+            eval::Val::Int(x) if self.unsigned => eval::Val::Int((*x as u64).saturating_add(jump.ceil() as u64) as i64),
             eval::Val::Int(x) => eval::Val::Int(x.saturating_add(jump.ceil() as i64)),
             eval::Val::F64(x) => eval::Val::F64(x + jump),
             eval::Val::F32(x) => eval::Val::F32(x + jump as f32),
@@ -726,7 +733,6 @@ impl Enc<'_> {
     fn sort_of(&self, ty: TypeId, span: Span) -> R<Sort> {
         match self.p.types.get(ty) {
             Type::Bool => Ok(Sort::Bool),
-            Type::Int { width: IntWidth::U64, .. } => no(U64, span),
             Type::Int { .. } | Type::Duration { .. } | Type::Enum(_) => Ok(Sort::Int),
             Type::Float { width: FloatWidth::F32, .. } => Ok(Sort::F32),
             Type::Float { width: FloatWidth::F64, .. } => Ok(Sort::F64),
@@ -735,13 +741,17 @@ impl Enc<'_> {
     }
 
     /// Die Breite eines ganzzahligen Typs; eine Dauer rechnet in `i64` (3.3).
-    fn int_width(&self, ty: TypeId, span: Span) -> R<Option<IntWidth>> {
+    fn int_width(&self, ty: TypeId) -> Option<IntWidth> {
         match self.p.types.get(ty) {
-            Type::Int { width: IntWidth::U64, .. } => no(U64, span),
-            Type::Int { width, .. } => Ok(Some(*width)),
-            Type::Duration { .. } => Ok(Some(IntWidth::I64)),
-            _ => Ok(None),
+            Type::Int { width, .. } => Some(*width),
+            Type::Duration { .. } => Some(IntWidth::I64),
+            _ => None,
         }
+    }
+
+    /// Ein `u64`: Er ordnet, teilt und schiebt ohne Vorzeichen (3.10).
+    pub(super) fn unsigned(&self, ty: TypeId) -> bool {
+        matches!(self.p.types.get(ty), Type::Int { width: IntWidth::U64, .. })
     }
 
     fn zero(sort: Sort) -> Term {
@@ -810,13 +820,13 @@ impl Enc<'_> {
             blocks.extend(s.transitions.iter().map(|t| &t.actions));
         }
         for b in blocks {
-            self.walk_counters(b, &mut Vec::new(), &mut out)?;
+            self.walk_counters(m, b, &mut Vec::new(), &mut out)?;
         }
         self.counter_paths.insert(m, out.clone());
         Ok(out)
     }
 
-    fn walk_counters(&mut self, b: &Block, counts: &mut Vec<i64>, out: &mut CounterPaths) -> R<()> {
+    fn walk_counters(&mut self, m: MachineId, b: &Block, counts: &mut Vec<i64>, out: &mut CounterPaths) -> R<()> {
         let record = |list: &mut Vec<Vec<i64>>, counts: &[i64]| {
             let mut paths: Vec<Vec<i64>> = vec![Vec::new()];
             for &n in counts {
@@ -833,22 +843,22 @@ impl Enc<'_> {
             match &s.kind {
                 StmtKind::Every { counter, body, .. } => {
                     record(&mut out.every[counter.index()], counts);
-                    self.walk_counters(body, counts, out)?;
+                    self.walk_counters(m, body, counts, out)?;
                 }
                 StmtKind::Check { confirm: Some(c), .. } => record(&mut out.viol[c.site.0 as usize], counts),
                 StmtKind::If { then, otherwise, .. } => {
-                    self.walk_counters(then, counts, out)?;
-                    self.walk_counters(otherwise, counts, out)?;
+                    self.walk_counters(m, then, counts, out)?;
+                    self.walk_counters(m, otherwise, counts, out)?;
                 }
                 StmtKind::Match { arms, .. } => {
                     for a in arms {
-                        self.walk_counters(&a.body, counts, out)?;
+                        self.walk_counters(m, &a.body, counts, out)?;
                     }
                 }
-                StmtKind::At { body, .. } => self.walk_counters(body, counts, out)?,
+                StmtKind::At { body, .. } => self.walk_counters(m, body, counts, out)?,
                 StmtKind::ForRange { count, body, .. } => {
-                    counts.push(self.const_int(count)?);
-                    self.walk_counters(body, counts, out)?;
+                    counts.push(self.const_int(Some(m), count)?);
+                    self.walk_counters(m, body, counts, out)?;
                     counts.pop();
                 }
                 StmtKind::ForEach { iter, body, .. } => {
@@ -862,7 +872,7 @@ impl Enc<'_> {
                                 every: vec![Vec::new(); out.every.len()],
                                 viol: vec![Vec::new(); out.viol.len()],
                             };
-                            self.walk_counters(body, &mut Vec::new(), &mut inner)?;
+                            self.walk_counters(m, body, &mut Vec::new(), &mut inner)?;
                             if inner.every.iter().chain(&inner.viol).any(|l| !l.is_empty()) {
                                 return no("`every` oder `check … for` in einer Schleife ueber eine map", s.span);
                             }
@@ -875,7 +885,7 @@ impl Enc<'_> {
                         _ => return no("`for` ueber diesen Wert", s.span),
                     };
                     counts.push(n);
-                    self.walk_counters(body, counts, out)?;
+                    self.walk_counters(m, body, counts, out)?;
                     counts.pop();
                 }
                 _ => {}
@@ -979,11 +989,16 @@ impl Enc<'_> {
 
     // ------------------------------------------------------------ Ausdruecke
 
-    /// Ein konstanter Wert (Parameter-Defaults, `safe`, `after`).
-    fn const_value(&mut self, e: &Expr) -> R<V> {
-        let pre = Env::new();
+    /// Ein konstanter Wert (Parameter-Defaults, `safe`, `after`); in einer
+    /// Maschine `m` auch ihre Parameter, die die Instanz bindet: Eine Frist
+    /// ist je Maschine eine feste Zahl von Ticks (7.1).
+    fn const_value(&mut self, m: Option<MachineId>, e: &Expr) -> R<V> {
+        let pre = match m {
+            Some(m) => self.bound_params(m),
+            None => Env::new(),
+        };
         let active = BTreeMap::new();
-        let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: &pre, active: &active, locals: None };
+        let cx = Cx { m, leaf: None, mode: Mode::Entry, pre: &pre, active: &active, locals: None };
         let mut flow = Flow::new(Term::bool(true));
         let v = self.value(e, &cx, &pre, &mut flow)?;
         let mut leaves = Vec::new();
@@ -994,12 +1009,23 @@ impl Enc<'_> {
         Ok(v)
     }
 
-    fn const_expr(&mut self, e: &Expr) -> R<Term> {
-        self.const_value(e)?.leaf(e.span)
+    /// Die Parameter einer Maschine mit konstanter Bindung.
+    fn bound_params(&mut self, m: MachineId) -> Env {
+        let mut env = Env::new();
+        for (i, def) in self.machine(m).vars.clone().into_iter().enumerate() {
+            let (VarScope::Param, Some(init)) = (def.scope, &def.init) else { continue };
+            let (Ok(v), Ok(shape)) = (self.const_value(None, init), self.shape(def.ty, def.span)) else { continue };
+            Enc::store(&mut env, &self.loc_var(m, VarId(i as u32)), &shape, v);
+        }
+        env
     }
 
-    fn const_int(&mut self, e: &Expr) -> R<i64> {
-        let t = self.const_expr(e)?;
+    fn const_expr(&mut self, m: Option<MachineId>, e: &Expr) -> R<Term> {
+        self.const_value(m, e)?.leaf(e.span)
+    }
+
+    fn const_int(&mut self, m: Option<MachineId>, e: &Expr) -> R<i64> {
+        let t = self.const_expr(m, e)?;
         match eval::eval(&t, &eval::Env::new()) {
             eval::Val::Int(i) => Ok(i),
             _ => no("Ganzzahl erwartet", e.span),
@@ -1045,7 +1071,7 @@ impl Enc<'_> {
                     return Ok(x);
                 }
                 let default = param.default.clone();
-                self.const_expr(&default)?
+                self.const_expr(None, &default)?
             }
             ExprKind::Command(c) => self.command(*c),
             ExprKind::Input { channel, .. } => self.read_input(*channel, cx, flow, span)?,
@@ -1145,7 +1171,7 @@ impl Enc<'_> {
             ExprKind::Binary { op, lhs, rhs } => {
                 let a = self.expr(lhs, cx, env, flow)?;
                 let b = self.expr(rhs, cx, env, flow)?;
-                let width = self.int_width(lhs.ty, span)?;
+                let width = self.int_width(lhs.ty);
                 self.binary(*op, a, b, width, span)?
             }
             ExprKind::Cond { cond, then, otherwise } => {
@@ -1161,8 +1187,11 @@ impl Enc<'_> {
             }
             ExprKind::Cast { expr, .. } => {
                 let x = self.expr(expr, cx, env, flow)?;
+                let unsigned = self.unsigned(expr.ty);
                 match (x.sort(), sort?) {
                     (Sort::Int, Sort::Int) => x,
+                    (Sort::Int, Sort::F32) if unsigned => Term::app(Op::UToF32, vec![x]),
+                    (Sort::Int, Sort::F64) if unsigned => Term::app(Op::UToF64, vec![x]),
                     (Sort::Int | Sort::F64, Sort::F32) => Term::app(Op::ToF32, vec![x]),
                     (Sort::Int | Sort::F32, Sort::F64) => Term::app(Op::ToF64, vec![x]),
                     (a, b) if a == b => x,
@@ -1306,6 +1335,18 @@ impl Enc<'_> {
     #[deny(clippy::wildcard_enum_match_arm)]
     fn binary(&mut self, op: BinaryOp, a: Term, b: Term, width: Option<IntWidth>, span: Span) -> R<Term> {
         let float = matches!(a.sort(), Sort::F32 | Sort::F64);
+        // Schmalere Breiten liegen nichtnegativ im Bitvektor; dort rechnet
+        // das Vorzeichen gleich, nur ein `u64` braucht die Operationen ohne.
+        let unsigned = width == Some(IntWidth::U64);
+        let pick = |f: Op, u: Op, s: Op| {
+            if float {
+                f
+            } else if unsigned {
+                u
+            } else {
+                s
+            }
+        };
         Ok(match op {
             BinaryOp::And => Term::and(vec![a, b]),
             BinaryOp::Or => Term::or(vec![a, b]),
@@ -1313,15 +1354,15 @@ impl Enc<'_> {
             BinaryOp::Eq => Term::eq(a, b),
             BinaryOp::Ne if float => Term::bin(Op::FEq, a, b).not(),
             BinaryOp::Ne => Term::eq(a, b).not(),
-            BinaryOp::Lt => Term::bin(if float { Op::FLt } else { Op::Lt }, a, b),
-            BinaryOp::Le => Term::bin(if float { Op::FLe } else { Op::Le }, a, b),
-            BinaryOp::Gt => Term::bin(if float { Op::FGt } else { Op::Gt }, a, b),
-            BinaryOp::Ge => Term::bin(if float { Op::FGe } else { Op::Ge }, a, b),
+            BinaryOp::Lt => Term::bin(pick(Op::FLt, Op::ULt, Op::Lt), a, b),
+            BinaryOp::Le => Term::bin(pick(Op::FLe, Op::ULe, Op::Le), a, b),
+            BinaryOp::Gt => Term::bin(pick(Op::FGt, Op::UGt, Op::Gt), a, b),
+            BinaryOp::Ge => Term::bin(pick(Op::FGe, Op::UGe, Op::Ge), a, b),
             BinaryOp::Add => Term::bin(if float { Op::FAdd } else { Op::Add }, a, b),
             BinaryOp::Sub => Term::bin(if float { Op::FSub } else { Op::Sub }, a, b),
             BinaryOp::Mul => Term::bin(if float { Op::FMul } else { Op::Mul }, a, b),
-            BinaryOp::Div => Term::bin(if float { Op::FDiv } else { Op::Div }, a, b),
-            BinaryOp::Rem if !float => Term::bin(Op::Rem, a, b),
+            BinaryOp::Div => Term::bin(pick(Op::FDiv, Op::UDiv, Op::Div), a, b),
+            BinaryOp::Rem if !float => Term::bin(if unsigned { Op::URem } else { Op::Rem }, a, b),
             BinaryOp::BitAnd => Term::bin(Op::BitAnd, a, b),
             BinaryOp::BitOr => Term::bin(Op::BitOr, a, b),
             BinaryOp::BitXor => Term::bin(Op::BitXor, a, b),
@@ -1330,7 +1371,7 @@ impl Enc<'_> {
                 let width = width.unwrap_or(IntWidth::I64);
                 Term::app(Op::Wrap { bits: width.bits(), signed: width.signed() }, vec![Term::bin(Op::Shl, a, b)])
             }
-            BinaryOp::Shr => Term::bin(Op::Shr, a, b),
+            BinaryOp::Shr => Term::bin(if unsigned { Op::LShr } else { Op::Shr }, a, b),
             other => return no(format!("Operator `{other:?}`"), span),
         })
     }
@@ -1360,12 +1401,20 @@ impl Enc<'_> {
         let math = |f: Fun, args: Vec<Term>| Term::app(Op::Math(f), args);
         Ok(match (op, xs.as_slice()) {
             (Intrinsic::Abs, [x]) if float => Term::app(Op::FAbs, vec![x.clone()]),
+            (Intrinsic::Abs, [x]) if self.unsigned(tys.1) => x.clone(),
             (Intrinsic::Abs, [x]) => {
                 let neg = Term::bin(Op::Lt, x.clone(), Term::int(0));
                 Term::ite(neg, Term::app(Op::Neg, vec![x.clone()]), x.clone())
             }
             (Intrinsic::Min | Intrinsic::Max, [a, b]) => {
-                let lt = Term::bin(if float { Op::FLt } else { Op::Lt }, a.clone(), b.clone());
+                let lt = if float {
+                    Op::FLt
+                } else if self.unsigned(tys.1) {
+                    Op::ULt
+                } else {
+                    Op::Lt
+                };
+                let lt = Term::bin(lt, a.clone(), b.clone());
                 if op == Intrinsic::Min {
                     Term::ite(lt, a.clone(), b.clone())
                 } else {
@@ -1434,7 +1483,7 @@ impl Enc<'_> {
             }
             // In der Breite des Ergebnisses gewickelt (`call.rs`).
             (Intrinsic::WrappingAdd | Intrinsic::WrappingSub | Intrinsic::WrappingMul, [a, b]) if !float => {
-                let w = self.int_width(tys.0, span)?.unwrap_or(IntWidth::I64);
+                let w = self.int_width(tys.0).unwrap_or(IntWidth::I64);
                 let r = if op == Intrinsic::WrappingAdd {
                     Term::bin(Op::Add, a.clone(), b.clone())
                 } else if op == Intrinsic::WrappingSub {
@@ -1444,10 +1493,20 @@ impl Enc<'_> {
                 };
                 Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![r])
             }
+            // Ohne Vorzeichen: ein Uebertrag auf 2^64 − 1, ein Borgen auf null.
+            (Intrinsic::SaturatingAdd, [a, b]) if self.unsigned(tys.0) => {
+                let r = Term::bin(Op::Add, a.clone(), b.clone());
+                Term::ite(Term::bin(Op::ULt, r.clone(), a.clone()), Term::int(-1), r)
+            }
+            (Intrinsic::SaturatingSub, [a, b]) if self.unsigned(tys.0) => Term::ite(
+                Term::bin(Op::ULt, a.clone(), b.clone()),
+                Term::int(0),
+                Term::bin(Op::Sub, a.clone(), b.clone()),
+            ),
             // Auf die Grenzen der Breite geklemmt; in 64 Bit entscheidet der
             // Ueberlauf die Richtung.
             (Intrinsic::SaturatingAdd | Intrinsic::SaturatingSub, [a, b]) if !float => {
-                let w = self.int_width(tys.0, span)?.unwrap_or(IntWidth::I64);
+                let w = self.int_width(tys.0).unwrap_or(IntWidth::I64);
                 let (lo, hi) = width_bounds(w);
                 let (lo, hi) = (Term::int(lo as i64), Term::int(hi as i64));
                 let add = op == Intrinsic::SaturatingAdd;
@@ -1462,9 +1521,10 @@ impl Enc<'_> {
                 let up = Term::bin(Op::Ge, a.clone(), Term::int(0));
                 Term::ite(wraps, Term::ite(up, hi, lo), clamped)
             }
-            // Rotation in der Breite des Arguments, der Betrag modulo der Breite.
+            // Rotation in der Breite des Arguments, der Betrag modulo der
+            // Breite; nach rechts schiebt sie Nullen nach, auch bei `i64`.
             (Intrinsic::Rotl | Intrinsic::Rotr, [x, n]) if !float => {
-                let w = self.int_width(tys.1, span)?.unwrap_or(IntWidth::I64);
+                let w = self.int_width(tys.1).unwrap_or(IntWidth::I64);
                 let bits = i64::from(w.bits());
                 let mask = if bits >= 64 { Term::int(-1) } else { Term::int((1i64 << bits) - 1) };
                 let r = Term::bin(Op::Rem, n.clone(), Term::int(bits));
@@ -1475,7 +1535,7 @@ impl Enc<'_> {
                 );
                 let u = Term::bin(Op::BitAnd, x.clone(), mask.clone());
                 let back = Term::bin(Op::Sub, Term::int(bits), n.clone());
-                let (first, second) = if op == Intrinsic::Rotl { (Op::Shl, Op::Shr) } else { (Op::Shr, Op::Shl) };
+                let (first, second) = if op == Intrinsic::Rotl { (Op::Shl, Op::LShr) } else { (Op::LShr, Op::Shl) };
                 let rot = Term::bin(Op::BitOr, Term::bin(first, u.clone(), n), Term::bin(second, u, back));
                 Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![Term::bin(Op::BitAnd, rot, mask)])
             }
@@ -1673,7 +1733,11 @@ impl Enc<'_> {
             CheckedKind::Range(r) => {
                 let x = self.expr(inner, cx, env, flow)?;
                 let (lo, hi) = (self.bound(&r.lo, x.sort()), self.bound(&r.hi, x.sort()));
-                let (ge, le) = if x.sort() == Sort::Int { (Op::Ge, Op::Le) } else { (Op::FGe, Op::FLe) };
+                let (ge, le) = match x.sort() {
+                    Sort::Int if self.unsigned(inner.ty) => (Op::UGe, Op::ULe),
+                    Sort::Int => (Op::Ge, Op::Le),
+                    Sort::Bool | Sort::F32 | Sort::F64 => (Op::FGe, Op::FLe),
+                };
                 let fail = Term::and(vec![Term::bin(ge, x.clone(), lo), Term::bin(le, x.clone(), hi)]).not();
                 (x, fail)
             }
@@ -1693,7 +1757,7 @@ impl Enc<'_> {
                 let ExprKind::Binary { op, lhs, rhs } = &inner.kind else {
                     return no("Schiebepruefung ohne Operator", span);
                 };
-                let width = self.int_width(node.ty, span)?.unwrap_or(IntWidth::I64);
+                let width = self.int_width(node.ty).unwrap_or(IntWidth::I64);
                 let a = self.expr(lhs, cx, env, flow)?;
                 let b = self.expr(rhs, cx, env, flow)?;
                 let fail = Term::or(vec![
@@ -1707,11 +1771,11 @@ impl Enc<'_> {
                 let ExprKind::Cast { expr: x, to } = &inner.kind else {
                     return no("Konversionspruefung ohne `as`", span);
                 };
-                let (Some(_), Some(width)) = (self.int_width(x.ty, span)?, self.int_width(*to, span)?) else {
+                let (Some(from), Some(width)) = (self.int_width(x.ty), self.int_width(*to)) else {
                     return no("Konversion", span);
                 };
                 let v = self.expr(x, cx, env, flow)?;
-                let fail = outside(&v, width);
+                let fail = converts_outside(&v, from, width);
                 (v, fail)
             }
             // `sqrt` unter null (4.2); der Knoten umschliesst das Argument.
@@ -1749,8 +1813,9 @@ impl Enc<'_> {
     /// Bit entscheiden die Vorzeichen.
     fn overflow(&mut self, inner: &Expr, ty: TypeId, cx: &Cx<'_>, env: &Env, flow: &mut Flow) -> R<(Term, Term)> {
         let span = inner.span;
-        let Some(width) = self.int_width(ty, span)? else { return no("Ueberlauf ohne Ganzzahl", span) };
+        let Some(width) = self.int_width(ty) else { return no("Ueberlauf ohne Ganzzahl", span) };
         let narrow = width.bits() < 64;
+        let unsigned = width == IntWidth::U64;
         let min = |x: &Term| Term::eq(x.clone(), Term::int(i64::MIN));
         Ok(match &inner.kind {
             ExprKind::Binary { op, lhs, rhs } => {
@@ -1759,6 +1824,11 @@ impl Enc<'_> {
                 let r = self.binary(*op, a.clone(), b.clone(), Some(width), span)?;
                 let fail = match op {
                     _ if narrow => outside(&r, width),
+                    // Ohne Vorzeichen: ein Uebertrag, ein Borgen, ein Produkt ueber 2^64 − 1.
+                    BinaryOp::Add if unsigned => Term::bin(Op::ULt, r.clone(), a),
+                    BinaryOp::Sub if unsigned => Term::bin(Op::ULt, a, b),
+                    BinaryOp::Mul if unsigned => Term::bin(Op::UMulOverflows, a, b),
+                    BinaryOp::Div | BinaryOp::Rem if unsigned => Term::bool(false),
                     BinaryOp::Add => Term::bin(Op::AddOverflows, a, b),
                     BinaryOp::Sub => Term::bin(Op::SubOverflows, a, b),
                     BinaryOp::Mul => Term::bin(Op::MulOverflows, a, b),
@@ -1769,17 +1839,30 @@ impl Enc<'_> {
                 };
                 (r, fail)
             }
-            // `-x` und `abs(x)`: Ueberlauf genau bei `MIN`.
+            // `-x` und `abs(x)`: Ueberlauf genau bei `MIN`; `-x` eines `u64`
+            // ausser bei null.
             ExprKind::Unary { op: UnaryOp::Neg, expr: x } => {
                 let x = self.expr(x, cx, env, flow)?;
                 let r = Term::app(Op::Neg, vec![x.clone()]);
-                let fail = if narrow { outside(&r, width) } else { min(&x) };
+                let fail = if narrow {
+                    outside(&r, width)
+                } else if unsigned {
+                    Term::eq(x, Term::int(0)).not()
+                } else {
+                    min(&x)
+                };
                 (r, fail)
             }
             ExprKind::Intrinsic { op: Intrinsic::Abs, args } if args.len() == 1 => {
                 let x = self.expr(&args[0], cx, env, flow)?;
                 let r = self.intrinsic(Intrinsic::Abs, vec![x.clone()], (args[0].ty, args[0].ty), flow, span)?;
-                let fail = if narrow { outside(&r, width) } else { min(&x) };
+                let fail = if narrow {
+                    outside(&r, width)
+                } else if unsigned {
+                    Term::bool(false)
+                } else {
+                    min(&x)
+                };
                 (r, fail)
             }
             _ => return no("Ueberlaufpruefung ohne Operator", span),
@@ -1888,7 +1971,7 @@ impl Enc<'_> {
                     flow.alive = Term::or(vec![ft.alive, fe.alive]);
                 }
                 StmtKind::ForRange { var, count, body } => {
-                    let n = self.const_int(count)?.max(0);
+                    let n = self.const_int(cx.m, count)?.max(0);
                     self.unroll_steps(n, s.span)?;
                     self.breaks.push(Vec::new());
                     for i in 0..n {
@@ -2019,7 +2102,7 @@ impl Enc<'_> {
                     let failed = match confirm {
                         None => c.clone().not(),
                         Some(confirm) => {
-                            let d = self.const_int(&confirm.duration)?;
+                            let d = self.const_int(cx.m, &confirm.duration)?;
                             let period = i64::from(machine_period(self.machine(m))).saturating_mul(self.p.config.tick);
                             let loc = self.loc_viol(m, confirm.site.0 as usize, &self.loop_path.clone());
                             let viol = env[&loc].clone();
@@ -2050,7 +2133,7 @@ impl Enc<'_> {
                 // `every d` (5.8): der Rumpf, sobald die Uhr den naechsten
                 // Zeitpunkt erreicht; der rueckt dann um `d` weiter.
                 StmtKind::Every { period, counter, body } => {
-                    let d = self.const_int(period)?;
+                    let d = self.const_int(cx.m, period)?;
                     let site = self.machine(m).layout.every_counters[counter.index()];
                     let clock = match (site.state, cx.leaf) {
                         (Some(_), Some(leaf)) => {
@@ -2124,7 +2207,7 @@ impl Enc<'_> {
                     flow.alive = Term::or(vec![alive_out, remaining]);
                 }
                 StmtKind::ForRange { var, count, body } => {
-                    let n = self.const_int(count)?.max(0);
+                    let n = self.const_int(cx.m, count)?.max(0);
                     self.unroll_steps(n, span)?;
                     let loc = self.loc_var(m, *var);
                     self.breaks.push(Vec::new());
@@ -2599,7 +2682,7 @@ impl Enc<'_> {
                     continue;
                 }
                 if let Some(safe) = c.attrs.safe.clone() {
-                    let v = self.const_value(&safe)?;
+                    let v = self.const_value(None, &safe)?;
                     let (loc, ty) = (self.loc_out(ChannelId(i as u32)), c.ty);
                     self.put(env, &loc, ty, v, &flow.alive.clone(), safe.span)?;
                 }
@@ -2780,7 +2863,7 @@ impl Enc<'_> {
                             fired
                         }
                         TransTrigger::After(d) => {
-                            let ns = self.const_int(d)?;
+                            let ns = self.const_int(Some(m), d)?;
                             let needed = ((ns + period - 1) / period).max(1);
                             let timer = env.get(&self.loc_timer(m, *s)).cloned().expect("Timer");
                             Term::bin(Op::Ge, timer, Term::int(needed))
@@ -2973,7 +3056,7 @@ impl Enc<'_> {
         let mut out: Option<i64> = None;
         for t in &state.transitions {
             if let TransTrigger::After(d) = &t.trigger {
-                let ns = self.const_int(d).ok()?;
+                let ns = self.const_int(Some(m), d).ok()?;
                 let needed = ((ns + period - 1) / period).max(1);
                 out = Some(out.map_or(needed, |o| o.min(needed)));
             }
@@ -2991,7 +3074,7 @@ impl Enc<'_> {
             for s in &machine.states {
                 for t in &s.transitions {
                     if let TransTrigger::After(d) = &t.trigger {
-                        let ns = self.const_int(d)?;
+                        let ns = self.const_int(Some(m), d)?;
                         out = out.max(((ns + period - 1) / period).max(1));
                     }
                 }
@@ -3031,7 +3114,7 @@ impl Enc<'_> {
                 continue;
             }
             let value = match &c.attrs.safe {
-                Some(e) => self.const_value(e)?,
+                Some(e) => self.const_value(None, e)?,
                 None => self.zero_of(c.ty, c.span)?,
             };
             out.push((self.loc_out(ChannelId(i as u32)), c.ty, value));
@@ -3255,6 +3338,10 @@ impl Enc<'_> {
     /// Die Invariante eines typisierten Orts (3.4): Range, Endlichkeit, Enum.
     fn type_invariant(&self, x: Term, ty: TypeId) -> Option<Term> {
         Some(match self.p.types.get(ty) {
+            Type::Int { range: Some(r), width: IntWidth::U64, .. } => {
+                let (lo, hi) = (self.bound(&r.lo, Sort::Int), self.bound(&r.hi, Sort::Int));
+                Term::and(vec![Term::bin(Op::UGe, x.clone(), lo), Term::bin(Op::ULe, x, hi)])
+            }
             Type::Int { range: Some(r), .. } | Type::Duration { range: Some(r) } => {
                 let (lo, hi) = (self.bound(&r.lo, Sort::Int), self.bound(&r.hi, Sort::Int));
                 Term::and(vec![Term::bin(Op::Ge, x.clone(), lo), Term::bin(Op::Le, x, hi)])
@@ -3371,7 +3458,7 @@ impl Enc<'_> {
                 else {
                     continue;
                 };
-                let (Ok(safe), Ok(shape)) = (self.const_value(safe), self.shape(c.ty, c.span)) else { continue };
+                let (Ok(safe), Ok(shape)) = (self.const_value(None, safe), self.shape(c.ty, c.span)) else { continue };
                 let Ok(now) = self.load(pre, &self.loc_out(ChannelId(i as u32)), &shape, c.span) else { continue };
                 out.push(Term::or(vec![faulted.clone().not(), Enc::equal(&now, &safe)]));
             }
@@ -3406,10 +3493,12 @@ impl Enc<'_> {
             let (range, outside) = match self.p.types.get(ty) {
                 Type::Int { range: Some(r), width, .. } => {
                     let (lo, hi) = (int_bound(&r.lo), int_bound(&r.hi));
+                    // Die Grenzen eines `u64` stehen als Bitmuster da.
+                    let value = |b: i64| if *width == IntWidth::U64 { i128::from(b as u64) } else { i128::from(b) };
                     let (min, max) = width_bounds(*width);
                     let outside =
-                        if i128::from(hi) < max { Some(hi + 1) } else { (i128::from(lo) > min).then(|| lo - 1) };
-                    (Some((Term::int(lo), Term::int(hi))), outside.map(eval::Val::Int))
+                        if value(hi) < max { Some(value(hi) + 1) } else { (value(lo) > min).then(|| value(lo) - 1) };
+                    (Some((Term::int(lo), Term::int(hi))), outside.map(|v| eval::Val::Int(v as i64)))
                 }
                 Type::Duration { range: Some(r) } => {
                     let (lo, hi) = (int_bound(&r.lo), int_bound(&r.hi));
@@ -3447,6 +3536,7 @@ impl Enc<'_> {
                 channel: ChannelId(i as u32),
                 name: c.name.clone(),
                 sort,
+                unsigned: self.unsigned(ty),
                 range,
                 violable,
                 outside,
@@ -3653,8 +3743,12 @@ impl Enc<'_> {
 
     /// Der Betrag der Aenderung zum letzten guten Wert, in `f64` wie
     /// `Gate::violation`.
-    fn slew_diff(x: &Term, good: &Term) -> Term {
-        let wide = |t: &Term| if t.sort() == Sort::F64 { t.clone() } else { Term::app(Op::ToF64, vec![t.clone()]) };
+    fn slew_diff(edge: &Edge, x: &Term, good: &Term) -> Term {
+        let wide = |t: &Term| match t.sort() {
+            Sort::F64 => t.clone(),
+            Sort::Int if edge.unsigned => Term::app(Op::UToF64, vec![t.clone()]),
+            _ => Term::app(Op::ToF64, vec![t.clone()]),
+        };
         Term::app(Op::FAbs, vec![Term::bin(Op::FSub, wide(x), wide(good))])
     }
 
@@ -3738,7 +3832,7 @@ impl Enc<'_> {
             // jede Aenderung zu: Eine Division oder auch nur ein Produkt mit
             // einem freien Abstand haelt kein Solver aus.
             if edge.slew.is_some() {
-                let diff = Enc::slew_diff(&x, &prev("good", edge.sort));
+                let diff = Enc::slew_diff(&edge, &x, &prev("good", edge.sort));
                 let within = self.slew_within(&edge, diff, prev("gap", Sort::Int));
                 out.push(implies(Term::and(vec![is(quality::GOOD), prev("has", Sort::Bool)]), within));
             }
@@ -3860,8 +3954,18 @@ fn outside(x: &Term, width: IntWidth) -> Term {
     ])
 }
 
-/// Warum ein `u64` nicht kodiert ist.
-const U64: &str = "`u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen";
+/// Faellt `x` beim `as` aus der Breite `from` aus `to` heraus (3.10)? Ein
+/// `u64` ab 2^63 steht negativ im Bitvektor und passt in keine andere
+/// Breite; in einen `u64` passt jeder Wert ab null.
+fn converts_outside(x: &Term, from: IntWidth, to: IntWidth) -> Term {
+    let negative = Term::bin(Op::Lt, x.clone(), Term::int(0));
+    match (from == IntWidth::U64, to == IntWidth::U64) {
+        (true, true) => Term::bool(false),
+        (false, true) => negative,
+        (true, false) => Term::or(vec![negative, outside(x, to)]),
+        (false, false) => outside(x, to),
+    }
+}
 
 /// Die Funktion aus `libtaktm` hinter einer Primitive (4.2).
 #[deny(clippy::wildcard_enum_match_arm)]

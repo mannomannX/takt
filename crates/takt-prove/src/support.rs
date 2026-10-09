@@ -131,7 +131,7 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Stream => Yes,
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
         ExprTag::JobState => Partial("ueber den Natives, die das Modell rechnet; nicht die Kryptofunktionen"),
-        ExprTag::Decode => Partial("ohne Fliesskomma- und `u64`-Felder"),
+        ExprTag::Decode => Partial("ohne Fliesskommafelder"),
         ExprTag::NativeCall => Partial(
             "Pruefsummen und Digests der kuratierten Menge; nicht `sha256_*`, `fft256` und die Kryptofunktionen",
         ),
@@ -195,10 +195,10 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Free
         | AccessorTag::Idle
         | AccessorTag::Sent => Yes,
-        AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
+        AccessorTag::Wrap => Yes,
         AccessorTag::Ok | AccessorTag::Err | AccessorTag::Get => Yes,
         AccessorTag::Min | AccessorTag::Max | AccessorTag::Mean | AccessorTag::Rms | AccessorTag::Last => Yes,
-        AccessorTag::Encode => Partial("ohne Fliesskomma- und `u64`-Felder"),
+        AccessorTag::Encode => Partial("ohne Fliesskommafelder"),
         AccessorTag::T | AccessorTag::Pre | AccessorTag::Post | AccessorTag::Samples | AccessorTag::Rate => Yes,
         AccessorTag::Seq
         | AccessorTag::Text
@@ -249,7 +249,7 @@ fn ty(t: TypeTag) -> Support {
     match t {
         TypeTag::Bool | TypeTag::Float | TypeTag::Duration | TypeTag::Enum | TypeTag::Result => Yes,
         TypeTag::Record | TypeTag::Array | TypeTag::Optional | TypeTag::Bytes | TypeTag::Vec => Yes,
-        TypeTag::Int => Partial("ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen"),
+        TypeTag::Int => Yes,
         TypeTag::HandleBlock => Partial("Blockinstanzen nur ueber ihre Felder"),
         TypeTag::Stream => Partial(
             "Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang, Records vom Rand fester Groesse; \

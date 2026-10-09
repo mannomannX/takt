@@ -39,7 +39,7 @@ Expr(Matches),"teilweise: nur in Handlern, Guards und Bedingungen",teilweise: ke
 Expr(Call),ja,teilweise: Funktionen aus kodierbaren Anweisungen,ja
 Expr(NativeCall),ja,"teilweise: Pruefsummen und Digests der kuratierten Menge; nicht `sha256_*`, `fft256` und die Kryptofunktionen",ja
 Expr(MatOp),ja,"teilweise: `det`, `inv`, `solve` und `cholesky` im Solver uninterpretiert",ja
-Expr(Decode),ja,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
+Expr(Decode),ja,teilweise: ohne Fliesskommafelder,ja
 Expr(Checked),ja,ja,ja
 Expr(Lift),ja,ja,ja
 Expr(Ok),ja,ja,ja
@@ -145,7 +145,7 @@ Accessor(Max),ja,ja,ja
 Accessor(Mean),ja,ja,ja
 Accessor(Rms),ja,ja,ja
 Accessor(Last),ja,ja,nein
-Accessor(Encode),teilweise: `encode` nur auf Records,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
+Accessor(Encode),teilweise: `encode` nur auf Records,teilweise: ohne Fliesskommafelder,ja
 Accessor(Get),ja,ja,ja
 Accessor(StartsWith),ja,ja,nein
 Accessor(Contains),ja,ja,nein
@@ -159,7 +159,7 @@ Accessor(Truncated),ja,ja,nein
 Accessor(Peek),ja,ja,ja
 Accessor(Sent),ja,ja,ja
 Accessor(Idle),ja,ja,ja
-Accessor(Wrap),ja,teilweise: ohne `wrap_u64`,ja
+Accessor(Wrap),ja,ja,ja
 Match(Matches),ja,teilweise: kein `{x:float}`,ja
 Match(Has),ja,teilweise: kein `{x:float}`,ja
 Stmt(Assign),ja,ja,ja
@@ -190,7 +190,7 @@ Place(Field),ja,ja,ja
 Place(Index),ja,ja,ja
 Place(Index2),ja,ja,ja
 Type(Bool),ja,ja,ja
-Type(Int),ja,teilweise: ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen,ja
+Type(Int),ja,ja,ja
 Type(Float),ja,ja,ja
 Type(Duration),ja,ja,ja
 Type(Enum),ja,ja,ja

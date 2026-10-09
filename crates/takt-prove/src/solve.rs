@@ -14,7 +14,7 @@ use std::process::Command;
 use takt_interp::property::Outcome;
 use takt_interp::{RunOptions, Trace, run};
 use takt_mir::program::{Direction, Program};
-use takt_mir::types::Type;
+use takt_mir::types::{IntWidth, Type};
 
 use crate::encode::Model;
 use crate::eval::Val;
@@ -1088,6 +1088,7 @@ fn value_text(program: &Program, ty: takt_mir::TypeId, v: &Val) -> String {
             program.enums[e.index()].variants.get(*i as usize).map(|v| v.name.clone()).unwrap_or_else(|| i.to_string())
         }
         (Type::Duration { .. }, Val::Int(i)) => format!("{i} ns"),
+        (Type::Int { width: IntWidth::U64, .. }, Val::Int(i)) => (*i as u64).to_string(),
         (_, Val::Int(i)) => i.to_string(),
         (_, Val::F64(f)) => format!("{f:?}"),
         (_, Val::F32(f)) => format!("{f:?}"),

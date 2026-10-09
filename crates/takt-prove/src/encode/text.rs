@@ -12,7 +12,7 @@ use takt_diag::Span;
 use takt_mir::TypeId;
 use takt_mir::expr::{Expr, MatchKind};
 use takt_mir::pattern::{Format, FormatPiece, PatternPiece};
-use takt_mir::types::Type;
+use takt_mir::types::{IntWidth, Type};
 
 use super::value::{Shape, V};
 use super::{Cx, Enc, Env, Flow, R, no};
@@ -363,12 +363,13 @@ impl Enc<'_> {
             return Text::of(v, span);
         }
         match self.p.types.get(e.ty).clone() {
-            Type::Int { .. } => {
+            Type::Int { width, .. } => {
                 let x = self.expr(e, cx, env, flow)?;
+                let unsigned = width == IntWidth::U64;
                 Ok(match spec {
                     Some("hex") => hex_text(&x),
-                    Some(s) if s.starts_with('0') => decimal_text(&x, s.parse().unwrap_or(0)),
-                    _ => decimal_text(&x, 0),
+                    Some(s) if s.starts_with('0') => decimal_text(&x, s.parse().unwrap_or(0), unsigned),
+                    _ => decimal_text(&x, 0, unsigned),
                 })
             }
             Type::Bool => {
@@ -405,20 +406,30 @@ fn choose(options: &[(Term, Text)]) -> Text {
     out
 }
 
-/// Eine Ganzzahl dezimal (`i.to_string()`), mit `width` als `{:0width$}`.
-fn decimal_text(x: &Term, width: i64) -> Text {
-    let negative = Term::bin(Op::Lt, x.clone(), int(0));
+/// Eine Ganzzahl dezimal (`i.to_string()`), mit `width` als `{:0width$}`;
+/// ein `u64` ohne Vorzeichen mit bis zu 20 Ziffern.
+fn decimal_text(x: &Term, width: i64, unsigned: bool) -> Text {
+    let negative = if unsigned { Term::bool(false) } else { Term::bin(Op::Lt, x.clone(), int(0)) };
     // Die Ziffern von hinten: |(x / 10^k) % 10|, ohne `|x|`, das bei
     // `i64::MIN` ueberliefe.
     let mut digits = Vec::new();
-    let mut power = 1i64;
+    let mut power = 1u64;
     let mut count = int(1);
-    for k in 0..19 {
-        let r = Term::bin(Op::Rem, Term::bin(Op::Div, x.clone(), int(power)), int(10));
-        digits.push(Term::ite(Term::bin(Op::Lt, r.clone(), int(0)), sub(int(0), r.clone()), r));
+    for k in 0..if unsigned { 20 } else { 19 } {
+        let p = int(power as i64);
+        let r = if unsigned {
+            Term::bin(Op::URem, Term::bin(Op::UDiv, x.clone(), p.clone()), int(10))
+        } else {
+            let r = Term::bin(Op::Rem, Term::bin(Op::Div, x.clone(), p.clone()), int(10));
+            Term::ite(Term::bin(Op::Lt, r.clone(), int(0)), sub(int(0), r.clone()), r)
+        };
+        digits.push(r);
         if k > 0 {
-            let big =
-                Term::or(vec![Term::bin(Op::Ge, x.clone(), int(power)), Term::bin(Op::Le, x.clone(), int(-power))]);
+            let big = if unsigned {
+                Term::bin(Op::UGe, x.clone(), p)
+            } else {
+                Term::or(vec![Term::bin(Op::Ge, x.clone(), p), Term::bin(Op::Le, x.clone(), int(-(power as i64)))])
+            };
             count = add(count, Term::ite(big, int(1), int(0)));
         }
         power = power.saturating_mul(10);

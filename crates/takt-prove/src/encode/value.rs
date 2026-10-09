@@ -878,9 +878,6 @@ impl Enc<'_> {
             }
             // `x.wrap_u8()` und Geschwister: modulo 2^n (3.10).
             (Accessor::Wrap(w), Type::Int { .. }) => {
-                if w.bits() == 64 && !w.signed() {
-                    return no(super::U64, span);
-                }
                 let x = self.expr(base, cx, env, flow)?;
                 Ok(Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![x]))
             }
@@ -890,7 +887,7 @@ impl Enc<'_> {
             ) => {
                 let sort = self.sort_of(*elem, span)?;
                 let items = self.value(base, cx, env, flow)?;
-                self.reduce(accessor, items, sort, flow, span)
+                self.reduce(accessor, items, (sort, self.unsigned(*elem)), flow, span)
             }
             // `.last` (8.9): das letzte Element; ein leeres Array faultet.
             (Accessor::Last, Type::Array { len, .. } | Type::Samples { len, .. }) => {
@@ -913,8 +910,16 @@ impl Enc<'_> {
     /// 8.9): von links nach rechts; bei gleichen Elementen bleibt das erste.
     /// `mean` und `rms` rechnen in der Breite der Elemente ohne Pruefung
     /// dazwischen, erst die Wurzel von `rms` faultet, wenn sie nicht endlich
-    /// ist; ein leeres Array faultet mit `MissingValue`.
-    fn reduce(&mut self, accessor: Accessor, items: V, sort: Sort, flow: &mut Flow, span: Span) -> R<Term> {
+    /// ist; ein leeres Array faultet mit `MissingValue`. Elemente aus `u64`
+    /// (`unsigned`) ordnen sich ohne Vorzeichen.
+    fn reduce(
+        &mut self,
+        accessor: Accessor,
+        items: V,
+        (sort, unsigned): (Sort, bool),
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<Term> {
         let V::Node(parts) = items else { return no("Reduktion", span) };
         let items = parts.into_iter().map(|x| x.leaf(span)).collect::<R<Vec<_>>>()?;
         let Some((first, rest)) = items.split_first() else {
@@ -929,8 +934,10 @@ impl Enc<'_> {
         if let Accessor::Min | Accessor::Max = accessor {
             let op = match (accessor == Accessor::Min, float) {
                 (true, true) => Op::FLt,
+                (true, false) if unsigned => Op::ULt,
                 (true, false) => Op::Lt,
                 (false, true) => Op::FGt,
+                (false, false) if unsigned => Op::UGt,
                 (false, false) => Op::Gt,
             };
             return Ok(rest

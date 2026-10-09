@@ -130,6 +130,10 @@ fn leaves_of(p: &Program, ty: TypeId, text: &str, base: &str, out: &mut Vec<(Str
             };
             out.push((base.to_string(), Val::Int(n.parse::<i64>().ok()? * factor)));
         }
+        // Das Modell fuehrt einen `u64` als Bitmuster.
+        Type::Int { width: takt_mir::types::IntWidth::U64, .. } => {
+            out.push((base.to_string(), Val::Int(text.split_whitespace().next()?.parse::<u64>().ok()? as i64)));
+        }
         _ => out.push((base.to_string(), parse_val(text)?)),
     }
     Some(())
@@ -2208,6 +2212,99 @@ fn composite_inputs_agree() {
     let stim = "t=1 in st BUSY\nt=1 in pos Pos(3, -4)\nt=3 in st ERROR(7)\nt=4 in pos Pos(50, 20)\n\
                 t=9 in st IDLE\nt=10 in st stale\nt=12 in st ERROR(9) bad\nt=13 in pos stale\nt=15 in st BUSY\n";
     agree_program("COMPOSITE_INPUT", &compile("COMPOSITE_INPUT", COMPOSITE_INPUT), stim, 20);
+}
+
+/// `u64` ohne Vorzeichen (3.10): Ordnung, Division, Rest, `>>`, Saettigung,
+/// Rotation, Konversion und Dezimaltext ab 2^63; dazu `rotl` auf einem
+/// negativen `int`, das nach rechts Nullen nachschiebt.
+const UNSIGNED: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  x    : u64   @ hw("i/x")
+input  y    : u64   @ hw("i/y")
+input  z    : int   @ hw("i/z")
+output q    : u64   @ hw("o/q")    with safe = 0
+output r    : u64   @ hw("o/r")    with safe = 0
+output s    : u64   @ hw("o/s")    with safe = 0
+output w    : u64   @ hw("o/w")    with safe = 0
+output up   : u64   @ hw("o/up")   with safe = 0
+output down : u64   @ hw("o/down") with safe = 0
+output low  : u64   @ hw("o/low")  with safe = 0
+output top  : u64   @ hw("o/top")  with safe = 0
+output rot  : u64   @ hw("o/rot")  with safe = 0
+output roti : int   @ hw("o/roti") with safe = 0
+output less : bool  @ hw("o/less") with safe = false
+output f    : float @ hw("o/f")    with safe = 0.0
+output n    : u32   @ hw("o/n")    with safe = 0
+output tx   : stream<u8> @ hw("o/tx") with max_rate = 100000 Hz, capacity = 64
+
+machine m:
+    var a  : u64 = 0
+    var b  : u64 = 0
+    var xs : [3] u64 = default
+    initial RUN
+
+    state RUN:
+        loop:
+            a = x.or(0)
+            b = y.or(0)
+            q = a / (b | 1)
+            r = a % (b | 1)
+            s = a >> 3
+            w = wrapping_add(a, b)
+            up = saturating_add(a, b)
+            down = saturating_sub(a, b)
+            low = min(a, b)
+            xs = [b, a, 7]
+            top = xs.max()
+            rot = rotl(a, 7)
+            roti = rotl(z.or(0), 5)
+            less = a < b
+            f = a as float
+            n = (a % 4294967296) as u32
+            send tx, "{a} {b:hex}"
+"#;
+
+#[test]
+fn unsigned_64_bit_arithmetic_agrees() {
+    let stim = "t=0 in x 18446744073709551615\nt=0 in y 3\nt=0 in z -7\n\
+                t=1 in x 9223372036854775808\nt=1 in y 18446744073709551614\nt=1 in z -9223372036854775808\n\
+                t=2 in x 5\nt=2 in y 9223372036854775809\nt=2 in z 3\n\
+                t=3 in x 10000000000000000000\nt=3 in y 0\n";
+    agree_program("UNSIGNED", &compile("UNSIGNED", UNSIGNED), stim, 6);
+}
+
+/// Eine Frist aus einem Parameter der Instanz: je Maschine eine feste
+/// Zahl von Ticks (7.1).
+const BOUND_PARAMS: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+output lamp : bool @ hw("o/lamp") with safe = false
+
+machine blink(out: output bool, half: Duration):
+    pub var n : int in 0..999 = 0
+    initial ON
+
+    state ON:
+        enter:
+            out = true
+        loop:
+            n = (n + 1) % 1000
+        after half: -> OFF
+
+    state OFF:
+        enter:
+            out = false
+        after half: -> ON
+
+instance b = blink(out = lamp, half = 30 ms)
+"#;
+
+#[test]
+fn bound_parameters_agree() {
+    agree_program("BOUND_PARAMS", &compile("BOUND_PARAMS", BOUND_PARAMS), "", 14);
 }
 
 #[test]

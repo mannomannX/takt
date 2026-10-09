@@ -170,7 +170,7 @@ impl Enc<'_> {
                 continue;
             }
             if let Some(safe) = c.attrs.safe.clone() {
-                let v = self.const_value(&safe)?;
+                let v = self.const_value(None, &safe)?;
                 let (loc, ty) = (self.loc_out(takt_mir::ChannelId(i as u32)), c.ty);
                 self.init_loc(env, &loc, ty, v, safe.span)?;
             }

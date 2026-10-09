@@ -107,6 +107,16 @@ pub enum Op {
     BitXor,
     Shl,
     Shr,
+    /// Ohne Vorzeichen, fuer `u64` (3.10): Ein Wert ab 2^63 steht im
+    /// Bitvektor negativ und ordnet, teilt und schiebt sich anders.
+    ULt,
+    ULe,
+    UGt,
+    UGe,
+    UDiv,
+    URem,
+    /// Schiebt Nullen nach (`bvlshr`).
+    LShr,
     FNeg,
     FAdd,
     FSub,
@@ -124,6 +134,10 @@ pub enum Op {
     ToF32,
     /// Vorzeichenbehaftete Ganzzahl oder Fliesskommazahl nach `Float64` (RNE).
     ToF64,
+    /// Ganzzahl ohne Vorzeichen nach `Float32` (RNE).
+    UToF32,
+    /// Ganzzahl ohne Vorzeichen nach `Float64` (RNE).
+    UToF64,
     /// Weder NaN noch unendlich (4.1).
     IsFinite,
     /// Die unteren `bits` Bits, mit oder ohne Vorzeichen erweitert: die
@@ -140,6 +154,8 @@ pub enum Op {
     SubOverflows,
     /// Das exakte Produkt.
     MulOverflows,
+    /// Das exakte Produkt zweier `u64` liegt ueber 2^64 − 1.
+    UMulOverflows,
     /// `x · num / den`, einmal gerundet (`libtaktm::scale`, 3.2).
     Scale {
         num: u128,
@@ -432,12 +448,17 @@ impl Term {
                     | Op::FGt
                     | Op::FGe
                     | Op::FEq
+                    | Op::ULt
+                    | Op::ULe
+                    | Op::UGt
+                    | Op::UGe
                     | Op::IsFinite
                     | Op::AddOverflows
                     | Op::SubOverflows
-                    | Op::MulOverflows => return Sort::Bool,
-                    Op::ToF32 => return Sort::F32,
-                    Op::ToF64 => return Sort::F64,
+                    | Op::MulOverflows
+                    | Op::UMulOverflows => return Sort::Bool,
+                    Op::ToF32 | Op::UToF32 => return Sort::F32,
+                    Op::ToF64 | Op::UToF64 => return Sort::F64,
                     Op::Ite => &args[1],
                     Op::Neg
                     | Op::Add
@@ -450,6 +471,9 @@ impl Term {
                     | Op::BitXor
                     | Op::Shl
                     | Op::Shr
+                    | Op::UDiv
+                    | Op::URem
+                    | Op::LShr
                     | Op::Wrap { .. }
                     | Op::FloatToInt
                     | Op::Native { .. } => return Sort::Int,

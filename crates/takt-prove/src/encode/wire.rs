@@ -7,11 +7,11 @@
 use std::ops::Not;
 
 use takt_diag::Span;
-use takt_mir::types::{Const, Endian, IntWidth, Type};
+use takt_mir::types::{Const, Endian, Type};
 use takt_mir::{RecordId, TypeId};
 
 use super::value::V;
-use super::{Enc, R, U64, int_bound, no};
+use super::{Enc, R, int_bound, no};
 use crate::term::{Node, Op, Term};
 
 fn int(i: i64) -> Term {
@@ -174,7 +174,7 @@ impl Enc<'_> {
     fn wire_bytes(&self, ty: TypeId, v: V, endian: Endian, span: Span) -> R<Vec<Term>> {
         Ok(match self.p.types.get(ty) {
             Type::Bool => vec![Term::ite(v.leaf(span)?, int(1), int(0))],
-            Type::Int { width, .. } => int_bytes(&v.leaf(span)?, self.int_bytes_of(*width, span)?, endian),
+            Type::Int { width, .. } => int_bytes(&v.leaf(span)?, i64::from(width.bits() / 8), endian),
             Type::Enum(e) => {
                 let def = &self.p.enums[e.index()];
                 if self.fielded(*e) {
@@ -259,7 +259,7 @@ impl Enc<'_> {
         Ok(match self.p.types.get(ty) {
             Type::Bool => (yes, V::Leaf(Term::eq(view.at(&int(0)), int(0)).not())),
             Type::Int { width, .. } => {
-                let n = view.uint(self.int_bytes_of(*width, span)?, endian);
+                let n = view.uint(i64::from(width.bits() / 8), endian);
                 let x = match width.bits() {
                     bits if width.signed() && bits < 64 => Term::app(Op::Wrap { bits, signed: true }, vec![n]),
                     _ => n,
@@ -300,14 +300,6 @@ impl Enc<'_> {
             Type::Float { .. } => return no("Gleitkommafeld im Drahtformat", span),
             _ => return no("Feldtyp im Drahtformat", span),
         })
-    }
-
-    /// Die Breite einer Ganzzahl im Draht in Bytes.
-    fn int_bytes_of(&self, width: IntWidth, span: Span) -> R<i64> {
-        if width == IntWidth::U64 {
-            return no(U64, span);
-        }
-        Ok(i64::from(width.bits() / 8))
     }
 
     /// Groesse eines Feldtyps in Bytes (`field_size`).

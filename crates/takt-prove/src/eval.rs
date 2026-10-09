@@ -165,6 +165,23 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
             let (x, n) = (a(0).as_int(), a(1).as_int() as u64);
             Val::Int(if n >= 64 { x >> 63 } else { x >> n })
         }
+        Op::ULt => Val::Bool((a(0).as_int() as u64) < a(1).as_int() as u64),
+        Op::ULe => Val::Bool(a(0).as_int() as u64 <= a(1).as_int() as u64),
+        Op::UGt => Val::Bool(a(0).as_int() as u64 > a(1).as_int() as u64),
+        Op::UGe => Val::Bool(a(0).as_int() as u64 >= a(1).as_int() as u64),
+        // Wie `bvudiv`/`bvurem`: durch null alle Bits gesetzt, der Rest der Dividend.
+        Op::UDiv => {
+            let (x, y) = (a(0).as_int() as u64, a(1).as_int() as u64);
+            Val::Int(x.checked_div(y).unwrap_or(u64::MAX) as i64)
+        }
+        Op::URem => {
+            let (x, y) = (a(0).as_int() as u64, a(1).as_int() as u64);
+            Val::Int(x.checked_rem(y).unwrap_or(x) as i64)
+        }
+        Op::LShr => {
+            let (x, n) = (a(0).as_int() as u64, a(1).as_int() as u64);
+            Val::Int(if n >= 64 { 0 } else { (x >> n) as i64 })
+        }
         Op::FNeg => fp1(a(0), |x| -x, |x| -x),
         Op::FAbs => fp1(a(0), f64::abs, f32::abs),
         Op::FSqrt => fp1(a(0), f64::sqrt, f32::sqrt),
@@ -191,11 +208,14 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
             Val::F32(x) => f64::from(x),
             x => x.as_int() as f64,
         }),
+        Op::UToF32 => Val::F32(a(0).as_int() as u64 as f32),
+        Op::UToF64 => Val::F64(a(0).as_int() as u64 as f64),
         Op::IsFinite => Val::Bool(a(0).as_f64().is_finite()),
         Op::Wrap { bits, signed } => Val::Int(wrap(a(0).as_int(), bits, signed)),
         Op::AddOverflows => Val::Bool(a(0).as_int().checked_add(a(1).as_int()).is_none()),
         Op::SubOverflows => Val::Bool(a(0).as_int().checked_sub(a(1).as_int()).is_none()),
         Op::MulOverflows => Val::Bool(a(0).as_int().checked_mul(a(1).as_int()).is_none()),
+        Op::UMulOverflows => Val::Bool((a(0).as_int() as u64).checked_mul(a(1).as_int() as u64).is_none()),
         Op::Scale { num, den } => match a(0) {
             Val::F32(x) => Val::F32(libtaktm::scale_f32(x, num, den)),
             x => Val::F64(libtaktm::scale_f64(x.as_f64(), num, den)),

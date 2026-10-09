@@ -285,8 +285,8 @@ fn a_reachable_implicit_check_gets_its_path() {
 }
 
 /// 13.3: Je Maschine, mit Ψ als freier Eingabe in seiner Range. Der
-/// Erzeuger rechnet in `u64` und ist nicht kodierbar — die Kodierung
-/// rechnet in 64 Bit mit Vorzeichen —; der Verbraucher wird trotzdem
+/// Erzeuger formatiert eine Fliesskommazahl und ist nicht kodierbar — das
+/// Modell rechnet keine Dezimalzahl um —; der Verbraucher wird trotzdem
 /// bewiesen.
 #[test]
 fn a_machine_is_proven_alone_when_the_whole_is_not_encodable() {
@@ -297,14 +297,15 @@ fn a_machine_is_proven_alone_when_the_whole_is_not_encodable() {
     tick     = 10 ms
 
 output y  : int @ hw(\"o/y\") with safe = 0
+output tx : stream<u8> @ hw(\"o/tx\") with max_rate = 100000 Hz, capacity = 64
 
 machine producer:
     pub var level : int in 0..100 = 0
-    var wide : u64 = 0
+    var f : float = 0.5
     initial RUN
     state RUN:
         loop:
-            wide = wide.wrap_u64() + 1
+            send tx, \"{f}\"
             level = (level + 1) % 101
 
 machine consumer:

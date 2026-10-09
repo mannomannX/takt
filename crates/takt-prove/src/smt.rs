@@ -184,6 +184,13 @@ fn app_text(op: Op, a: &[String]) -> String {
         Op::BitXor => format!("(bvxor {} {})", a[0], a[1]),
         Op::Shl => format!("(bvshl {} {})", a[0], a[1]),
         Op::Shr => format!("(bvashr {} {})", a[0], a[1]),
+        Op::ULt => format!("(bvult {} {})", a[0], a[1]),
+        Op::ULe => format!("(bvule {} {})", a[0], a[1]),
+        Op::UGt => format!("(bvugt {} {})", a[0], a[1]),
+        Op::UGe => format!("(bvuge {} {})", a[0], a[1]),
+        Op::UDiv => format!("(bvudiv {} {})", a[0], a[1]),
+        Op::URem => format!("(bvurem {} {})", a[0], a[1]),
+        Op::LShr => format!("(bvlshr {} {})", a[0], a[1]),
         Op::FNeg => format!("(fp.neg {})", a[0]),
         Op::FAbs => format!("(fp.abs {})", a[0]),
         Op::FSqrt => format!("(fp.sqrt {rm} {})", a[0]),
@@ -199,6 +206,8 @@ fn app_text(op: Op, a: &[String]) -> String {
         Op::FEq => format!("(fp.eq {} {})", a[0], a[1]),
         Op::ToF32 => format!("((_ to_fp 8 24) {rm} {})", a[0]),
         Op::ToF64 => format!("((_ to_fp 11 53) {rm} {})", a[0]),
+        Op::UToF32 => format!("((_ to_fp_unsigned 8 24) {rm} {})", a[0]),
+        Op::UToF64 => format!("((_ to_fp_unsigned 11 53) {rm} {})", a[0]),
         Op::IsFinite => format!("(not (or (fp.isNaN {0}) (fp.isInfinite {0})))", a[0]),
         Op::Wrap { bits, .. } if bits >= 64 => a[0].clone(),
         Op::Wrap { bits, signed } => {
@@ -220,6 +229,10 @@ fn app_text(op: Op, a: &[String]) -> String {
         // des Produkts in 64 Bit.
         Op::MulOverflows => format!(
             "(not (= ((_ sign_extend 64) (bvmul {0} {1})) (bvmul ((_ sign_extend 64) {0}) ((_ sign_extend 64) {1}))))",
+            a[0], a[1]
+        ),
+        Op::UMulOverflows => format!(
+            "(not (= ((_ zero_extend 64) (bvmul {0} {1})) (bvmul ((_ zero_extend 64) {0}) ((_ zero_extend 64) {1}))))",
             a[0], a[1]
         ),
         Op::Round(r) => {
@@ -535,6 +548,16 @@ fn lia_text(op: Op, a: &[String]) -> Option<String> {
         | Op::BitXor
         | Op::Shl
         | Op::Shr
+        | Op::ULt
+        | Op::ULe
+        | Op::UGt
+        | Op::UGe
+        | Op::UDiv
+        | Op::URem
+        | Op::LShr
+        | Op::UMulOverflows
+        | Op::UToF32
+        | Op::UToF64
         | Op::Wrap { .. }
         | Op::FNeg
         | Op::FAdd
