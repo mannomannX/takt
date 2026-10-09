@@ -782,6 +782,51 @@ property clean: never(odd)
     }
 }
 
+/// Matrizen (3.11): Summe und Transponierte rechnet der Solver genau, und
+/// der Interpreter bestaetigt sein Gegenbeispiel; `inv` sieht er
+/// uninterpretiert, und ein Pfad, der einen Wert braucht, den sie nicht
+/// annimmt, bleibt offen. Das Produkt pruefen die Vergleiche gegen den
+/// Interpreter: Eine `fma`-Kette ueber einem freien Wert haelt z3 nicht in
+/// einer Minute aus.
+#[test]
+fn a_matrix_sum_is_exact_and_its_functions_stay_open() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input  a : float in -10.0..10.0 @ hw(\"i/a\")
+output y : float @ hw(\"o/y\") with safe = 0.0
+output e : float @ hw(\"o/e\") with safe = 0.0
+
+const M : mat<2, 2> = [[2.0, 1.0], [1.0, 3.0]]
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            var d : mat<2, 2> = [[0.0, a], [0.0, 0.0]]
+            var v : mat<2, 2> = M + d.transpose()
+            y = v[1, 0]
+            var s : mat<2, 2> = [[4.0, 1.0], [1.0, 4.0]]
+            e = s.inv()[0, 0]
+
+property small: never(y > 8.0)
+property bounded: always(e < 1.0)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert_eq!(model.uninterpreted, vec!["inv".to_string()]);
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let small = reports.iter().find(|r| r.name == "small").expect("small");
+    let Verdict::Violated { stimulus, .. } = &small.verdict else { panic!("{small:?}") };
+    assert!(stimulus.contains("in a "), "{stimulus}");
+    let bounded = reports.iter().find(|r| r.name == "bounded").expect("bounded");
+    let Verdict::Unproven { reason } = &bounded.verdict else { panic!("{bounded:?}") };
+    assert!(reason.contains("`inv` uninterpretiert"), "{reason}");
+}
+
 /// Ein Job (4.5), der seine Dauer ueberschreitet, steht im Gegenbeispiel als
 /// Aufzeichnung `job <maschine> <handle> done`, und der Interpreter
 /// bestaetigt es.

@@ -47,6 +47,7 @@ mod canon;
 mod fault;
 mod job;
 mod map;
+mod matrix;
 mod monitor;
 mod pattern;
 mod port;
@@ -1136,8 +1137,8 @@ impl Enc<'_> {
                 let x = self.expr(expr, cx, env, flow)?;
                 match (x.sort(), sort?) {
                     (Sort::Int, Sort::Int) => x,
-                    (Sort::Int, Sort::F32) => Term::app(Op::ToF32, vec![x]),
-                    (Sort::Int, Sort::F64) => Term::app(Op::ToF64, vec![x]),
+                    (Sort::Int | Sort::F64, Sort::F32) => Term::app(Op::ToF32, vec![x]),
+                    (Sort::Int | Sort::F32, Sort::F64) => Term::app(Op::ToF64, vec![x]),
                     (a, b) if a == b => x,
                     _ => return no("Konversion", span),
                 }
@@ -1165,6 +1166,8 @@ impl Enc<'_> {
                 self.native_call(*native, args, cx, env, flow, span)?.leaf(span)?
             }
             ExprKind::JobState { handle, field } => self.job_state(*handle, *field, e.ty, cx, env, span)?.leaf(span)?,
+            ExprKind::MatOp { op: takt_mir::expr::MatOp::Det, args } => self.mat_det(args, cx, env, flow, span)?,
+            ExprKind::Index2 { base, row, col } => self.mat_element(base, row, col, cx, env, flow, span)?,
             other @ (ExprKind::Str(_)
             | ExprKind::None
             | ExprKind::Record { .. }
@@ -1173,7 +1176,6 @@ impl Enc<'_> {
             | ExprKind::BlockInit { .. }
             | ExprKind::Armed(_)
             | ExprKind::PortRead(_)
-            | ExprKind::Index2 { .. }
             | ExprKind::Slice { .. }
             | ExprKind::Format(_)
             | ExprKind::Stream(_)

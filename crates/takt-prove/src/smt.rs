@@ -113,6 +113,16 @@ impl Printer<'_> {
                 }
                 format!("({fun} {})", parts.join(" "))
             }
+            Op::Mat { f, n, k, part } => {
+                let elem = args[0].sort();
+                let width = sort_text(elem).replace(['(', ')', ' ', '_'], "");
+                let fun = format!("|mat.{}.{n}.{k}.{part}.{width}|", f.name());
+                if self.declared.insert(fun.clone()) {
+                    let domain = vec![sort_text(elem); parts.len()].join(" ");
+                    let _ = writeln!(self.out, "(declare-fun {fun} ({domain}) {})", sort_text(sort));
+                }
+                format!("({fun} {})", parts.join(" "))
+            }
             _ => app_text(*op, &parts),
         };
         let n = format!("|d{}{}|", self.tag, self.next);
@@ -223,7 +233,7 @@ fn app_text(op: Op, a: &[String]) -> String {
         }
         Op::FloatToInt => format!("((_ fp.to_sbv 64) RTZ {})", a[0]),
         // Beide schreibt der Drucker selbst: Sie brauchen die Sorte.
-        Op::Scale { .. } | Op::Math(_) | Op::Native { .. } => unreachable!("im Drucker behandelt"),
+        Op::Scale { .. } | Op::Math(_) | Op::Native { .. } | Op::Mat { .. } => unreachable!("im Drucker behandelt"),
     }
 }
 
@@ -545,6 +555,7 @@ fn lia_text(op: Op, a: &[String]) -> Option<String> {
         | Op::Scale { .. }
         | Op::Math(_)
         | Op::Native { .. }
+        | Op::Mat { .. }
         | Op::Round(_)
         | Op::FloatToInt => return None,
     })

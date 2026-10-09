@@ -108,9 +108,9 @@ pub enum Op {
     FAbs,
     FSqrt,
     FFma,
-    /// Vorzeichenbehaftete Ganzzahl nach `Float32` (RNE).
+    /// Vorzeichenbehaftete Ganzzahl oder Fliesskommazahl nach `Float32` (RNE).
     ToF32,
-    /// Vorzeichenbehaftete Ganzzahl nach `Float64` (RNE).
+    /// Vorzeichenbehaftete Ganzzahl oder Fliesskommazahl nach `Float64` (RNE).
     ToF64,
     /// Weder NaN noch unendlich (4.1).
     IsFinite,
@@ -145,10 +145,54 @@ pub enum Op {
         part: u16,
         bits: u8,
     },
+    /// Teil `part` des Ergebnisses einer Matrixfunktion aus `libtaktm::mat`
+    /// (3.11) ueber einer `n`×`n`-Matrix und bei `solve` einer `n`×`k`
+    /// rechten Seite, die Argumente ihre Elemente zeilenweise. Hinter den
+    /// Elementen des Ergebnisses steht ein Wahrheitswert: singulaer bei `inv`
+    /// und `solve`, zerlegbar bei `cholesky`. Der Solver sieht die Funktion
+    /// uninterpretiert.
+    Mat {
+        f: MatFun,
+        n: u8,
+        k: u8,
+        part: u16,
+    },
     /// Auf eine ganze Zahl gerundet, in der Breite des Arguments.
     Round(Rounding),
     /// Eine ganzzahlige Fliesskommazahl als Ganzzahl.
     FloatToInt,
+}
+
+/// Eine Matrixfunktion aus `libtaktm::mat`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
+pub enum MatFun {
+    Det,
+    Inv,
+    Solve,
+    Cholesky,
+}
+
+impl MatFun {
+    /// Wie das Programm sie nennt.
+    pub fn name(self) -> &'static str {
+        match self {
+            MatFun::Det => "det",
+            MatFun::Inv => "inv",
+            MatFun::Solve => "solve",
+            MatFun::Cholesky => "cholesky",
+        }
+    }
+
+    /// Die Elemente des Ergebnisses; der Teil danach ist der Wahrheitswert.
+    pub fn elements(self, n: u8, k: u8) -> u16 {
+        let (n, k) = (u16::from(n), u16::from(k));
+        match self {
+            MatFun::Det => 1,
+            MatFun::Inv | MatFun::Cholesky => n * n,
+            MatFun::Solve => n * k,
+        }
+    }
 }
 
 /// Ein Knoten.
@@ -396,6 +440,7 @@ impl Term {
                     | Op::Wrap { .. }
                     | Op::FloatToInt
                     | Op::Native { .. } => return Sort::Int,
+                    Op::Mat { f, n, k, part } if *part == f.elements(*n, *k) => return Sort::Bool,
                     Op::FNeg
                     | Op::FAdd
                     | Op::FSub
@@ -406,6 +451,7 @@ impl Term {
                     | Op::FFma
                     | Op::Scale { .. }
                     | Op::Math(_)
+                    | Op::Mat { .. }
                     | Op::Round(_) => &args[0],
                 },
             };

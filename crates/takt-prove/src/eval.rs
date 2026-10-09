@@ -181,8 +181,16 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
         Op::FGt => Val::Bool(a(0).as_f64() > a(1).as_f64()),
         Op::FGe => Val::Bool(a(0).as_f64() >= a(1).as_f64()),
         Op::FEq => Val::Bool(a(0).as_f64() == a(1).as_f64()),
-        Op::ToF32 => Val::F32(a(0).as_int() as f32),
-        Op::ToF64 => Val::F64(a(0).as_int() as f64),
+        Op::ToF32 => Val::F32(match a(0) {
+            Val::F64(x) => x as f32,
+            Val::F32(x) => x,
+            x => x.as_int() as f32,
+        }),
+        Op::ToF64 => Val::F64(match a(0) {
+            Val::F64(x) => x,
+            Val::F32(x) => f64::from(x),
+            x => x.as_int() as f64,
+        }),
         Op::IsFinite => Val::Bool(a(0).as_f64().is_finite()),
         Op::Wrap { bits, signed } => Val::Int(wrap(a(0).as_int(), bits, signed)),
         Op::AddOverflows => Val::Bool(a(0).as_int().checked_add(a(1).as_int()).is_none()),
@@ -199,6 +207,7 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
         }
         Op::Round(r) => rounded(r, a(0)),
         Op::Native { f, part, .. } => native(f, part, &(0..args.len()).map(a).collect::<Vec<_>>()),
+        Op::Mat { f, n, k, part } => matrix(f, n, k, part, &(0..args.len()).map(a).collect::<Vec<_>>()),
         Op::FloatToInt => Val::Int(a(0).as_f64() as i64),
     }
 }
@@ -221,6 +230,46 @@ fn native(f: takt_native::Native, part: u16, args: &[Val]) -> Val {
         Some(takt_native::Output::Digest(d)) => d.get(usize::from(part)).copied().map_or(0, i64::from),
         _ => 0,
     })
+}
+
+/// Teil `part` des Ergebnisses einer Matrixfunktion, wie der Interpreter
+/// sie ruft (`matrix::op`), in der Breite ihrer Argumente.
+fn matrix(f: crate::term::MatFun, n: u8, k: u8, part: u16, args: &[Val]) -> Val {
+    if let Some(Val::F32(_)) = args.first() {
+        let x: Vec<f32> = args.iter().map(|v| if let Val::F32(f) = v { *f } else { 0.0 }).collect();
+        let (items, flag) = matrix_parts(f, usize::from(n), usize::from(k), &x);
+        return items.get(usize::from(part)).map_or(Val::Bool(flag), |v| Val::F32(*v));
+    }
+    let x: Vec<f64> = args.iter().map(|v| v.as_f64()).collect();
+    let (items, flag) = matrix_parts(f, usize::from(n), usize::from(k), &x);
+    items.get(usize::from(part)).map_or(Val::Bool(flag), |v| Val::F64(*v))
+}
+
+/// Die Elemente und der Wahrheitswert einer Matrixfunktion; ein
+/// Ergebnis, das es nicht gibt, ist null.
+fn matrix_parts<S: libtaktm::mat::Scalar>(f: crate::term::MatFun, n: usize, k: usize, x: &[S]) -> (Vec<S>, bool) {
+    use crate::term::MatFun;
+    use libtaktm::mat;
+    let (a, b) = x.split_at((n * n).min(x.len()));
+    let (mut scratch, mut perm) = (vec![S::ZERO; mat::scratch_len(n)], vec![0usize; n]);
+    match f {
+        MatFun::Det => (vec![mat::det(a, n, &mut scratch, &mut perm)], false),
+        MatFun::Inv => {
+            let mut out = vec![S::ZERO; n * n];
+            let singular = mat::inv(a, n, &mut out, &mut scratch, &mut perm).is_err();
+            (if singular { vec![S::ZERO; n * n] } else { out }, singular)
+        }
+        MatFun::Solve => {
+            let mut out = vec![S::ZERO; n * k];
+            let singular = mat::solve(a, n, b, k, &mut out, &mut scratch, &mut perm).is_err();
+            (if singular { vec![S::ZERO; n * k] } else { out }, singular)
+        }
+        MatFun::Cholesky => {
+            let mut out = vec![S::ZERO; n * n];
+            let ok = mat::cholesky(a, n, &mut out).is_some();
+            (if ok { out } else { vec![S::ZERO; n * n] }, ok)
+        }
+    }
 }
 
 /// Auf eine ganze Zahl gerundet, in der Breite des Werts.

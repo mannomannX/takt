@@ -90,6 +90,9 @@ pub(super) struct Pending {
     span: Span,
     index: Term,
     depth: usize,
+    /// Bei einem Matrixelement die eigene Grenze: Zeile oder Spalte zu
+    /// gross; der Fault hat keine Pruefstelle (`walk_mut`).
+    beyond: Option<Term>,
 }
 
 /// Wurzel einer Zuweisungsstelle, ihre Indizes von der Wurzel her (`None`
@@ -126,7 +129,8 @@ impl Enc<'_> {
             | Type::Result { .. }
             | Type::Map { .. }
             | Type::Capture { .. }
-            | Type::Samples { .. } => true,
+            | Type::Samples { .. }
+            | Type::Mat { .. } => true,
             Type::Enum(e) => self.fielded(*e),
             _ => false,
         }
@@ -144,6 +148,8 @@ impl Enc<'_> {
     fn element_of(&self, ty: TypeId) -> Option<(Option<TypeId>, Bound)> {
         match self.p.types.get(ty) {
             Type::Array { elem, len } | Type::Samples { elem, len } => Some((Some(*elem), Bound::Fixed(*len))),
+            // Ein Matrixelement hat keinen eigenen Typ; darunter geht es nicht weiter.
+            Type::Mat { rows, cols, .. } => Some((None, Bound::Fixed(rows * cols))),
             Type::Vec { elem, .. } => Some((Some(*elem), Bound::Dynamic)),
             Type::Bytes { .. } => Some((None, Bound::Dynamic)),
             _ => None,
@@ -173,6 +179,10 @@ impl Enc<'_> {
             Type::Array { elem, len } | Type::Samples { elem, len } => {
                 let s = self.shape(*elem, span)?;
                 Shape::Node((0..*len).map(|i| (format!("[{i}]"), s.clone())).collect())
+            }
+            // 3.11: zeilenweise, in der Breite von `float`.
+            Type::Mat { rows, cols, .. } => {
+                Shape::Node((0..rows * cols).map(|i| (format!("[{i}]"), Shape::Plain(self.mat_sort()))).collect())
             }
             Type::Bytes { cap } => Shape::Node(
                 std::iter::once((".len".to_string(), Shape::Count(*cap)))
@@ -406,7 +416,7 @@ impl Enc<'_> {
     }
 
     /// Das Element `index` (ohne Pruefung: ausserhalb ist es das letzte).
-    fn select(elems: Vec<V>, index: &Term) -> V {
+    pub(super) fn select(elems: Vec<V>, index: &Term) -> V {
         let mut it = elems.into_iter().enumerate().rev();
         let Some((_, mut acc)) = it.next() else { return V::Node(Vec::new()) };
         for (k, e) in it {
@@ -508,6 +518,14 @@ impl Enc<'_> {
                 for x in items {
                     parts.push(self.value(x, cx, env, flow)?);
                 }
+                // `[[a, b], [c, d]]` als Matrix: die Zeilen hintereinander.
+                if self.mat_dims(e.ty).is_some() {
+                    let rows = parts.into_iter().map(|row| match row {
+                        V::Node(items) => items,
+                        leaf => vec![leaf],
+                    });
+                    return Ok(V::Node(rows.flatten().collect()));
+                }
                 if self.collection(e.ty).is_none() {
                     return Ok(V::Node(parts));
                 }
@@ -525,6 +543,10 @@ impl Enc<'_> {
             }
             ExprKind::Lift(x) => V::Node(vec![V::Leaf(Term::bool(true)), self.value(x, cx, env, flow)?]),
             ExprKind::PortRead(p) => self.port_value(*p, span)?,
+            ExprKind::Binary { op, lhs, rhs } if self.mat_dims(e.ty).is_some() => {
+                self.mat_binary(*op, lhs, rhs, cx, env, flow, span)?
+            }
+            ExprKind::MatOp { op, args } => self.mat_op(*op, args, cx, env, flow, span)?,
             ExprKind::Input { channel, .. } if matches!(self.p.types.get(e.ty), Type::Samples { .. }) => {
                 self.samples_value(*channel, cx, flow, span)?
             }
@@ -644,7 +666,6 @@ impl Enc<'_> {
             | ExprKind::Convert { .. }
             | ExprKind::Stream(_)
             | ExprKind::Matches { .. }
-            | ExprKind::MatOp { .. }
             | ExprKind::Intrinsic { .. }) => {
                 return no(format!("zusammengesetzter Ausdruck {}", super::node_name(other)), span);
             }
@@ -1021,6 +1042,15 @@ impl Enc<'_> {
         match kind {
             CheckedKind::Index { len } => self.index_access(inner, *len, node.span, kind, cx, env, flow),
             CheckedKind::Missing => self.unwrap(inner, node.span, kind, cx, env, flow),
+            // Eine Matrix ist endlich, wenn jedes Element es ist (3.11).
+            CheckedKind::NonFinite if self.mat_dims(node.ty).is_some() => {
+                let v = self.value(inner, cx, env, flow)?;
+                let V::Node(items) = &v else { return no("Matrix", node.span) };
+                let finite = items.iter().map(|x| Ok(Term::app(Op::IsFinite, vec![x.clone().leaf(node.span)?])));
+                let finite = Term::and(finite.collect::<R<Vec<_>>>()?);
+                self.fault(kind, node.span, finite.not(), cx, flow);
+                Ok(v)
+            }
             // Das Lesen eines Arrays aus Abtastwerten faultet selbst (3.5,
             // `samples_value`); der Knoten ist die Stelle, wie beim Skalar.
             CheckedKind::Valid => {
@@ -1132,12 +1162,32 @@ impl Enc<'_> {
                     };
                     if let Some((kind, span)) = check {
                         self.fault(&kind, span, Term::bin(Op::Lt, index.clone(), Term::int(0)), cx, flow);
-                        pending.push(Pending { kind, span, index: index.clone(), depth: indices.len() });
+                        pending.push(Pending { kind, span, index: index.clone(), depth: indices.len(), beyond: None });
                     }
                     indices.push(Some(index));
                     cur = b;
                 }
-                Place::Index2(..) => return no("Matrixelement", span),
+                // `m[r, c] = v` (`path`): negativ faultet sofort, zu gross beim Schreiben.
+                Place::Index2(b, r, c) => {
+                    let (r, c) = (self.expr(r, cx, env, flow)?, self.expr(c, cx, env, flow)?);
+                    let Some((rows, cols)) = self.place_type(b, cx).and_then(|t| self.mat_dims(t)) else {
+                        return no("Matrixelement", span);
+                    };
+                    let negative = |x: &Term| Term::bin(Op::Lt, x.clone(), Term::int(0));
+                    self.fault_exit(FaultKind::Range, Term::or(vec![negative(&r), negative(&c)]), flow, span);
+                    let beyond = |x: &Term, n: u32| Term::bin(Op::Ge, x.clone(), Term::int(i64::from(n)));
+                    let index =
+                        Term::bin(Op::Add, Term::bin(Op::Mul, r.clone(), Term::int(i64::from(cols))), c.clone());
+                    pending.push(Pending {
+                        kind: CheckedKind::Index { len: rows * cols },
+                        span,
+                        index: index.clone(),
+                        depth: indices.len(),
+                        beyond: Some(Term::or(vec![beyond(&r, rows), beyond(&c, cols)])),
+                    });
+                    indices.push(Some(index));
+                    cur = b;
+                }
             }
         }
         // Von der Wurzel her gezaehlt.
@@ -1208,6 +1258,10 @@ impl Enc<'_> {
         let typed = self.typed_steps(place, indices, ty, span)?;
         let steps: Vec<Step> = typed.iter().map(|(s, _)| s.clone()).collect();
         for p in pending {
+            if let Some(beyond) = p.beyond {
+                self.fault_exit(FaultKind::Range, beyond, flow, p.span);
+                continue;
+            }
             let bound = match typed[p.depth].1 {
                 Bound::Fixed(n) => Term::int(i64::from(n)),
                 Bound::Dynamic => Enc::at(old.clone(), &steps[..p.depth], span)?.part(0, span)?.leaf(span)?,
@@ -1220,7 +1274,11 @@ impl Enc<'_> {
     /// Der Typ einer Stelle in einer Maschine.
     fn place_type(&self, place: &Place, cx: &Cx<'_>) -> Option<TypeId> {
         Some(match place {
-            Place::Var(id) => self.machine(cx.m?).vars[id.index()].ty,
+            // Im Rumpf einer Funktion eine Lokale, sonst eine Variable der Maschine.
+            Place::Var(id) => match cx.locals {
+                Some(_) => *self.local_types.get(id)?,
+                None => self.machine(cx.m?).vars.get(id.index())?.ty,
+            },
             Place::Output(c) => self.p.channels[c.index()].ty,
             Place::Field(b, f) => {
                 let Type::Record(r) = self.p.types.get(self.place_type(b, cx)?) else { return None };

@@ -53,6 +53,13 @@ fn leaves_of(p: &Program, ty: TypeId, text: &str, base: &str, out: &mut Vec<(Str
                 leaves_of(p, *elem, t, &format!("{base}[{i}]"), out)?;
             }
         }
+        // 3.11: zeilenweise, in der Breite von `float`.
+        Type::Mat { .. } => {
+            let inner = text.strip_prefix('[')?.strip_suffix(']')?;
+            for (i, t) in split(inner).into_iter().enumerate() {
+                out.push((format!("{base}[{i}]"), parse_val(t)?));
+            }
+        }
         // Die Laenge, die belegten Plaetze, dahinter null.
         Type::Bytes { cap } => {
             let items = split(text.strip_prefix('[')?.strip_suffix(']')?);
@@ -645,6 +652,9 @@ t={k} in b {}.5 V
         ),
         // `resume` (5.12): zurueck in FIRST, dann in SECOND (Schritt 27c-8).
         "60_resume.takt" => ("t=1 cmd pause\nt=3 cmd work\nt=7 cmd pause\nt=9 cmd work\n".to_string(), 12),
+        // Matrizen (Schritt 27c-12): Kalman-Filter, QP, Faults aus `inv` und `solve`.
+        "46_matrices.takt" | "77_float_faults.takt" => (String::new(), 30),
+        "69_qp_box.takt" | "87_fault_kinds.takt" | "108_singular_solve.takt" => (String::new(), 20),
         // Gescopte Instanzen (Schritt 27c-11): Ein- und Austritt, ein Abort.
         "63_scoped_instances.takt" => (
             "t=0 in mode 0
@@ -2078,6 +2088,66 @@ t=17 in go 2
 t=19 in go 1
 ";
     agree_program("SCOPED", &compile("SCOPED", SCOPED), stim, 30);
+}
+
+/// Matrizen (3.11): ein Element schreiben (den Index haelt Pruefung 30 in
+/// der Form), Transponierte,
+/// Determinante, Inverse — singulaer bei `a = 1` —, Produkt, `solve` nach
+/// Skalierung und `cholesky` mit und ohne Zerlegung; je Fault zeigt der
+/// Fault-Zustand seine Art. In beiden Breiten von `float` (4.2).
+const MATRIX: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+    float    = WIDTH
+
+input  a : float in -10.0..10.0 @ hw("i/a") with max_age = 1 s
+input  r : int in 0..1          @ hw("i/r") with max_age = 1 s
+
+output tr  : float       @ sim("o/tr")
+output d   : float       @ sim("o/d")
+output e   : float       @ sim("o/e")
+output sv  : float       @ sim("o/sv")
+output ch  : float       @ sim("o/ch")
+output why : int in 0..9 @ sim("o/why")
+
+machine m:
+    var mm : mat<2, 2> = [[1.0, 2.0], [3.0, 4.0]]
+    fault -> HURT
+    initial RUN
+
+    state RUN:
+        loop:
+            mm[0, 0] = a
+            mm[1, r] = a * 2.0
+            tr = mm.transpose()[0, 1]
+            var s : mat<2, 2> = [[a, 1.0], [1.0, a]]
+            d = s.det()
+            var w : mat<2, 2> = s.inv()
+            var q : mat<2, 2> = w * s
+            e = w[0, 0] + q[1, 1]
+            var x : mat<2, 1> = solve(s * 2.0 / 4.0, [[1.0], [2.0]])
+            sv = x[1, 0]
+            ch = s.cholesky().or([[0.0, 0.0], [0.0, 0.0]])[1, 1]
+
+    state HURT:
+        enter:
+            match last_fault.kind:
+                case ARITHMETIC(x):
+                    why = 1 if x == SINGULAR else 2
+                case _:
+                    why = 9
+
+        after 20 ms: -> RUN
+"#;
+
+#[test]
+fn matrices_agree() {
+    let stim = "t=0 in a 3.0\nt=0 in r 0\nt=3 in a 0.5\nt=5 in a 1.0\nt=8 in a 2.0\nt=9 in r 1\nt=12 in r 0\n\
+                t=12 in a -2.0\nt=15 in a 9.0\n";
+    for width in ["f64", "f32"] {
+        let name = format!("MATRIX {width}");
+        agree_program(&name, &compile(&name, &MATRIX.replace("WIDTH", width)), stim, 20);
+    }
 }
 
 #[test]

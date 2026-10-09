@@ -46,8 +46,11 @@ pub fn support(c: Construct) -> Support {
         ) => Yes,
         Construct::Binary(BinaryOp::Rem) => Partial("`%` nur auf Ganzzahlen"),
         Construct::Convert(ConvertKind::ToFloat | ConvertKind::As | ConvertKind::To) => Yes,
-        Construct::Mat(MatOp::Transpose | MatOp::Inv | MatOp::Det | MatOp::Solve | MatOp::Cholesky) => {
-            No("Matrizen sind nicht kodiert")
+        Construct::Mat(MatOp::Transpose) => Yes,
+        // 3.11: In der Auswertung genau aus `libtaktm::mat`, im Solver eine
+        // Funktion ohne Schranken.
+        Construct::Mat(MatOp::Inv | MatOp::Det | MatOp::Solve | MatOp::Cholesky) => {
+            Partial("im Solver uninterpretiert")
         }
         Construct::Builtin(Builtin::Now | Builtin::Tick) => Yes,
         Construct::Builtin(Builtin::TimeInState) => Partial("`time_in_state` nur in einem Zustand"),
@@ -71,7 +74,7 @@ pub fn support(c: Construct) -> Support {
         Construct::Stmt(s) => stmt(s),
         Construct::Place(PlaceTag::Var | PlaceTag::Output | PlaceTag::Field | PlaceTag::Index) => Yes,
         Construct::Place(PlaceTag::Port) => Yes,
-        Construct::Place(PlaceTag::Index2) => No("Zuweisung an ein Matrixelement"),
+        Construct::Place(PlaceTag::Index2) => Yes,
         Construct::Type(t) => ty(t),
         Construct::Seq(
             SeqTag::Stmt | SeqTag::Wait | SeqTag::Expect | SeqTag::Repeat | SeqTag::Step | SeqTag::Until,
@@ -119,7 +122,7 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Format => Partial("Ganzzahlen, Wahrheitswerte, Varianten ohne Felder und Text; keine Fliesskommazahl"),
         ExprTag::Ok | ExprTag::Err => Yes,
         ExprTag::Tuple => Partial("nur als Punkt einer konstanten Tabelle von `interp`"),
-        ExprTag::Index2 => No("Matrizen sind nicht kodiert"),
+        ExprTag::Index2 => Yes,
         ExprTag::Slice => Partial("auf Bytes und Vektoren; nicht auf einem Array"),
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
         ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
@@ -132,7 +135,7 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::NativeCall => Partial(
             "Pruefsummen und Digests der kuratierten Menge; nicht `sha256_*`, `fft256` und die Kryptofunktionen",
         ),
-        ExprTag::MatOp => No("Matrizen sind nicht kodiert"),
+        ExprTag::MatOp => Partial("`det`, `inv`, `solve` und `cholesky` im Solver uninterpretiert"),
     }
 }
 
@@ -259,7 +262,8 @@ fn ty(t: TypeTag) -> Support {
         TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),
         TypeTag::Map => Yes,
         TypeTag::Capture | TypeTag::HandleJob | TypeTag::Samples => Yes,
-        TypeTag::Mat | TypeTag::HandleTrigger => NO_SORT,
+        TypeTag::Mat => Yes,
+        TypeTag::HandleTrigger => NO_SORT,
     }
 }
 
