@@ -140,10 +140,10 @@ Accessor(Result),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Bit),ja,ja,ja
 Accessor(Bits),"teilweise: `.bits` nur mit konstanten, geordneten Grenzen",ja,ja
 Accessor(WithBit),ja,ja,ja
-Accessor(Min),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Max),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Mean),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Rms),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Min),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
+Accessor(Max),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
+Accessor(Mean),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
+Accessor(Rms),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
 Accessor(Last),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Encode),teilweise: `encode` nur auf Records,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
 Accessor(Get),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja

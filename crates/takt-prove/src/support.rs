@@ -189,6 +189,9 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Sent => Yes,
         AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
         AccessorTag::Ok | AccessorTag::Err => Yes,
+        AccessorTag::Min | AccessorTag::Max | AccessorTag::Mean | AccessorTag::Rms => {
+            Partial("ueber einem Array; nicht ueber `samples`")
+        }
         AccessorTag::Encode => Partial("ohne Fliesskomma- und `u64`-Felder"),
         AccessorTag::T
         | AccessorTag::Seq
@@ -198,10 +201,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::TimeWarped
         | AccessorTag::Done
         | AccessorTag::Result
-        | AccessorTag::Min
-        | AccessorTag::Max
-        | AccessorTag::Mean
-        | AccessorTag::Rms
         | AccessorTag::Last
         | AccessorTag::Get
         | AccessorTag::Armed

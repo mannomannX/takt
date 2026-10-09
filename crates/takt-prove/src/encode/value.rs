@@ -13,7 +13,7 @@ use std::ops::Not;
 
 use takt_diag::Span;
 use takt_mir::expr::{Accessor, Builtin, CheckedKind, Expr, ExprKind};
-use takt_mir::machine::FaultKind;
+use takt_mir::machine::{ArithKind, FaultKind};
 use takt_mir::stmt::{ArmPattern, Block, Method, Place};
 use takt_mir::types::Type;
 use takt_mir::{EnumId, MachineId, TypeId};
@@ -776,8 +776,63 @@ impl Enc<'_> {
                 let x = self.expr(base, cx, env, flow)?;
                 Ok(Term::app(Op::Wrap { bits: w.bits(), signed: w.signed() }, vec![x]))
             }
+            (Accessor::Min | Accessor::Max | Accessor::Mean | Accessor::Rms, Type::Array { elem, .. }) => {
+                let sort = self.sort_of(*elem, span)?;
+                let items = self.value(base, cx, env, flow)?;
+                self.reduce(accessor, items, sort, flow, span)
+            }
             _ => no(format!("Zugriff `.{}`", accessor.name()), span),
         }
+    }
+
+    /// `min`, `max`, `mean` und `rms` ueber einem Array (`eval::reduce`,
+    /// 8.9): von links nach rechts; bei gleichen Elementen bleibt das erste.
+    /// `mean` und `rms` rechnen in der Breite der Elemente ohne Pruefung
+    /// dazwischen, erst die Wurzel von `rms` faultet, wenn sie nicht endlich
+    /// ist; ein leeres Array faultet mit `MissingValue`.
+    fn reduce(&mut self, accessor: Accessor, items: V, sort: Sort, flow: &mut Flow, span: Span) -> R<Term> {
+        let V::Node(parts) = items else { return no("Reduktion", span) };
+        let items = parts.into_iter().map(|x| x.leaf(span)).collect::<R<Vec<_>>>()?;
+        let Some((first, rest)) = items.split_first() else {
+            flow.exits.push(Exit {
+                cond: flow.alive.clone(),
+                kind: ExitKind::Fault(None, self.cause(FaultKind::MissingValue, span)),
+            });
+            flow.alive = Term::bool(false);
+            return Ok(Enc::zero(sort));
+        };
+        let float = matches!(sort, Sort::F32 | Sort::F64);
+        if let Accessor::Min | Accessor::Max = accessor {
+            let op = match (accessor == Accessor::Min, float) {
+                (true, true) => Op::FLt,
+                (true, false) => Op::Lt,
+                (false, true) => Op::FGt,
+                (false, false) => Op::Gt,
+            };
+            return Ok(rest
+                .iter()
+                .fold(first.clone(), |best, x| Term::ite(Term::bin(op, x.clone(), best.clone()), x.clone(), best)));
+        }
+        if !float {
+            return no("`mean` und `rms` ueber Ganzzahlen", span);
+        }
+        let rms = accessor == Accessor::Rms;
+        let sum = items.iter().fold(Term::float(0.0, sort), |acc, x| {
+            let term = if rms { Term::bin(Op::FMul, x.clone(), x.clone()) } else { x.clone() };
+            Term::bin(Op::FAdd, acc, term)
+        });
+        let mean = Term::bin(Op::FDiv, sum, Term::float(items.len() as f64, sort));
+        if !rms {
+            return Ok(mean);
+        }
+        let root = Term::app(Op::FSqrt, vec![mean]);
+        let fail = Term::app(Op::IsFinite, vec![root.clone()]).not();
+        flow.exits.push(Exit {
+            cond: Term::and(vec![flow.alive.clone(), fail.clone()]),
+            kind: ExitKind::Fault(None, self.cause(FaultKind::Arithmetic(ArithKind::NonFinite), span)),
+        });
+        flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
+        Ok(root)
     }
 
     /// Die Bedingung eines Zweigs von `case` und die Werte, die er bindet

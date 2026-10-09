@@ -525,6 +525,8 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Reduktionen ueber Arrays (Schritt 27a-8).
+        "26_samples.takt" | "71_places.takt" => (String::new(), 30),
         // Geplante Ausgaben (Schritt 27b-5): `at`, `pulse`, `cancel`, ein
         // Timeout, der die Warteschlange leert.
         "28_scheduled.takt"
