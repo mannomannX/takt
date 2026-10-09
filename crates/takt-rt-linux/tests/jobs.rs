@@ -144,8 +144,14 @@ fn a_restart_after_cancel_is_accepted_once_the_slot_is_free() {
         assert!(jobs.begin(0, "sha256", &bytes_arg(&[7u8; 4096])));
         jobs.cancel(0);
         let mut tries = 0;
-        while !jobs.begin(0, "sum8", &bytes_arg(&[1, 2, 3])) {
-            assert_eq!(jobs.poll(0), JobState::Running, "verweigert nur, solange der Arbeiter rechnet");
+        loop {
+            // Gefragt wird vor dem Versuch: Danach liefe die Abfrage gegen den
+            // Arbeiter, der den Slot inzwischen raeumen kann (FB-473).
+            let before = jobs.poll(0);
+            if jobs.begin(0, "sum8", &bytes_arg(&[1, 2, 3])) {
+                break;
+            }
+            assert_eq!(before, JobState::Running, "verweigert nur, solange der Arbeiter rechnet");
             tries += 1;
             assert!(tries < 2000, "der verworfene Lauf wird nie geraeumt");
             thread::sleep(Duration::from_millis(1));
