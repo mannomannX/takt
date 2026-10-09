@@ -20,7 +20,20 @@ priority = 50
 # Ein Board kennt nur einen Lauf zur Zeit, und beide Suiten laufen
 # nacheinander: Ihre Abbilder bauen im selben Zielverzeichnis.
 boards = { max-threads = 1 }
+# Die drei Tests mit dem groessten Speicher laufen nacheinander (gemessen
+# samt Compiler und Solver, 2026-10-09): der Wahrheitstest der Matrix
+# 0,8 GB, die Suite `beweiser` 0,7 GB, `embed_cmd` mit seinem cargo-Bau
+# 0,5 GB; jeder andere bleibt unter 0,2 GB. Zwei von ihnen zugleich
+# sprengten die Zusagegrenze des Rechners.
+memory = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = "binary(board_esp32c6) | binary(board_stm32f401)"
 test-group = "boards"
+
+[[profile.default.overrides]]
+filter = """
+    test(=every_table_tells_the_truth_about_its_component) | test(=every_program_of_the_prover_suite_agrees)
+    | test(=the_rust_example_builds_with_one_call_and_agrees_with_the_interpreter)
+"""
+test-group = "memory"
