@@ -163,15 +163,17 @@ pub enum Op {
     },
     /// Eine Funktion aus `libtaktm`.
     Math(Fun),
-    /// Teil `part` des Ergebnisses einer Native der kuratierten Menge (4.5),
-    /// eine Zahl aus `bits` Bit ohne Vorzeichen. Die Argumente sind Bloecke
+    /// Teil `part` des Ergebnisses einer Native der kuratierten Menge (4.5)
+    /// in der Sorte `sort`: eine Zahl aus `bits` Bit ohne Vorzeichen, bei
+    /// `fft256` eine Fliesskommazahl. Die Argumente sind Bloecke
     /// `[Kapazitaet, Laenge, Byte …]`, so dass die Auswertung sie ohne den
-    /// Typ in die Bytes der Grenze zerlegt; der Solver sieht die Funktion
-    /// uninterpretiert.
+    /// Typ in die Bytes der Grenze zerlegt, bei `fft256` die Werte selbst;
+    /// der Solver sieht die Funktion uninterpretiert.
     Native {
         f: takt_native::Native,
         part: u16,
         bits: u8,
+        sort: Sort,
     },
     /// Teil `part` des Ergebnisses einer Matrixfunktion aus `libtaktm::mat`
     /// (3.11) ueber einer `n`×`n`-Matrix und bei `solve` einer `n`×`k`
@@ -475,8 +477,8 @@ impl Term {
                     | Op::URem
                     | Op::LShr
                     | Op::Wrap { .. }
-                    | Op::FloatToInt
-                    | Op::Native { .. } => return Sort::Int,
+                    | Op::FloatToInt => return Sort::Int,
+                    Op::Native { sort, .. } => return *sort,
                     Op::Mat { f, n, k, part } if *part == f.elements(*n, *k) => return Sort::Bool,
                     Op::FNeg
                     | Op::FAdd

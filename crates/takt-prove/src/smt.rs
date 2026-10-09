@@ -106,10 +106,11 @@ impl Printer<'_> {
                 format!("((_ to_fp {e} {s}) RNE (/ (* (fp.to_real {}) {num}.0) {den}.0))", parts[0])
             }
             Op::Native { f, part, .. } => {
-                let fun = format!("|native.{}.{part}.{}|", f.name(), parts.len());
+                let width = sort_text(sort).replace(['(', ')', ' ', '_'], "");
+                let fun = format!("|native.{}.{part}.{}.{width}|", f.name(), parts.len());
                 if self.declared.insert(fun.clone()) {
-                    let domain = vec![sort_text(Sort::Int); parts.len()].join(" ");
-                    let _ = writeln!(self.out, "(declare-fun {fun} ({domain}) {})", sort_text(Sort::Int));
+                    let domain: Vec<&str> = args.iter().map(|a| sort_text(a.sort())).collect();
+                    let _ = writeln!(self.out, "(declare-fun {fun} ({}) {})", domain.join(" "), sort_text(sort));
                 }
                 // Eine Konstante wie `sha256_init` steht ohne Klammern da.
                 if parts.is_empty() { fun } else { format!("({fun} {})", parts.join(" ")) }
@@ -134,7 +135,7 @@ impl Printer<'_> {
         }
         // Eine Native liefert eine Zahl aus `bits` Bit ohne Vorzeichen; in
         // 64 Bit ist jedes Bitmuster eine.
-        if let Op::Native { bits, .. } = op
+        if let Op::Native { bits, sort: Sort::Int, .. } = op
             && *bits < 64
         {
             let max = (1u64 << bits) - 1;

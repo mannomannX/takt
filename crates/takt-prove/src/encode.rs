@@ -1579,14 +1579,29 @@ impl Enc<'_> {
         for a in args {
             values.push(self.value(a, cx, env, flow)?);
         }
-        self.native_value(id, values, span)
+        Ok(self.native_result(id, values, span)?.0)
     }
 
-    /// Das Ergebnis einer Native ueber ihren ausgewerteten Argumenten.
-    fn native_value(&mut self, id: takt_mir::NativeId, args: Vec<V>, span: Span) -> R<V> {
+    /// Das Ergebnis einer Native ueber ihren ausgewerteten Argumenten und,
+    /// bei `aes_gcm_decrypt`, wann sie keines hat (`Err(FAILED)`, 4.5).
+    pub(super) fn native_result(&mut self, id: takt_mir::NativeId, args: Vec<V>, span: Span) -> R<(V, Option<Term>)> {
         use takt_native::Native;
         let n = self.p.natives[id.index()].clone();
         let Some(f) = Native::by_name(&n.name) else { return no(format!("Projekt-Native `{}`", n.name), span) };
+        // `fft256` nimmt ihre Fliesskommazahlen selbst und liefert solche
+        // derselben Breite.
+        if f == Native::Fft256 {
+            let mut leaves = Vec::new();
+            for v in &args {
+                v.leaves(&mut leaves);
+            }
+            let xs: Vec<Term> = leaves.into_iter().cloned().collect();
+            let Some(sort) = xs.first().map(Term::sort) else { return no("`fft256` ohne Argument", span) };
+            let parts =
+                (0..xs.len() as u16).map(|part| V::Leaf(Term::app(Op::Native { f, part, bits: 0, sort }, xs.clone())));
+            self.uninterpreted.insert(n.name.clone());
+            return Ok((V::Node(parts.collect()), None));
+        }
         let mut blocks = Vec::new();
         for (v, param) in args.into_iter().zip(&n.params) {
             let (len, bytes) = match self.p.types.get(param.ty) {
@@ -1605,7 +1620,8 @@ impl Enc<'_> {
             blocks.push(len);
             blocks.extend(bytes);
         }
-        let part = |part: u16, bits: u8| Term::app(Op::Native { f, part, bits }, blocks.clone());
+        let part = |part: u16, bits: u8| Term::app(Op::Native { f, part, bits, sort: Sort::Int }, blocks.clone());
+        let mut failed = None;
         let out = match f {
             Native::Crc32 | Native::Crc32c => V::Leaf(part(0, 32)),
             Native::Crc16 => V::Leaf(part(0, 16)),
@@ -1613,21 +1629,29 @@ impl Enc<'_> {
             Native::Sha256 | Native::HmacSha256 | Native::Sha256Final => {
                 V::Node(std::iter::once(V::Leaf(Term::int(32))).chain((0..32).map(|k| V::Leaf(part(k, 8)))).collect())
             }
-            // Je Blatt des Ergebnisses ein Teil, in der Reihenfolge des Modells.
-            Native::Sha256Init | Native::Sha256Update => {
-                let shape = self.shape(n.ret, span)?;
-                let mut k = 0u16;
-                self.gather("", &shape, &mut |enc, _, s| {
-                    let Some(bits) = enc.leaf_bits(s) else { return no("Blatt eines `Sha256Ctx`", span) };
-                    k += 1;
-                    Ok(part(k - 1, bits))
-                })?
-            }
+            Native::Sha256Init | Native::Sha256Update => self.native_leaves(n.ret, 0, &part, span)?,
             Native::EcdsaP256Verify | Native::Rsa3072Verify => V::Leaf(Term::eq(part(0, 1), Term::int(1))),
-            Native::Fft256 | Native::AesGcmDecrypt => return no(format!("Native `{}`", n.name), span),
+            // Teil 0 sagt, ob der Tag nicht passt, dahinter der Klartext.
+            Native::AesGcmDecrypt => {
+                failed = Some(Term::eq(part(0, 1), Term::int(1)));
+                self.native_leaves(n.ret, 1, &part, span)?
+            }
+            Native::Fft256 => return no("`fft256`", span),
         };
         self.uninterpreted.insert(n.name.clone());
-        Ok(out)
+        Ok((out, failed))
+    }
+
+    /// Je Blatt des Typs `ty` ein Teil der Native ab `first`, in der
+    /// Reihenfolge des Modells.
+    fn native_leaves(&mut self, ty: TypeId, first: u16, part: &dyn Fn(u16, u8) -> Term, span: Span) -> R<V> {
+        let shape = self.shape(ty, span)?;
+        let mut k = first;
+        self.gather("", &shape, &mut |enc, _, s| {
+            let Some(bits) = enc.leaf_bits(s) else { return no("Blatt eines Ergebnisses", span) };
+            k += 1;
+            Ok(part(k - 1, bits))
+        })
     }
 
     /// Wie viele Bit ein Blatt ohne Vorzeichen hoechstens traegt.

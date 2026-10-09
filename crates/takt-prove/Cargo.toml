@@ -17,7 +17,7 @@ takt-hal = { path = "../takt-hal" }
 libtaktm = { path = "../libtaktm" }
 # Die Natives der kuratierten Menge rechnet die Auswertung wie der Interpreter (4.5).
 takt-native = { path = "../takt-native" }
-takt-crypto = { path = "../takt-crypto", features = ["ecdsa", "rsa"] }
+takt-crypto = { path = "../takt-crypto", features = ["ecdsa", "rsa", "aes-gcm"] }
 
 [dev-dependencies]
 # Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).

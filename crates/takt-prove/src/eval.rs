@@ -238,6 +238,9 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
 fn native(f: takt_native::Native, part: u16, args: &[Val]) -> Val {
     use takt_native::Native;
     use takt_native::sha256::Ctx;
+    if f == Native::Fft256 {
+        return fft_part(part, args);
+    }
     let mut blocks: Vec<Vec<u8>> = Vec::new();
     let mut rest = args;
     while let [cap, len, tail @ ..] = rest {
@@ -268,12 +271,50 @@ fn native(f: takt_native::Native, part: u16, args: &[Val]) -> Val {
             i64::from(takt_crypto::ecdsa_p256_verify(&key, &digest, &sig).unwrap_or(false))
         }
         Native::Rsa3072Verify => i64::from(takt_crypto::rsa3072_verify(block(0), block(1), block(2)).unwrap_or(false)),
+        // Teil 0: ob der Tag nicht passt (`Err(FAILED)`), dann der Klartext.
+        Native::AesGcmDecrypt => {
+            let data = block(3);
+            let mut out = vec![0u8; data.len()];
+            let opened = takt_crypto::aes_gcm_decrypt(block(0), block(1), block(2), data, block(4), &mut out);
+            match (usize::from(part), opened.ok().flatten()) {
+                (0, opened) => i64::from(opened.is_none()),
+                (1, Some(n)) => n as i64,
+                (k, Some(n)) if k >= 2 && k - 2 < n => i64::from(out[k - 2]),
+                _ => 0,
+            }
+        }
         _ => match takt_native::call(f, &inputs) {
             Some(takt_native::Output::Scalar(raw)) => raw as i64,
             Some(takt_native::Output::Digest(d)) => byte(d),
             _ => 0,
         },
     })
+}
+
+/// Wert `part` von `fft256` (4.5) wie im Interpreter: die Argumente in
+/// kanonischer Form, das Ergebnis in der Breite der Argumente.
+fn fft_part(part: u16, args: &[Val]) -> Val {
+    let mut input = Vec::new();
+    for a in args {
+        match a {
+            Val::F32(x) => input.extend(x.to_le_bytes()),
+            Val::F64(x) => input.extend(x.to_le_bytes()),
+            _ => {}
+        }
+    }
+    let out = match takt_native::call(takt_native::Native::Fft256, &[&input]) {
+        Some(takt_native::Output::Floats { bytes, len }) => bytes[..len].to_vec(),
+        _ => Vec::new(),
+    };
+    let k = usize::from(part);
+    match args.first() {
+        Some(Val::F32(_)) => Val::F32(
+            out.get(4 * k..4 * k + 4).map_or(0.0, |b| f32::from_le_bytes(<[u8; 4]>::try_from(b).unwrap_or_default())),
+        ),
+        _ => Val::F64(
+            out.get(8 * k..8 * k + 8).map_or(0.0, |b| f64::from_le_bytes(<[u8; 8]>::try_from(b).unwrap_or_default())),
+        ),
+    }
 }
 
 /// Blatt `part` eines `Sha256Ctx` (Prelude: `h : [8] u32`, `buf : bytes<64>`,

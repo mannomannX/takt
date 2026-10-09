@@ -1550,11 +1550,11 @@ fn bytes_fn(name: &str, cap: usize, hex: &str) -> String {
     )
 }
 
-/// Die Eingaben der ersten gueltigen Zeile einer Funktion aus den
-/// Krypto-Bloecken der Spezifikation.
-fn crypto_line(fun: &str) -> Vec<String> {
+/// Die Eingaben der Zeile `nth` einer Funktion aus den Krypto-Bloecken
+/// der Spezifikation.
+fn crypto_line(fun: &str, nth: usize) -> Vec<String> {
     let spec = include_str!("../../../grammar/takt-native.md");
-    let line = spec.lines().find_map(|l| l.trim().strip_prefix(fun)?.split_once(':')).expect("Zeile");
+    let line = spec.lines().filter_map(|l| l.trim().strip_prefix(fun)?.split_once(':')).nth(nth).expect("Zeile");
     line.0.split_whitespace().map(str::to_string).collect()
 }
 
@@ -1564,7 +1564,7 @@ fn crypto_line(fun: &str) -> Vec<String> {
 /// dazu ein leerer Schluessel (FB-487).
 #[test]
 fn chunked_hashes_and_signatures_agree() {
-    let (ecdsa, rsa) = (crypto_line("ecdsa_p256_verify"), crypto_line("rsa3072_verify"));
+    let (ecdsa, rsa) = (crypto_line("ecdsa_p256_verify", 0), crypto_line("rsa3072_verify", 0));
     let src = format!(
         "system:
     language = 1
@@ -1634,6 +1634,75 @@ machine m:
         assert!(trace.contains(want), "`{want}` fehlt im Interpreter:\n{trace}");
     }
     agree_program("CHUNKED", &p, "", 20);
+}
+
+/// `fft256` ueber `[256] float` und `aes_gcm_decrypt` als Job, einmal mit
+/// passendem und einmal mit gekipptem Tag (`Err(FAILED)`), mit den Vektoren
+/// der Spezifikation (4.5).
+#[test]
+fn the_spectrum_and_the_decryption_agree() {
+    let (good, bad) = (crypto_line("aes_gcm_decrypt", 1), crypto_line("aes_gcm_decrypt", 4));
+    let src = format!(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+native fn fft256(x: [256] float) -> [256] float with cost = 8400, stack = 9000, total
+native job aes_gcm_decrypt(key: bytes<32>, nonce: bytes<12>, aad: bytes<16>, data: bytes<64>, tag: bytes<16>) -> bytes<64> with cost = 300, stack = 2752, duration = 30 ms, total
+
+output spectrum : float        @ sim(\"spectrum\")
+output plain    : int in 0..64 @ sim(\"plain\")
+output first    : u8           @ sim(\"first\")
+output failed   : bool         @ sim(\"failed\")
+
+{}{}{}{}{}{}
+machine m:
+    var x : [256] float = default
+    var y : [256] float = default
+    var n : int in 0..99 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            n = (n + 1) % 100
+            for i in range(256):
+                x[i] = ((i * 37 + n) % 101) as float / 50.0 - 1.0
+            y = fft256(x)
+            spectrum = y[2] + y[7] * 0.5 - y[255]
+        sequence:
+            job a = aes_gcm_decrypt(key = k(), nonce = nonce(), aad = aad(), data = data(), tag = good_tag())
+            until a.done timeout 1 s -> STUCK
+            plain = a.result.or(default).len
+            first = a.result.or(default)[0]
+            job a = aes_gcm_decrypt(key = k(), nonce = nonce(), aad = aad(), data = data(), tag = bad_tag())
+            until a.done timeout 1 s -> STUCK
+            failed = a.result.err.or(PENDING) == FAILED
+            -> DONE
+
+    state DONE:
+        when false: -> RUN
+
+    state STUCK:
+        when false: -> RUN
+",
+        bytes_fn("k", 32, &good[0]),
+        bytes_fn("nonce", 12, &good[1]),
+        bytes_fn("aad", 16, &good[2]),
+        bytes_fn("data", 64, &good[3]),
+        bytes_fn("good_tag", 16, &good[4]),
+        bytes_fn("bad_tag", 16, &bad[4]),
+    );
+    let p = compile("SPECTRUM", &src);
+    let trace =
+        run(&p, &Trace::default(), &RunOptions { ticks: 12, ..Default::default() }).expect("Lauf").trace.render();
+    for want in ["out plain 57", "out failed true"] {
+        assert!(
+            trace.contains(want),
+            "`{want}` fehlt im Interpreter:
+{trace}"
+        );
+    }
+    agree_program("SPECTRUM", &p, "", 12);
 }
 
 /// Jobs (4.5): `a` startet neu, waehrend er laeuft, und uebernimmt die

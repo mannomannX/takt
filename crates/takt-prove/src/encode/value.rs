@@ -1056,11 +1056,13 @@ impl Enc<'_> {
             CheckedKind::Index { len } => self.index_access(inner, *len, node.span, kind, cx, env, flow),
             CheckedKind::Missing => self.unwrap(inner, node.span, kind, cx, env, flow),
             // Eine Matrix ist endlich, wenn jedes Element es ist (3.11).
-            CheckedKind::NonFinite if self.mat_dims(node.ty).is_some() => {
+            // Eine Matrix, das Ergebnis von `fft256`: jedes Element endlich.
+            CheckedKind::NonFinite if self.composite(node.ty) => {
                 let v = self.value(inner, cx, env, flow)?;
-                let V::Node(items) = &v else { return no("Matrix", node.span) };
-                let finite = items.iter().map(|x| Ok(Term::app(Op::IsFinite, vec![x.clone().leaf(node.span)?])));
-                let finite = Term::and(finite.collect::<R<Vec<_>>>()?);
+                let mut leaves = Vec::new();
+                v.leaves(&mut leaves);
+                let floats = leaves.into_iter().filter(|x| matches!(x.sort(), Sort::F32 | Sort::F64));
+                let finite = Term::and(floats.map(|x| Term::app(Op::IsFinite, vec![x.clone()])).collect());
                 self.fault(kind, node.span, finite.not(), cx, flow);
                 Ok(v)
             }

@@ -130,9 +130,9 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Armed => No("Trigger sind nicht kodiert"),
         ExprTag::Stream => Yes,
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
-        ExprTag::JobState => Partial("nicht `aes_gcm_decrypt`, ein Job, der scheitern kann"),
+        ExprTag::JobState => Partial("nur Jobs der kuratierten Menge, keine Projekt-Native"),
         ExprTag::Decode => Partial("ohne Fliesskommafelder"),
-        ExprTag::NativeCall => Partial("nicht `fft256`, ein Ergebnis aus Fliesskommazahlen"),
+        ExprTag::NativeCall => Partial("nur die kuratierte Menge, keine Projekt-Native"),
         ExprTag::MatOp => Partial("`det`, `inv`, `solve` und `cholesky` im Solver uninterpretiert"),
     }
 }
@@ -238,7 +238,7 @@ fn stmt(s: StmtTag) -> Support {
         StmtTag::Arm => No("Trigger sind nicht kodiert"),
         StmtTag::Every => Yes,
         StmtTag::At => Yes,
-        StmtTag::Job => Partial("nicht `aes_gcm_decrypt`, ein Job, der scheitern kann"),
+        StmtTag::Job => Partial("nur Jobs der kuratierten Menge, keine Projekt-Native"),
     }
 }
 

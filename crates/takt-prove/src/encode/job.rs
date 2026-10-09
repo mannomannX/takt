@@ -21,8 +21,9 @@ use super::value::V;
 use super::{Cx, Enc, Env, Flow, R, no};
 use crate::term::{Op, Sort, Term};
 
-/// `JobErr` im Prelude: CANCELLED = 0, PENDING = 2 (`JobRun::err`).
+/// `JobErr` im Prelude: CANCELLED = 0, FAILED = 1, PENDING = 2 (`JobRun::err`).
 const CANCELLED: i64 = 0;
+const FAILED: i64 = 1;
 const PENDING: i64 = 2;
 
 /// Die groesste Verspaetung in Nanosekunden: Mit ihr bleibt die
@@ -55,12 +56,22 @@ impl Enc<'_> {
         self.p.natives[self.machine(m).layout.job_slots[slot].native.index()].ret
     }
 
+    /// Kann der Lauf ohne Ergebnis enden? Nur `aes_gcm_decrypt` (4.5); sein
+    /// Slot fuehrt dafuer `failed`.
+    fn job_fails(&self, m: MachineId, slot: usize) -> bool {
+        let native = self.machine(m).layout.job_slots[slot].native;
+        self.p.natives[native.index()].name == takt_native::Native::AesGcmDecrypt.name()
+    }
+
     /// Die Slots einer Maschine vor dem ersten Lauf; `due` −1 liegt vor
     /// jedem Modell-Tick.
     pub(super) fn jobs_initial(&self, m: MachineId, env: &mut Env) -> R<()> {
         for i in 0..self.machine(m).layout.job_slots.len() {
             for part in ["running", "done", "cancelled"] {
                 env.insert(self.loc_job(m, i, part), Term::bool(false));
+            }
+            if self.job_fails(m, i) {
+                env.insert(self.loc_job(m, i, "failed"), Term::bool(false));
             }
             env.insert(self.loc_job(m, i, "due"), Term::int(-1));
             let ret = self.job_ret(m, i);
@@ -93,7 +104,7 @@ impl Enc<'_> {
         for a in args {
             values.push(self.value(a, cx, env, flow)?);
         }
-        let value = self.native_value(native, values, span)?;
+        let (value, failed) = self.native_result(native, values, span)?;
         let tick = self.p.config.tick.max(1);
         let name = format!("i.job.{}.{}.delay", self.machine(m).name, self.machine(m).vars[handle.index()].name);
         if !self.inputs.contains_key(&name) {
@@ -118,6 +129,11 @@ impl Enc<'_> {
             let at = self.loc_job(m, slot, part);
             let old = env[&at].clone();
             env.insert(at, Term::ite(alive.clone(), new, old));
+        }
+        if let Some(failed) = failed {
+            let at = self.loc_job(m, slot, "failed");
+            let old = env[&at].clone();
+            env.insert(at, Term::ite(alive.clone(), failed, old));
         }
         let ret = self.job_ret(m, slot);
         self.put(env, &self.loc_job(m, slot, "value"), ret, value, &alive, span)
@@ -150,8 +166,8 @@ impl Enc<'_> {
     }
 
     /// `v.done` und `v.result` (`MachineEnv::job`): `Err(PENDING)` vor der
-    /// Fertigstellung, `Err(CANCELLED)` nach einem Abbruch, sonst
-    /// `Ok(Ergebnis)`.
+    /// Fertigstellung, `Err(CANCELLED)` nach einem Abbruch, `Err(FAILED)`
+    /// ohne Ergebnis, sonst `Ok(Ergebnis)`.
     pub(super) fn job_state(
         &mut self,
         handle: VarId,
@@ -167,14 +183,21 @@ impl Enc<'_> {
         if matches!(field, JobField::Done) {
             return Ok(V::Leaf(done));
         }
-        let failed = Term::or(vec![done.clone().not(), env[&self.loc_job(m, i, "cancelled")].clone()]);
+        let cancelled = env[&self.loc_job(m, i, "cancelled")].clone();
+        let empty = if self.job_fails(m, i) {
+            Term::and(vec![cancelled.clone().not(), env[&self.loc_job(m, i, "failed")].clone()])
+        } else {
+            Term::bool(false)
+        };
+        let err = Term::or(vec![done.clone().not(), cancelled.clone(), empty.clone()]);
         let ret = self.job_ret(m, i);
         let value = self.load(env, &self.loc_job(m, i, "value"), &self.shape(ret, span)?, span)?;
         let V::Node(mut parts) = self.zero_of(ty, span)? else { return no("Ergebnis eines Jobs", span) };
         let zero = parts[1].clone();
-        parts[0] = V::Leaf(failed.clone());
-        parts[1] = V::ite(&failed, zero, value);
-        parts[2] = V::Leaf(Term::ite(done, Term::int(CANCELLED), Term::int(PENDING)));
+        parts[0] = V::Leaf(err.clone());
+        parts[1] = V::ite(&err, zero, value);
+        let code = Term::ite(empty, Term::int(FAILED), Term::int(CANCELLED));
+        parts[2] = V::Leaf(Term::ite(done, code, Term::int(PENDING)));
         Ok(V::Node(parts))
     }
 

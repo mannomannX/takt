@@ -960,6 +960,36 @@ fn a_native_proves_its_width_and_keeps_its_paths_open() {
     assert!(reason.contains("`crc32` uninterpretiert"), "{reason}");
 }
 
+/// `fft256` (4.5) ist je Wert eine Funktion ueber Fliesskommazahlen ihrer
+/// Breite. Der Solver liest die Deklarationen fehlerfrei; ein Urteil ueber
+/// 256 Funktionen mit je 256 Argumenten dauert Minuten (die Kongruenz ueber
+/// die Schritte), darum steht hier keine Anfrage.
+#[test]
+fn the_spectrum_reaches_the_solver_as_float_functions() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         native fn fft256(x: [256] float) -> [256] float with cost = 8400, stack = 9000, total\n\n\
+         output peak : float @ hw(\"o/peak\") with safe = 0.0\n\n\
+         machine m:\n    var x : [256] float = default\n    var n : int in 0..9 = 0\n    initial RUN\n\n\
+         \x20   state RUN:\n        loop:\n            n = (n + 1) % 10\n            x[n] = 1.0\n\
+         \x20           var y = fft256(x)\n            peak = y[1]\n",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert_eq!(model.uninterpreted, vec!["fft256".to_string()]);
+    let text: String = takt_prove::export(&model, 1)
+        .lines()
+        .filter(|l| !l.starts_with("(check-sat)") && !l.starts_with("(get-value"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert!(text.contains("(declare-fun |native.fft256.255.256.Float64| (Float64"), "keine Funktion ueber Float64");
+    let file = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("spectrum.smt2");
+    std::fs::write(&file, &text).expect("Datei");
+    let out = std::process::Command::new(solver.path().expect("Pfad")).arg(&file).output().expect("Solver");
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(!said.contains("error"), "{said}");
+}
+
 /// Die Chunk-Natives (4.5) sind je Blatt des `Sha256Ctx` eine Funktion;
 /// die Gesamtlaenge in 64 Bit hat keine Schranke ausser ihrer Breite.
 /// Ein Digest ueber den Kontext ist ein Byte, mehr beweist der Solver nicht.
