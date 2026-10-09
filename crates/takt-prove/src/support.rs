@@ -111,7 +111,7 @@ fn expr(e: ExprTag) -> Support {
         | ExprTag::Lift => Yes,
         ExprTag::Field => Partial("auf Records; nicht auf den Feldern einer Variante"),
         ExprTag::Index => Partial("auf Arrays, Bytes und Vektoren; nicht auf Samples und Channel-Arrays"),
-        ExprTag::Published | ExprTag::StateOf | ExprTag::Signal => Partial("nicht ueber ein Instanz-Array"),
+        ExprTag::Published | ExprTag::StateOf | ExprTag::Signal => Yes,
         ExprTag::Cast => Partial("nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma"),
         ExprTag::Call => Partial("Funktionen aus kodierbaren Anweisungen"),
         ExprTag::Str => Yes,

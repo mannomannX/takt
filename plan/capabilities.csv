@@ -16,9 +16,9 @@ Expr(Param),ja,ja,ja
 Expr(Command),ja,ja,ja
 Expr(Input),ja,ja,ja
 Expr(Output),ja,ja,ja
-Expr(Published),ja,teilweise: nicht ueber ein Instanz-Array,ja
-Expr(StateOf),ja,teilweise: nicht ueber ein Instanz-Array,ja
-Expr(Signal),ja,teilweise: nicht ueber ein Instanz-Array,ja
+Expr(Published),ja,ja,ja
+Expr(StateOf),ja,ja,ja
+Expr(Signal),ja,ja,ja
 Expr(Builtin),ja,ja,ja
 Expr(Armed),ja,nein: Trigger und Registerports sind nicht kodiert,nein
 Expr(PortRead),ja,nein: Trigger und Registerports sind nicht kodiert,ja

@@ -205,6 +205,23 @@ impl Model {
 /// Werte der Orte.
 type Env = BTreeMap<String, Term>;
 
+/// Ein Wert, der sich nach einer Bedingung waehlen laesst.
+trait Choose {
+    fn choose(c: &Term, a: Self, b: Self) -> Self;
+}
+
+impl Choose for Term {
+    fn choose(c: &Term, a: Term, b: Term) -> Term {
+        Term::ite(c.clone(), a, b)
+    }
+}
+
+impl Choose for V {
+    fn choose(c: &Term, a: V, b: V) -> V {
+        V::ite(c, a, b)
+    }
+}
+
 fn ite_env(c: &Term, a: &Env, b: &Env) -> Env {
     a.iter()
         .map(|(k, va)| {
@@ -958,53 +975,21 @@ impl Enc<'_> {
                 src.get(&loc).cloned().ok_or_else(|| Unsupported { what: "Output".into(), span })?
             }
             ExprKind::Published { machine, var } => {
-                if machine.index.is_some() {
-                    return no("Instanz-Array", span);
-                }
-                let loc = self.loc_var(machine.machine, *var);
-                if !self.order.contains(&machine.machine) {
-                    let ty = self.machine(machine.machine).vars[var.index()].ty;
-                    let (x, fresh) = self.free_psi(machine.machine, &loc, self.sort_of(ty, span)?);
-                    if fresh && let Some(t) = self.type_invariant(x.clone(), ty) {
-                        self.psi_assumptions.push(t);
-                    }
-                    return Ok(x);
-                }
-                self.psi(cx, env, machine.machine, &loc, span)?
+                let var = *var;
+                self.per_instance(machine, cx, env, flow, &mut |enc, m| enc.published(m, var, cx, env, span))?
             }
             ExprKind::StateOf(machine) => {
-                if machine.index.is_some() {
-                    return no("Instanz-Array", span);
-                }
-                let loc = self.loc_leaf(machine.machine);
-                if !self.order.contains(&machine.machine) {
-                    let (x, fresh) = self.free_psi(machine.machine, &loc, Sort::Int);
-                    if fresh {
-                        let m = machine.machine;
-                        let mut codes: Vec<Term> = self
-                            .leaves(m)
-                            .into_iter()
-                            .map(|l| Term::eq(x.clone(), Term::int(self.code(m, l))))
-                            .collect();
-                        if let Some(c) = self.faulted_code(m) {
-                            codes.push(Term::eq(x.clone(), Term::int(c)));
-                        }
-                        self.psi_assumptions.push(Term::or(codes));
-                    }
-                    return Ok(self.state_value(machine.machine, x));
-                }
-                let leaf = self.psi(cx, env, machine.machine, &loc, span)?;
-                self.state_value(machine.machine, leaf)
+                self.per_instance(machine, cx, env, flow, &mut |enc, m| enc.state_of(m, cx, env, span))?
             }
             ExprKind::Signal { machine, signal } => {
-                if machine.index.is_some() {
-                    return no("Instanz-Array", span);
-                }
-                let loc = self.loc_sig(machine.machine, signal.index());
-                if !self.order.contains(&machine.machine) {
-                    return Ok(self.free_psi(machine.machine, &loc, Sort::Bool).0);
-                }
-                self.psi(cx, env, machine.machine, &loc, span)?
+                let loc = |enc: &Enc<'_>, m| enc.loc_sig(m, signal.index());
+                self.per_instance(machine, cx, env, flow, &mut |enc, m| {
+                    let at = loc(enc, m);
+                    if !enc.order.contains(&m) {
+                        return Ok(enc.free_psi(m, &at, Sort::Bool).0);
+                    }
+                    enc.psi(cx, env, m, &at, span)
+                })?
             }
             ExprKind::Builtin(b) => match b {
                 Builtin::Tick => Term::int(self.p.config.tick),
@@ -1133,6 +1118,76 @@ impl Enc<'_> {
         let new = env.get(loc).cloned().unwrap_or_else(|| old.clone());
         let active = cx.active.get(&target).cloned().unwrap_or_else(|| Term::bool(false));
         Ok(Term::ite(active, new, old))
+    }
+
+    /// Ein Bezug auf eine Instanz (`machine_index`): ohne Index die Maschine,
+    /// sonst je Element des Instanz-Arrays `read`, ausgewaehlt nach dem
+    /// Index; ausserhalb des Arrays ein `RangeFault`.
+    fn per_instance<T>(
+        &mut self,
+        mref: &takt_mir::expr::MachineRef,
+        cx: &Cx<'_>,
+        env: &Env,
+        flow: &mut Flow,
+        read: &mut dyn FnMut(&mut Self, MachineId) -> R<T>,
+    ) -> R<T>
+    where
+        T: Choose,
+    {
+        let Some(index) = &mref.index else { return read(self, mref.machine) };
+        let i = self.expr(index, cx, env, flow)?;
+        let n = match &self.machine(mref.machine).kind {
+            takt_mir::machine::MachineKind::Instance(info) => info.array.map_or(1, |(_, n)| n),
+            _ => 1,
+        };
+        let outside = Term::or(vec![
+            Term::bin(Op::Lt, i.clone(), Term::int(0)),
+            Term::bin(Op::Ge, i.clone(), Term::int(i64::from(n))),
+        ]);
+        flow.exits.push(Exit {
+            cond: Term::and(vec![flow.alive.clone(), outside.clone()]),
+            kind: ExitKind::Fault(None, self.cause(FaultKind::Range, index.span)),
+        });
+        flow.alive = Term::and(vec![flow.alive.clone(), outside.not()]);
+        let mut out = read(self, MachineId(mref.machine.0 + n.max(1) - 1))?;
+        for k in (0..n.saturating_sub(1)).rev() {
+            let v = read(self, MachineId(mref.machine.0 + k))?;
+            out = T::choose(&Term::eq(i.clone(), Term::int(i64::from(k))), v, out);
+        }
+        Ok(out)
+    }
+
+    /// Eine `pub var` einer Maschine: frisch nach `follows`, sonst Ψ.
+    fn published(&mut self, m: MachineId, var: VarId, cx: &Cx<'_>, env: &Env, span: Span) -> R<Term> {
+        let loc = self.loc_var(m, var);
+        if !self.order.contains(&m) {
+            let ty = self.machine(m).vars[var.index()].ty;
+            let (x, fresh) = self.free_psi(m, &loc, self.sort_of(ty, span)?);
+            if fresh && let Some(t) = self.type_invariant(x.clone(), ty) {
+                self.psi_assumptions.push(t);
+            }
+            return Ok(x);
+        }
+        self.psi(cx, env, m, &loc, span)
+    }
+
+    /// Der Zustand einer Maschine als Variante ihres Zustandstyps.
+    fn state_of(&mut self, m: MachineId, cx: &Cx<'_>, env: &Env, span: Span) -> R<Term> {
+        let loc = self.loc_leaf(m);
+        if !self.order.contains(&m) {
+            let (x, fresh) = self.free_psi(m, &loc, Sort::Int);
+            if fresh {
+                let mut codes: Vec<Term> =
+                    self.leaves(m).into_iter().map(|l| Term::eq(x.clone(), Term::int(self.code(m, l)))).collect();
+                if let Some(c) = self.faulted_code(m) {
+                    codes.push(Term::eq(x.clone(), Term::int(c)));
+                }
+                self.psi_assumptions.push(Term::or(codes));
+            }
+            return Ok(self.state_value(m, x));
+        }
+        let leaf = self.psi(cx, env, m, &loc, span)?;
+        Ok(self.state_value(m, leaf))
     }
 
     /// Ein zweistelliger Operator; `width` ist die Breite eines ganzzahligen

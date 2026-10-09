@@ -466,12 +466,14 @@ impl Enc<'_> {
                 self.load(src, &self.loc_out(*c), &shape, span)?
             }
             ExprKind::Published { machine, var } => {
-                if machine.index.is_some() || !self.order.contains(&machine.machine) {
-                    return no("zusammengesetzter Wert einer anderen Maschine", span);
-                }
-                let target: MachineId = machine.machine;
-                let base = self.loc_var(target, *var);
-                self.gather(&base, &shape, &mut |enc, loc, _| enc.psi(cx, env, target, loc, span))?
+                let var = *var;
+                self.per_instance(machine, cx, env, flow, &mut |enc, target: MachineId| {
+                    if !enc.order.contains(&target) {
+                        return no("zusammengesetzter Wert einer anderen Maschine", span);
+                    }
+                    let base = enc.loc_var(target, var);
+                    enc.gather(&base, &shape, &mut |enc, loc, _| enc.psi(cx, env, target, loc, span))
+                })?
             }
             ExprKind::Record { fields, .. } => {
                 let mut parts = Vec::new();
@@ -977,8 +979,18 @@ impl Enc<'_> {
         env: &Env,
         flow: &mut Flow,
     ) -> R<V> {
-        // Der Index einer Zuweisungsstelle prueft `place_steps`.
-        let ExprKind::Index { base, index } = &inner.kind else { return no("Indexpruefung ohne Zugriff", span) };
+        // Der Index einer Zuweisungsstelle prueft `place_steps`. Ohne Zugriff
+        // ist der Knoten der Index eines Instanz-Arrays: Er fuehrt die
+        // Stelle, der Wert geht an `machine_index` weiter.
+        let ExprKind::Index { base, index } = &inner.kind else {
+            let i = self.expr(inner, cx, env, flow)?;
+            let fail = Term::or(vec![
+                Term::bin(Op::Lt, i.clone(), Term::int(0)),
+                Term::bin(Op::Ge, i.clone(), Term::int(i64::from(len))),
+            ]);
+            self.fault(kind, span, fail, cx, flow);
+            return Ok(V::Leaf(i));
+        };
         if matches!(base.kind, ExprKind::Input { .. }) {
             return no("Channel-Array", span);
         }

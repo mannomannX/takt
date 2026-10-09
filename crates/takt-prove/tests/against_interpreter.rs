@@ -525,6 +525,8 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Instanz-Arrays (Schritt 27a-10).
+        "74_instance_index.takt" => (String::new(), 20),
         // Records ueber eine `sim`-Bindung (Schritt 27c-5).
         "55_frames_with_bytes.takt" => (String::new(), 20),
         // Natives der kuratierten Menge (Schritt 27c-4).
@@ -1145,6 +1147,70 @@ fn the_wire_format_agrees() {
         stim.push_str(&format!("t={} in rx 0x{}\n", 3 * k + 1, f.replace(' ', "")));
     }
     agree_program("WIRE", &compile("WIRE", WIRE), &stim, 40);
+}
+
+/// Instanz-Arrays (5.11, `machine_index`): `pub var`, ein Record, der
+/// Zustand und ein Signal ueber einen berechneten Index; ein Index
+/// ausserhalb des Arrays faultet mit `RangeFault`.
+const INSTANCES: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+record Pt:
+    x : int in 0..99
+    y : int in 0..9
+
+output p    : int in 0..999 @ sim("p")
+output px   : int in 0..99  @ sim("px")
+output st   : int in 0..9   @ sim("st")
+output pg   : int in 0..9   @ sim("pg")
+output bad  : int in 0..999 @ sim("bad")
+output line : int in 0..999 @ sim("line")
+
+machine cell(idx: int in 0..2) every 10 ms:
+    pub var value : int in 0..999 = 0
+    pub var pt    : Pt = default
+    signal ping
+
+    initial A
+
+    state A:
+        loop:
+            value = (value + idx + 1) % 1000
+            pt = Pt(x = value % 100, y = idx)
+            if value % 4 == 0:
+                raise ping
+        when value > 20: -> B
+
+    state B:
+        after 30 ms: -> A
+
+instance cells[i in 0..3] = cell(idx = i)
+
+machine picker:
+    fault -> OOPS
+    var k : int in 0..9 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 5
+            p = cells[k % 3].value
+            px = cells[(k + 2) % 3].pt.x
+            st = 1 if cells[(k + 1) % 3].state == B else 0
+            pg = 1 if cells[k % 3].ping else 0
+            bad = cells[k].value
+
+    state OOPS:
+        enter:
+            line = last_fault.line
+        after 10 ms: -> RUN
+"#;
+
+#[test]
+fn instance_arrays_agree() {
+    agree_program("INSTANCES", &compile("INSTANCES", INSTANCES), "", 30);
 }
 
 /// Records ueber eine `sim`-Bindung (8.3, `elements_of`): Ein Bytestrom
