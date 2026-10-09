@@ -117,6 +117,15 @@ pub mod shape {
     /// `map<K, V, N>`: Kapazitaet, Slotbreite von Schluessel und Wert (je
     /// `u32`), dann beider Gestalten.
     pub const MAP: u8 = 13;
+    /// Ganzzahl mit Range (3.4): Breite in Byte, mit Vorzeichen (je `u8`),
+    /// Unter- und Obergrenze (je `i64`, einschliesslich).
+    pub const INT_IN: u8 = 14;
+    /// `f32` mit Range: die Grenzen als `f64`, in `f32` gerundet verglichen.
+    pub const F32_IN: u8 = 15;
+    /// `f64` mit Range: die Grenzen als `f64`.
+    pub const F64_IN: u8 = 16;
+    /// Dauer mit Range: die Grenzen in Nanosekunden (`i64`).
+    pub const DURATION_IN: u8 = 17;
 }
 
 /// Tiefer verschachtelt liest der Interpreter nicht (`bytes::read`).
@@ -164,6 +173,10 @@ impl<'a> Cursor<'a> {
         Some(i64::from_le_bytes(self.take(8)?.try_into().ok()?))
     }
 
+    fn f64(&mut self) -> Option<f64> {
+        Some(f64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+
     /// Eine Laenge, hoechstens `cap`.
     fn len(&mut self, cap: u32) -> Option<usize> {
         let n = self.u32()?;
@@ -176,6 +189,16 @@ impl<'a> Cursor<'a> {
 fn finite(bytes: &[u8], mask: u64) -> Option<()> {
     let bits = bytes.iter().rev().fold(0u64, |acc, b| (acc << 8) | u64::from(*b));
     (bits & mask != mask).then_some(())
+}
+
+/// Eine Ganzzahl in `width` Byte, little-endian, mit oder ohne Vorzeichen.
+fn int_value(raw: &[u8], signed: bool) -> Option<i128> {
+    if raw.is_empty() || raw.len() > 8 {
+        return None;
+    }
+    let value = i128::from(raw.iter().rev().fold(0u64, |acc, b| (acc << 8) | u64::from(*b)));
+    let negative = signed && raw.last().is_some_and(|b| b & 0x80 != 0);
+    Some(if negative { value - (1i128 << (8 * raw.len())) } else { value })
 }
 
 /// Liest einen Wert der Gestalt unter `s` aus `d`; `None`, wenn es keiner
@@ -192,6 +215,33 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
         shape::F32 => finite(d.take(4)?, 0x7F80_0000),
         shape::F64 => finite(d.take(8)?, 0x7FF0_0000_0000_0000),
         shape::DURATION => d.take(8).map(drop),
+        // 8.6, 3.4: Ein Wert ausserhalb seiner Range ist kein Wert seines
+        // Typs; die Grenzen gelten einschliesslich wie `in_range`.
+        shape::INT_IN => {
+            let (width, signed) = (usize::from(s.u8()?), s.u8()? != 0);
+            let (lo, hi) = (s.i64()?, s.i64()?);
+            let x = int_value(d.take(width)?, signed)?;
+            (i128::from(lo) <= x && x <= i128::from(hi)).then_some(())
+        }
+        shape::F32_IN => {
+            let (lo, hi) = (s.f64()?, s.f64()?);
+            let raw = d.take(4)?;
+            finite(raw, 0x7F80_0000)?;
+            let x = f64::from(f32::from_le_bytes(raw.try_into().ok()?));
+            (x >= f64::from(lo as f32) && x <= f64::from(hi as f32)).then_some(())
+        }
+        shape::F64_IN => {
+            let (lo, hi) = (s.f64()?, s.f64()?);
+            let raw = d.take(8)?;
+            finite(raw, 0x7FF0_0000_0000_0000)?;
+            let x = f64::from_le_bytes(raw.try_into().ok()?);
+            (x >= lo && x <= hi).then_some(())
+        }
+        shape::DURATION_IN => {
+            let (lo, hi) = (s.i64()?, s.i64()?);
+            let x = d.i64()?;
+            (lo <= x && x <= hi).then_some(())
+        }
         shape::ENUM => {
             let variants = s.u16()?;
             let disc = d.i64()?;
@@ -289,6 +339,8 @@ fn skip(s: &mut Cursor<'_>, depth: u32) -> Option<()> {
     match s.u8()? {
         shape::BOOL | shape::F32 | shape::F64 | shape::DURATION => Some(()),
         shape::INT => s.u8().map(drop),
+        shape::INT_IN => s.take(2 + 16).map(drop),
+        shape::F32_IN | shape::F64_IN | shape::DURATION_IN => s.take(16).map(drop),
         shape::BYTES | shape::STR => s.u32().map(drop),
         shape::ENUM => {
             for _ in 0..s.u16()? {
@@ -324,6 +376,43 @@ mod tests {
 
     /// Ein Record `{ ok: bool, n: u16 }`.
     const PAIR: [u8; 6] = [shape::RECORD, 2, 0, shape::BOOL, shape::INT, 2];
+
+    /// Eine Gestalt mit Range in einem Puffer: Kopf, Unter- und Obergrenze,
+    /// dahinter `tail`; dazu ihre Laenge.
+    fn ranged(head: &[u8], lo: [u8; 8], hi: [u8; 8], tail: &[u8]) -> ([u8; 32], usize) {
+        let mut out = [0u8; 32];
+        let mut n = 0;
+        for part in [head, &lo, &hi, tail] {
+            out[n..n + part.len()].copy_from_slice(part);
+            n += part.len();
+        }
+        (out, n)
+    }
+
+    /// Eine Range gilt einschliesslich, mit Vorzeichen, in `f32` gerundet
+    /// und fuer Dauern (FB-470).
+    #[test]
+    fn a_value_outside_its_range_does_not_decode() {
+        let (i8_in, n) = ranged(&[shape::INT_IN, 1, 1], (-5i64).to_le_bytes(), 5i64.to_le_bytes(), &[]);
+        for (byte, ok) in [(5u8, true), (6, false), (0xFB, true), (0xFA, false)] {
+            assert_eq!(decodes(&i8_in[..n], &[byte], true), ok, "{byte:#x}");
+        }
+        let (f32_in, n) = ranged(&[shape::F32_IN], 0.0f64.to_le_bytes(), 0.1f64.to_le_bytes(), &[]);
+        assert!(decodes(&f32_in[..n], &0.1f32.to_le_bytes(), true), "die Grenze in f32");
+        assert!(!decodes(&f32_in[..n], &0.2f32.to_le_bytes(), true));
+        let (f64_in, n) = ranged(&[shape::F64_IN], 0.0f64.to_le_bytes(), 1.0f64.to_le_bytes(), &[]);
+        assert!(decodes(&f64_in[..n], &1.0f64.to_le_bytes(), true));
+        assert!(!decodes(&f64_in[..n], &f64::NAN.to_le_bytes(), true));
+        let (ms, n) = ranged(&[shape::DURATION_IN], 0i64.to_le_bytes(), 1_000_000i64.to_le_bytes(), &[]);
+        assert!(decodes(&ms[..n], &1_000_000i64.to_le_bytes(), true));
+        assert!(!decodes(&ms[..n], &1_000_001i64.to_le_bytes(), true));
+        // Im Record liest die Pruefung die Grenzen mit und kommt beim
+        // naechsten Feld an.
+        let head = [shape::RECORD, 2, 0, shape::INT_IN, 1, 1];
+        let (record, n) = ranged(&head, (-5i64).to_le_bytes(), 5i64.to_le_bytes(), &[shape::BOOL]);
+        assert!(decodes(&record[..n], &[3, 1], true));
+        assert!(!decodes(&record[..n], &[9, 1], true));
+    }
 
     #[test]
     fn a_record_decodes_exactly_or_as_a_slot() {

@@ -12,6 +12,17 @@ use takt_mir::types::{FloatWidth, Type};
 
 use crate::value::Value;
 
+/// Liegt ein Wert in seinem Typ, Ranges eingeschlossen (3.4, 8.6)? Die
+/// kanonische Form geht durch dieselbe Gestalt wie im Rand des erzeugten
+/// Codes (`takt_native::bytes::decodes`, FB-470). Ein Typ ohne
+/// kanonische Form hat keine Range zu pruefen.
+pub fn in_type(p: &Program, v: &Value, ty: TypeId) -> bool {
+    match (takt_mir::bytes::shape(p, ty), encode(p, v, ty)) {
+        (Ok(shape), Ok(bytes)) => takt_native::bytes::decodes(&shape, &bytes, true),
+        _ => true,
+    }
+}
+
 /// Kodiert einen Wert in die kanonische Form.
 pub fn encode(p: &Program, v: &Value, ty: TypeId) -> Result<Vec<u8>, Error> {
     let mut out = Encoder::new();

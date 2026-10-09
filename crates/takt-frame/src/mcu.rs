@@ -960,6 +960,9 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
         let _ = writeln!(s, "    takt_jobs_poll(a);");
     }
     let _ = writeln!(s, "    takt_sample(a);");
+    // 8.3: die `sim`-Kopplung der Stroeme nach dem Rand, wie
+    // `apply_sim_bindings` im Interpreter.
+    let _ = writeln!(s, "    takt_sim_streams(a, k * {}LL);", p.config.tick);
     crate::parts::steps(s, p, layout, driven, "    ", "k", x);
     crate::parts::abort_phase(s, p, driven, "    ", "k", x);
     crate::parts::idle_drops(s, p, driven, "    ", x);

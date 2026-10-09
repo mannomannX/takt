@@ -965,6 +965,141 @@ fn a_sequence_reports_its_state() {
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
 
+/// **Ein Feld ausserhalb seiner Range ist `malformed`** (8.6, FB-470): in
+/// der Textform `Frame(50)` und in der Byteform des Werts 60 verwirft der
+/// Rand das Element auf beiden Seiten; `Frame(5)` kommt an.
+const RANGED_FRAME: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+record Frame:
+    id : int in 0..9
+
+input  rx   : stream<Frame> @ hw(\"u/rx\") with max_rate = 100 Hz
+output seen : int in 0..9 @ hw(\"o/seen\") with safe = 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        on rx as f:
+            seen = f.data.id
+";
+
+#[test]
+fn a_field_outside_its_range_is_malformed() {
+    let Some(clang) = common::clang() else { return };
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(RANGED_FRAME, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let stimulus = takt_interp::Trace::parse("t=1 in rx Frame(5)\nt=2 in rx Frame(50)\nt=3 in rx 0x3c00000000000000\n")
+        .expect("Stimulus");
+    let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    for want in ["t=1 out seen 5", "malformed=1", "malformed=2"] {
+        assert!(interpreted.contains(want), "`{want}` fehlt im Interpreter:\n{interpreted}");
+    }
+    let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
+    let native =
+        common::run_native_all_with(&clang, &p, "ranged_frame", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
+/// Dasselbe aus einem `sim`-Bytestrom (8.3): Die Bytes `60, 0, …` sind die
+/// kanonische Form von `Frame(60)` und kommen als `malformed` an.
+const FED_FRAME: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+record Frame:
+    id : int in 0..9
+
+input  rx     : stream<Frame> @ hw(\"u/rx\") with max_rate = 100 Hz
+output rx_sim : stream<u8>    @ sim(\"u/rx\") with capacity = 64
+output seen   : int in 0..9   @ hw(\"o/seen\") with safe = 0
+
+machine plant:
+    var k : int in 0..99 = 0
+    initial P
+
+    state P:
+        loop:
+            k = (k + 1) % 100
+            if k == 2 or k == 4:
+                for i in range(8):
+                    send rx_sim, (5 if k == 2 else 60) as u8 if i == 0 else 0
+
+machine m:
+    initial RUN
+
+    state RUN:
+        on rx as f:
+            seen = f.data.id
+";
+
+#[test]
+fn a_fed_field_outside_its_range_is_malformed() {
+    let Some(clang) = common::clang() else { return };
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(FED_FRAME, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let interpreted = run_interpreted(&p);
+    for want in ["out seen 5", "malformed=1"] {
+        assert!(interpreted.contains(want), "`{want}` fehlt im Interpreter:\n{interpreted}");
+    }
+    let native = common::run_native_all(&clang, &p, "fed_frame", TICKS).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
+/// **Ein `sim`-gespeister Strom fuellt sich wie eine Lieferung** (8.3, 8.6,
+/// FB-488): Die Elemente kommen zu Beginn des naechsten Ticks an, nach der
+/// Eviction des vorigen — vier je Tick passen in `capacity = 4`, obwohl der
+/// Leser die vorigen vier erst am Tick-Ende freigibt —, und sechs
+/// verdraengen mit `drop_oldest` die zwei aeltesten.
+const FED_BYTES: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+input  rx     : stream<u8> @ hw(\"u/rx\") with max_rate = 400 Hz, capacity = 4, overflow = drop_oldest
+output rx_sim : stream<u8> @ sim(\"u/rx\") with capacity = 64
+output last   : int in 0..255 @ hw(\"o/last\") with safe = 0
+
+machine plant:
+    var k : int in 0..99 = 0
+    initial P
+
+    state P:
+        loop:
+            k = (k + 1) % 100
+            for i in range(6):
+                if i < 4 or k == 3:
+                    send rx_sim, i as u8
+
+machine m:
+    initial RUN
+
+    state RUN:
+        on rx as b:
+            last = b.data as int
+";
+
+#[test]
+fn a_fed_stream_fills_like_a_delivery() {
+    let Some(clang) = common::clang() else { return };
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(FED_BYTES, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let interpreted = run_interpreted(&p);
+    for want in ["out last 5", "dropped=2 overflowed=0"] {
+        assert!(interpreted.contains(want), "`{want}` fehlt im Interpreter:\n{interpreted}");
+    }
+    let native = common::run_native_all(&clang, &p, "fed_bytes", TICKS).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
 /// **Eine Dauer in einem Record schreibt der Rahmen wie der Interpreter**
 /// (T2): in ihrer groessten ganzzahligen Einheit, als Feld von
 /// `Name(f1, f2)`. Den MCU-Rahmen betrifft das noch nicht, er schreibt

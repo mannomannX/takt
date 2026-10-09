@@ -702,7 +702,12 @@ pub fn elements_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Vec<Optio
         // Elemente in kanonischer Byteform, wie hineinpassen.
         _ => match takt_mir::bytes::max_size(p, elem) {
             Ok(size) if size > 0 => {
-                bytes.chunks_exact(size as usize).map(|chunk| crate::bytes::decode_slot(p, chunk, elem).ok()).collect()
+                // 8.6: auch ein Feld ausserhalb seiner Range ist `malformed` (FB-470).
+                let decoded = |chunk: &[u8]| crate::bytes::decode_slot(p, chunk, elem).ok();
+                bytes
+                    .chunks_exact(size as usize)
+                    .map(|chunk| decoded(chunk).filter(|v| crate::bytes::in_type(p, v, elem)))
+                    .collect()
             }
             _ => vec![Some(element_of(bytes, ty, p))],
         },

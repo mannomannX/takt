@@ -117,9 +117,26 @@ fn shape_at(p: &Program, ty: TypeId, depth: u32, out: &mut Vec<u8>) -> Result<()
     let count = |n: usize| u16::try_from(n).map(u16::to_le_bytes).map_err(|_| Error::NotPod);
     match p.types.list.get(ty.index()).ok_or(Error::NotPod)? {
         Type::Bool => out.push(op::BOOL),
+        // 3.4, 8.6: Eine Range gehoert zur Gestalt; was sie verletzt, ist
+        // kein Wert des Typs (FB-470).
+        Type::Int { width, range: Some(r), .. } => {
+            out.extend([op::INT_IN, (width.bits() / 8) as u8, u8::from(width.signed())]);
+            out.extend(int_bound(&r.lo).to_le_bytes());
+            out.extend(int_bound(&r.hi).to_le_bytes());
+        }
         Type::Int { width, .. } => out.extend([op::INT, (width.bits() / 8) as u8]),
+        Type::Float { width, range: Some(r), .. } => {
+            out.push(if *width == FloatWidth::F32 { op::F32_IN } else { op::F64_IN });
+            out.extend(float_bound(&r.lo).to_le_bytes());
+            out.extend(float_bound(&r.hi).to_le_bytes());
+        }
         Type::Float { width: FloatWidth::F32, .. } => out.push(op::F32),
         Type::Float { width: FloatWidth::F64, .. } => out.push(op::F64),
+        Type::Duration { range: Some(r) } => {
+            out.push(op::DURATION_IN);
+            out.extend(int_bound(&r.lo).to_le_bytes());
+            out.extend(int_bound(&r.hi).to_le_bytes());
+        }
         Type::Duration { .. } => out.push(op::DURATION),
         Type::Enum(e) => {
             let def = p.enums.get(e.index()).ok_or(Error::NotPod)?;
@@ -172,6 +189,24 @@ fn shape_at(p: &Program, ty: TypeId, depth: u32, out: &mut Vec<u8>) -> Result<()
         _ => return Err(Error::NotPod),
     }
     Ok(())
+}
+
+/// Eine Grenze einer ganzzahligen Range oder Dauer.
+fn int_bound(c: &crate::types::Const) -> i64 {
+    match c {
+        crate::types::Const::Int(i) | crate::types::Const::Duration(i) => *i,
+        crate::types::Const::Float(f) => *f as i64,
+        crate::types::Const::Bool(b) => i64::from(*b),
+    }
+}
+
+/// Eine Grenze einer Fliesskomma-Range.
+fn float_bound(c: &crate::types::Const) -> f64 {
+    match c {
+        crate::types::Const::Float(f) => *f,
+        crate::types::Const::Int(i) | crate::types::Const::Duration(i) => *i as f64,
+        crate::types::Const::Bool(b) => f64::from(u8::from(*b)),
+    }
 }
 
 /// Obere Schranke der kodierten Laenge in Byte.

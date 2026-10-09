@@ -769,6 +769,14 @@ fn queue_internal(sim: &mut Sim<'_>, name: &str, sample: &SampleText) -> Result<
 /// Bytes in kanonischer Form (`0x…`, 8.6); misslingt `decode`, ist es
 /// `None` — verworfen und gezaehlt (12.6, Zeile 5).
 fn element_value(text: &str, elem: takt_mir::TypeId, p: &Program) -> Result<Option<Value>, String> {
+    // 8.6: Was der Rand nicht dekodieren kann — auch ein Feld ausserhalb
+    // seiner Range —, zaehlt als `malformed` (FB-470).
+    Ok(element_text(text, elem, p)?.filter(|v| crate::bytes::in_type(p, v, elem)))
+}
+
+/// Ein Element in seiner Textform: der Wert oder `None`, wenn die Drahtform
+/// keiner ist.
+fn element_text(text: &str, elem: takt_mir::TypeId, p: &Program) -> Result<Option<Value>, String> {
     // Records, Bytes und Text duerfen in ihrer Drahtform stehen, ein `u8`
     // steht als Zahl (`grammar/trace.md`).
     let ty = p.types.list.get(elem.index());

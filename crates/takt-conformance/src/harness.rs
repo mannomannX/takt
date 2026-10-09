@@ -342,6 +342,9 @@ fn build_inner(
     // 12.1: `sample_inputs()` und `validate_and_bound()` nach dem Altern,
     // wie `Run::tick`.
     let _ = writeln!(t.code, "        takt_edge_stimulus(a, a->tick);");
+    // 8.3: die `sim`-Kopplung der Stroeme nach dem Rand, wie
+    // `apply_sim_bindings` im Interpreter.
+    let _ = writeln!(t.code, "        takt_sim_streams(a, a->tick * {}LL);", p.config.tick);
     // 4.5: Faellige Jobs werden zu Tick-Beginn sichtbar, wie `poll_jobs` im Interpreter.
     if p.machines.iter().any(|m| !m.layout.job_slots.is_empty()) {
         let _ = writeln!(t.code, "        takt_jobs_poll(a);");

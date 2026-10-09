@@ -20,7 +20,7 @@ use std::fmt::Write as _;
 use takt_llvm::symbols::Prefix;
 
 use takt_mir::TypeId;
-use takt_mir::program::{Channel, Direction, Program};
+use takt_mir::program::{Channel, Direction, Overflow, Program};
 use takt_mir::types::Type;
 
 use crate::text::Text;
@@ -691,6 +691,10 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     if streams.is_empty() {
         let _ =
             writeln!(t.code, "static void takt_tx_commit(struct {x}_arena *a, long long t) {{ (void)a; (void)t; }}");
+        let _ = writeln!(
+            t.code,
+            "static void takt_sim_streams(struct {x}_arena *a, long long at) {{ (void)a; (void)at; }}"
+        );
         if rings {
             stream_send(&mut t.code, true, false, stages(p), x);
         }
@@ -732,7 +736,7 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
     let read = read_outputs(p);
-    if !coupled(p).is_empty() || !read.is_empty() {
+    if !coupled(p).is_empty() {
         couple(s, x);
     }
     stream_send(s, rings, true, rings && stages(p), x);
@@ -764,35 +768,14 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
         }
         let _ = writeln!(s, "        memcpy(a->tx_sent[{slot}], a->tx[{slot}], (size_t)n);");
         let _ = writeln!(s, "        a->tx_sent_n[{slot}] = n;");
-        // 8.3: ein `sim`-Ausgabestrom speist den `hw`-Eingang derselben
-        // Adresse — je Byte ein Element eines `stream<u8>`, Text als ein
-        // Element, sonst so viele Elemente fester Byteform, wie hineinpassen.
-        if let Some((in_id, _, elem)) = coupled(p).into_iter().find(|(_, o, _)| *o == *i) {
-            let width = match p.types.list.get(elem.index()) {
-                Some(Type::Int { width, .. }) if width.bits() == 8 => 1,
-                Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }) => 0,
-                _ => takt_mir::bytes::max_size(p, elem).unwrap_or(0),
-            };
-            let shape = if element_shape(p, elem).is_some() {
-                format!("g_shape_{in_id}, (unsigned)sizeof g_shape_{in_id}")
-            } else {
-                "0, 0".to_string()
-            };
-            // `.t` ist die Commit-Zeit des Elements: der Beginn des naechsten
-            // Ticks, in dem die Bindung es zustellt (`apply_sim_bindings`).
-            let _ = writeln!(
-                s,
-                "        takt_couple(a, takt_int_slot({in_id}), a->tx_sent[{slot}], n, {width}, {shape}, (a->tick + 1) * {tick}LL);",
-                tick = p.config.tick
-            );
-        }
         // 8.3: Ein Modell, das den Ausgabestrom liest, bekommt das
         // Abgeholte im naechsten Tick als ein Element, mit der Zeit dieses
         // Ticks (`System::drain_tx`).
         if read.contains(i) {
+            let _ = writeln!(s, "        int r = takt_int_slot({i});");
             let _ = writeln!(
                 s,
-                "        takt_couple(a, takt_int_slot({i}), a->tx_sent[{slot}], n, 0, 0, 0, a->tick * {tick}LL);",
+                "        if (r >= 0 && !takt_int_push(a, r, (const char *)a->tx_sent[{slot}], n, a->tick * {tick}LL, 0)) a->int_overflowed[r]++;",
                 tick = p.config.tick
             );
         }
@@ -804,6 +787,7 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
         let _ = writeln!(s, "    a->tx_busy[{slot}] = a->tx_n[{slot}] > 0;");
     }
     let _ = writeln!(s, "}}\n");
+    sim_streams(s, p, &streams, x);
     // `o.free` (8.8, 9.3): gesampelt und um jedes `send` des Ticks verringert —
     // der Platz, den der eigene Puffer noch hat.
     let _ = writeln!(s, "int {x}_stream_free(struct {x}_arena *a, int s) {{");
@@ -829,26 +813,53 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     let _ = writeln!(s, "}}\n");
 }
 
-/// `takt_couple`: ein Element des `sim`-Ausgabestroms in den gekoppelten
-/// Eingabestrom (8.3). 12.6 Zeile 5: Ein Slot, dessen `decode` misslingt,
-/// wird verworfen, wie `elements_of` im Interpreter.
+/// `takt_sim_streams(at)`: Zu Tickbeginn wird, was der letzte Commit einem
+/// `sim`-Ausgabestrom abgenommen hat, zu Elementen des `hw`-Eingangs
+/// derselben Adresse (8.3, `apply_sim_bindings`) — je Byte ein Element
+/// eines `stream<u8>`, Text als ein Element, sonst so viele Elemente fester
+/// Byteform, wie hineinpassen. `.t` ist der Beginn dieses Ticks; ein
+/// `malformed` zaehlt in ihm, wie die Zustellung (FB-470).
+fn sim_streams(s: &mut String, p: &Program, streams: &[(usize, &Channel)], x: &Prefix) {
+    let _ = writeln!(s, "static void takt_sim_streams(struct {x}_arena *a, long long at) {{");
+    let _ = writeln!(s, "    (void)a; (void)at;");
+    for (slot, (i, _)) in streams.iter().enumerate() {
+        let Some((in_id, _, elem)) = coupled(p).into_iter().find(|(_, o, _)| o == i) else { continue };
+        let width = match p.types.list.get(elem.index()) {
+            Some(Type::Int { width, .. }) if width.bits() == 8 => 1,
+            Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }) => 0,
+            _ => takt_mir::bytes::max_size(p, elem).unwrap_or(0),
+        };
+        let shape = if element_shape(p, elem).is_some() {
+            format!("g_shape_{in_id}, (unsigned)sizeof g_shape_{in_id}")
+        } else {
+            "0, 0".to_string()
+        };
+        let drop_oldest = u8::from(matches!(p.channels[in_id].attrs.overflow, Some(Overflow::DropOldest)));
+        let _ = writeln!(
+            s,
+            "    takt_couple(a, takt_int_slot({in_id}), a->tx_sent[{slot}], a->tx_sent_n[{slot}], {width}, {shape}, at, {drop_oldest});"
+        );
+    }
+    let _ = writeln!(s, "}}\n");
+}
+
+/// `takt_couple`: die Elemente eines `sim`-Ausgabestroms in den gekoppelten
+/// Eingabestrom, sofort sichtbar wie ein Element vom Rand (`Buffer::push`).
+/// 12.6 Zeile 5: Ein Slot, dessen `decode` misslingt, wird verworfen, wie
+/// `elements_of` im Interpreter.
 fn couple(s: &mut String, x: &Prefix) {
     let _ = writeln!(
         s,
-        "static void takt_couple(struct {x}_arena *a, int k, const unsigned char *b, int n, int w, const unsigned char *shape, unsigned shape_len, long long at) {{"
+        "static void takt_couple(struct {x}_arena *a, int k, const unsigned char *b, int n, int w, const unsigned char *shape, unsigned shape_len, long long at, _Bool drop_oldest) {{"
     );
-    let _ = writeln!(s, "    if (k < 0) return;");
-    let _ = writeln!(
-        s,
-        "    if (w == 0) {{ if (!takt_int_push(a, k, (const char *)b, n, at, 0)) a->int_overflowed[k]++; return; }}"
-    );
+    let _ = writeln!(s, "    if (k < 0 || n <= 0) return;");
+    let _ = writeln!(s, "    if (w == 0) {{ (void)takt_int_deliver(a, k, b, n, at, drop_oldest, 0); return; }}");
     let _ = writeln!(s, "    for (int off = 0; off + w <= n; off += w) {{");
     let _ = writeln!(
         s,
         "        if (shape && !takt_edge_decodes(shape, shape_len, b + off, (unsigned)w, 0)) a->int_malformed[k]++;"
     );
-    let _ =
-        writeln!(s, "        else if (!takt_int_push(a, k, (const char *)b + off, w, at, 0)) a->int_overflowed[k]++;");
+    let _ = writeln!(s, "        else (void)takt_int_deliver(a, k, b + off, w, at, drop_oldest, 0);");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
 }
