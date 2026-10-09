@@ -157,7 +157,7 @@ impl Enc<'_> {
     }
 
     /// Der Typ eines Enums.
-    fn enum_type(&self, e: EnumId) -> Option<TypeId> {
+    pub(super) fn enum_type(&self, e: EnumId) -> Option<TypeId> {
         self.p.types.list.iter().position(|t| *t == Type::Enum(e)).map(|i| TypeId(i as u32))
     }
 

@@ -52,6 +52,7 @@ mod matrix;
 mod monitor;
 mod pattern;
 mod port;
+mod read;
 mod samples;
 mod sched;
 mod scoped;
@@ -62,7 +63,9 @@ mod tx;
 mod value;
 mod wire;
 use fault::Cause;
+pub use fault::kind_of as fault_kind;
 use monitor::Monitor;
+pub use read::{leaves_at, value_at};
 use value::V;
 
 /// Etwas, das die Kodierung nicht abbildet.
@@ -167,6 +170,11 @@ pub struct Model {
     pub notes: Vec<String>,
     /// Je Maschine die Zustandscodes mit Namen.
     pub leaves: BTreeMap<String, Vec<(i64, String)>>,
+    /// Je Maschine die Zustandscodes mit dem Pfad, den die Zeile `state`
+    /// nennt (`MachineState::path`): von der Wurzel zum Blatt, von einem
+    /// Sequenzsegment nur das Blatt; `FAULTED`; leer fuer eine inaktive
+    /// gescopte Instanz.
+    pub paths: BTreeMap<String, Vec<(i64, String)>>,
     /// Die laengste Frist eines `after` und das laengste Fenster eines
     /// Monitors, in Ticks (FB-375): Eine k-Induktion mit kleinerem k sieht
     /// einen Zeitablauf nicht ganz.
@@ -614,18 +622,27 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         .map(|(name, i)| StateVar { name: name.clone(), sort: i.sort(), init: i.clone(), next: next[name].clone() })
         .collect();
     let mut leaves = BTreeMap::new();
+    let mut paths = BTreeMap::new();
     for &id in &enc.order {
         let m = &p.machines[id.index()];
+        let ids = (0..m.states.len()).map(|i| StateId(i as u32));
         let mut codes: Vec<(i64, String)> =
-            m.states.iter().enumerate().map(|(i, s)| (enc.code(id, StateId(i as u32)), s.name.clone())).collect();
+            ids.clone().map(|s| (enc.code(id, s), m.states[s.index()].name.clone())).collect();
+        let last = |s: StateId| m.states[s.index()].name.rsplit('.').next().unwrap_or_default().to_string();
+        let mut chains: Vec<(i64, String)> = ids
+            .map(|s| (enc.code(id, s), enc.chain_to(id, s).into_iter().map(last).collect::<Vec<_>>().join(".")))
+            .collect();
         if let Some(c) = enc.faulted_code(id) {
             codes.push((c, "FAULTED".to_string()));
+            chains.push((c, "FAULTED".to_string()));
         }
         // 5.11: Eine inaktive gescopte Instanz hat keine Konfiguration.
         if enc.is_scoped(id) {
             codes.push((-1, String::new()));
+            chains.push((-1, String::new()));
         }
         leaves.insert(m.name.clone(), codes);
+        paths.insert(m.name.clone(), chains);
     }
     let horizon = enc.horizon()?;
     let observed = enc
@@ -647,6 +664,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         contracts,
         notes,
         leaves,
+        paths,
         horizon,
         candidates,
         uninterpreted: enc.uninterpreted.into_iter().collect(),
@@ -3184,6 +3202,7 @@ impl Enc<'_> {
                 cur.insert(self.loc_sig(m, i), Term::bool(false));
             }
         }
+        self.faults_cleared(&mut cur);
         let end = self.run_end();
         let ended = end.as_ref().map(|_| pre[ENDED].clone());
         let running = ended.clone().map_or_else(|| Term::bool(true), Term::not);
@@ -3238,6 +3257,7 @@ impl Enc<'_> {
         // `now` ist Tick mal Tickdauer, im Tick 0 also null.
         self.now = Term::int(0);
         env.insert(NOW.into(), self.now.clone());
+        self.faults_cleared(&mut env);
         self.edges_initial(&mut env)?;
         self.streams_initial(&mut env)?;
         self.tx_initial(&mut env);

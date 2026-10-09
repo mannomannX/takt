@@ -1,7 +1,8 @@
-//! `last_fault` im Modell (5.3, `system::last_fault_value`): Art, Meldung,
-//! Zeile und Tick des letzten Faults einer Maschine. Jeder Fault-Ausgang
-//! traegt seine Ursache; den Ort im Zustand fuehrt nur eine Maschine, die
-//! `last_fault` liest.
+//! Faults im Modell (5.3): Jeder Fault-Ausgang traegt seine Ursache. Die Art
+//! steht je Maschine fuer den laufenden Tick im Zustand — die Zeile `fault`
+//! eines Laufs (`Model::run`); Art, Meldung, Zeile und Tick des letzten
+//! Faults (`last_fault`, `system::last_fault_value`) fuehrt nur eine
+//! Maschine, die `last_fault` liest.
 
 use takt_diag::Span;
 use takt_mir::machine::FaultKind;
@@ -69,6 +70,11 @@ impl Enc<'_> {
         self.last_fault.contains(&m)
     }
 
+    /// Die Art des Faults der Maschine in diesem Tick als Nummer ([`code`]).
+    pub(super) fn loc_fault(&self, m: MachineId) -> String {
+        format!("s.{}.fault", self.machine(m).name)
+    }
+
     pub(super) fn loc_last_fault(&self, m: MachineId) -> String {
         format!("s.{}.last_fault", self.machine(m).name)
     }
@@ -98,6 +104,7 @@ impl Enc<'_> {
 
     /// Haelt in `out` fest, was der Fault `cause` hinterlaesst.
     pub(super) fn record_fault(&self, m: MachineId, cause: &Cause, out: &mut Env) -> R<()> {
+        out.insert(self.loc_fault(m), Term::int(code(cause.kind)));
         if !self.reads_last_fault(m) {
             return Ok(());
         }
@@ -123,6 +130,13 @@ impl Enc<'_> {
         Ok(())
     }
 
+    /// Kein Fault in diesem Tick: zu Beginn jedes Ticks und im Anfangszustand.
+    pub(super) fn faults_cleared(&self, env: &mut Env) {
+        for &m in &self.order {
+            env.insert(self.loc_fault(m), Term::int(0));
+        }
+    }
+
     /// Die Art als Wert von `FaultKind` (`fault_kind_value`): die Variante
     /// nach ihrem Namen im Prelude, die Unterart als Feld.
     fn fault_kind_value(&self, kind: FaultKind, ty: TypeId, span: Span) -> R<V> {
@@ -145,4 +159,15 @@ impl Enc<'_> {
         };
         self.variant(ty, variant as u32, fields, span)
     }
+}
+
+/// Die Nummer einer Art im Zustand: eins plus ihr Platz in `FaultKind::all`;
+/// null heisst kein Fault.
+fn code(kind: FaultKind) -> i64 {
+    FaultKind::all().iter().position(|k| *k == kind).map_or(0, |i| i as i64 + 1)
+}
+
+/// Die Art zu einer Nummer im Zustand.
+pub fn kind_of(code: i64) -> Option<FaultKind> {
+    FaultKind::all().get(usize::try_from(code).ok()?.checked_sub(1)?).copied()
 }

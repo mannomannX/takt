@@ -501,7 +501,8 @@ fn sample_text(sample: &SampleText) -> String {
     out
 }
 
-pub(crate) fn render_line(line: &TraceLine) -> String {
+/// Eine Zeile in der Form des Traces, ohne Zeilenende.
+pub fn render_line(line: &TraceLine) -> String {
     let t = line.tick;
     match &line.kind {
         LineKind::Input { channel, sample } => format!("t={t} in {channel}{}", sample_text(sample)),
