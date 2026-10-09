@@ -344,6 +344,8 @@ impl Enc<'_> {
                 Some(sum.max(1))
             }
             Type::Array { elem, len } => self.element_bytes(*elem)?.checked_mul(*len),
+            // Kopf aus vier Skalaren, dann die Abtastwerte (`byte_len`).
+            Type::Capture { elem, len } => self.element_bytes(*elem)?.checked_mul(*len)?.checked_add(4),
             Type::Bytes { .. } | Type::Vec { .. } | Type::Str { .. } | Type::Line { .. } => None,
             _ => Some(1),
         }

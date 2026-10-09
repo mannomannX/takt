@@ -74,6 +74,8 @@ pub(super) enum Shape {
     Tag(EnumId),
     /// Die Laenge einer Sammlung bis zu ihrer Kapazitaet.
     Count(u32),
+    /// Ein Skalar ohne eigenen Typ, etwa der Kopf eines Captures.
+    Plain(Sort),
     /// Ein Byte.
     Byte,
     /// Teile mit ihrem Pfad: `.feld`, `[i]`.
@@ -122,7 +124,8 @@ impl Enc<'_> {
             | Type::Str { .. }
             | Type::Line { .. }
             | Type::Result { .. }
-            | Type::Map { .. } => true,
+            | Type::Map { .. }
+            | Type::Capture { .. } => true,
             Type::Enum(e) => self.fielded(*e),
             _ => false,
         }
@@ -202,6 +205,17 @@ impl Enc<'_> {
                 ]);
                 Shape::Node((0..*cap).map(|i| (format!("[{i}]"), slot.clone())).collect())
             }
+            // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge.
+            Type::Capture { elem, len } => {
+                let item = self.shape(*elem, span)?;
+                Shape::Node(vec![
+                    (".t".into(), Shape::Plain(Sort::Int)),
+                    (".pre".into(), Shape::Plain(Sort::Int)),
+                    (".post".into(), Shape::Plain(Sort::Int)),
+                    (".rate".into(), Shape::Plain(Sort::F64)),
+                    (".samples".into(), Shape::Node((0..*len).map(|i| (format!("[{i}]"), item.clone())).collect())),
+                ])
+            }
             Type::Str { cap } => super::text::text_shape(*cap, false),
             Type::Line { cap } => super::text::text_shape(*cap, true),
             Type::Enum(e) if self.fielded(*e) => {
@@ -241,6 +255,7 @@ impl Enc<'_> {
             Shape::Leaf(ty) => self.sort_of(*ty, span),
             Shape::Flag => Ok(Sort::Bool),
             Shape::Tag(_) | Shape::Count(_) | Shape::Byte => Ok(Sort::Int),
+            Shape::Plain(sort) => Ok(*sort),
             Shape::Node(_) => no("zusammengesetzter Wert", span),
         }
     }
@@ -353,7 +368,7 @@ impl Enc<'_> {
             Shape::Byte => {
                 Some(Term::and(vec![Term::bin(Op::Ge, x.clone(), Term::int(0)), Term::bin(Op::Le, x, Term::int(255))]))
             }
-            Shape::Flag | Shape::Node(_) => None,
+            Shape::Flag | Shape::Plain(_) | Shape::Node(_) => None,
         }
     }
 
@@ -546,6 +561,11 @@ impl Enc<'_> {
                 let [default] = args.as_slice() else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?
             }
+            ExprKind::Accessor { base, accessor: Accessor::Samples, .. }
+                if matches!(self.p.types.get(base.ty), Type::Capture { .. }) =>
+            {
+                self.value(base, cx, env, flow)?.part(4, span)?
+            }
             // `get` (3.9): auf einer map der Wert zum Schluessel, sonst das
             // Element zum Index, ausserhalb kein Wert.
             ExprKind::Accessor { base, accessor: Accessor::Get, args } => {
@@ -735,6 +755,15 @@ impl Enc<'_> {
             }
             (Accessor::Len, Type::Bytes { .. } | Type::Vec { .. } | Type::Str { .. } | Type::Line { .. }) => {
                 self.value(base, cx, env, flow)?.part(0, span)?.leaf(span)
+            }
+            (Accessor::T | Accessor::Pre | Accessor::Post | Accessor::Rate, Type::Capture { .. }) => {
+                let part = match accessor {
+                    Accessor::T => 0,
+                    Accessor::Pre => 1,
+                    Accessor::Post => 2,
+                    _ => 3,
+                };
+                self.value(base, cx, env, flow)?.part(part, span)?.leaf(span)
             }
             (Accessor::Len, Type::Map { .. }) => {
                 let m = self.value(base, cx, env, flow)?;

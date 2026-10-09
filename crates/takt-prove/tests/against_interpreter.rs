@@ -92,6 +92,21 @@ fn leaves_of(p: &Program, ty: TypeId, text: &str, base: &str, out: &mut Vec<(Str
                 }
             }
         }
+        // 8.9: `t;pre;post;rate;[s1, …]` im Stimulus; fehlende Abtastwerte
+        // sind null.
+        Type::Capture { elem, len } => {
+            let parts: Vec<&str> = text.splitn(5, ';').collect();
+            let [t, pre, post, rate, samples] = parts.as_slice() else { return None };
+            out.push((format!("{base}.t"), Val::Int(t.trim().parse().ok()?)));
+            out.push((format!("{base}.pre"), Val::Int(pre.trim().parse().ok()?)));
+            out.push((format!("{base}.post"), Val::Int(post.trim().parse().ok()?)));
+            out.push((format!("{base}.rate"), Val::F64(rate.trim().parse().ok()?)));
+            let items = split(samples.trim().strip_prefix('[')?.strip_suffix(']')?);
+            let zero = if matches!(p.types.get(*elem), Type::Float { .. }) { "0.0" } else { "0" };
+            for i in 0..*len as usize {
+                leaves_of(p, *elem, items.get(i).copied().unwrap_or(zero), &format!("{base}.samples[{i}]"), out)?;
+            }
+        }
         Type::Duration { .. } => {
             let (n, unit) = text.split_once(' ')?;
             let factor = match unit {
@@ -525,6 +540,14 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Captures (Schritt 27c-7): Kopf und Abtastwerte, auch fehlende.
+        "66_capture.takt" => (
+            "t=1 in wave 5000000;2;2;1000.0;[1.0, -2.0, 3.0, 0.5]\n\
+             t=4 in wave 38000000;1;3;2000.0;[0.25, 0.75]\n\
+             t=9 in wave 85000000;0;4;1000.0;[-1.5, -0.5, 2.5, 4.0]\n"
+                .to_string(),
+            20,
+        ),
         // Registerports (Schritt 27c-6).
         "68_uart_port.takt" | "120_port_writes.takt" => (String::new(), 30),
         // Instanz-Arrays (Schritt 27a-10).

@@ -720,6 +720,18 @@ property small: always(x != 0.0 or y < 0.5)
     assert!(reason.contains("`sin` uninterpretiert"), "{reason}");
 }
 
+/// Ein Capture vom Rand (8.9) steht im Gegenbeispiel in seiner Textform
+/// `t;pre;post;rate;[…]`, und der Interpreter bestaetigt es.
+#[test]
+fn a_capture_counterexample_is_confirmed() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with("66_capture.takt", "property never_five: never(count == 5)");
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    let Verdict::Violated { stimulus, .. } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    assert!(stimulus.contains("in wave ") && stimulus.contains(";["), "{stimulus}");
+}
+
 /// Eine Native der kuratierten Menge (4.5) sieht der Solver wie eine
 /// Funktion aus `libtaktm`: Was ihre Breite traegt, ist bewiesen; ein Pfad
 /// ueber einen Wert, den die Pruefsumme nie annimmt, bleibt offen.

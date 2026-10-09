@@ -923,6 +923,17 @@ fn element_text(program: &Program, ty: takt_mir::TypeId, base: &str, get: &dyn F
                 (0..*len).map(|i| element_text(program, *elem, &format!("{base}[{i}]"), get)).collect();
             format!("[{}]", parts.join(", "))
         }
+        // 8.9: `t;pre;post;rate;[s1, …]`.
+        Type::Capture { elem, len } => {
+            let head = |part: &str| match leaf(&format!("{base}.{part}")) {
+                Val::Int(i) => i.to_string(),
+                Val::F64(f) => format!("{f:?}"),
+                other => format!("{other:?}"),
+            };
+            let samples: Vec<String> =
+                (0..*len).map(|i| element_text(program, *elem, &format!("{base}.samples[{i}]"), get)).collect();
+            format!("{};{};{};{};[{}]", head("t"), head("pre"), head("post"), head("rate"), samples.join(", "))
+        }
         Type::Optional(inner) => match get(&format!("{base}.has")) {
             Some(Val::Bool(true)) => element_text(program, *inner, &format!("{base}.value"), get),
             _ => "none".to_string(),

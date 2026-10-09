@@ -123,7 +123,7 @@ Accessor(Reason),ja,"teilweise: nur in Beobachtungen, die das Modell auslaesst",
 Accessor(Or),teilweise: `.or` nur auf einem Channel oder Wrapper,"teilweise: auf einem Input (3.5), einem Optional und einem Ergebnis (3.8)",ja
 Accessor(Ok),ja,ja,ja
 Accessor(Err),teilweise: `.err` nicht auf `T?`,ja,ja
-Accessor(T),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(T),ja,ja,nein
 Accessor(Seq),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Text),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Data),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -150,10 +150,10 @@ Accessor(Get),ja,ja,ja
 Accessor(StartsWith),ja,ja,nein
 Accessor(Contains),ja,ja,nein
 Accessor(Armed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
-Accessor(Pre),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Post),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Samples),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
-Accessor(Rate),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
+Accessor(Pre),ja,ja,ja
+Accessor(Post),ja,ja,ja
+Accessor(Samples),ja,ja,ja
+Accessor(Rate),ja,ja,nein
 Accessor(Remaining),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Truncated),ja,ja,nein
 Accessor(Peek),ja,ja,ja
@@ -207,7 +207,7 @@ Type(Map),ja,ja,ja
 Type(Optional),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Result),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Stream),ja,"teilweise: Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang, Records vom Rand fester Groesse; Ausgabestroeme ohne Leser",ja
-Type(Capture),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Capture),ja,ja,ja
 Type(HandleJob),ja,nein: Typ ohne Sorte im Modell,ja
 Type(HandleTrigger),ja,nein: Typ ohne Sorte im Modell,nein
 Type(HandleBlock),ja,teilweise: Blockinstanzen nur ueber ihre Felder,ja

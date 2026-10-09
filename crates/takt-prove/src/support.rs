@@ -198,8 +198,8 @@ fn accessor(a: AccessorTag) -> Support {
             Partial("ueber einem Array; nicht ueber `samples`")
         }
         AccessorTag::Encode => Partial("ohne Fliesskomma- und `u64`-Felder"),
-        AccessorTag::T
-        | AccessorTag::Seq
+        AccessorTag::T | AccessorTag::Pre | AccessorTag::Post | AccessorTag::Samples | AccessorTag::Rate => Yes,
+        AccessorTag::Seq
         | AccessorTag::Text
         | AccessorTag::Data
         | AccessorTag::Jitter
@@ -208,10 +208,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Result
         | AccessorTag::Last
         | AccessorTag::Armed
-        | AccessorTag::Pre
-        | AccessorTag::Post
-        | AccessorTag::Samples
-        | AccessorTag::Rate
         | AccessorTag::Remaining => No("Zugriffe sind nicht kodiert (FB-372, FB-373)"),
     }
 }
@@ -265,7 +261,8 @@ fn ty(t: TypeTag) -> Support {
         TypeTag::Str | TypeTag::Line | TypeTag::Result => Partial("nicht als Typ eines Inputs"),
         TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),
         TypeTag::Map => Yes,
-        TypeTag::Samples | TypeTag::Mat | TypeTag::Capture | TypeTag::HandleJob | TypeTag::HandleTrigger => NO_SORT,
+        TypeTag::Capture => Yes,
+        TypeTag::Samples | TypeTag::Mat | TypeTag::HandleJob | TypeTag::HandleTrigger => NO_SORT,
     }
 }
 
