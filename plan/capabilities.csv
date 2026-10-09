@@ -37,8 +37,8 @@ Expr(JobState),ja,nein: Jobs sind nicht kodiert,ja
 Expr(Stream),teilweise: nur als Empfaenger eines Zugriffs,ja,ja
 Expr(Matches),"teilweise: nur in Handlern, Guards und Bedingungen",teilweise: kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion,ja
 Expr(Call),ja,teilweise: Funktionen aus kodierbaren Anweisungen,ja
-Expr(NativeCall),ja,nein: Natives und Matrizen sind nicht kodiert,ja
-Expr(MatOp),ja,nein: Natives und Matrizen sind nicht kodiert,ja
+Expr(NativeCall),ja,"teilweise: Pruefsummen und Digests der kuratierten Menge; nicht `sha256_*`, `fft256` und die Jobs",ja
+Expr(MatOp),ja,nein: Matrizen sind nicht kodiert,ja
 Expr(Decode),ja,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
 Expr(Checked),ja,ja,ja
 Expr(Lift),ja,ja,ja

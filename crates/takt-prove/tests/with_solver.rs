@@ -719,3 +719,23 @@ property small: always(x != 0.0 or y < 0.5)
     let Verdict::Unproven { reason } = &small.verdict else { panic!("{small:?}") };
     assert!(reason.contains("`sin` uninterpretiert"), "{reason}");
 }
+
+/// Eine Native der kuratierten Menge (4.5) sieht der Solver wie eine
+/// Funktion aus `libtaktm`: Was ihre Breite traegt, ist bewiesen; ein Pfad
+/// ueber einen Wert, den die Pruefsumme nie annimmt, bleibt offen.
+#[test]
+fn a_native_proves_its_width_and_keeps_its_paths_open() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with(
+        "20_native.takt",
+        "property width: always(pruefsumme <= 4294967295)\nproperty magic: never(pruefsumme == 7)",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert_eq!(model.uninterpreted, vec!["crc32".to_string()]);
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let width = reports.iter().find(|r| r.name == "width").expect("width");
+    assert!(matches!(width.verdict, Verdict::Proven { .. }), "{width:?}");
+    let magic = reports.iter().find(|r| r.name == "magic").expect("magic");
+    let Verdict::Unproven { reason } = &magic.verdict else { panic!("{magic:?}") };
+    assert!(reason.contains("`crc32` uninterpretiert"), "{reason}");
+}

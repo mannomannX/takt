@@ -127,7 +127,10 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
         ExprTag::JobState => No("Jobs sind nicht kodiert"),
         ExprTag::Decode => Partial("ohne Fliesskomma- und `u64`-Felder"),
-        ExprTag::NativeCall | ExprTag::MatOp => No("Natives und Matrizen sind nicht kodiert"),
+        ExprTag::NativeCall => {
+            Partial("Pruefsummen und Digests der kuratierten Menge; nicht `sha256_*`, `fft256` und die Jobs")
+        }
+        ExprTag::MatOp => No("Matrizen sind nicht kodiert"),
     }
 }
 

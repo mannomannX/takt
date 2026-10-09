@@ -525,6 +525,8 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Natives der kuratierten Menge (Schritt 27c-4).
+        "20_native.takt" => (String::new(), 20),
         // Maps (Schritt 27a-9).
         "42_map.takt" | "114_for_pairs.takt" => (String::new(), 30),
         // Reduktionen ueber Arrays (Schritt 27a-8).
@@ -1141,6 +1143,56 @@ fn the_wire_format_agrees() {
         stim.push_str(&format!("t={} in rx 0x{}\n", 3 * k + 1, f.replace(' ', "")));
     }
     agree_program("WIRE", &compile("WIRE", WIRE), &stim, 40);
+}
+
+/// Natives der kuratierten Menge (4.5): Pruefsummen und Digests ueber Bytes
+/// wechselnder Laenge, auch mit zwei Argumenten; die Auswertung rechnet sie
+/// wie der Interpreter.
+const NATIVES: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+native fn crc16(b: bytes<16>) -> u16 with cost = 400, stack = 32, total
+native fn crc32c(b: bytes<16>) -> u32 with cost = 400, stack = 32, total
+native fn sum8(b: bytes<8>) -> u8 with cost = 100, stack = 32, total
+native fn sha256(b: bytes<16>) -> bytes<32> with cost = 4000, stack = 640, total
+native fn hmac_sha256(key: bytes<8>, msg: bytes<16>) -> bytes<32> with cost = 8000, stack = 992, total
+
+output c16  : int in 0..65535       @ sim("c16")
+output c32  : int in 0..4294967295  @ sim("c32")
+output s8   : int in 0..255         @ sim("s8")
+output h0   : int in 0..255         @ sim("h0")
+output h31  : int in 0..255         @ sim("h31")
+output m5   : int in 0..255         @ sim("m5")
+
+machine m:
+    var buf : bytes<16> = default
+    var key : bytes<8> = default
+    var n   : int in 0..99 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            n = (n + 1) % 100
+            if buf.len >= 16:
+                buf.clear()
+            var p = buf.push((n * 37 % 256) as u8)
+            if key.len < 8:
+                var q = key.push(n as u8)
+            c16 = crc16(buf) as int
+            c32 = crc32c(buf) as int
+            s8 = sum8(key) as int
+            var d = sha256(buf)
+            h0 = d[0] as int
+            h31 = d[31] as int
+            var mac = hmac_sha256(key, buf)
+            m5 = mac[5] as int
+"#;
+
+#[test]
+fn natives_agree() {
+    agree_program("NATIVES", &compile("NATIVES", NATIVES), "", 20);
 }
 
 /// `map<K, V, N>` (3.9): Schluessel mit demselben Heimatplatz (0, 4 und 8

@@ -105,6 +105,14 @@ impl Printer<'_> {
                 let (e, s) = if sort == Sort::F32 { (8, 24) } else { (11, 53) };
                 format!("((_ to_fp {e} {s}) RNE (/ (* (fp.to_real {}) {num}.0) {den}.0))", parts[0])
             }
+            Op::Native { f, part, .. } => {
+                let fun = format!("|native.{}.{part}.{}|", f.name(), parts.len());
+                if self.declared.insert(fun.clone()) {
+                    let domain = vec![sort_text(Sort::Int); parts.len()].join(" ");
+                    let _ = writeln!(self.out, "(declare-fun {fun} ({domain}) {})", sort_text(Sort::Int));
+                }
+                format!("({fun} {})", parts.join(" "))
+            }
             _ => app_text(*op, &parts),
         };
         let n = format!("|d{}{}|", self.tag, self.next);
@@ -112,6 +120,11 @@ impl Printer<'_> {
         let _ = writeln!(self.out, "(define-fun {n} () {} {body})", sort_text(sort));
         if let Op::Math(f) = op {
             let _ = writeln!(self.out, "(assert {})", math_bound(*f, &n, sort));
+        }
+        // Eine Native liefert eine Zahl aus `bits` Bit ohne Vorzeichen.
+        if let Op::Native { bits, .. } = op {
+            let max = (1u64 << bits) - 1;
+            let _ = writeln!(self.out, "(assert (and (bvsle (_ bv0 64) {n}) (bvsle {n} (_ bv{max} 64))))");
         }
         self.defs.insert((t.key(), state, input), n);
     }
@@ -210,7 +223,7 @@ fn app_text(op: Op, a: &[String]) -> String {
         }
         Op::FloatToInt => format!("((_ fp.to_sbv 64) RTZ {})", a[0]),
         // Beide schreibt der Drucker selbst: Sie brauchen die Sorte.
-        Op::Scale { .. } | Op::Math(_) => unreachable!("im Drucker behandelt"),
+        Op::Scale { .. } | Op::Math(_) | Op::Native { .. } => unreachable!("im Drucker behandelt"),
     }
 }
 
@@ -529,6 +542,7 @@ fn lia_text(op: Op, a: &[String]) -> Option<String> {
         | Op::IsFinite
         | Op::Scale { .. }
         | Op::Math(_)
+        | Op::Native { .. }
         | Op::Round(_)
         | Op::FloatToInt => return None,
     })

@@ -808,6 +808,7 @@ dependencies = [
  "takt-interp",
  "takt-llvm",
  "takt-mir",
+ "takt-native",
  "takt-rt-core",
  "takt-sema",
  "takt-testkit",

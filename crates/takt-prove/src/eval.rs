@@ -198,8 +198,29 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
             math(f, x, y)
         }
         Op::Round(r) => rounded(r, a(0)),
+        Op::Native { f, part, .. } => native(f, part, &(0..args.len()).map(a).collect::<Vec<_>>()),
         Op::FloatToInt => Val::Int(a(0).as_f64() as i64),
     }
+}
+
+/// Teil `part` des Ergebnisses einer Native, wie der Interpreter sie ruft
+/// (`call::call_native`): die Bloecke `[Kapazitaet, Laenge, Byte …]` als
+/// Bytes der Grenze.
+fn native(f: takt_native::Native, part: u16, args: &[Val]) -> Val {
+    let mut blocks: Vec<Vec<u8>> = Vec::new();
+    let mut rest = args;
+    while let [cap, len, tail @ ..] = rest {
+        let cap = usize::try_from(cap.as_int()).unwrap_or(0).min(tail.len());
+        let len = usize::try_from(len.as_int()).unwrap_or(0).min(cap);
+        blocks.push(tail[..len].iter().map(|b| b.as_int() as u8).collect());
+        rest = &tail[cap..];
+    }
+    let inputs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+    Val::Int(match takt_native::call(f, &inputs) {
+        Some(takt_native::Output::Scalar(raw)) => raw as i64,
+        Some(takt_native::Output::Digest(d)) => d.get(usize::from(part)).copied().map_or(0, i64::from),
+        _ => 0,
+    })
 }
 
 /// Auf eine ganze Zahl gerundet, in der Breite des Werts.

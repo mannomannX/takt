@@ -1092,6 +1092,9 @@ impl Enc<'_> {
             ExprKind::Matches { subject, kind, pattern, binding } => {
                 self.value_match(subject, *kind, pattern, *binding, cx, env, flow, span)?
             }
+            ExprKind::NativeCall { native, args } => {
+                self.native_call(*native, args, cx, env, flow, span)?.leaf(span)?
+            }
             other @ (ExprKind::Str(_)
             | ExprKind::None
             | ExprKind::Record { .. }
@@ -1105,7 +1108,6 @@ impl Enc<'_> {
             | ExprKind::Format(_)
             | ExprKind::JobState { .. }
             | ExprKind::Stream(_)
-            | ExprKind::NativeCall { .. }
             | ExprKind::MatOp { .. }
             | ExprKind::Decode { .. }
             | ExprKind::Lift(_)
@@ -1329,6 +1331,62 @@ impl Enc<'_> {
             }
             _ => return no(format!("Primitive `{op:?}`"), span),
         })
+    }
+
+    /// Ein Aufruf einer Native der kuratierten Menge (4.5, `call_native`):
+    /// die Argumente in der Form der Grenze, `bytes<N>` roh, alles andere in
+    /// kanonischer Byteform; eine Pruefsumme ist eine Zahl, ein Digest 32
+    /// Byte. Der Solver sieht die Native uninterpretiert, die Auswertung
+    /// rechnet sie genau.
+    fn native_call(
+        &mut self,
+        id: takt_mir::NativeId,
+        args: &[Expr],
+        cx: &Cx<'_>,
+        env: &Env,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<V> {
+        use takt_native::Native;
+        let n = self.p.natives[id.index()].clone();
+        let Some(f) = Native::by_name(&n.name) else { return no(format!("Projekt-Native `{}`", n.name), span) };
+        let mut blocks = Vec::new();
+        for (a, param) in args.iter().zip(&n.params) {
+            let v = self.value(a, cx, env, flow)?;
+            let (len, bytes) = match self.p.types.get(param.ty) {
+                Type::Bytes { .. } => {
+                    let V::Node(parts) = v else { return no("Bytes", span) };
+                    let mut it = parts.into_iter();
+                    let len = it.next().map_or_else(|| no("Bytes", span), |x| x.leaf(span))?;
+                    (len, it.map(|x| x.leaf(span)).collect::<R<Vec<_>>>()?)
+                }
+                _ => {
+                    let form = self.canonical(param.ty, v, span)?;
+                    (form.len, form.bytes)
+                }
+            };
+            blocks.push(Term::int(bytes.len() as i64));
+            blocks.push(len);
+            blocks.extend(bytes);
+        }
+        let part = |part: u16, bits: u8| V::Leaf(Term::app(Op::Native { f, part, bits }, blocks.clone()));
+        let out = match f {
+            Native::Crc32 | Native::Crc32c => part(0, 32),
+            Native::Crc16 => part(0, 16),
+            Native::Sum8 => part(0, 8),
+            Native::Sha256 | Native::HmacSha256 => {
+                V::Node(std::iter::once(V::Leaf(Term::int(32))).chain((0..32).map(|k| part(k, 8))).collect())
+            }
+            Native::Sha256Init
+            | Native::Sha256Update
+            | Native::Sha256Final
+            | Native::EcdsaP256Verify
+            | Native::Fft256
+            | Native::Rsa3072Verify
+            | Native::AesGcmDecrypt => return no(format!("Native `{}`", n.name), span),
+        };
+        self.uninterpreted.insert(n.name.clone());
+        Ok(out)
     }
 
     /// `interp(t, x)` ueber einer konstanten Tabelle (`call.rs`): bis zum

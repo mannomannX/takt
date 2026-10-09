@@ -135,6 +135,16 @@ pub enum Op {
     },
     /// Eine Funktion aus `libtaktm`.
     Math(Fun),
+    /// Teil `part` des Ergebnisses einer Native der kuratierten Menge (4.5),
+    /// eine Zahl aus `bits` Bit ohne Vorzeichen. Die Argumente sind Bloecke
+    /// `[Kapazitaet, Laenge, Byte …]`, so dass die Auswertung sie ohne den
+    /// Typ in die Bytes der Grenze zerlegt; der Solver sieht die Funktion
+    /// uninterpretiert.
+    Native {
+        f: takt_native::Native,
+        part: u16,
+        bits: u8,
+    },
     /// Auf eine ganze Zahl gerundet, in der Breite des Arguments.
     Round(Rounding),
     /// Eine ganzzahlige Fliesskommazahl als Ganzzahl.
@@ -384,7 +394,8 @@ impl Term {
                     | Op::Shl
                     | Op::Shr
                     | Op::Wrap { .. }
-                    | Op::FloatToInt => return Sort::Int,
+                    | Op::FloatToInt
+                    | Op::Native { .. } => return Sort::Int,
                     Op::FNeg
                     | Op::FAdd
                     | Op::FSub

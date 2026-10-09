@@ -15,6 +15,8 @@ takt-interp = { path = "../takt-interp" }
 takt-hal = { path = "../takt-hal" }
 # Die Auswertung rechnet Einheiten und Funktionen wie der Interpreter (3.2, 4.2).
 libtaktm = { path = "../libtaktm" }
+# Die Natives der kuratierten Menge rechnet die Auswertung wie der Interpreter (4.5).
+takt-native = { path = "../takt-native" }
 
 [dev-dependencies]
 # Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).

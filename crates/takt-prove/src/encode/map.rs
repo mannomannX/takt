@@ -41,9 +41,9 @@ fn sel(items: &[Term], i: &Term) -> Term {
 
 /// Eine kanonische Byteform: die Plaetze bis zur Obergrenze, dahinter null,
 /// und die geltende Laenge.
-struct Form {
-    bytes: Vec<Term>,
-    len: Term,
+pub(super) struct Form {
+    pub(super) bytes: Vec<Term>,
+    pub(super) len: Term,
 }
 
 impl Form {
@@ -260,8 +260,9 @@ impl Enc<'_> {
         Ok(h)
     }
 
-    /// Die kanonische Byteform (5.9, `bytes::write`) eines Schluessels.
-    fn canonical(&self, ty: TypeId, v: V, span: Span) -> R<Form> {
+    /// Die kanonische Byteform (5.9, `bytes::write`) eines Schluessels oder
+    /// eines Arguments einer Native.
+    pub(super) fn canonical(&self, ty: TypeId, v: V, span: Span) -> R<Form> {
         Ok(match self.p.types.get(ty).clone() {
             Type::Bool => Form::fixed(vec![Term::ite(v.leaf(span)?, int(1), int(0))]),
             Type::Int { width: IntWidth::U64, .. } => return no(U64, span),
@@ -329,7 +330,7 @@ impl Enc<'_> {
                 }
                 f
             }
-            _ => return no("Schluessel dieser Art in einer map", span),
+            _ => return no("Byteform dieser Art", span),
         })
     }
 

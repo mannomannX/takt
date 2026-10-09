@@ -574,6 +574,7 @@ impl Enc<'_> {
                 V::Node(vec![V::Leaf(ok.clone()), V::ite(&ok, r, zero)])
             }
             ExprKind::Slice { base, from, to } => self.slice(base, from, to, cx, env, flow, span)?,
+            ExprKind::NativeCall { native, args } => self.native_call(*native, args, cx, env, flow, span)?,
             ExprKind::Call { callee, args } => {
                 let mut xs = Vec::new();
                 for a in args {
@@ -604,7 +605,6 @@ impl Enc<'_> {
             | ExprKind::JobState { .. }
             | ExprKind::Stream(_)
             | ExprKind::Matches { .. }
-            | ExprKind::NativeCall { .. }
             | ExprKind::MatOp { .. }
             | ExprKind::Intrinsic { .. }) => {
                 return no(format!("zusammengesetzter Ausdruck {}", super::node_name(other)), span);
