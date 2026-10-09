@@ -525,6 +525,8 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Records ueber eine `sim`-Bindung (Schritt 27c-5).
+        "55_frames_with_bytes.takt" => (String::new(), 20),
         // Natives der kuratierten Menge (Schritt 27c-4).
         "20_native.takt" => (String::new(), 20),
         // Maps (Schritt 27a-9).
@@ -1143,6 +1145,78 @@ fn the_wire_format_agrees() {
         stim.push_str(&format!("t={} in rx 0x{}\n", 3 * k + 1, f.replace(' ', "")));
     }
     agree_program("WIRE", &compile("WIRE", WIRE), &stim, 40);
+}
+
+/// Records ueber eine `sim`-Bindung (8.3, `elements_of`): Ein Bytestrom
+/// speist einen Strom von Records; jeder Slot ist die kanonische Form,
+/// und was sich nicht lesen laesst — ein Wahrheitswert 2, eine fremde
+/// Diskriminante, eine Laenge ueber der Kapazitaet, ungueltiges UTF-8 —,
+/// zaehlt als `malformed`.
+const SIM_RECORDS: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+enum Small: A, B, C
+
+record Pair:
+    on   : bool
+    n    : i16
+    kind : Small
+    name : str<2>
+
+output raw   : stream<u8>   @ sim("bus/x") with max_rate = 1700 Hz, capacity = 64
+input  rx    : stream<Pair> @ hw("bus/x")  with max_rate = 100 Hz, capacity = 4
+
+output seen  : int in 0..999      @ sim("seen")
+output total : int in -99999..99999 @ sim("total")
+output ons   : int in 0..999      @ sim("ons")
+output kinds : int in 0..9999     @ sim("kinds")
+output names : int in 0..9999     @ sim("names")
+output bad   : int in 0..999      @ sim("bad")
+
+machine writer:
+    var k : int in 0..99 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            k = (k + 1) % 100
+            var n : int in -32768..32767 = k * 300 - 9000
+            var lo : u8 = ((n % 256 + 256) % 256) as u8
+            var hi : u8 = (((n - (n % 256 + 256) % 256) / 256 + 256) % 256) as u8
+            var second : u8 = 0x28 if k % 5 == 0 else 0xA4
+            send raw, [(k % 3) as u8, lo, hi, (k % 4) as u8, 0, 0, 0, 0, 0, 0, 0, (k % 4) as u8, 0, 0, 0, 0xC3, second]
+
+machine reader:
+    var s : int in 0..999 = 0
+    var t : int in -99999..99999 = 0
+    var o : int in 0..999 = 0
+    var c : int in 0..9999 = 0
+    var w : int in 0..9999 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            bad = rx.malformed
+        on rx as e:
+            s = (s + 1) % 1000
+            t = (t + (e.data.n as int)) % 99999
+            if e.data.on:
+                o = (o + 1) % 1000
+            c = (c * 3 + (1 if e.data.kind == A else (2 if e.data.kind == B else 3))) % 10000
+            w = (w * 7 + e.data.name.len) % 10000
+            seen = s
+            total = t
+            ons = o
+            kinds = c
+            names = w
+"#;
+
+#[test]
+fn records_over_a_sim_binding_agree() {
+    agree_program("SIM_RECORDS", &compile("SIM_RECORDS", SIM_RECORDS), "", 30);
 }
 
 /// Natives der kuratierten Menge (4.5): Pruefsummen und Digests ueber Bytes

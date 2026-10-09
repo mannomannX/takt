@@ -12,11 +12,10 @@ use takt_diag::Span;
 use takt_mir::TypeId;
 use takt_mir::expr::Expr;
 use takt_mir::stmt::{Block, Method};
-use takt_mir::types::{IntWidth, Type};
+use takt_mir::types::Type;
 
 use super::value::V;
-use super::wire::put;
-use super::{Cx, Enc, Env, Flow, R, U64, UNROLL_LIMIT, ite_env, no};
+use super::{Cx, Enc, Env, Flow, R, UNROLL_LIMIT, ite_env, no};
 use crate::term::{Op, Term};
 
 fn int(i: i64) -> Term {
@@ -27,56 +26,11 @@ fn add(a: Term, b: Term) -> Term {
     Term::bin(Op::Add, a, b)
 }
 
-/// Die Bytes einer Zahl, das niedrigste zuerst (`to_le_bytes`).
-fn le_bytes(x: &Term, n: i64) -> Vec<Term> {
-    (0..n).map(|i| Term::bin(Op::BitAnd, Term::bin(Op::Shr, x.clone(), int(8 * i)), int(0xFF))).collect()
-}
-
 /// Das Element `i` (`i` liegt in den Grenzen).
 fn sel(items: &[Term], i: &Term) -> Term {
     let mut it = items.iter().enumerate().rev();
     let Some((_, last)) = it.next() else { return int(0) };
     it.fold(last.clone(), |acc, (k, x)| Term::ite(Term::eq(i.clone(), int(k as i64)), x.clone(), acc))
-}
-
-/// Eine kanonische Byteform: die Plaetze bis zur Obergrenze, dahinter null,
-/// und die geltende Laenge.
-pub(super) struct Form {
-    pub(super) bytes: Vec<Term>,
-    pub(super) len: Term,
-}
-
-impl Form {
-    fn fixed(bytes: Vec<Term>) -> Form {
-        let len = int(bytes.len() as i64);
-        Form { bytes, len }
-    }
-
-    /// `other` hinter dieser Form.
-    fn then(mut self, other: Form) -> Form {
-        let total = self.bytes.len() + other.bytes.len();
-        self.bytes.resize(total, int(0));
-        put(&mut self.bytes, &self.len, &other.bytes);
-        Form { bytes: self.bytes, len: add(self.len, other.len) }
-    }
-
-    /// Nur, wo `c` gilt; sonst leer.
-    fn when(self, c: &Term) -> Form {
-        Form {
-            bytes: self.bytes.into_iter().map(|b| Term::ite(c.clone(), b, int(0))).collect(),
-            len: Term::ite(c.clone(), self.len, int(0)),
-        }
-    }
-
-    /// `a`, wo `c` gilt, sonst `b`.
-    fn choose(c: &Term, a: Form, b: Form) -> Form {
-        let n = a.bytes.len().max(b.bytes.len());
-        let at = |f: &Form, i: usize| f.bytes.get(i).cloned().unwrap_or_else(|| int(0));
-        Form {
-            bytes: (0..n).map(|i| Term::ite(c.clone(), at(&a, i), at(&b, i))).collect(),
-            len: Term::ite(c.clone(), a.len, b.len),
-        }
-    }
 }
 
 /// Ein Slot: belegt, Schluessel, Wert.
@@ -258,80 +212,6 @@ impl Enc<'_> {
             h = Term::bin(Op::BitAnd, mixed, int(0xFFFF_FFFF));
         }
         Ok(h)
-    }
-
-    /// Die kanonische Byteform (5.9, `bytes::write`) eines Schluessels oder
-    /// eines Arguments einer Native.
-    pub(super) fn canonical(&self, ty: TypeId, v: V, span: Span) -> R<Form> {
-        Ok(match self.p.types.get(ty).clone() {
-            Type::Bool => Form::fixed(vec![Term::ite(v.leaf(span)?, int(1), int(0))]),
-            Type::Int { width: IntWidth::U64, .. } => return no(U64, span),
-            Type::Int { width, .. } => Form::fixed(le_bytes(&v.leaf(span)?, i64::from(width.bits() / 8))),
-            Type::Duration { .. } => Form::fixed(le_bytes(&v.leaf(span)?, 8)),
-            Type::Enum(e) if !self.fielded(e) => {
-                let x = v.leaf(span)?;
-                let d = self.p.enums[e.index()].variants.iter().enumerate().rev().fold(int(0), |acc, (i, var)| {
-                    Term::ite(Term::eq(x.clone(), int(i as i64)), int(var.discriminant), acc)
-                });
-                Form::fixed(le_bytes(&d, 8))
-            }
-            Type::Enum(e) => {
-                let V::Node(parts) = v else { return no("Variante", span) };
-                let tag = parts.first().cloned().map_or_else(|| no("Variante", span), |t| t.leaf(span))?;
-                let def = self.p.enums[e.index()].clone();
-                let slots = self.variant_parts(e);
-                let mut out: Option<Form> = None;
-                for (i, var) in def.variants.iter().enumerate().rev() {
-                    let mut f = Form::fixed(le_bytes(&int(var.discriminant), 8));
-                    for (field, slot) in var.fields.iter().zip(&slots[i]) {
-                        let Some(x) = parts.get(*slot).cloned() else { return no("Variante", span) };
-                        f = f.then(self.canonical(field.ty, x, span)?);
-                    }
-                    out = Some(match out {
-                        None => f,
-                        Some(rest) => Form::choose(&Term::eq(tag.clone(), int(i as i64)), f, rest),
-                    });
-                }
-                out.map_or_else(|| no("Enum ohne Varianten", span), Ok)?
-            }
-            Type::Record(r) => {
-                let V::Node(parts) = v else { return no("Record", span) };
-                let fields = self.p.records[r.index()].fields.clone();
-                let mut f = Form::fixed(Vec::new());
-                for (field, x) in fields.iter().zip(parts) {
-                    f = f.then(self.canonical(field.ty, x, span)?);
-                }
-                f
-            }
-            Type::Array { elem, .. } => {
-                let V::Node(parts) = v else { return no("Array", span) };
-                let mut f = Form::fixed(Vec::new());
-                for x in parts {
-                    f = f.then(self.canonical(elem, x, span)?);
-                }
-                f
-            }
-            // Laenge in vier Bytes, dann die Bytes; dahinter steht null.
-            Type::Bytes { .. } | Type::Str { .. } => {
-                let V::Node(parts) = v else { return no("Bytes", span) };
-                let mut it = parts.into_iter();
-                let len = it.next().map_or_else(|| no("Bytes", span), |x| x.leaf(span))?;
-                let raw = it.map(|x| x.leaf(span)).collect::<R<Vec<_>>>()?;
-                Form::fixed(le_bytes(&len, 4)).then(Form { len: len.clone(), bytes: raw })
-            }
-            Type::Vec { elem, .. } => {
-                let V::Node(parts) = v else { return no("Vektor", span) };
-                let mut it = parts.into_iter();
-                let len = it.next().map_or_else(|| no("Vektor", span), |x| x.leaf(span))?;
-                let mut f = Form::fixed(le_bytes(&len, 4));
-                for (k, x) in it.enumerate() {
-                    let inside = Term::bin(Op::Lt, int(k as i64), len.clone());
-                    f = f.then(self.canonical(elem, x, span)?.when(&inside));
-                }
-                f
-            }
-            _ => return no("Byteform dieser Art", span),
-        })
     }
 
     /// `insert`, `remove` und `clear` (`maps.rs`): die neue Map und das

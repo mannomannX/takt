@@ -206,7 +206,7 @@ Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Map),ja,ja,ja
 Type(Optional),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Result),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Stream),ja,"teilweise: Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes, Records vom Rand fester Groesse; Ausgabestroeme ohne Leser",ja
+Type(Stream),ja,"teilweise: Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang, Records vom Rand fester Groesse; Ausgabestroeme ohne Leser",ja
 Type(Capture),ja,nein: Typ ohne Sorte im Modell,ja
 Type(HandleJob),ja,nein: Typ ohne Sorte im Modell,ja
 Type(HandleTrigger),ja,nein: Typ ohne Sorte im Modell,nein

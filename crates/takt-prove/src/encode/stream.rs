@@ -188,7 +188,7 @@ impl Enc<'_> {
                 Some(t) => {
                     let width = self.txs[t].per_tick_bytes();
                     match self.p.types.get(*elem) {
-                        Type::Int { width: takt_mir::types::IntWidth::U8, .. } => {}
+                        Type::Int { width: takt_mir::types::IntWidth::U8, .. } | Type::Record(_) | Type::Enum(_) => {}
                         Type::Bytes { cap } if *cap >= width => {}
                         _ => return no("Eingabestrom aus einem `sim`-Ausgang mit Elementen dieser Art", c.span),
                     }
@@ -204,7 +204,7 @@ impl Enc<'_> {
             let (cap, budget) = self.ring_slots(*elem, cap, bytes, c.span)?;
             // Ein Record vom Rand steht im Stimulus als `Name(…)`; ein Feld
             // variabler Laenge hat dort keine Textform.
-            if budget.is_some() && matches!(self.p.types.get(*elem), Type::Record(_)) {
+            if budget.is_some() && fed.is_none() && matches!(self.p.types.get(*elem), Type::Record(_)) {
                 return no("Record-Element variabler Laenge vom Rand", c.span);
             }
             out.push(Stream {
@@ -577,8 +577,9 @@ impl Enc<'_> {
 
     /// Ein `sim`-gespeister Eingabestrom (8.3, `apply_sim_bindings`): Was der
     /// Treiber beim letzten Commit abholte, kommt zu Tick-Beginn an, in
-    /// einem `stream<u8>` Byte fuer Byte, sonst als ein Element; ein
-    /// Ueberlauf zaehlt nur.
+    /// einem `stream<u8>` Byte fuer Byte, in einem Bytestrom als ein
+    /// Element, sonst in Slots der kanonischen Form (`elements_of`); was sich
+    /// nicht lesen laesst, zaehlt als `malformed`, ein Ueberlauf zaehlt nur.
     fn feed(&mut self, s: &Stream, t: usize, cur: &mut Env) -> R<()> {
         let tx = self.txs[t].clone();
         let sent = self.sent_text(&tx, cur);
@@ -588,6 +589,20 @@ impl Enc<'_> {
                 let any = Term::bin(Op::Gt, sent.len.clone(), Term::int(0));
                 let v = sent.value(*cap, None);
                 self.push(s, cur, &any, &now, &v)?;
+            }
+            Type::Record(_) | Type::Enum(_) => {
+                let span = Span::default();
+                let Ok(size) = takt_mir::bytes::max_size(self.p, s.elem) else {
+                    return no("Element ohne Byteform", span);
+                };
+                let size = size.max(1) as usize;
+                for (j, chunk) in sent.bytes.chunks_exact(size).enumerate() {
+                    let present = Term::bin(Op::Le, Term::int(((j + 1) * size) as i64), sent.len.clone());
+                    let r = self.read_canonical(s.elem, chunk, &Term::int(0), span)?;
+                    let ok = Term::and(vec![present.clone(), r.valid.clone()]);
+                    self.push(s, cur, &ok, &now, &r.value)?;
+                    bump(cur, &loc(s, "malformed"), &Term::and(vec![present, r.valid.not()]));
+                }
             }
             _ => {
                 for (j, b) in sent.bytes.iter().enumerate() {

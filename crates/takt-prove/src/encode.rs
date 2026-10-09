@@ -43,6 +43,7 @@ use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId}
 use crate::eval;
 use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
+mod canon;
 mod fault;
 mod map;
 mod monitor;

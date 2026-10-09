@@ -167,28 +167,26 @@ impl Enc<'_> {
                 let V::Node(items) = self.value(value, cx, env, flow)? else { return no("Array", span) };
                 let mut bytes = Vec::new();
                 for item in items {
-                    bytes.extend(self.scalar_bytes(item.leaf(span)?, elem, span)?);
+                    bytes.extend(self.buffer_bytes(item, elem, span)?);
                 }
                 Ok(Text { len: int(bytes.len() as i64), bytes })
             }
             _ => {
-                let x = self.expr(value, cx, env, flow)?;
-                let bytes = self.scalar_bytes(x, elem, span)?;
+                let v = self.value(value, cx, env, flow)?;
+                let bytes = self.buffer_bytes(v, elem, span)?;
                 Ok(Text { len: int(bytes.len() as i64), bytes })
             }
         }
     }
 
-    /// Ein Skalar in der kanonischen Form des Elementtyps.
-    fn scalar_bytes(&self, x: Term, elem: TypeId, span: Span) -> R<Vec<Term>> {
-        let width = match self.p.types.get(elem) {
-            Type::Int { width, .. } => width.bits() / 8,
-            Type::Bool => return Ok(vec![Term::ite(x, int(1), int(0))]),
-            _ => return no("`send` eines Werts dieser Art auf einen Ausgabestrom", span),
-        };
-        Ok((0..width)
-            .map(|k| Term::bin(Op::BitAnd, Term::bin(Op::Shr, x.clone(), int(i64::from(8 * k))), int(0xFF)))
-            .collect())
+    /// Ein Element in der Form des Sendepuffers (`element_bytes`): seine
+    /// kanonische Form, mit Nullen auf `max_size` gefuellt, damit der Leser
+    /// die Grenzen findet (FB-189).
+    fn buffer_bytes(&self, v: V, elem: TypeId, span: Span) -> R<Vec<Term>> {
+        let Ok(size) = takt_mir::bytes::max_size(self.p, elem) else { return no("Element ohne Byteform", span) };
+        let mut bytes = self.canonical(elem, v, span)?.bytes;
+        bytes.resize(size as usize, int(0));
+        Ok(bytes)
     }
 
     /// `send o, e` auf einen Ausgabestrom (8.8): Passt der Wert nicht in den

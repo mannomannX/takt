@@ -257,8 +257,8 @@ fn ty(t: TypeTag) -> Support {
         TypeTag::Int => Partial("ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen"),
         TypeTag::HandleBlock => Partial("Blockinstanzen nur ueber ihre Felder"),
         TypeTag::Stream => Partial(
-            "Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes, Records vom \
-             Rand fester Groesse; Ausgabestroeme ohne Leser",
+            "Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang, Records vom Rand fester Groesse; \
+             Ausgabestroeme ohne Leser",
         ),
         TypeTag::Str | TypeTag::Line | TypeTag::Result => Partial("nicht als Typ eines Inputs"),
         TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),

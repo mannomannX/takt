@@ -27,7 +27,7 @@ fn sub(a: Term, b: Term) -> Term {
 }
 
 /// Das Byte an `i`; ausserhalb null.
-fn pick(bytes: &[Term], i: &Term) -> Term {
+pub(super) fn pick(bytes: &[Term], i: &Term) -> Term {
     if let Node::Int(k) = &*i.0 {
         return usize::try_from(*k).ok().and_then(|k| bytes.get(k)).cloned().unwrap_or_else(|| int(0));
     }
