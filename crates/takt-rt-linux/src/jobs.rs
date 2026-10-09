@@ -133,11 +133,14 @@ fn run(native: Native, args: &[u8]) -> Option<Vec<u8>> {
             ctx_bytes(&ctx)
         }
         Native::Sha256Final => Some(digest(&Ctx::from_bytes(inputs.first()?)?.finish())),
+        // Ein Argument in falscher Laenge ist keine gueltige Signatur (4.5, FB-487).
         Native::EcdsaP256Verify => {
-            let key = <[u8; 64]>::try_from(*inputs.first()?).ok()?;
-            let digest = <[u8; 32]>::try_from(*inputs.get(1)?).ok()?;
-            let sig = <[u8; 64]>::try_from(*inputs.get(2)?).ok()?;
-            takt_crypto::ecdsa_p256_verify(&key, &digest, &sig).ok().map(|b| vec![u8::from(b)])
+            let [key, digest, sig] = inputs.as_slice() else { return None };
+            let ok = match (<[u8; 64]>::try_from(*key), <[u8; 32]>::try_from(*digest), <[u8; 64]>::try_from(*sig)) {
+                (Ok(key), Ok(digest), Ok(sig)) => takt_crypto::ecdsa_p256_verify(&key, &digest, &sig).ok()?,
+                _ => false,
+            };
+            Some(vec![u8::from(ok)])
         }
         Native::Rsa3072Verify => {
             let [key, digest, sig] = inputs.as_slice() else { return None };

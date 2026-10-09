@@ -161,22 +161,19 @@ impl Ctx<'_, '_> {
             });
         }
         let inputs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+        let block = |i: usize| inputs.get(i).copied().unwrap_or(&[]);
         if f == Native::EcdsaP256Verify {
-            let fixed = |i: usize, len: usize| inputs.get(i).copied().filter(|b| b.len() == len);
-            let (Some(key), Some(digest), Some(sig)) = (fixed(0, 64), fixed(1, 32), fixed(2, 64)) else {
-                return bug(format!("`{}`: Schluessel 64, Digest 32, Signatur 64 Byte erwartet", n.name));
-            };
+            // Ein Argument in falscher Laenge ist keine gueltige Signatur (4.5, FB-487).
             let (Ok(key), Ok(digest), Ok(sig)) =
-                (<[u8; 64]>::try_from(key), <[u8; 32]>::try_from(digest), <[u8; 64]>::try_from(sig))
+                (<[u8; 64]>::try_from(block(0)), <[u8; 32]>::try_from(block(1)), <[u8; 64]>::try_from(block(2)))
             else {
-                return bug(format!("`{}`: Argumentlaenge", n.name));
+                return Ok(Value::Bool(false));
             };
             return match takt_crypto::ecdsa_p256_verify(&key, &digest, &sig) {
                 Ok(b) => Ok(Value::Bool(b)),
                 Err(_) => bug("`ecdsa_p256_verify`: takt-crypto ohne Feature `ecdsa` gebaut (plan/m6.md 2.4)"),
             };
         }
-        let block = |i: usize| inputs.get(i).copied().unwrap_or(&[]);
         if f == Native::Rsa3072Verify {
             return match takt_crypto::rsa3072_verify(block(0), block(1), block(2)) {
                 Ok(b) => Ok(Value::Bool(b)),

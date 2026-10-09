@@ -1116,6 +1116,38 @@ machine m:
     );
 }
 
+/// **Eine Signaturpruefung mit Argumenten falscher Laenge ist `false`**
+/// (4.5, FB-487): Der Schluessel aus `default` ist leer. Vorher endete der
+/// Interpreter mit einem Bug und der Wirtsrahmen mit `Err(FAILED)`.
+#[test]
+fn a_signature_check_with_a_short_key_is_false() {
+    let Some(clang) = common::clang() else { return };
+    let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
+               native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool \
+               with cost = 300, stack = 5600, duration = 3 ms, total\n\n\
+               output verified : bool @ sim(\"o/verified\")\n\
+               output failed   : bool @ sim(\"o/failed\")\n\n\
+               machine m:\n    var key    : bytes<64> = default\n    var digest : bytes<32> = default\n\
+               \x20   var sig    : bytes<64> = default\n    initial RUN\n\n    state RUN:\n        sequence:\n\
+               \x20           job e = ecdsa_p256_verify(key = key, digest = digest, sig = sig)\n\
+               \x20           until e.done timeout 1 s -> STUCK\n\
+               \x20           verified = e.result.or(true)\n\
+               \x20           failed = e.result.err.or(PENDING) == FAILED\n\
+               \x20           -> DONE\n\
+               \x20   state DONE:\n        when false: -> RUN\n\
+               \x20   state STUCK:\n        when false: -> RUN\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let interpreted = run_interpreted(&p);
+    for want in ["out verified false", "out failed false"] {
+        assert!(interpreted.contains(want), "`{want}` fehlt im Interpreter:\n{interpreted}");
+    }
+    let native = common::run_native_all(&clang, &p, "short_key", TICKS).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
 /// **Ueber 64 Text-Handler: ohne Produkt-DFA dasselbe Urteil** (8.7, 11.2;
 /// SYN-035): `117_many_text_handlers` hat 66 Muster in einem Zustand, der
 /// Codegen prueft jedes mit eigenem Durchlauf. Der erste passende Handler

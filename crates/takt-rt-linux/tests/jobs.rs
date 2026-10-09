@@ -62,6 +62,20 @@ fn an_ecdsa_job_verifies_its_signature() {
     assert_eq!(out[0], 1, "die Signatur aus RFC 6979 prueft");
 }
 
+/// Ein Schluessel in falscher Laenge ist keine gueltige Signatur: `false`
+/// wie im Interpreter und in der ABI der Boards, kein `Err(FAILED)` (4.5,
+/// FB-487).
+#[test]
+fn an_ecdsa_job_with_a_short_key_is_false() {
+    let args = [bytes_arg(&[]), bytes_arg(&[0; 32]), bytes_arg(&[0; 64])].concat();
+    let mut jobs = ThreadJobs::new(1, 256 * 1024).expect("Arbeiter");
+    assert!(jobs.begin(0, "ecdsa_p256_verify", &args));
+    assert_eq!(wait_done(&mut jobs, 0), JobState::Done);
+    let mut out = [0u8; 8];
+    assert_eq!(jobs.take(0, &mut out), 1);
+    assert_eq!(out[0], 0);
+}
+
 #[test]
 fn an_unknown_native_is_refused() {
     let mut jobs = ThreadJobs::new(1, 64 * 1024).expect("Arbeiter");
