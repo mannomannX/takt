@@ -913,8 +913,7 @@ impl Enc<'_> {
     /// Der Code eines Zustands: seine Variante in `<m>.State`, sonst sein Index.
     /// Die Varianten von `<m>.State`.
     fn state_variants(&self, m: MachineId) -> &[takt_mir::types::VariantDef] {
-        let name = format!("{}.State", self.machine(m).name);
-        self.p.enums.iter().find(|e| e.name == name).map_or(&[], |e| e.variants.as_slice())
+        self.p.state_variants(self.machine(m))
     }
 
     /// Der Code eines Blatts: seine Variante in `<m>.State`; ein Blatt ohne
@@ -926,10 +925,9 @@ impl Enc<'_> {
         variants.iter().position(|v| v.name == *name).map_or((variants.len() + s.index()) as i64, |i| i as i64)
     }
 
-    /// `m.state` zum Blattcode `leaf`: die Variante zum letzten Teil des
-    /// Namens, sonst die erste (`state_value`, `publish_function`).
+    /// `m.state` zum Blattcode `leaf` (`state_value`, `publish_function`):
+    /// Ein Segment meldet den Zustand seiner Sequenz (FB-469).
     fn state_value(&self, m: MachineId, leaf: Term) -> Term {
-        let variants = self.state_variants(m);
         // Ohne Konfiguration die erste Variante (`state_value`, 5.11).
         let mut out = if self.is_scoped(m) {
             Term::ite(Term::eq(leaf.clone(), Term::int(-1)), Term::int(0), leaf.clone())
@@ -937,9 +935,7 @@ impl Enc<'_> {
             leaf.clone()
         };
         for l in self.leaves(m) {
-            let name = &self.machine(m).states[l.index()].name;
-            let last = name.rsplit('.').next().unwrap_or(name);
-            let value = variants.iter().position(|v| v.name == last).unwrap_or(0) as i64;
+            let value = i64::from(self.p.state_variant(self.machine(m), l));
             let code = self.code(m, l);
             if value != code {
                 out = Term::ite(Term::eq(leaf.clone(), Term::int(code)), Term::int(value), out);

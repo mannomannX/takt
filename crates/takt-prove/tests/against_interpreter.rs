@@ -1617,6 +1617,44 @@ fn trigger_rules_agree() {
     agree_program("TRIGGER_RULES", &compile("TRIGGER_RULES", TRIGGER_RULES), stim, 24);
 }
 
+/// `m.state` in einer Sequenz ist der Zustand der Sequenz (FB-469), auch
+/// neben einem eigenen Zustand, der wie ein Segment heisst.
+const SEGMENT_NAME: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+output in_run : bool @ hw("o/in_run") with safe = false
+output in_s0  : bool @ hw("o/in_s0")  with safe = false
+
+machine ctrl:
+    initial IDLE
+
+    state IDLE:
+        after 20 ms: -> RUN
+
+    state RUN:
+        sequence:
+            wait 30 ms
+            wait 30 ms
+            -> S0
+
+    state S0:
+        after 20 ms: -> IDLE
+
+machine watch:
+    initial W
+
+    state W:
+        loop:
+            in_run = ctrl.state == RUN
+            in_s0 = ctrl.state == S0
+"#;
+
+#[test]
+fn a_segment_is_not_the_state_of_its_name() {
+    agree_program("SEGMENT_NAME", &compile("SEGMENT_NAME", SEGMENT_NAME), "", 16);
+}
+
 /// Eine Funktion, die die Bytes `hex` als `bytes<cap>` liefert.
 fn bytes_fn(name: &str, cap: usize, hex: &str) -> String {
     let items: Vec<String> = hex.as_bytes().chunks(2).map(|p| format!("0x{}", String::from_utf8_lossy(p))).collect();
@@ -2679,9 +2717,9 @@ fn collections_agree() {
     agree_program("past_len", &compile("past_len", &past_len), "", 12);
 }
 
-/// `m.state` in einem Segment einer Sequenz ist im Interpreter und im
-/// erzeugten Code die erste Variante; das Modell hielt den Index des
-/// Segments, und der fiel mit dem Code von `FAULTED` zusammen.
+/// `m.state` in einem Segment einer Sequenz ist der Zustand der Sequenz
+/// (FB-469); das Modell hielt frueher den Index des Segments, und der fiel
+/// mit dem Code von `FAULTED` zusammen.
 const SEQUENCE_STATE: &str = r#"system:
     language = 1
     tick     = 10 ms

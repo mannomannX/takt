@@ -531,14 +531,12 @@ fn apply_stimulus(
             }
             LineKind::State { machine, path } if only.is_some() => {
                 let m = foreign_machine(program, machine, only)?;
-                let leaf = path.rsplit('.').next().unwrap_or(path);
-                let variant = program
-                    .enums
-                    .iter()
-                    .find(|e| e.name == format!("{machine}.State"))
-                    .and_then(|e| e.variants.iter().position(|v| v.name == leaf))
-                    .unwrap_or(0);
-                let state = Value::Enum { variant: variant as u32, fields: Vec::new() };
+                let def = &program.machines[m.index()];
+                let variant = match path.as_str() {
+                    "FAULTED" => program.faulted_variant(def),
+                    _ => program.state_variant(def, leaf_of_path(def, path)?),
+                };
+                let state = Value::Enum { variant, fields: Vec::new() };
                 sim.image.force_published(m, |e| e.state = Some(state));
             }
             LineKind::Published { machine, var, value } if only.is_some() => {
@@ -976,6 +974,20 @@ fn foreign_machine(p: &Program, name: &str, only: Option<MachineId>) -> Result<M
         return Err(Trap::Bug(format!("Stimulus: `{name}` ist die abgespielte Maschine selbst")));
     }
     Ok(m)
+}
+
+/// Das Blatt zu einem Pfad wie `RUN.S0` (`MachineState::path`): je Teil das
+/// Kind, dessen Name auf ihn endet — ein Segment heisst im MIR `RUN.S0`.
+fn leaf_of_path(m: &takt_mir::machine::Machine, path: &str) -> Result<takt_mir::StateId, Trap> {
+    let mut at: Option<takt_mir::StateId> = None;
+    for part in path.split('.') {
+        let child = m.states.iter().position(|s| s.parent == at && s.name.rsplit('.').next() == Some(part));
+        let Some(i) = child else {
+            return Err(Trap::Bug(format!("Stimulus: `{}` hat keinen Zustand `{path}`", m.name)));
+        };
+        at = Some(takt_mir::StateId(i as u32));
+    }
+    at.ok_or_else(|| Trap::Bug(format!("Stimulus: leerer Zustand fuer `{}`", m.name)))
 }
 
 /// Ob ein Fault den Lauf zu FAIL macht (13.5): der Wert des Szenarios,

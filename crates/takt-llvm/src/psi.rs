@@ -220,8 +220,6 @@ pub fn publish_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
     let id = MachineId(p.machines.iter().position(|x| x.name == m.name).ok_or(NotYet { what: "Maschine" })? as u32);
     let next = region_offset(id, true, p).ok_or(NotYet { what: "Psi-Region" })?;
     let leaves = machine::leaves(m);
-    let variants = p.enums.iter().find(|e| e.name == format!("{}.State", m.name)).map(|e| &e.variants);
-    let variant_of = |name: &str| variants.and_then(|v| v.iter().position(|x| x.name == name)).unwrap_or(0);
     let mark = module.mark();
     module.begin(&format!("{}_publish", m.name), &LlvmType::Void, &[LlvmType::Ptr, LlvmType::Ptr]);
     let flag = module.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {next}"));
@@ -236,9 +234,10 @@ pub fn publish_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
     let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
     let cur = module.inst(&format!("load i8, ptr {slot}"));
     // Hinter dem letzten Blatt steht `FAULTED` (step.rs, `leave_configuration`).
-    let mut acc = variant_of("FAULTED").to_string();
+    let mut acc = p.faulted_variant(m).to_string();
     for (i, leaf) in leaves.iter().enumerate() {
-        let v = variant_of(&m.states[leaf.index()].name);
+        // Ein Segment meldet den Zustand seiner Sequenz (FB-469).
+        let v = p.state_variant(m, *leaf);
         let eq = module.inst(&format!("icmp eq i8 {cur}, {i}"));
         acc = module.inst(&format!("select i1 {eq}, i32 {v}, i32 {acc}")).to_string();
     }

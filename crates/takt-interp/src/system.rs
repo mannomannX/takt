@@ -297,19 +297,16 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
         Value::Record(fields)
     }
 
-    /// Zustand als Variante des Zustandstyps (Festlegung 4).
+    /// Zustand als Variante des Zustandstyps (Festlegung 4); ohne
+    /// Konfiguration die erste (5.11).
     pub fn state_value(&self, loaded: &Loaded<'_>) -> Value {
         let m = self.machine(loaded);
-        let name = self.state.path(m);
-        let leaf = name.rsplit('.').next().unwrap_or(&name);
-        let variant = loaded
-            .program
-            .enums
-            .iter()
-            .find(|e| e.name == format!("{}.State", m.name))
-            .and_then(|e| e.variants.iter().position(|v| v.name == leaf))
-            .unwrap_or(0);
-        Value::Enum { variant: variant as u32, fields: Vec::new() }
+        let variant = match (self.state.faulted, self.state.conf.last()) {
+            (true, _) => loaded.program.faulted_variant(m),
+            (false, Some(leaf)) => loaded.program.state_variant(m, *leaf),
+            (false, None) => 0,
+        };
+        Value::Enum { variant, fields: Vec::new() }
     }
 }
 

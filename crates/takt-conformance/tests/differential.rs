@@ -915,6 +915,56 @@ fn the_trigger_rules_agree() {
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
 
+/// **`m.state` in einer Sequenz ist der Zustand der Sequenz** (FB-469):
+/// Waehrend `ctrl` die Segmente von `RUN` abarbeitet (`RUN.S0`, `RUN.S1`),
+/// gilt `ctrl.state == RUN` — nicht die erste Variante und nicht der
+/// eigene Zustand `S0`, der wie ein Segment heisst.
+const SEQUENCE_STATE: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+output in_run : bool @ hw(\"o/in_run\") with safe = false
+output in_s0  : bool @ hw(\"o/in_s0\")  with safe = false
+
+machine ctrl:
+    initial IDLE
+
+    state IDLE:
+        after 20 ms: -> RUN
+
+    state RUN:
+        sequence:
+            wait 30 ms
+            wait 30 ms
+            -> S0
+
+    state S0:
+        after 20 ms: -> IDLE
+
+machine watch:
+    initial W
+
+    state W:
+        loop:
+            in_run = ctrl.state == RUN
+            in_s0 = ctrl.state == S0
+";
+
+#[test]
+fn a_sequence_reports_its_state() {
+    let Some(clang) = common::clang() else { return };
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(SEQUENCE_STATE, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let interpreted = run_interpreted(&p);
+    let first = |want: &str| interpreted.lines().position(|l| l.ends_with(want));
+    let (run, s0) = (first("out in_run true"), first("out in_s0 true"));
+    assert!(run.is_some() && run < s0, "die Sequenz meldet nicht `RUN`:\n{interpreted}");
+    let native = common::run_native_all(&clang, &p, "sequence_state", TICKS).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
 /// **Eine Dauer in einem Record schreibt der Rahmen wie der Interpreter**
 /// (T2): in ihrer groessten ganzzahligen Einheit, als Feld von
 /// `Name(f1, f2)`. Den MCU-Rahmen betrifft das noch nicht, er schreibt

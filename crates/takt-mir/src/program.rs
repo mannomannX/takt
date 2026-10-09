@@ -575,6 +575,34 @@ pub struct Port {
 }
 
 impl Program {
+    /// Die Varianten von `<m>.State`: alle Zustandsnamen und `FAULTED`.
+    pub fn state_variants(&self, m: &Machine) -> &[crate::types::VariantDef] {
+        let name = format!("{}.State", m.name);
+        self.enums.iter().find(|e| e.name == name).map_or(&[], |e| e.variants.as_slice())
+    }
+
+    /// `m.state` eines Blatts als Variante von `<m>.State` (Festlegung 4):
+    /// die des tiefsten Zustands seiner Kette mit eigener Variante. Ein
+    /// Segment einer Sequenz (`IGNITION.S0`) hat keine und meldet den
+    /// Zustand seiner Sequenz (FB-469).
+    pub fn state_variant(&self, m: &Machine, leaf: StateId) -> u32 {
+        let variants = self.state_variants(m);
+        let mut cur = Some(leaf);
+        while let Some(s) = cur {
+            let state = &m.states[s.index()];
+            if let Some(i) = variants.iter().position(|v| v.name == state.name) {
+                return i as u32;
+            }
+            cur = state.parent;
+        }
+        0
+    }
+
+    /// `m.state` einer gefaulteten Maschine: die Variante `FAULTED`.
+    pub fn faulted_variant(&self, m: &Machine) -> u32 {
+        self.state_variants(m).iter().position(|v| v.name == "FAULTED").unwrap_or(0) as u32
+    }
+
     /// Ist die Maschine ein Plant-Modell (8.3): speist sie einen `hw`-Input,
     /// schreibt also einen `sim`-Output an dessen Adresse? Ein `sim`-Output
     /// ohne solchen Input ist eine Beobachtung, und wer ihn schreibt, gehoert
