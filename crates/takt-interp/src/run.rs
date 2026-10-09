@@ -16,6 +16,7 @@ use crate::property::{Monitor, PropertyResult};
 use crate::stream::Delivery;
 use crate::system::Sim;
 use crate::trace::{LineKind, SampleText, Trace, TraceLine, parse_value, sample_from_text, value_text};
+use crate::value::Seen;
 use crate::value::{Quality, Trap, Value};
 
 /// Lauf-Verdikt (13.5): FAIL absorbiert.
@@ -65,6 +66,9 @@ pub struct RunOptions {
     pub only: Option<String>,
     /// Jede ausgefuehrte Anweisung mitschreiben (`takt sim --steps`).
     pub steps: bool,
+    /// Die Abtastungen der Inputs je Tick mitschreiben, wie die Maschinen
+    /// sie lesen: der Vergleich mit dem Modell von `takt prove`.
+    pub inputs: bool,
 }
 
 /// Ergebnis eines Laufs.
@@ -87,6 +91,9 @@ pub struct RunResult {
     pub properties: Vec<PropertyResult>,
     /// Jede ausgefuehrte Anweisung als Zeile, wenn `steps` gesetzt war.
     pub steps: String,
+    /// Je Tick die Abtastung jedes Channels, wenn `inputs` gesetzt war;
+    /// Outputs stehen als leere Abtastung darin.
+    pub inputs: Vec<Vec<Seen>>,
     /// Jeder Fault mit seiner Stelle, in der Reihenfolge des Traces. Die
     /// Zeile `fault` nennt nur Maschine und Art; wer einen Pfad zu einer
     /// bestimmten Pruefung bestaetigt (`takt prove`), braucht die Stelle.
@@ -184,6 +191,9 @@ impl<'p> Run<'p> {
         sim.nvm = options.nvm.clone();
         if options.steps {
             sim.steps = Some(Vec::new());
+        }
+        if options.inputs {
+            sim.seen = Some(Vec::new());
         }
         // Satz 9.4.1: jede lineare Erweiterung der `follows`-Kanten liefert
         // denselben Trace (7.2).
@@ -349,7 +359,7 @@ impl<'p> Run<'p> {
             return Err(trap);
         }
         let Run {
-            sim,
+            mut sim,
             ticks,
             mut writer,
             monitors,
@@ -384,6 +394,7 @@ impl<'p> Run<'p> {
             properties,
             steps,
             faults,
+            inputs: sim.seen.take().unwrap_or_default(),
         })
     }
 }

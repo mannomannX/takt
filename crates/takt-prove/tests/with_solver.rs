@@ -304,12 +304,15 @@ fn a_path_found_alone_is_confirmed_on_the_whole() {
     assert_eq!(*at, 1);
 }
 
-/// 13.3: `max_slew` gilt als Annahme — die Aenderung je Tick ist durch
-/// die Rate beschraenkt, wie der Rand sie erzwingt (12.6).
+/// 13.3: `max_slew` gilt als Annahme — die Aenderung ist durch die Rate seit
+/// der letzten guten Lieferung beschraenkt, wie der Rand sie erzwingt (12.6),
+/// genau bis auf die Rundung des Randes. Ein Tick ohne Lieferung haelt die
+/// vorige Abtastung (3.5); danach springt `x` um die Rate beider Ticks, und
+/// der Interpreter bestaetigt den Pfad.
 #[test]
-fn max_slew_bounds_the_change_per_tick() {
+fn max_slew_bounds_the_change_since_the_last_good_delivery() {
     let Some(solver) = solver() else { return };
-    let body = |attr: &str| {
+    let body = |attr: &str, bound: &str| {
         format!(
             "system:
     language = 1
@@ -325,7 +328,7 @@ machine m:
     state RUN:
         loop:
             if armed:
-                check abs(x - last) <= 0.02, \"Sprung\"
+                check abs(x - last) <= {bound}, \"Sprung\"
             last = x
             armed = true
             y = last
@@ -333,13 +336,24 @@ machine m:
         )
     };
     let check = |sites: Vec<takt_prove::CheckReport>| sites.into_iter().find(|s| s.kind == "check").expect("Stelle");
-    let p = compile(&body(" with max_slew = 10.0"));
+    let p = compile(&body(" with max_slew = 10.0", "0.02"));
     let model = encode(&p).expect("kodierbar");
     assert!(model.state.iter().any(|v| v.name == "s.q.x.good.prev"), "der letzte gute Wert liegt im Zustand");
     let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
-    assert_eq!(site.verdict, CheckVerdict::Unreachable { k: 2 }, "{site:?}");
+    let CheckVerdict::Undecided { reason } = &site.verdict else { panic!("{site:?}") };
+    assert!(reason.contains("kein Pfad bis Tiefe 2"), "{reason}");
 
-    let p = compile(&body(""));
+    let p = compile(&body(" with max_slew = 10.0", "0.015"));
+    let model = encode(&p).expect("kodierbar");
+    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
+    let CheckVerdict::Reachable { stimulus, .. } = &site.verdict else { panic!("{site:?}") };
+    assert!(
+        stimulus.lines().filter(|l| l.contains(" in x ")).count() < 3,
+        "ein Tick ohne Lieferung:
+{stimulus}"
+    );
+
+    let p = compile(&body("", "0.02"));
     let model = encode(&p).expect("kodierbar");
     let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
     assert!(matches!(site.verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {site:?}");

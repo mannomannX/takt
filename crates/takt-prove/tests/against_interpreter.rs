@@ -5,10 +5,12 @@
 use std::collections::BTreeMap;
 
 use takt_interp::trace::LineKind;
+use takt_interp::value::{Quality, Seen, Value};
 use takt_interp::{RunOptions, Trace, run};
-use takt_mir::program::{Binding, Direction};
+use takt_mir::program::Direction;
 use takt_mir::types::Type;
 use takt_mir::{Program, TypeId};
+use takt_prove::term::Sort;
 use takt_prove::{Model, Val, encode, eval};
 
 fn corpus(name: &str) -> Program {
@@ -184,6 +186,16 @@ fn parse_val(text: &str) -> Option<Val> {
     }
 }
 
+/// Ein Wert in der Sorte, die das Modell fuer die Eingabe fuehrt.
+fn fit(v: Val, sort: Sort) -> Val {
+    match (v, sort) {
+        (Val::F64(x), Sort::F32) => Val::F32(x as f32),
+        (Val::Int(x), Sort::F32) => Val::F32(x as f32),
+        (Val::Int(x), Sort::F64) => Val::F64(x as f64),
+        (v, _) => v,
+    }
+}
+
 fn same(a: Val, b: Val) -> bool {
     match (a, b) {
         (Val::F64(x), Val::F64(y)) => x.to_bits() == y.to_bits(),
@@ -194,23 +206,41 @@ fn same(a: Val, b: Val) -> bool {
     }
 }
 
-/// `sim`-Bindungen (8.3): Input-Name und der Output, der ihn speist.
-fn sim_bindings(p: &Program) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for c in p.channels.iter().filter(|c| c.dir == Direction::Input) {
-        let Binding::Hw(addr) = &c.binding else { continue };
-        for o in p.channels.iter().filter(|o| o.dir == Direction::Output) {
-            if matches!(&o.binding, Binding::Sim(a) if a == addr) {
-                out.push((c.name.clone(), o.name.clone()));
-            }
-        }
+/// Eine Abtastung, wie die Maschinen sie lesen, als Eingaben des Modells:
+/// `i.<c>.held` ohne Lieferung in diesem Tick, `i.<c>.q` die Qualitaet,
+/// `i.<c>` der Wert, wenn es einen gibt.
+fn sample_inputs(name: &str, seen: &Seen, out: &mut Vec<(String, Val)>) {
+    use takt_prove::encode::quality;
+    let s = &seen.sample;
+    out.push((format!("i.{name}.held"), Val::Bool(!seen.fresh)));
+    let q = match s.quality {
+        Quality::Good => quality::GOOD,
+        Quality::Suspect => quality::SUSPECT,
+        Quality::Stale => quality::STALE,
+        Quality::Bad => quality::BAD,
+    };
+    out.push((format!("i.{name}.q"), Val::Int(q)));
+    // Der Wert einer ungueltigen Lieferung ist unbeobachtbar und im Modell
+    // null; eine gehaltene, die `Stale` wurde, traegt ihren weiter.
+    let carried = s.quality == Quality::Stale && !seen.fresh;
+    if !matches!(s.quality, Quality::Good | Quality::Suspect) && !carried {
+        return;
     }
-    out
+    let v = match &s.value {
+        Some(Value::Bool(b)) => Val::Bool(*b),
+        Some(Value::Int(x) | Value::Duration(x)) => Val::Int(*x),
+        Some(Value::UInt(x)) => Val::Int(*x as i64),
+        Some(Value::F32(x)) => Val::F32(*x),
+        Some(Value::F64(x)) => Val::F64(*x),
+        Some(Value::Enum { variant, .. }) => Val::Int(i64::from(*variant)),
+        _ => return,
+    };
+    out.push((format!("i.{name}"), v));
 }
 
 /// Fuehrt Interpreter und Modell mit demselben Stimulus und vergleicht je
-/// Tick jeden Output und jedes Blatt. Ein `sim`-gebundener Input liest
-/// den committeten Output des vorigen Ticks (Unit-Delay, 8.3).
+/// Tick jeden Output und jedes Blatt. Die skalaren Inputs nimmt das Modell
+/// so, wie der Interpreter sie nach dem Rand sah.
 fn agree(name: &str, stimulus: &str, ticks: u64) {
     agree_program(name, &corpus(name), stimulus, ticks);
 }
@@ -218,13 +248,18 @@ fn agree(name: &str, stimulus: &str, ticks: u64) {
 fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
     let model: Model = encode(p).unwrap_or_else(|e| panic!("{name}: {}", e.what));
     let stim = Trace::parse(stimulus).expect("Stimulus");
-    let r = run(p, &stim, &RunOptions { ticks, ..Default::default() }).expect("Lauf");
-    let bound = sim_bindings(p);
-    // Eingaben des Modells: Commands im Tick ihrer Zeile, Inputs halten,
-    // Stromelemente je Tick in ihrer Reihenfolge (8.6) — ohne eigenen
-    // Zeitstempel mit dem Ende des Tick-Fensters, `0x` nicht dekodierbar.
+    let r = run(p, &stim, &RunOptions { ticks, inputs: true, ..Default::default() }).expect("Lauf");
+    // Eingaben des Modells: Commands im Tick ihrer Zeile, skalare Inputs aus
+    // den Abtastungen des Interpreters, Stromelemente je Tick in ihrer
+    // Reihenfolge (8.6) — ohne eigenen Zeitstempel mit dem Ende des
+    // Tick-Fensters, `0x` nicht dekodierbar.
     let mut inputs: BTreeMap<(u64, String), Val> = BTreeMap::new();
-    let mut held: BTreeMap<String, Val> = BTreeMap::new();
+    let mut tunes: BTreeMap<String, Val> = r
+        .start_params
+        .iter()
+        .filter(|(n, _)| p.params.iter().any(|x| x.tunable && x.name == *n))
+        .map(|(n, v)| (n.clone(), parse_val(v).unwrap_or_else(|| panic!("{n}: `{v}`"))))
+        .collect();
     let element = |channel: &str| {
         let c = p.channels.iter().find(|c| c.name == channel && c.dir == Direction::Input)?;
         match p.types.get(c.ty) {
@@ -257,26 +292,25 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
                             inputs.extend(leaves.into_iter().map(|(n, v)| ((k, n), v)));
                         }
                         *j += 1;
-                    } else {
-                        // Die Qualitaet haelt wie der Wert (3.5); ohne Angabe `Good`.
-                        use takt_prove::encode::quality;
-                        let q = match sample.quality.as_deref() {
-                            Some("suspect") => quality::SUSPECT,
-                            Some("stale") => quality::STALE,
-                            Some("bad") => quality::BAD,
-                            _ => quality::GOOD,
-                        };
-                        held.insert(format!("i.{channel}.q"), Val::Int(q));
-                        if let Some(v) = sample.value.as_deref().and_then(parse_val) {
-                            held.insert(format!("i.{channel}"), v);
-                        }
                     }
                 }
                 _ => {}
             }
         }
-        for (n, v) in &held {
-            inputs.insert((k, n.clone()), *v);
+        // 8.4: ein Tunable ab dem Tick, in dem der Interpreter es uebernahm.
+        for l in r.trace.lines.iter().filter(|l| l.tick == k) {
+            if let LineKind::Tune { name, value, accepted: true } = &l.kind {
+                tunes.insert(name.clone(), parse_val(value).unwrap_or_else(|| panic!("{name}: `{value}`")));
+            }
+        }
+        inputs.extend(tunes.iter().map(|(n, v)| ((k, format!("i.tune.{n}")), *v)));
+        let seen = usize::try_from(k).ok().and_then(|k| r.inputs.get(k));
+        for (c, s) in p.channels.iter().zip(seen.into_iter().flatten()) {
+            if c.dir == Direction::Input && !matches!(p.types.get(c.ty), Type::Stream(_)) {
+                let mut leaves = Vec::new();
+                sample_inputs(&c.name, s, &mut leaves);
+                inputs.extend(leaves.into_iter().map(|(n, v)| ((k, n), v)));
+            }
         }
         for (s, n) in delivered {
             inputs.insert((k, format!("i.stream.{s}.n")), Val::Int(n));
@@ -310,12 +344,7 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
     for k in 0..=ticks {
         let mut env = states.last().cloned().unwrap_or_default();
         for (n, sort) in &model.inputs {
-            let from_sim = bound
-                .iter()
-                .find(|(i, _)| format!("i.{i}") == *n)
-                .and_then(|(_, o)| states.last().and_then(|s| s.get(&format!("s.out.{o}")).copied()));
-            let v = inputs.get(&(k, n.clone())).copied().or(from_sim).unwrap_or(Val::zero(*sort));
-            env.insert(n.clone(), v);
+            env.insert(n.clone(), inputs.get(&(k, n.clone())).map_or(Val::zero(*sort), |v| fit(*v, *sort)));
         }
         let step: eval::Env = model
             .state
@@ -329,6 +358,14 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
         for (i, inv) in model.invariants.iter().enumerate() {
             let holds = eval::eval(inv, &step);
             assert_eq!(holds, Val::Bool(true), "{name} t={k}: Invariante {i} verletzt");
+        }
+        // Die Annahmen gelten fuer die Eingaben jedes Laufs des Interpreters:
+        // Eine, die eine solche Eingabe ausschliesst, verschwiege Laeufe.
+        // Sie stehen ueber dem Zustand nach dem Tick und seinen Eingaben.
+        let mut seen = env.clone();
+        seen.extend(step.iter().map(|(n, v)| (n.clone(), *v)));
+        for (i, a) in model.assumptions.iter().enumerate() {
+            assert_eq!(eval::eval(a, &seen), Val::Bool(true), "{name} t={k}: Annahme {i} verletzt");
         }
         states.push(step);
     }
@@ -1817,6 +1854,33 @@ machine other:
         loop:
             abort "fertig"
 "#;
+
+/// Der Rand (3.5) mit gehaltenen Abtastungen: Ohne Lieferung gilt die
+/// vorige weiter, auch ein `Suspect`, und `max_slew` misst ab der letzten
+/// guten Lieferung, nicht ab dem letzten Tick.
+const EDGE: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  x : int in 0..100 @ hw("i/x") with max_slew = 1000, debounce = 1, max_age = 50 ms
+
+output y : int in 0..100 @ sim("o/y")
+output q : int in 0..9   @ sim("o/q")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            y = x.or(0)
+            q = 1 if x.suspect else (2 if x.stale else (0 if x.valid else 3))
+"#;
+
+#[test]
+fn held_samples_agree() {
+    let stim = "t=1 in x 50\nt=2 in x 55\nt=4 in x 72\nt=5 in x 200\nt=8 in x 75\nt=9 in x 20 bad\nt=10 in x 30\n";
+    agree_program("EDGE", &compile("EDGE", EDGE), stim, 18);
+}
 
 #[test]
 fn every_cause_of_last_fault_agrees() {

@@ -62,6 +62,10 @@ pub struct Image {
     /// Inputs, die der Stimulus in diesem Tick gesetzt hat; ihre
     /// `sim`-Bindung ruht so lange (8.3).
     driven: Vec<bool>,
+    /// Inputs mit einer Lieferung in diesem Tick, vom Stimulus, einer
+    /// `sim`-Bindung oder als Degradierung; die anderen halten ihre vorige
+    /// Abtastung, die altert (3.5).
+    pub delivered: Vec<bool>,
     /// `buf[s]` je Stream-Channel (9.1, 9.6).
     pub channel_bufs: HashMap<ChannelId, Buffer>,
     /// `buf[s]` je internem Stream; was in Tick k gesendet wird, ist ab k+1
@@ -221,6 +225,7 @@ impl Image {
             port_queues: HashMap::new(),
             port_last: HashMap::new(),
             port_writes: Vec::new(),
+            delivered: vec![false; p.channels.len()],
             driven,
             channel_bufs,
             stream_bufs,
@@ -249,6 +254,7 @@ impl Image {
     pub fn set_input(&mut self, c: ChannelId, sample: Sample, now: i64) {
         self.inputs[c.index()] = self.through_edge(sample, c, now);
         self.driven[c.index()] = true;
+        self.delivered[c.index()] = true;
     }
 
     /// Der Treiber eines Inputs haelt seinen Vertrag nicht (12.6, Zeile 2):
@@ -258,6 +264,7 @@ impl Image {
         self.last_good[c.index()] = None;
         self.inputs[c.index()] = Sample::bad(Reason::Driver);
         self.driven[c.index()] = true;
+        self.delivered[c.index()] = true;
     }
 
     /// Ein Element liess sich nicht decodieren (12.6, Zeile 5): verworfen,
@@ -516,6 +523,7 @@ impl Image {
                 _ => Sample::good(value),
             };
             self.inputs[inp.index()] = self.through_edge(sample, inp, now);
+            self.delivered[inp.index()] = true;
         }
         // 12.10: Ein Strom an `mmio/ADR/r` liefert je Lesen ein Element.
         let ports: Vec<(String, ChannelId)> = self
@@ -552,6 +560,7 @@ impl Image {
     /// Laesst alle Inputs um einen Tick altern; ueberschreitet das Alter
     /// `max_age`, wird die Abtastung `Stale` (3.5).
     pub fn age_inputs(&mut self, p: &Program, tick_ns: i64) {
+        self.delivered.fill(false);
         for (i, c) in p.channels.iter().enumerate() {
             if c.dir != Direction::Input {
                 continue;

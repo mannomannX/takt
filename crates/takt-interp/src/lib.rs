@@ -52,7 +52,7 @@ pub use property::{Monitor, Outcome, PropertyResult};
 pub use run::{Ended, Run, RunOptions, RunResult, StimulusError, Verdict, read_stimulus, run};
 pub use system::Sim;
 pub use trace::{Trace, TraceLine};
-pub use value::{Fault, Quality, Reason, Sample, Trap, Value};
+pub use value::{Fault, Quality, Reason, Sample, Seen, Trap, Value};
 
 use takt_mir::expr::Expr;
 use takt_mir::program::Program;

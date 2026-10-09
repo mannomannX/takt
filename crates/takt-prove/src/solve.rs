@@ -819,6 +819,11 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 _ => quality::GOOD,
             };
             let (last, since) = gates.entry(c.name.clone()).or_insert((None, 0));
+            // Ohne Lieferung gilt die vorige Abtastung weiter (3.5).
+            if values.get(&(k, format!("i.{}.held", c.name))) == Some(&Val::Bool(true)) {
+                *since += 1;
+                continue;
+            }
             let line = match q {
                 quality::SUSPECT => {
                     let edge = edges.iter().find(|e| e.name == c.name);

@@ -755,6 +755,9 @@ pub struct Sim<'p> {
     /// Ausgefuehrte Anweisungen des laufenden Ticks je Maschine, wenn die
     /// Schrittsicht laeuft (`takt sim --steps`).
     pub steps: Option<Vec<(MachineId, crate::env::Step)>>,
+    /// Die Abtastungen der Inputs je Tick nach dem Rand, wie die Maschinen
+    /// sie lesen, wenn erbeten (`RunOptions::inputs`).
+    pub seen: Option<Vec<Vec<crate::value::Seen>>>,
     /// Nichtfluechtiger Speicher fuer `persist var` (5.9); vor `init()` zu
     /// fuellen, danach unveraendert — das Schreiben liegt ausserhalb der
     /// Semantik.
@@ -876,6 +879,7 @@ impl<'p> Sim<'p> {
             foreign: Vec::new(),
             observations: Vec::new(),
             steps: None,
+            seen: None,
             nvm: Nvm::new(),
             scoped,
             active_scoped,
@@ -907,6 +911,7 @@ impl<'p> Sim<'p> {
         let tick_ns = program.config.tick;
         self.observations.clear();
         self.image.apply_sim_bindings(program, 0);
+        self.record_inputs();
         // Ψ traegt im Tick 0 die Anfangswerte der Variablen, damit die
         // `enter`- und Entry-`loop`-Bloecke sie schon lesen koennen (1.4).
         for id in [self.order.clone(), self.foreign.clone()].concat() {
@@ -1200,6 +1205,19 @@ impl<'p> Sim<'p> {
         }
     }
 
+    fn record_inputs(&mut self) {
+        if let Some(seen) = &mut self.seen {
+            let delivered = &self.image.delivered;
+            let tick = self
+                .image
+                .inputs
+                .iter()
+                .zip(delivered)
+                .map(|(s, f)| crate::value::Seen { sample: s.clone(), fresh: *f });
+            seen.push(tick.collect());
+        }
+    }
+
     /// Laesst die Abtastungen um einen Tick altern (3.5). Getrennt von
     /// `step`, weil der Stimulus des Ticks dazwischen liegt: eine frische
     /// Lieferung hat das Alter ihres Treibers, nicht schon einen Tick.
@@ -1438,6 +1456,7 @@ impl<'p> Sim<'p> {
         // mit dem Alter 0 gelesen wird (9.4: `I_k = sample()`).
         let now = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(tick_ns);
         self.image.apply_sim_bindings(program, now);
+        self.record_inputs();
         // deliver(D_k): interne Streams werden sichtbar, Ueberlauf merkt den
         // Fault fuer jeden Konsumenten vor (9.6).
         self.deliver()?;

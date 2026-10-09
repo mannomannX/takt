@@ -46,6 +46,16 @@ pub struct Sample {
     pub reason: Option<Reason>,
 }
 
+/// Eine Abtastung, wie die Maschinen sie in einem Tick lesen
+/// (`RunOptions::inputs`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Seen {
+    /// Die Abtastung nach dem Rand.
+    pub sample: Sample,
+    /// Kam in diesem Tick eine Lieferung an? Sonst gilt die vorige weiter.
+    pub fresh: bool,
+}
+
 impl Sample {
     /// `x.valid`: `Good` oder `Suspect` mit Wert (3.5).
     pub fn valid(&self) -> bool {
