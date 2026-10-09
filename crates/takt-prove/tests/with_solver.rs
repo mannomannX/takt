@@ -80,6 +80,43 @@ fn a_path_at_the_unroll_limit_fits_the_stack_of_a_test() {
     assert!(text.contains("(check-sat)"));
 }
 
+/// Eine Maschine mit den Deklarationen `top`, der Variablen `var` und
+/// `body` im Tick.
+fn machine_with(top: &str, var: &str, body: &str) -> Program {
+    compile(&format!(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n{top}\n\
+         output n : int @ hw(\"n\") with safe = 0\n\n\
+         machine m:\n    var {var}\n    initial RUN\n\n    state RUN:\n        loop:\n\
+         \x20           n = 1\n{body}"
+    ))
+}
+
+/// **Die Grenze des Zustands.** Das Flash-Modell der Prelude haelt 256
+/// Chunks zu 256 Byte, ueber 65 000 Blaetter; jede Verzweigung mischte sie
+/// alle, und der Wahrheitstest der Matrix starb daran am Speicher (FB-485).
+/// Ein Viertel davon kodiert weiter.
+#[test]
+fn a_state_beyond_the_limit_is_out_of_reach() {
+    let e = encode(&machine_with("", "mem : map<int, bytes<256>, 256> = default", "")).expect_err("ueber der Grenze");
+    assert!(e.what.contains(&takt_prove::encode::STATE_LIMIT.to_string()), "{}", e.what);
+    let r = encode(&machine_with("", "mem : map<int, bytes<64>, 256> = default", ""));
+    assert!(r.is_ok(), "unter der Grenze: {:?}", r.err());
+}
+
+/// **Die Knotengrenze vor dem Bau.** `send` eines Elements aus 4096 Byte
+/// in einen Sendepuffer aus 4096 Byte waehlt fuer jeden Platz unter jedem
+/// Byte des Werts; das sind ueber 50 Millionen Knoten, und der Kodierer
+/// lehnt ab, bevor er einen baut (FB-485).
+#[test]
+fn a_send_beyond_the_node_limit_is_refused_before_it_is_built() {
+    let decl = "output rx : stream<bytes<4096>> @ hw(\"rx\") with capacity = 4096";
+    let built = takt_prove::term::built();
+    let program = machine_with(decl, "page : bytes<4096> = default", "            send rx, page\n");
+    let e = encode(&program).expect_err("ueber der Grenze");
+    assert!(e.what.contains(&takt_prove::encode::MODEL_LIMIT.to_string()), "{}", e.what);
+    assert!(takt_prove::term::built() - built < takt_prove::encode::MODEL_LIMIT / 4, "gebaut, dann abgelehnt");
+}
+
 #[test]
 fn an_inductive_invariant_is_proven() {
     let Some(solver) = solver() else { return };
@@ -780,6 +817,40 @@ property clean: never(odd)
         let Verdict::Violated { stimulus, .. } = &report.verdict else { panic!("{report:?}") };
         assert!(stimulus.contains(" in s ["), "{name}: {stimulus}");
     }
+}
+
+/// Ein Input zusammengesetzten Typs steht im Gegenbeispiel in seiner
+/// Textform, und der Interpreter bestaetigt es.
+#[test]
+fn a_composite_input_counterexample_is_confirmed() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+enum Cmd: NONE, MOVE(dx: int in -100..100, dy: int in -100..100), STOP(hard: bool)
+
+input  cmd  : Cmd @ hw(\"i/cmd\")
+output move : int in -100..100 @ hw(\"o/move\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            match cmd.or(NONE):
+                case MOVE(dx, dy):
+                    move = dx
+                case _:
+                    move = 0
+
+property calm: never(move > 50)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let Verdict::Violated { stimulus, .. } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    assert!(stimulus.contains("in cmd MOVE("), "{stimulus}");
 }
 
 /// Matrizen (3.11): Summe und Transponierte rechnet der Solver genau, und

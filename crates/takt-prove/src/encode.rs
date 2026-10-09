@@ -41,9 +41,10 @@ use takt_mir::types::{Const, FloatWidth, HandleKind, IntWidth, Type};
 use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId};
 
 use crate::eval;
-use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
+use crate::term::{self, Fun, Node, Op, Rounding, Sort, Term};
 
 mod canon;
+mod composite;
 mod fault;
 mod job;
 mod map;
@@ -311,9 +312,24 @@ impl Cx<'_> {
 /// Wie viele Schleifendurchlaeufe die Kodierung eines Pfads ausrollt: des
 /// Starts einer Maschine oder ihres Ticks aus einem Blatt. Jeder Durchlauf
 /// vertieft die Terme der Variablen, die er schreibt; nichts rekursiert
-/// ueber diese Tiefe (`term::post_order`), die Grenze haelt das Modell in
-/// der Groesse, die Auswertung und Solver tragen (FB-403).
+/// ueber diese Tiefe (`term::post_order`). Die Grenze lehnt eine lange
+/// Schleife ab, bevor sie gebaut ist (FB-403); was ein Durchlauf baut,
+/// zaehlt [`MODEL_LIMIT`].
 pub const UNROLL_LIMIT: i64 = 4096;
+
+/// Wie viele Knoten die Kodierung eines Programms baut. Ein Durchlauf
+/// kostet, was sein Rumpf baut: `push` auf `bytes<4096>` mit freier Laenge
+/// schreibt jeden der 4096 Plaetze, und 256 solche Durchlaeufe liegen tief
+/// unter [`UNROLL_LIMIT`] (`long_job.takt`, 8 Millionen Knoten). Die Grenze
+/// haelt Zeit und Speicher der Kodierung in dem, was Auswertung und Solver
+/// tragen (FB-485).
+pub const MODEL_LIMIT: u64 = 1 << 24;
+
+/// Wie viele Blaetter der Zustand hat. Jede Verzweigung mischt den ganzen
+/// Zustand, und jeder Schritt einer Pruefung deklariert ihn neu; der
+/// groesste Zustand im Korpus hat knapp 9000 Blaetter, das Flash-Modell
+/// mit 256 Chunks zu 256 Byte ueber 65 000 (FB-485).
+pub const STATE_LIMIT: usize = 1 << 15;
 
 /// Bis zu so vielen Ticks seit der letzten guten Lieferung steht die Grenze
 /// von `max_slew` als Konstante im Modell (`slew_limit`).
@@ -344,6 +360,8 @@ struct Enc<'p> {
     job_assumptions: Vec<Term>,
     /// Ausgerollte Schleifendurchlaeufe des laufenden Pfads ([`UNROLL_LIMIT`]).
     unrolled: i64,
+    /// Der Knotenzaehler des Threads beim Start ([`MODEL_LIMIT`]).
+    built_at: u64,
     /// Die Typen der Lokalen des Rumpfs, der gerade eingebettet wird.
     local_types: BTreeMap<VarId, TypeId>,
     /// Die Monitore der Eigenschaften mit Zeitoperatoren (13.3).
@@ -428,6 +446,9 @@ pub struct Edge {
     /// `N` eines oversampelten Kanals `samples<T, N>` (8.9); Sorte, Range und
     /// Rand gelten dann je Abtastwert.
     samples: Option<u32>,
+    /// Ein Input zusammengesetzten Typs: der Typ und seine Blaetter mit Pfad
+    /// und Sorte.
+    composite: Option<(TypeId, Vec<(String, Sort)>)>,
 }
 
 impl Edge {
@@ -449,9 +470,10 @@ impl Edge {
     /// Bei einem oversampelten Kanal sind es das Array `x[j]`, ob es einen
     /// Wert hat, `v`, und fuer `Suspect` das letzte gute Array `last`.
     fn parts(&self) -> Vec<String> {
-        let mut out: Vec<String> = match self.samples {
-            Some(n) => (0..n).map(|j| format!("x[{j}]")).chain(["v".to_string()]).collect(),
-            None => vec!["x".to_string()],
+        let mut out: Vec<String> = match (self.samples, &self.composite) {
+            (Some(n), _) => (0..n).map(|j| format!("x[{j}]")).chain(["v".to_string()]).collect(),
+            (None, Some((_, leaves))) => leaves.iter().map(|(path, _)| format!("x{path}")).collect(),
+            (None, None) => vec!["x".to_string()],
         };
         out.push("q".into());
         if self.fresh_ticks.is_some() {
@@ -537,6 +559,9 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         enc.monitors = enc.monitors()?;
     }
     let init = enc.init()?;
+    if init.len() > STATE_LIMIT {
+        return no(format!("ein Zustand aus mehr als {STATE_LIMIT} Blaettern"), Span::default());
+    }
     let init_sites = std::mem::take(&mut enc.sites);
     let pre: Env = init.keys().map(|k| (k.clone(), Term::var(k.clone(), init[k].sort()))).collect();
     let next = enc.tick(&pre)?;
@@ -640,6 +665,7 @@ impl<'p> Enc<'p> {
             tunes_seen: BTreeSet::new(),
             job_assumptions: Vec::new(),
             unrolled: 0,
+            built_at: term::built(),
             local_types: BTreeMap::new(),
             monitors: Vec::new(),
             confirms: Vec::new(),
@@ -1826,6 +1852,7 @@ impl Enc<'_> {
             if flow.alive.is_bool(false) {
                 break;
             }
+            self.model_budget(0, s.span)?;
             match &s.kind {
                 StmtKind::Return(e) => {
                     let v = self.value(e, cx, env, flow)?;
@@ -1978,6 +2005,7 @@ impl Enc<'_> {
                 break;
             }
             let span = s.span;
+            self.model_budget(0, span)?;
             match &s.kind {
                 StmtKind::Assign { target, value } => {
                     let v = self.value(value, cx, env, flow)?;
@@ -2097,10 +2125,7 @@ impl Enc<'_> {
                 }
                 StmtKind::ForRange { var, count, body } => {
                     let n = self.const_int(count)?.max(0);
-                    self.unrolled = self.unrolled.saturating_add(n);
-                    if self.unrolled > UNROLL_LIMIT {
-                        return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
-                    }
+                    self.unroll_steps(n, span)?;
                     let loc = self.loc_var(m, *var);
                     self.breaks.push(Vec::new());
                     for i in 0..n {
@@ -2116,10 +2141,7 @@ impl Enc<'_> {
                     if matches!(self.p.types.get(iter.ty), Type::Array { .. } | Type::Samples { .. }) =>
                 {
                     let V::Node(items) = self.value(iter, cx, env, flow)? else { return no("`for … in`", span) };
-                    self.unrolled = self.unrolled.saturating_add(items.len() as i64);
-                    if self.unrolled > UNROLL_LIMIT {
-                        return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
-                    }
+                    self.unroll_steps(items.len() as i64, span)?;
                     let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
                     self.breaks.push(Vec::new());
                     for (k, item) in items.into_iter().enumerate() {
@@ -2202,10 +2224,20 @@ impl Enc<'_> {
     }
 
     /// Zaehlt ausgerollte Durchlaeufe gegen [`UNROLL_LIMIT`].
-    fn unroll_steps(&mut self, n: i64, span: Span) -> R<()> {
+    pub(super) fn unroll_steps(&mut self, n: i64, span: Span) -> R<()> {
         self.unrolled = self.unrolled.saturating_add(n);
         if self.unrolled > UNROLL_LIMIT {
             return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
+        }
+        Ok(())
+    }
+
+    /// Haelt das Modell unter [`MODEL_LIMIT`], mit `more` Knoten, die
+    /// gleich entstehen; vor jeder Anweisung geprueft, bricht es ab, bevor
+    /// ein Pfad Speicher und Zeit verbraucht.
+    pub(super) fn model_budget(&self, more: u64, span: Span) -> R<()> {
+        if (term::built() - self.built_at).saturating_add(more) > MODEL_LIMIT {
+            return no(format!("mehr als {MODEL_LIMIT} Knoten im Modell"), span);
         }
         Ok(())
     }
@@ -3359,7 +3391,18 @@ impl Enc<'_> {
                 Type::Samples { elem, len } => (*elem, Some(*len)),
                 _ => (c.ty, None),
             };
-            let sort = self.sort_of(ty, c.span)?;
+            // Ein zusammengesetzter Wert: je Blatt eine Eingabe, ohne Range und
+            // `max_slew` (`limits_of`).
+            let composite = match samples {
+                None if self.composite(ty) => {
+                    let mut locs = Vec::new();
+                    Enc::leaf_locs("", &self.shape(ty, c.span)?, &mut locs);
+                    let leaves = locs.into_iter().map(|(path, s)| Ok((path, self.leaf_sort(&s, c.span)?)));
+                    Some((ty, leaves.collect::<R<Vec<_>>>()?))
+                }
+                _ => None,
+            };
+            let sort = if composite.is_some() { Sort::Int } else { self.sort_of(ty, c.span)? };
             let (range, outside) = match self.p.types.get(ty) {
                 Type::Int { range: Some(r), width, .. } => {
                     let (lo, hi) = (int_bound(&r.lo), int_bound(&r.hi));
@@ -3412,6 +3455,7 @@ impl Enc<'_> {
                 tick: self.p.config.tick,
                 fresh_ticks: c.attrs.max_age.map(|a| a / self.p.config.tick.max(1)),
                 samples,
+                composite,
             });
         }
         Ok(out)
@@ -3439,6 +3483,9 @@ impl Enc<'_> {
     fn readable(&mut self, edge: &Edge, pre: &Env) -> Term {
         if edge.samples.is_some() {
             return self.samples_readable(edge);
+        }
+        if edge.composite.is_some() {
+            return self.composite_readable(edge);
         }
         let q = self.quality(edge);
         let good = Term::eq(q.clone(), Term::int(quality::GOOD));
@@ -3514,13 +3561,17 @@ impl Enc<'_> {
     /// die Abtastung davor ist `Bad` ohne Wert (`Image::new`).
     fn edges_initial(&self, env: &mut Env) -> R<()> {
         for edge in self.edges()? {
+            let leaf = |part: &str| {
+                let (_, leaves) = edge.composite.as_ref()?;
+                leaves.iter().find(|(path, _)| part.strip_prefix('x') == Some(path.as_str())).map(|(_, s)| *s)
+            };
             for part in edge.parts() {
                 let v = match part.as_str() {
                     "q" => Term::int(quality::BAD),
                     "v" | "has" | "last.has" => Term::bool(false),
                     "age" | "strikes" => Term::int(0),
                     "gap" => Term::int(1),
-                    _ => Enc::zero(edge.sort),
+                    other => Enc::zero(leaf(other).unwrap_or(edge.sort)),
                 };
                 env.insert(edge.loc(&format!("{part}.prev")), v.clone());
                 env.insert(edge.loc(&part), v);
@@ -3536,9 +3587,10 @@ impl Enc<'_> {
     /// Annahmen dieses Ticks.
     fn edges_next(&mut self, pre: &Env, cur: &mut Env) -> R<()> {
         for edge in self.edges()? {
-            let next = match edge.samples {
-                Some(_) => self.samples_next(&edge, pre),
-                None => self.scalar_next(&edge, pre),
+            let next = match (edge.samples, &edge.composite) {
+                (Some(_), _) => self.samples_next(&edge, pre),
+                (None, Some(_)) => self.composite_next(&edge, pre)?,
+                (None, None) => self.scalar_next(&edge, pre),
             };
             for (part, value) in next {
                 cur.insert(edge.loc(&format!("{part}.prev")), pre[&edge.loc(&part)].clone());
@@ -3637,6 +3689,10 @@ impl Enc<'_> {
         for edge in self.edges()? {
             if edge.samples.is_some() {
                 self.samples_assumptions(&edge, &mut out);
+                continue;
+            }
+            if edge.composite.is_some() {
+                self.composite_assumptions(&edge, &mut out)?;
                 continue;
             }
             let q = self.quality(&edge);

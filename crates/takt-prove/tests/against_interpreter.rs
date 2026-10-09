@@ -216,7 +216,8 @@ fn same(a: Val, b: Val) -> bool {
 /// Eine Abtastung, wie die Maschinen sie lesen, als Eingaben des Modells:
 /// `i.<c>.held` ohne Lieferung in diesem Tick, `i.<c>.q` die Qualitaet,
 /// `i.<c>` der Wert, wenn es einen gibt.
-fn sample_inputs(name: &str, seen: &Seen, out: &mut Vec<(String, Val)>) {
+fn sample_inputs(p: &Program, c: &takt_mir::program::Channel, seen: &Seen, out: &mut Vec<(String, Val)>) {
+    let name = &c.name;
     use takt_prove::encode::quality;
     let s = &seen.sample;
     out.push((format!("i.{name}.held"), Val::Bool(seen.delivery.is_none())));
@@ -238,12 +239,27 @@ fn sample_inputs(name: &str, seen: &Seen, out: &mut Vec<(String, Val)>) {
             out.push((format!("i.{name}.v"), Val::Bool(true)));
             out.extend(items.iter().enumerate().filter_map(|(j, x)| Some((format!("i.{name}[{j}]"), val_of(x)?))));
         }
-        Some(v) if visible => out.extend(val_of(v).map(|v| (format!("i.{name}"), v))),
+        // Ein zusammengesetzter Wert: seine Blaetter, wie der Trace ihn schreibt.
+        Some(v) if visible && composite(p, c.ty) => {
+            let text = takt_interp::trace::value_text(v, c.ty, p);
+            leaves_of(p, c.ty, &text, &format!("i.{name}"), out)
+                .unwrap_or_else(|| panic!("`{text}` von `{name}` hat keinen Wert"));
+        }
+        Some(v) if visible => out.extend(val_of(v).map(|x| (format!("i.{name}"), x))),
         _ => {}
     }
     let checked = seen.delivery.is_some() && matches!(s.quality, Quality::Good | Quality::Suspect);
     if let Some(Sample { value: Some(Value::Samples(items)), .. }) = seen.delivery.as_ref().filter(|_| checked) {
         out.extend(items.iter().enumerate().filter_map(|(j, x)| Some((format!("i.{name}.d[{j}]"), val_of(x)?))));
+    }
+}
+
+/// Hat ein Wert dieses Typs im Modell mehrere Blaetter?
+fn composite(p: &Program, ty: TypeId) -> bool {
+    match p.types.get(ty) {
+        Type::Enum(e) => p.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty()),
+        Type::Int { .. } | Type::Float { .. } | Type::Bool | Type::Duration { .. } => false,
+        _ => true,
     }
 }
 
@@ -330,7 +346,7 @@ fn agree_program(name: &str, p: &Program, stimulus: &str, ticks: u64) {
         for (c, s) in p.channels.iter().zip(seen.into_iter().flatten()) {
             if c.dir == Direction::Input && !matches!(p.types.get(c.ty), Type::Stream(_)) {
                 let mut leaves = Vec::new();
-                sample_inputs(&c.name, s, &mut leaves);
+                sample_inputs(p, c, s, &mut leaves);
                 inputs.extend(leaves.into_iter().map(|(n, v)| ((k, n), v)));
             }
         }
@@ -2148,6 +2164,50 @@ fn matrices_agree() {
         let name = format!("MATRIX {width}");
         agree_program(&name, &compile(&name, &MATRIX.replace("WIDTH", width)), stim, 20);
     }
+}
+
+/// Inputs zusammengesetzter Typen (3.5): ein Enum mit Feldern und ein
+/// Record, gut, gehalten bis `max_age`, `stale` und `bad`; gelesen mit
+/// `.or`, `match` und Feldzugriff.
+const COMPOSITE_INPUT: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+enum Status: IDLE, BUSY, ERROR(code: u8)
+
+record Pos:
+    x : int in -100..100
+    y : int in -100..100
+
+input  st  : Status @ hw("i/st")  with max_age = 30 ms
+input  pos : Pos    @ hw("i/pos") with max_age = 1 s
+
+output code : u8                @ sim("o/code")
+output busy : bool              @ sim("o/busy")
+output sum  : int in -200..200 @ sim("o/sum")
+output q    : int in 0..9       @ sim("o/q")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            q = 2 if st.stale else (0 if st.valid else 3)
+            busy = st.or(IDLE) == BUSY
+            match st.or(ERROR(code = 5)):
+                case ERROR(c):
+                    code = c
+                case _:
+                    code = 0
+            var p : Pos = pos.or(Pos(x = 0, y = 0))
+            sum = p.x + p.y
+"#;
+
+#[test]
+fn composite_inputs_agree() {
+    let stim = "t=1 in st BUSY\nt=1 in pos Pos(3, -4)\nt=3 in st ERROR(7)\nt=4 in pos Pos(50, 20)\n\
+                t=9 in st IDLE\nt=10 in st stale\nt=12 in st ERROR(9) bad\nt=13 in pos stale\nt=15 in st BUSY\n";
+    agree_program("COMPOSITE_INPUT", &compile("COMPOSITE_INPUT", COMPOSITE_INPUT), stim, 20);
 }
 
 #[test]

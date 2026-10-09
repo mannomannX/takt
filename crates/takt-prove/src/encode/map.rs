@@ -15,7 +15,7 @@ use takt_mir::stmt::{Block, Method};
 use takt_mir::types::Type;
 
 use super::value::V;
-use super::{Cx, Enc, Env, Flow, R, UNROLL_LIMIT, ite_env, no};
+use super::{Cx, Enc, Env, Flow, R, ite_env, no};
 use crate::term::{Op, Term};
 
 fn int(i: i64) -> Term {
@@ -282,10 +282,7 @@ impl Enc<'_> {
     ) -> R<()> {
         let v = self.value(iter, cx, env, flow)?;
         let entries = self.map_entries(iter.ty, v, span)?;
-        self.unrolled = self.unrolled.saturating_add(entries.len() as i64);
-        if self.unrolled > UNROLL_LIMIT {
-            return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
-        }
+        self.unroll_steps(entries.len() as i64, span)?;
         let (k_loc, k_ty, v_loc, v_ty) = vars;
         self.breaks.push(Vec::new());
         for (inside, key, value) in entries {

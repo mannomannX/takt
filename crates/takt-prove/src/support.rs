@@ -247,18 +247,16 @@ fn stmt(s: StmtTag) -> Support {
 #[deny(clippy::wildcard_enum_match_arm)]
 fn ty(t: TypeTag) -> Support {
     match t {
-        TypeTag::Bool | TypeTag::Float | TypeTag::Duration => Yes,
-        TypeTag::Enum => Partial("mit Feldern nicht als Typ eines Inputs"),
-        TypeTag::Record | TypeTag::Array | TypeTag::Optional | TypeTag::Bytes | TypeTag::Vec => {
-            Partial("nicht als Typ eines Inputs")
-        }
+        TypeTag::Bool | TypeTag::Float | TypeTag::Duration | TypeTag::Enum | TypeTag::Result => Yes,
+        TypeTag::Record | TypeTag::Array | TypeTag::Optional | TypeTag::Bytes | TypeTag::Vec => Yes,
         TypeTag::Int => Partial("ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen"),
         TypeTag::HandleBlock => Partial("Blockinstanzen nur ueber ihre Felder"),
         TypeTag::Stream => Partial(
             "Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang, Records vom Rand fester Groesse; \
              Ausgabestroeme ohne Leser",
         ),
-        TypeTag::Str | TypeTag::Line | TypeTag::Result => Partial("nicht als Typ eines Inputs"),
+        // Ein Text vom Rand ist gueltiges UTF-8; das Modell nimmt jedes Byte.
+        TypeTag::Str | TypeTag::Line => Partial("als Input ohne die UTF-8-Pruefung des Randes"),
         TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),
         TypeTag::Map => Yes,
         TypeTag::Capture | TypeTag::HandleJob | TypeTag::Samples => Yes,

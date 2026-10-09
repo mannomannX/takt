@@ -12,11 +12,8 @@
 
 use std::ops::Not;
 
-use takt_diag::Span;
-use takt_mir::ChannelId;
-
 use super::value::V;
-use super::{Cx, Edge, Enc, Env, Flow, R, quality};
+use super::{Edge, Enc, Env, quality};
 use crate::term::{Op, Sort, Term};
 
 /// Der Rand nach den Abtastwerten eines Ticks.
@@ -185,27 +182,8 @@ impl Enc<'_> {
         ])
     }
 
-    /// Das Array, das die Maschinen lesen; ist es nicht lesbar, faultet das
-    /// Lesen mit `SensorFault` (3.5).
-    pub(super) fn samples_value(&mut self, c: ChannelId, cx: &Cx<'_>, flow: &mut Flow, span: Span) -> R<V> {
-        let edge = self.edge_of(c)?;
-        self.require_readable(&edge, cx, flow, span);
-        Ok(V::Node(self.sample_items(&edge, "").into_iter().map(V::Leaf).collect()))
-    }
-
-    /// `x.or(d)` (3.5): der Ersatz nur, wo das Array nicht lesbar ist.
-    pub(super) fn samples_or(
-        &mut self,
-        c: ChannelId,
-        default: &super::Expr,
-        cx: &Cx<'_>,
-        env: &Env,
-        flow: &mut Flow,
-    ) -> R<V> {
-        let edge = self.edge_of(c)?;
-        let ok = self.readable(&edge, cx.pre);
-        let items = V::Node(self.sample_items(&edge, "").into_iter().map(V::Leaf).collect());
-        let d = self.guarded(&ok.clone().not(), flow, |enc, flow| enc.value(default, cx, env, flow))?;
-        Ok(V::ite(&ok, items, d))
+    /// Das Array, das die Maschinen lesen.
+    pub(super) fn sample_array(&mut self, edge: &Edge) -> V {
+        V::Node(self.sample_items(edge, "").into_iter().map(V::Leaf).collect())
     }
 }

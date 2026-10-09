@@ -817,6 +817,10 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 samples_line(values, program, k, &c.name, *elem, *len, &mut out);
                 continue;
             }
+            if composite_type(program, c.ty) {
+                composite_line(values, program, k, c, &mut out);
+                continue;
+            }
             let Some(v) = values.get(&(k, format!("i.{}", c.name))) else { continue };
             let q = match values.get(&(k, format!("i.{}.q", c.name))) {
                 Some(Val::Int(q)) => *q,
@@ -882,6 +886,38 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
     }
     job_records(values, program, depth, &mut out);
     out
+}
+
+/// Hat ein Input einen zusammengesetzten Wert (`Enc::composite`)?
+fn composite_type(program: &Program, ty: takt_mir::TypeId) -> bool {
+    match program.types.get(ty) {
+        Type::Enum(e) => program.enums[e.index()].variants.iter().any(|v| !v.fields.is_empty()),
+        Type::Int { .. } | Type::Float { .. } | Type::Bool | Type::Duration { .. } => false,
+        _ => true,
+    }
+}
+
+/// Eine Lieferung eines Inputs zusammengesetzten Typs: der Wert aus seinen
+/// Blaettern, ohne Lieferung keine Zeile, ohne Wert `stale`, vom Treiber `bad`.
+fn composite_line(
+    values: &BTreeMap<(u32, String), Val>,
+    program: &Program,
+    k: u32,
+    c: &takt_mir::program::Channel,
+    out: &mut String,
+) {
+    let get = |at: &str| values.get(&(k, at.to_string())).copied();
+    let Some(Val::Int(q)) = get(&format!("i.{}.q", c.name)) else { return };
+    if get(&format!("i.{}.held", c.name)) == Some(Val::Bool(true)) {
+        return;
+    }
+    let text = element_text(program, c.ty, &format!("i.{}", c.name), &get);
+    let line = match q {
+        crate::encode::quality::STALE => "stale".to_string(),
+        crate::encode::quality::BAD => format!("{text} bad"),
+        _ => text,
+    };
+    let _ = writeln!(out, "t={k} in {} {line}", c.name);
 }
 
 /// Eine Lieferung eines oversampelten Inputs (8.9): die Abtastwerte, die der

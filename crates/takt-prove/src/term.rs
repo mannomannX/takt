@@ -9,8 +9,20 @@
 //! [`post_order`] liefert die Knoten in der Reihenfolge, in der jeder nur
 //! seine schon behandelten Argumente braucht.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
+
+thread_local! {
+    /// Die Knoten, die dieser Thread gebaut hat; der Kodierer misst daran
+    /// die Groesse seines Modells (`encode::MODEL_LIMIT`).
+    static BUILT: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Wie viele Knoten dieser Thread bisher gebaut hat.
+pub fn built() -> u64 {
+    BUILT.with(Cell::get)
+}
 
 /// Sorte eines Terms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,6 +283,7 @@ impl std::ops::Not for Term {
 
 impl Term {
     fn new(n: Node) -> Term {
+        BUILT.with(|b| b.set(b.get() + 1));
         Term(Rc::new(n))
     }
 

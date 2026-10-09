@@ -19,7 +19,7 @@ use takt_mir::{ChannelId, TypeId};
 use super::text::Text;
 use super::value::V;
 use super::{Cx, Enc, Env, Exit, ExitKind, Flow, R, no};
-use crate::term::{Op, Term};
+use crate::term::{Node, Op, Term};
 
 /// Ein Ausgabestrom, den eine kodierte Maschine schreibt.
 #[derive(Clone, Debug)]
@@ -216,6 +216,7 @@ impl Enc<'_> {
             flow.alive = fits.clone();
         }
         let tail = wrap(add(head, len.clone()), t.cap);
+        self.model_budget(u64::from(t.cap) * (3 * data.bytes.len() as u64 + 8), span)?;
         for i in 0..t.cap {
             // Abstand des Platzes hinter dem Ende des Puffers.
             let d = sub(int(i64::from(i)), tail.clone());
@@ -234,7 +235,8 @@ impl Enc<'_> {
     }
 
     /// Der Treiber holt ab (`TxBuffer::drain`): bis zu `per_tick` Bytes vom
-    /// Kopf, im Tick 0 wie in jedem anderen.
+    /// Kopf, im Tick 0 wie in jedem anderen. Steht der Kopf fest, liest
+    /// jedes Byte seinen Platz ohne Auswahl ueber den Ring.
     pub(super) fn drain_tx(&self, env: &mut Env) {
         for t in &self.txs {
             let (head, len) = (t.head(env), env[&loc(t, "len")].clone());
@@ -242,14 +244,16 @@ impl Enc<'_> {
             let n = Term::ite(Term::bin(Op::Lt, len.clone(), per.clone()), len.clone(), per);
             for j in 0..t.per_tick {
                 let pos = wrap(add(head.clone(), int(i64::from(j))), t.cap);
-                let mut byte = int(0);
-                for i in (0..t.cap).rev() {
-                    byte = Term::ite(
-                        Term::eq(pos.clone(), int(i64::from(i))),
-                        env[&loc(t, &format!("q[{i}]"))].clone(),
-                        byte,
-                    );
-                }
+                let byte = match &*pos.0 {
+                    Node::Int(i) => env[&loc(t, &format!("q[{i}]"))].clone(),
+                    _ => (0..t.cap).rev().fold(int(0), |byte, i| {
+                        Term::ite(
+                            Term::eq(pos.clone(), int(i64::from(i))),
+                            env[&loc(t, &format!("q[{i}]"))].clone(),
+                            byte,
+                        )
+                    }),
+                };
                 let taken = Term::bin(Op::Lt, int(i64::from(j)), n.clone());
                 env.insert(loc(t, &format!("sent[{j}]")), Term::ite(taken, byte, int(0)));
             }

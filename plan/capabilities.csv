@@ -193,19 +193,19 @@ Type(Bool),ja,ja,ja
 Type(Int),ja,teilweise: ohne `u64`: Die Kodierung rechnet in 64 Bit mit Vorzeichen,ja
 Type(Float),ja,ja,ja
 Type(Duration),ja,ja,ja
-Type(Enum),ja,teilweise: mit Feldern nicht als Typ eines Inputs,ja
-Type(Record),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Array),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Bytes),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Vec),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Str),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Line),ja,teilweise: nicht als Typ eines Inputs,ja
+Type(Enum),ja,ja,ja
+Type(Record),ja,ja,ja
+Type(Array),ja,ja,ja
+Type(Bytes),ja,ja,ja
+Type(Vec),ja,ja,ja
+Type(Str),ja,teilweise: als Input ohne die UTF-8-Pruefung des Randes,ja
+Type(Line),ja,teilweise: als Input ohne die UTF-8-Pruefung des Randes,ja
 Type(Samples),ja,ja,ja
 Type(Table),ja,teilweise: nur als konstante Tabelle von `interp`,ja
 Type(Mat),ja,ja,ja
 Type(Map),ja,ja,ja
-Type(Optional),ja,teilweise: nicht als Typ eines Inputs,ja
-Type(Result),ja,teilweise: nicht als Typ eines Inputs,ja
+Type(Optional),ja,ja,ja
+Type(Result),ja,ja,ja
 Type(Stream),ja,"teilweise: Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang, Records vom Rand fester Groesse; Ausgabestroeme ohne Leser",ja
 Type(Capture),ja,ja,ja
 Type(HandleJob),ja,ja,ja

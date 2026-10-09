@@ -24,7 +24,7 @@ use takt_mir::{MachineId, TypeId, VarId};
 
 use super::text::Text;
 use super::value::V;
-use super::{Cx, Enc, Env, Exit, ExitKind, Flow, Mode, NOW, R, UNROLL_LIMIT, ite_env, no};
+use super::{Cx, Enc, Env, Exit, ExitKind, Flow, Mode, NOW, R, ite_env, no};
 use crate::term::{Op, Sort, Term};
 
 /// Ein Strom, wie das Modell ihn fuehrt.
@@ -253,14 +253,19 @@ impl Enc<'_> {
 
     /// Die Plaetze des Rings und, bei Elementen variabler Laenge, die
     /// Schranke in Bytes (`Buffer::push`). Belegt jedes Element gleich viele
-    /// Bytes, kappt `CAPB` geteilt durch ihre Zahl schon die Plaetze.
+    /// Bytes, kappt `CAPB` geteilt durch ihre Zahl schon die Plaetze. Jeder
+    /// Platz ist ein Zeitstempel und die Blaetter seines Elements im
+    /// Zustand; sie zaehlen gegen [`MODEL_LIMIT`](super::MODEL_LIMIT), bevor
+    /// einer gebaut ist.
     fn ring_slots(&self, elem: TypeId, cap: u32, bytes: u32, span: Span) -> R<(u32, Option<u32>)> {
-        self.shape(elem, span)?;
-        Ok(match self.element_bytes(elem) {
+        let shape = self.shape(elem, span)?;
+        let slots = match self.element_bytes(elem) {
             Some(0) => (cap, None),
             Some(size) => (cap.min(bytes / size), None),
             None => (cap, Some(bytes)),
-        })
+        };
+        self.model_budget(u64::from(slots.0) * (1 + Enc::leaf_count(&shape)), span)?;
+        Ok(slots)
     }
 
     /// Die Bytelast eines Werts (`stream::byte_len`): Text und Bytes ihre
@@ -757,15 +762,6 @@ impl Enc<'_> {
         }
     }
 
-    /// Rueckt den Unroll-Zaehler um ein Fenster vor.
-    fn unroll(&mut self, n: usize, span: Span) -> R<()> {
-        self.unrolled = self.unrolled.saturating_add(n as i64);
-        if self.unrolled > UNROLL_LIMIT {
-            return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
-        }
-        Ok(())
-    }
-
     /// Die Bindung eines Elements (8.7, `element_record`): die Captures,
     /// dann `.t`, `.seq` und der Inhalt unter `.data` oder `.text`.
     fn binding(&mut self, ty: TypeId, item: &Item, caps: Vec<V>, span: Span) -> R<V> {
@@ -830,7 +826,7 @@ impl Enc<'_> {
             let mine: Vec<&Handler> = handlers.iter().filter(|h| h.stream == key).collect();
             let span = mine[0].span;
             let (cursor, w) = self.window(m, key, span)?;
-            self.unroll(w.items.len(), span)?;
+            self.unroll_steps(w.items.len() as i64, span)?;
             for item in &w.items {
                 // Noch kein Handler hat das Element genommen.
                 let mut rest = Term::and(vec![flow.alive.clone(), item.present.clone()]);
@@ -944,7 +940,7 @@ impl Enc<'_> {
         }
         let m = cx.m.expect("Maschine");
         let (cursor, w) = self.window(m, key, span)?;
-        self.unroll(w.items.len(), span)?;
+        self.unroll_steps(w.items.len() as i64, span)?;
         let (at, ty) = (self.loc_var(m, var), self.machine(m).vars[var.index()].ty);
         self.breaks.push(Vec::new());
         for (j, item) in w.items.iter().enumerate() {

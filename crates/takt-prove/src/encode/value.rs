@@ -18,7 +18,7 @@ use takt_mir::stmt::{ArmPattern, Block, Method, Place};
 use takt_mir::types::Type;
 use takt_mir::{EnumId, MachineId, TypeId};
 
-use super::{Cx, Enc, Env, Exit, ExitKind, Flow, R, UNROLL_LIMIT, ite_env, no};
+use super::{Cx, Enc, Env, Exit, ExitKind, Flow, R, ite_env, no};
 use crate::term::{Op, Sort, Term};
 
 /// Ein Wert im Modell: ein skalarer Term oder seine Teile in der Ordnung
@@ -358,6 +358,14 @@ impl Enc<'_> {
     }
 
     /// Die Orte der Blaetter mit ihrer Gestalt.
+    /// Wie viele Blaetter ein Wert dieser Gestalt hat.
+    pub(super) fn leaf_count(s: &Shape) -> u64 {
+        match s {
+            Shape::Node(parts) => parts.iter().map(|(_, p)| Enc::leaf_count(p)).sum(),
+            _ => 1,
+        }
+    }
+
     pub(super) fn leaf_locs(base: &str, s: &Shape, out: &mut Vec<(String, Shape)>) {
         match s {
             Shape::Node(parts) => {
@@ -547,16 +555,15 @@ impl Enc<'_> {
                 self.mat_binary(*op, lhs, rhs, cx, env, flow, span)?
             }
             ExprKind::MatOp { op, args } => self.mat_op(*op, args, cx, env, flow, span)?,
-            ExprKind::Input { channel, .. } if matches!(self.p.types.get(e.ty), Type::Samples { .. }) => {
-                self.samples_value(*channel, cx, flow, span)?
-            }
+            // Ein zusammengesetzter Input: seine Blaetter, Samples ihr Array.
+            ExprKind::Input { channel, .. } => self.input_value(*channel, cx, flow, span)?,
             ExprKind::Accessor { base, accessor: Accessor::Or, args }
-                if matches!(self.p.types.get(base.ty), Type::Samples { .. }) =>
+                if matches!(base.kind, ExprKind::Input { .. }) =>
             {
                 let (ExprKind::Input { channel, .. }, [default]) = (&base.kind, args.as_slice()) else {
-                    return no("`.or` auf einem Array", span);
+                    return no("`.or` auf einem Input", span);
                 };
-                self.samples_or(*channel, default, cx, env, flow)?
+                self.input_or(*channel, default, cx, env, flow)?
             }
             ExprKind::Builtin(Builtin::LastFault) => {
                 let Some(m) = cx.m else { return no("`last_fault` ausserhalb einer Maschine", span) };
@@ -653,7 +660,6 @@ impl Enc<'_> {
             | ExprKind::BlockInit { .. }
             | ExprKind::Param(_)
             | ExprKind::Command(_)
-            | ExprKind::Input { .. }
             | ExprKind::StateOf(_)
             | ExprKind::Signal { .. }
             | ExprKind::Builtin(_)
@@ -1468,10 +1474,7 @@ impl Enc<'_> {
         let v = self.value(iter, cx, env, flow)?;
         let (items, len) = self.places(iter.ty, v, span)?;
         let Some(len) = len else { return no("`for … in`", span) };
-        self.unrolled = self.unrolled.saturating_add(items.len() as i64);
-        if self.unrolled > UNROLL_LIMIT {
-            return no(format!("mehr als {UNROLL_LIMIT} Durchlaeufe von Schleifen auf einem Pfad"), span);
-        }
+        self.unroll_steps(items.len() as i64, span)?;
         self.breaks.push(Vec::new());
         for (k, item) in items.into_iter().enumerate() {
             let inside = Term::bin(Op::Lt, Term::int(k as i64), len.clone());
