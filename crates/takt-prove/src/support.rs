@@ -55,7 +55,7 @@ pub fn support(c: Construct) -> Support {
         Construct::Builtin(Builtin::Now | Builtin::Tick) => Yes,
         Construct::Builtin(Builtin::TimeInState) => Partial("`time_in_state` nur in einem Zustand"),
         Construct::Builtin(Builtin::LastFault) => Yes,
-        Construct::Builtin(Builtin::Event) => No("eingebaute Groesse ohne Modell"),
+        Construct::Builtin(Builtin::Event) => Yes,
         Construct::Check(
             CheckTag::DivZero
             | CheckTag::NonFinite
@@ -127,7 +127,7 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
         ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
         ExprTag::PortRead => Partial("nicht mit einem Strom als Modell des Lesekanals"),
-        ExprTag::Armed => No("Trigger sind nicht kodiert"),
+        ExprTag::Armed => Yes,
         ExprTag::Stream => Yes,
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
         ExprTag::JobState => Partial("nur Jobs der kuratierten Menge, keine Projekt-Native"),
@@ -235,7 +235,7 @@ fn stmt(s: StmtTag) -> Support {
         StmtTag::Break | StmtTag::Skip => Yes,
         StmtTag::Send => Partial("auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus"),
         StmtTag::Cancel => Yes,
-        StmtTag::Arm => No("Trigger sind nicht kodiert"),
+        StmtTag::Arm => Yes,
         StmtTag::Every => Yes,
         StmtTag::At => Yes,
         StmtTag::Job => Partial("nur Jobs der kuratierten Menge, keine Projekt-Native"),
@@ -325,6 +325,6 @@ fn feature(f: Feature) -> Support {
         Feature::CheckConfirm => Yes,
         Feature::CheckWithin => Yes,
         Feature::Port => Partial("nicht mit einem Strom als Modell des Lesekanals"),
-        Feature::Trigger => No("Trigger sind nicht kodiert"),
+        Feature::Trigger => Yes,
     }
 }

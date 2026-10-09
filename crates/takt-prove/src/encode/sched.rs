@@ -11,6 +11,7 @@ use std::ops::Not;
 use takt_diag::Span;
 use takt_interp::system::MAX_SCHED;
 use takt_mir::machine::FaultKind;
+use takt_mir::stmt::{Place, StmtKind};
 use takt_mir::{ChannelId, MachineId};
 
 use super::{Enc, Env, Exit, ExitKind, Flow, R};
@@ -24,9 +25,25 @@ struct Slot {
 }
 
 impl Enc<'_> {
-    /// Die Outputs mit Warteschlange (`layout.output_queues`) und ihre Maschine.
+    /// Die Outputs mit Warteschlange (`layout.output_queues`) und ihre
+    /// Maschine, dazu die Ausgaben ihrer Trigger (7.5).
     fn queues(&self) -> Vec<(MachineId, ChannelId)> {
-        self.order.iter().flat_map(|&m| self.machine(m).layout.output_queues.iter().map(move |&c| (m, c))).collect()
+        let mut out: Vec<(MachineId, ChannelId)> = self
+            .order
+            .iter()
+            .flat_map(|&m| self.machine(m).layout.output_queues.iter().map(move |&c| (m, c)))
+            .collect();
+        for t in &self.p.triggers {
+            let Some(m) = t.owner.filter(|m| self.order.contains(m)) else { continue };
+            for s in &t.then.stmts {
+                if let StmtKind::Assign { target: Place::Output(c), .. } = &s.kind
+                    && !out.iter().any(|(_, o)| o == c)
+                {
+                    out.push((m, *c));
+                }
+            }
+        }
+        out
     }
 
     fn loc_slot(&self, c: ChannelId, i: u32, part: &str) -> String {
@@ -72,8 +89,7 @@ impl Enc<'_> {
     }
 
     /// Ein Schreibvorgang aus `at T:` (`schedule`): ein Zeitpunkt nicht in der
-    /// Zukunft ist ein `TimingFault`, eine volle Warteschlange ein
-    /// `ScheduleOverflow`.
+    /// Zukunft ist ein `TimingFault`, dann [`Enc::enqueue`].
     pub(super) fn schedule(
         &mut self,
         c: ChannelId,
@@ -83,20 +99,38 @@ impl Enc<'_> {
         flow: &mut Flow,
         span: Span,
     ) -> R<()> {
-        let fault = |fail: Term, kind: FaultKind, flow: &mut Flow| {
-            flow.exits.push(Exit {
-                cond: Term::and(vec![flow.alive.clone(), fail.clone()]),
-                kind: ExitKind::Fault(None, self.cause(kind, span)),
-            });
-            flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
-        };
-        fault(Term::bin(Op::Le, t.clone(), self.now.clone()), FaultKind::Timing, flow);
+        let late = Term::bin(Op::Le, t.clone(), self.now.clone());
+        flow.exits.push(Exit {
+            cond: Term::and(vec![flow.alive.clone(), late.clone()]),
+            kind: ExitKind::Fault(None, self.cause(FaultKind::Timing, span)),
+        });
+        flow.alive = Term::and(vec![flow.alive.clone(), late.not()]);
+        self.enqueue(c, t, v, env, flow, span)
+    }
+
+    /// Der Eintrag in die Warteschlange (`enqueue`): Ein gleicher Zeitpunkt
+    /// ueberschreibt, eine volle Warteschlange ist ein `ScheduleOverflow`.
+    /// Den Zeitpunkt hat der Aufrufer geprueft.
+    pub(super) fn enqueue(
+        &mut self,
+        c: ChannelId,
+        t: &Term,
+        v: Term,
+        env: &mut Env,
+        flow: &mut Flow,
+        span: Span,
+    ) -> R<()> {
         let slots = self.slots(c, env);
         let same: Vec<Term> =
             slots.iter().map(|s| Term::and(vec![s.has.clone(), Term::eq(s.t.clone(), t.clone())])).collect();
         let found = Term::or(same.clone());
         let full = Term::and(slots.iter().map(|s| s.has.clone()).collect());
-        fault(Term::and(vec![found.clone().not(), full]), FaultKind::ScheduleOverflow, flow);
+        let over = Term::and(vec![found.clone().not(), full]);
+        flow.exits.push(Exit {
+            cond: Term::and(vec![flow.alive.clone(), over.clone()]),
+            kind: ExitKind::Fault(None, self.cause(FaultKind::ScheduleOverflow, span)),
+        });
+        flow.alive = Term::and(vec![flow.alive.clone(), over.not()]);
         let mut before = Term::bool(true);
         let mut out = Vec::new();
         for (s, hit) in slots.into_iter().zip(same) {

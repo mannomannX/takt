@@ -20,7 +20,7 @@ Expr(Published),ja,ja,ja
 Expr(StateOf),ja,ja,ja
 Expr(Signal),ja,ja,ja
 Expr(Builtin),ja,ja,ja
-Expr(Armed),ja,nein: Trigger sind nicht kodiert,nein
+Expr(Armed),ja,ja,nein
 Expr(PortRead),ja,teilweise: nicht mit einem Strom als Modell des Lesekanals,ja
 Expr(Field),ja,teilweise: auf Records; nicht auf den Feldern einer Variante,ja
 Expr(Index),ja,"teilweise: auf Arrays, Samples, Bytes und Vektoren; nicht auf Channel-Arrays",ja
@@ -78,7 +78,7 @@ Builtin(Now),ja,ja,ja
 Builtin(Tick),ja,ja,ja
 Builtin(TimeInState),ja,teilweise: `time_in_state` nur in einem Zustand,ja
 Builtin(LastFault),"teilweise: `LastFault` nur in der Gestalt `str<128>`, `int`, `int`",ja,ja
-Builtin(Event),ja,nein: eingebaute Groesse ohne Modell,ja
+Builtin(Event),ja,ja,ja
 Check(DivZero),ja,ja,ja
 Check(Overflow),ja,ja,ja
 Check(NonFinite),ja,ja,ja
@@ -180,7 +180,7 @@ Stmt(Job),ja,"teilweise: nur Jobs der kuratierten Menge, keine Projekt-Native",j
 Stmt(Every),ja,ja,ja
 Stmt(Break),ja,ja,ja
 Stmt(Observe),ja,ja,ja
-Stmt(Arm),ja,nein: Trigger sind nicht kodiert,ja
+Stmt(Arm),ja,ja,ja
 Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`","teilweise: `step` einer Blockinstanz; `push`, `append`, `clear`, `insert`, `remove` auf Bytes, Vektoren und maps ohne Index",ja
 Stmt(Pass),ja,ja,ja
 Place(Var),ja,ja,ja
@@ -270,7 +270,7 @@ Feature(Profile),ja,ja,ja
 Feature(Property),ja,ja,ja
 Feature(Assumption),ja,ja,ja
 Feature(Monitor),ja,ja,ja
-Feature(Trigger),ja,nein: Trigger sind nicht kodiert,ja
+Feature(Trigger),ja,ja,ja
 Feature(Port),ja,teilweise: nicht mit einem Strom als Modell des Lesekanals,ja
 Feature(Recorded),ja,ja,ja
 Feature(Campaign),ja,ja,ja

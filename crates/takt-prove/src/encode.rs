@@ -57,6 +57,7 @@ mod sched;
 mod scoped;
 mod stream;
 mod text;
+mod trigger;
 mod tx;
 mod value;
 mod wire;
@@ -360,6 +361,11 @@ struct Enc<'p> {
     job_assumptions: Vec<Term>,
     /// Ausgerollte Schleifendurchlaeufe des laufenden Pfads ([`UNROLL_LIMIT`]).
     unrolled: i64,
+    /// `event` waehrend der Trigger-Phase (7.5).
+    event: Option<value::V>,
+    /// Die Faults der Trigger-Phase je Maschine, in der Folge ihrer
+    /// Nummern in `pending` hinter dem Stromueberlauf.
+    trigger_faults: BTreeMap<MachineId, Vec<fault::Cause>>,
     /// Der Knotenzaehler des Threads beim Start ([`MODEL_LIMIT`]).
     built_at: u64,
     /// Die Typen der Lokalen des Rumpfs, der gerade eingebettet wird.
@@ -672,6 +678,8 @@ impl<'p> Enc<'p> {
             tunes_seen: BTreeSet::new(),
             job_assumptions: Vec::new(),
             unrolled: 0,
+            event: None,
+            trigger_faults: BTreeMap::new(),
             built_at: term::built(),
             local_types: BTreeMap::new(),
             monitors: Vec::new(),
@@ -1223,13 +1231,13 @@ impl Enc<'_> {
             ExprKind::JobState { handle, field } => self.job_state(*handle, *field, e.ty, cx, env, span)?.leaf(span)?,
             ExprKind::MatOp { op: takt_mir::expr::MatOp::Det, args } => self.mat_det(args, cx, env, flow, span)?,
             ExprKind::Index2 { base, row, col } => self.mat_element(base, row, col, cx, env, flow, span)?,
+            ExprKind::Armed(t) => self.armed(*t, cx, env)?,
             other @ (ExprKind::Str(_)
             | ExprKind::None
             | ExprKind::Record { .. }
             | ExprKind::Array(_)
             | ExprKind::Tuple(..)
             | ExprKind::BlockInit { .. }
-            | ExprKind::Armed(_)
             | ExprKind::PortRead(_)
             | ExprKind::Slice { .. }
             | ExprKind::Format(_)
@@ -2332,7 +2340,8 @@ impl Enc<'_> {
                     self.job_start(*handle, *native, args, cx, env, flow, span)?
                 }
                 StmtKind::Observe(_) | StmtKind::Pass => {}
-                other @ (StmtKind::ForEach { .. } | StmtKind::Return(_) | StmtKind::Arm { .. }) => {
+                StmtKind::Arm { trigger, on } => self.arm_trigger(*trigger, *on, cx, env, flow)?,
+                other @ (StmtKind::ForEach { .. } | StmtKind::Return(_)) => {
                     return no(format!("Anweisung {}", stmt_name(other)), span);
                 }
             }
@@ -2844,9 +2853,10 @@ impl Enc<'_> {
     }
 
     /// Was jeder Fault-Pfad abraeumt (5.3, `clear_on_fault`): die Jobs der
-    /// Maschine und die Warteschlangen ihrer geplanten Ausgaben.
+    /// Maschine, ihre Trigger und die Warteschlangen ihrer geplanten Ausgaben.
     fn clear_on_fault(&self, m: MachineId, env: &mut Env) -> R<()> {
         self.jobs_cancel(m, env);
+        self.disarm_all(m, env);
         self.clear_schedules(m, env)
     }
 
@@ -2873,18 +2883,20 @@ impl Enc<'_> {
             self.unrolled = 0;
             let mut env = base.clone();
             let mut flow = Flow::new(is.clone());
-            // Ein vorgemerkter `StreamOverflow` kommt vor allem anderen (9.6).
+            // Ein vorgemerkter Fault kommt vor allem anderen: ein
+            // `StreamOverflow` (9.6) ohne Stelle (5.3) oder einer der
+            // Trigger-Phase (7.5).
             if self.has_pending(m) {
                 let at = self.loc_pending(m);
                 let pending = env[&at].clone();
-                // Zugestellt hat der Ueberlauf keine Stelle (5.3).
-                let cause = self.cause(FaultKind::StreamOverflow, Span::default());
-                flow.exits.push(Exit {
-                    cond: Term::and(vec![is.clone(), pending.clone()]),
-                    kind: ExitKind::Fault(None, cause),
-                });
-                flow.alive = Term::and(vec![is.clone(), pending.not()]);
-                env.insert(at, Term::bool(false));
+                for (code, cause) in self.pending_causes(m) {
+                    flow.exits.push(Exit {
+                        cond: Term::and(vec![is.clone(), Term::eq(pending.clone(), Term::int(code))]),
+                        kind: ExitKind::Fault(None, cause),
+                    });
+                }
+                flow.alive = Term::and(vec![is.clone(), Term::eq(pending, Term::int(0))]);
+                env.insert(at, Term::int(0));
             }
             // Handler laufen unmittelbar nach dem `loop:` ihrer Ebene (8.7).
             self.block(&machine.loop_block, &cx, &mut env, &mut flow)?;
@@ -3187,6 +3199,8 @@ impl Enc<'_> {
         self.committed = pre.clone();
         self.windows.clear();
         self.fault_paths.clear();
+        // 7.5: die Trigger-Phase zwischen Zustellung und Schritten.
+        self.trigger_phase(&actives, &mut cur)?;
         for &m in &self.order.clone() {
             let active = actives[&m].clone();
             self.step_machine(m, &active, pre, &actives, &mut cur)?;
@@ -3232,6 +3246,7 @@ impl Enc<'_> {
         self.streams_initial(&mut env)?;
         self.tx_initial(&mut env);
         self.sched_initial(&mut env)?;
+        self.trigger_cursors_initial(&mut env);
         self.deliver(None, &mut env)?;
         self.scoped_initial(&mut env);
         self.fault_paths.clear();
@@ -3301,6 +3316,7 @@ impl Enc<'_> {
             }
         }
         self.jobs_initial(m, env)?;
+        self.triggers_initial(m, env);
         for (i, v) in machine.vars.iter().enumerate().filter(|_| vars) {
             // Ein Job-Handle hat keinen Wert; sein Lauf steht im Slot.
             if matches!(self.p.types.get(v.ty), Type::Handle(HandleKind::Job)) {

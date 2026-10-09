@@ -960,6 +960,44 @@ fn a_native_proves_its_width_and_keeps_its_paths_open() {
     assert!(reason.contains("`crc32` uninterpretiert"), "{reason}");
 }
 
+/// Ein Trigger im Modell (7.5): Der Solver findet die Zeile, auf die er
+/// feuert, und der Interpreter bestaetigt das Gegenbeispiel. Ein kleiner
+/// Strom ohne Capture: 65 mit acht Zeilen zu 64 Byte je Tick sprengt den
+/// Speicher des Solvers, und eine Zahl im Muster kostet ihn Minuten.
+#[test]
+fn a_trigger_counterexample_is_confirmed() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input  rx  : stream<line<12>> @ hw(\"u/rx\") with capacity = 2, max_rate = 100 Hz
+output cut : bool @ hw(\"o/cut\") with safe = true
+
+trigger on_go:
+    when rx matches \"go\"
+    then at event.t + 10 ms: cut = false
+    bound 1 ms
+
+machine m:
+    initial ON
+    state ON:
+        enter:
+            arm on_go
+        when on_go.fired as f: -> DONE
+    state DONE:
+        when false: -> ON
+
+property stays: never(cut == false)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 3, &solver, 120).expect("Solver laeuft");
+    let Verdict::Violated { stimulus, .. } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    assert!(stimulus.contains("in rx \"go\""), "{stimulus}");
+}
+
 /// `fft256` (4.5) ist je Wert eine Funktion ueber Fliesskommazahlen ihrer
 /// Breite. Der Solver liest die Deklarationen fehlerfrei; ein Urteil ueber
 /// 256 Funktionen mit je 256 Argumenten dauert Minuten (die Kongruenz ueber

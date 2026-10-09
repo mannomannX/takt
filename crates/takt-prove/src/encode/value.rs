@@ -565,6 +565,11 @@ impl Enc<'_> {
                 };
                 self.input_or(*channel, default, cx, env, flow)?
             }
+            // `event` im `then` eines Triggers (7.5).
+            ExprKind::Builtin(Builtin::Event) => match self.event.clone() {
+                Some(v) => v,
+                None => return no("`event` ausserhalb eines Triggers", span),
+            },
             ExprKind::Builtin(Builtin::LastFault) => {
                 let Some(m) = cx.m else { return no("`last_fault` ausserhalb einer Maschine", span) };
                 let at = self.loc_last_fault(m);

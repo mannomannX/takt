@@ -541,6 +541,13 @@ fn case(name: &str) -> Option<(String, u64)> {
         | "95_boundary_ranges.takt"
         | "96_record_outputs.takt"
         | "113_case_ranges.takt" => (String::new(), 20),
+        // Trigger (7.5, M11 Schritt 27c-17): einer feuert armiert, einer kommt
+        // waehrend `CUT` und loest nach dem erneuten `arm` nichts aus.
+        "65_trigger.takt" => (
+            "t=2 in dut_log Erasing sector 7\nt=5 in dut_log Erasing sector 8\nt=20 in dut_log Erasing sector 9\n"
+                .to_string(),
+            30,
+        ),
         // Die Chunk-Natives (M11 Schritt 27c-15): einmal in einem Zustand.
         "39_sha256.takt" => (String::new(), 3),
         // Das Abbild in 256 Chunks zu 256 Byte, zwei je Tick, sobald
@@ -1539,6 +1546,75 @@ machine m:
 #[test]
 fn natives_agree() {
     agree_program("NATIVES", &compile("NATIVES", NATIVES), "", 20);
+}
+
+/// Die drei Regeln der Trigger-Phase (7.5, FB-484) im Modell: `soon 1`
+/// kommt vor `arm` und loest nichts aus, obwohl `late_reader` den Ring
+/// haelt; `soon 2` mit `.t` mitten im Tick plant vor dem Tick und doch nicht
+/// vor der Reaktion; `early 0` plant vor der Reaktion, und der `TimingFault`
+/// geht vorgemerkt an `ctrl`.
+const TRIGGER_RULES: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  dut : stream<line<32>> @ hw("u/rx") with capacity = 8, max_rate = 400 Hz
+
+output a     : bool        @ hw("o/a")     with safe = true
+output b     : bool        @ hw("o/b")     with safe = true
+output phase : int in 0..9 @ hw("o/phase") with safe = 0
+output ready : bool        @ hw("o/ready") with safe = false
+
+trigger soon:
+    when dut matches "soon {n:int}"
+    then at event.t + 2 ms: a = false
+    bound 1 ms
+
+trigger early:
+    when dut matches "early {n:int}"
+    then at event.t + event.n * 1 us: b = false
+    bound 1 ms
+
+machine ctrl:
+    fault -> HANDLED
+    initial WAIT
+
+    state WAIT:
+        enter:
+            phase = 1
+        after 50 ms: -> ARMED
+
+    state ARMED:
+        enter:
+            phase = 2
+            arm soon
+            arm early
+        loop:
+            ready = soon.armed
+        when soon.fired as f: -> FIRED
+
+    state FIRED:
+        enter:
+            phase = 3
+
+    state HANDLED:
+        enter:
+            phase = 9
+
+machine late_reader:
+    initial IDLE
+
+    state IDLE:
+        after 200 ms: -> READ
+
+    state READ:
+        on dut as l:
+            pass
+"#;
+
+#[test]
+fn trigger_rules_agree() {
+    let stim = "t=1 in dut soon 1\nt=7 in dut soon 2 t=65000000\nt=8 in dut early 0\n";
+    agree_program("TRIGGER_RULES", &compile("TRIGGER_RULES", TRIGGER_RULES), stim, 24);
 }
 
 /// Eine Funktion, die die Bytes `hex` als `bytes<cap>` liefert.

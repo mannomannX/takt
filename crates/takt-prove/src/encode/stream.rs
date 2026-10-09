@@ -60,19 +60,23 @@ pub(super) struct Stream {
 /// Ein Platz des Fensters: ob er belegt ist, Nummer, Zeitstempel, Wert.
 #[derive(Clone, Debug)]
 pub(super) struct Item {
-    present: Term,
-    seq: Term,
-    t: Term,
+    pub(super) present: Term,
+    pub(super) seq: Term,
+    pub(super) t: Term,
     value: V,
 }
+
+/// Die Nummer eines Stromueberlaufs in `pending` (9.6); die Faults der
+/// Trigger-Phase folgen ihr (7.5), null heisst: nichts vorgemerkt.
+pub(super) const OVERFLOW: i64 = 1;
 
 /// Das Fenster eines Lesers in einem Tick (9.6, `windows`).
 #[derive(Clone, Debug)]
 pub(super) struct Window {
     count: Term,
     /// Die Nummer hinter dem letzten Element.
-    end: Term,
-    items: Vec<Item>,
+    pub(super) end: Term,
+    pub(super) items: Vec<Item>,
 }
 
 /// Ein untersuchtes Element (9.6, `examined`): Leser, Cursor, wo es gilt,
@@ -385,9 +389,11 @@ impl Enc<'_> {
         Ok(i64::from(self.streams[self.stream_index(key, span)?].cap))
     }
 
-    /// Liest die Maschine einen Eingabestrom, der ueberlaufen kann?
+    /// Kann der Maschine ein Fault vorgemerkt werden: liest sie einen
+    /// Eingabestrom, der ueberlaufen kann, oder besitzt sie Trigger (7.5)?
     pub(super) fn has_pending(&self, m: MachineId) -> bool {
         self.streams.iter().any(|s| s.channel && s.readers.iter().any(|(r, _)| *r == m))
+            || !self.machine(m).layout.trigger_flags.is_empty()
     }
 
     /// Steht die Maschine in einem `idle`-Zustand (5.10)?
@@ -423,7 +429,7 @@ impl Enc<'_> {
         }
         for m in self.order.clone() {
             if self.has_pending(m) {
-                env.insert(self.loc_pending(m), Term::bool(false));
+                env.insert(self.loc_pending(m), Term::int(0));
             }
         }
         Ok(())
@@ -585,7 +591,8 @@ impl Enc<'_> {
                 };
                 let at = self.loc_pending(m);
                 let old = cur[&at].clone();
-                cur.insert(at, Term::or(vec![old, hit]));
+                let free = Term::eq(old.clone(), Term::int(0));
+                cur.insert(at, Term::ite(Term::and(vec![hit, free]), Term::int(OVERFLOW), old));
             }
         }
         Ok(())
@@ -724,16 +731,24 @@ impl Enc<'_> {
         {
             return Ok((cursor, w.clone()));
         }
+        let cur = cursor.map(|c| self.delivered[&self.loc_cursor(m, c)].clone());
+        let w = self.window_from(key, cur, span)?;
+        if let Some(c) = cursor {
+            self.windows.insert((m, c), w.clone());
+        }
+        Ok((cursor, w))
+    }
+
+    /// Die Elemente des zugestellten Rings ab `cursor`, ohne Cursor ab
+    /// seinem Anfang.
+    pub(super) fn window_from(&mut self, key: StreamRef, cursor: Option<Term>, span: Span) -> R<Window> {
         let s = self.streams[self.stream_index(key, span)?].clone();
         let env = self.delivered.clone();
         let (next, len, head) =
             (env[&loc(&s, "next")].clone(), env[&loc(&s, "len")].clone(), env[&loc(&s, "head")].clone());
         let start = sub(next.clone(), len);
         let from = match cursor {
-            Some(c) => {
-                let cur = env[&self.loc_cursor(m, c)].clone();
-                Term::ite(Term::bin(Op::Gt, cur.clone(), start.clone()), cur, start.clone())
-            }
+            Some(cur) => Term::ite(Term::bin(Op::Gt, cur.clone(), start.clone()), cur, start.clone()),
             None => start.clone(),
         };
         let count = sub(next.clone(), from.clone());
@@ -749,11 +764,7 @@ impl Enc<'_> {
                 value,
             });
         }
-        let w = Window { count, end: next, items };
-        if let Some(c) = cursor {
-            self.windows.insert((m, c), w.clone());
-        }
-        Ok((cursor, w))
+        Ok(Window { count, end: next, items })
     }
 
     fn mark(&mut self, m: MachineId, cursor: Option<usize>, cond: Term, seq: Term) {
@@ -764,7 +775,7 @@ impl Enc<'_> {
 
     /// Die Bindung eines Elements (8.7, `element_record`): die Captures,
     /// dann `.t`, `.seq` und der Inhalt unter `.data` oder `.text`.
-    fn binding(&mut self, ty: TypeId, item: &Item, caps: Vec<V>, span: Span) -> R<V> {
+    pub(super) fn binding(&mut self, ty: TypeId, item: &Item, caps: Vec<V>, span: Span) -> R<V> {
         let Type::Record(r) = self.p.types.get(ty) else { return no("Bindung ohne Record", span) };
         let fields = self.p.records[r.index()].fields.clone();
         let mut parts = caps;
@@ -783,7 +794,7 @@ impl Enc<'_> {
     /// Trifft das Muster eines Handlers oder Guards das Element, und was
     /// bindet es? Ein Record-Muster vergleicht die genannten Felder, ein
     /// Textmuster laeuft ueber den Text des Elements (8.7).
-    fn hits(
+    pub(super) fn hits(
         &mut self,
         pattern: Option<(MatchKind, &Pattern)>,
         item: &Item,
@@ -1167,6 +1178,12 @@ impl Enc<'_> {
             for &(m, c) in &s.readers {
                 out.push(within(&pre[&self.loc_cursor(m, c)], Term::int(0), next.clone()));
                 out.push(Term::bin(Op::Ge, pre[&self.loc_missed(m, c)].clone(), Term::int(0)));
+            }
+        }
+        for &m in &self.order {
+            if self.has_pending(m) {
+                let last = self.pending_causes(m).len() as i64;
+                out.push(within(&pre[&self.loc_pending(m)], Term::int(0), Term::int(last)));
             }
         }
     }
