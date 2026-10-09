@@ -111,7 +111,8 @@ impl Printer<'_> {
                     let domain = vec![sort_text(Sort::Int); parts.len()].join(" ");
                     let _ = writeln!(self.out, "(declare-fun {fun} ({domain}) {})", sort_text(Sort::Int));
                 }
-                format!("({fun} {})", parts.join(" "))
+                // Eine Konstante wie `sha256_init` steht ohne Klammern da.
+                if parts.is_empty() { fun } else { format!("({fun} {})", parts.join(" ")) }
             }
             Op::Mat { f, n, k, part } => {
                 let elem = args[0].sort();
@@ -131,8 +132,11 @@ impl Printer<'_> {
         if let Op::Math(f) = op {
             let _ = writeln!(self.out, "(assert {})", math_bound(*f, &n, sort));
         }
-        // Eine Native liefert eine Zahl aus `bits` Bit ohne Vorzeichen.
-        if let Op::Native { bits, .. } = op {
+        // Eine Native liefert eine Zahl aus `bits` Bit ohne Vorzeichen; in
+        // 64 Bit ist jedes Bitmuster eine.
+        if let Op::Native { bits, .. } = op
+            && *bits < 64
+        {
             let max = (1u64 << bits) - 1;
             let _ = writeln!(self.out, "(assert (and (bvsle (_ bv0 64) {n}) (bvsle {n} (_ bv{max} 64))))");
         }

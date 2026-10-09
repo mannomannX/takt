@@ -541,6 +541,28 @@ fn case(name: &str) -> Option<(String, u64)> {
         | "95_boundary_ranges.takt"
         | "96_record_outputs.takt"
         | "113_case_ranges.takt" => (String::new(), 20),
+        // Die Chunk-Natives (M11 Schritt 27c-15): einmal in einem Zustand.
+        "39_sha256.takt" => (String::new(), 3),
+        // Das Abbild in 256 Chunks zu 256 Byte, zwei je Tick, sobald
+        // `HASHING` liest (vorher liefe der Ring ueber), dann die Signatur
+        // ueber den Digest mit dem leeren Schluessel: `UPD_FAILED` im Tick
+        // 160 (FB-487).
+        "07_embedded_field.takt" => {
+            let mut stim = String::new();
+            for k in 0..=170u32 {
+                stim.push_str(&format!(
+                    "t={k} in cell_mv 3700 mV\nt={k} in charger true\nt={k} in chg_status 3\n\
+                     t={k} in flash_status IDLE\nt={k} in on_trial true\n"
+                ));
+            }
+            for k in 11..=138u32 {
+                for j in 0..2u32 {
+                    let chunk: String = (0..256u32).map(|i| format!("{:02x}", (k * 7 + j * 13 + i) % 256)).collect();
+                    stim.push_str(&format!("t={k} in flash_rx 0x{chunk}\n"));
+                }
+            }
+            (stim, 170)
+        }
         "89_fault_paths.takt" => ((0..=20).map(|k| format!("t={k} in p {} bar\n", (k * 7) % 100)).collect(), 20),
         // `check … for 5 ms`: vier Ticks ueber der Grenze faulten nicht,
         // elf schon; dazu ein Start.
@@ -1517,6 +1539,101 @@ machine m:
 #[test]
 fn natives_agree() {
     agree_program("NATIVES", &compile("NATIVES", NATIVES), "", 20);
+}
+
+/// Eine Funktion, die die Bytes `hex` als `bytes<cap>` liefert.
+fn bytes_fn(name: &str, cap: usize, hex: &str) -> String {
+    let items: Vec<String> = hex.as_bytes().chunks(2).map(|p| format!("0x{}", String::from_utf8_lossy(p))).collect();
+    format!(
+        "fn {name}() -> bytes<{cap}>:\n    var b : bytes<{cap}> = default\n    for x in [{}]:\n        b.push(x as u8)\n    return b\n\n",
+        items.join(", ")
+    )
+}
+
+/// Die Eingaben der ersten gueltigen Zeile einer Funktion aus den
+/// Krypto-Bloecken der Spezifikation.
+fn crypto_line(fun: &str) -> Vec<String> {
+    let spec = include_str!("../../../grammar/takt-native.md");
+    let line = spec.lines().find_map(|l| l.trim().strip_prefix(fun)?.split_once(':')).expect("Zeile");
+    line.0.split_whitespace().map(str::to_string).collect()
+}
+
+/// Die Chunk-Natives (4.5): ein Kontext ueber einen wachsenden Puffer,
+/// sein Digest gegen `sha256` desselben Puffers am Anfang; die
+/// Signaturpruefungen als Jobs mit den Vektoren aus RFC 6979 und RFC 8017,
+/// dazu ein leerer Schluessel (FB-487).
+#[test]
+fn chunked_hashes_and_signatures_agree() {
+    let (ecdsa, rsa) = (crypto_line("ecdsa_p256_verify"), crypto_line("rsa3072_verify"));
+    let src = format!(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+native fn sha256(b: bytes<16>) -> bytes<32> with cost = 4000, stack = 640, total
+native fn sha256_init() -> Sha256Ctx with cost = 8, stack = 320, total
+native fn sha256_update(ctx: Sha256Ctx, chunk: bytes<16>) -> Sha256Ctx with cost = 2300, stack = 544, total
+native fn sha256_final(ctx: Sha256Ctx) -> bytes<32> with cost = 3600, stack = 640, total
+native job ecdsa_p256_verify(key: bytes<64>, digest: bytes<32>, sig: bytes<64>) -> bool with cost = 300, stack = 5600, duration = 20 ms, total
+native job rsa3072_verify(key: bytes<384>, digest: bytes<32>, sig: bytes<384>) -> bool with cost = 900, stack = 10464, duration = 30 ms, total
+
+output same   : bool @ sim(\"same\")
+output h0     : int in 0..255 @ sim(\"h0\")
+output signed : bool @ sim(\"signed\")
+output empty  : bool @ sim(\"empty\")
+output padded : bool @ sim(\"padded\")
+
+{}{}{}{}{}{}
+machine m:
+    var buf    : bytes<16> = default
+    var ctx    : Sha256Ctx = sha256_init()
+    var first  : Sha256Ctx = sha256_init()
+    var n      : int in 0..99 = 0
+    var no_key : bytes<64> = default
+    initial RUN
+
+    state RUN:
+        loop:
+            n = (n + 1) % 100
+            if buf.len >= 16:
+                buf.clear()
+            var p = buf.push((n * 37 % 256) as u8)
+            ctx = sha256_update(ctx, buf)
+            var d = sha256_final(ctx)
+            h0 = d[0] as int
+            same = sha256_final(sha256_update(first, buf)) == sha256(buf)
+        sequence:
+            job e = ecdsa_p256_verify(key = ec_key(), digest = ec_digest(), sig = ec_sig())
+            until e.done timeout 1 s -> STUCK
+            signed = e.result.or(false)
+            job e = ecdsa_p256_verify(key = no_key, digest = ec_digest(), sig = ec_sig())
+            until e.done timeout 1 s -> STUCK
+            empty = e.result.or(true)
+            job r = rsa3072_verify(key = rsa_key(), digest = rsa_digest(), sig = rsa_sig())
+            until r.done timeout 1 s -> STUCK
+            padded = r.result.or(false)
+            -> DONE
+
+    state DONE:
+        when false: -> RUN
+
+    state STUCK:
+        when false: -> RUN
+",
+        bytes_fn("ec_key", 64, &ecdsa[0]),
+        bytes_fn("ec_digest", 32, &ecdsa[1]),
+        bytes_fn("ec_sig", 64, &ecdsa[2]),
+        bytes_fn("rsa_key", 384, &rsa[0]),
+        bytes_fn("rsa_digest", 32, &rsa[1]),
+        bytes_fn("rsa_sig", 384, &rsa[2]),
+    );
+    let p = compile("CHUNKED", &src);
+    let trace =
+        run(&p, &Trace::default(), &RunOptions { ticks: 20, ..Default::default() }).expect("Lauf").trace.render();
+    for want in ["out same true", "out signed true", "out empty false", "out padded true"] {
+        assert!(trace.contains(want), "`{want}` fehlt im Interpreter:\n{trace}");
+    }
+    agree_program("CHUNKED", &p, "", 20);
 }
 
 /// Jobs (4.5): `a` startet neu, waehrend er laeuft, und uebernimmt die

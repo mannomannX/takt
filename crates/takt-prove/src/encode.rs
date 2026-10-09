@@ -1563,8 +1563,9 @@ impl Enc<'_> {
     /// Ein Aufruf einer Native der kuratierten Menge (4.5, `call_native`):
     /// die Argumente in der Form der Grenze, `bytes<N>` roh, alles andere in
     /// kanonischer Byteform; eine Pruefsumme ist eine Zahl, ein Digest 32
-    /// Byte. Der Solver sieht die Native uninterpretiert, die Auswertung
-    /// rechnet sie genau.
+    /// Byte, ein `Sha256Ctx` seine Blaetter, eine Signaturpruefung ein
+    /// Wahrheitswert. Der Solver sieht die Native uninterpretiert, die
+    /// Auswertung rechnet sie genau.
     fn native_call(
         &mut self,
         id: takt_mir::NativeId,
@@ -1604,24 +1605,42 @@ impl Enc<'_> {
             blocks.push(len);
             blocks.extend(bytes);
         }
-        let part = |part: u16, bits: u8| V::Leaf(Term::app(Op::Native { f, part, bits }, blocks.clone()));
+        let part = |part: u16, bits: u8| Term::app(Op::Native { f, part, bits }, blocks.clone());
         let out = match f {
-            Native::Crc32 | Native::Crc32c => part(0, 32),
-            Native::Crc16 => part(0, 16),
-            Native::Sum8 => part(0, 8),
-            Native::Sha256 | Native::HmacSha256 => {
-                V::Node(std::iter::once(V::Leaf(Term::int(32))).chain((0..32).map(|k| part(k, 8))).collect())
+            Native::Crc32 | Native::Crc32c => V::Leaf(part(0, 32)),
+            Native::Crc16 => V::Leaf(part(0, 16)),
+            Native::Sum8 => V::Leaf(part(0, 8)),
+            Native::Sha256 | Native::HmacSha256 | Native::Sha256Final => {
+                V::Node(std::iter::once(V::Leaf(Term::int(32))).chain((0..32).map(|k| V::Leaf(part(k, 8)))).collect())
             }
-            Native::Sha256Init
-            | Native::Sha256Update
-            | Native::Sha256Final
-            | Native::EcdsaP256Verify
-            | Native::Fft256
-            | Native::Rsa3072Verify
-            | Native::AesGcmDecrypt => return no(format!("Native `{}`", n.name), span),
+            // Je Blatt des Ergebnisses ein Teil, in der Reihenfolge des Modells.
+            Native::Sha256Init | Native::Sha256Update => {
+                let shape = self.shape(n.ret, span)?;
+                let mut k = 0u16;
+                self.gather("", &shape, &mut |enc, _, s| {
+                    let Some(bits) = enc.leaf_bits(s) else { return no("Blatt eines `Sha256Ctx`", span) };
+                    k += 1;
+                    Ok(part(k - 1, bits))
+                })?
+            }
+            Native::EcdsaP256Verify | Native::Rsa3072Verify => V::Leaf(Term::eq(part(0, 1), Term::int(1))),
+            Native::Fft256 | Native::AesGcmDecrypt => return no(format!("Native `{}`", n.name), span),
         };
         self.uninterpreted.insert(n.name.clone());
         Ok(out)
+    }
+
+    /// Wie viele Bit ein Blatt ohne Vorzeichen hoechstens traegt.
+    fn leaf_bits(&self, s: &value::Shape) -> Option<u8> {
+        match s {
+            value::Shape::Byte => Some(8),
+            value::Shape::Count(cap) => Some((u32::BITS - cap.leading_zeros()) as u8),
+            value::Shape::Leaf(ty) => match self.p.types.get(*ty) {
+                Type::Int { width, .. } if !width.signed() => Some(width.bits() as u8),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 
     /// `interp(t, x)` ueber einer konstanten Tabelle (`call.rs`): bis zum

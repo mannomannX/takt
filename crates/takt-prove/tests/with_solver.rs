@@ -959,3 +959,25 @@ fn a_native_proves_its_width_and_keeps_its_paths_open() {
     let Verdict::Unproven { reason } = &magic.verdict else { panic!("{magic:?}") };
     assert!(reason.contains("`crc32` uninterpretiert"), "{reason}");
 }
+
+/// Die Chunk-Natives (4.5) sind je Blatt des `Sha256Ctx` eine Funktion;
+/// die Gesamtlaenge in 64 Bit hat keine Schranke ausser ihrer Breite.
+/// Ein Digest ueber den Kontext ist ein Byte, mehr beweist der Solver nicht.
+#[test]
+fn the_chunk_natives_prove_their_width_and_keep_their_paths_open() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with(
+        "39_sha256.takt",
+        "property width: always(chunked <= 4294967295)\nproperty magic: never(chunked == 7)",
+    );
+    let model = encode(&p).expect("kodierbar");
+    for f in ["sha256_init", "sha256_update", "sha256_final"] {
+        assert!(model.uninterpreted.iter().any(|u| u == f), "{f}: {:?}", model.uninterpreted);
+    }
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let width = reports.iter().find(|r| r.name == "width").expect("width");
+    assert!(matches!(width.verdict, Verdict::Proven { .. }), "{width:?}");
+    let magic = reports.iter().find(|r| r.name == "magic").expect("magic");
+    let Verdict::Unproven { reason } = &magic.verdict else { panic!("{magic:?}") };
+    assert!(reason.contains("`sha256_final`") && reason.contains("uninterpretiert"), "{reason}");
+}

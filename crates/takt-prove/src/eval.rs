@@ -236,6 +236,8 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
 /// (`call::call_native`): die Bloecke `[Kapazitaet, Laenge, Byte …]` als
 /// Bytes der Grenze.
 fn native(f: takt_native::Native, part: u16, args: &[Val]) -> Val {
+    use takt_native::Native;
+    use takt_native::sha256::Ctx;
     let mut blocks: Vec<Vec<u8>> = Vec::new();
     let mut rest = args;
     while let [cap, len, tail @ ..] = rest {
@@ -245,11 +247,55 @@ fn native(f: takt_native::Native, part: u16, args: &[Val]) -> Val {
         rest = &tail[cap..];
     }
     let inputs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
-    Val::Int(match takt_native::call(f, &inputs) {
-        Some(takt_native::Output::Scalar(raw)) => raw as i64,
-        Some(takt_native::Output::Digest(d)) => d.get(usize::from(part)).copied().map_or(0, i64::from),
-        _ => 0,
+    let block = |i: usize| inputs.get(i).copied().unwrap_or(&[]);
+    // Jeder Wert des Records ist ein Kontext (`Ctx::from_bytes`).
+    let ctx = || Ctx::from_bytes(block(0)).unwrap_or_default();
+    let byte = |d: [u8; 32]| d.get(usize::from(part)).copied().map_or(0, i64::from);
+    Val::Int(match f {
+        Native::Sha256Init => ctx_leaf(&Ctx::new(), part),
+        Native::Sha256Update => {
+            let mut c = ctx();
+            c.update(block(1));
+            ctx_leaf(&c, part)
+        }
+        Native::Sha256Final => byte(ctx().finish()),
+        Native::EcdsaP256Verify => {
+            let (Ok(key), Ok(digest), Ok(sig)) =
+                (<[u8; 64]>::try_from(block(0)), <[u8; 32]>::try_from(block(1)), <[u8; 64]>::try_from(block(2)))
+            else {
+                return Val::Int(0);
+            };
+            i64::from(takt_crypto::ecdsa_p256_verify(&key, &digest, &sig).unwrap_or(false))
+        }
+        Native::Rsa3072Verify => i64::from(takt_crypto::rsa3072_verify(block(0), block(1), block(2)).unwrap_or(false)),
+        _ => match takt_native::call(f, &inputs) {
+            Some(takt_native::Output::Scalar(raw)) => raw as i64,
+            Some(takt_native::Output::Digest(d)) => byte(d),
+            _ => 0,
+        },
     })
+}
+
+/// Blatt `part` eines `Sha256Ctx` (Prelude: `h : [8] u32`, `buf : bytes<64>`,
+/// `total : u64`) in der Reihenfolge des Modells, gelesen aus der
+/// kanonischen Form: die acht Woerter, die Laenge des Puffers, seine 64
+/// Plaetze, hinter der Laenge null, und die Gesamtlaenge.
+fn ctx_leaf(ctx: &takt_native::sha256::Ctx, part: u16) -> i64 {
+    let mut out = [0u8; takt_native::sha256::CTX_MAX_BYTES];
+    let len = ctx.to_bytes(&mut out).unwrap_or(0);
+    let b = &out[..len];
+    let le = |at: usize, n: usize| {
+        b.get(at..at + n).map_or(0, |w| w.iter().rev().fold(0u64, |x, &y| (x << 8) | u64::from(y)))
+    };
+    let filled = le(32, 4) as usize;
+    let k = usize::from(part);
+    (match k {
+        0..=7 => le(4 * k, 4),
+        8 => filled as u64,
+        9..=72 if k - 9 < filled => le(36 + k - 9, 1),
+        73 => le(36 + filled, 8),
+        _ => 0,
+    }) as i64
 }
 
 /// Teil `part` des Ergebnisses einer Matrixfunktion, wie der Interpreter
