@@ -615,11 +615,7 @@ pub fn resolve_m(
                     env.state.abort_latched = true;
                 }
                 env.state.last_fault = Some(f.clone());
-                cancel_jobs(env);
-                // 5.3: Ein Safe-Wert darf nie von einem Wert ueberschrieben
-                // werden, den ein verlassener Zustand geplant hat.
-                let queues = env.machine(loaded).layout.output_queues.clone();
-                env.image.cancel_all_scheduled(&queues);
+                clear_on_fault(loaded, env);
                 // `FAULTED` ist die Senke des Fault-Walds (5.3, Lemma 9.3.1):
                 // Ein Fault dort — in einem exit-Block auf dem Weg hinein
                 // oder in den Aktionen eines Uebergangs hinaus — fuehrt
@@ -637,6 +633,16 @@ pub fn resolve_m(
             }
         }
     }
+}
+
+/// Was jeder Fault-Pfad abraeumt (5.3): die Jobs und Trigger der Maschine
+/// und die Warteschlangen ihrer geplanten Ausgaben — ein Safe-Wert darf nie
+/// von einem Wert ueberschrieben werden, den ein verlassener Zustand geplant
+/// hat.
+fn clear_on_fault(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>) {
+    cancel_jobs(env);
+    let queues = env.machine(loaded).layout.output_queues.clone();
+    env.image.cancel_all_scheduled(&queues);
 }
 
 /// Meldung eines Faults ohne eigenen Text: die Art und, wenn vorhanden, der
@@ -674,6 +680,7 @@ pub fn switch(
             let leaf = env.state.leaf();
             let f = Fault::new(kind, fault_message(m, leaf, kind), Span::default(), tick);
             env.state.last_fault = Some(f.clone());
+            clear_on_fault(loaded, env);
             let t = match fault_target(m, leaf) {
                 FaultTarget::State(s) => Target::State(s),
                 FaultTarget::Faulted => Target::Faulted,

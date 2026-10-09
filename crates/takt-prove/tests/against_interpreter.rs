@@ -525,6 +525,21 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Geplante Ausgaben (Schritt 27b-5): `at`, `pulse`, `cancel`, ein
+        // Timeout, der die Warteschlange leert.
+        "28_scheduled.takt"
+        | "82_scheduled_sleep.takt"
+        | "107_cancel_and_pulse.takt"
+        | "119_timeout_cancels_schedule.takt" => (String::new(), 40),
+        // Handshake, Sektoren, `PANIC`, ein Ping und ein Datenrahmen vom Bus,
+        // eine Flanke, auf die `at e.t + CUT_DELAY` folgt.
+        "05_streams_and_protocol.takt" => (
+            "t=2 cmd start\nt=4 in rx_log \"READY v1.2\"\nt=8 in rx_log \"SECTOR 3 of 10\"\n\
+             t=9 in rx_log \"PANIC now\"\nt=10 in rx_bus 0x5aa501020000\nt=11 in rx_bus 0x5aa502030000\n\
+             t=12 in edges Edge(true)\nt=14 in rx_log \"SECTOR 12 of 10\"\n"
+                .to_string(),
+            40,
+        ),
         // Rahmen mit Kopf, Nutzlast und Pruefsumme: gueltig, zu kurz, fremde
         // Konstante, Laenge ausserhalb der Range, Laenge ueber dem Rahmen,
         // falsche Pruefsumme, die volle Nutzlast.
@@ -1122,6 +1137,81 @@ fn the_wire_format_agrees() {
         stim.push_str(&format!("t={} in rx 0x{}\n", 3 * k + 1, f.replace(' ', "")));
     }
     agree_program("WIRE", &compile("WIRE", WIRE), &stim, 40);
+}
+
+/// Geplante Ausgaben (9.8): zwei Werte im selben Tick faellig (der spaetere
+/// gewinnt), gleiches `T` ueberschreibt, ein fuenfter Eintrag laeuft ueber,
+/// `at now` ist ein `TimingFault`, ein Fault leert die Warteschlangen,
+/// `cancel` leert eine, und ein normaler Wechsel behaelt sie.
+const SCHEDULE: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+output a : int in 0..99 @ sim("a")
+output b : int in 0..99 @ sim("b")
+output c : int in 0..9  @ sim("c")
+
+machine m:
+    var turn : int in 0..20 = 0
+    fault -> REPORT
+    initial RUN
+
+    state RUN:
+        enter:
+            turn = turn + 1
+            match turn:
+                case 1:
+                    at now + 15 ms:
+                        a = 1
+                    at now + 18 ms:
+                        a = 2
+                    at now + 30 ms:
+                        b = 3
+                    at now + 30 ms:
+                        b = 4
+                case 2:
+                    at now + 10 ms:
+                        b = 10
+                    at now + 20 ms:
+                        b = 20
+                    at now + 30 ms:
+                        b = 30
+                    at now + 40 ms:
+                        b = 40
+                    at now + 50 ms:
+                        b = 50
+                case 3:
+                    at now:
+                        a = 7
+                case 4:
+                    at now + 50 ms:
+                        a = 9
+                    at now + 30 ms:
+                        b = 8
+                    cancel a
+                case 5:
+                    at now + 60 ms:
+                        a = 11
+                        b = 12
+                case _:
+                    pass
+        after 40 ms: -> RUN
+
+    state REPORT:
+        enter:
+            match last_fault.kind:
+                case SCHEDULE_OVERFLOW:
+                    c = 2
+                case TIMING:
+                    c = 3
+                case _:
+                    c = 9
+        after 10 ms: -> RUN
+"#;
+
+#[test]
+fn scheduled_outputs_agree() {
+    agree_program("SCHEDULE", &compile("SCHEDULE", SCHEDULE), "", 40);
 }
 
 /// `last_fault` (5.3) fuer jede Ursache, die 98 nicht hat: Definitionsbereich,

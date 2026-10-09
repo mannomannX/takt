@@ -46,6 +46,7 @@ use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 mod fault;
 mod monitor;
 mod pattern;
+mod sched;
 mod stream;
 mod text;
 mod tx;
@@ -1913,13 +1914,25 @@ impl Enc<'_> {
                 StmtKind::MethodCall { target, receiver, method, args } => {
                     self.method_call(target.as_ref(), receiver, *method, args, cx, env, flow, span)?;
                 }
+                // 9.8: Die rechten Seiten jetzt, die Schreibvorgaenge nach `T`.
+                StmtKind::At { time, body } => {
+                    let t = self.expr(time, cx, env, flow)?;
+                    for a in &body.stmts {
+                        let StmtKind::Assign { target: Place::Output(c), value } = &a.kind else {
+                            return no("`at` mit anderem als Output-Zuweisungen", a.span);
+                        };
+                        let v = self.expr(value, cx, env, flow)?;
+                        self.schedule(*c, &t, v, env, flow, a.span)?;
+                    }
+                }
+                StmtKind::Cancel(c) => self.cancel_schedule(*c, &flow.alive, env)?,
                 StmtKind::Observe(_) | StmtKind::Pass => {}
                 other @ (StmtKind::ForEach { .. }
                 | StmtKind::Return(_)
-                | StmtKind::At { .. }
-                | StmtKind::Cancel(_)
                 | StmtKind::Job { .. }
-                | StmtKind::Arm { .. }) => return no(format!("Anweisung {}", stmt_name(other)), span),
+                | StmtKind::Arm { .. }) => {
+                    return no(format!("Anweisung {}", stmt_name(other)), span);
+                }
             }
             self.flush_binds(env)?;
         }
@@ -2333,6 +2346,7 @@ impl Enc<'_> {
                 let t = match t {
                     Target::Fault(kind) => {
                         self.record_fault(m, &self.cause(*kind, Span::default()), &mut out)?;
+                        self.clear_schedules(m, &mut out)?;
                         fault_target
                     }
                     other => *other,
@@ -2341,6 +2355,7 @@ impl Enc<'_> {
             }
             ExitKind::Fault(explicit, cause) => {
                 self.record_fault(m, cause, &mut out)?;
+                self.clear_schedules(m, &mut out)?;
                 let t = explicit.unwrap_or(fault_target);
                 self.switch(cx, leaf, t, &mut out, depth, &exit.cond)?;
             }
@@ -2349,6 +2364,7 @@ impl Enc<'_> {
                 let mut sw = env.clone();
                 sw.insert(self.loc_latched(m), Term::bool(true));
                 self.record_fault(m, cause, &mut sw)?;
+                self.clear_schedules(m, &mut sw)?;
                 let under = Term::and(vec![exit.cond.clone(), !latched.clone()]);
                 self.switch(cx, leaf, fault_target, &mut sw, depth, &under)?;
                 out = ite_env(&latched, env, &sw);
@@ -2464,6 +2480,7 @@ impl Enc<'_> {
                 let mut env = base.clone();
                 env.insert(self.loc_latched(m), Term::bool(true));
                 self.record_fault(m, &self.cause(FaultKind::Abort, Span::default()), &mut env)?;
+                self.clear_schedules(m, &mut env)?;
                 let t = self.fault_target(m, leaf);
                 self.switch(&cx, Some(leaf), t, &mut env, 0, &is)?;
                 merged = ite_env(&is, &env, &merged);
@@ -2695,6 +2712,7 @@ impl Enc<'_> {
         }
         self.advance_streams(&mut cur)?;
         self.advance(&actives, &mut cur);
+        self.apply_scheduled(&mut cur)?;
         self.drain_tx(&mut cur);
         self.edges_next(pre, &mut cur)?;
         if let (Some(end), Some(ended)) = (end, ended) {
@@ -2720,6 +2738,7 @@ impl Enc<'_> {
         self.edges_initial(&mut env)?;
         self.streams_initial(&mut env)?;
         self.tx_initial(&mut env);
+        self.sched_initial(&mut env)?;
         self.deliver(None, &mut env)?;
         let before = env.clone();
         for &m in &self.order.clone() {

@@ -1,0 +1,18 @@
+(system
+  (language 1)
+  (tick 10ms))
+(output lamp :int in 0..9 @hw("o/lamp") safe=0)
+(machine m
+  (var go :bool false)
+  (fault -> SAFE)
+  (initial WAIT)
+  (state WAIT
+    (enter
+      (at (+ now 60ms)
+        (= lamp 5)))
+    (sequence
+      (until go timeout=30ms)
+      (= lamp 1)))
+  (state SAFE
+    (enter
+      (= lamp 2))))

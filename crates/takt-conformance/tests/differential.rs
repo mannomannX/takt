@@ -91,6 +91,8 @@ const UNFIRED: &[(&str, usize)] = &[
     ("61_requirements.takt", 4),
     ("65_trigger.takt", 2),
     ("116_sequence_timeout.takt", 2),
+    // Der Timeout ist der Zweck: `until go` wird nie wahr.
+    ("119_timeout_cancels_schedule.takt", 1),
     // Schnitt, Timeouts und Flash-Fehler nur mit `CUT > 0`, also in der Kampagne.
     ("110_journal_log.takt", 17),
     ("sim/12_7/program.takt", 4),

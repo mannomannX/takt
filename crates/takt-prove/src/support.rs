@@ -72,8 +72,9 @@ pub fn support(c: Construct) -> Support {
         Construct::Place(PlaceTag::Var | PlaceTag::Output | PlaceTag::Field | PlaceTag::Index) => Yes,
         Construct::Place(PlaceTag::Port | PlaceTag::Index2) => No("Zuweisung an Port oder Matrixelement"),
         Construct::Type(t) => ty(t),
-        Construct::Seq(SeqTag::Stmt | SeqTag::Wait | SeqTag::Expect | SeqTag::Repeat | SeqTag::Step) => Yes,
-        Construct::Seq(SeqTag::Until) => Partial("kein Timeout-Fault einer Sequenz"),
+        Construct::Seq(
+            SeqTag::Stmt | SeqTag::Wait | SeqTag::Expect | SeqTag::Repeat | SeqTag::Step | SeqTag::Until,
+        ) => Yes,
         Construct::Temporal(TemporalOp::Always | TemporalOp::Never) => Yes,
         Construct::Temporal(TemporalOp::Once) => Yes,
         Construct::Temporal(TemporalOp::Eventually | TemporalOp::Stable) => Partial(
@@ -234,9 +235,10 @@ fn stmt(s: StmtTag) -> Support {
         }
         StmtTag::Break | StmtTag::Skip => Yes,
         StmtTag::Send => Partial("auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus"),
-        StmtTag::Cancel | StmtTag::Arm => No("geplante Ausgaben und Trigger sind nicht kodiert"),
+        StmtTag::Cancel => Yes,
+        StmtTag::Arm => No("Trigger sind nicht kodiert"),
         StmtTag::Every => Yes,
-        StmtTag::At => No("`at` ist nicht kodiert"),
+        StmtTag::At => Yes,
         StmtTag::Job => No("Jobs sind nicht kodiert"),
     }
 }

@@ -1,0 +1,27 @@
+# 119 — Der Timeout einer Sequenz ist ein Fault (6.2) und nimmt den
+# Fault-Pfad wie jeder andere (5.3): Er verwirft die geplanten Ausgaben der
+# Maschine, damit der Wert eines verlassenen Zustands nicht nach dem
+# Safe-Wert ankommt (FB-472).
+
+system:
+    language = 1
+    tick     = 10 ms
+
+output lamp : int in 0..9 @ hw("o/lamp") with safe = 0
+
+machine m:
+    var go : bool = false
+    fault -> SAFE
+    initial WAIT
+
+    state WAIT:
+        enter:
+            at now + 60 ms:
+                lamp = 5
+        sequence:
+            until go timeout 30 ms
+            lamp = 1
+
+    state SAFE:
+        enter:
+            lamp = 2

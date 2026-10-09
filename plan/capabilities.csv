@@ -172,15 +172,15 @@ Stmt(ForEach),ja,"teilweise: ueber ein Array, Bytes oder einen Vektor mit einer 
 Stmt(Match),ja,teilweise: nicht im Rumpf einer Funktion,ja
 Stmt(Return),ja,ja,ja
 Stmt(Send),ja,"teilweise: auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus",ja
-Stmt(At),ja,nein: `at` ist nicht kodiert,ja
-Stmt(Cancel),ja,nein: geplante Ausgaben und Trigger sind nicht kodiert,ja
+Stmt(At),ja,ja,ja
+Stmt(Cancel),ja,ja,ja
 Stmt(Skip),ja,ja,nein
 Stmt(Raise),ja,ja,ja
 Stmt(Job),ja,nein: Jobs sind nicht kodiert,ja
 Stmt(Every),ja,ja,ja
 Stmt(Break),ja,ja,ja
 Stmt(Observe),ja,ja,ja
-Stmt(Arm),ja,nein: geplante Ausgaben und Trigger sind nicht kodiert,ja
+Stmt(Arm),ja,nein: Trigger sind nicht kodiert,ja
 Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`","teilweise: `step` einer Blockinstanz; `push`, `append`, `clear` auf Bytes und Vektoren ohne Index",ja
 Stmt(Pass),ja,ja,ja
 Place(Var),ja,ja,ja
@@ -213,7 +213,7 @@ Type(HandleTrigger),ja,nein: Typ ohne Sorte im Modell,nein
 Type(HandleBlock),ja,teilweise: Blockinstanzen nur ueber ihre Felder,ja
 Seq(Stmt),ja,ja,nein
 Seq(Wait),ja,ja,nein
-Seq(Until),ja,teilweise: kein Timeout-Fault einer Sequenz,nein
+Seq(Until),ja,ja,nein
 Seq(Expect),ja,ja,nein
 Seq(Repeat),ja,ja,nein
 Seq(Step),ja,ja,nein
