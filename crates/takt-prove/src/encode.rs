@@ -44,6 +44,7 @@ use crate::eval;
 use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
 mod fault;
+mod map;
 mod monitor;
 mod pattern;
 mod sched;
@@ -742,6 +743,19 @@ impl Enc<'_> {
                     let n = match self.p.types.get(iter.ty) {
                         Type::Array { len, .. } => i64::from(*len),
                         Type::Bytes { cap } | Type::Vec { cap, .. } => i64::from(*cap),
+                        // Der Index eines Durchlaufs ist der Rang unter den
+                        // belegten Slots, kein fester Platz.
+                        Type::Map { .. } => {
+                            let mut inner = CounterPaths {
+                                every: vec![Vec::new(); out.every.len()],
+                                viol: vec![Vec::new(); out.viol.len()],
+                            };
+                            self.walk_counters(body, &mut Vec::new(), &mut inner)?;
+                            if inner.every.iter().chain(&inner.viol).any(|l| !l.is_empty()) {
+                                return no("`every` oder `check … for` in einer Schleife ueber eine map", s.span);
+                            }
+                            continue;
+                        }
                         Type::Stream(_) => match stream::stream_of(iter) {
                             Some(key) => self.window_slots(key, s.span)?,
                             None => return no("`for` ueber diesen Strom", s.span),
@@ -1649,26 +1663,46 @@ impl Enc<'_> {
                     }
                     self.left_loop(flow);
                 }
-                // Ueber ein Array, Bytes oder einen Vektor: die Variable je
-                // Platz, hinter der Laenge einer Sammlung nichts.
-                StmtKind::ForEach { vars: ForVars::One(var), iter, body }
+                // Ueber ein Array, Bytes oder einen Vektor die Variable je
+                // Platz, hinter der Laenge einer Sammlung nichts; ueber eine
+                // map Schluessel und Wert je belegtem Slot.
+                StmtKind::ForEach { vars, iter, body }
                     if matches!(
-                        self.p.types.get(iter.ty),
-                        Type::Array { .. } | Type::Bytes { .. } | Type::Vec { .. }
+                        (vars, self.p.types.get(iter.ty)),
+                        (ForVars::One(_), Type::Array { .. } | Type::Bytes { .. } | Type::Vec { .. })
+                            | (ForVars::Pair(..), Type::Map { .. })
                     ) =>
                 {
                     let v = self.value(iter, cx, env, flow)?;
-                    let (items, len) = self.places(iter.ty, v, s.span)?;
-                    self.unroll_steps(items.len() as i64, s.span)?;
+                    let rounds: Vec<(Term, Vec<(VarId, V)>)> = match vars {
+                        ForVars::One(var) => {
+                            let (items, len) = self.places(iter.ty, v, s.span)?;
+                            items
+                                .into_iter()
+                                .enumerate()
+                                .map(|(k, item)| {
+                                    let inside = match &len {
+                                        Some(len) => Term::bin(Op::Lt, Term::int(k as i64), len.clone()),
+                                        None => Term::bool(true),
+                                    };
+                                    (inside, vec![(*var, item)])
+                                })
+                                .collect()
+                        }
+                        ForVars::Pair(kv, vv) => self
+                            .map_entries(iter.ty, v, s.span)?
+                            .into_iter()
+                            .map(|(has, key, value)| (has, vec![(*kv, key), (*vv, value)]))
+                            .collect(),
+                    };
+                    self.unroll_steps(rounds.len() as i64, s.span)?;
                     self.breaks.push(Vec::new());
-                    for (k, item) in items.into_iter().enumerate() {
-                        let inside = match &len {
-                            Some(len) => Term::bin(Op::Lt, Term::int(k as i64), len.clone()),
-                            None => Term::bool(true),
-                        };
+                    for (inside, bindings) in rounds {
                         let saved = cx.locals.clone();
                         let mut fk = Flow::new(Term::and(vec![flow.alive.clone(), inside.clone()]));
-                        self.set_local(cx, *var, item, &fk.alive.clone(), s.span)?;
+                        for (var, item) in bindings {
+                            self.set_local(cx, var, item, &fk.alive.clone(), s.span)?;
+                        }
                         let mut rk = ret.clone();
                         self.fn_block(body, cx, env, &mut fk, &mut rk)?;
                         let after = cx.locals.take().expect("Lokale");
@@ -1696,7 +1730,10 @@ impl Enc<'_> {
                     None => return no("`break` ausserhalb einer Schleife", s.span),
                 },
                 StmtKind::MethodCall { target, receiver, method, args }
-                    if matches!(method, Method::Push | Method::Append | Method::Clear) =>
+                    if matches!(
+                        method,
+                        Method::Push | Method::Append | Method::Clear | Method::Insert | Method::Remove
+                    ) =>
                 {
                     self.local_collection_method(target.as_ref(), receiver, *method, args, cx, env, flow, s.span)?;
                 }
@@ -1890,6 +1927,14 @@ impl Enc<'_> {
                     let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
                     self.for_collection(&loc, ty, iter, body, cx, env, flow, span)?;
                 }
+                StmtKind::ForEach { vars: ForVars::Pair(k, v), iter, body }
+                    if matches!(self.p.types.get(iter.ty), Type::Map { .. }) =>
+                {
+                    let vars = &self.machine(m).vars;
+                    let (k_ty, v_ty) = (vars[k.index()].ty, vars[v.index()].ty);
+                    let (k_loc, v_loc) = (self.loc_var(m, *k), self.loc_var(m, *v));
+                    self.for_map((&k_loc, k_ty, &v_loc, v_ty), iter, body, cx, env, flow, span)?;
+                }
                 // Ueber das Fenster eines Stroms (8.7).
                 StmtKind::ForEach { vars: ForVars::One(var), iter, body }
                     if matches!(self.p.types.get(iter.ty), Type::Stream(_)) =>
@@ -2039,7 +2084,7 @@ impl Enc<'_> {
         span: Span,
     ) -> R<()> {
         let m = cx.m.expect("Maschine");
-        if matches!(method, Method::Push | Method::Append | Method::Clear) {
+        if matches!(method, Method::Push | Method::Append | Method::Clear | Method::Insert | Method::Remove) {
             return self.collection_method(target, receiver, method, args, cx, env, flow, span);
         }
         let Place::Var(inst) = receiver else { return no("Methodenaufruf auf diesem Ziel", span) };

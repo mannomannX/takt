@@ -525,6 +525,8 @@ t={k} in b {}.5 V
         "78_length_guards.takt" => (String::new(), 80),
         // Jede Runde faultet anders; der Fault-Zustand gibt `last_fault` aus (Schritt 27a-7).
         "98_last_fault.takt" => (String::new(), 40),
+        // Maps (Schritt 27a-9).
+        "42_map.takt" | "114_for_pairs.takt" => (String::new(), 30),
         // Reduktionen ueber Arrays (Schritt 27a-8).
         "26_samples.takt" | "71_places.takt" => (String::new(), 30),
         // Geplante Ausgaben (Schritt 27b-5): `at`, `pulse`, `cancel`, ein
@@ -1139,6 +1141,110 @@ fn the_wire_format_agrees() {
         stim.push_str(&format!("t={} in rx 0x{}\n", 3 * k + 1, f.replace(' ', "")));
     }
     agree_program("WIRE", &compile("WIRE", WIRE), &stim, 40);
+}
+
+/// `map<K, V, N>` (3.9): Schluessel mit demselben Heimatplatz (0, 4 und 8
+/// liegen bei 1, 2 und 6 bei 3), eine volle Map, Ersetzen,
+/// Rueckwaertsverschiebung auch ueber das Ende hinweg, `get`, `clear` und
+/// die Folge von `for (k, v)`; Enum-Schluessel mit Feldern, Bytes-Schluessel
+/// verschiedener Laenge und eine lokale Map in einer Funktion.
+const MAP: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+enum Kind:
+    PLAIN
+    TAGGED(n: int)
+
+output order : int in 0..99999999 @ sim("order")
+output total : int in 0..99999    @ sim("total")
+output size  : int in 0..9        @ sim("size")
+output ok    : bool               @ sim("ok")
+output got   : int in -1..999     @ sim("got")
+output kinds : int in 0..999      @ sim("kinds")
+output words : int in 0..999      @ sim("words")
+output local : int in 0..9999     @ sim("local")
+
+fn tally(n: int in 1..5) -> int in 0..9999:
+    var bag : map<int, int, 4> = default
+    var put : bool = false
+    for i in range(6):
+        put = bag.insert((i * n) % 7, i)
+    var s : int in 0..9999 = 0
+    for (k, v) in bag:
+        s = (s * 10 + k) % 10000
+    return s
+
+machine m:
+    var table : map<int, int, 4> = default
+    var tags  : map<Kind, int, 3> = default
+    var names : map<bytes<4>, int, 4> = default
+    var t     : int in 0..99 = 0
+    var r     : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            t = t + 1
+            match t:
+                case 1:
+                    r = table.insert(0, 10)
+                    r = table.insert(4, 40)
+                    r = table.insert(8, 80)
+                    r = table.insert(1, 11)
+                case 2:
+                    ok = table.insert(5, 55)
+                    r = table.insert(4, 44)
+                case 3:
+                    r = table.remove(0)
+                case 4:
+                    got = table.get(8).or(-1)
+                case 5:
+                    r = table.remove(1)
+                    got = table.get(0).or(-1)
+                case 6:
+                    r = table.insert(2, 20)
+                    r = table.insert(6, 60)
+                    ok = table.insert(3, 30)
+                case 7:
+                    r = table.remove(2)
+                case 8:
+                    table.clear()
+                case _:
+                    pass
+            var o : int in 0..99999999 = 0
+            var s : int in 0..99999 = 0
+            for (k, v) in table:
+                o = (o * 10 + k + 1) % 100000000
+                s = (s + v) % 100000
+            order = o
+            total = s
+            size = table.len
+            r = tags.insert(TAGGED(n = t % 3), t)
+            r = tags.insert(PLAIN, 1)
+            if t % 4 == 0:
+                r = tags.remove(TAGGED(n = 1))
+            var ks : int in 0..999 = 0
+            for (k, v) in tags:
+                ks = (ks * 3 + v) % 1000
+            kinds = ks
+            var w : bytes<4> = default
+            for i in range(4):
+                if i >= t % 4:
+                    break
+                var p = w.push(i as u8)
+            r = names.insert(w, t)
+            var ws : int in 0..999 = 0
+            for (k, v) in names:
+                ws = (ws * 7 + k.len + v) % 1000
+            words = ws
+            local = tally(t % 5 + 1)
+"#;
+
+#[test]
+fn maps_agree() {
+    agree_program("MAP", &compile("MAP", MAP), "", 16);
 }
 
 /// Geplante Ausgaben (9.8): zwei Werte im selben Tick faellig (der spaetere

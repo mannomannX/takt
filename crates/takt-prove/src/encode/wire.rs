@@ -39,7 +39,7 @@ fn pick(bytes: &[Term], i: &Term) -> Term {
 }
 
 /// Schreibt `bytes` ab `at` in `out`.
-fn put(out: &mut [Term], at: &Term, bytes: &[Term]) {
+pub(super) fn put(out: &mut [Term], at: &Term, bytes: &[Term]) {
     if let Node::Int(a) = &*at.0 {
         for (k, b) in bytes.iter().enumerate() {
             if let Some(slot) = usize::try_from(*a).ok().and_then(|a| out.get_mut(a + k)) {

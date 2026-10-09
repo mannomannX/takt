@@ -188,7 +188,7 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Idle
         | AccessorTag::Sent => Yes,
         AccessorTag::Wrap => Partial("ohne `wrap_u64`"),
-        AccessorTag::Ok | AccessorTag::Err => Yes,
+        AccessorTag::Ok | AccessorTag::Err | AccessorTag::Get => Yes,
         AccessorTag::Min | AccessorTag::Max | AccessorTag::Mean | AccessorTag::Rms => {
             Partial("ueber einem Array; nicht ueber `samples`")
         }
@@ -202,7 +202,6 @@ fn accessor(a: AccessorTag) -> Support {
         | AccessorTag::Done
         | AccessorTag::Result
         | AccessorTag::Last
-        | AccessorTag::Get
         | AccessorTag::Armed
         | AccessorTag::Pre
         | AccessorTag::Post
@@ -226,12 +225,14 @@ fn stmt(s: StmtTag) -> Support {
         StmtTag::Check => Yes,
         StmtTag::ForRange => Partial("bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403)"),
         StmtTag::Match => Partial("nicht im Rumpf einer Funktion"),
-        StmtTag::MethodCall => {
-            Partial("`step` einer Blockinstanz; `push`, `append`, `clear` auf Bytes und Vektoren ohne Index")
-        }
-        StmtTag::ForEach => {
-            Partial("ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion")
-        }
+        StmtTag::MethodCall => Partial(
+            "`step` einer Blockinstanz; `push`, `append`, `clear`, `insert`, `remove` auf Bytes, Vektoren und maps \
+             ohne Index",
+        ),
+        StmtTag::ForEach => Partial(
+            "ueber Arrays, Bytes, Vektoren, maps und das Fenster eines Stroms; kein `every` und kein `check … for` \
+             in einer Schleife ueber eine map",
+        ),
         StmtTag::Break | StmtTag::Skip => Yes,
         StmtTag::Send => Partial("auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus"),
         StmtTag::Cancel => Yes,
@@ -258,12 +259,8 @@ fn ty(t: TypeTag) -> Support {
         ),
         TypeTag::Str | TypeTag::Line | TypeTag::Result => Partial("nicht als Typ eines Inputs"),
         TypeTag::Table => Partial("nur als konstante Tabelle von `interp`"),
-        TypeTag::Samples
-        | TypeTag::Mat
-        | TypeTag::Map
-        | TypeTag::Capture
-        | TypeTag::HandleJob
-        | TypeTag::HandleTrigger => NO_SORT,
+        TypeTag::Map => Yes,
+        TypeTag::Samples | TypeTag::Mat | TypeTag::Capture | TypeTag::HandleJob | TypeTag::HandleTrigger => NO_SORT,
     }
 }
 

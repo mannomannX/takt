@@ -146,7 +146,7 @@ Accessor(Mean),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
 Accessor(Rms),ja,teilweise: ueber einem Array; nicht ueber `samples`,ja
 Accessor(Last),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
 Accessor(Encode),teilweise: `encode` nur auf Records,teilweise: ohne Fliesskomma- und `u64`-Felder,ja
-Accessor(Get),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",ja
+Accessor(Get),ja,ja,ja
 Accessor(StartsWith),ja,ja,nein
 Accessor(Contains),ja,ja,nein
 Accessor(Armed),ja,"nein: Zugriffe sind nicht kodiert (FB-372, FB-373)",nein
@@ -168,7 +168,7 @@ Stmt(Goto),ja,ja,ja
 Stmt(Abort),ja,ja,ja
 Stmt(If),ja,ja,ja
 Stmt(ForRange),ja,teilweise: bis `UNROLL_LIMIT` Durchlaeufe auf einem Pfad (FB-403),ja
-Stmt(ForEach),ja,"teilweise: ueber ein Array, Bytes oder einen Vektor mit einer Variablen, nicht im Rumpf einer Funktion",ja
+Stmt(ForEach),ja,"teilweise: ueber Arrays, Bytes, Vektoren, maps und das Fenster eines Stroms; kein `every` und kein `check … for` in einer Schleife ueber eine map",ja
 Stmt(Match),ja,teilweise: nicht im Rumpf einer Funktion,ja
 Stmt(Return),ja,ja,ja
 Stmt(Send),ja,"teilweise: auf einen Ausgabestrom Text, Bytes, Ganzzahlen, Wahrheitswerte und Arrays daraus",ja
@@ -181,7 +181,7 @@ Stmt(Every),ja,ja,ja
 Stmt(Break),ja,ja,ja
 Stmt(Observe),ja,ja,ja
 Stmt(Arm),ja,nein: Trigger sind nicht kodiert,ja
-Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`","teilweise: `step` einer Blockinstanz; `push`, `append`, `clear` auf Bytes und Vektoren ohne Index",ja
+Stmt(MethodCall),"teilweise: Methoden je nach Ziel: `step`, `reset`, Blockmethoden, `insert`, `remove`","teilweise: `step` einer Blockinstanz; `push`, `append`, `clear`, `insert`, `remove` auf Bytes, Vektoren und maps ohne Index",ja
 Stmt(Pass),ja,ja,ja
 Place(Var),ja,ja,ja
 Place(Output),ja,ja,ja
@@ -203,7 +203,7 @@ Type(Line),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Samples),ja,nein: Typ ohne Sorte im Modell,ja
 Type(Table),ja,teilweise: nur als konstante Tabelle von `interp`,ja
 Type(Mat),ja,nein: Typ ohne Sorte im Modell,ja
-Type(Map),ja,nein: Typ ohne Sorte im Modell,ja
+Type(Map),ja,ja,ja
 Type(Optional),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Result),ja,teilweise: nicht als Typ eines Inputs,ja
 Type(Stream),ja,"teilweise: Eingabestroeme mit `max_rate` oder aus einem `sim`-Ausgang mit Elementen `u8` oder Bytes, Records vom Rand fester Groesse; Ausgabestroeme ohne Leser",ja

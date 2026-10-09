@@ -121,7 +121,8 @@ impl Enc<'_> {
             | Type::Vec { .. }
             | Type::Str { .. }
             | Type::Line { .. }
-            | Type::Result { .. } => true,
+            | Type::Result { .. }
+            | Type::Map { .. } => true,
             Type::Enum(e) => self.fielded(*e),
             _ => false,
         }
@@ -193,6 +194,14 @@ impl Enc<'_> {
                     (".error".into(), self.shape(e, span)?),
                 ])
             }
+            Type::Map { key, value, cap } => {
+                let slot = Shape::Node(vec![
+                    (".has".into(), Shape::Flag),
+                    (".key".into(), self.shape(*key, span)?),
+                    (".value".into(), self.shape(*value, span)?),
+                ]);
+                Shape::Node((0..*cap).map(|i| (format!("[{i}]"), slot.clone())).collect())
+            }
             Type::Str { cap } => super::text::text_shape(*cap, false),
             Type::Line { cap } => super::text::text_shape(*cap, true),
             Type::Enum(e) if self.fielded(*e) => {
@@ -214,7 +223,7 @@ impl Enc<'_> {
 
     /// Die Teile der Felder jeder Variante in der Gestalt ihres Enums;
     /// Teil 0 ist die Variante.
-    fn variant_parts(&self, e: EnumId) -> Vec<Vec<usize>> {
+    pub(super) fn variant_parts(&self, e: EnumId) -> Vec<Vec<usize>> {
         let mut next = 1;
         self.p.enums[e.index()]
             .variants
@@ -534,6 +543,23 @@ impl Enc<'_> {
                 let [default] = args.as_slice() else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?
             }
+            // `get` (3.9): auf einer map der Wert zum Schluessel, sonst das
+            // Element zum Index, ausserhalb kein Wert.
+            ExprKind::Accessor { base, accessor: Accessor::Get, args } => {
+                let [arg] = args.as_slice() else { return no("`get` ohne Argument", span) };
+                let b = self.value(base, cx, env, flow)?;
+                if matches!(self.p.types.get(base.ty), Type::Map { .. }) {
+                    let key = self.value(arg, cx, env, flow)?;
+                    return self.map_get(base.ty, b, key, span);
+                }
+                let (elems, len) = self.places(base.ty, b, span)?;
+                let i = self.expr(arg, cx, env, flow)?;
+                let n = len.unwrap_or_else(|| Term::int(elems.len() as i64));
+                let inside =
+                    Term::and(vec![Term::bin(Op::Ge, i.clone(), Term::int(0)), Term::bin(Op::Lt, i.clone(), n)]);
+                let zero = self.zero_value(&shape, span)?.part(1, span)?;
+                V::Node(vec![V::Leaf(inside.clone()), V::ite(&inside, Enc::select(elems, &i), zero)])
+            }
             ExprKind::Accessor { base, accessor: Accessor::Encode, .. } => {
                 let Type::Record(r) = self.p.types.get(base.ty) else { return no("`encode` ohne Record", span) };
                 let r = *r;
@@ -707,6 +733,10 @@ impl Enc<'_> {
             }
             (Accessor::Len, Type::Bytes { .. } | Type::Vec { .. } | Type::Str { .. } | Type::Line { .. }) => {
                 self.value(base, cx, env, flow)?.part(0, span)?.leaf(span)
+            }
+            (Accessor::Len, Type::Map { .. }) => {
+                let m = self.value(base, cx, env, flow)?;
+                self.map_len(base.ty, m, span)
             }
             (Accessor::Truncated, Type::Line { cap }) => {
                 let cap = *cap as usize;
@@ -1132,7 +1162,6 @@ impl Enc<'_> {
         span: Span,
     ) -> R<()> {
         let Some(ty) = self.place_type(receiver, cx) else { return no("Sammlungsmethode", span) };
-        let Some(cap) = self.collection(ty) else { return no("Sammlungsmethode", span) };
         if self.has_index(receiver) {
             return no("Sammlungsmethode auf einem Element", span);
         }
@@ -1141,7 +1170,7 @@ impl Enc<'_> {
             xs.push(self.value(a, cx, env, flow)?);
         }
         let old = self.place_value(receiver, cx, env, span)?;
-        let (new, done) = self.collection_update(method, ty, cap, old, &xs, span)?;
+        let (new, done) = self.update_by(method, ty, old, &xs, span)?;
         self.assign(receiver, new, cx, env, flow, span)?;
         if let Some(t) = target {
             self.assign(t, V::Leaf(done), cx, env, flow, span)?;
@@ -1164,18 +1193,27 @@ impl Enc<'_> {
     ) -> R<()> {
         let Place::Var(id) = receiver else { return no("Sammlungsmethode auf einem Teil einer Lokalen", span) };
         let Some(ty) = self.local_types.get(id).copied() else { return no("Lokale", span) };
-        let Some(cap) = self.collection(ty) else { return no("Sammlungsmethode", span) };
         let mut xs = Vec::new();
         for a in args {
             xs.push(self.value(a, cx, env, flow)?);
         }
         let Some(old) = cx.locals.as_ref().and_then(|l| l.get(id)).cloned() else { return no("Lokale", span) };
-        let (new, done) = self.collection_update(method, ty, cap, old, &xs, span)?;
+        let (new, done) = self.update_by(method, ty, old, &xs, span)?;
         self.assign_local(receiver, new, cx, env, flow, span)?;
         if let Some(t) = target {
             self.assign_local(t, V::Leaf(done), cx, env, flow, span)?;
         }
         Ok(())
+    }
+
+    /// Eine map nach `insert`, `remove` oder `clear`, eine Sammlung nach
+    /// `push`, `append` oder `clear`, und das Ergebnis der Methode.
+    fn update_by(&mut self, method: Method, ty: TypeId, old: V, xs: &[V], span: Span) -> R<(V, Term)> {
+        if matches!(self.p.types.get(ty), Type::Map { .. }) {
+            return self.map_update(method, ty, old, xs, span);
+        }
+        let Some(cap) = self.collection(ty) else { return no("Sammlungsmethode", span) };
+        self.collection_update(method, ty, cap, old, xs, span)
     }
 
     /// Die Sammlung nach `push`, `append` oder `clear` (3.9, `exec.rs`) und
