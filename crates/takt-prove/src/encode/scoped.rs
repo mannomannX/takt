@@ -114,7 +114,7 @@ impl Enc<'_> {
         }
         self.unrolled = 0;
         if !si.resume {
-            return self.switch(&cx, None, Target::State(machine.initial), env, 0, under, false);
+            return self.switch(&cx, None, Target::State(machine.initial), env, 0, under, false, true);
         }
         // 5.12: das gemerkte Blatt mit der Geschichte seiner `resume`-Zustaende.
         for s in (0..machine.states.len()).map(|i| StateId(i as u32)).filter(|s| machine.states[s.index()].resume) {
@@ -124,13 +124,13 @@ impl Enc<'_> {
         let resumed = base[&self.loc_resumed(m)].clone();
         let start = env.clone();
         let none = Term::and(vec![under.clone(), Term::eq(resumed.clone(), Term::int(-1))]);
-        self.switch(&cx, None, Target::State(machine.initial), env, 0, &none, false)?;
+        self.switch(&cx, None, Target::State(machine.initial), env, 0, &none, false, true)?;
         for leaf in self.leaves(m) {
             let hit = Term::eq(resumed.clone(), Term::int(self.code(m, leaf)));
             let mut branch = start.clone();
             self.unrolled = 0;
             let under = Term::and(vec![under.clone(), hit.clone()]);
-            self.switch(&cx, None, Target::State(leaf), &mut branch, 0, &under, false)?;
+            self.switch(&cx, None, Target::State(leaf), &mut branch, 0, &under, false, true)?;
             *env = ite_env(&hit, &branch, env);
         }
         env.insert(self.loc_resumed(m), Term::int(-1));

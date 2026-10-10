@@ -35,7 +35,7 @@ pub mod sha256;
 pub use cost::{Cost, cost_of};
 
 /// Eine Funktion der kuratierten Menge (4.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Native {
     /// `crc32(b)`: CRC-32 nach IEEE 802.3, wie in ZIP und PNG.
     Crc32,

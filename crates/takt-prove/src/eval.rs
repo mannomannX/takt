@@ -5,6 +5,7 @@
 //! Modells muss im Interpreter dasselbe tun.
 
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{BuildHasherDefault, Hasher};
 
 use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
@@ -58,18 +59,45 @@ impl Val {
 /// Werte der Variablen.
 pub type Env = BTreeMap<String, Val>;
 
+/// Eine Tabelle je Knoten, nach seinem Schluessel (`Term::key`, eine
+/// Adresse). SipHash kostete hier mehr als die Auswertung selbst.
+type Keys<V> = HashMap<usize, V, BuildHasherDefault<KeyHasher>>;
+
+/// Der Hash eines Knotenschluessels: das Produkt mit einer ungeraden
+/// Konstante, die hohen Bits auf die niedrigen gefaltet — eine Adresse hat
+/// unten nur Nullen.
+#[derive(Default)]
+struct KeyHasher(u64);
+
+impl Hasher for KeyHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        let x = (n as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.0 = x ^ (x >> 32);
+    }
+}
+
 /// Wertet `t` unter `env`; eine fehlende Variable ist ihr Nullwert. Jeder
 /// geteilte Knoten wird einmal ausgewertet: Der Term ist ein Graph, und
 /// ohne Gedaechtnis waechst die Arbeit mit der Zahl seiner Pfade.
 pub fn eval(t: &Term, env: &Env) -> Val {
-    eval_in(t, env, &mut HashMap::new())
+    eval_in(t, env, &mut Keys::default())
 }
 
 /// Wertet mehrere Terme unter derselben Belegung, mit einem Gedaechtnis
 /// fuer alle: Die Folgezustaende eines Modells teilen den groessten Teil
 /// ihres Graphen.
 pub fn eval_all<'a>(ts: impl IntoIterator<Item = &'a Term>, env: &Env) -> Vec<Val> {
-    let mut memo = HashMap::new();
+    let mut memo = Keys::default();
     ts.into_iter().map(|t| eval_in(t, env, &mut memo)).collect()
 }
 
@@ -77,7 +105,7 @@ pub fn eval_all<'a>(ts: impl IntoIterator<Item = &'a Term>, env: &Env) -> Vec<Va
 /// tief (FB-403). Ein Knoten, dem ein Argument fehlt, legt sich mit ihm
 /// zurueck auf den Stapel; `ite` wertet nur den genommenen Zweig, `and`
 /// und `or` brechen ab, sobald ihr Wert feststeht.
-fn eval_in(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
+fn eval_in(t: &Term, env: &Env, memo: &mut Keys<Val>) -> Val {
     let mut stack = vec![(t.clone(), 0)];
     while let Some((n, from)) = stack.pop() {
         if !memo.contains_key(&n.key())
@@ -92,7 +120,7 @@ fn eval_in(t: &Term, env: &Env, memo: &mut HashMap<usize, Val>) -> Val {
 /// Der Wert von `t`, wenn seine Argumente bekannt sind; sonst legt er sich
 /// und das naechste fehlende Argument auf den Stapel. `from` ist bei `and`
 /// und `or` das erste noch ungepruefte Argument.
-fn visit(t: &Term, from: usize, env: &Env, memo: &HashMap<usize, Val>, stack: &mut Vec<(Term, usize)>) -> Option<Val> {
+fn visit(t: &Term, from: usize, env: &Env, memo: &Keys<Val>, stack: &mut Vec<(Term, usize)>) -> Option<Val> {
     let Node::App(op, args) = &*t.0 else { return Some(leaf(t, env)) };
     let known = |a: &Term| memo.get(&a.key()).copied();
     let mut wait = |a: &Term, from: usize| {
@@ -119,7 +147,7 @@ fn visit(t: &Term, from: usize, env: &Env, memo: &HashMap<usize, Val>, stack: &m
         }
         _ => match args.iter().find(|a| known(a).is_none()) {
             Some(a) => wait(a, 0),
-            None => Some(apply(*op, args, memo)),
+            None => Some(apply(*op, args.len(), |i| memo[&args[i].key()])),
         },
     }
 }
@@ -135,9 +163,194 @@ fn leaf(t: &Term, env: &Env) -> Val {
     }
 }
 
+/// Terme, einmal in eine Liste uebersetzt (M11 Schritt 28): Jeder Knoten
+/// hat einen Platz hinter seinen Argumenten, jede Variable einen Platz in
+/// [`Plan::vars`]. Ein Lauf des Modells wertet je Tick dieselben Terme aus;
+/// ueber Indizes geht das ohne Hash je Knoten. `ite`, `and` und `or` werten
+/// wie [`eval`] nur, was sie brauchen.
+pub struct Plan {
+    items: Vec<Item>,
+    args: Vec<u32>,
+    /// Die Operationen und Konstanten, auf die die Knoten zeigen: Ein `Op`
+    /// ist 48 Byte gross, ein Knoten so nur 16.
+    ops: Vec<Op>,
+    consts: Vec<Val>,
+    roots: Vec<u32>,
+    vars: Vec<(String, Sort)>,
+    /// Werte der laufenden Auswertung; gueltig, wo `stamp` gleich `epoch`
+    /// ist. So beginnt jede Auswertung ohne Loeschen.
+    vals: Vec<Val>,
+    stamp: Vec<u32>,
+    epoch: u32,
+}
+
+#[derive(Clone, Copy)]
+enum Item {
+    Leaf(u32),
+    Var(u32),
+    App { op: u32, start: u32, len: u32 },
+}
+
+impl Plan {
+    /// Uebersetzt die Terme `roots`.
+    pub fn new<'a>(roots: impl IntoIterator<Item = &'a Term>) -> Plan {
+        let mut items = Vec::new();
+        let mut args: Vec<u32> = Vec::new();
+        let mut ops: Vec<Op> = Vec::new();
+        let mut op_index: HashMap<Op, u32> = HashMap::new();
+        let mut consts: Vec<Val> = Vec::new();
+        let mut vars: Vec<(String, Sort)> = Vec::new();
+        let mut index: Keys<u32> = Keys::default();
+        let mut slots: HashMap<String, u32> = HashMap::new();
+        let mut tops = Vec::new();
+        for root in roots {
+            // Ein Knoten kommt mit `ready` zurueck, wenn seine Argumente
+            // ihren Platz haben: Sie liegen ueber ihm auf dem Stapel.
+            let mut stack = vec![(root.clone(), false)];
+            while let Some((t, ready)) = stack.pop() {
+                if index.contains_key(&t.key()) {
+                    continue;
+                }
+                let item = match &*t.0 {
+                    Node::App(_, xs) if !ready => {
+                        stack.push((t.clone(), true));
+                        stack.extend(xs.iter().filter(|a| !index.contains_key(&a.key())).map(|a| (a.clone(), false)));
+                        continue;
+                    }
+                    Node::App(op, xs) => {
+                        let start = args.len() as u32;
+                        args.extend(xs.iter().map(|a| index[&a.key()]));
+                        let next = ops.len() as u32;
+                        let code = *op_index.entry(*op).or_insert(next);
+                        if code == next {
+                            ops.push(*op);
+                        }
+                        Item::App { op: code, start, len: xs.len() as u32 }
+                    }
+                    Node::Var(name, sort) => {
+                        let next = vars.len() as u32;
+                        let slot = *slots.entry(name.clone()).or_insert(next);
+                        if slot == next {
+                            vars.push((name.clone(), *sort));
+                        }
+                        Item::Var(slot)
+                    }
+                    Node::Bool(_) | Node::Int(_) | Node::F32(_) | Node::F64(_) => {
+                        consts.push(leaf(&t, &Env::new()));
+                        Item::Leaf(consts.len() as u32 - 1)
+                    }
+                };
+                index.insert(t.key(), items.len() as u32);
+                items.push(item);
+            }
+            tops.push(index[&root.key()]);
+        }
+        let n = items.len();
+        Plan {
+            items,
+            args,
+            ops,
+            consts,
+            roots: tops,
+            vars,
+            vals: vec![Val::Bool(false); n],
+            stamp: vec![0; n],
+            epoch: 0,
+        }
+    }
+
+    /// Die Variablen der Terme in der Folge ihrer Plaetze.
+    pub fn vars(&self) -> &[(String, Sort)] {
+        &self.vars
+    }
+
+    /// Wertet alle Wurzeln; `vars` nennt je Variable ihren Wert in der Folge
+    /// von [`Plan::vars`].
+    pub fn eval(&mut self, vars: &[Val]) -> Vec<Val> {
+        self.epoch = self.epoch.wrapping_add(1);
+        if self.epoch == 0 {
+            self.stamp.fill(0);
+            self.epoch = 1;
+        }
+        let mut stack = Vec::new();
+        for i in 0..self.roots.len() {
+            self.force(self.roots[i], vars, &mut stack);
+        }
+        self.roots.iter().map(|&r| self.vals[r as usize]).collect()
+    }
+
+    /// Ein Stapel statt Rekursion, wie [`eval`]: Ein Knoten, dem Argumente
+    /// fehlen, legt sich unter sie zurueck auf den Stapel.
+    fn force(&mut self, root: u32, vars: &[Val], stack: &mut Vec<(u32, u32)>) {
+        stack.push((root, 0));
+        while let Some((n, from)) = stack.pop() {
+            let i = n as usize;
+            if self.stamp[i] == self.epoch {
+                continue;
+            }
+            let (stamp, vals, epoch) = (&self.stamp, &self.vals, self.epoch);
+            let known = |a: u32| (stamp[a as usize] == epoch).then(|| vals[a as usize]);
+            let v = match self.items[i] {
+                Item::Leaf(c) => self.consts[c as usize],
+                Item::Var(slot) => vars[slot as usize],
+                Item::App { op, start, len } => {
+                    let op = self.ops[op as usize];
+                    let args = &self.args[start as usize..(start + len) as usize];
+                    match op {
+                        Op::Ite => {
+                            let Some(c) = known(args[0]) else {
+                                stack.extend([(n, 0), (args[0], 0)]);
+                                continue;
+                            };
+                            let pick = args[if c.as_bool() { 1 } else { 2 }];
+                            match known(pick) {
+                                Some(v) => v,
+                                None => {
+                                    stack.extend([(n, 0), (pick, 0)]);
+                                    continue;
+                                }
+                            }
+                        }
+                        Op::And | Op::Or => {
+                            let decisive = matches!(op, Op::Or);
+                            let mut open = None;
+                            let mut v = Val::Bool(!decisive);
+                            for (j, &a) in args.iter().enumerate().skip(from as usize) {
+                                match known(a) {
+                                    Some(x) if x.as_bool() == decisive => {
+                                        v = Val::Bool(decisive);
+                                        break;
+                                    }
+                                    Some(_) => {}
+                                    None => {
+                                        open = Some((j as u32, a));
+                                        break;
+                                    }
+                                }
+                            }
+                            if let Some((j, a)) = open {
+                                stack.extend([(n, j), (a, 0)]);
+                                continue;
+                            }
+                            v
+                        }
+                        _ if args.iter().any(|&a| known(a).is_none()) => {
+                            stack.push((n, 0));
+                            stack.extend(args.iter().filter(|&&a| known(a).is_none()).map(|&a| (a, 0)));
+                            continue;
+                        }
+                        _ => apply(op, args.len(), |k| vals[args[k] as usize]),
+                    }
+                }
+            };
+            self.vals[i] = v;
+            self.stamp[i] = self.epoch;
+        }
+    }
+}
+
 /// Eine Operation ueber ihren bekannten Argumenten.
-fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
-    let a = |i: usize| memo[&args[i].key()];
+fn apply(op: Op, n: usize, a: impl Fn(usize) -> Val) -> Val {
     match op {
         Op::Ite | Op::And | Op::Or => unreachable!("im Stapel ausgewertet"),
         Op::Not => Val::Bool(!a(0).as_bool()),
@@ -222,12 +435,12 @@ fn apply(op: Op, args: &[Term], memo: &HashMap<usize, Val>) -> Val {
         },
         Op::Math(f) => {
             let x = a(0);
-            let y = if args.len() > 1 { a(1) } else { Val::F64(0.0) };
+            let y = if n > 1 { a(1) } else { Val::F64(0.0) };
             math(f, x, y)
         }
         Op::Round(r) => rounded(r, a(0)),
-        Op::Native { f, part, .. } => native(f, part, &(0..args.len()).map(a).collect::<Vec<_>>()),
-        Op::Mat { f, n, k, part } => matrix(f, n, k, part, &(0..args.len()).map(a).collect::<Vec<_>>()),
+        Op::Native { f, part, .. } => native(f, part, &(0..n).map(a).collect::<Vec<_>>()),
+        Op::Mat { f, n: rows, k, part } => matrix(f, rows, k, part, &(0..n).map(a).collect::<Vec<_>>()),
         Op::FloatToInt => Val::Int(a(0).as_f64() as i64),
     }
 }

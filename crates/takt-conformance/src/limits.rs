@@ -32,19 +32,22 @@ pub struct Limit {
 pub const LIMITS: &[Limit] = &[
     Limit {
         was: "Der Korpus mit Eingaben",
-        warum: "Die Abnahme faehrt jedes Korpusprogramm ohne Stimulus: Commands, Lieferungen und \
-                Tunes kommen nur in den Einzeltests der Abnahme vor (`differential.rs`, \
-                `streams.rs`, `driver_edge.rs`). Was ein Programm erst auf eine Eingabe hin tut, \
-                vergleicht der Korpuslauf nicht.",
-        wann: "M11 Schritte 9 und 29: Stimuli je Programm aus dem Manifest.",
+        warum: "Die Abnahme faehrt jedes Korpusprogramm ohne Stimulus und, wo einer geschrieben \
+                ist, mit dem Stimulus der Suite `beweiser` (`takt_conformance::cases`, M11 Schritt \
+                28b). Erzeugte Eingaben — Grenzen, Qualitaeten, Folgen von Commands — gibt es noch \
+                nicht; was ein Programm erst auf eine solche Eingabe hin tut, vergleicht der \
+                Korpuslauf nicht.",
+        wann: "M11 Schritt 29: Eingaben je Programm aus seinen Deklarationen.",
         row: "FB-376",
     },
     Limit {
         was: "Skalare Inputs zusammengesetzter Typen",
         warum: "Skalare Lieferungen gehen mit Wert, Qualitaet, Alter und Zeitstempel durch den \
                 Treiberrand beider Seiten (12.6, M10 Schritt 29b). Der Rahmen schreibt den \
-                Wert in der C-Form seines Typs; einen Input vom Typ Record, Array oder \
-                `samples` liefert er nicht, und kein Korpusprogramm treibt einen solchen.",
+                Wert in der C-Form seines Typs; einen Input vom Typ Record, Array, Enum mit \
+                Feldern oder `samples` liefert er nicht. Die Laeufe mit Stimulus von \
+                `04_blocks_and_multirate` und `07_embedded_field` brauchen einen; ihre native \
+                Spalte steht darum in `GAPS` (`differential.rs`).",
         wann: "M11 Schritt 29, mit dem ersten Programm, das einen braucht: die kanonische Form \
                (5.9) aus dem Trace-Text, wie fuer Stromelemente.",
         row: "FB-430",
@@ -101,10 +104,10 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Das Modell des Beweisers als Ausfuehrer",
-        warum: "Der Beweiser kodiert das Programm in sein eigenes Modell; ob es rechnet wie \
-                Interpreter und Codegen, vergleicht nur `takt-prove/tests` an wenigen \
-                Programmen.",
-        wann: "M11 Schritt 28.",
+        warum: "Das Modell rechnet im Korpusvergleich als dritte Spalte (`Model::run`, M11 \
+                Schritt 28b); die Pfade des Solvers — Gegenbeispiele, erreichbare Pruefstellen — \
+                laufen noch nicht durch alle drei Ausfuehrer.",
+        wann: "M11 Schritt 28c.",
         row: "FB-381",
     },
     Limit {

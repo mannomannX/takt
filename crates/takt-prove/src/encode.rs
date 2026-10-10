@@ -268,6 +268,19 @@ struct Exit {
     kind: ExitKind,
 }
 
+/// Von wo ein Ausgang wechselt.
+#[derive(Clone, Copy, Debug)]
+enum Origin {
+    /// Aus diesem Zustand: dem Blatt, oder dem kleinsten gemeinsamen
+    /// Vorfahren, wenn ein exit-Block auf dem Weg faultete (9.3, FB-289).
+    State(StateId),
+    /// Aus `FAULTED`, der Senke des Fault-Walds (5.3).
+    Faulted,
+    /// Aus der leeren Konfiguration: Ein exit-Block faultete, und der
+    /// Wechsel hatte keinen gemeinsamen Vorfahren.
+    Root,
+}
+
 /// Kontrollfluss eines Blocks: `alive` heisst, die Ausfuehrung erreicht
 /// die naechste Anweisung; die Ausgaenge sind paarweise exklusiv.
 #[derive(Clone, Debug)]
@@ -1119,7 +1132,7 @@ impl Enc<'_> {
             ExprKind::Index { base, index } => self.element(base, index, cx, env, flow, span)?.leaf(span)?,
             ExprKind::Output(c) => {
                 let ch = &self.p.channels[c.index()];
-                if let Some(owner) = ch.owner.filter(|o| !self.order.contains(o)) {
+                if let Some(owner) = ch.owner.filter(|_| self.foreign(ch.owner)) {
                     let (ty, name) = (ch.ty, ch.name.clone());
                     let (x, fresh) = self.free_psi(owner, &format!("s.out.{name}"), self.sort_of(ty, span)?);
                     if fresh && let Some(t) = self.type_invariant(x.clone(), ty) {
@@ -2654,12 +2667,15 @@ impl Enc<'_> {
         depth: u32,
         under: &Term,
         by_fault: bool,
+        first: bool,
     ) -> R<()> {
         let m = cx.m.expect("Maschine");
         let resumed = match target {
             Target::State(s) if !by_fault && self.machine(m).states[s.index()].resume => s,
-            Target::State(s) => return self.switch_path(cx, from, target, self.descend(m, s), env, depth, under),
-            Target::Faulted => return self.switch_path(cx, from, target, Vec::new(), env, depth, under),
+            Target::State(s) => {
+                return self.switch_path(cx, from, target, self.descend(m, s), env, depth, under, first);
+            }
+            Target::Faulted => return self.switch_path(cx, from, target, Vec::new(), env, depth, under, first),
             Target::Fault(_) => return no("Timeout-Fault einer Sequenz", self.machine(m).span),
         };
         // 5.12: Ein Uebergang auf einen `resume`-Zustand betritt das gemerkte
@@ -2676,20 +2692,23 @@ impl Enc<'_> {
             env,
             depth,
             &Term::and(vec![under.clone(), none]),
+            first,
         )?;
         let paths: Vec<Vec<StateId>> =
             self.leaves(m).into_iter().map(|l| self.chain_to(m, l)).filter(|p| p.contains(&resumed)).collect();
         for path in paths {
             let hit = Term::eq(saved.clone(), Term::int(self.code(m, path[path.len() - 1])));
             let mut branch = base.clone();
-            self.switch_path(cx, from, target, path, &mut branch, depth, &Term::and(vec![under.clone(), hit.clone()]))?;
+            let under = Term::and(vec![under.clone(), hit.clone()]);
+            self.switch_path(cx, from, target, path, &mut branch, depth, &under, first)?;
             *env = ite_env(&hit, &branch, env);
         }
         Ok(())
     }
 
     /// `switch` auf die Kette `new`; `target` bestimmt den gemeinsamen
-    /// Vorfahren (9.3).
+    /// Vorfahren (9.3). `first` ist der erste Eintritt der Maschine: Dann
+    /// laeuft auch der `loop:` ihrer eigenen Ebene.
     #[allow(clippy::too_many_arguments)]
     fn switch_path(
         &mut self,
@@ -2700,6 +2719,7 @@ impl Enc<'_> {
         env: &mut Env,
         depth: u32,
         under: &Term,
+        first: bool,
     ) -> R<()> {
         let m = cx.m.expect("Maschine");
         let machine = self.machine(m).clone();
@@ -2735,6 +2755,15 @@ impl Enc<'_> {
         for s in old[common..].iter().rev() {
             self.block(&machine.states[s.index()].exit, &entry, env, &mut flow)?;
         }
+        // Scheitert ein exit-Block, gilt der Fault ab dem kleinsten
+        // gemeinsamen Vorfahren (`switch` im Interpreter, FB-289): Was
+        // darunter lag, ist verlassen, das Neue nicht betreten.
+        let left = flow.exits.len();
+        let after_exit = match (target, common) {
+            (Target::Faulted, _) => Origin::Faulted,
+            (_, 0) => Origin::Root,
+            _ => Origin::State(old[common - 1]),
+        };
         // Ein verlassener Zustand vergisst seine Zeit: Gelesen wird sie nur,
         // solange er aktiv ist (`time_in_state`, `after`), und beim Eintritt
         // beginnt sie neu. So ist jeder inaktive Timer null, ein Lemma fuer
@@ -2795,7 +2824,7 @@ impl Enc<'_> {
             for s in &entered {
                 self.block(&machine.states[s.index()].enter, &entry, env, &mut flow)?;
             }
-            if from.is_none() {
+            if first {
                 self.block(&machine.loop_block, &entry, env, &mut flow)?;
             }
             for s in &entered {
@@ -2807,26 +2836,30 @@ impl Enc<'_> {
         }
         let base = env.clone();
         let mut merged = base.clone();
-        for exit in &flow.exits {
+        for (i, exit) in flow.exits.iter().enumerate() {
             if exit.cond.is_bool(false) {
                 continue;
             }
-            let applied = self.resolve(cx, new_leaf, exit, &base, depth + 1)?;
+            let origin = if i < left { after_exit } else { new_leaf.map_or(Origin::Faulted, Origin::State) };
+            let applied = self.resolve(cx, origin, exit, &base, depth + 1)?;
             merged = ite_env(&exit.cond, &applied, &merged);
         }
         *env = merged;
         Ok(())
     }
 
-    /// Wendet einen Ausgang an (`resolve_m`); `leaf` ist das Blatt, von dem
-    /// aus gewechselt wird — keines in `FAULTED`.
-    fn resolve(&mut self, cx: &Cx<'_>, leaf: Option<StateId>, exit: &Exit, env: &Env, depth: u32) -> R<Env> {
+    /// Wendet einen Ausgang an (`resolve_m`), gewechselt wird von `origin`.
+    fn resolve(&mut self, cx: &Cx<'_>, origin: Origin, exit: &Exit, env: &Env, depth: u32) -> R<Env> {
         let m = cx.m.expect("Maschine");
         // `FAULTED` ist die Senke des Fault-Walds (5.3): Ein Fault auf dem
         // Weg hinein fuehrt dorthin zurueck.
-        let fault_target = match leaf {
-            Some(l) => self.fault_target(m, l),
-            None => Target::Faulted,
+        let (leaf, fault_target) = match origin {
+            Origin::State(l) => (Some(l), self.fault_target(m, l)),
+            Origin::Faulted => (None, Target::Faulted),
+            Origin::Root => match self.machine(m).fault_target {
+                FaultTarget::State(s) => (None, Target::State(s)),
+                FaultTarget::Faulted => (None, Target::Faulted),
+            },
         };
         let mut out = env.clone();
         match &exit.kind {
@@ -2842,14 +2875,14 @@ impl Enc<'_> {
                     }
                     other => (*other, false),
                 };
-                self.switch(cx, leaf, t, &mut out, depth, &exit.cond, by_fault)?;
+                self.switch(cx, leaf, t, &mut out, depth, &exit.cond, by_fault, false)?;
             }
             ExitKind::Fault(explicit, cause) => {
                 self.record_fault(m, cause, &mut out)?;
                 self.clear_on_fault(m, &mut out)?;
                 self.fault_paths.entry(m).or_default().push(exit.cond.clone());
                 let t = explicit.unwrap_or(fault_target);
-                self.switch(cx, leaf, t, &mut out, depth, &exit.cond, true)?;
+                self.switch(cx, leaf, t, &mut out, depth, &exit.cond, true, false)?;
             }
             ExitKind::Abort(cause) => {
                 let latched = env[&self.loc_latched(m)].clone();
@@ -2859,7 +2892,7 @@ impl Enc<'_> {
                 self.clear_on_fault(m, &mut sw)?;
                 let under = Term::and(vec![exit.cond.clone(), !latched.clone()]);
                 self.fault_paths.entry(m).or_default().push(under.clone());
-                self.switch(cx, leaf, fault_target, &mut sw, depth, &under, true)?;
+                self.switch(cx, leaf, fault_target, &mut sw, depth, &under, true, false)?;
                 out = ite_env(&latched, env, &sw);
             }
         }
@@ -2956,7 +2989,7 @@ impl Enc<'_> {
                 if exit.cond.is_bool(false) {
                     continue;
                 }
-                let applied = self.resolve(&cx, Some(leaf), exit, &env, 0)?;
+                let applied = self.resolve(&cx, Origin::State(leaf), exit, &env, 0)?;
                 out = ite_env(&exit.cond, &applied, &out);
             }
             merged = ite_env(&is, &out, &merged);
@@ -2988,7 +3021,7 @@ impl Enc<'_> {
                 self.record_fault(m, &self.cause(FaultKind::Abort, Span::default()), &mut env)?;
                 self.clear_on_fault(m, &mut env)?;
                 let t = self.fault_target(m, leaf);
-                self.switch(&cx, Some(leaf), t, &mut env, 0, &is, true)?;
+                self.switch(&cx, Some(leaf), t, &mut env, 0, &is, true, false)?;
                 merged = ite_env(&is, &env, &merged);
             }
             *cur = merged;
@@ -3174,12 +3207,20 @@ impl Enc<'_> {
 
     /// Die Outputs, wie sie zu Beginn und nach dem Ende eines Laufs stehen:
     /// `safe`, sonst der Standardwert (`eval_safe_outputs`).
+    /// Gehoert ein Output einer Maschine ausserhalb einer Kodierung je
+    /// Maschine (13.3)? Dann ist er dort eine freie Eingabe. Im Gesamtmodell
+    /// ist ein Besitzer ausserhalb der Schrittordnung ein Szenario, das nicht
+    /// laeuft: Sein Output steht fest auf dem Anfangswert, wie im Lauf.
+    fn foreign(&self, owner: Option<MachineId>) -> bool {
+        self.scope.is_some() && owner.is_some_and(|o| !self.order.contains(&o))
+    }
+
     fn safe_outputs(&mut self) -> R<Vec<(String, TypeId, V)>> {
         let mut out = Vec::new();
         for (i, c) in self.p.channels.clone().iter().enumerate() {
             // Ein Ausgabestrom hat keinen Latch; sein Puffer gehoert dem Treiber (8.8).
             let stream = matches!(self.p.types.get(c.ty), Type::Stream(_));
-            if c.dir != Direction::Output || stream || c.owner.is_some_and(|o| !self.order.contains(&o)) {
+            if c.dir != Direction::Output || stream || self.foreign(c.owner) {
                 continue;
             }
             let value = match &c.attrs.safe {
@@ -3282,16 +3323,19 @@ impl Enc<'_> {
             let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
             self.init_vars(m, &cx, &mut env, &Term::bool(true))?;
         }
+        // Ψ_0 sind die Anfangswerte: Nur ein Follower liest frisch, was vor
+        // ihm eintrat (7.2); jede andere Maschine liest sie, auch hinter
+        // einem Eintritt, der sie schon aendert.
+        let psi = env.clone();
         // 5.11: Eine gescopte Instanz tritt erst ein, wenn ihr Scope steht.
         for &m in &self.order.clone() {
             if self.is_scoped(m) {
                 continue;
             }
             let machine = self.machine(m).clone();
-            let pre = env.clone();
-            let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &pre, active: &actives, locals: None };
+            let cx = Cx { m: Some(m), leaf: None, mode: Mode::Entry, pre: &psi, active: &actives, locals: None };
             self.unrolled = 0;
-            self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true), false)?;
+            self.switch(&cx, None, Target::State(machine.initial), &mut env, 0, &Term::bool(true), false, true)?;
         }
         let faults = self.faults_now();
         self.scoped_lifecycle(&mut env, &actives, &faults)?;

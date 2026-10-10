@@ -26,70 +26,42 @@ fn korpus() -> Vec<&'static str> {
 /// wenig genug, dass ein Fehlschlag noch zu lesen ist.
 const TICKS: u64 = 60;
 
-/// Die Obergrenze der Tickzahl eines Korpusprogramms (KON1-006): Fristen
-/// darueber (`after 3 s` bei 50 us Tick, `after 7 d`) erreicht der
-/// Vergleich nicht, und `UNFIRED` nennt ihre Transitionen.
-const MAX_TICKS: u64 = 2000;
-
-/// Wie viele Ticks ein Korpusprogramm laeuft (KON1-006): die Summe seiner
-/// statischen Fristen (`after`, `timeout`, `within`, `every`, Dauern in
-/// Ausdruecken) in Ticks und ein Rand, mindestens 60 und hoechstens
-/// [`MAX_TICKS`]. Die Summe statt der laengsten Frist, weil Fristen
-/// hintereinander liegen: `after 200 ms`, dann `until … timeout 500 ms`
-/// erreicht den Timeout-Pfad erst nach 700 ms.
-fn ticks_for(p: &Program) -> u64 {
-    let mut sum = 0i64;
-    for m in &p.machines {
-        takt_mir::visit::for_each_expr_machine(m, &mut |e| {
-            if let takt_mir::expr::ExprKind::Duration(d) = &e.kind {
-                sum = sum.saturating_add((*d).max(0));
-            }
-        });
-    }
-    let ticks = u64::try_from(sum / p.config.tick.max(1)).unwrap_or(u64::MAX);
-    ticks.saturating_add(10).clamp(60, MAX_TICKS)
-}
-
-/// Transitionen eines Korpusprogramms, die im Lauf ohne Eingaben nie feuern
-/// (KON1-006, Coverage aus 13.2): Programm und Zahl. Die Ratsche verlangt die
-/// Zahl genau; feuert eine weitere nicht mehr, ist das ein Befund, feuert
-/// eine mehr, wird die Zahl gesenkt. Der Grund ist fast immer derselbe: Ohne
-/// Stimulus fehlen die Commands und Lieferungen, die sie ausloesen (FB-376);
+/// Transitionen eines Korpusprogramms, die in keinem seiner Laeufe feuern
+/// (KON1-006, Coverage aus 13.2, [`takt_conformance::cases`]): Programm und
+/// Zahl. Die Ratsche verlangt die Zahl genau; feuert eine weitere nicht mehr,
+/// ist das ein Befund, feuert eine mehr, wird die Zahl gesenkt. Der Grund ist
+/// fast immer derselbe: Kein Stimulus liefert die Commands und Lieferungen,
+/// die sie ausloesen (FB-376);
 /// bei `11_foc_drive` (`after 3 s` bei 50 us) und `sim/14_7` (`after 2 min`,
-/// `after 7 d`) liegen Fristen jenseits von [`MAX_TICKS`].
+/// `after 7 d`) liegen Fristen jenseits von [`takt_conformance::cases::MAX_TICKS`].
 const UNFIRED: &[(&str, usize)] = &[
-    ("01_minimal.takt", 3),
-    ("03_sequences_and_faults.takt", 12),
-    ("11_foc_drive.takt", 6),
+    ("01_minimal.takt", 1),
+    ("03_sequences_and_faults.takt", 11),
+    ("11_foc_drive.takt", 5),
     ("12_bitfields.takt", 1),
     ("14_latency.takt", 1),
-    ("16_timing.takt", 2),
     ("17_nested.takt", 3),
     ("18_blocks.takt", 2),
     ("21_fault_targets.takt", 1),
     ("40_jobs.takt", 3),
-    ("43_sent.takt", 2),
+    ("43_sent.takt", 1),
     ("45_journal_cut.takt", 14),
     ("47_monitors.takt", 2),
-    ("49_record_streams.takt", 2),
     ("50_clause_words.takt", 2),
     ("53_stream_kinds.takt", 1),
-    ("60_resume.takt", 2),
-    ("62_type_generics.takt", 2),
-    ("63_scoped_instances.takt", 8),
+    ("63_scoped_instances.takt", 6),
     ("64_scoped_exit.takt", 1),
     ("87_fault_kinds.takt", 3),
     ("88_capture_segments.takt", 3),
     ("92_idle_streams.takt", 1),
-    ("04_blocks_and_multirate.takt", 3),
-    ("05_streams_and_protocol.takt", 6),
+    ("04_blocks_and_multirate.takt", 2),
+    ("05_streams_and_protocol.takt", 3),
     ("06_test_harness.takt", 5),
-    ("07_embedded_field.takt", 17),
+    ("07_embedded_field.takt", 13),
     ("30_idle.takt", 1),
     ("31_idle_multirate.takt", 1),
     ("38_scenarios.takt", 2),
     ("61_requirements.takt", 4),
-    ("65_trigger.takt", 2),
     ("116_sequence_timeout.takt", 2),
     // Der Timeout ist der Zweck: `until go` wird nie wahr.
     ("119_timeout_cancels_schedule.takt", 1),
@@ -141,7 +113,7 @@ fn virtual_sleep_is_invisible() {
         if !p.machines.iter().any(|m| m.states.iter().any(|s| s.idle)) {
             continue;
         }
-        let ticks = ticks_for(&p);
+        let ticks = takt_conformance::cases::ticks_for(&p);
         let native = match common::run_native_sleeping(&clang, &p, name, ticks) {
             Ok(t) => t,
             Err(e) => {
@@ -281,65 +253,135 @@ fn a_running_job_keeps_the_native_system_awake() {
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
 
-/// **Die Abnahme.** Interpreter und erzeugter Code liefern dieselben
-/// Outputs (Satz 9.4.4), jedes Programm so lange, wie seine Fristen
-/// verlangen ([`ticks_for`]); jede Transition feuert dabei, ausser denen,
-/// die [`UNFIRED`] zaehlt.
+/// Was eine Spalte des Vergleichs nicht rechnet, je Programm, Lauf und
+/// Spalte, mit Grund. Die Liste ist eine Ratsche wie [`UNFIRED`]: Eine neue
+/// Luecke scheitert ebenso wie eine, die es nicht mehr gibt. Ein Programm
+/// ausserhalb der Suite `beweiser` nennt seinen Grund im Manifest.
+const GAPS: &[(&str, &str, &str, &str)] = &[
+    ("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach"),
+    (
+        "04_blocks_and_multirate.takt",
+        "stimulus",
+        "nativ",
+        "`samples<T, N>` als Input liefert der Rahmen nicht (FB-430)",
+    ),
+    ("07_embedded_field.takt", "stimulus", "nativ", "ein Enum mit Feldern als Input liefert der Rahmen nicht (FB-430)"),
+];
+
+/// **Die Abnahme: ein Vergleich, drei Ausfuehrer** (Satz 9.4.4, M11
+/// Schritt 28). Je Korpusprogramm und Lauf ([`takt_conformance::cases`])
+/// rechnen Interpreter, erzeugter Code und Modell denselben Stimulus, und
+/// derselbe Vergleich urteilt ueber jedes Paar. Zwischen Interpreter und
+/// Modell gilt der strengere Zeile fuer Zeile (`takt_prove::mismatches`),
+/// der auch Zustaende und `pub var` sieht. Ueber alle Laeufe feuert jede
+/// Transition, ausser denen, die [`UNFIRED`] zaehlt.
 #[test]
-fn the_interpreter_and_the_generated_code_agree() {
+fn the_three_executors_agree() {
     let Some(clang) = common::clang() else { return };
+    let modelled = takt_conformance::suites::programs("beweiser");
     let mut failed = Vec::new();
+    let mut gaps = Vec::new();
     for name in korpus() {
         let p = corpus(name);
-        let ticks = ticks_for(&p);
-        // Alle Maschinen, in Schrittordnung (7.2): Ψ-Lesevorgaenge und
-        // `follows` gibt es nur zwischen Maschinen.
-        let native = match common::run_native_all(&clang, &p, name, ticks) {
-            Ok(t) => t,
-            Err(e) => {
-                failed.push(format!("{name}: kein nativer Lauf:\n{e}"));
-                continue;
-            }
-        };
-        let result = interpret(&p, ticks);
+        let model = modelled.contains(&name).then(|| {
+            takt_prove::encode(&p).unwrap_or_else(|e| panic!("{name} steht in der Suite `beweiser`: {}", e.what))
+        });
         let items = takt_interp::coverage::items(&p);
-        let unfired: Vec<String> = result
-            .coverage
-            .missing(&items)
-            .into_iter()
-            .filter(|i| i.kind == takt_interp::CoverKind::Transition)
-            .map(|i| format!("{} {}", i.machine, i.key))
-            .collect();
+        let mut unfired: Option<std::collections::BTreeSet<String>> = None;
+        for case in takt_conformance::cases::cases(name, &p) {
+            let run = format!("{name} ({}, {} Ticks)", case.label, case.ticks);
+            // Bricht der Lauf ab (Speicher, Stapel), nennt das Protokoll den Lauf.
+            eprintln!("{run}");
+            let stimulus = takt_interp::Trace::parse(&case.stimulus).expect("Stimulus");
+            let options = takt_interp::RunOptions { ticks: case.ticks, inputs: true, ..Default::default() };
+            let result = takt_interp::run(&p, &stimulus, &options).unwrap_or_else(|e| panic!("{run}: {e:?}"));
+            let missing = result.coverage.missing(&items).into_iter();
+            let missing = missing.filter(|i| i.kind == takt_interp::CoverKind::Transition);
+            let here: std::collections::BTreeSet<String> =
+                missing.map(|i| format!("{} {}", i.machine, i.key)).collect();
+            unfired = Some(match unfired {
+                Some(before) => before.intersection(&here).cloned().collect(),
+                None => here,
+            });
+            let interpreted = result.trace.render();
+            let f32s = takt_conformance::run::f32_outputs(&p);
+            let widened = takt_conformance::run::widen_f32(&interpreted, &f32s);
+            // Alle Maschinen, in Schrittordnung (7.2): Ψ-Lesevorgaenge und
+            // `follows` gibt es nur zwischen Maschinen.
+            let native = Stimulus::from_trace(&stimulus)
+                .and_then(|inputs| common::run_native_all_with(&clang, &p, name, case.ticks, &inputs));
+            match &native {
+                Ok(native) => failed.extend(disagreement(&run, "Interpreter", &widened, "nativ", native)),
+                Err(e) => gaps.push((name, case.label, "nativ", e.lines().next().unwrap_or_default().to_string())),
+            }
+            let Some(model) = &model else { continue };
+            let traced = match model.run(&p, &stimulus, &result, case.ticks) {
+                Ok(t) => t,
+                Err(e) => {
+                    failed.push(format!("{run}: Modell: {e}"));
+                    continue;
+                }
+            };
+            let diffs = takt_prove::mismatches(&result.trace, &traced);
+            if !diffs.is_empty() {
+                let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+                failed.push(format!("{run}: Interpreter und Modell weichen ab:\n{}", list.join("\n")));
+            }
+            if let Ok(native) = &native {
+                let modelled = takt_conformance::run::widen_f32(&traced.render(), &f32s);
+                let native = without(native, takt_prove::UNMODELLED);
+                failed.extend(disagreement(&run, "Modell", &modelled, "nativ", &native));
+            }
+        }
+        let unfired = unfired.unwrap_or_default();
         let allowed = UNFIRED.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
         if unfired.len() != allowed {
             failed.push(format!(
-                "{name}: {} Transitionen feuern in {ticks} Ticks nie, `UNFIRED` erwartet {allowed}:\n  {}",
+                "{name}: {} Transitionen feuern in keinem Lauf, `UNFIRED` erwartet {allowed}:\n  {}",
                 unfired.len(),
-                unfired.join("\n  ")
-            ));
-        }
-        let interpreted = result.trace.render();
-        // Der Vergleich prueft nur Ausgaenge, die beide Seiten melden; einer,
-        // den der Rahmen nie schreibt, fiele sonst durch (FB-305).
-        let missing: Vec<String> = common::board::output_names(&interpreted)
-            .difference(&common::board::output_names(&native))
-            .cloned()
-            .collect();
-        // Ein `f32` schreibt der Rahmen als seinen Wert in `f64` (4.2).
-        let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
-        let diffs = compare(&widened, &native);
-        if !missing.is_empty() || !diffs.is_empty() {
-            let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
-            failed.push(format!(
-                "{name}: {} Abweichungen, fehlende Ausgaenge {missing:?}\n{}\n--- Interpreter ---\n{}\n--- nativ ---\n{}",
-                diffs.len(),
-                list.join("\n"),
-                interpreted.lines().take(12).collect::<Vec<_>>().join("\n"),
-                native.lines().take(12).collect::<Vec<_>>().join("\n")
+                unfired.into_iter().collect::<Vec<_>>().join("\n  ")
             ));
         }
     }
+    let expected: Vec<(&str, &str, &str)> = GAPS.iter().map(|&(n, l, c, _)| (n, l, c)).collect();
+    let found: Vec<(&str, &str, &str)> = gaps.iter().map(|(n, l, c, _)| (*n, *l, *c)).collect();
+    for (n, l, c, why) in &gaps {
+        if !expected.contains(&(*n, *l, *c)) {
+            failed.push(format!("{n} ({l}): die Spalte `{c}` rechnet nicht, `GAPS` nennt das nicht: {why}"));
+        }
+    }
+    for (n, l, c) in expected.iter().filter(|g| !found.contains(g)) {
+        failed.push(format!("{n} ({l}): die Spalte `{c}` rechnet wieder, `GAPS` nennt noch eine Luecke"));
+    }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// Die Abweichungen zweier Traces nach [`compare`], fuer die Meldung mit
+/// dem Anfang beider; `None`, wenn es keine gibt. Der Vergleich prueft
+/// nur Ausgaenge, die beide Seiten melden; einer, den eine Seite nie
+/// schreibt, ist eine Abweichung fuer sich (FB-305).
+fn disagreement(run: &str, left: &str, a: &str, right: &str, b: &str) -> Option<String> {
+    let names = |t: &str| common::board::output_names(t);
+    let missing: Vec<String> = names(a).difference(&names(b)).cloned().collect();
+    let diffs = compare(a, b);
+    if missing.is_empty() && diffs.is_empty() {
+        return None;
+    }
+    let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+    let head = |t: &str| t.lines().take(12).collect::<Vec<_>>().join("\n");
+    Some(format!(
+        "{run}: {left} gegen {right}: {} Abweichungen, fehlende Ausgaenge {missing:?}\n{}\n--- {left} ---\n{}\n--- {right} ---\n{}",
+        diffs.len(),
+        list.join("\n"),
+        head(a),
+        head(b)
+    ))
+}
+
+/// Der Trace ohne die Zeilen der Arten `kinds` (`t=<tick> <art> …`).
+fn without(trace: &str, kinds: &[(&str, &str)]) -> String {
+    let dropped = |l: &str| l.split_whitespace().nth(1).is_some_and(|w| kinds.iter().any(|(k, _)| *k == w));
+    trace.lines().filter(|l| !dropped(l)).map(|l| format!("{l}\n")).collect()
 }
 
 /// Die Grenzen der Abnahme stehen im Code, nicht nur im Plan.

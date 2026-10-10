@@ -25,7 +25,7 @@ pub fn built() -> u64 {
 }
 
 /// Sorte eines Terms.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Sort {
     /// `Bool`
     Bool,
@@ -39,7 +39,7 @@ pub enum Sort {
 
 /// Eine korrekt gerundete Funktion aus `libtaktm` (4.2): in der Auswertung
 /// genau, im Solver uninterpretiert, mit den Schranken ihres Wertebereichs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(missing_docs)]
 pub enum Fun {
     Sin,
@@ -73,7 +73,7 @@ impl Fun {
 }
 
 /// Die Richtung einer Rundung auf eine ganze Zahl.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(missing_docs)]
 pub enum Rounding {
     /// Halbe von null weg (`f64::round`).
@@ -84,7 +84,7 @@ pub enum Rounding {
 }
 
 /// Operation eines inneren Knotens.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(missing_docs)]
 pub enum Op {
     Not,

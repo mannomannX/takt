@@ -11,7 +11,7 @@
 //! Tick. Ein Rand, der anders urteilt, als das Modell zusichert, beendet den
 //! Lauf mit [`Stop::Violated`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use takt_interp::run::element_value;
 use takt_interp::trace::{LineKind, TraceLine, parse_value, render_line, value_text};
@@ -23,8 +23,8 @@ use takt_mir::types::Type;
 use takt_mir::{MachineId, Program};
 
 use crate::encode::{Model, fault_kind, leaves_at, quality, value_at};
-use crate::eval::{self, Env, Val};
-use crate::term::Sort;
+use crate::eval::{self, Env, Plan, Val};
+use crate::term::{Sort, Term};
 
 /// Warum ein Lauf des Modells endet, bevor er seine Ticks gerechnet hat.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,48 +83,128 @@ impl Model {
         }
         let inputs = inputs(self, p, stimulus, seen, ticks)?;
         let mut writer = Writer::new(self, p);
-        let mut state: Option<Env> = None;
+        let mut runner = Runner::new(self, |name| writer.reads(name));
+        let mut state: Option<Vec<Val>> = None;
         for k in 0..=ticks {
-            let next = self.step(k, state.as_ref(), &inputs)?;
-            writer.tick(k, &next)?;
+            let next = runner.step(self, k, state.as_deref(), &inputs)?;
+            let shown = runner.observed(self, &next);
+            writer.tick(k, &shown)?;
             // 12.7: Die Zeile `end` markiert die Entscheidung; die Outputs auf
             // `safe` stehen im Zustand danach und im Trace im selben Tick.
-            if next.get(ENDED) == Some(&Val::Bool(true)) {
-                writer.end(k, &next)?;
-                let after = self.step(k + 1, Some(&next), &inputs)?;
-                writer.changes(k, &after)?;
+            if shown.get(ENDED) == Some(&Val::Bool(true)) {
+                writer.end(k, &shown)?;
+                let after = runner.step(self, k + 1, Some(&next), &inputs)?;
+                writer.changes(k, &runner.observed(self, &after))?;
                 break;
             }
             state = Some(next);
         }
         Ok(Trace { lines: writer.lines, ..Trace::default() })
     }
+}
+
+/// Die Terme eines Ticks, einmal uebersetzt, und woher ihre Variablen ihre
+/// Werte nehmen: der Folgezustand ueber dem Zustand davor und den Eingaben,
+/// die Invarianten ueber dem Zustand danach, die Annahmen ueber ihm und den
+/// Eingaben. Der Zustand ist ein Vektor in der Folge von `Model::state`.
+struct Runner {
+    next: (Plan, Vec<Source>),
+    invariants: (Plan, Vec<Source>),
+    assumptions: (Plan, Vec<Source>),
+    /// Die Plaetze des Zustands, die der Trace liest.
+    observed: Vec<usize>,
+}
+
+/// Woher eine Variable eines Plans ihren Wert nimmt; eine unbekannte ist
+/// null wie in `eval::eval`.
+#[derive(Clone, Copy)]
+enum Source {
+    State(usize),
+    Input(usize),
+    Zero(Sort),
+}
+
+impl Runner {
+    fn new(model: &Model, reads: impl Fn(&str) -> bool) -> Runner {
+        let state: HashMap<&str, usize> = model.state.iter().enumerate().map(|(i, v)| (v.name.as_str(), i)).collect();
+        let input: HashMap<&str, usize> = model.inputs.iter().enumerate().map(|(i, (n, _))| (n.as_str(), i)).collect();
+        let plan = |terms: Vec<&Term>, with_inputs: bool| {
+            let plan = Plan::new(terms);
+            let sources = plan
+                .vars()
+                .iter()
+                .map(|(n, sort)| match (state.get(n.as_str()), input.get(n.as_str())) {
+                    (Some(&i), _) => Source::State(i),
+                    (None, Some(&j)) if with_inputs => Source::Input(j),
+                    _ => Source::Zero(*sort),
+                })
+                .collect();
+            (plan, sources)
+        };
+        Runner {
+            next: plan(model.state.iter().map(|v| &v.next).collect(), true),
+            invariants: plan(model.invariants.iter().collect(), false),
+            assumptions: plan(model.assumptions.iter().collect(), true),
+            observed: (0..model.state.len()).filter(|&i| reads(&model.state[i].name)).collect(),
+        }
+    }
 
     /// Ein Tick: der Zustand danach. Jede Invariante gilt in ihm, und die
     /// Annahmen gelten ueber ihm und den Eingaben des Ticks.
-    fn step(&self, k: u64, pre: Option<&Env>, inputs: &BTreeMap<(u64, String), Val>) -> Result<Env, Stop> {
-        let mut env = pre.cloned().unwrap_or_default();
-        for (n, sort) in &self.inputs {
-            let v = inputs.get(&(k, n.clone())).copied().unwrap_or(Val::zero(*sort));
+    fn step(
+        &mut self,
+        model: &Model,
+        k: u64,
+        pre: Option<&[Val]>,
+        inputs: &BTreeMap<(u64, String), Val>,
+    ) -> Result<Vec<Val>, Stop> {
+        let now: HashMap<&str, Val> =
+            inputs.range((k, String::new())..(k + 1, String::new())).map(|((_, n), v)| (n.as_str(), *v)).collect();
+        let mut given = Vec::with_capacity(model.inputs.len());
+        for (n, sort) in &model.inputs {
+            let v = now.get(n.as_str()).copied().unwrap_or(Val::zero(*sort));
             if sort_of(v) != *sort {
                 return Err(Stop::Gap {
                     tick: k,
                     what: format!("die Eingabe `{n}` hat die Sorte {sort:?}, nicht {v:?}"),
                 });
             }
-            env.insert(n.clone(), v);
+            given.push(v);
         }
-        let terms = self.state.iter().map(|v| if pre.is_none() { &v.init } else { &v.next });
-        let next: Env = self.state.iter().map(|v| v.name.clone()).zip(eval::eval_all(terms, &env)).collect();
-        if let Some(i) = self.invariants.iter().position(|t| eval::eval(t, &next) != Val::Bool(true)) {
+        let next = match pre {
+            None => {
+                let env: Env = model.inputs.iter().map(|(n, _)| n.clone()).zip(given.iter().copied()).collect();
+                eval::eval_all(model.state.iter().map(|v| &v.init), &env)
+            }
+            Some(pre) => self.next.0.eval(&gather(&self.next.1, pre, &given)),
+        };
+        let holds = self.invariants.0.eval(&gather(&self.invariants.1, &next, &given));
+        if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
             return Err(Stop::Violated { tick: k, what: format!("Invariante {i}") });
         }
-        env.extend(next.iter().map(|(n, v)| (n.clone(), *v)));
-        if let Some(i) = self.assumptions.iter().position(|t| eval::eval(t, &env) != Val::Bool(true)) {
+        let holds = self.assumptions.0.eval(&gather(&self.assumptions.1, &next, &given));
+        if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
             return Err(Stop::Violated { tick: k, what: format!("Annahme {i}") });
         }
         Ok(next)
     }
+
+    /// Die Orte des Zustands, die der Trace liest, mit ihrem Wert.
+    fn observed(&self, model: &Model, state: &[Val]) -> Env {
+        self.observed.iter().map(|&i| (model.state[i].name.clone(), state[i])).collect()
+    }
+}
+
+/// Die Werte der Variablen eines Plans.
+fn gather(sources: &[Source], state: &[Val], given: &[Val]) -> Vec<Val> {
+    sources
+        .iter()
+        .map(|s| match *s {
+            Source::State(i) => state[i],
+            Source::Input(j) => given[j],
+            Source::Zero(sort) => Val::zero(sort),
+        })
+        .collect()
 }
 
 /// Der Ort, an dem das Modell das Ende eines Laufs fuehrt (12.7).
@@ -408,6 +488,40 @@ impl<'a> Writer<'a> {
         Writer { model, p, machines, lines: Vec::new(), shown: BTreeMap::new() }
     }
 
+    /// Liest der Trace den Ort `name` des Zustands? Nur diese Orte gehen je
+    /// Tick an den Schreiber.
+    fn reads(&self, name: &str) -> bool {
+        let under = |base: &str| {
+            name.strip_prefix(base)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
+        };
+        if name == ENDED {
+            return true;
+        }
+        for &m in &self.machines {
+            let def = &self.p.machines[m.index()];
+            let Some(rest) = name.strip_prefix(&format!("s.{}.", def.name)) else { continue };
+            if matches!(rest, "leaf" | "faulted" | "fault") || rest.starts_with("sig.") {
+                return true;
+            }
+            if def.vars.iter().any(|v| v.public && under(&format!("s.{}.v.{}", def.name, v.name))) {
+                return true;
+            }
+        }
+        for c in self.p.channels.iter().filter(|c| c.dir == Direction::Output) {
+            let base = match self.p.types.get(c.ty) {
+                Type::Stream(_) => format!("s.tx.{}.sent", c.name),
+                _ => format!("s.out.{}", c.name),
+            };
+            if under(&base) {
+                return true;
+            }
+        }
+        name.strip_prefix("s.stream.").is_some_and(|rest| {
+            rest.ends_with(".dropped") || rest.ends_with(".overflowed") || rest.ends_with(".malformed")
+        })
+    }
+
     /// Was ein Tick beobachten laesst: Faults und Signale, dann die
     /// Aenderungen.
     fn tick(&mut self, k: u64, s: &Env) -> Result<(), Stop> {
@@ -498,8 +612,13 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// Der Pfad wie `MachineState::path`: `FAULTED` vor jedem Blatt — ohne
+    /// Zustandsenum bleibt der Blattcode einer gefaulteten Maschine stehen.
     fn path(&self, m: MachineId, s: &Env, k: u64) -> Result<String, Stop> {
         let name = &self.p.machines[m.index()].name;
+        if s.get(&format!("s.{name}.faulted")) == Some(&Val::Bool(true)) {
+            return Ok("FAULTED".into());
+        }
         let code = int(s, &format!("s.{name}.leaf"), k)?;
         let paths = self.model.paths.get(name).ok_or_else(|| missing(k, name))?;
         let path = paths.iter().find(|(c, _)| *c == code).map(|(_, p)| p.clone());
