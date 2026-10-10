@@ -409,7 +409,11 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
         }
     };
     let tick_of = |l: &str| l.strip_prefix("t=").and_then(|r| r.split_whitespace().next()?.parse::<u64>().ok());
-    let entered = text.lines().find(|l| l.contains("state m EDGE")).and_then(tick_of);
+    // Den Tick des Eintritts nennt der Interpreter: Das Board schreibt keine
+    // Zustaende, und `guard` aendert nur, ob die geplante Ausgabe faultet.
+    let run = takt_interp::RunOptions { ticks: 20, ..Default::default() };
+    let interpreted = takt_interp::run(&self::program(&edge), &takt_interp::Trace::default(), &run).expect("Lauf");
+    let entered = interpreted.trace.render().lines().find(|l| l.contains("state m EDGE")).and_then(tick_of);
     let faults: Vec<&str> = text.lines().filter(|l| l.contains("fault m")).collect();
     match (entered, faults.as_slice()) {
         (Some(k), [fault]) if tick_of(fault) == Some(k) && fault.contains("Timing") => {}
