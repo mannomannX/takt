@@ -1,4 +1,4 @@
 takt-proof 2
 program 3637e21beb9a42cc078262436773eb081e68cad5dc5a3f525ebd376da8f67d65
 solver z3 4.13.4
-site 1585 1591 ovf k=5
+site 1585 1591 ovf k=0

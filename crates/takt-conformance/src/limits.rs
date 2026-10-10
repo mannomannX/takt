@@ -31,28 +31,6 @@ pub struct Limit {
 /// wird, ist schlechter als keine, weil ihr jemand glaubt.
 pub const LIMITS: &[Limit] = &[
     Limit {
-        was: "Der Korpus mit Eingaben",
-        warum: "Die Abnahme faehrt jedes Korpusprogramm ohne Stimulus und, wo einer geschrieben \
-                ist, mit dem Stimulus der Suite `beweiser` (`takt_conformance::cases`, M11 Schritt \
-                28b). Erzeugte Eingaben — Grenzen, Qualitaeten, Folgen von Commands — gibt es noch \
-                nicht; was ein Programm erst auf eine solche Eingabe hin tut, vergleicht der \
-                Korpuslauf nicht.",
-        wann: "M11 Schritt 29: Eingaben je Programm aus seinen Deklarationen.",
-        row: "FB-376",
-    },
-    Limit {
-        was: "Skalare Inputs zusammengesetzter Typen",
-        warum: "Skalare Lieferungen gehen mit Wert, Qualitaet, Alter und Zeitstempel durch den \
-                Treiberrand beider Seiten (12.6, M10 Schritt 29b). Der Rahmen schreibt den \
-                Wert in der C-Form seines Typs; einen Input vom Typ Record, Array, Enum mit \
-                Feldern oder `samples` liefert er nicht. Die Laeufe mit Stimulus von \
-                `04_blocks_and_multirate` und `07_embedded_field` brauchen einen; ihre native \
-                Spalte steht darum in `GAPS` (`differential.rs`).",
-        wann: "M11 Schritt 29, mit dem ersten Programm, das einen braucht: die kanonische Form \
-               (5.9) aus dem Trace-Text, wie fuer Stromelemente.",
-        row: "FB-430",
-    },
-    Limit {
         was: "Record-Ausgaenge mit `bytes`-Feld",
         warum: "Der Wirtsrahmen schreibt einen Record-Ausgang Feld fuer Feld; ein Feld `bytes<N>` \
                 hat dort keine Schreibweise, und der Vergleich sieht den Ausgang nicht.",
@@ -60,66 +38,68 @@ pub const LIMITS: &[Limit] = &[
         row: "FB-402",
     },
     Limit {
-        was: "Registerports, deren Modell den Lesekanal als Strom stellt (12.10)",
-        warum: "Ein Register, das beim Lesen weiterschaltet (ein FIFO-Datenregister), stellt \
-                das Modell als `stream<Regs>`. Der Wirtsrahmen bildet nur einen Pegel ab und \
-                bricht den Bau des Rahmens fuer einen Strom mit `#error` ab; kein \
-                Korpusprogramm liest ein solches Register.",
-        wann: "M11 Schritt 29, mit dem ersten Korpusprogramm, das eines liest: eine \
-               Warteschlange je Port, gespeist aus dem Sendepuffer des Modells wie \
-               `Image::port_queues`.",
-        row: "FB-431",
-    },
-    Limit {
-        was: "Beobachtungen ohne Gegenstueck im Rahmen",
-        warum: "`compare` haelt `log`, `measure`, `verify`, `verdict`, `property` und `end` \
-                gegeneinander; `job`, `signal` und `verdict-final` schreibt kein Rahmen, \
-                `persist` nur der Wirtsrahmen (`persist_native.rs`). Die Maschine einer \
-                Beobachtung nennt der Rahmen mit ihrer Nummer, verglichen wird darum je Tick \
-                Art und Ausgang, nicht die Maschine.",
-        wann: "M11 Schritt 29: die Zeilen im Rahmen nachziehen.",
-        row: "FB-432",
+        was: "Die Maschine von `log`, `measure`, `verify` und `verdict`",
+        warum: "`compare` haelt diese Beobachtungen je Tick nach Art und Ausgang gegeneinander; \
+                der Rahmen nennt ihre Maschine mit der Nummer, nicht mit dem Namen. `job` und \
+                `signal` tragen Maschine und Namen (FB-432), `persist` schreibt nur der \
+                Wirtsrahmen (`persist_native.rs`).",
+        wann: "M11 Schritt 9: Der Produktrahmen schreibt die Beobachtungen mit dem Namen der Maschine.",
+        row: "FB-391",
     },
     Limit {
         was: "Das Journal auf dem STM32F401",
         warum: "Das Bring-up des F401 hat keinen Nvm-Treiber: Die `persist`-Programme seines \
                 Korpus laufen dort ohne Journal.",
-        wann: "M11 Schritt 29.",
+        wann: "M11 Schritt 15: Die Portpruefung faehrt `persist` auf jedem Port; der Port des F401 \
+               braucht dafuer den Nvm-Treiber.",
         row: "KON1-022",
     },
     Limit {
         was: "Das Profil `shared` auf dem ESP32-C6",
         warum: "`shared` wird nur auf dem F401 unter RTIC mit nachgebildeter Funk-ISR geprueft; \
                 auf dem C6, dem Board mit Funk, laeuft es nicht.",
-        wann: "M11 Schritt 29.",
+        wann: "M11 Schritt 21b: ESP-IDF mit aktivem Funk auf dem C6.",
         row: "KON1-021",
     },
     Limit {
-        was: "Fehler, die alle Ausfuehrer teilen",
-        warum: "Interpreter, Wirtsrahmen und Boards teilen den Kern des Treiberrands \
-                (`takt-hal`) und die Natives; ein Fehler dort ist auf allen Seiten gleich und \
-                fiele keinem Vergleich auf.",
-        wann: "M11 Schritt 29: exakte Erwartungen neben dem Vergleich.",
+        was: "Fehler, die alle Ausfuehrer teilen, ausserhalb der Relationen",
+        warum: "Interpreter, Wirtsrahmen und Boards teilen Sema, MIR, den Kern des Treiberrands \
+                (`takt-hal`) und die Natives. Was dort falsch ist, sehen nur die Relationen \
+                (`relations.rs`: Schrittordnung, Schlaf, `sim` gegen `hw`) und die Golden-Traces \
+                der Referenzprogramme — wenn es eine Relation bricht oder einen Golden-Trace \
+                aendert. IEEE-Umgebung (`embed.rs`) sowie Praefix und Instanzen \
+                (`several_programs.rs`) laufen nur ueber den Korpus ohne Eingaben.",
+        wann: "M11 Schritt 9: IEEE-Umgebung, Praefix und Instanzen ueber den erzeugten Eingaben, \
+               sobald der Produktrahmen den Stimulus treibt.",
         row: "FB-382",
     },
     Limit {
-        was: "Das Modell des Beweisers als Ausfuehrer",
-        warum: "Das Modell rechnet im Korpusvergleich als dritte Spalte (`Model::run`, M11 \
-                Schritt 28b); die Pfade des Solvers — Gegenbeispiele, erreichbare Pruefstellen — \
-                laufen noch nicht durch alle drei Ausfuehrer.",
-        wann: "M11 Schritt 28c.",
-        row: "FB-381",
+        was: "aarch64 und armv7 auf einem Geraet (12.8: 64-Bit Linux, 32-Bit mit f64-FPU)",
+        warum: "aarch64 laeuft unter qemu gegen x86-64 und den Interpreter (`targets.rs`, im \
+                Container aus `tools/Dockerfile.linux`); armv7 belegt die Abnahme nur ueber IR und \
+                Bau (`every_target_gets_the_same_ir`, \
+                `the_corpus_compiles_for_the_32_bit_class_with_f64`). 12.8 verlangt die Messung je \
+                Zielklasse auf einem Geraet.",
+        wann: "M11 Schritt 17 (Wirt und `linux_rt`), mit einem Geraet der Klasse: etwa einem \
+               Raspberry Pi 3 oder 4 und einem Pi 2.",
+        row: "FB-501",
     },
     Limit {
-        was: "aarch64 und armv7 (12.8: 64-Bit Linux, 32-Bit mit f64-FPU)",
-        warum: "Verglichen wird x86-64 gegen den Interpreter, auf den Boards Cortex-M4F und \
-                RV32IMAC. Fuer aarch64 und armv7 belegt die Abnahme die gleiche IR und den Bau \
-                (`every_target_gets_the_same_ir`, `the_corpus_compiles_for_the_32_bit_class_with_f64`); \
-                der Lauf unter qemu braucht die Linux-Kette (`targets.rs`), und 12.8 verlangt \
-                die Messung je Zielklasse auf einem Geraet.",
-        wann: "M11 Schritt 29 fuer den Lauf unter qemu; die Messung mit einem Geraet der Klasse \
-               (etwa einem Raspberry Pi 3 oder 4 und einem Pi 2).",
-        row: "KON2-013",
+        was: "Pruefstellen und Uebergaenge, die weder ein Lauf erreicht noch der Solver ausschliesst",
+        warum: "`UNREACHED` (`differential.rs`) haelt 94 Uebergaenge, 72 nie bestandene und 522 nie verletzte \
+                Pruefstellen in 98 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
+                bis Tiefe 5 in 10 s keinen Pfad, und k-Induktion beweist sie nicht unerreichbar.",
+        wann: "M11 Schritt 29, Nachtrag: induktive Invarianten je Stelle (Spacer) und tiefere Pfade.",
+        row: "FB-511",
+    },
+    Limit {
+        was: "Das Flash-Modell aus 14.8 im Modell des Beweisers",
+        warum: "Interpreter und erzeugter Code rechnen jedes Szenario aus Kapitel 14, das Modell \
+                alle bis auf die von 14.8: Der Zustand des Flash-Modells liegt ueber `STATE_LIMIT`, \
+                und in `fallback` und `no_image` ordnet der Kodierer seinen Sendestrom keiner \
+                kodierten Maschine zu (`MODEL_GAPS` in `examples.rs`).",
+        wann: "M11 Schritt 29, Nachtrag: Maps und Puffer als Arrays der SMT-Theorie.",
+        row: "FB-497",
     },
 ];
 
@@ -179,7 +159,7 @@ mod tests {
     /// eine fehlende Zeile.
     #[test]
     fn the_status_comes_from_the_plan() {
-        assert!(status("FB-376").is_some_and(|s| s.starts_with("offen")));
+        assert!(status("FB-402").is_some_and(|s| s.starts_with("offen")));
         assert!(status("FB-361").is_some_and(|s| s.starts_with("behoben")));
         assert_eq!(status("FB-99999"), None);
     }

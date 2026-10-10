@@ -551,7 +551,7 @@ impl Enc<'_> {
                 self.variant(e.ty, *variant, values, span)?
             }
             ExprKind::Lift(x) => V::Node(vec![V::Leaf(Term::bool(true)), self.value(x, cx, env, flow)?]),
-            ExprKind::PortRead(p) => self.port_value(*p, span)?,
+            ExprKind::PortRead(p) => self.port_value(*p, env, flow, span)?,
             ExprKind::Binary { op, lhs, rhs } if self.mat_dims(e.ty).is_some() => {
                 self.mat_binary(*op, lhs, rhs, cx, env, flow, span)?
             }
@@ -609,6 +609,9 @@ impl Enc<'_> {
                 Some(c) => self.tx_accessor(c, Accessor::Sent, e.ty, cx, env, span)?,
                 None => return no("`.sent` ohne Ausgabestrom", span),
             },
+            ExprKind::Accessor { base, accessor: Accessor::Or, .. } if Enc::array_element(base).is_some() => {
+                self.element_accessor(e, cx, env, flow)?
+            }
             ExprKind::Accessor { base, accessor: Accessor::Or, args } => {
                 let [default] = args.as_slice() else { return no("`.or` ohne Ersatz", span) };
                 self.or_value(base, default, cx, env, flow)?
@@ -1526,7 +1529,7 @@ impl Enc<'_> {
             // wird gelesen, veraendert und zurueckgeschrieben.
             Place::Port(p) => {
                 let (p, ty) = (*p, self.p.ports[p.index()].ty);
-                let old = self.port_value(p, span)?;
+                let old = self.port_value(p, env, flow, span)?;
                 let new = self.write_into(place, indices, pending, ty, &old, v, cx, flow, span)?;
                 return self.port_write(p, new, env, flow, span);
             }

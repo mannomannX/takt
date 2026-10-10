@@ -65,10 +65,12 @@ Ziffernfolge, die beim Zurücklesen denselben Wert ergibt; ab dem Betrag `1e16`
 (`f64`) bzw. `1e7` (`f32`) und unter `1e-5` in Exponentform (`1.0e30`,
 `1.5e-7`), sodass eine Zahl höchstens 24 bzw. 16 Zeichen braucht (3.9).
 
-Ein Input kann statt eines Werts eine Qualität tragen (3.5): `bad`, `stale`,
-`suspect`, jeweils mit optionalem `reason=` (`Stale`, `OutOfRange`,
-`Implausible`, `Driver`, `Node`) und `age=`. Ohne Angabe gilt `Good` mit
-Alter 0.
+Ein Input kann eine Qualität tragen (3.5, 12.6): `bad` statt eines Werts,
+`stale` mit oder ohne Wert, `suspect` hinter einem Wert — der Treiber nennt
+ihn zweifelhaft; `bad` mit Wert und `suspect` ohne brechen den
+Treibervertrag (12.6 Zeile 2). Jede trägt ein optionales `reason=`
+(`Stale`, `OutOfRange`, `Implausible`, `Driver`, `Node`) und `age=`. Ohne
+Angabe gilt `Good` mit Alter 0.
 
 ```trace
 t=0 in tank_p 45 bar

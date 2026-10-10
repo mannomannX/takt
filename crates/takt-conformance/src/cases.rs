@@ -4,16 +4,18 @@
 //!
 //! Jedes Programm laeuft ohne Eingaben ueber seine Fristen (KON1-006) —
 //! der Weg, auf dem jeder Input `Bad` bleibt —, wo ein Stimulus
-//! geschrieben ist, auch mit ihm, und mit jedem Pfad, den der Solver zu einer
-//! Pruefstelle oder Verletzung fand (`crate::paths`, Schritt 28c).
+//! geschrieben ist, auch mit ihm, mit den Eingaben aus seinen Deklarationen
+//! (`crate::generated`, Schritt 29a) und mit jedem Pfad, den der Solver zu
+//! einer Pruefstelle, einem Uebergang oder einer Verletzung fand
+//! (`crate::paths`, Schritt 28c).
 
 use takt_mir::Program;
 
 /// Ein Lauf: wie er heisst, sein Stimulus im Trace-Format und seine Ticks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Case {
-    /// `still` ohne Eingaben, `stimulus` mit dem geschriebenen, `pfad …`
-    /// mit einem des Solvers.
+    /// `still` ohne Eingaben, `stimulus` mit dem geschriebenen, `erzeugt …`
+    /// mit erzeugten, `pfad …` mit einem des Solvers.
     pub label: String,
     /// Der Stimulus.
     pub stimulus: String,
@@ -27,6 +29,7 @@ pub fn cases(name: &str, p: &Program) -> Vec<Case> {
     if let Some((stimulus, ticks)) = case(name) {
         out.push(Case { label: "stimulus".into(), stimulus, ticks });
     }
+    out.extend(crate::generated::cases(p));
     let paths = crate::paths::load(name).into_iter();
     out.extend(paths.map(|p| Case { label: format!("pfad {}", p.label), stimulus: p.stimulus, ticks: p.ticks }));
     out
@@ -283,6 +286,8 @@ t=0 in fan_sp_b 60.0
         "40_jobs.takt" => ("t=6 job m v done start=0\n".to_string(), 12),
         // Registerports (Schritt 27c-6).
         "68_uart_port.takt" | "120_port_writes.takt" => (String::new(), 30),
+        // Ein FIFO-Datenregister (FB-431): zwei Schuebe, die es ueberlaufen lassen.
+        "123_fifo_port.takt" => ("t=5 cmd burst\nt=9 cmd burst\n".to_string(), 30),
         // Instanz-Arrays (Schritt 27a-10).
         "74_instance_index.takt" => (String::new(), 20),
         // Records ueber eine `sim`-Bindung (Schritt 27c-5).

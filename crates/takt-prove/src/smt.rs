@@ -340,6 +340,20 @@ pub enum Target {
     Property(usize),
     /// Eine Pruefstelle (Index in `Model::checks`).
     Check(usize),
+    /// Ein Uebergang (Index in `Model::transitions`): wie eine Pruefstelle,
+    /// deren Feuern das Nehmen des Uebergangs ist.
+    Transition(usize),
+}
+
+impl Target {
+    /// Die Stelle hinter einer Pruefstelle oder einem Uebergang.
+    fn site(self, model: &Model) -> Option<&crate::encode::CheckSite> {
+        match self {
+            Target::Property(_) => None,
+            Target::Check(i) => model.checks.get(i),
+            Target::Transition(i) => model.transitions.get(i),
+        }
+    }
 }
 
 /// Was eine Anfrage traegt: Zustand, Eingaben und Bedingungen, dazu die
@@ -376,7 +390,9 @@ fn scope<'a>(model: &'a Model, targets: &[Target], slice: bool) -> Scope<'a> {
         .iter()
         .flat_map(|t| match *t {
             Target::Property(i) => vec![&model.properties[i].formula],
-            Target::Check(i) => vec![&model.checks[i].init, &model.checks[i].fires],
+            Target::Check(_) | Target::Transition(_) => {
+                t.site(model).map_or_else(Vec::new, |s| vec![&s.init, &s.fires])
+            }
         })
         .collect();
     let (inside, constraints, invariants) = cone(model, &roots, &constraints, &invariants);
@@ -441,8 +457,8 @@ fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth:
                 let word = if prop.assumption { "Annahme" } else { "Eigenschaft" };
                 (format!("{word} `{}`", prop.name), (0..=steps).map(|k| p.name(&prop.formula, k, k)).collect())
             }
-            Target::Check(i) => {
-                let site = &model.checks[i];
+            Target::Check(_) | Target::Transition(_) => {
+                let Some(site) = target.site(model) else { continue };
                 let mut holds = Vec::new();
                 if kind == Query::Bmc {
                     let fires = p.name(&site.init, 0, 0);
@@ -452,7 +468,8 @@ fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth:
                     let fires = p.name(&site.fires, k, k + 1);
                     holds.push(format!("(not {fires})"));
                 }
-                (format!("Pruefstelle `{}` @{}", site.kind, site.start), holds)
+                let word = if matches!(target, Target::Transition(_)) { "Uebergang" } else { "Pruefstelle" };
+                (format!("{word} `{}` @{}", site.kind, site.start), holds)
             }
         };
         let _ = writeln!(p.out, "(push 1)");
@@ -732,8 +749,8 @@ pub fn horn(model: &Model, target: Target) -> Option<String> {
             body.push(format!("(not {})", lp.name(&model.properties[i].formula, 0, 0)?));
             let _ = writeln!(out, "{}", rule(binders(&[0]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
         }
-        Target::Check(i) => {
-            let site = &model.checks[i];
+        Target::Check(_) | Target::Transition(_) => {
+            let site = target.site(model)?;
             let mut lp = LetPrinter::new(tag);
             let mut body = start(&mut lp)?;
             body.push(lp.name(&site.init, 1, 1)?);
@@ -753,7 +770,10 @@ pub fn horn(model: &Model, target: Target) -> Option<String> {
 /// ob er im Anfangszustand fallen kann; `step = true`, ob er nach einem
 /// Tick aus einem Zustand fallen kann, in dem alle gelten. Je Kandidat eine
 /// Antwort, in ihrer Reihenfolge.
-pub fn houdini(model: &Model, candidates: &[&Term], step: bool) -> String {
+/// Mit `assumed` gelten die `assumption`-Formeln mit: Die Lemmata halten dann
+/// nur in Laeufen, die die Annahmen erfuellen, und taugen nur fuer
+/// Eigenschaften, die unter ihnen stehen (13.3).
+pub fn houdini(model: &Model, candidates: &[&Term], step: bool, assumed: bool) -> String {
     let tag = "@";
     let mut out = String::new();
     let _ = writeln!(out, "; takt prove — Hilfslemmata (Houdini, FB-375)");
@@ -783,8 +803,10 @@ pub fn houdini(model: &Model, candidates: &[&Term], step: bool) -> String {
             let _ = writeln!(p.out, "(assert (= {} {init}))", at(&v.name, 0, tag));
         }
     }
+    let user = model.properties.iter().filter(|g| assumed && g.assumption).map(|g| &g.formula);
+    let constraints: Vec<&Term> = model.assumptions.iter().chain(user).chain(&model.invariants).collect();
     for &k in steps {
-        for c in model.assumptions.iter().chain(&model.invariants) {
+        for c in &constraints {
             let t = p.name(c, k, k);
             let _ = writeln!(p.out, "(assert {t})");
         }

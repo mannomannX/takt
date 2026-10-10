@@ -340,20 +340,31 @@ pub fn a_tune_from_the_console_wakes_the_board(board: &mut dyn Board) -> Vec<Str
 /// `at now + 100 ns` liegt unter der gemessenen Treiberlatenz der Bruecke
 /// in `corpus-try/hw/<board>.hw` und ist ein `TimingFault`, `at now + 1 ms`
 /// geht durch. Derselbe Bau ohne `guard` am Kanal rechnet wie die
-/// Simulation und laesst beides durch. Ohne Konfiguration baut ein Board
-/// nicht mehr: Speicher, Schutzregion und NVM stehen in ihr (M11 Schritt 10).
+/// Simulation und fuehrt beide Ausgaben aus. Ohne Konfiguration baut ein
+/// Board nicht mehr: Speicher, Schutzregion und NVM stehen in ihr (M11
+/// Schritt 10).
+///
+/// **Die Grenze selbst** (9.8, KON1-011, KON2-036): `T == now + guard`
+/// faultet, eine Nanosekunde spaeter nicht, im Tick des Eintritts; und
+/// `o.jitter` liest den gemessenen Wert der Konfiguration, mit
+/// `tick_granular` um T0 mehr (7.5). Der Interpreter rechnet die Simulation
+/// mit `guard` und `jitter` null (7.5); hier gilt darum die Erwartung aus der
+/// Konfiguration, nicht sein Trace.
 pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> Vec<String> {
     let program = board::root().join("crates/takt-conformance/tests/programs/guard.takt");
     let hardware = board::root().join(format!("corpus-try/hw/{}.hw", board.name()));
     // Dieselbe Konfiguration ohne die gemessenen `guard_ns`.
     let text = std::fs::read_to_string(&hardware).expect("Konfiguration lesbar");
     let unguarded = takt_conformance::target_dir().join(format!("takt-{}-ohne-guard.hw", board.name()));
+    let edge = takt_conformance::target_dir().join(format!("takt-{}-guard-grenze.takt", board.name()));
     let lines: String =
         text.lines().filter(|l| !l.trim_start().starts_with("guard_ns")).map(|l| format!("{l}\n")).collect();
     std::fs::write(&unguarded, lines).expect("Konfiguration schreibbar");
-    let mut run = |options: Options| board.build(&program, &options).and_then(|elf| board.run(&elf, &options));
+    let mut run = |program: &std::path::Path, options: Options| {
+        board.build(program, &options).and_then(|elf| board.run(&elf, &options))
+    };
     let mut failed = Vec::new();
-    match run(Options::fresh(20).with_hardware(hardware)) {
+    match run(&program, Options::fresh(20).with_hardware(hardware.clone())) {
         Ok(with) => {
             if !with.lines().any(|l| l.contains("out probe 1")) {
                 failed.push(format!("1 ms voraus geht nicht durch:\n{with}"));
@@ -364,14 +375,72 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
         }
         Err(e) => failed.push(format!("kein Lauf mit Konfiguration: {e}")),
     }
-    match run(Options::fresh(20).with_hardware(unguarded)) {
+    match run(&program, Options::fresh(20).with_hardware(unguarded.clone())) {
         Ok(without) if without.contains("fault m") => {
             failed.push(format!("ohne `guard` am Kanal ist guard null:\n{without}"));
         }
-        Ok(_) => {}
+        // Beide geplanten Ausgaben kommen an: erst die Eins, dann die Null.
+        Ok(without) => {
+            let one = without.lines().position(|l| l.contains("out probe 1"));
+            let zero = one.and_then(|i| without.lines().skip(i).position(|l| l.contains("out probe 0")));
+            if zero.is_none() {
+                failed.push(format!("ohne `guard` fehlen `out probe 1` und danach `out probe 0`:\n{without}"));
+            }
+        }
         Err(e) => failed.push(format!("kein Lauf ohne `guard`: {e}")),
     }
+    let config = takt_mir::hardware::parse(&text).expect("Konfiguration gueltig");
+    let Some(channel) = config.channel("gpio/loop_out") else {
+        failed.push("die Konfiguration nennt `gpio/loop_out` nicht".to_string());
+        return failed;
+    };
+    let (Some(guard), Some(jitter)) = (channel.guard_ns, channel.jitter_ns) else {
+        failed.push("`gpio/loop_out` ohne `guard_ns` oder `jitter_ns`".to_string());
+        return failed;
+    };
+    let tick_ns = 1_000_000;
+    let spread = jitter + if channel.tick_granular.unwrap_or(false) { tick_ns } else { 0 };
+    std::fs::write(&edge, guard_edge(guard)).expect("Programm schreibbar");
+    let text = match run(&edge, Options::fresh(20).with_hardware(hardware)) {
+        Ok(t) => t,
+        Err(e) => {
+            failed.push(format!("kein Lauf an der Grenze: {e}"));
+            return failed;
+        }
+    };
+    let tick_of = |l: &str| l.strip_prefix("t=").and_then(|r| r.split_whitespace().next()?.parse::<u64>().ok());
+    let entered = text.lines().find(|l| l.contains("state m EDGE")).and_then(tick_of);
+    let faults: Vec<&str> = text.lines().filter(|l| l.contains("fault m")).collect();
+    match (entered, faults.as_slice()) {
+        (Some(k), [fault]) if tick_of(fault) == Some(k) && fault.contains("Timing") => {}
+        _ => failed.push(format!("`at now + {guard} ns` faultet nicht im Tick des Eintritts in EDGE:\n{text}")),
+    }
+    let one = text.lines().position(|l| l.contains("out probe 1"));
+    if one.and_then(|i| text.lines().skip(i).position(|l| l.contains("out probe 0"))).is_none() {
+        failed.push(format!("`at now + {} ns` geht nicht durch:\n{text}", guard + 1));
+    }
+    if !text.contains(&format!("out spread {spread} ns")) {
+        failed.push(format!("`probe.jitter` ist nicht {spread} ns:\n{text}"));
+    }
     failed
+}
+
+/// Ein Programm an der Grenze von `guard` (9.8): `PAST` plant eine
+/// Nanosekunde hinter ihr und geht durch, `EDGE` genau auf sie und faultet.
+/// `spread` liest `probe.jitter` (7.5).
+fn guard_edge(guard: i64) -> String {
+    format!(
+        "system:\n    language = 1\n    tick     = 1 ms\n\n\
+         output probe  : bool     @ hw(\"gpio/loop_out\") with safe = false\n\
+         output spread : Duration @ hw(\"o/spread\")      with safe = 0 s\n\n\
+         machine m:\n    initial FAR\n\n    loop:\n        spread = probe.jitter\n\n\
+         \x20   state FAR:\n        enter:\n            at now + 1 ms:\n                probe = true\n        \
+         after 5 ms: -> PAST\n\n\
+         \x20   state PAST:\n        enter:\n            at now + {past} ns:\n                probe = false\n        \
+         after 5 ms: -> EDGE\n\n\
+         \x20   state EDGE:\n        enter:\n            at now + {guard} ns:\n                probe = true\n",
+        past = guard + 1
+    )
 }
 
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,

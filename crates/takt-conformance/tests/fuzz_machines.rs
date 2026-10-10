@@ -22,10 +22,17 @@
 //!
 //! Der Generator ist ein xorshift mit festem Startwert: Ein Fehlschlag
 //! ist reproduzierbar, und der Testlauf ist es auch.
+//!
+//! **Mit Eingaben** (M11 Schritt 29a): Ein zweiter Lauf gibt den Maschinen
+//! einen Input und ein Command, die Anweisungen und Uebergaenge lesen, und
+//! faehrt jedes Programm mit einem der erzeugten Laeufe
+//! ([`takt_conformance::generated`]). Der erste bleibt ohne: Sein fester
+//! Startwert bewacht, was er gefunden hat.
 
 use std::fmt::Write as _;
 
 use takt_conformance::compare;
+use takt_conformance::stimulus::Stimulus;
 
 mod common;
 
@@ -86,6 +93,21 @@ fn statement(rng: &mut Rng, states: usize, at_ns: &mut u64) -> String {
     }
 }
 
+/// Eine Anweisung, die den Input `u` oder das Command `go` liest; sonst
+/// eine aus [`statement`].
+fn input_statement(rng: &mut Rng, states: usize, at_ns: &mut u64) -> String {
+    match rng.upto(10) {
+        // Das Lesen eines ungueltigen Inputs faultet (3.5).
+        7 => "            d = u".to_string(),
+        8 => "            if go:\n                c = c + 1".to_string(),
+        9 if states > 1 => {
+            let to = rng.upto(states as u64);
+            format!("            if u.valid and u.or(0) > 4:\n                -> S{to}")
+        }
+        _ => statement(rng, states, at_ns),
+    }
+}
+
 /// Ein Programm mit gewuerfelter Struktur.
 ///
 /// Fest ist, was der Vergleich braucht: Outputs, die jeden Tick
@@ -93,6 +115,17 @@ fn statement(rng: &mut Rng, states: usize, at_ns: &mut u64) -> String {
 /// Gewuerfelt ist die Zahl der Zustaende, ihr Inhalt und ihre
 /// Uebergaenge.
 fn machine_program(rng: &mut Rng) -> String {
+    structure(rng, false)
+}
+
+/// Wie [`machine_program`], mit einem Input `u` und einem Command `go`, die
+/// Anweisungen und Uebergaenge lesen; ein Fault fuehrt in den ersten
+/// Zustand zurueck.
+fn machine_program_with_inputs(rng: &mut Rng) -> String {
+    structure(rng, true)
+}
+
+fn structure(rng: &mut Rng, inputs: bool) -> String {
     let states = 1 + rng.upto(3) as usize;
     let mut s = String::new();
     let _ = writeln!(s, "system:");
@@ -102,7 +135,14 @@ fn machine_program(rng: &mut Rng) -> String {
     let _ = writeln!(s, "output d : int in 0..9 @ sim(\"d\")");
     let _ = writeln!(s, "output n : int in 0..9 @ sim(\"n\")");
     let _ = writeln!(s, "output f : float @ sim(\"f\")\n");
+    if inputs {
+        let _ = writeln!(s, "input u : int in 0..9 @ hw(\"in/u\") with max_age = 30 ms");
+        let _ = writeln!(s, "command go\n");
+    }
     let _ = writeln!(s, "machine m:");
+    if inputs {
+        let _ = writeln!(s, "    fault -> S0");
+    }
     // Ein Feld mit festen Werten: Die Reduktionen brauchen eines, und
     // ein gewuerfeltes waere eine zweite Quelle von Unterschieden.
     let _ = writeln!(s, "    var xs : [4] float = [3.0, -1.0, 4.0, 2.0]");
@@ -114,7 +154,12 @@ fn machine_program(rng: &mut Rng) -> String {
         let _ = writeln!(s, "        loop:");
         // Ein bis drei Anweisungen je Zustand.
         for _ in 0..=rng.upto(3) {
-            let _ = writeln!(s, "{}", statement(rng, states, &mut at_ns));
+            let line =
+                if inputs { input_statement(rng, states, &mut at_ns) } else { statement(rng, states, &mut at_ns) };
+            let _ = writeln!(s, "{line}");
+        }
+        if inputs && states > 1 {
+            let _ = writeln!(s, "        when go: -> S{}", rng.upto(states as u64));
         }
         // Ein Uebergang, damit der Zustand nicht endgueltig ist (SC-10);
         // das Ziel ist gewuerfelt, auch auf sich selbst.
@@ -207,4 +252,61 @@ fn generated_machines_agree() {
     // grosszuegig — sie faengt den Fall, dass der Generator nur noch
     // Ablehnungen erzeugt, nicht eine Schwankung um ein paar Programme.
     assert!(built >= 40, "nur {built} von 120 Programmen kamen zum Vergleich; der Generator trifft zu selten");
+}
+
+/// **Der Strukturfuzzer mit Eingaben** (M11 Schritt 29a): Maschinen, die
+/// einen Input und ein Command lesen, laufen mit einem der erzeugten Laeufe
+/// in beiden Implementierungen und liefern dieselben Outputs und Faults.
+#[test]
+fn generated_machines_with_inputs_agree() {
+    let Some(clang) = common::clang() else { return };
+    let mut rng = Rng(0x2026_1010);
+    let (mut built, mut rejected, mut faulted) = (0, 0, 0);
+    let mut errors = Vec::new();
+    for round in 0..80 {
+        let src = machine_program_with_inputs(&mut rng);
+        let Some(p) = compile(&src) else {
+            rejected += 1;
+            continue;
+        };
+        let cases = takt_conformance::generated::cases(&p);
+        let case = &cases[round % cases.len()];
+        let stimulus = takt_interp::Trace::parse(&case.stimulus).expect("Stimulus");
+        let inputs = Stimulus::from_trace(&stimulus).expect("Eingaben");
+        let name = format!("fuzzmi{round}");
+        let native = match common::run_native_all_with(&clang, &p, &name, case.ticks, &inputs) {
+            Ok(t) => t,
+            Err(e) => {
+                errors.push(format!("Runde {round} ({}): baut nicht:\n{e}\n--- Quelle ---\n{src}", case.label));
+                continue;
+            }
+        };
+        let options = takt_interp::RunOptions { ticks: case.ticks, ..Default::default() };
+        let interpreted = match takt_interp::run(&p, &stimulus, &options) {
+            Ok(r) => r.trace.render(),
+            Err(e) => {
+                errors.push(format!(
+                    "Runde {round} ({}): Interpreter scheitert: {e:?}\n--- Quelle ---\n{src}",
+                    case.label
+                ));
+                continue;
+            }
+        };
+        built += 1;
+        faulted += usize::from(interpreted.contains(" fault "));
+        let diffs = compare(&interpreted, &native);
+        if !diffs.is_empty() {
+            let list: Vec<String> = diffs.iter().take(6).map(|d| format!("  {d}")).collect();
+            errors.push(format!(
+                "Runde {round} ({}): {} Abweichungen\n{}\n--- Quelle ---\n{src}",
+                case.label,
+                diffs.len(),
+                list.join("\n")
+            ));
+        }
+    }
+    eprintln!("{built} verglichen, davon {faulted} mit Fault, {rejected} abgelehnt");
+    assert!(errors.is_empty(), "{}", errors.join("\n\n"));
+    assert!(built >= 25, "nur {built} von 80 Programmen kamen zum Vergleich; der Generator trifft zu selten");
+    assert!(faulted * 4 >= built, "nur {faulted} von {built} Programmen faulten; die Eingaben wirken nicht");
 }

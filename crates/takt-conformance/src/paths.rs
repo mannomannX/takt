@@ -1,12 +1,15 @@
-//! Die Pfade des Solvers je Korpusprogramm (M11 Schritt 28c): Was
+//! Die Pfade des Solvers je Korpusprogramm (M11 Schritte 28c, 29a): Was
 //! `takt prove` an einem Programm findet — Gegenbeispiele zu Eigenschaften,
-//! Pfade zu erreichbaren Pruefstellen, bewiesen unerreichbare Stellen —,
-//! steht unter `corpus-try/paths/`. Die Pfade sind Stimuli, die der
-//! Vergleich wie jeden anderen Lauf durch alle drei Ausfuehrer rechnet; die
-//! Beweise stehen in einer Beweisdatei (11.3), mit der er das Programm
-//! uebersetzt. Der Codegen laesst die bewiesenen Pruefungen aus, der
-//! Interpreter prueft sie weiter: Ein falscher Beweis faellt dort auf, und
-//! der Vergleich sieht den Unterschied.
+//! Pfade zu erreichbaren Pruefstellen und Uebergaengen, bewiesen
+//! unerreichbare Stellen und Uebergaenge —, steht unter
+//! `corpus-try/paths/`. Die Pfade sind Stimuli, die der Vergleich wie jeden
+//! anderen Lauf durch alle drei Ausfuehrer rechnet; die Beweise stehen in
+//! einer Beweisdatei (11.3), mit der er das Programm uebersetzt. Der Codegen
+//! laesst die bewiesenen Pruefungen aus, der Interpreter prueft sie weiter:
+//! Ein falscher Beweis faellt dort auf, und der Vergleich sieht den
+//! Unterschied. Bewiesen nie genommene Uebergaenge stehen daneben in
+//! `<programm>.unfired`; der Codegen liest sie nicht, die Ratsche der
+//! Abdeckung schon.
 //!
 //! Erzeugt werden sie mit Solver (`UPDATE_PATHS=1`, `tests/solver_paths.rs`;
 //! die Bring-ups binden diese Crate ohne den Beweiser). Ohne ihn prueft der
@@ -47,6 +50,16 @@ pub enum Target {
         /// Position der Verletzung.
         at: u64,
     },
+    /// Der Uebergang `key` (Schluessel der Coverage) in `machine`, genommen
+    /// im Tick `at`.
+    Transition {
+        /// Die Maschine.
+        machine: String,
+        /// `VON->NACH @<anfang>`.
+        key: String,
+        /// Tick, in dem er genommen wird.
+        at: u64,
+    },
 }
 
 /// Ein Pfad des Solvers.
@@ -62,13 +75,27 @@ pub struct Path {
     pub ticks: u64,
 }
 
-/// Was der Solver an einem Programm fand: die Beweisdatei und die Pfade.
+/// Was der Solver an einem Programm fand: die Beweisdatei, die bewiesen
+/// unerreichbaren Uebergaenge und die Pfade.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Found {
     /// Der Text der Beweisdatei; ohne bewiesene Stelle keine.
     pub proof: Option<String>,
+    /// Der Text von `<programm>.unfired`; ohne bewiesenen Uebergang keiner.
+    pub unfired: Option<String>,
     /// Die Pfade.
     pub paths: Vec<Path>,
+}
+
+/// Die bewiesen nie genommenen Uebergaenge eines Programms.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Unfired {
+    /// SHA-256 der Quelle, hexadezimal.
+    pub program: String,
+    /// Der Solver mit Version.
+    pub solver: String,
+    /// Maschine und Schluessel der Coverage je Uebergang.
+    pub transitions: Vec<(String, String)>,
 }
 
 /// Das Verzeichnis der Pfade. Ohne `crate::board`, das nur mit dem Feature
@@ -90,6 +117,62 @@ pub fn proof_file(name: &str) -> PathBuf {
 /// Das Verzeichnis der Pfade des Programms `name`.
 pub fn paths_dir(name: &str) -> PathBuf {
     dir().join(stem(name))
+}
+
+/// Die Datei der bewiesen nie genommenen Uebergaenge des Programms `name`.
+pub fn unfired_file(name: &str) -> PathBuf {
+    dir().join(format!("{}.unfired", stem(name)))
+}
+
+/// Die bewiesen nie genommenen Uebergaenge des Programms, wenn es sie gibt.
+pub fn unfired(name: &str) -> Option<Unfired> {
+    let path = unfired_file(name);
+    let text = std::fs::read_to_string(&path).ok()?;
+    Some(parse_unfired(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display())))
+}
+
+/// Liest `<programm>.unfired`: `takt-unfired 1`, `program <hash>`, `solver
+/// <Name> <Version>`, je Uebergang `uebergang <maschine> k=<tiefe>
+/// <schluessel>`.
+fn parse_unfired(text: &str) -> Result<Unfired, String> {
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#'));
+    if lines.next() != Some("takt-unfired 1") {
+        return Err("erste Zeile muss `takt-unfired 1` sein".into());
+    }
+    let mut out = Unfired::default();
+    for line in lines {
+        let (word, rest) = line.split_once(' ').unwrap_or((line, ""));
+        match word {
+            "program" => out.program = rest.to_string(),
+            "solver" => out.solver = rest.to_string(),
+            "uebergang" => {
+                let mut parts = rest.splitn(3, ' ');
+                let (Some(machine), Some(_k), Some(key)) = (parts.next(), parts.next(), parts.next()) else {
+                    return Err(format!("`{line}` unverstanden"));
+                };
+                out.transitions.push((machine.to_string(), key.to_string()));
+            }
+            _ => return Err(format!("`{line}` unverstanden")),
+        }
+    }
+    if out.program.is_empty() || out.solver.is_empty() {
+        return Err("`program` und `solver` fehlen".into());
+    }
+    Ok(out)
+}
+
+/// `<programm>.unfired` zu den bewiesen nie genommenen Uebergaengen,
+/// `(maschine, schluessel, k)`, an die Quelle gebunden; ohne Uebergang keine.
+pub fn unfired_text(source: &str, solver: &str, transitions: &[(String, String, u32)]) -> Option<String> {
+    if transitions.is_empty() {
+        return None;
+    }
+    let mut out =
+        format!("takt-unfired 1\nprogram {}\nsolver {solver}\n", takt_mir::review::hash_of(source.as_bytes()));
+    for (machine, key, k) in transitions {
+        out.push_str(&format!("uebergang {machine} k={k} {key}\n"));
+    }
+    Some(out)
 }
 
 /// Die Beweisdatei des Programms, wenn es eine gibt.
@@ -123,9 +206,15 @@ fn parse(label: &str, text: &str) -> Result<Path, String> {
     let line = |key: &str| {
         text.lines().find_map(|l| l.strip_prefix(&format!("# {key} "))).ok_or_else(|| format!("`# {key}` fehlt"))
     };
-    let words: Vec<&str> = line("ziel")?.split_whitespace().collect();
+    let goal = line("ziel")?;
+    let words: Vec<&str> = goal.split_whitespace().collect();
     let number = |w: &str| w.parse::<u64>().map_err(|_| format!("Zahl erwartet, `{w}` gefunden"));
     let target = match words.as_slice() {
+        // Der Schluessel enthaelt Leerzeichen (`A->[Fault Range] @12`): der Rest der Zeile.
+        ["uebergang", machine, at, ..] => {
+            let key = goal.splitn(4, ' ').nth(3).unwrap_or_default();
+            Target::Transition { machine: machine.to_string(), key: key.to_string(), at: number(at)? }
+        }
         ["check", kind, machine, start, end, at] => Target::Check {
             kind: kind.to_string(),
             machine: machine.to_string(),
@@ -146,9 +235,10 @@ pub fn render_path(path: &Path, solver: &str) -> String {
     let goal = match &path.target {
         Target::Check { kind, machine, start, end, at } => format!("check {kind} {machine} {start} {end} {at}"),
         Target::Property { name, at } => format!("property {name} {at}"),
+        Target::Transition { machine, key, at } => format!("uebergang {machine} {at} {key}"),
     };
     format!(
-        "# Pfad des Solvers ({solver}, Tiefe {DEPTH}), erzeugt mit `UPDATE_PATHS` (M11 Schritt 28c)\n# ziel {goal}\n# ticks {}\n{}",
+        "# Pfad des Solvers ({solver}, Tiefe {DEPTH}), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)\n# ziel {goal}\n# ticks {}\n{}",
         path.ticks, path.stimulus
     )
 }
@@ -166,14 +256,15 @@ pub fn store(name: &str, found: &Found, solver: &str) -> std::io::Result<()> {
     if dir.exists() {
         std::fs::remove_dir_all(&dir)?;
     }
-    let file = proof_file(name);
-    match &found.proof {
-        Some(text) => {
-            std::fs::create_dir_all(self::dir())?;
-            std::fs::write(&file, text)?;
+    for (file, text) in [(proof_file(name), &found.proof), (unfired_file(name), &found.unfired)] {
+        match text {
+            Some(text) => {
+                std::fs::create_dir_all(self::dir())?;
+                std::fs::write(&file, text)?;
+            }
+            None if file.exists() => std::fs::remove_file(&file)?,
+            None => {}
         }
-        None if file.exists() => std::fs::remove_file(&file)?,
-        None => {}
     }
     if !found.paths.is_empty() {
         std::fs::create_dir_all(&dir)?;

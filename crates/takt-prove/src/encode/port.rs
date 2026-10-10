@@ -1,7 +1,8 @@
 //! Registerports im Simulator (12.10, `system::port_read`, `port_write`):
 //! Gelesen wird der `sim`-Output `mmio/ADR/r`, den ein Modell stellt, mit
 //! Unit-Delay — im Modell sein Wert am Tick-Anfang —, ohne Modell der
-//! Default. Ein Schreibvorgang, auch auf ein Feld, setzt den gelesenen
+//! Default; ein Strom liefert je Lesen ein Element (`tx::port_next`). Ein
+//! Schreibvorgang, auch auf ein Feld, setzt den gelesenen
 //! Record neu zusammen und stellt ihn als Element in den Eingabestrom
 //! `mmio/ADR/w` wie ein `send`, das nicht faultet (FB-475): Ein voller
 //! Strom verliert es und zaehlt den Ueberlauf.
@@ -28,12 +29,20 @@ impl Enc<'_> {
             .map(|i| ChannelId(i as u32))
     }
 
-    /// Der Wert eines Ports (`port_read`).
-    pub(super) fn port_value(&mut self, p: PortId, span: Span) -> R<V> {
+    /// Ist der Ausgabestrom `c` das Modell eines Ports (`mmio/ADR/r`)?
+    pub(super) fn port_model(&self, c: ChannelId) -> bool {
+        (0..self.p.ports.len()).any(|i| self.port_channel(PortId(i as u32), "r", Direction::Output) == Some(c))
+    }
+
+    /// Der Wert eines Ports (`port_read`), gelesen, wo `flow` lebt.
+    pub(super) fn port_value(&mut self, p: PortId, env: &Env, flow: &Flow, span: Span) -> R<V> {
         let ty = self.p.ports[p.index()].ty;
         let Some(c) = self.port_channel(p, "r", Direction::Output) else { return self.zero_of(ty, span) };
-        if matches!(self.p.types.get(self.p.channels[c.index()].ty), Type::Stream(_)) {
-            return no("Port, dessen Modell ein Strom ist", span);
+        if let Type::Stream(elem) = self.p.types.get(self.p.channels[c.index()].ty) {
+            if *elem != ty {
+                return no("Port, dessen Strommodell einen anderen Record traegt", span);
+            }
+            return self.port_next(c, env, &flow.alive, span);
         }
         let (shape, at) = (self.shape(ty, span)?, self.loc_out(c));
         let committed = std::mem::take(&mut self.committed);

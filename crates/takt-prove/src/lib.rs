@@ -13,11 +13,13 @@ pub mod solve;
 pub mod support;
 pub mod term;
 
-pub use encode::{CheckSite, ContractGoal, Goal, Model, Position, StateVar, Unsupported, encode, encode_machine};
+pub use encode::{
+    CheckSite, ContractGoal, Goal, Model, Position, StateVar, Unsupported, encode, encode_machine, encode_scenario,
+};
 pub use eval::Val;
 pub use run::{Stop, UNMODELLED, mismatches};
 pub use smt::export;
 pub use solve::{
-    CheckReport, CheckVerdict, ContractReport, ContractVerdict, Report, Solver, Verdict, classify,
-    classify_compositional, fault_at, find, named, prove, verify_contracts,
+    CheckReport, CheckVerdict, ContractReport, ContractVerdict, Report, Solver, TransitionReport, Verdict, classify,
+    classify_compositional, classify_transitions, fault_at, find, named, prove, taken_at, verify_contracts,
 };

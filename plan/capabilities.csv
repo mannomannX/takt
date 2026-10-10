@@ -21,9 +21,9 @@ Expr(StateOf),ja,ja,ja
 Expr(Signal),ja,ja,ja
 Expr(Builtin),ja,ja,ja
 Expr(Armed),ja,ja,nein
-Expr(PortRead),ja,teilweise: nicht mit einem Strom als Modell des Lesekanals,ja
+Expr(PortRead),ja,ja,ja
 Expr(Field),ja,teilweise: auf Records; nicht auf den Feldern einer Variante,ja
-Expr(Index),ja,"teilweise: auf Arrays, Samples, Bytes und Vektoren; nicht auf Channel-Arrays",ja
+Expr(Index),ja,"teilweise: auf Arrays, Samples, Bytes und Vektoren; ein Element eines Channel-Arrays nur unter `.valid`, `.suspect`, `.stale` und `.or`",ja
 Expr(Index2),ja,ja,ja
 Expr(Slice),ja,teilweise: auf Bytes und Vektoren; nicht auf einem Array,ja
 Expr(Accessor),ja,"teilweise: die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung",ja
@@ -271,7 +271,7 @@ Feature(Property),ja,ja,ja
 Feature(Assumption),ja,ja,ja
 Feature(Monitor),ja,ja,ja
 Feature(Trigger),ja,ja,ja
-Feature(Port),ja,teilweise: nicht mit einem Strom als Modell des Lesekanals,ja
+Feature(Port),ja,ja,ja
 Feature(Recorded),ja,ja,ja
 Feature(Campaign),ja,ja,ja
 Feature(Node),ja,ja,nein

@@ -1,0 +1,4 @@
+takt-unfired 1
+program 1d87951baf3b145f00d2711c711170b69547e0c8aac545724114f4fcc46c1b22
+solver z3 4.13.4
+uebergang dut k=5 SENT->IDLE @669

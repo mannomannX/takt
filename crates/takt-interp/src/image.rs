@@ -11,7 +11,6 @@ use takt_mir::types::Type;
 
 use crate::stream::{Buffer, Delivery};
 use crate::value::{Quality, Reason, Sample, Value};
-use takt_mir::expr::StreamRef;
 
 /// Veroeffentlichte Groessen einer Maschine (Ψ, 9.1).
 #[derive(Clone, Debug, Default)]
@@ -49,14 +48,15 @@ pub struct Image {
     /// Start-Tick und der Tick der Fertigstellung — `None`, wenn nur `late`
     /// aufgezeichnet ist. Sie ersetzen das Modell `duration`.
     pub job_records: Vec<(MachineId, usize, u64, Option<u64>)>,
+    /// Je implizite Pruefstelle der Quelle (Anfang, Ende, Art), wie oft sie
+    /// ausgewertet wurde, ohne selbst zu faulten (`coverage::sites`).
+    pub site_evals: HashMap<(u32, u32, u8), u64>,
     /// Adresse → `sim`-Output, der einen `hw`-Input speist (8.3).
     sim_sources: HashMap<String, ChannelId>,
     /// Adresse → `hw`-Input.
     hw_inputs: HashMap<String, ChannelId>,
-    /// Elemente eines Stroms an `mmio/ADR/r`, die ein Port noch liest (12.10).
-    port_queues: HashMap<String, VecDeque<Value>>,
-    /// Das zuletzt entnommene Element je Adresse.
-    port_last: HashMap<String, Value>,
+    /// Das zuletzt entnommene Element je Strom an `mmio/ADR/r` (12.10).
+    port_last: HashMap<ChannelId, Value>,
     /// Schreibvorgaenge an Registerports in diesem Tick, zugestellt nach
     /// allen Schritten (12.10).
     port_writes: Vec<(ChannelId, i64, Value, bool)>,
@@ -115,6 +115,40 @@ pub struct TxBuffer {
     /// Bytes, die dieser Tick gesendet hat: Um sie sinkt `free` gegenueber
     /// dem gemeldeten Stand.
     pub fresh: u32,
+    /// Ist der Strom das Modell eines Ports (`mmio/ADR/r`), leert ihn das
+    /// Lesen des Ports statt `max_rate` (12.10).
+    pub port: Option<PortRead>,
+    /// Behaelt der Puffer die Grenzen seiner Elemente
+    /// (`Program::keeps_elements`): die Laengen der wartenden Elemente, die
+    /// schon abgeholten Bytes des ersten und die Elemente, die der letzte
+    /// Commit vollendet hat.
+    pub elements: Option<Elements>,
+}
+
+/// Die Elemente eines Sendepuffers, der ihre Grenzen behaelt (8.3, 8.8): je
+/// `send` eines, hoechstens `capacity` zugleich.
+#[derive(Clone, Debug, Default)]
+pub struct Elements {
+    /// Die Laengen der Elemente im Puffer, das erste vorn.
+    pub lengths: VecDeque<usize>,
+    /// Was der Treiber vom ersten schon abgeholt hat.
+    pub carry: Vec<u8>,
+    /// Was der letzte Commit vollendet hat, in Sendereihenfolge.
+    pub done: Vec<Vec<u8>>,
+}
+
+/// Der Port als Treiber eines Stroms an `mmio/ADR/r` (12.10): Jedes Lesen
+/// entnimmt ein Element, das vor dem Tick im Puffer stand. Frei werden die
+/// Bytes erst am Tick-Ende, damit `free` des Modells nicht davon abhaengt,
+/// ob es vor oder nach dem Treiber schreitet (Satz 9.4.1).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PortRead {
+    /// Bytes je Element in kanonischer Form.
+    pub size: usize,
+    /// Bytes am Anfang des Puffers, die schon vor diesem Tick darin standen.
+    pub visible: usize,
+    /// Bytes, die das Lesen dieses Ticks entnommen hat.
+    pub taken: usize,
 }
 
 impl TxBuffer {
@@ -127,6 +161,21 @@ impl TxBuffer {
         }
     }
 
+    /// Faengt der Puffer kein weiteres Element mehr? Nur wo er Grenzen
+    /// behaelt: dort fasst er hoechstens `capacity` Elemente, auch leere.
+    pub fn full_of_elements(&self) -> bool {
+        self.elements.as_ref().is_some_and(|e| e.lengths.len() >= self.capacity as usize)
+    }
+
+    /// Legt ein gesendetes Element an (`send`, 8.8).
+    pub fn push(&mut self, bytes: Vec<u8>) {
+        self.fresh = self.fresh.saturating_add(u32::try_from(bytes.len()).unwrap_or(u32::MAX));
+        if let Some(e) = &mut self.elements {
+            e.lengths.push_back(bytes.len());
+        }
+        self.queued.extend(bytes);
+    }
+
     /// Eine Zeile `tx` zu Tickbeginn (12.5).
     pub fn report(&mut self, free: u32, idle: bool) {
         self.reported = Some((free, idle));
@@ -134,10 +183,34 @@ impl TxBuffer {
     }
 
     /// Der Treiber holt bis zu `per_tick` Bytes ab (8.8: „die Simulation
-    /// leert exakt `max_rate * T0` Bytes pro Tick").
+    /// leert exakt `max_rate * T0` Bytes pro Tick"); an einem Port, was
+    /// sein Lesen entnommen hat (12.10).
     pub fn drain(&mut self) {
-        let n = (self.per_tick as usize).min(self.queued.len());
+        let n = match &mut self.port {
+            Some(port) => std::mem::take(&mut port.taken),
+            None => (self.per_tick as usize).min(self.queued.len()),
+        };
         self.sent = self.queued.drain(..n).collect();
+        if let Some(port) = &mut self.port {
+            port.visible = self.queued.len();
+        }
+        if let Some(e) = &mut self.elements {
+            e.done.clear();
+            let mut rest = self.sent.as_slice();
+            // Ein Element ist da, wenn sein letztes Byte abgeholt ist; ein
+            // leeres, sobald es vorn steht.
+            while let Some(&len) = e.lengths.front() {
+                let need = len - e.carry.len();
+                if need > rest.len() {
+                    e.carry.extend_from_slice(rest);
+                    break;
+                }
+                e.carry.extend_from_slice(&rest[..need]);
+                rest = &rest[need..];
+                e.done.push(std::mem::take(&mut e.carry));
+                e.lengths.pop_front();
+            }
+        }
         self.fresh = 0;
         // Was nach dem Commit im Puffer steht, steht zu Beginn des naechsten
         // Ticks darin: dort wird `idle` gesampelt.
@@ -202,10 +275,16 @@ impl Image {
                 }
                 Direction::Output => {
                     // Ein Ausgabestrom, den eine Maschine liest, hat ein
-                    // Fenster wie ein Eingabestrom (8.3, Plant-Modelle).
-                    if p.machines.iter().any(|m| m.layout.cursors.contains(&StreamRef::Channel(id))) {
-                        let cap = c.attrs.capacity.unwrap_or(16);
-                        channel_bufs.insert(id, Buffer::new(cap, cap.saturating_mul(256)));
+                    // Fenster wie ein Eingabestrom (8.3, Plant-Modelle) mit
+                    // so vielen Plaetzen, wie sein Sendepuffer Bytes fasst;
+                    // jedes Element belegt mindestens eins.
+                    if p.is_read_output(id) {
+                        let cap = c.attrs.capacity.unwrap_or(256);
+                        let size = match p.types.list.get(c.ty.index()) {
+                            Some(Type::Stream(e)) => takt_mir::bytes::max_size(p, *e).unwrap_or(1).max(1),
+                            _ => 1,
+                        };
+                        channel_bufs.insert(id, Buffer::new(cap, cap.saturating_mul(size)));
                     }
                     // 8.8: „die Simulation leert exakt `max_rate * T0` Bytes
                     // pro Tick". Ohne `max_rate` holt der Treiber alles ab.
@@ -222,6 +301,8 @@ impl Image {
                             capacity: c.attrs.capacity.unwrap_or(256),
                             per_tick,
                             idle: true,
+                            port: port_read(p, c),
+                            elements: p.keeps_elements(id).then(Elements::default),
                             ..Default::default()
                         },
                     );
@@ -242,7 +323,6 @@ impl Image {
             params,
             sim_sources,
             hw_inputs,
-            port_queues: HashMap::new(),
             port_last: HashMap::new(),
             port_writes: Vec::new(),
             delivered: vec![None; p.channels.len()],
@@ -265,6 +345,7 @@ impl Image {
             edge: takt_hal::Edge::new(p, p.channels.iter().map(|c| limits_of(c, p)).collect(), p.config.tick),
             last_good: vec![None; p.channels.len()],
             job_records: Vec::new(),
+            site_evals: HashMap::new(),
         }
     }
 
@@ -559,55 +640,70 @@ impl Image {
             // diesem Tick abgenommen hat, wird zum Element des `hw`-Inputs;
             // seine `.t` ist die Commit-Zeit.
             if matches!(p.types.list.get(p.channels[inp.index()].ty.index()), Some(Type::Stream(_))) {
-                let sent = self.tx.get_mut(&out).map(|t| std::mem::take(&mut t.sent)).unwrap_or_default();
-                if !sent.is_empty() {
-                    let drop_oldest =
-                        matches!(p.channels[inp.index()].attrs.overflow, Some(takt_mir::program::Overflow::DropOldest));
-                    for value in elements_of(&sent, p.channels[inp.index()].ty, p) {
-                        match value {
-                            Some(v) => {
-                                self.push_element(inp, now, v, drop_oldest);
-                            }
-                            None => self.malformed(inp),
-                        }
-                    }
-                }
+                self.deliver_sent(p, out, inp, now);
                 continue;
             }
-            let sample = Sample::good(self.committed[out.index()].clone());
+            // 8.9: Ein Modell speist einen oversampelten Kanal mit seinem
+            // Tick-Array, auch aus einer Konstante vom Typ `[N] T`; der Rand
+            // prueft es Abtastwert fuer Abtastwert.
+            let value = match (p.types.list.get(p.channels[inp.index()].ty.index()), &self.committed[out.index()]) {
+                (Some(Type::Samples { .. }), Value::Array(items)) => Value::Samples(items.clone()),
+                (_, v) => v.clone(),
+            };
+            let sample = Sample::good(value);
             self.delivered[inp.index()] = Some(sample.clone());
             self.inputs[inp.index()] = self.through_edge(sample, inp, now);
-        }
-        // 12.10: Ein Strom an `mmio/ADR/r` liefert je Lesen ein Element.
-        let ports: Vec<(String, ChannelId)> = self
-            .sim_sources
-            .iter()
-            .filter(|(a, _)| a.starts_with("mmio/") && a.ends_with("/r"))
-            .map(|(a, c)| (a.clone(), *c))
-            .collect();
-        for (addr, out) in ports {
-            let ty = p.channels[out.index()].ty;
-            if !matches!(p.types.list.get(ty.index()), Some(Type::Stream(_))) {
-                continue;
-            }
-            let sent = self.tx.get_mut(&out).map(|t| std::mem::take(&mut t.sent)).unwrap_or_default();
-            if !sent.is_empty() {
-                self.port_queues.entry(addr).or_default().extend(elements_of(&sent, ty, p).into_iter().flatten());
-            }
         }
         self.driven.iter_mut().for_each(|d| *d = false);
     }
 
-    /// Das naechste Element eines Stroms an `mmio/ADR/r` (12.10); ist er
-    /// leer, das zuletzt entnommene.
-    pub fn port_next(&mut self, addr: &str) -> Option<Value> {
-        match self.port_queues.get_mut(addr).and_then(VecDeque::pop_front) {
-            Some(v) => {
-                self.port_last.insert(addr.to_string(), v.clone());
-                Some(v)
+    /// Was der Treiber dem Ausgabestrom `out` beim letzten Commit abnahm,
+    /// als Elemente des Stroms `to` mit der Zeit `t` (8.3): je vollendetes
+    /// `send` eines, genau wie gesendet, wenn der Puffer die Grenzen behaelt;
+    /// sonst aus den Bytes (`elements_of`). Was sich nicht lesen laesst,
+    /// zaehlt als `malformed`.
+    pub fn deliver_sent(&mut self, p: &Program, out: ChannelId, to: ChannelId, t: i64) {
+        let (blocks, kept) = match self.tx.get(&out) {
+            Some(tx) => match &tx.elements {
+                Some(e) => (e.done.clone(), true),
+                None if tx.sent.is_empty() => (Vec::new(), false),
+                None => (vec![tx.sent.clone()], false),
+            },
+            None => (Vec::new(), false),
+        };
+        let drop_oldest =
+            matches!(p.channels[to.index()].attrs.overflow, Some(takt_mir::program::Overflow::DropOldest));
+        let ty = p.channels[to.index()].ty;
+        for block in blocks {
+            let values = if kept { vec![Some(kept_element(&block, ty, p))] } else { elements_of(&block, ty, p) };
+            for value in values {
+                match value {
+                    Some(v) => {
+                        self.push_element(to, t, v, drop_oldest);
+                    }
+                    None => self.malformed(to),
+                }
             }
-            None => self.port_last.get(addr).cloned(),
         }
+    }
+
+    /// Das naechste Element des Stroms `out` an `mmio/ADR/r` (12.10), das
+    /// vor diesem Tick im Puffer stand; ist keins mehr da, das zuletzt
+    /// entnommene, vor dem ersten nichts. `Err`, wenn die Bytes kein Element
+    /// sind — sie stammen aus `send`, das waere ein Fehler des Interpreters.
+    pub fn port_next(&mut self, out: ChannelId, p: &Program) -> Result<Option<Value>, String> {
+        let Some(Type::Stream(elem)) = p.types.list.get(p.channels[out.index()].ty.index()) else {
+            return Err(format!("Channel {} ist kein Strom", out.0));
+        };
+        let Some(tx) = self.tx.get_mut(&out) else { return Err(format!("Channel {} ohne Sendepuffer", out.0)) };
+        let Some(port) = tx.port.as_mut() else { return Err(format!("Channel {} ist kein Portmodell", out.0)) };
+        if port.taken + port.size <= port.visible {
+            let chunk = &tx.queued[port.taken..port.taken + port.size];
+            let value = crate::bytes::decode_slot(p, chunk, *elem).map_err(|e| format!("{e:?}"))?;
+            port.taken += port.size;
+            self.port_last.insert(out, value);
+        }
+        Ok(self.port_last.get(&out).cloned())
     }
 
     /// Laesst alle Inputs um einen Tick altern; ueberschreitet das Alter
@@ -726,6 +822,20 @@ pub fn wire_element(bytes: &[u8], elem: takt_mir::TypeId, p: &Program) -> Value 
     }
 }
 
+/// Ein Element, wie `send` es in einen Puffer mit Grenzen legte (8.3): Text
+/// und Bytes genau so, ohne die Rahmung des Rands.
+fn kept_element(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Value {
+    let elem = match p.types.list.get(ty.index()) {
+        Some(Type::Stream(e)) => p.types.list.get(e.index()),
+        _ => None,
+    };
+    match elem {
+        Some(Type::Line { .. }) => Value::Line { text: String::from_utf8_lossy(bytes).into_owned(), truncated: false },
+        Some(Type::Str { .. }) => Value::Str(String::from_utf8_lossy(bytes).into_owned()),
+        _ => Value::Bytes(bytes.to_vec()),
+    }
+}
+
 /// Die Elemente, die ein Byteblock in einem Strom ergibt: je Byte eines in
 /// einem `stream<u8>` — `send` eines `bytes<N>` schickt N Elemente (8.8) —,
 /// sonst ein Element. `None` steht fuer ein Element, dessen `decode`
@@ -754,6 +864,17 @@ pub fn elements_of(bytes: &[u8], ty: takt_mir::TypeId, p: &Program) -> Vec<Optio
             _ => vec![Some(element_of(bytes, ty, p))],
         },
     }
+}
+
+/// Der Port, dessen Lesekanal der Ausgabestrom `c` ist (12.10): die Bytes
+/// eines Elements.
+fn port_read(p: &Program, c: &takt_mir::program::Channel) -> Option<PortRead> {
+    let Binding::Sim(a) = &c.binding else { return None };
+    let Some(Type::Stream(elem)) = p.types.list.get(c.ty.index()) else { return None };
+    let key = address_key(a);
+    p.ports.iter().any(|port| key == format!("mmio/{:#x}/r", port.address)).then_some(())?;
+    let size = takt_mir::bytes::max_size(p, *elem).ok()?;
+    Some(PortRead { size: usize::try_from(size).ok()?, ..PortRead::default() })
 }
 
 /// `max_rate` eines Streams in Hz; nur ein Literal, wie im Sema (8.6).

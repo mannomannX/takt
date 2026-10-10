@@ -606,6 +606,53 @@ impl Program {
         self.state_variants(m).iter().position(|v| v.name == "FAULTED").unwrap_or(0) as u32
     }
 
+    /// Behaelt der Sendepuffer des Ausgabestroms `out` die Grenzen seiner
+    /// Elemente (8.3, 8.8)? Ja, wenn er einen `sim`-gebundenen Eingabestrom
+    /// speist oder eine Maschine ihn liest und die Elemente dort verschieden
+    /// lang sind (`line`, `str`, `bytes`): Dann ist jedes `send` ein
+    /// Element, und ein Element kommt an, wenn der Treiber sein letztes Byte
+    /// abgeholt hat.
+    pub fn keeps_elements(&self, out: ChannelId) -> bool {
+        self.kept_element_cap(out).is_some()
+    }
+
+    /// Die Kapazitaet des Elements, das ein Puffer mit Grenzen speist
+    /// ([`Program::keeps_elements`]): Laenger darf kein `send` sein
+    /// (Pruefung 20).
+    pub fn kept_element_cap(&self, out: ChannelId) -> Option<u32> {
+        use crate::types::Type;
+        let o = &self.channels[out.index()];
+        if o.dir != Direction::Output {
+            return None;
+        }
+        let text_cap = |ty: TypeId| match self.types.get(ty) {
+            Type::Stream(e) => match self.types.get(*e) {
+                Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap } => Some(*cap),
+                _ => None,
+            },
+            _ => None,
+        };
+        let coupled = match &o.binding {
+            Binding::Sim(addr) => self.channels.iter().find_map(|inp| {
+                (inp.dir == Direction::Input && matches!(&inp.binding, Binding::Hw(a) if a == addr))
+                    .then(|| text_cap(inp.ty))
+                    .flatten()
+            }),
+            _ => None,
+        };
+        coupled.or_else(|| self.is_read_output(out).then(|| text_cap(o.ty)).flatten())
+    }
+
+    /// Liest eine Maschine den Ausgabestrom `out` (8.3: ein Modell liest die
+    /// Ausgaenge des Programms mit Unit-Delay)? Dann kommt, was der Treiber
+    /// abholt, im naechsten Tick als Elemente seines Typs in ihr Fenster.
+    pub fn is_read_output(&self, out: ChannelId) -> bool {
+        let r = crate::expr::StreamRef::Channel(out);
+        self.channels[out.index()].dir == Direction::Output
+            && matches!(self.types.get(self.channels[out.index()].ty), crate::types::Type::Stream(_))
+            && self.machines.iter().any(|m| m.layout.cursors.contains(&r))
+    }
+
     /// Ist die Maschine ein Plant-Modell (8.3): speist sie einen `hw`-Input,
     /// schreibt also einen `sim`-Output an dessen Adresse? Ein `sim`-Output
     /// ohne solchen Input ist eine Beobachtung, und wer ihn schreibt, gehoert

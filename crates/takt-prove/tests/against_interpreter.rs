@@ -381,6 +381,46 @@ fn send_buffers_agree() {
     agree_program("TX_STREAMS", &compile("TX_STREAMS", TX_STREAMS), "", 12);
 }
 
+/// Je `send` ein Element, auch wenn der Treiber nicht je Tick alles abholt
+/// (8.3, `TxBuffer::drain`): Zeilen zu zehn und sechs Byte bei zehn Byte je
+/// Tick reichen ueber Tickgrenzen, ein Tick vollendet auch zwei, und ein
+/// leeres `send` ist ein Element.
+const KEPT_LINES: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  rx     : stream<line<32>> @ hw("uart0/rx") with max_rate = 2000 Hz, framing = lines
+output rx_sim : stream<line<32>> @ sim("uart0/rx") with capacity = 96, max_rate = 1000 Hz
+output n      : int in 0..99 @ sim("n")
+output last   : int in 0..99 @ sim("last")
+
+machine model:
+    var k : int in 0..9 = 0
+    initial RUN
+    state RUN:
+        loop:
+            if k < 3:
+                send rx_sim, "first line"
+                send rx_sim, "second"
+            if k == 3:
+                send rx_sim, ""
+            k = min(k + 1, 9)
+
+machine reader:
+    var c : int in 0..99 = 0
+    initial RUN
+    state RUN:
+        on rx as e:
+            c = (c + 1) % 100
+            n = c
+            last = e.text.len
+"#;
+
+#[test]
+fn elements_across_commits_agree() {
+    agree_program("KEPT_LINES", &compile("KEPT_LINES", KEPT_LINES), "", 10);
+}
+
 /// Ganzzahl-Primitive in ihrer Breite (wrapping, saturating auch ueber
 /// `i64` hinaus, Rotation mit beliebigem Betrag), Bits, Rundung auf eine
 /// ganze Zahl und eine affine Einheit.
@@ -748,6 +788,16 @@ machine reader:
 #[test]
 fn records_over_a_sim_binding_agree() {
     agree_program("SIM_RECORDS", &compile("SIM_RECORDS", SIM_RECORDS), "", 30);
+}
+
+/// Ein FIFO-Datenregister (12.10, FB-431): Das Strommodell des Ports laeuft
+/// voll, jedes Lesen entnimmt ein Element, und der Commit gibt frei, was
+/// gelesen wurde.
+#[test]
+fn a_fifo_port_agrees() {
+    let p = corpus("123_fifo_port.takt");
+    agree_program("123_fifo_port.takt", &p, "", 12);
+    agree_program("123_fifo_port.takt", &p, "t=5 cmd burst\nt=9 cmd burst\n", 30);
 }
 
 /// Natives der kuratierten Menge (4.5): Pruefsummen und Digests ueber Bytes
@@ -1827,6 +1877,46 @@ fn unsigned_64_bit_arithmetic_agrees() {
                 t=2 in x 5\nt=2 in y 9223372036854775809\nt=2 in z 3\n\
                 t=3 in x 10000000000000000000\nt=3 in y 0\n";
     agree_program("UNSIGNED", &compile("UNSIGNED", UNSIGNED), stim, 6);
+}
+
+/// Schmale und vorzeichenlose Breiten (INT-018, 3.10, 4.1): ein `u8`-Zaehler,
+/// der in seine Breite wickelt, `<<` in `u8`, `i16` und `u32`, `>>` eines
+/// negativen `i16` und Vergleiche in jeder Breite.
+const NARROW: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  x    : u8  @ hw("i/x")
+input  y    : i16 @ hw("i/y")
+output c    : u8   @ hw("o/c")    with safe = 0
+output sl8  : u8   @ hw("o/sl8")  with safe = 0
+output sl16 : i16  @ hw("o/sl16") with safe = 0
+output sl32 : u32  @ hw("o/sl32") with safe = 0
+output sr16 : i16  @ hw("o/sr16") with safe = 0
+output sr8  : u8   @ hw("o/sr8")  with safe = 0
+output lt   : bool @ hw("o/lt")   with safe = false
+
+machine m:
+    var k : u8 = 250
+    initial RUN
+
+    state RUN:
+        loop:
+            k = wrapping_add(k, 3 as u8)
+            c = k
+            sl8 = x.or(0 as u8) << 3
+            sl16 = y.or(0 as i16) << 4
+            sl32 = (x.or(0 as u8) as u32) << 28
+            sr16 = y.or(0 as i16) >> 2
+            sr8 = (k << 1) >> 1
+            lt = (x.or(0 as u8) as i16) < y.or(0 as i16)
+"#;
+
+#[test]
+fn narrow_widths_agree() {
+    let stim = "t=0 in x 255\nt=0 in y -32768\nt=1 in x 31\nt=1 in y 4097\nt=2 in x 200\nt=2 in y -3\n\
+                t=3 in x 0\nt=3 in y 32767\n";
+    agree_program("NARROW", &compile("NARROW", NARROW), stim, 8);
 }
 
 /// Eine Frist aus einem Parameter der Instanz: je Maschine eine feste

@@ -5,14 +5,24 @@
 # aarch64-Werkzeugkette (Linker und Standardbibliothek) und qemu, um
 # aarch64-Binaries auf x86-64 auszufuehren. Ohne qemu liesse sich die
 # Bit-Gleichheit nur behaupten, nicht messen.
+#
+# LLVM in derselben Hauptversion wie auf dem Wirt (22): Der Codegen schreibt
+# IR fuer diese Version, und das clang 19 der Distribution stuerzte in SROA
+# an den Bloecken des Korpus ab (KON2-013).
 FROM rust:1-slim
 
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-        clang lld \
+        ca-certificates wget \
         gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
         qemu-user \
         util-linux \
+    && wget -qO /etc/apt/trusted.gpg.d/apt.llvm.org.asc https://apt.llvm.org/llvm-snapshot.gpg.key \
+    && echo "deb http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/llvm.list \
+    && apt-get update -qq && apt-get install -y -qq --no-install-recommends clang-22 lld-22 llvm-22 \
     && rm -rf /var/lib/apt/lists/*
+
+# clang, lld und die LLVM-Werkzeuge (`llvm-nm`) unter ihren Namen ohne Version.
+ENV PATH=/usr/lib/llvm-22/bin:$PATH
 
 RUN rustup target add aarch64-unknown-linux-gnu
 

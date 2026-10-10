@@ -1,0 +1,4 @@
+takt-unfired 1
+program effc5e8cc3ac7b1855c6b9355fb1a1faa2d5853ed652230834cff06c428e41cd
+solver z3 4.13.4
+uebergang p k=0 LOW->LOW @505

@@ -38,9 +38,10 @@ pub(super) struct Stream {
     cap: u32,
     /// Die Schranke in Bytes, wenn die Elemente verschieden viele belegen.
     budget: Option<u32>,
-    /// Was der Rand je Tick hoechstens liefert (`MAXPT`, 8.6); ein Strom
-    /// eines Schreibers ausserhalb des Modells (13.3) liefert bis zur
-    /// Kapazitaet, ein interner sonst nichts.
+    /// Was der Rand je Tick hoechstens liefert (`MAXPT`, 8.6), auch an
+    /// einen gekoppelten Eingabestrom; ein Strom eines Schreibers ausserhalb
+    /// des Modells (13.3) liefert bis zur Kapazitaet, ein interner sonst
+    /// nichts.
     maxpt: Option<u32>,
     overflow: Overflow,
     wake: bool,
@@ -53,8 +54,12 @@ pub(super) struct Stream {
     readers: Vec<(MachineId, usize)>,
     /// Liest eine Maschine ausserhalb des Modells mit (13.3)?
     foreign_readers: bool,
-    /// Der Ausgabestrom, der ihn ueber eine `sim`-Bindung speist (8.3).
+    /// Der Ausgabestrom, der ihn ueber eine `sim`-Bindung speist (8.3), oder
+    /// bei einem gelesenen Ausgabestrom sein eigener.
     fed: Option<usize>,
+    /// Ein Ausgabestrom, den ein Modell liest (8.3): Seine Elemente tragen
+    /// die Zeit des Commits, der sie abholte, nicht die der Zustellung.
+    read_output: bool,
 }
 
 /// Ein Platz des Fensters: ob er belegt ist, Nummer, Zeitstempel, Wert.
@@ -66,9 +71,19 @@ pub(super) struct Item {
     value: V,
 }
 
-/// Die Nummer eines Stromueberlaufs in `pending` (9.6); die Faults der
-/// Trigger-Phase folgen ihr (7.5), null heisst: nichts vorgemerkt.
+/// Die Nummer eines Stromueberlaufs in `pending` (9.6); null heisst:
+/// nichts vorgemerkt.
 pub(super) const OVERFLOW: i64 = 1;
+
+/// Die Nummer eines Operator-Aborts in `pending` (5.4).
+pub(super) const ABORT: i64 = 2;
+
+/// Die Nummer des ersten Runtime-Faults von aussen in `pending` (7.3), in der
+/// Folge von [`super::RUNTIME_KINDS`].
+pub(super) const RUNTIME: i64 = 3;
+
+/// Die Nummer des ersten Faults der Trigger-Phase in `pending` (7.5).
+pub(super) const TRIGGER: i64 = RUNTIME + super::RUNTIME_KINDS.len() as i64;
 
 /// Das Fenster eines Lesers in einem Tick (9.6, `windows`).
 #[derive(Clone, Debug)]
@@ -145,8 +160,8 @@ fn bump(env: &mut Env, at: &str, by: &Term) {
 }
 
 impl Enc<'_> {
-    /// Die Stroeme des Modells. Elemente variabler Laenge, Ausgabestroeme
-    /// mit Leser und Eingabestroeme aus einem `sim`-Ausgang lehnt es ab.
+    /// Die Stroeme des Modells: Eingabestroeme, gelesene Ausgabestroeme und
+    /// interne Stroeme.
     pub(super) fn stream_defs(&self) -> R<Vec<Stream>> {
         let mut out = Vec::new();
         let runnable = takt_mir::analysis::schedule::runnable(self.p);
@@ -172,9 +187,10 @@ impl Enc<'_> {
             let key = StreamRef::Channel(takt_mir::ChannelId(i as u32));
             let (own, foreign) = readers(key);
             if c.dir == Direction::Output {
-                if !own.is_empty() || foreign {
-                    return no("Ausgabestrom mit Leser", c.span);
+                if own.is_empty() && !foreign {
+                    continue;
                 }
+                out.push(self.read_output(i, c, *elem, own, foreign)?);
                 continue;
             }
             let source = self.p.channels.iter().position(|o| {
@@ -188,30 +204,25 @@ impl Enc<'_> {
                 },
                 None => None,
             };
-            let maxpt = match fed {
-                // Was der Treiber abholt, kommt ohne Vertrag an (`apply_sim_bindings`).
-                Some(t) => {
-                    let width = self.txs[t].per_tick_bytes();
-                    match self.p.types.get(*elem) {
-                        Type::Int { width: takt_mir::types::IntWidth::U8, .. } | Type::Record(_) | Type::Enum(_) => {}
-                        Type::Bytes { cap } if *cap >= width => {}
-                        _ => return no("Eingabestrom aus einem `sim`-Ausgang mit Elementen dieser Art", c.span),
-                    }
-                    None
+            // Was der Treiber abholt, kommt ohne Vertrag an
+            // (`apply_sim_bindings`); Text und Bytes je `send` (8.3).
+            if let Some(t) = fed {
+                match self.p.types.get(*elem) {
+                    Type::Int { width: takt_mir::types::IntWidth::U8, .. } | Type::Record(_) | Type::Enum(_) => {}
+                    Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap } if self.txs[t].kept_fits(*cap) => {}
+                    _ => return no("Eingabestrom aus einem `sim`-Ausgang mit Elementen dieser Art", c.span),
                 }
-                None => match takt_hal::edge::maxpt_of(c, self.p.config.tick) {
-                    Some(m) => Some(m),
-                    None => return no("Eingabestrom ohne `max_rate`", c.span),
-                },
+            }
+            // Vom Rand kommt, was ein Stimulus liefert, auch an einen
+            // gekoppelten Strom: vor den Elementen der Kopplung.
+            let maxpt = match (takt_hal::edge::maxpt_of(c, self.p.config.tick), fed) {
+                (Some(m), _) => Some(m),
+                (None, Some(_)) => None,
+                (None, None) => return no("Eingabestrom ohne `max_rate`", c.span),
             };
             let cap = c.attrs.capacity.unwrap_or(16);
             let bytes = c.attrs.capacity_bytes.unwrap_or(cap.saturating_mul(256));
             let (cap, budget) = self.ring_slots(*elem, cap, bytes, c.span)?;
-            // Ein Record vom Rand steht im Stimulus als `Name(…)`; ein Feld
-            // variabler Laenge hat dort keine Textform.
-            if budget.is_some() && fed.is_none() && matches!(self.p.types.get(*elem), Type::Record(_)) {
-                return no("Record-Element variabler Laenge vom Rand", c.span);
-            }
             out.push(Stream {
                 key,
                 name: c.name.clone(),
@@ -221,11 +232,12 @@ impl Enc<'_> {
                 maxpt,
                 overflow: c.attrs.overflow.unwrap_or_default(),
                 wake: c.attrs.wake,
-                channel: fed.is_none(),
-                decodes: fed.is_none() && matches!(self.p.types.get(*elem), Type::Record(_) | Type::Capture { .. }),
+                channel: true,
+                decodes: maxpt.is_some() && matches!(self.p.types.get(*elem), Type::Record(_) | Type::Capture { .. }),
                 readers: own,
                 foreign_readers: foreign,
                 fed,
+                read_output: false,
             });
         }
         for (i, s) in self.p.streams.iter().enumerate() {
@@ -248,6 +260,7 @@ impl Enc<'_> {
                 readers: own,
                 foreign_readers: foreign,
                 fed: None,
+                read_output: false,
             });
         }
         Ok(out)
@@ -387,11 +400,11 @@ impl Enc<'_> {
         Ok(i64::from(self.streams[self.stream_index(key, span)?].cap))
     }
 
-    /// Kann der Maschine ein Fault vorgemerkt werden: liest sie einen
-    /// Eingabestrom, der ueberlaufen kann, oder besitzt sie Trigger (7.5)?
-    pub(super) fn has_pending(&self, m: MachineId) -> bool {
-        self.streams.iter().any(|s| s.channel && s.readers.iter().any(|(r, _)| *r == m))
-            || !self.machine(m).layout.trigger_flags.is_empty()
+    /// Kann der Maschine ein Fault vorgemerkt werden? Jeder ein
+    /// Operator-Abort (5.4), dazu der Ueberlauf eines Eingabestroms (9.6) und
+    /// die Faults ihrer Trigger (7.5).
+    pub(super) fn has_pending(&self, _m: MachineId) -> bool {
+        true
     }
 
     /// Steht die Maschine in einem `idle`-Zustand (5.10)?
@@ -553,64 +566,122 @@ impl Enc<'_> {
     /// ersten Eintritt (`run`: Stimulus, dann `init`), und niemand schlaeft.
     pub(super) fn deliver(&mut self, pre: Option<&Env>, cur: &mut Env) -> R<()> {
         for s in self.streams.clone() {
+            if let Some(bound) = s.maxpt {
+                self.deliver_edge(&s, bound, pre, cur)?;
+            }
+            // 8.3: danach die Kopplung, wie `apply_sim_bindings` nach dem
+            // Stimulus.
             if let (Some(t), Some(_)) = (s.fed, pre) {
                 self.feed(&s, t, cur)?;
-                continue;
-            }
-            let Some(bound) = s.maxpt else { continue };
-            let n = self.input(format!("i.stream.{}.n", s.name), Sort::Int);
-            let mut over = Vec::new();
-            for j in 0..bound {
-                let here = Term::bin(Op::Lt, Term::int(i64::from(j)), n.clone());
-                let t = self.input(format!("i.stream.{}.{j}.t", s.name), Sort::Int);
-                let value = self.element_input(&s, j)?;
-                let mut ok = here.clone();
-                if s.decodes {
-                    let bad = self.input(format!("i.stream.{}.{j}.bad", s.name), Sort::Bool);
-                    bump(cur, &loc(&s, "malformed"), &Term::and(vec![here, bad.clone()]));
-                    ok = Term::and(vec![ok, bad.not()]);
-                }
-                if !s.channel {
-                    // Ein fremder Schreiber laeuft nie ueber: Sein `send` haette
-                    // ihn gefaultet (9.6).
-                    let room = Term::bin(Op::Lt, cur[&loc(&s, "len")].clone(), Term::int(i64::from(s.cap)));
-                    ok = Term::and(vec![ok, room]);
-                }
-                over.push(self.push(&s, cur, &ok, &t, &value)?);
-            }
-            if !s.channel {
-                continue;
-            }
-            let over = Term::or(over);
-            for &(m, _) in &s.readers {
-                let hit = match pre {
-                    Some(pre) if !s.wake => Term::and(vec![over.clone(), self.idle(m, pre).not()]),
-                    _ => over.clone(),
-                };
-                let at = self.loc_pending(m);
-                let old = cur[&at].clone();
-                let free = Term::eq(old.clone(), Term::int(0));
-                cur.insert(at, Term::ite(Term::and(vec![hit, free]), Term::int(OVERFLOW), old));
             }
         }
         Ok(())
     }
 
+    /// Was der Rand einem Strom in diesem Tick liefert.
+    fn deliver_edge(&mut self, s: &Stream, bound: u32, pre: Option<&Env>, cur: &mut Env) -> R<()> {
+        let n = self.input(format!("i.stream.{}.n", s.name), Sort::Int);
+        let mut over = Vec::new();
+        for j in 0..bound {
+            let here = Term::bin(Op::Lt, Term::int(i64::from(j)), n.clone());
+            let t = self.input(format!("i.stream.{}.{j}.t", s.name), Sort::Int);
+            let value = self.element_input(s, j)?;
+            let mut ok = here.clone();
+            if s.decodes {
+                let bad = self.input(format!("i.stream.{}.{j}.bad", s.name), Sort::Bool);
+                bump(cur, &loc(s, "malformed"), &Term::and(vec![here, bad.clone()]));
+                ok = Term::and(vec![ok, bad.not()]);
+            }
+            if !s.channel {
+                // Ein fremder Schreiber laeuft nie ueber: Sein `send` haette
+                // ihn gefaultet (9.6).
+                let room = Term::bin(Op::Lt, cur[&loc(s, "len")].clone(), Term::int(i64::from(s.cap)));
+                ok = Term::and(vec![ok, room]);
+            }
+            over.push(self.push(s, cur, &ok, &t, &value)?);
+        }
+        if !s.channel {
+            return Ok(());
+        }
+        let over = Term::or(over);
+        for &(m, _) in &s.readers {
+            let hit = match pre {
+                Some(pre) if !s.wake => Term::and(vec![over.clone(), self.idle(m, pre).not()]),
+                _ => over.clone(),
+            };
+            let at = self.loc_pending(m);
+            let old = cur[&at].clone();
+            let free = Term::eq(old.clone(), Term::int(0));
+            cur.insert(at, Term::ite(Term::and(vec![hit, free]), Term::int(OVERFLOW), old));
+        }
+        Ok(())
+    }
+
+    /// Ein Ausgabestrom, den ein Modell liest (8.3, `System::drain_tx`): ein
+    /// Ring mit so vielen Plaetzen, wie der Sendepuffer Bytes fasst, den der
+    /// eigene Sendepuffer speist.
+    fn read_output(
+        &self,
+        i: usize,
+        c: &takt_mir::program::Channel,
+        elem: TypeId,
+        own: Vec<(MachineId, usize)>,
+        foreign: bool,
+    ) -> R<Stream> {
+        if foreign {
+            return no("Ausgabestrom, den eine Maschine ausserhalb des Modells liest", c.span);
+        }
+        let Some(t) = self.txs.iter().position(|t| t.channel.index() == i) else {
+            return no("gelesener Ausgabestrom einer Maschine ausserhalb des Modells", c.span);
+        };
+        match self.p.types.get(elem) {
+            Type::Int { width: takt_mir::types::IntWidth::U8, .. } | Type::Record(_) | Type::Enum(_) => {}
+            Type::Line { cap } | Type::Str { cap } | Type::Bytes { cap } if self.txs[t].kept_fits(*cap) => {}
+            _ => return no("gelesener Ausgabestrom mit Elementen dieser Art", c.span),
+        }
+        let cap = c.attrs.capacity.unwrap_or(256);
+        let size = takt_mir::bytes::max_size(self.p, elem).unwrap_or(1).max(1);
+        let (cap, budget) = self.ring_slots(elem, cap, cap.saturating_mul(size), c.span)?;
+        Ok(Stream {
+            key: StreamRef::Channel(takt_mir::ChannelId(i as u32)),
+            name: c.name.clone(),
+            elem,
+            cap,
+            budget,
+            maxpt: None,
+            overflow: c.attrs.overflow.unwrap_or_default(),
+            wake: c.attrs.wake,
+            channel: false,
+            decodes: false,
+            readers: own,
+            foreign_readers: false,
+            fed: Some(t),
+            read_output: true,
+        })
+    }
+
     /// Ein `sim`-gespeister Eingabestrom (8.3, `apply_sim_bindings`): Was der
     /// Treiber beim letzten Commit abholte, kommt zu Tick-Beginn an, in
-    /// einem `stream<u8>` Byte fuer Byte, in einem Bytestrom als ein
-    /// Element, sonst in Slots der kanonischen Form (`elements_of`); was sich
-    /// nicht lesen laesst, zaehlt als `malformed`, ein Ueberlauf zaehlt nur.
+    /// einem `stream<u8>` Byte fuer Byte, als Text oder Bytes je
+    /// vollendetes `send`, sonst in Slots der kanonischen Form
+    /// (`elements_of`); was sich nicht lesen laesst, zaehlt als `malformed`,
+    /// ein Ueberlauf zaehlt nur.
     fn feed(&mut self, s: &Stream, t: usize, cur: &mut Env) -> R<()> {
         let tx = self.txs[t].clone();
-        let sent = self.sent_text(&tx, cur);
-        let now = self.now.clone();
-        match self.p.types.get(s.elem) {
-            Type::Bytes { cap } => {
-                let any = Term::bin(Op::Gt, sent.len.clone(), Term::int(0));
-                let v = sent.value(*cap, None);
-                self.push(s, cur, &any, &now, &v)?;
+        let now = if s.read_output { sub(self.now.clone(), Term::int(self.p.config.tick)) } else { self.now.clone() };
+        if let Some(elements) = self.done_elements(&tx, cur) {
+            let (cap, truncated) = match self.p.types.get(s.elem) {
+                Type::Line { cap } => (*cap, Some(Term::bool(false))),
+                Type::Str { cap } | Type::Bytes { cap } => (*cap, None),
+                _ => return no("Element mit Grenzen ohne Textgestalt", Span::default()),
+            };
+            for (present, text) in elements {
+                self.push(s, cur, &present, &now, &text.value(cap, truncated.clone()))?;
             }
+            return Ok(());
+        }
+        let sent = self.sent_text(&tx, cur);
+        match self.p.types.get(s.elem) {
             Type::Record(_) | Type::Enum(_) => {
                 let span = Span::default();
                 let Ok(size) = takt_mir::bytes::max_size(self.p, s.elem) else {

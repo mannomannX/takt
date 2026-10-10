@@ -2,4 +2,4 @@ takt-proof 2
 program b1d9993493e0e01c033feb9bb3034972d243aec7e760ff5e110447091da1f5c0
 solver z3 4.13.4
 site 677 685 index k=5
-site 715 721 index k=5
+site 715 721 index k=0

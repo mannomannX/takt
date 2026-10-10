@@ -147,7 +147,10 @@ fn every_condition_of_passing_fails_the_driver_on_its_own() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
     assert!(
-        stdout.contains("Treiber dev: Zustaende 2/2, Transitionen 2/2, Checks 0/0 (0 verletzt), Handler 1/1"),
+        stdout.contains(
+            "Treiber dev: Zustaende 2/2, Transitionen 2/2, Checks 0/0 (0 verletzt), Pruefstellen 0/0 (0 verletzt), \
+             Handler 1/1"
+        ),
         "{stdout}"
     );
     let cases: [(&str, &Edit, &[&str], &str); 4] = [

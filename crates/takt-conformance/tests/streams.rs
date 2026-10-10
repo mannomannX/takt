@@ -308,3 +308,69 @@ fn the_window_is_empty_in_entry_mode_on_both_sides() {
     let diffs = compare(&interpreted, &native);
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
+
+/// **Je `send` ein Element, auch durch den Sendepuffer** (8.3, 8.8): Ein
+/// Modell sendet in drei Ticks je zwei Zeilen, der Treiber holt zehn Byte je
+/// Tick ab. Eine Zeile kommt an, wenn ihr letztes Byte abgeholt ist, auch
+/// ueber Tickgrenzen hinweg; zwei Zeilen, die ein Tick vollendet, kommen als
+/// zwei Elemente an statt als eine zusammengeklebte. Im Interpreter und im
+/// erzeugten Code gleich.
+#[test]
+fn every_send_into_a_coupled_stream_is_one_element() {
+    let p = program_of(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         input  rx     : stream<line<32>> @ hw(\"uart0/rx\") with max_rate = 2000 Hz, framing = lines\n\
+         output rx_sim : stream<line<32>> @ sim(\"uart0/rx\") with capacity = 64, max_rate = 1000 Hz\n\
+         output n      : int in 0..99 @ hw(\"o/n\") with safe = 0\n\
+         output last   : int in 0..99 @ hw(\"o/last\") with safe = 0\n\n\
+         machine model:\n    var k : int in 0..9 = 0\n    initial RUN\n    state RUN:\n        loop:\n\
+         \x20           if k < 3:\n                send rx_sim, \"first line\"\n                send rx_sim, \"second\"\n\
+         \x20           k = min(k + 1, 9)\n\n\
+         machine reader:\n    var c : int in 0..99 = 0\n    initial RUN\n    state RUN:\n        on rx as e:\n\
+         \x20           c = (c + 1) % 100\n            n = c\n            last = e.text.len\n",
+    );
+    let options = takt_interp::RunOptions { ticks: 8, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    // Sechs Zeilen zu 10 und 6 Byte, 48 Byte bei 10 je Tick: Im Tick 5 kommen
+    // zwei an, und keine ist laenger als zehn Zeichen.
+    for line in ["t=1 out last 10", "t=2 out last 6", "t=5 out n 6"] {
+        assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
+    }
+    assert!(!interpreted.contains("out last 16"), "zwei Zeilen zu einer verklebt:\n{interpreted}");
+    let Some(clang) = common::clang() else { return };
+    let native = common::run_native_all_with(&clang, &p, "je_send", 8, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}
+
+/// **Ein Modell liest einen Ausgabestrom in seinem Elementtyp** (8.3, 8.6):
+/// Was der Treiber eines `stream<u8>` abholt, kommt Byte fuer Byte an, nicht
+/// als ein Block. Der Interpreter gab dem Leser den Block als Element, und
+/// ein `u8` trug danach eine Bytefolge bis in einen Latch des Programms;
+/// der erzeugte Code las davon das erste Byte.
+#[test]
+fn a_model_reads_an_output_stream_byte_by_byte() {
+    let p = program_of(
+        "system:\n    language = 1\n    tick     = 1 ms\n\n\
+         output tx       : stream<u8> @ hw(\"uart0/tx\") with max_rate = 11520 Hz, capacity = 64\n\
+         input  back     : u8 @ hw(\"gpio/back\")\n\
+         output back_sim : u8 @ sim(\"gpio/back\")\n\
+         output echo     : u8 @ hw(\"gpio/echo\") with safe = 0\n\
+         output count    : int in 0..99 @ hw(\"o/count\") with safe = 0\n\n\
+         machine ctl:\n    initial A\n    state A:\n        enter:\n            send tx, \"HELLO WORLD 123\\n\"\n\
+         \x20       when true: -> B\n    state B:\n        loop:\n            echo = back.or(0)\n\n\
+         machine model:\n    var last : u8 = 0\n    var n : int in 0..99 = 0\n    initial RUN\n    state RUN:\n\
+         \x20       loop:\n            back_sim = last\n            count = n\n        on tx as b:\n\
+         \x20           last = b.data\n            n = min(n + 1, 99)\n",
+    );
+    let options = takt_interp::RunOptions { ticks: 5, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    // Elf Byte im Tick 0, fuenf im Tick 1: das letzte Byte je Block, alle 16.
+    for line in ["t=2 out back_sim 68", "t=3 out back_sim 10", "t=4 out echo 10", "t=3 out count 16"] {
+        assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
+    }
+    let Some(clang) = common::clang() else { return };
+    let native = common::run_native_all_with(&clang, &p, "gelesener_strom", 5, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let diffs = compare(&interpreted, &native);
+    assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+}

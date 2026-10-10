@@ -1,7 +1,0 @@
-# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritt 28c)
-# ziel check valid watch 1118 1119 4
-# ticks 7
-t=0 in p -0.0
-t=3 in p 2.0000000000000004
-t=4 in p 0.0 bad
-t=5 in p 5e-324

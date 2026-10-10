@@ -1,0 +1,9 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)
+# ziel uebergang dut 3 OPEN->CLOSED @855
+# ticks 7
+t=0 in p -0.0
+t=1 in p 0.0
+t=2 in p 6.000000000931323
+t=3 in p 0.0
+t=4 in p 32.0
+t=5 in p 0.0

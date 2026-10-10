@@ -1,0 +1,5 @@
+takt-unfired 1
+program b49ca4d2af81c75f1aaacdbd4080900d564b3a588658b30e6110818bddc96d5f
+solver z3 4.13.4
+uebergang m k=0 RUN.S0->SLOW @547
+uebergang m k=0 RUN.S1->RUN.S2 @594

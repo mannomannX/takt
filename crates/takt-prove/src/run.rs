@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use takt_interp::run::element_value;
 use takt_interp::trace::{LineKind, TraceLine, parse_value, render_line, value_text};
-use takt_interp::value::{Quality, Sample, Seen, Value};
+use takt_interp::value::{Quality, Seen, Value};
 use takt_interp::{RunResult, Trace};
 use takt_mir::machine::FaultKind;
 use takt_mir::program::{Channel, Direction};
@@ -71,6 +71,9 @@ pub const UNMODELLED: &[(&str, &str)] = &[
     // erzeugte Code schreibt auch das.
     ("property", "was erst das Laufende entscheidet, entscheidet das Modell nicht"),
     ("assumption", "wie `property`"),
+    // 4.5: Die Fertigstellung eines Jobs ist eine Eingabe des Modells; es
+    // nimmt sie aus dem Lauf des Interpreters.
+    ("job", "eine Eingabe des Modells, aus dem Lauf des Interpreters"),
 ];
 
 impl Model {
@@ -97,9 +100,21 @@ impl Model {
             // `safe` stehen im Zustand danach und im Trace im selben Tick.
             if shown.get(ENDED) == Some(&Val::Bool(true)) {
                 writer.end(k, &shown)?;
-                let after = runner.step(self, k + 1, Some(&next), &inputs)?;
+                let (after, _) = runner.advance(self, k + 1, Some(&next), &inputs)?;
                 writer.changes(k, &runner.observed(self, &after))?;
                 break;
+            }
+            // 13.6: Das Szenario ist am Ende, wenn es in `FAULTED` steht oder
+            // in einer Kette ohne Uebergang; ab Tick 1, wie im Interpreter.
+            if let Some((name, done)) = &self.scenario
+                && k > 0
+            {
+                let faulted = shown.get(&format!("s.{name}.faulted")) == Some(&Val::Bool(true));
+                let leaf = int(&shown, &format!("s.{name}.leaf"), k)?;
+                if faulted || done.contains(&leaf) {
+                    writer.push(k, LineKind::End { reason: "scenario".into() });
+                    break;
+                }
             }
             state = Some(next);
         }
@@ -168,6 +183,30 @@ impl Runner {
         pre: Option<&[Val]>,
         inputs: &BTreeMap<(u64, String), Val>,
     ) -> Result<Vec<Val>, Stop> {
+        let (next, given) = self.advance(model, k, pre, inputs)?;
+        let holds = self.invariants.0.eval(&gather(&self.invariants.1, &next, &given));
+        if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
+            return Err(Stop::Violated { tick: k, what: format!("Invariante {i}") });
+        }
+        let holds = self.assumptions.0.eval(&gather(&self.assumptions.1, &next, &given));
+        if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
+            return Err(Stop::Violated { tick: k, what: format!("Annahme {i}") });
+        }
+        let goals = self.goals.0.eval(&gather(&self.goals.1, &next, &given));
+        self.held = goals.iter().map(|v| *v == Val::Bool(true)).collect();
+        Ok(next)
+    }
+
+    /// Der Zustand nach dem Tick `k` und die Eingaben, aus denen er folgt,
+    /// ohne Pruefung: Nach dem Ende eines Laufs (12.7) laeuft kein Tick
+    /// mehr, fuer den ein Rand etwas zusicherte.
+    fn advance(
+        &mut self,
+        model: &Model,
+        k: u64,
+        pre: Option<&[Val]>,
+        inputs: &BTreeMap<(u64, String), Val>,
+    ) -> Result<(Vec<Val>, Vec<Val>), Stop> {
         let now: HashMap<&str, Val> =
             inputs.range((k, String::new())..(k + 1, String::new())).map(|((_, n), v)| (n.as_str(), *v)).collect();
         let mut given = Vec::with_capacity(model.inputs.len());
@@ -188,17 +227,7 @@ impl Runner {
             }
             Some(pre) => self.next.0.eval(&gather(&self.next.1, pre, &given)),
         };
-        let holds = self.invariants.0.eval(&gather(&self.invariants.1, &next, &given));
-        if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
-            return Err(Stop::Violated { tick: k, what: format!("Invariante {i}") });
-        }
-        let holds = self.assumptions.0.eval(&gather(&self.assumptions.1, &next, &given));
-        if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
-            return Err(Stop::Violated { tick: k, what: format!("Annahme {i}") });
-        }
-        let goals = self.goals.0.eval(&gather(&self.goals.1, &next, &given));
-        self.held = goals.iter().map(|v| *v == Val::Bool(true)).collect();
-        Ok(next)
+        Ok((next, given))
     }
 
     /// Die Orte des Zustands, die der Trace liest, mit ihrem Wert.
@@ -309,6 +338,16 @@ fn inputs(
                 LineKind::Command { name } => {
                     out.insert((k, format!("i.cmd.{name}")), Val::Bool(true));
                 }
+                LineKind::Abort => {
+                    out.insert((k, crate::encode::OPERATOR_ABORT.to_string()), Val::Bool(true));
+                }
+                // 7.3: wie der Interpreter (`pend_runtime`); `Driver` nennt den Output.
+                LineKind::Runtime { kind, output } => {
+                    let found = crate::encode::RUNTIME_KINDS.iter().find(|r| format!("{r:?}") == *kind);
+                    let Some(&r) = found else { return gap(k, format!("`runtime {kind}`")) };
+                    let output = output.as_deref().filter(|_| r == takt_mir::machine::RuntimeKind::Driver);
+                    out.insert((k, crate::encode::runtime_input(r, output)), Val::Bool(true));
+                }
                 LineKind::Input { channel, sample } => {
                     let c = p.channels.iter().find(|c| c.name == *channel && c.dir == Direction::Input);
                     let Some(c) = c else { return gap(k, format!("`in {channel}`: kein Input des Programms")) };
@@ -320,6 +359,11 @@ fn inputs(
                         || sample.seq.is_some()
                     {
                         return gap(k, format!("`in {channel}`: Qualitaet, Alter und Folgenummer eines Stromelements"));
+                    }
+                    // Was das Modell nicht vom Rand nimmt, ginge sonst still verloren.
+                    let count = format!("i.stream.{channel}.n");
+                    if !model.inputs.iter().any(|(n, _)| *n == count) {
+                        return gap(k, format!("`in {channel}`: ein Element, das das Modell nicht vom Rand nimmt"));
                     }
                     let j = delivered.entry(channel.as_str()).or_insert(0);
                     let base = format!("i.stream.{channel}.{j}");
@@ -431,11 +475,27 @@ fn sample_inputs(
         }
         _ => {}
     }
-    let checked = seen.delivery.is_some() && matches!(s.quality, Quality::Good | Quality::Suspect);
-    if let Some(Sample { value: Some(Value::Samples(items)), .. }) = seen.delivery.as_ref().filter(|_| checked) {
-        for (j, x) in items.iter().enumerate() {
-            out.insert((k, format!("i.{name}.d[{j}]")), val_of(x).ok_or_else(unreadable)?);
+    // Was der Rand prueft (12.6, Zeilen 3 und 4): eine Lieferung mit Wert
+    // ausser `Bad`, ein `samples`-Array nur ganz. Ein Skalar kam durch, wenn
+    // er Qualitaet und Wert seines Treibers behielt (`pass`); bei einem Array
+    // heisst `pass`, dass der Rand es pruefte.
+    let Some(delivery) = seen.delivery.as_ref() else { return Ok(()) };
+    let Some(value) = delivery.value.as_ref().filter(|_| delivery.quality != Quality::Bad) else { return Ok(()) };
+    match (value, p.types.get(c.ty)) {
+        (Value::Samples(items), Type::Samples { len, .. }) if items.len() == *len as usize => {
+            out.insert((k, format!("i.{name}.pass")), Val::Bool(true));
+            for (j, x) in items.iter().enumerate() {
+                out.insert((k, format!("i.{name}.d[{j}]")), val_of(x).ok_or_else(unreadable)?);
+            }
         }
+        (Value::Samples(_), _) => {}
+        (v, _) if s.quality == delivery.quality && s.value.as_ref() == Some(v) => {
+            out.insert((k, format!("i.{name}.pass")), Val::Bool(true));
+            if let Some(x) = val_of(v) {
+                out.insert((k, format!("i.{name}.d")), x);
+            }
+        }
+        _ => {}
     }
     Ok(())
 }

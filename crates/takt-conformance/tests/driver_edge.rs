@@ -94,10 +94,13 @@ t=22 in p 11 t=210000000
 t=23 in p 12
 # Zeile 5: eine Zeile ueber `line<16>` kommt gekuerzt an, kein Verstoss
 t=23 in rx \"0123456789ABCDEFGHIJ\" seq=14
+# Zeile 2 (FB-506): `Suspect` ohne Wert, dann wieder vertragsgemaess
+t=24 in k suspect
+t=25 in k 6
 ";
 
 /// So viele Ticks laufen beide Seiten: einer nach dem letzten Fall.
-const TICKS: u64 = 25;
+const TICKS: u64 = 26;
 
 fn program() -> Program {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
@@ -144,6 +147,8 @@ fn every_contract_violation_shows_in_the_golden_trace() {
             "t=19 driver uart degraded seq",
             "t=20 driver uart recovered",
             "t=22 driver adc warped p",
+            "t=24 driver dio degraded flags",
+            "t=25 driver dio recovered",
         ],
         "{trace}"
     );

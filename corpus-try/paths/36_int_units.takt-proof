@@ -1,11 +1,8 @@
 takt-proof 2
 program 6ed5a8ae6128aa6d57455a838a505132c1526a4d74738a663ee7920d3228256d
 solver z3 4.13.4
-site 1042 1051 ovf k=5
 site 1098 1109 ovf k=5
 site 1172 1184 ovf k=5
 site 1276 1287 ovf k=5
 site 10757 10766 ovf k=5
-site 10836 10853 div k=5
-site 10837 10845 ovf k=5
 site 10876 10885 ovf k=5

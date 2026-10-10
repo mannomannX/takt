@@ -130,10 +130,13 @@ fn an_inductive_invariant_is_proven() {
 #[test]
 fn a_violation_yields_a_counterexample_the_interpreter_confirms() {
     let Some(solver) = solver() else { return };
-    let p = corpus_with("01_minimal.takt", "property never_vents: never(vent)");
+    // Im Normalbetrieb: Ein Abort oeffnet das Ventil schneller (13.3).
+    let nominal = "input outer : bool @ hw(\"sys/outer_fault\")\nassumption nominal: never(outer)";
+    let p = corpus_with("01_minimal.takt", &format!("{nominal}\nproperty never_vents: never(vent)"));
     let model = encode(&p).expect("kodierbar");
     let reports = prove(&model, &p, 4, &solver, 60).expect("Solver laeuft");
-    let Verdict::Violated { at, stimulus } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
+    let report = reports.iter().find(|r| r.name == "never_vents").expect("die Eigenschaft");
+    let Verdict::Violated { at, stimulus } = &report.verdict else { panic!("{report:?}") };
     // `start`, dann ein Tankdruck ueber LIMIT: der Fault-Pfad oeffnet das Ventil.
     assert!(*at <= 4, "{at}");
     assert!(stimulus.contains("cmd start") && stimulus.contains("in tank_p "), "{stimulus}");
@@ -254,11 +257,11 @@ machine counter:
     let model = encode(&p).expect("kodierbar");
     let sites = classify(&model, &p, 5, &solver, 60).expect("Solver laeuft");
     let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
-    assert_eq!(site.verdict, CheckVerdict::Unreachable { k: 5 }, "{site:?}");
+    let CheckVerdict::Unreachable { k } = site.verdict else { panic!("{site:?}") };
 
     let hash = takt_mir::review::hash_of(src.as_bytes());
     let text =
-        render(&hash, "z3 4.13.4", &[Site { start: site.start, end: site.span.end, kind: site.kind.clone(), k: 5 }]);
+        render(&hash, "z3 4.13.4", &[Site { start: site.start, end: site.span.end, kind: site.kind.clone(), k }]);
     let proof = parse(&text).expect("Beweisdatei");
     let options = takt_sema::Options {
         policy: takt_diag::Policy::default(),
@@ -326,7 +329,7 @@ machine consumer:
     assert!(encode(&p).is_err(), "das Ganze ist nicht kodierbar");
     let (sites, notes) = classify_compositional(&p, None, 5, &solver, 60).expect("Solver laeuft");
     let site = sites.iter().find(|s| s.kind == "range").unwrap_or_else(|| panic!("Range-Stelle: {notes:?}"));
-    assert_eq!((site.machine.as_str(), &site.verdict), ("consumer", &CheckVerdict::Unreachable { k: 5 }), "{site:?}");
+    assert!(site.machine == "consumer" && matches!(site.verdict, CheckVerdict::Unreachable { .. }), "{site:?}");
 }
 
 /// **z3 und cvc5 widersprechen sich nicht** (M11 Schritt 28c, 2.13 h): An

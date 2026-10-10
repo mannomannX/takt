@@ -23,12 +23,17 @@ fn solver() -> Option<Solver> {
 }
 
 /// Ein Ventil: `go` oeffnet es fuer drei Ticks und schaerft `armed` fuer
-/// immer; in Tick 0 laeuft nur der Eintritt.
+/// immer; in Tick 0 laeuft nur der Eintritt. Die Eigenschaften meinen den
+/// Normalbetrieb: Ein Abort oder Runtime-Fault von aussen setzt die Outputs
+/// auf `safe`, und die Annahme `nominal` schliesst ihn aus (13.3).
 const VALVE: &str = "system:
     language = 1
     tick     = 10 ms
 
 command go
+
+input outer : bool @ hw(\"sys/outer_fault\")
+assumption nominal: never(outer)
 
 output valve : bool @ hw(\"o/valve\") with safe = false
 output armed : bool @ hw(\"o/armed\") with safe = false
@@ -55,7 +60,7 @@ fn verdict(formula: &str) -> Option<Verdict> {
     let model = encode(&p).expect("kodierbar");
     assert!(model.notes.iter().all(|n| !n.contains("nicht kodiert")), "{:?}", model.notes);
     let reports = prove(&model, &p, 8, &solver, 60).expect("Solver laeuft");
-    Some(reports.into_iter().next().expect("eine Eigenschaft").verdict)
+    Some(reports.into_iter().find(|r| r.name == "p").expect("die Eigenschaft `p`").verdict)
 }
 
 fn proven(formula: &str) {
@@ -167,7 +172,9 @@ fn an_open_step_names_the_depth_of_the_longest_deadline() {
 /// Die vier Eigenschaften aus 13.3 an einem Programm in ihrem Sinn: Zuenden
 /// nur mit offenem Brennstoff, aus `SAFE` zurueck nach `IDLE`, das Ventil
 /// flattert nicht, geschaerft vor dem Zuenden. Ein Abbruch waehrend des
-/// Feuerns schliesst das Ventil sofort.
+/// Feuerns schliesst das Ventil sofort. Sie meinen den Normalbetrieb (13.3):
+/// Faults von aussen in Folge hielten `hotfire` in `SAFE`, und die Annahme
+/// `nominal` schliesst sie aus.
 const HOTFIRE: &str = "system:
     language = 1
     tick     = 10 ms
@@ -177,6 +184,9 @@ enum ValveCmd: CLOSED, OPEN
 command prepare
 command fire
 command abort_test
+
+input outer : bool @ hw(\"sys/outer_fault\")
+assumption nominal: never(outer)
 
 output fuel_main : ValveCmd @ hw(\"o/fuel\")  with safe = CLOSED
 output valve     : ValveCmd @ hw(\"o/valve\") with safe = CLOSED

@@ -8,8 +8,10 @@
 //!
 //! **Dieselbe Liste wie die Golden-Traces** (KOR-032): Jede Zeile von
 //! `corpus-try/sim/manifest.csv` — Beispiel, Szenario, Ticks, Profil — laeuft
-//! hier mit ihrem Stimulus (`<szenario>.stim.trace`) in beiden
-//! Implementierungen. Eine Handliste liess `sim/11_4` (die Bloecke der
+//! hier mit ihrem Stimulus (`<szenario>.stim.trace`) im Interpreter, im
+//! erzeugten Code und im Modell von `takt prove` (M11 Schritt 29b): Die
+//! vollstaendigen Programme der Referenz sind Korpus wie jedes andere, mit
+//! dem Verhalten, das ihr Text nennt, als Golden-Trace. Eine Handliste liess `sim/11_4` (die Bloecke der
 //! Standardbibliothek) und `sim/12_6` (`max_slew`, `debounce` am Rand) aus,
 //! und ohne Stimulus sah der Vergleich nur den Anfangszustand.
 //!
@@ -28,8 +30,8 @@ use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
 use takt_diag::Policy;
 use takt_interp::{RunOptions, Trace, run};
-use takt_mir::Program;
 use takt_mir::machine::MachineKind;
+use takt_mir::{MachineId, Program};
 use takt_sema::{Build, Options};
 
 mod common;
@@ -43,6 +45,19 @@ const GAPS: &[(&str, &str, &str)] = &[(
     "FB-402: Der Wirtsrahmen schreibt keinen Record-Ausgang mit `bytes`-Feld. \
      TODO(M11 Schritt 9): mit dem Produktrahmen",
 )];
+
+/// Was das Modell an einem Beispiel nicht kodiert (FB-497): Beispiel, die
+/// Meldung von `takt_prove::encode` oder `Model::run` und was dahinter
+/// steht. Eine Ratsche wie [`GAPS`]: Jede Luecke muss noch auftreten, eine
+/// neue faellt nie hinein.
+const MODEL_GAPS: &[(&str, &str, &str)] = &[
+    (
+        "14_8",
+        "Eingabestrom aus dem `sim`-Ausgang einer anderen Maschine",
+        "der Kodierer ordnet den Sendestrom des Flash-Modells (`flash_model`, 8.10) in `fallback` und `no_image` keiner kodierten Maschine zu",
+    ),
+    ("14_8", "ein Zustand aus mehr als 32768 Blaettern", "das Flash-Modell, ein Zustand ueber `STATE_LIMIT` (FB-485)"),
+];
 
 /// Eine Zeile von `corpus-try/sim/manifest.csv`.
 struct Case {
@@ -135,14 +150,16 @@ fn tick_of(line: &str) -> u64 {
 }
 
 /// **Die Abnahme.** Jedes Szenario jedes Beispiels liefert mit seinem
-/// Stimulus im Interpreter und im erzeugten Code dieselben Outputs (Satz
-/// 9.4.4).
+/// Stimulus im Interpreter, im erzeugten Code und im Modell dieselben
+/// Outputs (Satz 9.4.4); zwischen Interpreter und Modell gilt der strengere
+/// Vergleich Zeile fuer Zeile (`takt_prove::mismatches`).
 #[test]
 fn the_reference_examples_agree_on_both_paths() {
     let Some(clang) = common::clang() else { return };
     let cases = cases();
     let mut failed = Vec::new();
     let mut gaps_seen = Vec::new();
+    let mut model_gaps = Vec::new();
     for case in &cases {
         let label = case.label();
         let p = example(&case.example, case.profile.as_deref());
@@ -152,6 +169,7 @@ fn the_reference_examples_agree_on_both_paths() {
             ticks: case.ticks,
             profile: case.profile.clone(),
             scenario: scenario.clone(),
+            inputs: true,
             ..Default::default()
         };
         let result = match run(&p, &stimulus, &options) {
@@ -165,6 +183,14 @@ fn the_reference_examples_agree_on_both_paths() {
         let name = format!("{}_{}", case.example, case.scenario);
         let profiled = case.profiled(&p);
         let p = profiled.as_ref().unwrap_or(&p);
+        match modelled(p, scenario.as_deref(), &stimulus, &result, case.ticks) {
+            Ok(diffs) if diffs.is_empty() => {}
+            Ok(diffs) => {
+                let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+                failed.push(format!("{label}: Interpreter und Modell weichen ab:\n{}", list.join("\n")));
+            }
+            Err(why) => model_gaps.push((case.example.clone(), why)),
+        }
         let native = match &scenario {
             Some(s) => common::run_native_scenario_with(&clang, p, &name, s, case.ticks, &inputs),
             None => common::run_native_all_with(&clang, p, &name, case.ticks, &inputs),
@@ -206,6 +232,45 @@ fn the_reference_examples_agree_on_both_paths() {
             gaps_seen.iter().any(|(n, o)| n == example && o == output),
             "die Luecke {example} `{output}` ist geschlossen; den Eintrag in `GAPS` entfernen ({why})"
         );
+    }
+    let mut unexpected: Vec<String> = model_gaps
+        .iter()
+        .filter(|(n, why)| !MODEL_GAPS.iter().any(|(e, w, _)| e == n && why.contains(w)))
+        .map(|(n, why)| format!("{n}: das Modell rechnet nicht, `MODEL_GAPS` nennt das nicht: {why}"))
+        .collect();
+    unexpected.dedup();
+    for (example, message, why) in MODEL_GAPS {
+        if !model_gaps.iter().any(|(n, w)| n == example && w.contains(message)) {
+            unexpected
+                .push(format!("{example}: das Modell rechnet wieder; `MODEL_GAPS` nennt noch `{message}` ({why})"));
+        }
+    }
+    assert!(unexpected.is_empty(), "{}", unexpected.join("\n"));
+}
+
+/// Der Lauf des Modells zum Lauf `result` des Interpreters, mit dem
+/// Szenario, das mitlief: die Abweichungen nach `takt_prove::mismatches`;
+/// `Err` mit dem Grund, wenn das Modell das Beispiel nicht kodiert.
+fn modelled(
+    p: &Program,
+    scenario: Option<&str>,
+    stimulus: &Trace,
+    result: &takt_interp::RunResult,
+    ticks: u64,
+) -> Result<Vec<String>, String> {
+    let model = match scenario {
+        Some(s) => {
+            let id = p.machines.iter().position(|m| m.name == s).ok_or_else(|| format!("kein Szenario `{s}`"))?;
+            takt_prove::encode_scenario(p, MachineId(id as u32))
+        }
+        None => takt_prove::encode(p),
+    };
+    let model = model.map_err(|e| e.what)?;
+    match model.run(p, stimulus, result, ticks) {
+        Ok(traced) => Ok(takt_prove::mismatches(&result.trace, &traced)),
+        Err(e @ takt_prove::Stop::Gap { .. }) => Err(e.to_string()),
+        // Eine Invariante, die im Lauf nicht haelt, ist ein Fehler des Modells.
+        Err(e) => Ok(vec![e.to_string()]),
     }
 }
 

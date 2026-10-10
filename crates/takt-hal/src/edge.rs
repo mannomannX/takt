@@ -163,7 +163,11 @@ impl Edge {
         let reading = |r: &Reading<V>| contract::Delivery {
             channel: r.channel.0,
             element: false,
-            bad_with_value: r.quality == Quality::Bad && r.value.is_some(),
+            inconsistent: match r.quality {
+                Quality::Bad => r.value.is_some(),
+                Quality::Suspect => r.value.is_none(),
+                Quality::Good | Quality::Stale => false,
+            },
             t: r.t,
             age: r.age,
             seq: 0,
@@ -172,7 +176,7 @@ impl Edge {
         let element = |e: &Element<V>| contract::Delivery {
             channel: e.channel.0,
             element: true,
-            bad_with_value: false,
+            inconsistent: false,
             t: e.t,
             age: 0,
             seq: e.seq,

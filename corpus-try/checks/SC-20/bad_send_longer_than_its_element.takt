@@ -1,0 +1,25 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-20 (8.3): Speist ein Ausgabestrom einen Eingabestrom aus Text, ist
+# jedes `send` ein Element; eine Zeile bis 16 Byte passt nicht in ein
+# Element zu 8.
+
+input  rx     : stream<line<8>>  @ hw("uart0/rx")  with max_rate = 100 Hz, framing = lines
+output rx_sim : stream<line<16>> @ sim("uart0/rx") with capacity = 64
+output n      : int in 0..99     @ hw("o/n")       with safe = 0
+
+machine model:
+    initial RUN
+
+    state RUN:
+        enter:
+            send rx_sim, "ok"  # ~ SC-20
+
+machine listener:
+    initial RUN
+
+    state RUN:
+        on rx as e:
+            n = e.text.len

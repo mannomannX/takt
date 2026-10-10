@@ -27,6 +27,7 @@ pub mod board;
 pub mod bringup;
 pub mod cases;
 mod deliveries;
+pub mod generated;
 pub mod harness;
 pub mod limits;
 pub mod math;

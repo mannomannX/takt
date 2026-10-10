@@ -314,10 +314,30 @@ pub fn raised(t: &mut Text, p: &Program, x: &Prefix) {
     let abort = takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort);
     let _ = writeln!(t.fields, "    _Bool raised[{n}];");
     let _ = writeln!(t.fields, "    int pending[{n}];");
+    // 13.3: Kam in diesem Tick ein Fault von aussen? `sys/outer_fault`.
+    let _ = writeln!(t.fields, "    _Bool outer;");
     let s = &mut t.code;
     let _ = writeln!(s, "static void takt_pend(struct {x}_arena *a, int m, int code) {{");
+    let _ = writeln!(s, "    a->outer = 1;");
     let _ = writeln!(s, "    if (a->pending[m] != {abort}) a->pending[m] = code;");
     let _ = writeln!(s, "}}");
+}
+
+/// `sys/outer_fault` (13.3): wahr im Tick, in dem `takt_pend` einen Fault von
+/// aussen vorgemerkt hat, gut und frisch. Der Kern stellt den Kanal; kein
+/// Treiber tastet ihn ab. Danach beginnt der naechste Tick ohne.
+pub fn outer_fault(s: &mut String, p: &Program, indent: &str) {
+    let Some(c) = takt_mir::sys::outer_fault(p) else { return };
+    let name = &p.channels[c].name;
+    let (Some(at), Some(q)) = (takt_llvm::image::offset_of(takt_mir::ChannelId(c as u32), p), quality_offset(p, name))
+    else {
+        return;
+    };
+    let _ = writeln!(s, "{indent}a->image[{at}] = a->outer; a->image[{q}] = 0; /* {name} */");
+    if let Some(age) = age_offset(p, name) {
+        let _ = writeln!(s, "{indent}*(long long *)(a->image + {age}) = 0;");
+    }
+    let _ = writeln!(s, "{indent}a->outer = 0;");
 }
 
 /// Die Abort-Phase (5.4, 9.4): Nach den Schritten nimmt jede Maschine mit
@@ -670,13 +690,16 @@ pub fn steps(
         // Zustand; der Schritt nimmt ihn statt seines Rumpfs. In `FAULTED`
         // wartet er, bis die Maschine es verlaesst (9.3).
         let i = p.machines.iter().position(|x| x.name == m.name).unwrap_or(0);
+        // 4.5, `step_m`: Ein Job wird zu Beginn des Schritts seiner Maschine
+        // fertig, im ersten ab dem Tick des Modells.
+        let jobs = if m.layout.job_slots.is_empty() { String::new() } else { format!("takt_jobs_poll(a, {i}); ") };
         let live = match in_faulted(p, m) {
             Some(test) => format!(" && !({test})"),
             None => String::new(),
         };
         let _ = writeln!(
             s,
-            "{indent}{condition}{{ if (a->pending[{i}]{live}) {{ {x}_{0}_pend(a, a->pending[{i}]); a->pending[{i}] = 0; }} {x}_{0}_step(a); {x}_{0}_publish(a); }}",
+            "{indent}{condition}{{ {jobs}if (a->pending[{i}]{live}) {{ {x}_{0}_pend(a, a->pending[{i}]); a->pending[{i}] = 0; }} {x}_{0}_step(a); {x}_{0}_publish(a); }}",
             m.name
         );
     }
@@ -1224,15 +1247,27 @@ pub fn job_tables(s: &mut String, p: &Program, x: &Prefix) -> Option<(usize, u64
             (d.saturating_add(t0 - 1) / t0).to_string()
         })
         .collect();
+    // Die Slots der Maschine `m` liegen von `base[m]` bis vor `base[m + 1]`.
     let mut base = Vec::new();
     let mut acc = 0usize;
     for m in &p.machines {
         base.push(acc.to_string());
         acc += m.layout.job_slots.len();
     }
+    base.push(acc.to_string());
+    // 4.5: Maschine und Handle je Slot, fuer die Zeile `job` (FB-432).
+    let names: Vec<String> = slots
+        .iter()
+        .map(|(mi, j, _)| {
+            let m = &p.machines[*mi];
+            let handle = m.layout.job_slots[*j].handle;
+            format!("\"{} {}\"", m.name, m.vars.get(handle.index()).map_or("?", |v| v.name.as_str()))
+        })
+        .collect();
+    let _ = writeln!(s, "static const char *const takt_job_names[{}] = {{ {} }};", slots.len(), names.join(", "));
     let _ = writeln!(s, "static const long long takt_job_at[{}] = {{ {} }};", slots.len(), at.join(", "));
     let _ = writeln!(s, "static const int takt_job_ticks[{}] = {{ {} }};", slots.len(), ticks.join(", "));
-    let _ = writeln!(s, "static const int takt_job_base[{}] = {{ {} }};", base.len().max(1), base.join(", "));
+    let _ = writeln!(s, "static const int takt_job_base[{}] = {{ {} }};", base.len(), base.join(", "));
     s.push_str(JOBS_C);
     let _ = writeln!(s, "static void takt_job_image(struct {x}_arena *a, int i, int done, int ok, int err) {{");
     let _ = writeln!(s, "    unsigned char *e = a->image + takt_job_at[i];");
@@ -1242,6 +1277,41 @@ pub fn job_tables(s: &mut String, p: &Program, x: &Prefix) -> Option<(usize, u64
     );
     let _ = writeln!(s, "}}");
     Some((slots.len(), out_max))
+}
+
+/// Die Signale des Ticks als Zeilen `signal <maschine> <name>` (5.8,
+/// FB-432), wie der Interpreter sie nach der Abort-Phase beobachtet: Was
+/// eine Maschine hob, steht bis zum Commit in ihrer Ψ-Bank.
+pub fn signal_lines(
+    s: &mut String,
+    p: &Program,
+    driven: &[&takt_mir::machine::Machine],
+    indent: &str,
+    tick: &str,
+    trace: crate::streams::Trace,
+) {
+    use takt_llvm::psi::{Field, field_offset, region_offset};
+    for m in driven {
+        let Some(id) = p.machines.iter().position(|x| x.name == m.name) else { continue };
+        let id = takt_mir::MachineId(id as u32);
+        let Some(base) = region_offset(id, true, p) else { continue };
+        for (i, sig) in m.signals.iter().enumerate() {
+            let Some(off) = field_offset(id, Field::Signal(takt_mir::SignalId(i as u32)), p) else { continue };
+            let at = base + off;
+            let _ = match trace {
+                crate::streams::Trace::Stdio => writeln!(
+                    s,
+                    "{indent}if (a->image[{at}]) printf(\"t=%lld signal {} {}\\n\", (long long)({tick}));",
+                    m.name, sig.name
+                ),
+                crate::streams::Trace::Board => writeln!(
+                    s,
+                    "{indent}if (a->image[{at}]) {{ takt_board_trace(\"t=\"); takt_board_trace_i64({tick}); takt_board_trace(\" signal {} {}\\n\"); }}",
+                    m.name, sig.name
+                ),
+            };
+        }
+    }
 }
 
 /// Ruft die native Funktion eines Jobs (4.5): `native` waehlt sie, `args`

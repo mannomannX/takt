@@ -1,0 +1,4 @@
+takt-unfired 1
+program 5165a4a921bbe17ccb51f6bf5095a330d2bf49f91a6a721005c02e48ad084845
+solver z3 4.13.4
+uebergang dut k=5 OPEN->LOCKED @889

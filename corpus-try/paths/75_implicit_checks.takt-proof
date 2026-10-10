@@ -4,6 +4,6 @@ solver z3 4.13.4
 site 1262 1271 range k=5
 site 1607 1616 range k=5
 site 1951 1960 range k=5
-site 2269 2290 range k=5
-site 2275 2290 ovf k=5
+site 2269 2290 range k=0
+site 2275 2290 ovf k=0
 site 2303 2312 range k=5

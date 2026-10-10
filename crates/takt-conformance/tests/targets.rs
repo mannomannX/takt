@@ -65,6 +65,19 @@ fn cross_available() -> bool {
             .is_ok_and(|o| o.status.success())
 }
 
+/// Die Native-Bibliothek eines Ziels (`takt-native-abi`): Treiberrand,
+/// Natives und korrekt gerundete Mathematik, die der erzeugte Code und der
+/// Rahmen rufen. Je Ziel einmal gebaut.
+fn natives(target: Target) -> Result<std::path::PathBuf, String> {
+    static HOST: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
+    static AARCH64: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
+    if target == Target::AARCH64_LINUX {
+        AARCH64.get_or_init(|| takt_conformance::harness::native_library_for(Some(target.triple))).clone()
+    } else {
+        HOST.get_or_init(|| takt_conformance::harness::native_library_for(None)).clone()
+    }
+}
+
 /// Uebersetzt und laeuft ein Programm fuer ein Ziel, mit allen Maschinen
 /// wie die Abnahme — noetig fuer Programme mit Plant-Modell (8.3), deren
 /// Eingaenge sonst `Bad` blieben.
@@ -105,11 +118,20 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str) -> Result<String, 
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
     let linker = if target == Target::AARCH64_LINUX { "aarch64-linux-gnu-gcc" } else { "cc" };
-    // Auch der Linker erbt die Zusage aus 11.3: Er setzt sonst einen
-    // Zeitstempel, und zwei Uebersetzungen waeren verschieden.
-    let mut cmd = std::process::Command::new(linker);
-    let out =
-        Clang::deterministic(&mut cmd).arg(&c).arg(&obj).arg("-o").arg(&exe).output().map_err(|e| e.to_string())?;
+    // Auch der Linker erbt die Zusage aus 11.3. Er ist gcc, nicht clang: Die
+    // Flagge gegen den Zeitstempel im COFF-Kopf kennt er nicht, und ein ELF
+    // traegt keinen; es bleibt `SOURCE_DATE_EPOCH`. Die Rust-Bibliothek
+    // braucht unter glibc Threads, `dlopen` und `libm`.
+    let out = std::process::Command::new(linker)
+        .env("SOURCE_DATE_EPOCH", "0")
+        .arg(&c)
+        .arg(&obj)
+        .arg(natives(target)?)
+        .args(["-lpthread", "-ldl", "-lm"])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }

@@ -1,7 +1,0 @@
-takt-proof 2
-program b8d014c9fdd86e5671e8ca53928cf23b846c8715a10c6818c4c5ed8b3944ae74
-solver z3 4.13.4
-site 741 752 range k=5
-site 746 752 ovf k=5
-site 769 780 range k=5
-site 774 780 ovf k=5

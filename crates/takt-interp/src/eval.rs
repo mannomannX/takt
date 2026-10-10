@@ -844,6 +844,13 @@ impl<'p, 'o> Ctx<'p, 'o> {
 
     /// Eingefuegte Pruefung (M3-Knoten; die Semantik gilt ab M1).
     fn checked(&mut self, inner: &Expr, kind: &CheckedKind, span: Span) -> EvalResult<Value> {
+        let value = self.check(inner, kind, span)?;
+        self.outer.site(span, takt_mir::analysis::walk::tag(kind));
+        Ok(value)
+    }
+
+    /// Die Pruefung eines Knotens `Checked`; ob er bestand, zaehlt `checked`.
+    fn check(&mut self, inner: &Expr, kind: &CheckedKind, span: Span) -> EvalResult<Value> {
         match kind {
             CheckedKind::Missing => match self.eval(inner)? {
                 Value::Optional(Some(v)) => Ok(*v),

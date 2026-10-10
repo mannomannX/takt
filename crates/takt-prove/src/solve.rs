@@ -315,6 +315,84 @@ pub fn classify_compositional(
     Ok((out, notes))
 }
 
+/// Ein Uebergang mit Urteil (M11 Schritt 29): ein Pfad, auf dem er genommen
+/// wird, bewiesen nie genommen, oder unentschieden.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransitionReport {
+    /// Die Maschine.
+    pub machine: String,
+    /// Der Schluessel der Coverage (`VON->NACH @<anfang>`).
+    pub key: String,
+    /// Das Urteil; `Reachable` traegt den Tick, in dem der Interpreter ihn
+    /// nimmt.
+    pub verdict: CheckVerdict,
+}
+
+/// Klassifiziert die Uebergaenge `which` (Maschine, Schluessel der Coverage)
+/// wie Pruefstellen: Einen Pfad bestaetigt der Interpreter an seiner
+/// Coverage; was nicht im Modell steht, fehlt im Ergebnis.
+pub fn classify_transitions(
+    model: &Model,
+    program: &Program,
+    which: &[(String, String)],
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+) -> Result<Vec<TransitionReport>, String> {
+    let model = &strengthened(model, solver, timeout_s)?;
+    let mut out = Vec::new();
+    for (i, goal) in model.transitions.iter().enumerate() {
+        if !which.iter().any(|(m, k)| *m == goal.machine && *k == goal.kind) {
+            continue;
+        }
+        let target = Target::Transition(i);
+        let bmc = solver.run(&query(model, depth, target, Query::Bmc), timeout_s, "transition-bmc")?;
+        let verdict = match answer(&bmc) {
+            "sat" => {
+                let values = parse_values(&bmc, "@");
+                let stimulus = stimulus(&values, program, depth);
+                match taken_at(program, &goal.machine, &goal.kind, &stimulus, depth) {
+                    Some(at) => CheckVerdict::Reachable { at, stimulus },
+                    None => CheckVerdict::Undecided {
+                        reason: format!(
+                            "der Solver fand einen Pfad bis Tiefe {depth}, der Interpreter nimmt den Uebergang nicht — {}:\n{stimulus}",
+                            unconfirmed(model)
+                        ),
+                    },
+                }
+            }
+            "unsat" => {
+                let ind = solver.run(&query(model, depth, target, Query::Induction), timeout_s, "transition-ind")?;
+                match answer(&ind) {
+                    "unsat" => CheckVerdict::Unreachable { k: depth },
+                    "sat" => match invariant(model, target, solver, timeout_s)? {
+                        Some(true) => CheckVerdict::Unreachable { k: 0 },
+                        found => CheckVerdict::Undecided {
+                            reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, found)),
+                        },
+                    },
+                    other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
+                }
+            }
+            other => CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") },
+        };
+        out.push(TransitionReport { machine: goal.machine.clone(), key: goal.kind.clone(), verdict });
+    }
+    Ok(out)
+}
+
+/// Der erste Tick bis `depth`, nach dem der Interpreter mit `stimulus` den
+/// Uebergang `key` der Maschine `machine` genommen hat.
+pub fn taken_at(program: &Program, machine: &str, key: &str, stimulus: &str, depth: u32) -> Option<u64> {
+    let stim = takt_interp::Trace::parse(stimulus).ok()?;
+    (0..=u64::from(depth)).find(|&ticks| {
+        let options = takt_interp::RunOptions { ticks, ..Default::default() };
+        takt_interp::run(program, &stim, &options).is_ok_and(|r| {
+            r.coverage.hits.contains_key(&(takt_interp::CoverKind::Transition, machine.to_string(), key.to_string()))
+        })
+    })
+}
+
 fn report(site: &crate::encode::CheckSite, verdict: CheckVerdict) -> CheckReport {
     CheckReport { start: site.start, span: site.span, machine: site.machine.clone(), kind: site.kind.clone(), verdict }
 }
@@ -557,17 +635,7 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
 /// und so prueft der Vergleich, dass ein gespeicherter Pfad sein Ziel noch
 /// erreicht (M11 Schritt 28c).
 pub fn fault_at(r: &takt_interp::RunResult, machine: &str, kind: &str, span: takt_diag::Span) -> Option<u64> {
-    use takt_mir::machine::{ArithKind, FaultKind};
-    let implicit = match kind {
-        "range" => FaultKind::Range,
-        "div" => FaultKind::Arithmetic(ArithKind::DivZero),
-        "ovf" => FaultKind::Arithmetic(ArithKind::Overflow),
-        "fin" => FaultKind::Arithmetic(ArithKind::NonFinite),
-        "dom" => FaultKind::Arithmetic(ArithKind::Domain),
-        "conv" | "shift" | "index" => FaultKind::Range,
-        "missing" => FaultKind::MissingValue,
-        // Der Lesevorgang eines ungueltigen Inputs (3.5).
-        "valid" => FaultKind::SensorFault,
+    match kind {
         "check" | "expect" => {
             let name = format!("{kind} @{}", span.start);
             let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, machine.to_string(), name));
@@ -582,16 +650,14 @@ pub fn fault_at(r: &takt_interp::RunResult, machine: &str, kind: &str, span: tak
                 .find(|l| matches!(&l.kind, takt_interp::trace::LineKind::Fault { machine: m, kind: k, .. } if m == machine && k == word))
                 .map(|l| l.tick);
         }
-        _ => return None,
-    };
-    // Division, Definitionsbereich und der Index einer Zuweisungsstelle
-    // prueft der Knoten am Operanden, der Interpreter meldet den Fault an der
-    // Operation oder Anweisung, die ihn umschliesst.
-    let at = |s: takt_diag::Span| match kind {
-        "div" | "dom" | "index" => s.start <= span.start && span.end <= s.end,
-        _ => s.start == span.start && s.end == span.end,
-    };
-    r.faults.iter().find(|f| f.machine == machine && f.kind == implicit && at(f.span)).map(|f| f.tick)
+        _ => {}
+    }
+    // Dieselbe Regel wie die Coverage der Pruefstellen: Division und
+    // Definitionsbereich prueft der Knoten am Operanden, der Interpreter
+    // meldet den Fault an der Operation, die ihn umschliesst.
+    let tag = takt_mir::analysis::walk::tag_of_name(kind)?;
+    let site = takt_interp::coverage::Site::at(span.start, span.end, tag, matches!(kind, "div" | "dom"));
+    r.faults.iter().find(|f| f.machine == machine && site.takes(f.kind, f.span)).map(|f| f.tick)
 }
 
 /// Prueft jede Eigenschaft des Modells.
@@ -602,9 +668,17 @@ pub fn prove(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<Vec<Report>, String> {
-    let model = &strengthened(model, solver, timeout_s)?;
+    // Eine Eigenschaft steht unter den Annahmen, eine Annahme nicht (13.3):
+    // Die Lemmata der Eigenschaften duerfen die Annahmen nutzen.
+    let plain = strengthened(model, solver, timeout_s)?;
+    let assumed = if model.properties.iter().any(|g| g.assumption) {
+        strengthened_with(model, solver, timeout_s, true)?
+    } else {
+        plain.clone()
+    };
     let mut out = Vec::new();
     for (i, prop) in model.properties.iter().enumerate() {
+        let model = if prop.assumption { &plain } else { &assumed };
         let bmc = solver.run(&query(model, depth, Target::Property(i), Query::Bmc), timeout_s, "bmc")?;
         let verdict = match answer(&bmc) {
             "sat" => {
@@ -644,11 +718,11 @@ pub fn prove(
 /// Anfangszustand gelten und zusammen induktiv sind. Was in einer Runde
 /// fallen kann, faellt, bis der Rest haelt; was bleibt, gilt in jedem
 /// erreichbaren Zustand.
-pub fn lemmas(model: &Model, solver: &Solver, timeout_s: u64) -> Result<Vec<Term>, String> {
-    let mut cands = surviving(model, solver, timeout_s, model.candidates.iter().collect(), false)?;
+pub fn lemmas(model: &Model, solver: &Solver, timeout_s: u64, assumed: bool) -> Result<Vec<Term>, String> {
+    let mut cands = surviving(model, solver, timeout_s, model.candidates.iter().collect(), false, assumed)?;
     loop {
         let before = cands.len();
-        cands = surviving(model, solver, timeout_s, cands, true)?;
+        cands = surviving(model, solver, timeout_s, cands, true, assumed)?;
         if cands.len() == before {
             return Ok(cands.into_iter().cloned().collect());
         }
@@ -662,11 +736,12 @@ fn surviving<'a>(
     timeout_s: u64,
     cands: Vec<&'a Term>,
     step: bool,
+    assumed: bool,
 ) -> Result<Vec<&'a Term>, String> {
     if cands.is_empty() {
         return Ok(cands);
     }
-    let text = solver.run(&houdini(model, &cands, step), timeout_s, "lemma")?;
+    let text = solver.run(&houdini(model, &cands, step, assumed), timeout_s, "lemma")?;
     let answers: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     // Ohne Antwort faellt ein Kandidat: Nur was bewiesen haelt, wird Lemma.
     Ok(cands.into_iter().enumerate().filter(|(i, _)| answers.get(*i) == Some(&"unsat")).map(|(_, c)| c).collect())
@@ -674,8 +749,14 @@ fn surviving<'a>(
 
 /// Das Modell mit seinen Hilfslemmata unter den Invarianten.
 pub fn strengthened(model: &Model, solver: &Solver, timeout_s: u64) -> Result<Model, String> {
+    strengthened_with(model, solver, timeout_s, false)
+}
+
+/// Wie [`strengthened`]; mit `assumed` unter den `assumption`-Formeln — nur
+/// fuer Eigenschaften, die unter ihnen stehen.
+fn strengthened_with(model: &Model, solver: &Solver, timeout_s: u64, assumed: bool) -> Result<Model, String> {
     let mut out = model.clone();
-    out.invariants.extend(lemmas(model, solver, timeout_s)?);
+    out.invariants.extend(lemmas(model, solver, timeout_s, assumed)?);
     out.candidates.clear();
     Ok(out)
 }
@@ -821,17 +902,23 @@ fn parse_values(text: &str, tag: &str) -> BTreeMap<(u32, String), Val> {
 /// Stromelemente mit Zeitstempel, Tunables und Commands je Tick.
 ///
 /// Die Qualitaet liefert der Stimulus so, wie der Rand des Interpreters sie
-/// entstehen laesst (3.5): `Good` als Wert, `Suspect` als echte Verletzung
-/// unter `debounce` (der Rand haelt dann den letzten guten Wert), `Stale`
-/// ohne Wert, `Bad` mit Wert vom Treiber, der den Bezugspunkt loescht.
+/// entstehen laesst (3.5): `Good` als Wert, `Suspect` und `Stale` vom
+/// Treiber mit dem Wert, den der Rand durchliess (12.6), `Suspect` vom Rand
+/// als echte Verletzung unter `debounce` (der Rand haelt dann den letzten
+/// guten Wert), `Stale` sonst ohne Wert, `Bad` mit Wert vom Treiber, der den
+/// Bezugspunkt loescht.
 pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth: u32) -> String {
     use crate::encode::quality;
     let edges = crate::encode::input_edges(program).unwrap_or_default();
     // Je Kanal der letzte gute Wert und die Ticks seither, wie der Rand sie fuehrt.
     let mut gates: BTreeMap<String, (Option<Val>, i64)> = BTreeMap::new();
     let mut out = String::new();
+    // `sys/outer_fault` stellt der Kern aus Abort und Runtime-Faults (13.3).
+    let outer = takt_mir::sys::outer_fault(program);
     for k in 0..=depth {
-        for c in program.channels.iter().filter(|c| c.dir == Direction::Input) {
+        for (_, c) in
+            program.channels.iter().enumerate().filter(|(i, c)| c.dir == Direction::Input && outer != Some(*i))
+        {
             if let Type::Samples { elem, len } = program.types.get(c.ty) {
                 samples_line(values, program, k, &c.name, *elem, *len, &mut out);
                 continue;
@@ -851,7 +938,14 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 *since += 1;
                 continue;
             }
+            let passed = values.get(&(k, format!("i.{}.pass", c.name))) == Some(&Val::Bool(true));
+            let delivered = values.get(&(k, format!("i.{}.d", c.name))).copied().unwrap_or(*v);
             let line = match q {
+                quality::SUSPECT | quality::STALE if passed => {
+                    (*last, *since) = (Some(delivered), -1);
+                    let flag = if q == quality::SUSPECT { "suspect" } else { "stale" };
+                    format!("{} {flag}", value_text(program, c.ty, &delivered))
+                }
                 quality::SUSPECT => {
                     let edge = edges.iter().find(|e| e.name == c.name);
                     let wrong = edge.and_then(|e| e.violation(last.as_ref(), *since)).unwrap_or(*v);
@@ -886,6 +980,8 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 };
                 let text = if values.get(&(k, format!("{base}.bad"))) == Some(&Val::Bool(true)) {
                     "0x".to_string()
+                } else if let Some(wire) = record_wire(program, *elem, &format!("{base}.v"), values, k) {
+                    wire
                 } else {
                     element_text(program, *elem, &format!("{base}.v"), &|at| values.get(&(k, at.to_string())).copied())
                 };
@@ -900,6 +996,22 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
         for c in &program.commands {
             if values.get(&(k, format!("i.cmd.{}", c.name))) == Some(&Val::Bool(true)) {
                 let _ = writeln!(out, "t={k} cmd {}", c.name);
+            }
+        }
+        if values.get(&(k, crate::encode::OPERATOR_ABORT.to_string())) == Some(&Val::Bool(true)) {
+            let _ = writeln!(out, "t={k} abort");
+        }
+        for kind in crate::encode::RUNTIME_KINDS {
+            let outputs: Vec<Option<&str>> = if kind == takt_mir::machine::RuntimeKind::Driver {
+                program.channels.iter().filter(|c| c.dir == Direction::Output).map(|c| Some(c.name.as_str())).collect()
+            } else {
+                vec![None]
+            };
+            for output in outputs {
+                if values.get(&(k, crate::encode::runtime_input(kind, output))) == Some(&Val::Bool(true)) {
+                    let _ =
+                        writeln!(out, "t={k} runtime {kind:?}{}", output.map(|o| format!(" {o}")).unwrap_or_default());
+                }
             }
         }
     }
@@ -931,7 +1043,9 @@ fn composite_line(
         return;
     }
     let text = element_text(program, c.ty, &format!("i.{}", c.name), &get);
+    // `Suspect` kommt hier nur vom Treiber, mit Wert (12.6 Zeile 2).
     let line = match q {
+        crate::encode::quality::SUSPECT => format!("{text} suspect"),
         crate::encode::quality::STALE => "stale".to_string(),
         crate::encode::quality::BAD => format!("{text} bad"),
         _ => text,
@@ -957,9 +1071,16 @@ fn samples_line(
         return;
     }
     let zero = if matches!(program.types.get(elem), Type::Float { .. }) { Val::F64(0.0) } else { Val::Int(0) };
-    let items: Vec<String> =
-        (0..len).map(|j| value_text(program, elem, &get(format!("i.{name}.d[{j}]")).unwrap_or(zero))).collect();
+    let delivered: Vec<Val> = (0..len).map(|j| get(format!("i.{name}.d[{j}]")).unwrap_or(zero)).collect();
+    let items: Vec<String> = delivered.iter().map(|d| value_text(program, elem, d)).collect();
+    let checked = get(format!("i.{name}.pass")) == Some(Val::Bool(true));
+    // Zeigt das Array die Lieferung selbst, liess der Rand sie durch: Ein
+    // `Suspect` des Rands haelt das letzte gute, das die Lieferung nicht ist.
+    let shown = get(format!("i.{name}.v")) == Some(Val::Bool(true))
+        && delivered.iter().enumerate().all(|(j, d)| get(format!("i.{name}[{j}]")) == Some(*d));
     let line = match q {
+        crate::encode::quality::SUSPECT if shown => format!("[{}] suspect", items.join(", ")),
+        crate::encode::quality::STALE if checked => format!("[{}] stale", items.join(", ")),
         crate::encode::quality::STALE => "stale".to_string(),
         crate::encode::quality::BAD => format!("[{}] bad", items.join(", ")),
         _ => format!("[{}]", items.join(", ")),
@@ -1000,6 +1121,43 @@ fn job_records(values: &BTreeMap<(u32, String), Val>, program: &Program, depth: 
                 }
             }
         }
+    }
+}
+
+/// Ein Record-Element mit einem Feld variabler Laenge in seiner Byteform
+/// (3.7, 5.9), wie der Rand es nimmt: Als `Name(…)` hat ein solches Feld
+/// keine Schreibweise. `None` fuer jeden anderen Typ, der lesbar bleibt.
+fn record_wire(
+    program: &Program,
+    ty: takt_mir::TypeId,
+    base: &str,
+    values: &BTreeMap<(u32, String), Val>,
+    k: u32,
+) -> Option<String> {
+    if !matches!(program.types.get(ty), Type::Record(_)) || !variable_length(program, ty) {
+        return None;
+    }
+    let env: crate::eval::Env = values
+        .range((k, base.to_string())..(k + 1, String::new()))
+        .filter(|((_, name), _)| name.starts_with(base))
+        .map(|((_, name), v)| (name.clone(), *v))
+        .collect();
+    let v = crate::encode::value_at(program, ty, base, &env)?;
+    let bytes = takt_interp::bytes::encode(program, &v, ty).ok()?;
+    Some(format!("0x{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+}
+
+/// Hat ein Wert des Typs eine Laenge, die erst er selbst festlegt (Text,
+/// Bytes, Vektor, auch in einem Feld)?
+fn variable_length(program: &Program, ty: takt_mir::TypeId) -> bool {
+    match program.types.get(ty) {
+        Type::Bytes { .. } | Type::Str { .. } | Type::Line { .. } | Type::Vec { .. } => true,
+        Type::Record(r) => program.records[r.index()].fields.iter().any(|f| variable_length(program, f.ty)),
+        Type::Array { elem, .. } | Type::Optional(elem) => variable_length(program, *elem),
+        Type::Enum(e) => {
+            program.enums[e.index()].variants.iter().flat_map(|v| &v.fields).any(|f| variable_length(program, f.ty))
+        }
+        _ => false,
     }
 }
 

@@ -111,7 +111,7 @@ fn coverage_counts_states_transitions_and_checks() {
     let checks = items.iter().filter(|i| i.kind == CoverKind::Check).count();
     assert_eq!(checks, 1, "der `check` in `dut`; `expect` und `verify` stehen in Szenarien");
     let text = c.render();
-    assert!(text.starts_with("# takt-coverage 1\n"), "{text}");
+    assert!(text.starts_with("# takt-coverage 2\n"), "{text}");
 }
 
 #[test]

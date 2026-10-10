@@ -150,17 +150,17 @@ impl Track {
     }
 
     /// Eine Skalar-Lieferung: Zeitstempel `t`, Alter `age` des Werts,
-    /// `bad_with_value` fuer `Bad` mit Wert.
+    /// `inconsistent` fuer Flags, die sich widersprechen.
     ///
     /// Zeitstempel duerfen gleich bleiben, nicht fallen: Ein grober
     /// Zeitgeber stempelt zwei Lieferungen gleich, und die Reihenfolge
     /// steht ohnehin fest.
-    pub fn reading(&mut self, t: i64, age: i64, bad_with_value: bool, w: &Window) -> Result<Placement, Contract> {
+    pub fn reading(&mut self, t: i64, age: i64, inconsistent: bool, w: &Window) -> Result<Placement, Contract> {
         let placed = w.place(t);
         let measured = t.saturating_sub(age);
         let broken = if placed == Placement::Outside {
             Some(Contract::TimeWindow)
-        } else if bad_with_value {
+        } else if inconsistent {
             Some(Contract::Flags)
         } else if self.last_t != NONE && t < self.last_t {
             Some(Contract::Timestamp)
@@ -253,8 +253,9 @@ shared_with_c! {
         pub channel: u32,
         /// Ein Stromelement; sonst ein Skalar.
         pub element: bool,
-        /// Ein Skalar, der `Bad` meldet und doch einen Wert traegt.
-        pub bad_with_value: bool,
+        /// Ein Skalar, dessen Flags sich widersprechen: `Bad` mit Wert oder
+        /// `Suspect` ohne — `Suspect` heisst „Wert da, aber zweifelhaft“.
+        pub inconsistent: bool,
         /// Zeitstempel in Nanosekunden.
         pub t: i64,
         /// Alter des Werts eines Skalars.
@@ -321,7 +322,7 @@ pub fn settle(
         let Some(device) = devices.get_mut(*d as usize) else { continue };
         device.delivered = true;
         let checked =
-            if x.element { track.element(x.t, x.seq, w) } else { track.reading(x.t, x.age, x.bad_with_value, w) };
+            if x.element { track.element(x.t, x.seq, w) } else { track.reading(x.t, x.age, x.inconsistent, w) };
         match checked {
             Ok(placed) => x.at = placed.time(x.t),
             Err(broken) => note(device, broken),

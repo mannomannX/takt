@@ -675,19 +675,11 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         return;
     };
     let in_max = crate::parts::job_in_max(p);
-    let names: Vec<String> = crate::parts::job_slots(p)
-        .iter()
-        .map(|(mi, j, _)| {
-            let m = &p.machines[*mi];
-            let handle = m.layout.job_slots[*j].handle;
-            format!("\"{} {}\"", m.name, m.vars.get(handle.index()).map_or("?", |v| v.name.as_str()))
-        })
-        .collect();
 
     let _ = writeln!(t.code, "enum {{ TAKT_JOB_FREE, TAKT_JOB_WAITING, TAKT_JOB_RUNNING, TAKT_JOB_DONE }};");
     let _ = writeln!(
         t.types,
-        "typedef struct {{ unsigned char state, gen; int native; long long due, order; int in_len, out_len; unsigned char in[{in_max}], out[{out_max}]; }} {x}_job;"
+        "typedef struct {{ unsigned char state, gen, late; int native; long long due, order; int in_len, out_len; unsigned char in[{in_max}], out[{out_max}]; }} {x}_job;"
     );
     // Slots und Auftrag liegen in der Runtime hinter dem Programmbereich:
     // Der Job-Kontext schreibt den Auftrag ausserhalb des Schritts, wenn der
@@ -701,7 +693,6 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(f, "    int work_native, work_in_len, work_out_len;");
     let _ = writeln!(f, "    unsigned char work_in[{in_max}], work_out[{out_max}];");
     let s = &mut t.code;
-    let _ = writeln!(s, "static const char *const takt_job_names[{slots}] = {{ {} }};", names.join(", "));
 
     let _ = writeln!(
         s,
@@ -711,7 +702,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    int i = takt_job_base[m] + slot; {x}_job *j = &a->jobs[i];");
     let _ = writeln!(s, "    if (len > (int)sizeof j->in) len = (int)sizeof j->in;");
     let _ = writeln!(s, "    j->in_len = len; j->native = native;");
-    let _ = writeln!(s, "    j->state = TAKT_JOB_WAITING; j->gen++; j->order = ++a->job_order;");
+    let _ = writeln!(s, "    j->state = TAKT_JOB_WAITING; j->gen++; j->order = ++a->job_order; j->late = 0;");
     let _ = writeln!(s, "    j->due = a->tick + takt_job_ticks[i];");
     let _ = writeln!(s, "    takt_job_image(a, i, 0, 0, 2); /* Err(PENDING) */");
     let _ = writeln!(s, "}}");
@@ -772,11 +763,28 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    a->work_finished = 1;");
     let _ = writeln!(s, "}}");
     guarded(s, x, "void", "job_work", "", "");
-    let _ = writeln!(s, "/* 12.1: zu Tickbeginn. Ein fertiges Ergebnis wird sichtbar, wenn seine Dauer um ist. */");
-    let _ = writeln!(s, "static void takt_jobs_poll(struct {x}_arena *a) {{");
+    let _ = writeln!(
+        s,
+        "/* 4.5: zu Beginn des Schritts der Maschine `m`. Ein fertiges Ergebnis wird sichtbar, wenn seine Dauer um ist. */"
+    );
+    let _ = writeln!(s, "static void takt_jobs_poll(struct {x}_arena *a, int m) {{");
     let _ = writeln!(s, "    int i, b;");
-    let _ = writeln!(s, "    takt_jobs_collect(a);");
-    let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
+    let _ = writeln!(s, "    for (i = takt_job_base[m]; i < takt_job_base[m + 1]; i++) {{");
+    // 4.5, FB-476: Ein Lauf, der im Tick seiner Faelligkeit nicht fertig ist,
+    // steht dort einmal als `late`; seine Fertigstellung folgt als `done`.
+    let _ = writeln!(
+        s,
+        "        if (a->jobs[i].state != TAKT_JOB_FREE && a->jobs[i].state != TAKT_JOB_DONE && a->jobs[i].due <= a->tick && !a->jobs[i].late) {{"
+    );
+    let _ = writeln!(s, "            a->jobs[i].late = 1;");
+    let _ = writeln!(s, "            takt_board_trace(\"t=\"); takt_board_trace_i64(a->tick);");
+    let _ = writeln!(
+        s,
+        "            takt_board_trace(\" job \"); takt_board_trace(takt_job_names[i]); takt_board_trace(\" late start=\");"
+    );
+    let _ =
+        writeln!(s, "            takt_board_trace_i64(a->jobs[i].due - takt_job_ticks[i]); takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "        if (a->jobs[i].state != TAKT_JOB_DONE || a->jobs[i].due > a->tick) continue;");
     let _ = writeln!(s, "        a->jobs[i].state = TAKT_JOB_FREE;");
     let _ = writeln!(
@@ -790,8 +798,9 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "        takt_board_trace(\"t=\"); takt_board_trace_i64(a->tick);");
     let _ = writeln!(
         s,
-        "        takt_board_trace(\" job \"); takt_board_trace(takt_job_names[i]); takt_board_trace(\" done\\n\");"
+        "        takt_board_trace(\" job \"); takt_board_trace(takt_job_names[i]); takt_board_trace(\" done start=\");"
     );
+    let _ = writeln!(s, "        takt_board_trace_i64(a->jobs[i].due - takt_job_ticks[i]); takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
     let _ = writeln!(
@@ -866,6 +875,8 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // 9.4: Auch Tick 0 beginnt mit `I_0 = sample()`; ein `enter:` des
     // Anfangszustands liest die Eingaenge wie im Interpreter (FB-316).
     let _ = writeln!(s, "    takt_sample(a);");
+    let _ = writeln!(s, "    a->outer = 0;");
+    crate::parts::outer_fault(s, p, "    ");
     crate::parts::enter_machines(s, p, layout, driven, "    ", x);
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).
@@ -954,10 +965,11 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
         let _ = writeln!(s, "    }}");
     }
     crate::parts::aging(s, p, layout, "    ");
-    // 4.5: Was fertig und faellig ist, wird zu Tickbeginn sichtbar, wie
-    // `poll_jobs` im Interpreter und im Wirtsrahmen.
+    crate::parts::outer_fault(s, p, "    ");
+    // 4.5: Was der Job-Kontext fertig hat, holt der Tickbeginn ab; sichtbar
+    // wird es im Schritt seiner Maschine (`parts::steps`).
     if !crate::parts::job_slots(p).is_empty() {
-        let _ = writeln!(s, "    takt_jobs_poll(a);");
+        let _ = writeln!(s, "    takt_jobs_collect(a);");
     }
     let _ = writeln!(s, "    takt_sample(a);");
     // 8.3: die `sim`-Kopplung der Stroeme nach dem Rand, wie
@@ -965,6 +977,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(s, "    takt_sim_streams(a, k * {}LL);", p.config.tick);
     crate::parts::steps(s, p, layout, driven, "    ", "k", x);
     crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
+    crate::parts::signal_lines(s, p, driven, "    ", "k", crate::streams::Trace::Board);
     crate::parts::idle_drops(s, p, driven, "    ", x);
     crate::parts::commit_sequence(s, p, driven, "    ", "k");
     for (i, _) in monitors(p) {
@@ -1977,7 +1990,8 @@ fn bound_scalars(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundScalar> {
         .iter()
         .filter_map(|slot| {
             let channel = p.channels.iter().position(|c| c.name == slot.name)?;
-            if fed.contains(&channel) {
+            // `sys/outer_fault` stellt der Kern (`parts::outer_fault`).
+            if fed.contains(&channel) || takt_mir::sys::outer_fault(p) == Some(channel) {
                 return None;
             }
             let function = crate::drivers::input_symbol(slot.address.as_ref()?, x);

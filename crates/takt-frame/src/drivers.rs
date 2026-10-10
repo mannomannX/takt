@@ -182,7 +182,8 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
     for slot in &layout.inputs {
         let Some(channel) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
         let (Some(addr), Some(value)) = (slot.address.as_ref(), value_of(&slot.ty, slot.signed)) else { continue };
-        if fed.contains(&channel) {
+        // Was der Kern selbst stellt, hat keinen Treiber (13.3).
+        if fed.contains(&channel) || takt_mir::sys::channel(&addr.text()).is_some_and(|s| s.core) {
             continue;
         }
         if let Some(method) = sys_method(addr) {

@@ -4,7 +4,10 @@
 //! (`takt_llvm::mmio`); hier ist der Rahmen die Runtime. Er bildet die
 //! Adresse ab wie der Interpreter (`port_read`, `port_write`): Gelesen wird
 //! der `sim`-Output `mmio/ADR/r`, den ein Modell stellt, mit Unit-Delay wie
-//! jeder Modellwert (8.3), ohne Modell der Default des Records. Geschrieben
+//! jeder Modellwert (8.3), ohne Modell der Default des Records. Stellt das
+//! Modell einen Strom, entnimmt jedes Lesen das naechste Element, das vor
+//! dem Tick in seinem Sendepuffer stand; frei wird es mit dem Commit
+//! (`takt_frame::streams::port_reads`). Geschrieben
 //! wird ein Element in den Eingabestrom `mmio/ADR/w`, und zwar der ganze
 //! Record in kanonischer Form: Ein Feld darunter wird in den gelesenen
 //! Record eingesetzt, wie `Eval::assign` es tut. Der Schreibvorgang ist ein
@@ -47,17 +50,30 @@ fn channel<'a>(
     p.channels.iter().enumerate().find(|(_, c)| c.dir == dir && matches!(&c.binding, Binding::Sim(a) if *a == want))
 }
 
-/// Das Modell eines Ports: der Versatz seines Lesekanals im Latch, wenn ein
-/// Modell ihn als Pegel stellt und er gebaut ist wie der Port. `Err` nennt,
-/// warum der Rahmen ihn nicht abbilden kann.
-fn model(p: &Program, port: &Port, ty: &LlvmType) -> Option<Result<u64, String>> {
+/// Wie das Modell eines Ports seinen Lesekanal stellt.
+enum Model {
+    /// Als Pegel: der Versatz im Latch.
+    Level(u64),
+    /// Als Strom: der Kanal und je Skalar des Elements `(Versatz im
+    /// Speicher, Laenge)` in kanonischer Reihenfolge.
+    Stream(usize, Vec<(u64, u64)>),
+}
+
+/// Das Modell eines Ports, wenn es gebaut ist wie der Port. `Err` nennt,
+/// warum der Rahmen es nicht abbilden kann.
+fn model(p: &Program, port: &Port, ty: &LlvmType) -> Option<Result<Model, String>> {
     let (c, model) = channel(p, port.address, "r", Direction::Output)?;
-    if matches!(p.types.list.get(model.ty.index()), Some(Type::Stream(_))) {
-        return Some(Err(format!("Port {}: ein Strom an mmio/ADR/r fehlt im Wirtsrahmen", port.name)));
+    let unlike = || Err(format!("Port {}: das Modell {} liegt anders als der Port", port.name, model.name));
+    if let Some(Type::Stream(elem)) = p.types.list.get(model.ty.index()) {
+        let mut chunks = Vec::new();
+        return Some(match takt_llvm::ty::lower(*elem, p) {
+            Some(e) if e == *ty && canonical(p, *elem, &e, 0, &mut chunks).is_some() => Ok(Model::Stream(c, chunks)),
+            _ => unlike(),
+        });
     }
     match takt_llvm::image::latch_offset(ChannelId(c as u32), p) {
-        Some(offset) if takt_llvm::ty::lower(model.ty, p).as_ref() == Some(ty) => Some(Ok(offset)),
-        _ => Some(Err(format!("Port {}: das Modell {} liegt anders als der Port", port.name, model.name))),
+        Some(offset) if takt_llvm::ty::lower(model.ty, p).as_ref() == Some(ty) => Some(Ok(Model::Level(offset))),
+        _ => Some(unlike()),
     }
 }
 
@@ -92,7 +108,7 @@ fn canonical(p: &Program, ty: TypeId, llvm: &LlvmType, at: u64, out: &mut Vec<(u
 pub(crate) fn sample(s: &mut String, p: &Program, indent: &str) {
     for (i, port) in p.ports.iter().enumerate() {
         let Some(ty) = takt_llvm::ty::lower(port.ty, p) else { continue };
-        if let Some(Ok(offset)) = model(p, port, &ty) {
+        if let Some(Ok(Model::Level(offset))) = model(p, port, &ty) {
             let _ = writeln!(s, "{indent}memcpy(a->port_model_{i}, a->latch + {offset}, {});", ty.aligned_size());
         }
     }
@@ -101,9 +117,8 @@ pub(crate) fn sample(s: &mut String, p: &Program, indent: &str) {
 /// Schreibt `takt_mmio_read` und `takt_mmio_write`; ohne Ports nichts.
 ///
 /// Was der Rahmen nicht abbilden kann, bricht den Bau des Rahmens mit
-/// `#error` ab, statt still einen Default zu lesen: ein Modell, das den
-/// Lesekanal als Strom stellt (ein Register, das beim Lesen weiterschaltet),
-/// und ein Modellrecord, der anders im Speicher liegt als der Port.
+/// `#error` ab, statt still einen Default zu lesen: ein Modellrecord, der
+/// anders im Speicher liegt als der Port.
 pub(crate) fn emit(t: &mut Text, p: &Program, x: &Prefix) {
     if p.ports.is_empty() {
         return;
@@ -123,9 +138,34 @@ pub(crate) fn emit(t: &mut Text, p: &Program, x: &Prefix) {
         let size = ty.aligned_size();
         sizes.push(size);
         match model(p, port, &ty) {
-            Some(Ok(_)) => {
+            Some(Ok(Model::Level(_))) => {
                 let _ = writeln!(fields, "    _Alignas(8) unsigned char port_model_{i}[{size}]; /* {} */", port.name);
                 let _ = writeln!(current, "    case {i}: memcpy(whole, a->port_model_{i}, {size}); return;");
+            }
+            // Ein Datenregister, das beim Lesen weiterschaltet: Das naechste
+            // Element des Sendepuffers, das vor dem Tick darin stand, wird
+            // das zuletzt entnommene; vor dem ersten bleibt der Default.
+            Some(Ok(Model::Stream(c, chunks))) => {
+                let width: u64 = chunks.iter().map(|(_, n)| n).sum();
+                let _ = writeln!(
+                    fields,
+                    "    _Alignas(8) unsigned char port_model_{i}[{size}]; /* {}, zuletzt entnommen */",
+                    port.name
+                );
+                let _ = writeln!(current, "    case {i}: {{ /* {} <- {} */", port.name, p.channels[c].name);
+                let _ = writeln!(current, "        int k = takt_tx_slot({c});");
+                let _ = writeln!(current, "        if (a->tx_taken[k] + {width} <= a->tx_visible[k]) {{");
+                let _ = writeln!(current, "            const unsigned char *e = a->tx[k] + a->tx_taken[k];");
+                let mut from = 0;
+                for (at, n) in chunks {
+                    let _ = writeln!(current, "            memcpy(a->port_model_{i} + {at}, e + {from}, {n});");
+                    from += n;
+                }
+                let _ = writeln!(current, "            a->tx_taken[k] += {width};");
+                let _ = writeln!(current, "        }}");
+                let _ = writeln!(current, "        memcpy(whole, a->port_model_{i}, {size});");
+                let _ = writeln!(current, "        return;");
+                let _ = writeln!(current, "    }}");
             }
             Some(Err(e)) => {
                 let _ = writeln!(s, "#error \"{e}\"");

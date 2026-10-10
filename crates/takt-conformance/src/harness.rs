@@ -317,6 +317,7 @@ fn build_inner(
     // Die Lieferungen des Ticks 0 gehen vor jedem Init durch den Rand, wie
     // `Run::new` den Stimulus vor `Sim::init` einspeist.
     let _ = writeln!(t.code, "    takt_edge_stimulus(a, 0);");
+    takt_frame::parts::outer_fault(&mut t.code, p, "    ");
     // 8.5: Ein Command des Ticks 0 gilt schon fuer die Eintritte, wie im
     // Interpreter; die Schleife setzt es ab Tick 1 zurueck (FB-493).
     for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
@@ -352,10 +353,6 @@ fn build_inner(
     // 8.3: die `sim`-Kopplung der Stroeme nach dem Rand, wie
     // `apply_sim_bindings` im Interpreter.
     let _ = writeln!(t.code, "        takt_sim_streams(a, a->tick * {}LL);", p.config.tick);
-    // 4.5: Faellige Jobs werden zu Tick-Beginn sichtbar, wie `poll_jobs` im Interpreter.
-    if p.machines.iter().any(|m| !m.layout.job_slots.is_empty()) {
-        let _ = writeln!(t.code, "        takt_jobs_poll(a);");
-    }
     // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
     // Schritt und loescht es danach — wie die Runtime (12.1).
     for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
@@ -369,6 +366,7 @@ fn build_inner(
     // 5.4: Operator-Abort und Runtime-Faults von aussen werden vorgemerkt,
     // wie `apply_stimulus` im Interpreter.
     pended(&mut t.code, p, inputs, "        ");
+    takt_frame::parts::outer_fault(&mut t.code, p, "        ");
     // 8.4: Ein Tunable gilt ab seiner Tick-Grenze; der Rahmen gibt ihn vor
     // dem Schritt an `takt_tune_value`, wie die Schleife des Produktrahmens
     // (`Runtime::service_with`), und `takt_tune_value` prueft Typ und Range wie
@@ -388,6 +386,7 @@ fn build_inner(
     }
     steps(&mut t.code, p, &layout, &driven, "        ", "a->tick", x);
     abort_phase(&mut t.code, p, &layout, &driven, "        ", "a->tick", x);
+    takt_frame::parts::signal_lines(&mut t.code, p, &driven, "        ", "a->tick", takt_frame::streams::Trace::Stdio);
     idle_drops(&mut t.code, p, &driven, "        ", x);
     commit_sequence(&mut t.code, p, &driven, "        ", "a->tick");
     crate::ports::sample(&mut t.code, p, "        ");
@@ -842,11 +841,17 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         "    if (a->jobs[i].active) {{ a->jobs[i].active = 0; takt_job_image(a, i, 1, 0, 0); /* Err(CANCELLED) */ }}"
     );
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_jobs_poll(struct {x}_arena *a) {{");
+    // 4.5: zu Beginn des Schritts der Maschine `m` (`parts::steps`), wie
+    // `poll_jobs` im Interpreter.
+    let _ = writeln!(s, "static void takt_jobs_poll(struct {x}_arena *a, int m) {{");
     let _ = writeln!(s, "    int i, b;");
-    let _ = writeln!(s, "    for (i = 0; i < {slots}; i++) {{");
+    let _ = writeln!(s, "    for (i = takt_job_base[m]; i < takt_job_base[m + 1]; i++) {{");
     let _ = writeln!(s, "        if (!a->jobs[i].active || a->jobs[i].due > a->tick) continue;");
     let _ = writeln!(s, "        a->jobs[i].active = 0;");
+    let _ = writeln!(
+        s,
+        "        printf(\"t=%lld job %s done start=%lld\\n\", a->tick, takt_job_names[i], a->jobs[i].due - takt_job_ticks[i]);"
+    );
     let _ = writeln!(
         s,
         "        if (a->jobs[i].out_len < 0) {{ takt_job_image(a, i, 1, 0, 1); continue; }} /* Err(FAILED) */"

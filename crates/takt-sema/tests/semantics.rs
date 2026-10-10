@@ -619,6 +619,37 @@ machine m:
 }
 
 #[test]
+fn a_driver_suspect_keeps_its_value_when_the_edge_lets_it_pass() {
+    // 3.5, „Qualitaet vom Treiber“: Der Rand prueft den Wert einer Lieferung
+    // `Suspect` wie jeden. Besteht er, ist die Abtastung `Suspect` mit dem
+    // Wert des Treibers, lesbar; besteht er nicht, gilt die Range wie sonst.
+    // `Suspect` ohne Wert bricht den Vertrag (12.6 Zeile 2).
+    let body = "\
+input  p     : float[bar] in 0..100 bar @ hw(\"d/p\")
+output p_sim : float[bar]               @ sim(\"d/p\")
+output used  : float[bar]               @ hw(\"o/used\") with safe = 0 bar
+output doubt : bool                     @ hw(\"o/doubt\") with safe = false
+output ok    : bool                     @ hw(\"o/ok\")   with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            used = p.or(7 bar)
+            doubt = p.suspect
+            ok = p.valid
+";
+    let stim = "t=1 in p 30 bar\nt=2 in p 35 bar suspect\nt=3 in p 250 bar suspect\nt=4 in p suspect\n";
+    let trace = simulate(body, stim, 5);
+    assert!(trace.contains("t=2 out used 35.0 bar\n"), "der Wert des Treibers: {trace}");
+    assert!(trace.contains("t=2 out doubt true\n"), "`.suspect` ist wahr: {trace}");
+    assert!(!trace.contains("t=2 out ok false\n"), "`Suspect` ist gueltig: {trace}");
+    assert!(trace.contains("t=3 out used 7.0 bar\n"), "ausserhalb der Range `Bad`: {trace}");
+    assert!(trace.contains("t=4 driver d degraded flags\n"), "ohne Wert ein Vertragsbruch: {trace}");
+    assert!(!trace.contains("fault"), "kein Fault am Rand (3.5): {trace}");
+}
+
+#[test]
 fn a_self_transition_leaves_and_reenters_the_state() {
     // 9.3: der kleinste gemeinsame Vorfahr liegt echt oberhalb des Ziels.
     // Ohne das war `-> S` aus `S` wirkungslos: kein exit, kein enter, keine
@@ -1151,7 +1182,7 @@ record Data layout little:
 
 port dr : Data @ mmio(0x40001000)
 
-output regs : stream<Data> @ sim(\"mmio/0x40001000/r\") with max_rate = 40 kHz, capacity = 64
+output regs : stream<Data> @ sim(\"mmio/0x40001000/r\") with capacity = 64
 output sum  : int @ hw(\"o/sum\") with safe = 0
 
 machine model:

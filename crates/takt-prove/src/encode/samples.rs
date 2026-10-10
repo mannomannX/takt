@@ -6,9 +6,11 @@
 //! zaehlt nach einem schlechten Abtastwert weiter, und das Modell laesst
 //! danach hoechstens mehr zu.
 //!
-//! Eingaben je Tick: `i.<c>.d[j]` die gelieferten Abtastwerte, `i.<c>[j]`
+//! Eingaben je Tick: `i.<c>.d[j]` die gelieferten Abtastwerte, `i.<c>.pass`,
+//! ob die Lieferung ein ganzes Array trug, das der Rand prueft, `i.<c>[j]`
 //! das Array, das die Maschinen lesen, `i.<c>.v`, ob es einen Wert hat, dazu
-//! Qualitaet und `held` wie bei einem skalaren Input.
+//! Qualitaet und `held` wie bei einem skalaren Input. Laesst der Rand das
+//! Array durch, behaelt es die Qualitaet seines Treibers (12.6).
 
 use std::ops::Not;
 
@@ -80,12 +82,14 @@ impl Enc<'_> {
     }
 
     /// Was der Rand ueber das Array eines Ticks zusichert: Gehalten ist es
-    /// das vorige; geliefert mit Werten ist seine Qualitaet die des Randes,
-    /// `Good` zeigt die Lieferung, `Suspect` das letzte gute Array; ohne
-    /// Werte ist nichts zu sehen.
+    /// das vorige; geliefert mit Werten urteilt der Rand: Laesst er es durch,
+    /// behaelt es die Qualitaet des Treibers, und `Good` und `Suspect` zeigen
+    /// die Lieferung; sonst ist es `Suspect` mit dem letzten guten Array oder
+    /// `Bad`. Ohne Werte ist nichts zu sehen.
     pub(super) fn samples_assumptions(&mut self, edge: &Edge, out: &mut Vec<Term>) {
         let q = self.quality(edge);
         let held = self.held(edge);
+        let checked = self.passed(edge);
         let v = self.sample_valued(edge);
         let x = self.sample_items(edge, "");
         let d = self.sample_items(edge, ".d");
@@ -101,8 +105,12 @@ impl Enc<'_> {
         kept.extend(x.iter().enumerate().map(|(j, t)| Term::eq(t.clone(), prev(&format!("x[{j}]"), edge.sort))));
         out.push(implies(held.clone(), Term::and(kept)));
         let is = |code| Term::and(vec![held.clone().not(), Term::eq(q.clone(), Term::int(code))]);
-        let valued = Term::or(vec![is(quality::GOOD), is(quality::SUSPECT)]);
-        out.push(implies(valued.clone().not(), zero(&d)));
+        // Ohne ein ganzes Array prueft der Rand nichts: `Stale` oder `Bad`
+        // (`Suspect` ohne Wert bricht den Vertrag, 12.6 Zeile 2).
+        out.push(implies(checked.clone(), held.clone().not()));
+        let unchecked = Term::and(vec![held.clone().not(), checked.clone().not()]);
+        out.push(implies(unchecked, Term::or(vec![is(quality::STALE), is(quality::BAD)])));
+        out.push(implies(checked.clone().not(), zero(&d)));
         out.push(implies(
             Term::or(vec![is(quality::STALE), is(quality::BAD)]),
             Term::and(vec![v.clone().not(), zero(&x)]),
@@ -110,13 +118,20 @@ impl Enc<'_> {
         // 4.1: NaN und Unendlich gibt es in der Sprache nicht.
         if matches!(edge.sort, Sort::F32 | Sort::F64) {
             let finite = d.iter().map(|t| Term::app(Op::IsFinite, vec![t.clone()])).collect();
-            out.push(implies(valued.clone(), Term::and(finite)));
+            out.push(implies(checked.clone(), Term::and(finite)));
         }
         let gate = self.gate(edge, &d, &|part, sort| prev(part, sort));
-        out.push(implies(valued, Term::eq(q.clone(), gate.worst)));
-        let mut good = vec![v.clone()];
-        good.extend(x.iter().zip(&d).map(|(a, b)| Term::eq(a.clone(), b.clone())));
-        out.push(implies(is(quality::GOOD), Term::and(good)));
+        let through = Term::eq(gate.worst.clone(), Term::int(quality::GOOD));
+        // Durchgelassen: die Qualitaet des Treibers; sonst die des Rands.
+        out.push(implies(
+            Term::and(vec![checked.clone(), through.clone()]),
+            Term::or(vec![is(quality::GOOD), is(quality::SUSPECT), is(quality::STALE)]),
+        ));
+        out.push(implies(Term::and(vec![checked.clone(), through.clone().not()]), Term::eq(q.clone(), gate.worst)));
+        let mut shown = vec![v.clone()];
+        shown.extend(x.iter().zip(&d).map(|(a, b)| Term::eq(a.clone(), b.clone())));
+        let driver = Term::and(vec![checked.clone(), through.clone(), is(quality::STALE).not()]);
+        out.push(implies(driver, Term::and(shown)));
         if edge.suspect() {
             let present = Term::and(vec![gate.worst_held, prev("last.has", Sort::Bool)]);
             let mut suspect = vec![Term::eq(v.clone(), present.clone())];
@@ -124,7 +139,7 @@ impl Enc<'_> {
                 let last = Term::ite(present.clone(), prev(&format!("last[{j}]"), edge.sort), Enc::zero(edge.sort));
                 Term::eq(t.clone(), last)
             }));
-            out.push(implies(is(quality::SUSPECT), Term::and(suspect)));
+            out.push(implies(Term::and(vec![checked, through.not(), is(quality::SUSPECT)]), Term::and(suspect)));
         }
     }
 
@@ -132,6 +147,7 @@ impl Enc<'_> {
     pub(super) fn samples_next(&mut self, edge: &Edge, pre: &Env) -> Vec<(String, Term)> {
         let q = self.quality(edge);
         let held = self.held(edge);
+        let checked = self.passed(edge);
         let v = self.sample_valued(edge);
         let x = self.sample_items(edge, "");
         let d = self.sample_items(edge, ".d");
@@ -146,22 +162,23 @@ impl Enc<'_> {
             ));
         }
         let is = |code| Term::and(vec![held.clone().not(), Term::eq(q.clone(), Term::int(code))]);
-        let valued = Term::or(vec![is(quality::GOOD), is(quality::SUSPECT)]);
+        let gate = self.gate(edge, &d, &|part, _| get(part));
         if edge.stateful() {
-            let gate = self.gate(edge, &d, &|part, _| get(part));
             let bad = is(quality::BAD);
-            let has = Term::ite(valued.clone(), gate.has, Term::and(vec![bad.clone().not(), get("has")]));
-            let strikes = Term::ite(valued.clone(), gate.strikes, Term::ite(bad, Term::int(0), get("strikes")));
+            let has = Term::ite(checked.clone(), gate.has, Term::and(vec![bad.clone().not(), get("has")]));
+            let strikes = Term::ite(checked.clone(), gate.strikes, Term::ite(bad, Term::int(0), get("strikes")));
             next.push(("has".into(), has));
-            next.push(("good".into(), Term::ite(valued.clone(), gate.good, get("good"))));
+            next.push(("good".into(), Term::ite(checked.clone(), gate.good, get("good"))));
             next.push(("strikes".into(), strikes));
             if edge.slew.is_some() {
-                let fresh = Term::and(vec![valued, gate.fresh]);
+                let fresh = Term::and(vec![checked.clone(), gate.fresh]);
                 next.push(("gap".into(), Term::ite(fresh, Term::int(1), Term::bin(Op::Add, get("gap"), Term::int(1)))));
             }
         }
         if edge.suspect() {
-            let (good, bad) = (is(quality::GOOD), is(quality::BAD));
+            // Das letzte gute Array: jedes, das der Rand durchliess.
+            let good = Term::and(vec![checked, Term::eq(gate.worst, Term::int(quality::GOOD))]);
+            let bad = is(quality::BAD);
             let has = Term::ite(good.clone(), Term::bool(true), Term::and(vec![bad.not(), get("last.has")]));
             next.push(("last.has".into(), has));
             for (j, t) in d.iter().enumerate() {

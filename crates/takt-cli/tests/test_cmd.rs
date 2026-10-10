@@ -23,7 +23,7 @@ fn every_scenario_runs_and_the_coverage_lands_in_a_file() {
     assert!(stdout.contains("pressure_rises: PASS") && stdout.contains("stays_closed: PASS"), "{stdout}");
     assert!(stdout.contains("Coverage: Zustaende"), "{stdout}");
     let text = std::fs::read_to_string(&coverage).expect("Coverage-Datei");
-    assert!(text.starts_with("# takt-coverage 1\n"), "{text}");
+    assert!(text.starts_with("# takt-coverage 2\n"), "{text}");
     assert!(text.contains("state,dut,OPEN,"), "{text}");
     let _ = std::fs::remove_dir_all(&out_dir);
 }

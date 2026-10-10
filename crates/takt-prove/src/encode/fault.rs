@@ -34,6 +34,23 @@ impl Enc<'_> {
         Cause { kind, message: None, line: i64::from(self.p.line_of(span)) }
     }
 
+    /// Ein Operator-Abort (5.4) mit der Meldung des Interpreters.
+    pub(super) fn operator_abort(&self) -> Cause {
+        Cause { message: Some(Text::literal("operator abort")), ..self.cause(FaultKind::Abort, Span::default()) }
+    }
+
+    /// Ein Runtime-Fault von aussen (7.3) mit der Meldung des Interpreters
+    /// (`pend_runtime`).
+    pub(super) fn runtime_cause(&self, kind: takt_mir::machine::RuntimeKind) -> Cause {
+        let message = Text::literal(&format!("Runtime-Fault {kind:?}"));
+        Cause { message: Some(message), ..self.cause(FaultKind::Runtime(kind), Span::default()) }
+    }
+
+    /// Ist die Ursache ein Abort (5.4)? Er beachtet den Latch.
+    pub(super) fn is_abort(cause: &Cause) -> bool {
+        cause.kind == FaultKind::Abort
+    }
+
     /// Die Ursache eines Faults einer Anweisung mit ihrer Meldung (`render`);
     /// ohne Meldung `fallback`. Gerendert wird nur, wenn die Maschine
     /// `last_fault` liest.

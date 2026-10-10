@@ -203,6 +203,50 @@ fn ro_and_wo() -> String {
         .to_string()
 }
 
+/// Ein FIFO-Datenregister (FB-431): Das Modell stellt `mmio/ADR/r` als Strom
+/// mit drei Plaetzen und sendet je Tick zwei Elemente, solange `free`
+/// reicht; der Treiber liest je Tick eins. `model_first` stellt das Modell
+/// vor den Treiber — die Reihenfolge aendert nichts (Satz 9.4.1).
+fn fifo(model_first: bool) -> String {
+    let model = "machine m:\n    var k : int in 0..200 = 1\n    initial RUN\n\n    state RUN:\n        loop:\n            \
+                 room = fifo.free\n            for _i in range(2):\n                if fifo.free >= 2:\n                    \
+                 send fifo, Pair(b = k as u8, odd = (k % 2) as u8)\n                    k = (k + 1) % 200\n\n        \
+                 after 1 s: -> RUN\n\n";
+    let driver = "driver machine d:\n    var s : int in 0..9999 = 0\n    initial RUN\n\n    state RUN:\n        loop:\n            \
+                  var e : Pair = pair\n            s = (s * 3 + (e.b as int)) % 10000\n            sum = s\n\n        \
+                  after 1 s: -> RUN\n\n";
+    let (first, second) = if model_first { (model, driver) } else { (driver, model) };
+    format!(
+        "system:\n    language = 1\n    tick     = 10 ms\n\n\
+         record Pair layout little:\n    b : u8\n    odd : u8\n\n\
+         port pair : Pair @ mmio(0x50000030)\n\n\
+         output fifo : stream<Pair> @ sim(\"mmio/0x50000030/r\") with capacity = 6\n\
+         output sum  : int in 0..9999 @ hw(\"o/sum\") with safe = 0\n\
+         output room : int in 0..9 @ hw(\"o/room\") with safe = 0\n\n\
+         {first}{second}"
+    )
+}
+
+/// **Ein Strom an `mmio/ADR/r` ist ein FIFO, und der Port ist sein Treiber**
+/// (12.10, FB-431): Jedes Lesen entnimmt ein Element, das vor dem Tick im
+/// Puffer stand. Frei wird sein Platz mit dem Commit, `free` des Modells
+/// sieht ihn im naechsten Tick; `capacity` ist die Tiefe.
+#[test]
+fn a_stream_model_is_a_fifo_the_port_empties() {
+    let trace = run(&fifo(true), 6);
+    // Tick 0: 1 und 2 im Puffer, Platz fuer eins. Tick 1: Das Modell legt 3
+    // nach, der Treiber liest 1 — frei wird der Platz erst mit dem Commit.
+    // Danach je Tick eins hinein, eins heraus.
+    assert!(trace.contains("t=0 out room 6\n"), "{trace}");
+    assert!(trace.contains("t=1 out room 2\n"), "{trace}");
+    assert!(!trace.contains("t=2 out room"), "{trace}");
+    assert!(trace.contains("t=1 out sum 1\n"), "{trace}");
+    assert!(trace.contains("t=2 out sum 5\n"), "1 * 3 + 2:\n{trace}");
+    assert!(trace.contains("t=3 out sum 18\n"), "5 * 3 + 3:\n{trace}");
+    let outs = |t: &str| t.lines().filter(|l| l.contains(" out ")).map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(outs(&trace), outs(&run(&fifo(false), 6)), "die Reihenfolge der Maschinen aendert nichts");
+}
+
 /// **Nativ wie im Interpreter** (Satz 9.4.4, FB-261): Der Rahmen bildet
 /// die Adresse auf dasselbe Modell ab, und jede der drei Eigenschaften
 /// oben gilt auch fuer den uebersetzten Treiber.
@@ -221,6 +265,8 @@ fn the_generated_code_maps_ports_like_the_interpreter() {
         ("ports_changing_swapped", changing_model(false), 6, "t=3 out got 3"),
         ("ports_w1c_false", w1c_false(), 4, "t=1 out bits 0"),
         ("ports_ro_wo", ro_and_wo(), 5, "out sent 2"),
+        ("ports_fifo", fifo(true), 8, "t=3 out sum 18"),
+        ("ports_fifo_swapped", fifo(false), 8, "t=3 out sum 18"),
     ];
     for (name, src, ticks, want) in cases {
         let interpreted = run(&src, ticks);

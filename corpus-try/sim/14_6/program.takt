@@ -129,10 +129,6 @@ const IDLE_CURRENT  : [4] float[A] = [0.2 A, 0.2 A, 0.2 A, 0.2 A]
 const ERASE_CURRENT : [4] float[A] = [0.4 A, 0.4 A, 0.4 A, 0.4 A]
 const NO_CURRENT    : [4] float[A] = [0.0 A, 0.0 A, 0.0 A, 0.0 A]
 
-# Der Treiber holt `max_rate * T0` Bytes je Tick ab (8.8); das Kommando aus
-# 8.8 braucht damit zwei Chunks.
-const CMD_CHUNKS : int in 1..255 = 2
-
 machine dut_model:
     var sector : int in 0..255 = 0
     var got    : int in 0..255 = 0
@@ -153,12 +149,12 @@ machine dut_model:
         when not vbus_en: -> OFF
 
     state READY:
-        # `dut_tx` traegt kein `framing`, seine Elemente sind Byte-Chunks
-        # (8.6). Das Modell zaehlt sie und antwortet, sobald das Kommando
-        # vollstaendig angekommen ist.
-        on dut_tx as chunk:
+        # `dut_tx` ist ein `stream<u8>`: Das Modell liest je Byte ein
+        # Element (8.3, 8.6) und antwortet, sobald das Zeilenende des
+        # Kommandos angekommen ist; die anderen Bytes sind damit untersucht.
+        on dut_tx as b when b.data == 0x0A:
             got = got + 1
-        when got >= CMD_CHUNKS:
+        when got > 0:
             send dut_log_sim, "READY"
             -> ERASING
         when not vbus_en: -> OFF

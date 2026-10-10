@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 60 (12.7): `sys/outer_fault` stellt der Kern selbst; ein Modell
+# speist ihn nicht.
+
+input  outer     : bool @ hw("sys/outer_fault")
+output outer_sim : bool @ sim("sys/outer_fault")  # ~ SC-60
+output calm      : bool @ hw("o/calm") with safe = false
+
+machine guard:
+    initial RUN
+
+    state RUN:
+        loop:
+            calm = not outer.or(true)

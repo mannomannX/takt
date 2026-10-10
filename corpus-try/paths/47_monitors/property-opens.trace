@@ -1,4 +1,4 @@
-# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritt 28c)
+# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)
 # ziel property opens 0
 # ticks 7
 t=0 cmd go

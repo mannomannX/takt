@@ -1,7 +1,0 @@
-# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritt 28c)
-# ziel check valid press 929 935 0
-# ticks 7
-t=0 in tank_p stale
-t=1 in tank_p 8.289046e-317
-t=3 in tank_p 5e-324
-t=5 in tank_p stale

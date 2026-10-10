@@ -18,6 +18,7 @@ use takt_hal::CLayout;
 use takt_hal::contract::{Delivery, Device, Event, Track, Window};
 use takt_hal::quality::{Bounds, Gate};
 use takt_llvm::symbols::Prefix;
+use takt_llvm::ty::LlvmType;
 
 use takt_mir::machine::Machine;
 use takt_mir::program::{Direction, Overflow, Program};
@@ -147,6 +148,11 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
         "static const unsigned g_edge_device_of[{n}] = {{ {} }};",
         or_zero(device_of.iter().map(usize::to_string).collect())
     );
+    // Haelt der Treiber des Kanals `c` seinen Vertrag gerade nicht (Zeile 2)?
+    let _ = writeln!(
+        s,
+        "static _Bool takt_edge_down(struct {x}_arena *a, unsigned c) {{ return a->edge_devices[g_edge_device_of[c]].degraded; }}"
+    );
     let bounds: Vec<String> = p
         .channels
         .iter()
@@ -212,8 +218,15 @@ fn deliveries(s: &mut String, max: usize, x: &Prefix) {
     let _ = writeln!(s, "    struct takt_edge_value *v = &a->edge_v[a->edge_n++];");
     let _ = writeln!(s, "    memset(d, 0, sizeof *d);");
     let _ = writeln!(s, "    memset(v, 0, sizeof *v);");
-    let _ = writeln!(s, "    d->channel = c; d->bad_with_value = quality == 3 && has_value; d->t = t; d->age = age;");
+    // 12.6 Zeile 2: `Bad` (3) mit Wert und `Suspect` (1) ohne widersprechen sich.
+    let _ = writeln!(
+        s,
+        "    d->channel = c; d->inconsistent = (quality == 3 && has_value) || (quality == 1 && !has_value); d->t = t; d->age = age;"
+    );
     let _ = writeln!(s, "    if (has_value && size > 0 && size <= 8) memcpy(v->value, value, (size_t)size);");
+    // Ein zusammengesetzter Wert (FB-430) kommt als Text mit statischer
+    // Lebensdauer: der Zeiger genuegt.
+    let _ = writeln!(s, "    if (has_value && size > 8) {{ v->bytes = (const unsigned char *)value; v->len = size; }}");
     let _ = writeln!(s, "    v->kind = kind; v->i = i; v->f = f; v->quality = quality; v->reason = reason;");
     let _ = writeln!(s, "    v->has_value = has_value; v->age = age;");
     let _ = writeln!(s, "}}");
@@ -303,15 +316,7 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], deli
         let Some((c, e)) = gate_of(p, &slot.name) else { continue };
         let _ = writeln!(s, "    case {c}: {{ /* {} */", slot.name);
         if c_type(&slot.ty, slot.signed).is_none() {
-            // Ein Array oder Record kommt am Rand nur als Qualitaet an
-            // (`bad`, 12.6); seinen Wert stellt die Bindung (8.3).
-            let _ = writeln!(s, "        if (!v->has_value) {{");
-            let _ =
-                writeln!(s, "            a->image[{}] = v->quality; a->image[{}] = v->reason;", e.quality, e.reason);
-            let _ = writeln!(s, "            *(long long *)(a->image + {}) = v->age;", e.age);
-            let _ = writeln!(s, "        }}");
-            let _ = writeln!(s, "        break;");
-            let _ = writeln!(s, "    }}");
+            composite(s, p, slot, c, &e);
             continue;
         }
         let _ = writeln!(s, "        unsigned verdict = 0;");
@@ -400,6 +405,61 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], deli
     let _ = writeln!(s, "    default: break;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
+}
+
+/// Ein Input zusammengesetzten Typs am Rand (FB-430), wie
+/// `Image::through_edge`: Ein Record, ein Array oder ein Enum mit Feldern
+/// kommt wie geliefert ins Abbild, eine Range hat der Rand dort nicht zu
+/// pruefen. Ein Tick-Array (`samples<T, N>`, 8.9) geht Sample fuer Sample
+/// durch das Tor des Kanals, und die schlechteste Qualitaet gilt: `Suspect`
+/// haelt das Abbild, `Bad` hat keinen Wert.
+fn composite(s: &mut String, p: &Program, slot: &crate::layout::Slot, c: usize, e: &Entry) {
+    let _ = writeln!(s, "        const unsigned char *src = v->len > 0 ? v->bytes : v->value;");
+    let samples = match p.types.list.get(p.channels[c].ty.index()) {
+        Some(Type::Samples { elem, len }) => {
+            let signed = matches!(p.types.get(*elem), Type::Int { width, .. } if width.signed());
+            match (slot.ty.clone(), takt_llvm::ty::lower(*elem, p)) {
+                (LlvmType::Array(item, _), Some(lowered)) if *item == lowered => {
+                    c_type(&lowered, signed).map(|ct| (ct, lowered.aligned_size(), lowered.is_float(), *len))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let Some((ct, stride, float, len)) = samples else {
+        let _ = writeln!(s, "        if (v->has_value) memcpy(a->image + {}, src, {});", slot.offset, slot.size);
+        let _ = writeln!(s, "        a->image[{}] = v->quality; a->image[{}] = v->reason;", e.quality, e.reason);
+        let _ = writeln!(s, "        *(long long *)(a->image + {}) = v->age;", e.age);
+        let _ = writeln!(s, "        break;");
+        let _ = writeln!(s, "    }}");
+        return;
+    };
+    let _ = writeln!(s, "        unsigned worst = 0, rank = 0;");
+    let _ = writeln!(s, "        if (v->has_value && v->quality != 3)");
+    let _ = writeln!(s, "            for (unsigned k = 0; k < {len}; k++) {{");
+    let _ = writeln!(s, "                {ct} x; memcpy(&x, src + k * {stride}, sizeof x);");
+    let _ = writeln!(
+        s,
+        "                unsigned vk = takt_edge_gate(&a->edge_gates[{c}], &g_edge_bounds[{c}], {}, (long long)x, (double)x, d->at);",
+        u8::from(float)
+    );
+    let _ = writeln!(s, "                unsigned q = vk & 0xff, r = q == 0 ? 0 : q == 1 ? 1 : 3;");
+    let _ = writeln!(s, "                if (r > rank) {{ rank = r; worst = vk; }}");
+    let _ = writeln!(s, "            }}");
+    let _ = writeln!(s, "        if (rank == 0) {{");
+    let _ = writeln!(s, "            if (v->has_value) memcpy(a->image + {}, src, {});", slot.offset, slot.size);
+    let _ = writeln!(s, "            a->image[{}] = v->quality; a->image[{}] = v->reason;", e.quality, e.reason);
+    let _ = writeln!(s, "        }} else {{");
+    let _ = writeln!(
+        s,
+        "            a->image[{}] = rank == 1 ? 1 : 3; a->image[{}] = (unsigned char)(worst >> 8);",
+        e.quality, e.reason
+    );
+    let _ = writeln!(s, "        }}");
+    let _ = writeln!(s, "        *(long long *)(a->image + {}) = v->age;", e.age);
+    let _ = writeln!(s, "        break;");
+    let _ = writeln!(s, "    }}");
 }
 
 /// Der Kanal eines Eingangs mit Eintrag im Abbild: einer, dessen Wert durch

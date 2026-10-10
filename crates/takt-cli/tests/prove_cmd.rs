@@ -151,8 +151,10 @@ fn a_saved_proof_drops_its_check_from_the_build_and_a_stale_one_is_refused() {
     let out = takt(&["prove", path, "--depth", "4", "--save-proof", proof_path]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.contains("range m:18:13: bewiesen unerreichbar (k-Induktion"), "{stdout}");
-    assert!(stdout.contains("range m:17:17: bewiesen unerreichbar (induktive Invariante, Spacer)"), "{stdout}");
+    // Mit freien Aborts (13.3) reicht fuer `b = b - 1` die k-Induktion
+    // nicht mehr; welche Methode beweist, ist hier gleich.
+    assert!(stdout.contains("range m:18:13: bewiesen unerreichbar"), "{stdout}");
+    assert!(stdout.contains("range m:17:17: bewiesen unerreichbar"), "{stdout}");
     assert!(stdout.contains(&format!("{proof_path}: 2 bewiesene Stellen")), "{stdout}");
     // FB-380: Bericht und Beweisdatei nennen Solver und Version.
     let identity = stdout.lines().find_map(|l| l.trim().strip_prefix("Solver: ")).unwrap_or_else(|| panic!("{stdout}"));

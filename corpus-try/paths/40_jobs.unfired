@@ -1,0 +1,5 @@
+takt-unfired 1
+program b064db355c44f12035d65b951572aec2369ef2e3661c6c6cb2a5d98f8f6c3698
+solver z3 4.13.4
+uebergang m k=5 DONE->RUN @1017
+uebergang m k=5 FAILED->RUN @1062

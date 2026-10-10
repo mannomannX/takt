@@ -1,0 +1,5 @@
+takt-unfired 1
+program f79c59b48ca589fccf8e52c6a038479a9d27e3945ae8093bee4cfc8ab77c0b53
+solver z3 4.13.4
+uebergang restart k=5 DONE->RUN @3436
+uebergang restart k=5 FAILED->RUN @3481

@@ -17,7 +17,7 @@ use crate::stream::Delivery;
 use crate::system::Sim;
 use crate::trace::{LineKind, SampleText, Trace, TraceLine, parse_value, sample_from_text, value_text};
 use crate::value::Seen;
-use crate::value::{Quality, Trap, Value};
+use crate::value::{Quality, Sample, Trap, Value};
 
 /// Lauf-Verdikt (13.5): FAIL absorbiert.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,6 +98,8 @@ pub struct RunResult {
     /// Zeile `fault` nennt nur Maschine und Art; wer einen Pfad zu einer
     /// bestimmten Pruefung bestaetigt (`takt prove`), braucht die Stelle.
     pub faults: Vec<FaultSite>,
+    /// Wie viele Ticks der Lauf verschlief (9.9).
+    pub slept: u64,
 }
 
 /// Ein Fault des Laufs mit der Stelle, die ihn ausloeste.
@@ -161,6 +163,8 @@ pub struct Run<'p> {
     pub(crate) trap: Option<Trap>,
     steps: String,
     faults: Vec<FaultSite>,
+    /// Die verschlafenen Ticks (`Runtime::skip`).
+    pub(crate) slept: u64,
     /// Runtime-Faults, die die Schleife erhoben hat (7.3, 12.3, 12.6 Zeile
     /// 7); der naechste Tick stellt sie zu und schreibt ihre Zeile.
     pub(crate) raised: Vec<takt_mir::machine::RuntimeKind>,
@@ -242,6 +246,7 @@ impl<'p> Run<'p> {
             }
             None => {
                 apply_stimulus(&mut sim, stimulus, 0, &mut echo, only)?;
+                outer_fault(&mut sim, stimulus, 0, false);
                 sim.init()?;
             }
         }
@@ -278,6 +283,7 @@ impl<'p> Run<'p> {
             trap: None,
             steps: String::new(),
             faults,
+            slept: 0,
             raised: Vec::new(),
         };
         run.deadline = run.earliest_deadline();
@@ -313,12 +319,14 @@ impl<'p> Run<'p> {
         }
         // Was die Schleife erhoben hat, steht im Trace wie ein Stimulus,
         // damit der Lauf sich nachspielen laesst (12.5).
+        let raised = !self.raised.is_empty();
         for kind in std::mem::take(&mut self.raised) {
             let name = format!("{kind:?}");
             self.writer.lines.push(TraceLine { tick, kind: LineKind::Runtime { kind: name, output: None } });
             pend_runtime(&mut self.sim, kind, None, tick);
         }
         apply_stimulus(&mut self.sim, &self.stimulus, tick, &mut self.echo, self.only)?;
+        outer_fault(&mut self.sim, &self.stimulus, tick, raised);
         self.writer.lines.append(&mut self.echo);
         self.sim.step()?;
         self.collect_steps(tick);
@@ -370,15 +378,17 @@ impl<'p> Run<'p> {
             monitors,
             verdict,
             mut fail,
-            coverage,
+            mut coverage,
             start_params,
             ended,
             last,
             steps,
             faults,
+            slept,
             ..
         } = self;
         let at = if ended == Ended::Ticks { ticks } else { last };
+        coverage.sites(sim.loaded.program, &sim.image.site_evals, &faults);
         let properties = finish_properties(monitors, at, &mut writer, &mut fail);
         let final_verdict = if fail { Verdict::Fail } else { verdict };
         if takt_mir::persist::any(sim.loaded.program) {
@@ -400,6 +410,7 @@ impl<'p> Run<'p> {
             steps,
             faults,
             inputs: sim.seen.take().unwrap_or_default(),
+            slept,
         })
     }
 }
@@ -508,6 +519,16 @@ fn foreign_lines(stimulus: &Trace, tick: u64) -> Trace {
 }
 
 /// Speist die Stimuluszeilen eines Ticks ein.
+/// `sys/outer_fault` (13.3): wahr im Tick, in dem ein Operator-Abort oder
+/// ein Runtime-Fault von aussen vorgemerkt wird — aus dem Stimulus oder aus
+/// der Schleife (`raised`). Der Kern stellt den Kanal, kein Treiber.
+fn outer_fault(sim: &mut Sim<'_>, stimulus: &Trace, tick: u64, raised: bool) {
+    let Some(c) = takt_mir::sys::outer_fault(sim.loaded.program) else { return };
+    let outer = raised || stimulus.at(tick).any(|l| matches!(l.kind, LineKind::Abort | LineKind::Runtime { .. }));
+    let now = i64::try_from(tick).unwrap_or(i64::MAX).saturating_mul(sim.loaded.program.config.tick);
+    sim.image.set_input(ChannelId(c as u32), Sample::good(Value::Bool(outer)), now);
+}
+
 fn apply_stimulus(
     sim: &mut Sim<'_>,
     stimulus: &Trace,

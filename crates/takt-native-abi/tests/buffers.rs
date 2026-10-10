@@ -175,7 +175,7 @@ fn the_edge_writes_at_most_max_events() {
     // Drei Treiber, jeder mit einem Zeitstempel knapp neben dem Fenster:
     // drei Klemmungen, also drei Meldungen.
     let delivery =
-        |channel| Delivery { channel, element: false, bad_with_value: false, t: 2_100, age: 0, seq: 0, at: NONE };
+        |channel| Delivery { channel, element: false, inconsistent: false, t: 2_100, age: 0, seq: 0, at: NONE };
     let mut deliveries = [delivery(0), delivery(1), delivery(2)];
     let window = Window { lo: 1_000, hi: 2_000, tolerance: 500 };
     let mut events = [Event { kind: 0xEE, what: 0xEE, index: 0xEEEE }; 3];

@@ -171,3 +171,26 @@ fn a_recorded_tx_line_holds_until_the_next() {
     assert!(t.contains("t=4 fault dut StreamOverflow \"Sendepuffer `tx` hat 2 Byte frei, 3 verlangt\" -> SAFE"), "{t}");
     assert!(!t.contains(" tx tx "), "{t}");
 }
+
+/// Pruefung 20, 8.3: Speist ein Ausgabestrom einen Eingabestrom aus Text,
+/// ist jedes `send` ein Element und muss mit seiner statischen Hoechstlaenge
+/// in dessen Kapazitaet passen; sonst saehe der Leser ein Element, das sein
+/// Typ nicht fasst.
+#[test]
+fn a_send_must_fit_the_element_it_feeds() {
+    let src = |cap: u32| {
+        format!(
+            "system:\n    language = 1\n    tick = 10 ms\n\n\
+             input  rx     : stream<line<8>> @ hw(\"uart0/rx\") with max_rate = 100 Hz, framing = lines\n\
+             output rx_sim : stream<line<{cap}>> @ sim(\"uart0/rx\") with capacity = 64\n\
+             output n      : int in 0..99 @ hw(\"o/n\") with safe = 0\n\n\
+             machine model:\n    initial RUN\n    state RUN:\n        enter:\n            send rx_sim, \"ok\"\n\n\
+             machine reader:\n    initial RUN\n    state RUN:\n        on rx as e:\n            n = e.text.len\n"
+        )
+    };
+    if let Err(e) = compile(&src(8)) {
+        panic!("{e:?}");
+    }
+    let errors = compile(&src(16)).expect_err("zu lang");
+    assert!(errors.iter().any(|e| e.contains("SC-20") && e.contains("fasst 8 Byte je Element")), "{errors:?}");
+}

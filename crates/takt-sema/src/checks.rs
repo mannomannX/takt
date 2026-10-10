@@ -459,152 +459,9 @@ impl Lowerer<'_> {
     }
 
     /// Statische Hoechstzahl von `send` auf einen Stream je Aktivierung des
-    /// Schreibers (8.6, Pruefung 43): eine Schleife mit ihrer Schranke, ein
-    /// Handler je Element seines Fensters (8.7), von zwei Zweigen der
-    /// teurere.
+    /// Schreibers (8.6, Pruefung 43; `takt_mir::analysis::sends`).
     fn max_sends(&self, target: StreamRef) -> u64 {
-        self.max_sends_of(target, &mut Vec::new())
-    }
-
-    /// `max_sends` mit den Stroemen, deren Hoechstzahl gerade entsteht: Ein
-    /// Zyklus ueber Handler rechnet mit der Kapazitaet.
-    fn max_sends_of(&self, target: StreamRef, open: &mut Vec<StreamRef>) -> u64 {
-        open.push(target);
-        let mut worst = 0u64;
-        for m in &self.program.machines {
-            if matches!(m.kind, MachineKind::Template) {
-                continue;
-            }
-            let period = u64::from(m.period.max(1));
-            let mut n = 0u64;
-            for_each_block_in(m, &mut |b, handler| {
-                if !handler {
-                    n = n.saturating_add(self.sends_in(&b.stmts, target, period, open));
-                }
-            });
-            for h in m.handlers.iter().chain(m.states.iter().flat_map(|s| &s.handlers)) {
-                let each = self.sends_in(&h.body.stmts, target, period, open);
-                if each > 0 {
-                    n = n.saturating_add(self.stream_window(h.stream, period, open).saturating_mul(each));
-                }
-            }
-            // 6.2: Eine Sequenz laeuft je Tick ein Segment; ihre `send`
-            // zaehlen je Segment, nicht in der Summe (FB-186).
-            for s in &m.states {
-                if let Some(seq) = &s.sequence {
-                    let mut count = |stmts: &[Stmt]| self.sends_in(stmts, target, period, open);
-                    n = n.saturating_add(segment_sends(&seq.items, &mut count));
-                }
-            }
-            worst = worst.max(n);
-        }
-        open.pop();
-        worst.max(1)
-    }
-
-    /// `send` auf `target` in einem Durchlauf von `stmts` einer Maschine
-    /// der Periode `period`.
-    fn sends_in(&self, stmts: &[Stmt], target: StreamRef, period: u64, open: &mut Vec<StreamRef>) -> u64 {
-        let mut n = 0u64;
-        for s in stmts {
-            let here = match &s.kind {
-                StmtKind::Send { stream, .. } => u64::from(*stream == target),
-                StmtKind::If { then, otherwise, .. } => {
-                    let a = self.sends_in(&then.stmts, target, period, open);
-                    a.max(self.sends_in(&otherwise.stmts, target, period, open))
-                }
-                StmtKind::Match { arms, .. } => {
-                    let mut most = 0u64;
-                    for a in arms {
-                        most = most.max(self.sends_in(&a.body.stmts, target, period, open));
-                    }
-                    most
-                }
-                // Die Sema senkt `range(N)` immer auf ein Literal (stmt.rs).
-                StmtKind::ForRange { count, body, .. } => {
-                    let trips = match count.kind {
-                        ExprKind::Int(n) => u64::try_from(n).unwrap_or(0),
-                        _ => u64::MAX,
-                    };
-                    single_pass(body, trips).saturating_mul(self.sends_in(&body.stmts, target, period, open))
-                }
-                StmtKind::ForEach { iter, body, .. } => match self.sends_in(&body.stmts, target, period, open) {
-                    0 => 0,
-                    each => single_pass(body, self.iterations(iter, period, open)).saturating_mul(each),
-                },
-                StmtKind::Every { body, .. } | StmtKind::At { body, .. } => {
-                    self.sends_in(&body.stmts, target, period, open)
-                }
-                StmtKind::Assign { .. }
-                | StmtKind::Check { .. }
-                | StmtKind::Goto(_)
-                | StmtKind::Abort { .. }
-                | StmtKind::Return(_)
-                | StmtKind::Cancel(_)
-                | StmtKind::Skip(_)
-                | StmtKind::Raise(_)
-                | StmtKind::Job { .. }
-                | StmtKind::Break
-                | StmtKind::Observe(_)
-                | StmtKind::Arm { .. }
-                | StmtKind::MethodCall { .. }
-                | StmtKind::Pass => 0,
-            };
-            n = n.saturating_add(here);
-        }
-        n
-    }
-
-    /// Durchlaeufe von `for x in iter`: das Fenster eines Stroms, sonst die
-    /// Kapazitaet des Behaelters (9.4.3).
-    fn iterations(&self, iter: &Expr, period: u64, open: &mut Vec<StreamRef>) -> u64 {
-        let stream = match &iter.kind {
-            ExprKind::Stream(s) => Some(StreamRef::Internal(*s)),
-            ExprKind::Input { channel, .. } => Some(StreamRef::Channel(*channel)),
-            ExprKind::Var(v) => Some(StreamRef::Var(*v)),
-            _ => None,
-        };
-        match (self.program.types.get(iter.ty), stream) {
-            (Type::Stream(_), Some(s)) => self.stream_window(s, period, open),
-            (Type::Array { len, .. } | Type::Samples { len, .. }, _) => u64::from(*len),
-            (
-                Type::Vec { cap, .. }
-                | Type::Bytes { cap }
-                | Type::Map { cap, .. }
-                | Type::Str { cap }
-                | Type::Line { cap },
-                _,
-            ) => u64::from(*cap),
-            _ => u64::MAX,
-        }
-    }
-
-    /// Hoechstens so viele Elemente sieht ein Konsument der Periode
-    /// `period` in seinem Fenster: die Kapazitaet, und nach Lemma 9.6.1
-    /// nicht mehr, als zwischen zwei Aktivierungen eintreffen
-    /// (`MAXPT_s * n_m`) — ein Ueberlauf darueber ist der Fault des Stroms.
-    fn stream_window(&self, s: StreamRef, period: u64, open: &mut Vec<StreamRef>) -> u64 {
-        let p = &self.program;
-        let tick = u64::try_from(p.config.tick).unwrap_or(0);
-        let internal = |i: StreamId| p.streams.get(i.index()).map_or(u64::MAX, |d| u64::from(d.capacity));
-        let (capacity, maxpt) = match s {
-            StreamRef::Channel(c) => {
-                let cap = p.channels.get(c.index()).and_then(|c| c.attrs.capacity).map_or(u64::MAX, u64::from);
-                let rate = self.rate_hz(c.index()).map(|r| ceil_div(r.saturating_mul(tick), 1_000_000_000).max(1));
-                (cap, rate)
-            }
-            StreamRef::Internal(i) => {
-                let sends = (!open.contains(&s)).then(|| self.max_sends_of(s, open));
-                (internal(i), sends)
-            }
-            StreamRef::Fired(t) => (p.triggers.get(t.index()).map_or(u64::MAX, |d| internal(d.fired)), None),
-            // Ein Strom als Parameter: hoechstens das groesste Fenster.
-            StreamRef::Var(_) => {
-                let channels = p.channels.iter().filter_map(|c| c.attrs.capacity).map(u64::from);
-                (channels.chain(p.streams.iter().map(|d| u64::from(d.capacity))).max().unwrap_or(u64::MAX), None)
-            }
-        };
-        maxpt.map_or(capacity, |m| capacity.min(m.saturating_mul(period)))
+        takt_mir::analysis::sends::max_sends(&self.program, target)
     }
 
     /// Pruefungen 40 und 41 (3.4, 4.2): zwei Hinweise, die nur auf schmalen
@@ -1151,6 +1008,14 @@ impl Lowerer<'_> {
                 ));
                 continue;
             };
+            if simulated && entry.core {
+                diags.push(Diagnostic::error(
+                    SC60,
+                    c.span,
+                    format!("`{}`: `{address}` stellt der Kern, kein Modell speist ihn (13.3)", c.name),
+                ));
+                continue;
+            }
             let dir_ok = if simulated {
                 c.dir == Direction::Output && entry.dir == Direction::Input
             } else {
@@ -1213,6 +1078,7 @@ impl Lowerer<'_> {
         match (want, self.ty(ty)) {
             (SysType::Enum(n), Type::Enum(e)) => self.program.enums[e.index()].name == n,
             (SysType::Duration, Type::Duration { .. }) => true,
+            (SysType::Bool, Type::Bool) => true,
             _ => false,
         }
     }
@@ -1265,7 +1131,9 @@ impl Lowerer<'_> {
 
     /// Pruefung 20 (8.8): „statische Summe der Hoechstlaengen je Aktivierung
     /// <= `capacity`". Gerechnet wird je Maschine ueber alle erreichbaren
-    /// `send`, weil der Sendepuffer erst beim Commit geleert wird.
+    /// `send`, weil der Sendepuffer erst beim Commit geleert wird. Speist der
+    /// Strom einen Eingabestrom mit Elementen verschiedener Laenge, ist jedes
+    /// `send` ein Element (8.3) und muss in dessen Kapazitaet passen.
     fn check_send_budget(&mut self) {
         let mut diags = Vec::new();
         for (i, c) in self.program.channels.iter().enumerate() {
@@ -1277,6 +1145,7 @@ impl Lowerer<'_> {
                 continue;
             }
             let cap = u64::from(c.attrs.capacity.unwrap_or(256));
+            let element = self.program.kept_element_cap(id);
             for m in &self.program.machines {
                 if matches!(m.kind, MachineKind::Template) {
                     continue;
@@ -1288,6 +1157,22 @@ impl Lowerer<'_> {
                         if *t == id {
                             sum += u64::from(*len_max);
                             site.get_or_insert(s.span);
+                            if let Some(n) = element.filter(|n| len_max > n) {
+                                diags.push(
+                                    Diagnostic::error(
+                                        SC20,
+                                        s.span,
+                                        format!(
+                                            "`{}`: ein `send` bis {len_max} Byte ist ein Element, \
+                                             der gespeiste Eingabestrom fasst {n} Byte je Element",
+                                            c.name
+                                        ),
+                                    )
+                                    .with_suggestion(
+                                        "kuerzer senden oder das Element des Eingabestroms vergroessern (8.3)",
+                                    ),
+                                );
+                            }
                         }
                     }
                 });
@@ -1628,7 +1513,9 @@ impl Lowerer<'_> {
                 continue;
             }
             if let Binding::Hw(a) = &c.binding {
-                if !sims.contains(&address_key(a)) {
+                // Einen Kanal, den der Kern stellt, speist kein Modell (13.3).
+                let core = sys::channel(&a.text()).is_some_and(|s| s.core);
+                if !core && !sims.contains(&address_key(a)) {
                     diags.push(
                         Diagnostic::warning(SC13, c.span, format!("Input `{}` hat keine `sim`-Quelle", c.name))
                             .with_suggestion(format!("`output {}_sim : … @ sim(\"…\")` oder Stimulus (8.3)", c.name)),
@@ -2196,40 +2083,6 @@ fn has_cycle(i: usize, edges: &[Vec<FnId>], state: &mut [u8]) -> bool {
 
 // ------------------------------------------------------------ Durchlaeufe
 
-/// Das Maximum der `send` eines Segments (6.2): Grenzen sind `wait`,
-/// `until`, eine Anweisung mit `->` und das Ende eines `repeat`-Koerpers.
-fn segment_sends(items: &[SeqItem], count: &mut dyn FnMut(&[Stmt]) -> u64) -> u64 {
-    let (mut best, mut cur) = (0u64, 0u64);
-    for item in items {
-        match item {
-            SeqItem::Stmt(s) => {
-                cur += count(std::slice::from_ref(s));
-                if Block::new(vec![s.clone()]).has_goto() {
-                    best = best.max(cur);
-                    cur = 0;
-                }
-            }
-            SeqItem::Wait(_) => {
-                best = best.max(cur);
-                cur = 0;
-            }
-            SeqItem::Until { timeout, .. } => {
-                best = best.max(cur);
-                cur = 0;
-                if let Some(TimeoutAction::Else(b)) = timeout.as_ref().map(|t| &t.action) {
-                    best = best.max(count(&b.stmts));
-                }
-            }
-            SeqItem::Expect { .. } => {}
-            SeqItem::Repeat { body, .. } | SeqItem::Step { body, .. } => {
-                best = best.max(cur).max(segment_sends(body, count));
-                cur = 0;
-            }
-        }
-    }
-    best.max(cur)
-}
-
 /// Die Channels, die eine Maschine liest: als Ausdruck oder, bei einem
 /// Handler, ueber ihren Cursor (`Layout::cursors`, 9.6).
 fn channels_read_by(m: &Machine) -> HashSet<ChannelId> {
@@ -2245,12 +2098,6 @@ fn channels_read_by(m: &Machine) -> HashSet<ChannelId> {
         }
     }
     read
-}
-
-/// Durchlaeufe einer Schleife mit Schranke `bound`: Endet ihr Rumpf mit
-/// `break`, laeuft sie hoechstens einmal.
-fn single_pass(body: &Block, bound: u64) -> u64 {
-    if matches!(body.stmts.last().map(|s| &s.kind), Some(StmtKind::Break)) { bound.min(1) } else { bound }
 }
 
 /// Wo ein Programm `next_run = ON_WAKE` schreibt (12.7); `None`, wenn

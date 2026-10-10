@@ -1,9 +1,10 @@
 //! Inputs zusammengesetzter Typen im Modell (3.5, `Image::through_edge`):
 //! je Blatt des Typs eine Eingabe. Der Rand prueft an ihnen weder Range noch
-//! `max_slew` (`limits_of` kennt sie nur fuer Zahlen), also ist eine
-//! Lieferung nie `Suspect`; eine gute haelt die Invarianten ihres Typs, eine
-//! ungueltige ist null, und eine gehaltene ist die vorige wie bei einem
-//! skalaren Input.
+//! `max_slew` (`limits_of` kennt sie nur fuer Zahlen), also behaelt eine
+//! Lieferung die Qualitaet ihres Treibers: `Good` und `Suspect` zeigen einen
+//! Wert, der die Invarianten seines Typs haelt (12.6 Zeile 2: `Suspect` nur
+//! mit Wert), eine ungueltige ist null, und eine gehaltene ist die vorige
+//! wie bei einem skalaren Input.
 
 use std::ops::Not;
 
@@ -36,7 +37,6 @@ impl Enc<'_> {
             Term::bin(Op::Ge, q.clone(), Term::int(quality::GOOD)),
             Term::bin(Op::Le, q.clone(), Term::int(quality::BAD)),
         ]));
-        out.push(Term::eq(q.clone(), Term::int(quality::SUSPECT)).not());
         let x: Vec<Term> =
             leaves.iter().map(|(path, sort)| self.input(format!("i.{}{path}", edge.name), *sort)).collect();
         let prev = |path: &str, sort| Term::var(edge.loc(&format!("x{path}.prev")), sort);
@@ -44,7 +44,7 @@ impl Enc<'_> {
         let mut kept = vec![Term::eq(q.clone(), self.kept_quality(edge))];
         kept.extend(x.iter().zip(&leaves).map(|(t, (path, sort))| Term::eq(t.clone(), prev(path, *sort))));
         out.push(implies(held.clone(), Term::and(kept)));
-        let good = Term::and(vec![held.clone().not(), Term::eq(q.clone(), Term::int(quality::GOOD))]);
+        let good = Term::and(vec![held.clone().not(), self.composite_readable(edge)]);
         let invalid = Term::and(vec![held.not(), good.clone().not()]);
         let zero = x.iter().map(|t| Term::eq(t.clone(), Enc::zero(t.sort()))).collect();
         out.push(implies(invalid, Term::and(zero)));
@@ -78,9 +78,11 @@ impl Enc<'_> {
         Ok(next)
     }
 
-    /// Lesbar ist nur ein guter Wert: `Suspect` gibt es hier nicht.
+    /// Lesbar ist ein Wert `Good` oder `Suspect`: Beides kommt hier nur vom
+    /// Treiber und immer mit Wert.
     pub(super) fn composite_readable(&mut self, edge: &Edge) -> Term {
-        Term::eq(self.quality(edge), Term::int(quality::GOOD))
+        let q = self.quality(edge);
+        Term::or(vec![Term::eq(q.clone(), Term::int(quality::GOOD)), Term::eq(q, Term::int(quality::SUSPECT))])
     }
 
     /// Der Wert eines zusammengesetzten Inputs oder Arrays aus Abtastwerten;
@@ -91,7 +93,7 @@ impl Enc<'_> {
         self.input_items(&edge, span)
     }
 
-    fn input_items(&mut self, edge: &Edge, span: Span) -> R<V> {
+    pub(super) fn input_items(&mut self, edge: &Edge, span: Span) -> R<V> {
         match edge.samples {
             Some(_) => Ok(self.sample_array(edge)),
             None => self.composite_items(edge, span),

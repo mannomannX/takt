@@ -251,13 +251,14 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
     for (id, elem) in channels {
         let c = &p.channels[id];
         let input = c.dir == Direction::Input;
-        let capacity = c.attrs.capacity.unwrap_or(16);
-        // Der Ring eines gelesenen Ausgabestroms fasst so viel wie das
-        // Fenster im Interpreter (`Image::new`): seine Kapazitaet mal 256.
+        // Der Ring eines gelesenen Ausgabestroms hat so viele Plaetze, wie
+        // sein Sendepuffer Bytes fasst, wie das Fenster im Interpreter
+        // (`Image::new`); die Byteschranke bindet dort nie.
+        let capacity = if input { c.attrs.capacity.unwrap_or(16) } else { c.attrs.capacity.unwrap_or(256) };
         let capacity_bytes = match (input, c.attrs.capacity_bytes) {
             (true, Some(b)) => b,
             (true, None) => capacity.saturating_mul(payload_cap(p, elem)),
-            (false, _) => capacity.saturating_mul(256),
+            (false, _) => capacity.saturating_mul(takt_mir::bytes::max_size(p, elem).unwrap_or(1).max(1)),
         };
         out.push(Dynamic {
             id: id as i64,
@@ -286,6 +287,23 @@ fn port_writes(p: &Program, id: usize) -> bool {
         })
 }
 
+/// Die Ausgabestroeme, die ein Modell als Lesekanal `mmio/ADR/r` eines
+/// Registerports stellt (12.10): Sie leert das Lesen des Ports, nicht
+/// `max_rate`.
+pub fn port_reads(p: &Program) -> Vec<usize> {
+    (0..p.channels.len())
+        .filter(|&id| {
+            let c = &p.channels[id];
+            c.dir == Direction::Output
+                && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_)))
+                && p.ports.iter().any(|port| {
+                    let want = takt_mir::pattern::Address::simple(&format!("mmio/{:#x}/r", port.address));
+                    matches!(&c.binding, takt_mir::program::Binding::Sim(a) if *a == want)
+                })
+        })
+        .collect()
+}
+
 /// Die Maschinen, die den Strom am Kanal `channel` lesen.
 fn readers_of(p: &Program, channel: usize) -> Vec<u32> {
     let r = takt_mir::expr::StreamRef::Channel(takt_mir::ChannelId(channel as u32));
@@ -294,17 +312,10 @@ fn readers_of(p: &Program, channel: usize) -> Vec<u32> {
 
 /// Die Ausgabestroeme, die eine Maschine liest (8.3: ein Modell liest die
 /// `hw`-Ausgaenge des Programms mit Unit-Delay). Was der Treiber in einem
-/// Tick abholt, wird im naechsten ein Element ihres Rings
+/// Tick abholt, steht im naechsten als Elemente ihres Typs in ihrem Ring
 /// (`System::drain_tx`).
 fn read_outputs(p: &Program) -> Vec<usize> {
-    (0..p.channels.len())
-        .filter(|&i| {
-            let c = &p.channels[i];
-            c.dir == Direction::Output
-                && matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_)))
-                && !readers_of(p, i).is_empty()
-        })
-        .collect()
+    (0..p.channels.len()).filter(|&i| p.is_read_output(takt_mir::ChannelId(i as u32))).collect()
 }
 
 /// Hat das Programm einen internen Strom oder den Schreibstrom eines Ports
@@ -745,13 +756,15 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
         .collect();
     // Je Strom so viel Platz wie seine Kapazitaet (8.8, Default 256), und
     // fuer das Abgeholte so viel, wie ein Tick hoechstens abholt; ohne Rate
-    // der ganze Puffer.
+    // der ganze Puffer, ebenso an einem Port, dessen Lesen ihn leert (12.10).
+    let ports = port_reads(p);
     let cap = |c: &Channel| c.attrs.capacity.unwrap_or(256);
     let per_tick = |c: &Channel| match rate_hz(c) {
         Some(hz) => u32::try_from((hz.saturating_mul(p.config.tick as u64) / 1_000_000_000).max(1))
             .map_or(cap(c), |n| n.min(cap(c))),
         None => cap(c),
     };
+    let per_tick = |i: usize, c: &Channel| if ports.contains(&i) { cap(c) } else { per_tick(c) };
     if rings {
         shapes(&mut t.code, p);
     }
@@ -763,13 +776,13 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
             "static void takt_sim_streams(struct {x}_arena *a, long long at) {{ (void)a; (void)at; }}"
         );
         if rings {
-            stream_send(&mut t.code, true, false, stages(p), x);
+            stream_send(&mut t.code, true, false, stages(p), false, x);
         }
         return;
     }
     let n = streams.len();
     let tx_max = streams.iter().map(|(_, c)| cap(c)).max().unwrap_or(1);
-    let sent_max = streams.iter().map(|(_, c)| cap(c).min(per_tick(c))).max().unwrap_or(1);
+    let sent_max = streams.iter().map(|(i, c)| cap(c).min(per_tick(*i, c))).max().unwrap_or(1);
     let _ = writeln!(t.code, "#define TAKT_TX_MAX {tx_max}");
     let _ = writeln!(t.fields, "    _Alignas(8) unsigned char tx[{n}][{tx_max}];");
     let _ = writeln!(t.fields, "    int tx_n[{n}];");
@@ -783,6 +796,33 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     // ihn). Beide null heisst `idle` — auch im Tick 0, ohne Initialisierung.
     let _ = writeln!(t.fields, "    unsigned char tx_busy[{n}];");
     let _ = writeln!(t.fields, "    unsigned char tx_hold[{n}];");
+    // 12.10: Was das Lesen eines Ports in diesem Tick entnommen hat und was
+    // vor dem Tick im Puffer stand (`TxBuffer::port`).
+    if !ports.is_empty() {
+        let _ = writeln!(t.fields, "    int tx_taken[{n}];");
+        let _ = writeln!(t.fields, "    int tx_visible[{n}];");
+    }
+    // 8.3: Speist ein Ausgabestrom einen Eingabestrom mit Elementen
+    // verschiedener Laenge, behaelt der Puffer ihre Grenzen
+    // (`Program::keeps_elements`): die Laengen der wartenden Elemente, die
+    // abgeholten Bytes des ersten und was der Commit vollendet hat.
+    let keeping: Vec<(usize, u32)> = streams
+        .iter()
+        .enumerate()
+        .filter(|(_, (i, _))| p.keeps_elements(takt_mir::ChannelId(*i as u32)))
+        .map(|(slot, (_, c))| (slot, cap(c)))
+        .collect();
+    if !keeping.is_empty() {
+        let (nk, most) = (keeping.len(), keeping.iter().map(|(_, c)| *c).max().unwrap_or(1));
+        let _ = writeln!(t.fields, "    int keep_len[{nk}][{most}];");
+        let _ = writeln!(t.fields, "    int keep_head[{nk}], keep_n[{nk}];");
+        let _ = writeln!(t.fields, "    unsigned char keep_carry[{nk}][{most}];");
+        let _ = writeln!(t.fields, "    int keep_carry_n[{nk}];");
+        // Vollendet sind hoechstens der Uebertrag und das Abgeholte.
+        let _ = writeln!(t.fields, "    unsigned char keep_done[{nk}][{}];", 2 * most);
+        let _ = writeln!(t.fields, "    int keep_done_len[{nk}][{most}];");
+        let _ = writeln!(t.fields, "    int keep_done_n[{nk}];");
+    }
     let s = &mut t.code;
     let _ = writeln!(s, "static int takt_tx_slot(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
@@ -790,6 +830,15 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
         let _ = writeln!(s, "    case {i}: return {slot}; /* {} */", c.name);
     }
     let _ = writeln!(s, "    default: return -1;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
+    // Der Platz eines Puffers, der die Grenzen seiner Elemente behaelt.
+    let _ = writeln!(s, "static int takt_keep_slot(int k) {{");
+    let _ = writeln!(s, "    switch (k) {{");
+    for (j, (slot, _)) in keeping.iter().enumerate() {
+        let _ = writeln!(s, "    case {slot}: return {j};");
+    }
+    let _ = writeln!(s, "    default: (void)k; return -1;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
     // Die Kapazitaet je Strom (8.8, Default 256): Was nicht hineinpasst,
@@ -806,15 +855,21 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     if !coupled(p).is_empty() {
         couple(s, x);
     }
-    stream_send(s, rings, true, rings && stages(p), x);
+    stream_send(s, rings, true, rings && stages(p), !keeping.is_empty(), x);
     // Der Commit: Der Treiber holt `per_tick` Bytes ab und meldet sie als
     // `out <stream> [0x.., ..]` — dieselbe Schreibweise wie im
     // Interpreter (`value_text` fuer `Value::Bytes`).
     let _ = writeln!(s, "static void takt_tx_commit(struct {x}_arena *a, long long t) {{");
     for (slot, (i, c)) in streams.iter().enumerate() {
-        let per_tick = per_tick(c);
-        let _ = writeln!(s, "    if (a->tx_n[{slot}] > 0) {{");
-        let _ = writeln!(s, "        int n = a->tx_n[{slot}] < {per_tick} ? a->tx_n[{slot}] : {per_tick};");
+        let port = ports.contains(i);
+        if port {
+            let _ = writeln!(s, "    if (a->tx_taken[{slot}] > 0) {{");
+            let _ = writeln!(s, "        int n = a->tx_taken[{slot}];");
+        } else {
+            let per_tick = per_tick(*i, c);
+            let _ = writeln!(s, "    if (a->tx_n[{slot}] > 0) {{");
+            let _ = writeln!(s, "        int n = a->tx_n[{slot}] < {per_tick} ? a->tx_n[{slot}] : {per_tick};");
+        }
         match trace {
             Trace::Stdio => {
                 let _ = writeln!(s, "        printf(\"t=%lld out {} [\", t);", c.name);
@@ -835,22 +890,55 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
         }
         let _ = writeln!(s, "        memcpy(a->tx_sent[{slot}], a->tx[{slot}], (size_t)n);");
         let _ = writeln!(s, "        a->tx_sent_n[{slot}] = n;");
-        // 8.3: Ein Modell, das den Ausgabestrom liest, bekommt das
-        // Abgeholte im naechsten Tick als ein Element, mit der Zeit dieses
-        // Ticks (`System::drain_tx`).
-        if read.contains(i) {
-            let _ = writeln!(s, "        int r = takt_int_slot({i});");
-            let _ = writeln!(
-                s,
-                "        if (r >= 0 && !takt_int_push(a, r, (const char *)a->tx_sent[{slot}], n, a->tick * {tick}LL, 0)) a->int_overflowed[r]++;",
-                tick = p.config.tick
-            );
-        }
         let _ = writeln!(s, "        memmove(a->tx[{slot}], a->tx[{slot}] + n, (size_t)(a->tx_n[{slot}] - n));");
         let _ = writeln!(s, "        a->tx_n[{slot}] -= n;");
         let _ = writeln!(s, "    }} else {{");
         let _ = writeln!(s, "        a->tx_sent_n[{slot}] = 0;");
         let _ = writeln!(s, "    }}");
+        // Ein Element ist da, wenn sein letztes Byte abgeholt ist; ein
+        // leeres, sobald es vorn steht (`TxBuffer::drain`).
+        if let Some(j) = keeping.iter().position(|(k, _)| *k == slot) {
+            let cap = keeping[j].1;
+            let _ = writeln!(s, "    {{");
+            let _ = writeln!(s, "        int off = 0, used = 0, n = a->tx_sent_n[{slot}];");
+            let _ = writeln!(s, "        a->keep_done_n[{j}] = 0;");
+            let _ = writeln!(s, "        while (a->keep_n[{j}] > 0) {{");
+            let _ = writeln!(s, "            int len = a->keep_len[{j}][a->keep_head[{j}]];");
+            let _ = writeln!(s, "            int need = len - a->keep_carry_n[{j}];");
+            let _ = writeln!(s, "            if (need > n - off) {{");
+            let _ = writeln!(
+                s,
+                "                memcpy(a->keep_carry[{j}] + a->keep_carry_n[{j}], a->tx_sent[{slot}] + off, (size_t)(n - off));"
+            );
+            let _ = writeln!(s, "                a->keep_carry_n[{j}] += n - off;");
+            let _ = writeln!(s, "                break;");
+            let _ = writeln!(s, "            }}");
+            let _ = writeln!(
+                s,
+                "            memcpy(a->keep_carry[{j}] + a->keep_carry_n[{j}], a->tx_sent[{slot}] + off, (size_t)need);"
+            );
+            let _ = writeln!(s, "            off += need;");
+            let _ = writeln!(s, "            memcpy(a->keep_done[{j}] + used, a->keep_carry[{j}], (size_t)len);");
+            let _ = writeln!(s, "            a->keep_done_len[{j}][a->keep_done_n[{j}]++] = len;");
+            let _ = writeln!(s, "            used += len;");
+            let _ = writeln!(s, "            a->keep_carry_n[{j}] = 0;");
+            let _ = writeln!(s, "            a->keep_head[{j}] = (a->keep_head[{j}] + 1) % {cap};");
+            let _ = writeln!(s, "            a->keep_n[{j}]--;");
+            let _ = writeln!(s, "        }}");
+            let _ = writeln!(s, "    }}");
+        }
+        // 8.3: Ein Modell, das den Ausgabestrom liest, bekommt das
+        // Abgeholte im naechsten Tick als Elemente seines Typs, mit der Zeit
+        // dieses Ticks (`System::drain_tx`).
+        if read.contains(i) {
+            let keep = keeping.iter().position(|(k, _)| *k == slot);
+            let at = format!("a->tick * {}LL", p.config.tick);
+            deliver_taken(s, p, *i, slot, keep, &format!("takt_int_slot({i})"), &at, 0);
+        }
+        if port {
+            let _ = writeln!(s, "    a->tx_taken[{slot}] = 0;");
+            let _ = writeln!(s, "    a->tx_visible[{slot}] = a->tx_n[{slot}];");
+        }
         let _ = writeln!(s, "    a->tx_busy[{slot}] = a->tx_n[{slot}] > 0;");
     }
     let _ = writeln!(s, "}}\n");
@@ -885,12 +973,27 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
 /// derselben Adresse (8.3, `apply_sim_bindings`) — je Byte ein Element
 /// eines `stream<u8>`, Text als ein Element, sonst so viele Elemente fester
 /// Byteform, wie hineinpassen. `.t` ist der Beginn dieses Ticks; ein
-/// `malformed` zaehlt in ihm, wie die Zustellung (FB-470).
+/// `malformed` zaehlt in ihm, wie die Zustellung (FB-470). Ist der Treiber
+/// des Eingangs in diesem Tick degradiert, kommt auch aus der Kopplung
+/// nichts an (12.6 Zeile 2, `Image::degrade`).
 fn sim_streams(s: &mut String, p: &Program, streams: &[(usize, &Channel)], x: &Prefix) {
+    if !coupled(p).is_empty() {
+        // Der Rand steht in der Datei weiter hinten (`edge::emit`).
+        let _ = writeln!(s, "static _Bool takt_edge_down(struct {x}_arena *a, unsigned c);");
+    }
     let _ = writeln!(s, "static void takt_sim_streams(struct {x}_arena *a, long long at) {{");
     let _ = writeln!(s, "    (void)a; (void)at;");
+    let keeps = |i: usize| p.keeps_elements(takt_mir::ChannelId(i as u32));
     for (slot, (i, _)) in streams.iter().enumerate() {
         let Some((in_id, _, elem)) = coupled(p).into_iter().find(|(_, o, _)| o == i) else { continue };
+        let ring = format!("(takt_edge_down(a, {in_id}) ? -1 : takt_int_slot({in_id}))");
+        // Je vollendetes `send` ein Element, auch ein leeres (8.3).
+        if keeps(*i) {
+            let drop_oldest = u8::from(matches!(p.channels[in_id].attrs.overflow, Some(Overflow::DropOldest)));
+            let j = streams[..slot].iter().filter(|(o, _)| keeps(*o)).count();
+            deliver_taken(s, p, *i, slot, Some(j), &ring, "at", drop_oldest);
+            continue;
+        }
         let width = match p.types.list.get(elem.index()) {
             Some(Type::Int { width, .. }) if width.bits() == 8 => 1,
             Some(Type::Line { .. } | Type::Str { .. } | Type::Bytes { .. }) => 0,
@@ -904,10 +1007,54 @@ fn sim_streams(s: &mut String, p: &Program, streams: &[(usize, &Channel)], x: &P
         let drop_oldest = u8::from(matches!(p.channels[in_id].attrs.overflow, Some(Overflow::DropOldest)));
         let _ = writeln!(
             s,
-            "    takt_couple(a, takt_int_slot({in_id}), a->tx_sent[{slot}], a->tx_sent_n[{slot}], {width}, {shape}, at, {drop_oldest});"
+            "    takt_couple(a, {ring}, a->tx_sent[{slot}], a->tx_sent_n[{slot}], {width}, {shape}, at, {drop_oldest});"
         );
     }
     let _ = writeln!(s, "}}\n");
+}
+
+/// Was der Commit dem Ausgabestrom `out` (Platz `slot`) abnahm, als Elemente
+/// in den Ring `ring` mit der Zeit `at` (8.3): je vollendetes `send` eines,
+/// wenn der Puffer die Grenzen behaelt (`keep`), sonst Stuecke fester
+/// Byteform. Gesendete Werte liegen in ihrem Typ, ein `decode` misslingt
+/// darum nicht.
+#[allow(clippy::too_many_arguments)]
+fn deliver_taken(
+    s: &mut String,
+    p: &Program,
+    out: usize,
+    slot: usize,
+    keep: Option<usize>,
+    ring: &str,
+    at: &str,
+    drop_oldest: u8,
+) {
+    let _ = writeln!(s, "    {{ /* {} */", p.channels[out].name);
+    let _ = writeln!(s, "        int r = {ring};");
+    match keep {
+        Some(j) => {
+            let _ = writeln!(s, "        for (int i = 0, off = 0; r >= 0 && i < a->keep_done_n[{j}]; i++) {{");
+            let _ = writeln!(
+                s,
+                "            (void)takt_int_deliver(a, r, a->keep_done[{j}] + off, a->keep_done_len[{j}][i], {at}, {drop_oldest}, 0);"
+            );
+            let _ = writeln!(s, "            off += a->keep_done_len[{j}][i];");
+            let _ = writeln!(s, "        }}");
+        }
+        None => {
+            let elem = match p.types.list.get(p.channels[out].ty.index()) {
+                Some(Type::Stream(e)) => *e,
+                _ => p.channels[out].ty,
+            };
+            let w = takt_mir::bytes::max_size(p, elem).unwrap_or(1).max(1);
+            let _ = writeln!(s, "        for (int off = 0; r >= 0 && off + {w} <= a->tx_sent_n[{slot}]; off += {w})");
+            let _ = writeln!(
+                s,
+                "            (void)takt_int_deliver(a, r, a->tx_sent[{slot}] + off, {w}, {at}, {drop_oldest}, 0);"
+            );
+        }
+    }
+    let _ = writeln!(s, "    }}");
 }
 
 /// `takt_couple`: die Elemente eines `sim`-Ausgabestroms in den gekoppelten
@@ -933,7 +1080,7 @@ fn couple(s: &mut String, x: &Prefix) {
 
 /// `takt_stream_send`: in den Ring eines internen Stroms (`rings`) oder in
 /// den Sendepuffer eines Ausgabestroms (`sends`).
-fn stream_send(s: &mut String, rings: bool, sends: bool, staging: bool, x: &Prefix) {
+fn stream_send(s: &mut String, rings: bool, sends: bool, staging: bool, keeps: bool, x: &Prefix) {
     // Ein abgewiesenes `send` auf einen internen Strom zaehlt, ausser mit
     // `overflow = drop` (8.6, `System::send`).
     let _ = writeln!(s, "_Bool {x}_stream_send(struct {x}_arena *a, int s, const char *b, int n) {{");
@@ -962,8 +1109,17 @@ fn stream_send(s: &mut String, rings: bool, sends: bool, staging: bool, x: &Pref
     }
     let _ = writeln!(s, "    int k = takt_tx_slot(s);");
     let _ = writeln!(s, "    if (k < 0) return 0;");
-    // 8.8: `len > tx.free` ist ein `StreamOverflow`.
+    // 8.8: `len > tx.free` ist ein `StreamOverflow`; ein Puffer, der die
+    // Grenzen behaelt, fasst ausserdem hoechstens `capacity` Elemente.
     let _ = writeln!(s, "    if (a->tx_n[k] + n > takt_tx_cap(s)) return 0;");
+    if keeps {
+        let _ = writeln!(s, "    int e = takt_keep_slot(k);");
+        let _ = writeln!(s, "    if (e >= 0) {{");
+        let _ = writeln!(s, "        if (a->keep_n[e] >= takt_tx_cap(s)) return 0;");
+        let _ = writeln!(s, "        a->keep_len[e][(a->keep_head[e] + a->keep_n[e]) % takt_tx_cap(s)] = n;");
+        let _ = writeln!(s, "        a->keep_n[e]++;");
+        let _ = writeln!(s, "    }}");
+    }
     let _ = writeln!(s, "    memcpy(a->tx[k] + a->tx_n[k], b, (size_t)n);");
     let _ = writeln!(s, "    a->tx_n[k] += n;");
     let _ = writeln!(s, "    return 1;");

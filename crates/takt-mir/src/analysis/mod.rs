@@ -22,6 +22,7 @@ pub mod proof;
 pub mod prove;
 pub mod schedulability;
 pub mod schedule;
+pub mod sends;
 pub mod size;
 pub mod stack;
 pub mod term;

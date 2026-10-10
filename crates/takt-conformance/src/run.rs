@@ -133,11 +133,13 @@ pub fn widen_f32(trace: &str, outputs: &std::collections::BTreeSet<String>) -> S
 }
 
 /// Was ein Lauf auf Hardware als Input aufzeichnet und der Interpreter
-/// nachspielt (12.5): die Zeilen `tx` eines Ausgabestroms (FB-435). Der
-/// Vergleich selbst sieht sie nicht an — sie sind Eingaben, keine
-/// Beobachtungen.
+/// nachspielt (12.5): die Zeilen `tx` eines Ausgabestroms (FB-435) und die
+/// Fertigstellungen und Verspaetungen der Jobs (4.5, FB-476). Eine
+/// puenktliche Fertigstellung spielt sich als sie selbst nach; der Vergleich
+/// haelt die Zeilen `job` ausserdem als Beobachtung.
 pub fn recorded_inputs(native: &str) -> String {
-    native.lines().filter(|l| l.split_whitespace().nth(1) == Some("tx")).map(|l| format!("{l}\n")).collect()
+    let input = |l: &str| matches!(l.split_whitespace().nth(1), Some("tx" | "job"));
+    native.lines().filter(|l| input(l)).map(|l| format!("{l}\n")).collect()
 }
 
 /// Vergleicht zwei Traces.
@@ -316,6 +318,9 @@ fn observations(trace: &str) -> BTreeMap<u64, Vec<String>> {
                 format!("measure {}", value.parse::<f64>().map_or_else(|_| value.to_string(), measured))
             }
             ["property", _, at] if native => format!("property {at}"),
+            // 5.8, 4.5 (FB-432): Beide Rahmen nennen Maschine, Signal und Handle beim Namen.
+            ["signal", machine, name] => format!("signal {machine} {name}"),
+            ["job", machine, handle, event, start] => format!("job {machine} {handle} {event} {start}"),
             ["property" | "assumption", _, "violated", at] => format!("property {at}"),
             ["end", "scenario"] => continue,
             ["end", word] => format!("end {word}"),

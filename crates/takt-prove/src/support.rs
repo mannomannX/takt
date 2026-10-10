@@ -114,7 +114,10 @@ fn expr(e: ExprTag) -> Support {
         | ExprTag::Array
         | ExprTag::Lift => Yes,
         ExprTag::Field => Partial("auf Records; nicht auf den Feldern einer Variante"),
-        ExprTag::Index => Partial("auf Arrays, Samples, Bytes und Vektoren; nicht auf Channel-Arrays"),
+        ExprTag::Index => Partial(
+            "auf Arrays, Samples, Bytes und Vektoren; ein Element eines Channel-Arrays nur unter `.valid`, \
+             `.suspect`, `.stale` und `.or`",
+        ),
         ExprTag::Published | ExprTag::StateOf | ExprTag::Signal => Yes,
         ExprTag::Cast => Partial("nur zwischen Ganzzahlen und von Ganzzahl nach Fliesskomma"),
         ExprTag::Call => Partial("Funktionen aus kodierbaren Anweisungen"),
@@ -126,7 +129,7 @@ fn expr(e: ExprTag) -> Support {
         ExprTag::Slice => Partial("auf Bytes und Vektoren; nicht auf einem Array"),
         ExprTag::BlockInit => Partial("Blockinstanzen nur ueber ihre Felder"),
         ExprTag::Accessor => Partial("die Qualitaet eines Inputs, ein Optional, die Laenge einer Sammlung"),
-        ExprTag::PortRead => Partial("nicht mit einem Strom als Modell des Lesekanals"),
+        ExprTag::PortRead => Yes,
         ExprTag::Armed => Yes,
         ExprTag::Stream => Yes,
         ExprTag::Matches => Partial("kein `{x:float}`; eine Bindung nicht im Rumpf einer Funktion"),
@@ -324,7 +327,7 @@ fn feature(f: Feature) -> Support {
         Feature::ScopedInstance => Partial("ohne Instanzen, die einen Strom lesen"),
         Feature::CheckConfirm => Yes,
         Feature::CheckWithin => Yes,
-        Feature::Port => Partial("nicht mit einem Strom als Modell des Lesekanals"),
+        Feature::Port => Yes,
         Feature::Trigger => Yes,
     }
 }

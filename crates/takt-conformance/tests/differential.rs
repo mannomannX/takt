@@ -26,47 +26,117 @@ fn korpus() -> Vec<&'static str> {
 /// wenig genug, dass ein Fehlschlag noch zu lesen ist.
 const TICKS: u64 = 60;
 
-/// Transitionen eines Korpusprogramms, die in keinem seiner Laeufe feuern
-/// (KON1-006, Coverage aus 13.2, [`takt_conformance::cases`]): Programm und
-/// Zahl. Die Ratsche verlangt die Zahl genau; feuert eine weitere nicht mehr,
-/// ist das ein Befund, feuert eine mehr, wird die Zahl gesenkt. Der Grund ist
-/// fast immer derselbe: Kein Stimulus liefert die Commands und Lieferungen,
-/// die sie ausloesen (FB-376);
-/// bei `11_foc_drive` (`after 3 s` bei 50 us) und `sim/14_7` (`after 2 min`,
-/// `after 7 d`) liegen Fristen jenseits von [`takt_conformance::cases::MAX_TICKS`].
-const UNFIRED: &[(&str, usize)] = &[
-    ("01_minimal.takt", 1),
-    ("03_sequences_and_faults.takt", 11),
-    ("11_foc_drive.takt", 5),
-    ("12_bitfields.takt", 1),
-    ("14_latency.takt", 1),
-    ("17_nested.takt", 3),
-    ("18_blocks.takt", 2),
-    ("21_fault_targets.takt", 1),
-    ("40_jobs.takt", 3),
-    ("43_sent.takt", 1),
-    ("45_journal_cut.takt", 14),
-    ("50_clause_words.takt", 2),
-    ("53_stream_kinds.takt", 1),
-    ("63_scoped_instances.takt", 5),
-    ("64_scoped_exit.takt", 1),
-    ("87_fault_kinds.takt", 3),
-    ("88_capture_segments.takt", 3),
-    ("92_idle_streams.takt", 1),
-    ("04_blocks_and_multirate.takt", 2),
-    ("05_streams_and_protocol.takt", 3),
-    ("06_test_harness.takt", 2),
-    ("07_embedded_field.takt", 13),
-    ("30_idle.takt", 1),
-    ("31_idle_multirate.takt", 1),
-    ("61_requirements.takt", 2),
-    ("116_sequence_timeout.takt", 2),
-    // Der Timeout ist der Zweck: `until go` wird nie wahr.
-    ("119_timeout_cancels_schedule.takt", 1),
-    // Schnitt, Timeouts und Flash-Fehler nur mit `CUT > 0`, also in der Kampagne.
-    ("110_journal_log.takt", 17),
-    ("sim/12_7/program.takt", 4),
-    ("sim/14_7/program.takt", 10),
+/// Was ueber alle Laeufe eines Korpusprogramms unerreicht bleibt (M11
+/// Schritt 29a; Coverage aus 13.2, [`takt_conformance::cases`]): Programm,
+/// Uebergaenge, die kein Lauf nimmt und kein Beweis ausschliesst
+/// (`<programm>.unfired`), Pruefstellen, die nie bestehen, und Pruefstellen,
+/// an denen nie ein Fault kommt und die die Beweisdatei nicht als
+/// unerreichbar fuehrt. Die Ratsche verlangt die Zahlen genau: Faellt eine
+/// Stelle aus der Abdeckung, ist das ein Befund; kommt eine dazu, wird die
+/// Zahl gesenkt. Was bleibt, liegt jenseits der Tiefe oder Frist des Solvers
+/// ([`takt_conformance::paths`]), jenseits von
+/// [`takt_conformance::cases::MAX_TICKS`] (`after 3 s` bei 50 us in
+/// `11_foc_drive`, `after 7 d` in `sim/14_7`) oder in einem Programm, das
+/// das Modell nicht kodiert.
+const UNREACHED: &[(&str, usize, usize, usize)] = &[
+    ("01_minimal.takt", 0, 0, 1),
+    ("02_units_and_data.takt", 0, 3, 6),
+    ("03_sequences_and_faults.takt", 10, 3, 5),
+    ("04_blocks_and_multirate.takt", 2, 1, 8),
+    ("05_streams_and_protocol.takt", 3, 0, 7),
+    ("06_test_harness.takt", 2, 0, 4),
+    ("07_embedded_field.takt", 13, 3, 9),
+    ("11_foc_drive.takt", 4, 33, 57),
+    ("12_bitfields.takt", 1, 0, 3),
+    ("13_framing.takt", 0, 0, 2),
+    ("13_protocol_analysis.takt", 0, 0, 9),
+    ("14_latency.takt", 1, 0, 0),
+    ("17_nested.takt", 2, 0, 1),
+    ("18_blocks.takt", 0, 0, 1),
+    ("23_patterns.takt", 0, 0, 3),
+    ("24_send_has.takt", 0, 0, 1),
+    ("26_samples.takt", 0, 0, 2),
+    ("27_every.takt", 0, 0, 2),
+    ("28_scheduled.takt", 0, 0, 1),
+    ("35_persist.takt", 0, 0, 1),
+    ("36_int_units.takt", 0, 0, 6),
+    ("37_follows.takt", 0, 0, 2),
+    ("40_jobs.takt", 1, 0, 0),
+    ("41_tunables.takt", 0, 0, 2),
+    ("42_map.takt", 0, 0, 3),
+    ("43_sent.takt", 0, 0, 1),
+    ("44_campaign.takt", 0, 0, 1),
+    ("45_journal_cut.takt", 14, 2, 26),
+    ("46_matrices.takt", 0, 0, 31),
+    ("47_monitors.takt", 0, 0, 1),
+    ("49_record_streams.takt", 0, 0, 2),
+    ("50_clause_words.takt", 0, 0, 1),
+    ("51_text_into_bytes.takt", 0, 0, 3),
+    ("52_padding_fields.takt", 0, 0, 4),
+    ("53_stream_kinds.takt", 1, 0, 6),
+    ("54_inout.takt", 0, 0, 1),
+    ("55_frames_with_bytes.takt", 0, 0, 5),
+    ("57_persist_often.takt", 0, 0, 2),
+    ("58_persist_alert.takt", 0, 0, 2),
+    ("59_persist_idle.takt", 0, 0, 1),
+    ("61_requirements.takt", 1, 3, 2),
+    ("62_type_generics.takt", 0, 0, 2),
+    ("63_scoped_instances.takt", 3, 0, 0),
+    ("68_uart_port.takt", 0, 0, 1),
+    ("69_qp_box.takt", 0, 0, 1),
+    ("70_padded_record.takt", 0, 0, 1),
+    ("71_places.takt", 0, 0, 9),
+    ("72_handler_levels.takt", 0, 0, 6),
+    ("73_after_levels.takt", 0, 0, 4),
+    ("74_instance_index.takt", 0, 0, 2),
+    ("75_implicit_checks.takt", 0, 0, 6),
+    ("76_stream_views.takt", 0, 0, 13),
+    ("77_float_faults.takt", 0, 0, 2),
+    ("78_length_guards.takt", 0, 0, 7),
+    ("79_byte_literals.takt", 0, 0, 1),
+    ("80_payload_variants.takt", 0, 0, 6),
+    ("81_persist_variants.takt", 0, 0, 2),
+    ("83_durations.takt", 0, 0, 1),
+    ("84_defaults.takt", 0, 0, 1),
+    ("85_observe_invalid.takt", 0, 0, 5),
+    ("86_units.takt", 0, 0, 11),
+    ("87_fault_kinds.takt", 1, 1, 12),
+    ("88_capture_segments.takt", 3, 0, 9),
+    ("89_fault_paths.takt", 0, 0, 2),
+    ("90_abort.takt", 0, 0, 5),
+    ("91_subnormals.takt", 0, 0, 4),
+    ("92_idle_streams.takt", 1, 0, 4),
+    ("93_confirmations.takt", 0, 0, 3),
+    ("94_float_ranges.takt", 0, 0, 1),
+    ("95_boundary_ranges.takt", 0, 0, 3),
+    ("96_record_outputs.takt", 0, 0, 1),
+    ("97_fast_math.takt", 0, 0, 6),
+    ("98_last_fault.takt", 0, 5, 4),
+    ("99_exit_fault.takt", 0, 0, 1),
+    ("100_dispatch.takt", 0, 0, 8),
+    ("101_correct_math.takt", 0, 0, 5),
+    ("102_correct_math_f32.takt", 0, 0, 5),
+    ("103_math_domains.takt", 0, 0, 1),
+    ("104_linear_has.takt", 0, 0, 5),
+    ("105_subnormals_f32.takt", 0, 0, 5),
+    ("106_machine_handler.takt", 0, 0, 2),
+    ("107_cancel_and_pulse.takt", 0, 0, 2),
+    ("108_singular_solve.takt", 0, 0, 3),
+    ("109_narrow_bounds.takt", 0, 0, 3),
+    ("110_journal_log.takt", 17, 3, 45),
+    ("111_assign_mul.takt", 0, 0, 1),
+    ("112_assign_div.takt", 0, 0, 1),
+    ("113_case_ranges.takt", 0, 0, 1),
+    ("114_for_pairs.takt", 0, 0, 4),
+    ("115_affine_unit.takt", 0, 0, 2),
+    ("116_sequence_timeout.takt", 0, 0, 1),
+    ("117_many_text_handlers.takt", 0, 2, 3),
+    ("118_tx_idle.takt", 0, 0, 1),
+    ("120_port_writes.takt", 0, 0, 6),
+    ("122_owner_reads_instance.takt", 0, 0, 1),
+    ("123_fifo_port.takt", 0, 0, 9),
+    ("sim/12_7/program.takt", 4, 6, 7),
+    ("sim/14_7/program.takt", 10, 7, 40),
 ];
 
 fn corpus(name: &str) -> Program {
@@ -254,100 +324,48 @@ fn a_running_job_keeps_the_native_system_awake() {
 }
 
 /// Was eine Spalte des Vergleichs nicht rechnet, je Programm, Lauf und
-/// Spalte, mit Grund. Die Liste ist eine Ratsche wie [`UNFIRED`]: Eine neue
+/// Spalte, mit Grund. Die Liste ist eine Ratsche wie [`UNREACHED`]: Eine neue
 /// Luecke scheitert ebenso wie eine, die es nicht mehr gibt. Ein Programm
 /// ausserhalb der Suite `beweiser` nennt seinen Grund im Manifest.
-const GAPS: &[(&str, &str, &str, &str)] = &[
-    ("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach"),
-    (
-        "04_blocks_and_multirate.takt",
-        "stimulus",
-        "nativ",
-        "`samples<T, N>` als Input liefert der Rahmen nicht (FB-430)",
-    ),
-    ("07_embedded_field.takt", "stimulus", "nativ", "ein Enum mit Feldern als Input liefert der Rahmen nicht (FB-430)"),
-];
+const GAPS: &[(&str, &str, &str, &str)] =
+    &[("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach")];
 
 /// **Die Abnahme: ein Vergleich, drei Ausfuehrer** (Satz 9.4.4, M11
-/// Schritt 28). Je Korpusprogramm und Lauf ([`takt_conformance::cases`])
+/// Schritte 28, 29). Je Korpusprogramm und Lauf ([`takt_conformance::cases`])
 /// rechnen Interpreter, erzeugter Code und Modell denselben Stimulus, und
 /// derselbe Vergleich urteilt ueber jedes Paar. Zwischen Interpreter und
 /// Modell gilt der strengere Zeile fuer Zeile (`takt_prove::mismatches`),
-/// der auch Zustaende und `pub var` sieht. Ueber alle Laeufe feuert jede
-/// Transition, ausser denen, die [`UNFIRED`] zaehlt.
+/// der auch Zustaende und `pub var` sieht. Ueber alle Laeufe ist erreicht,
+/// was [`UNREACHED`] nicht zaehlt. Die Programme verteilen sich auf Faeden;
+/// ein Kern bleibt frei.
 #[test]
 fn the_three_executors_agree() {
     let Some(clang) = common::clang() else { return };
     let modelled = takt_conformance::suites::programs("beweiser");
-    let mut failed = Vec::new();
-    let mut gaps = Vec::new();
-    for name in korpus() {
-        let p = corpus(name);
-        let model = modelled.contains(&name).then(|| {
-            takt_prove::encode(&p).unwrap_or_else(|e| panic!("{name} steht in der Suite `beweiser`: {}", e.what))
-        });
-        let items = takt_interp::coverage::items(&p);
-        let mut unfired: Option<std::collections::BTreeSet<String>> = None;
-        for case in takt_conformance::cases::cases(name, &p) {
-            let run = format!("{name} ({}, {} Ticks)", case.label, case.ticks);
-            // Bricht der Lauf ab (Speicher, Stapel), nennt das Protokoll den Lauf.
-            eprintln!("{run}");
-            let stimulus = takt_interp::Trace::parse(&case.stimulus).expect("Stimulus");
-            let options = takt_interp::RunOptions { ticks: case.ticks, inputs: true, ..Default::default() };
-            let result = takt_interp::run(&p, &stimulus, &options).unwrap_or_else(|e| panic!("{run}: {e:?}"));
-            let missing = result.coverage.missing(&items).into_iter();
-            let missing = missing.filter(|i| i.kind == takt_interp::CoverKind::Transition);
-            let here: std::collections::BTreeSet<String> =
-                missing.map(|i| format!("{} {}", i.machine, i.key)).collect();
-            unfired = Some(match unfired {
-                Some(before) => before.intersection(&here).cloned().collect(),
-                None => here,
-            });
-            let interpreted = result.trace.render();
-            let f32s = takt_conformance::run::f32_outputs(&p);
-            let widened = takt_conformance::run::widen_f32(&interpreted, &f32s);
-            // Alle Maschinen, in Schrittordnung (7.2): Ψ-Lesevorgaenge und
-            // `follows` gibt es nur zwischen Maschinen.
-            let native = Stimulus::from_trace(&stimulus)
-                .and_then(|inputs| common::run_native_all_with(&clang, &p, name, case.ticks, &inputs));
-            match &native {
-                Ok(native) => failed.extend(disagreement(&run, "Interpreter", &widened, "nativ", native)),
-                Err(e) => {
-                    gaps.push((name, case.label.clone(), "nativ", e.lines().next().unwrap_or_default().to_string()))
-                }
-            }
-            let Some(model) = &model else { continue };
-            let traced = match model.run(&p, &stimulus, &result, case.ticks) {
-                Ok(t) => t,
-                Err(e) => {
-                    failed.push(format!("{run}: Modell: {e}"));
-                    continue;
+    let queue = std::sync::Mutex::new(korpus());
+    let done = std::sync::Mutex::new(Vec::new());
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    std::thread::scope(|scope| {
+        for _ in 0..(cores - 1).clamp(1, 4) {
+            let worker = || {
+                loop {
+                    let next = queue.lock().expect("Warteschlange").pop();
+                    let Some(name) = next else { break };
+                    let outcome = compare_program(&clang, name, modelled.contains(&name));
+                    done.lock().expect("Ergebnisse").push((name, outcome));
                 }
             };
-            let diffs = takt_prove::mismatches(&result.trace, &traced);
-            if !diffs.is_empty() {
-                let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
-                failed.push(format!("{run}: Interpreter und Modell weichen ab:\n{}", list.join("\n")));
-            }
-            if let Ok(native) = &native {
-                // Die entschiedenen Verletzungen des Modells haelt `mismatches`
-                // gegen den Interpreter; gegen den erzeugten Code fallen sie auf
-                // beiden Seiten weg.
-                let modelled =
-                    without(&takt_conformance::run::widen_f32(&traced.render(), &f32s), takt_prove::UNMODELLED);
-                let native = without(native, takt_prove::UNMODELLED);
-                failed.extend(disagreement(&run, "Modell", &modelled, "nativ", &native));
-            }
+            // Kodierung und Sema gehen tief: 64 MiB Stapel je Faden.
+            std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(scope, worker).expect("Faden");
         }
-        let unfired = unfired.unwrap_or_default();
-        let allowed = UNFIRED.iter().find(|(n, _)| *n == name).map_or(0, |(_, k)| *k);
-        if unfired.len() != allowed {
-            failed.push(format!(
-                "{name}: {} Transitionen feuern in keinem Lauf, `UNFIRED` erwartet {allowed}:\n  {}",
-                unfired.len(),
-                unfired.into_iter().collect::<Vec<_>>().join("\n  ")
-            ));
-        }
+    });
+    let mut done = done.into_inner().expect("Ergebnisse");
+    done.sort_by_key(|(name, _)| korpus().iter().position(|n| n == name));
+    let mut failed = Vec::new();
+    let mut gaps = Vec::new();
+    for (name, outcome) in done {
+        failed.extend(outcome.failed);
+        gaps.extend(outcome.gaps.into_iter().map(|(label, column, why)| (name, label, column, why)));
     }
     let expected: Vec<(&str, &str, &str)> = GAPS.iter().map(|&(n, l, c, _)| (n, l, c)).collect();
     let found: Vec<(&str, &str, &str)> = gaps.iter().map(|(n, l, c, _)| (*n, l.as_str(), *c)).collect();
@@ -360,6 +378,130 @@ fn the_three_executors_agree() {
         failed.push(format!("{n} ({l}): die Spalte `{c}` rechnet wieder, `GAPS` nennt noch eine Luecke"));
     }
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// Was der Vergleich eines Korpusprogramms ergab.
+#[derive(Default)]
+struct Outcome {
+    /// Die Abweichungen, je eine Meldung.
+    failed: Vec<String>,
+    /// Lauf, Spalte und Grund je Spalte, die nicht rechnete.
+    gaps: Vec<(String, &'static str, String)>,
+}
+
+/// Rechnet jeden Lauf des Programms `name` durch Interpreter, erzeugten Code
+/// und — mit `modelled` — das Modell und haelt die Abdeckung ueber alle
+/// Laeufe gegen [`UNREACHED`].
+fn compare_program(clang: &takt_llvm::toolchain::Clang, name: &'static str, modelled: bool) -> Outcome {
+    let mut out = Outcome::default();
+    let p = corpus(name);
+    let model = modelled
+        .then(|| takt_prove::encode(&p).unwrap_or_else(|e| panic!("{name} steht in der Suite `beweiser`: {}", e.what)));
+    let f32s = takt_conformance::run::f32_outputs(&p);
+    let mut coverage = takt_interp::Coverage::default();
+    for case in takt_conformance::cases::cases(name, &p) {
+        let run = format!("{name} ({}, {} Ticks)", case.label, case.ticks);
+        // Bricht der Lauf ab (Speicher, Stapel), nennt das Protokoll den Lauf.
+        eprintln!("{run}");
+        let stimulus = takt_interp::Trace::parse(&case.stimulus).expect("Stimulus");
+        let options = takt_interp::RunOptions { ticks: case.ticks, inputs: true, ..Default::default() };
+        let result = takt_interp::run(&p, &stimulus, &options).unwrap_or_else(|e| panic!("{run}: {e:?}"));
+        coverage.merge(&result.coverage);
+        let interpreted = result.trace.render();
+        let widened = takt_conformance::run::widen_f32(&interpreted, &f32s);
+        // Alle Maschinen, in Schrittordnung (7.2): Ψ-Lesevorgaenge und
+        // `follows` gibt es nur zwischen Maschinen.
+        let native = Stimulus::from_trace(&stimulus)
+            .and_then(|inputs| common::run_native_all_with(clang, &p, name, case.ticks, &inputs));
+        match &native {
+            Ok(native) => out.failed.extend(disagreement(&run, "Interpreter", &widened, "nativ", native)),
+            Err(e) => out.gaps.push((case.label.clone(), "nativ", e.lines().next().unwrap_or_default().to_string())),
+        }
+        // Verstoesse gegen den Treibervertrag liegen vor dem Rand, den das
+        // Modell annimmt (13.3).
+        if case.label == takt_conformance::generated::EDGE {
+            continue;
+        }
+        let Some(model) = &model else { continue };
+        let traced = match model.run(&p, &stimulus, &result, case.ticks) {
+            Ok(t) => t,
+            Err(e) => {
+                out.failed.push(format!("{run}: Modell: {e}"));
+                continue;
+            }
+        };
+        let diffs = takt_prove::mismatches(&result.trace, &traced);
+        if !diffs.is_empty() {
+            let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+            out.failed.push(format!("{run}: Interpreter und Modell weichen ab:\n{}", list.join("\n")));
+        }
+        if let Ok(native) = &native {
+            // Die entschiedenen Verletzungen des Modells haelt `mismatches`
+            // gegen den Interpreter; gegen den erzeugten Code fallen sie auf
+            // beiden Seiten weg.
+            let modelled = without(&takt_conformance::run::widen_f32(&traced.render(), &f32s), takt_prove::UNMODELLED);
+            let native = without(native, takt_prove::UNMODELLED);
+            out.failed.extend(disagreement(&run, "Modell", &modelled, "nativ", &native));
+        }
+    }
+    let open = unreached(name, &p, &coverage);
+    let counts = (open[0].len(), open[1].len(), open[2].len());
+    let allowed = UNREACHED.iter().find(|(n, ..)| *n == name).map_or((0, 0, 0), |&(_, t, ps, f)| (t, ps, f));
+    if counts != allowed {
+        let list: Vec<String> = ["Uebergang", "besteht nie", "faultet nie"]
+            .iter()
+            .zip(&open)
+            .flat_map(|(what, keys)| keys.iter().map(move |k| format!("  {what}: {k}")))
+            .collect();
+        out.failed.push(format!(
+            "{name}: unerreicht {counts:?} (Uebergaenge, bestandene, verletzte Pruefstellen), `UNREACHED` erwartet \
+             {allowed:?}:\n{}",
+            list.join("\n")
+        ));
+    }
+    out
+}
+
+/// Was die Laeufe nicht erreichen: Uebergaenge ohne Beweis, dass sie nie
+/// genommen werden; Pruefstellen, die nie bestehen; Pruefstellen ohne Fault,
+/// die die Beweisdatei nicht fuehrt. `verify` urteilt ueber ein Szenario und
+/// hat keinen Fault.
+fn unreached(name: &str, p: &Program, coverage: &takt_interp::Coverage) -> [Vec<String>; 3] {
+    use takt_interp::CoverKind;
+    let proven = takt_conformance::paths::proof(name).map(|pr| pr.tags()).unwrap_or_default();
+    let unfired = takt_conformance::paths::unfired(name).map(|u| u.transitions).unwrap_or_default();
+    let mut out: [Vec<String>; 3] = Default::default();
+    for item in takt_interp::coverage::items(p) {
+        let label = || format!("{} {}", item.machine, item.key).trim().to_string();
+        match item.kind {
+            CoverKind::Transition => {
+                let ruled_out = unfired.iter().any(|(m, k)| *m == item.machine && *k == item.key);
+                if !coverage.has(CoverKind::Transition, &item) && !ruled_out {
+                    out[0].push(label());
+                }
+            }
+            CoverKind::Check => {
+                if !coverage.has(CoverKind::Check, &item) {
+                    out[1].push(label());
+                }
+                if !item.key.starts_with("verify") && !coverage.has(CoverKind::CheckFailed, &item) {
+                    out[2].push(label());
+                }
+            }
+            CoverKind::Site => {
+                if !coverage.has(CoverKind::Site, &item) {
+                    out[1].push(label());
+                }
+                let tag = item.key.split(' ').next().and_then(takt_mir::analysis::walk::tag_of_name);
+                let ruled_out = tag.is_some_and(|t| proven.contains(&(item.span.start, item.span.end, t)));
+                if !coverage.has(CoverKind::SiteFailed, &item) && !ruled_out {
+                    out[2].push(label());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Die Abweichungen zweier Traces nach [`compare`], fuer die Meldung mit

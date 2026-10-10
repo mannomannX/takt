@@ -1,0 +1,4 @@
+takt-unfired 1
+program 3c2c5cec0d033cfcc971a71c52e8a51af093b49c5e1ccc36a3d71a7708b1f698
+solver z3 4.13.4
+uebergang ablauf k=5 WARTEN.S0->WARTEN.S1 @800

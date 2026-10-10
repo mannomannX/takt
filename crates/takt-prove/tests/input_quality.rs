@@ -22,13 +22,16 @@ fn solver() -> Option<Solver> {
 }
 
 /// Ein Programm um einen Temperaturfuehler: `input` und `loop` nach Wahl,
-/// eine Maschine `m`, die in `RUN` bleiben soll.
+/// eine Maschine `m`, die in `RUN` bleiben soll. Die Eigenschaften meinen den
+/// Normalbetrieb: Ein Abort oder Runtime-Fault von aussen fuehrt `m` nach
+/// `FAULTED`, und die Annahme `nominal` schliesst ihn aus (13.3).
 fn sensor(input: &str, body: &str, property: &str) -> Program {
     compile(&format!(
         "system:\n    language = 1\n    tick     = 10 ms\n\n{input}\n\
+         input outer : bool @ hw(\"sys/outer_fault\")\n\
          output hot : bool @ hw(\"hot\") with safe = false\n\n\
          machine m:\n    var k : int in 0..9 = 0\n    initial RUN\n\n    state RUN:\n        loop:\n\
-         \x20           k = (k + 1) % 10\n{body}\n\n{property}\n"
+         \x20           k = (k + 1) % 10\n{body}\n\n{property}\nassumption nominal: never(outer)\n"
     ))
 }
 
@@ -81,20 +84,22 @@ fn a_read_behind_a_false_operand_is_never_reached() {
     assert!(matches!(v, Verdict::Proven { .. }), "{v:?}");
 }
 
-/// `Suspect` entsteht nur unter `debounce` (3.5): ohne bleibt `.suspect`
-/// falsch, mit wird es wahr, sobald eine Lieferung die Range verletzt — und
-/// genau so liefert sie das Gegenbeispiel an den Interpreter.
+/// `Suspect` kommt vom Treiber oder unter `debounce` vom Rand (3.5, 12.6):
+/// Ohne `debounce` wird `.suspect` erst wahr, wenn der Treiber seine
+/// Lieferung selbst so nennt — mit einem Wert, den der Rand durchlaesst —,
+/// und genau so liefert das Gegenbeispiel sie an den Interpreter. Mit
+/// `debounce` kommt der Rand dazu.
 #[test]
-fn suspect_needs_debounce_and_comes_from_a_violation() {
+fn suspect_comes_from_the_driver_or_from_a_violation_under_debounce() {
     let never = "property calm: never(t.suspect)";
     let plain = sensor(T, "            hot = t.or(0) > 50", never);
     let Some(v) = verdict(&plain, 3) else { return };
-    assert!(matches!(v, Verdict::Proven { .. }), "ohne debounce: {v:?}");
+    let Verdict::Violated { stimulus, .. } = &v else { panic!("ohne debounce: {v:?}") };
+    assert!(stimulus.contains(" suspect"), "der Treiber meldet `Suspect`:\n{stimulus}");
     let debounced = format!("{T}, debounce = 2");
     let p = sensor(&debounced, "            hot = t.or(0) > 50", never);
     let Some(v) = verdict(&p, 3) else { return };
-    let Verdict::Violated { stimulus, .. } = &v else { panic!("mit debounce: {v:?}") };
-    assert!(stimulus.contains("in t 100"), "die Verletzung liegt ueber der Range:\n{stimulus}");
+    assert!(matches!(v, Verdict::Violated { .. }), "mit debounce: {v:?}");
 }
 
 /// **Tunables** sind je Tick frei in ihrer Range (8.4): Eine Eigenschaft,

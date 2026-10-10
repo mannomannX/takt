@@ -714,9 +714,10 @@ fn a_bound_input_becomes_a_driver_symbol() {
 
 /// **Jobs laufen im Kontext, sichtbar nach ihrer Dauer** (4.5, M10
 /// Schritt 7). Der Start reiht ein, der Job-Kontext rechnet den Auftrag,
-/// den die Hauptschleife ihm gibt, und zu Tickbeginn wird sichtbar, was
-/// fertig und faellig ist — vor der Abtastung, wie im Wirtsrahmen. Mit
-/// einem Job, der laeuft, schlaeft das System nicht (9.9).
+/// den die Hauptschleife ihm gibt; zu Tickbeginn holt sie ab, was fertig
+/// ist, und sichtbar wird es im ersten Schritt seiner Maschine ab seiner
+/// Dauer (FB-507), wie `poll_jobs` im Interpreter. Mit einem Job, der
+/// laeuft, schlaeft das System nicht (9.9).
 #[test]
 fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     let src = takt_frame::mcu::build(&corpus("40_jobs.takt")).source;
@@ -741,9 +742,11 @@ fn a_job_runs_in_the_context_and_shows_after_its_duration() {
     );
     let at = src.find("static void takt_tick(").expect("Tickfunktion");
     let tick = &src[at..];
-    let poll = tick.find("takt_jobs_poll(a);").expect("Jobs zu Tickbeginn");
+    let collect = tick.find("takt_jobs_collect(a);").expect("Ergebnisse zu Tickbeginn");
     let sample = tick.find("takt_sample(a);").expect("Abtastung");
-    assert!(poll < sample, "{tick}");
+    let poll = tick.find("takt_jobs_poll(a, ").expect("Jobs im Schritt ihrer Maschine");
+    let step = tick.find("_step(a);").expect("Schritt");
+    assert!(collect < sample && sample < poll && poll < step, "{tick}");
     let at = src.find("static uint8_t takt_idle(struct app_arena *a)").expect("Schlafbedingung");
     assert!(src[at..].contains("if (app_jobs_busy(a)) return 0;"), "{src}");
 

@@ -1,0 +1,9 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)
+# ziel uebergang ctrl 1 FIRST->SECOND @942
+# ticks 7
+t=1 in mode 1
+t=2 in mode 0
+t=3 in mode 1
+t=4 in mode stale
+t=4 abort
+t=5 in mode 1

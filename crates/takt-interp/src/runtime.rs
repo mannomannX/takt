@@ -109,6 +109,7 @@ impl Run<'_> {
             observe_properties(&mut self.monitors, &self.sim, tick, &mut self.writer, &mut self.fail);
             self.last = tick;
         }
+        self.slept += n;
         self.deadline = self.earliest_deadline();
     }
 }

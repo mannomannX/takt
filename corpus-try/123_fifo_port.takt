@@ -1,0 +1,86 @@
+# 123 — Ein Datenregister, das beim Lesen weiterschaltet (12.10, FB-431):
+# Das Modell stellt den Lesekanal `mmio/ADR/r` als Strom, und der Port ist
+# der Treiber dieses Stroms. Jedes Lesen entnimmt das naechste Element, das
+# vor dem Tick im Sendepuffer stand; ist keins mehr da, liest der Port das
+# zuletzt entnommene, vor dem ersten den Default. `capacity` ist die Tiefe
+# des FIFO, und `free` zeigt dem Modell, was der Treiber gelesen hat: So
+# meldet es einen Ueberlauf im Statusregister. Der Treiber liest je Tick
+# hoechstens zwei Elemente, das Modell liefert drei — das FIFO laeuft voll.
+# Der Fuellstand kommt mit Unit-Delay (8.3): Was der Treiber im letzten Tick
+# las, zaehlt das Modell noch mit, der Treiber zieht es selbst ab.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+record RxData layout little:
+    byte  : u8
+    flags : u8 with bits:
+        parity : bool at 0
+
+record RxStatus layout little:
+    level : u8
+    flags : u8 with bits:
+        overrun : bool at 0
+
+port rx_data : RxData @ mmio(0x40002000)
+port rx_stat : RxStatus @ mmio(0x40002004)
+
+output rx_fifo : stream<RxData> @ sim("mmio/0x40002000/r") with capacity = 8
+output rx_st   : RxStatus       @ sim("mmio/0x40002004/r")
+
+command burst
+
+output received : int in 0..9999 @ sim("received")
+output checksum : int in 0..255  @ sim("checksum")
+output last     : int in 0..255  @ sim("last")
+output errors   : int in 0..999  @ sim("errors")
+output overruns : int in 0..999  @ sim("overruns")
+
+machine uart_model every 10 ms:
+    var next : int in 0..255 = 65
+    var left : int in 0..99 = 5
+    var lost : int in 0..999 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if burst:
+                left = min(left + 12, 99)
+            for _i in range(3):
+                if left > 0:
+                    if rx_fifo.free >= 2:
+                        send rx_fifo, RxData(byte = next as u8, flags = 1 if next % 7 == 0 else 0)
+                        next = (next + 1) % 256
+                    else:
+                        lost = (lost + 1) % 1000
+                    left = left - 1
+            rx_st = RxStatus(level = ((8 - rx_fifo.free) / 2) as u8, flags = 1 if lost > 0 else 0)
+            overruns = lost
+
+driver machine rx every 10 ms:
+    var n    : int in 0..9999 = 0
+    var sum  : int in 0..255 = 0
+    var bad  : int in 0..999 = 0
+    var prev : int in 0..2 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            var ready : int in -2..255 = (rx_stat.level as int) - prev
+            prev = 0
+            for i in range(2):
+                if i < ready:
+                    prev = prev + 1
+                    # Ein Lesen je Element: Jedes weitere schaltete weiter.
+                    var d : RxData = rx_data
+                    n = (n + 1) % 10000
+                    sum = (sum + (d.byte as int)) % 256
+                    last = d.byte as int
+                    if d.flags.parity:
+                        bad = (bad + 1) % 1000
+            received = n
+            checksum = sum
+            errors = bad

@@ -111,6 +111,34 @@ fn one_call_delivers_library_header_module_and_manifest() {
     assert!(strict.status.success(), "{}: {}", header.display(), String::from_utf8_lossy(&strict.stderr));
     let text = std::fs::read_to_string(&header).expect("Kopf");
     assert!(text.contains("#define VALVE_TICK_NS 10000000LL"), "{text}");
+    // Die Konstanten stehen in Kopf und Modul je einmal von Hand (GEN-034):
+    // Jede steht auf beiden Seiten mit demselben Wert.
+    let normal = |v: &str| {
+        let v = v.trim().trim_end_matches("ULL").trim_end_matches("LL").trim_end_matches('u');
+        match v {
+            "true" => "1".to_string(),
+            "false" => "0".to_string(),
+            v => v.to_string(),
+        }
+    };
+    let in_header: std::collections::BTreeMap<String, String> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("#define VALVE_"))
+        .filter_map(|l| l.split_once(' '))
+        .map(|(name, value)| (name.to_string(), normal(value)))
+        .collect();
+    let in_module: std::collections::BTreeMap<String, String> = module
+        .lines()
+        .filter_map(|l| l.strip_prefix("pub const "))
+        .filter_map(|l| {
+            let (name, rest) = l.split_once(':')?;
+            let value = rest.split_once('=')?.1.trim().strip_suffix(';')?;
+            Some((name.to_string(), normal(value)))
+        })
+        .filter(|(name, _)| name != "HW_ADDRESSES")
+        .collect();
+    assert!(in_header.len() >= 10, "{in_header:?}");
+    assert_eq!(in_header, in_module, "Kopf und Modul nennen andere Konstanten oder Werte");
 
     assert!(module.contains("ffi::valve_abi_4"), "die Huelle liest das ABI-Symbol nicht");
     let nm = clang.with_file_name(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });

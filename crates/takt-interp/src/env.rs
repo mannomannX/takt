@@ -119,6 +119,10 @@ pub enum CoverKind {
     Handler,
     /// Ein irreversibler Output wurde geschrieben (12.7).
     Irreversible,
+    /// Eine implizite Pruefstelle (4.1) hat bestanden.
+    Site,
+    /// Eine implizite Pruefstelle hat gefaultet.
+    SiteFailed,
 }
 
 impl CoverKind {
@@ -131,6 +135,8 @@ impl CoverKind {
             CoverKind::CheckFailed => "check_failed",
             CoverKind::Handler => "handler",
             CoverKind::Irreversible => "irreversible",
+            CoverKind::Site => "site",
+            CoverKind::SiteFailed => "site_failed",
         }
     }
 }
@@ -222,6 +228,9 @@ pub trait Outer {
     fn viol(&mut self, _site: SiteId, _index: &[i64]) -> EvalResult<&mut i64> {
         bug("Bestaetigungszaehler ausserhalb einer Maschine")
     }
+    /// Die implizite Pruefstelle `tag` an `span` ist ausgewertet, ohne selbst
+    /// zu faulten (Coverage, 13.2; `coverage::sites`).
+    fn site(&mut self, _span: Span, _tag: u8) {}
     /// `next`-Zaehler eines `every` in Nanosekunden (5.8), je Stelle und
     /// Schleifenindex; beim ersten Zugriff nach einem Zustandseintritt
     /// beginnt er bei der Periode `start`.

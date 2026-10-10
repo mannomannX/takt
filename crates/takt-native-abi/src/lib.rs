@@ -606,3 +606,11 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     // SAFETY: `abort` der C-Laufzeit nimmt nichts und kehrt nicht zurueck.
     unsafe { abort() }
 }
+
+/// Die Personality fuer das Abwickeln, auf die das vorgebaute `core` unter
+/// ELF verweist. Die Bibliothek wickelt nie ab (`panic = "abort"`); ohne das
+/// Symbol linkt sie unter Linux nicht (KON2-013). Unter Windows fragt
+/// `core` nach der Personality der C-Laufzeit.
+#[cfg(all(feature = "host", not(windows)))]
+#[unsafe(no_mangle)]
+extern "C" fn rust_eh_personality() {}

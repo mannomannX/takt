@@ -16,7 +16,7 @@ use takt_mir::stmt::{Place, StmtKind};
 use takt_mir::{MachineId, TriggerId};
 
 use super::fault::Cause;
-use super::stream::{OVERFLOW, Queued, stream_of};
+use super::stream::{ABORT, OVERFLOW, Queued, RUNTIME, TRIGGER, stream_of};
 use super::value::V;
 use super::{Cx, Enc, Env, Exit, ExitKind, Flow, Mode, R, no};
 use crate::term::{Op, Term};
@@ -81,18 +81,26 @@ impl Enc<'_> {
     }
 
     /// Die vorgemerkten Ursachen einer Maschine mit ihrer Nummer in
-    /// `pending`: der Ueberlauf eines Stroms, dann die der Trigger-Phase.
+    /// `pending`: der Ueberlauf eines Stroms, der Operator-Abort, die
+    /// Runtime-Faults von aussen, dann die der Trigger-Phase.
     pub(super) fn pending_causes(&self, m: MachineId) -> Vec<(i64, Cause)> {
         let overflow = (OVERFLOW, self.cause(FaultKind::StreamOverflow, takt_diag::Span::default()));
+        let abort = (ABORT, self.operator_abort());
+        let runtime =
+            super::RUNTIME_KINDS.iter().enumerate().map(|(i, k)| (RUNTIME + i as i64, self.runtime_cause(*k)));
         let phase = self.trigger_faults.get(&m).into_iter().flatten().cloned();
-        std::iter::once(overflow).chain(phase.enumerate().map(|(i, c)| (OVERFLOW + 1 + i as i64, c))).collect()
+        [overflow, abort]
+            .into_iter()
+            .chain(runtime)
+            .chain(phase.enumerate().map(|(i, c)| (TRIGGER + i as i64, c)))
+            .collect()
     }
 
     /// Merkt `cause` vor, wo `cond` gilt und noch nichts wartet.
     fn pend(&mut self, m: MachineId, cond: Term, cause: Cause, cur: &mut Env) {
         let list = self.trigger_faults.entry(m).or_default();
         list.push(cause);
-        let code = OVERFLOW + list.len() as i64;
+        let code = TRIGGER + list.len() as i64 - 1;
         let at = self.loc_pending(m);
         let old = cur[&at].clone();
         let free = Term::eq(old.clone(), Term::int(0));

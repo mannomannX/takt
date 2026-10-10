@@ -422,6 +422,12 @@ impl Outer for MachineEnv<'_, '_> {
         Ok(self.state.viol.at(site.0, index))
     }
 
+    fn site(&mut self, span: Span, tag: u8) {
+        if span.file.0 == takt_mir::analysis::proof::SOURCE {
+            *self.image.site_evals.entry((span.start, span.end, tag)).or_default() += 1;
+        }
+    }
+
     fn every(&mut self, counter: CounterId, index: &[i64], start: i64) -> EvalResult<&mut i64> {
         Ok(self.state.every_next.at_or(counter.0, index, start))
     }
@@ -448,7 +454,8 @@ impl Outer for MachineEnv<'_, '_> {
     /// `sim`-Output `mmio/ADR/r`, den ein Modell stellt — mit Unit-Delay
     /// wie jeder Modellwert (8.3), also der committete Wert: Der Latch
     /// hinge davon ab, ob das Modell vor dem Treiber schreitet (Satz 9.4.1).
-    /// Ist er ein Strom, entnimmt jedes Lesen ein Element.
+    /// Ist er ein Strom, entnimmt jedes Lesen ein Element
+    /// (`Image::port_next`).
     fn port_read(&mut self, p: PortId) -> EvalResult<Value> {
         let port = &self.loaded.program.ports[p.index()];
         let want = format!("mmio/{:#x}/r", port.address);
@@ -458,7 +465,8 @@ impl Outer for MachineEnv<'_, '_> {
             return Ok(Value::default_for(ty, program));
         };
         if matches!(self.loaded.ty(program.channels[i].ty), Type::Stream(_)) {
-            return Ok(self.image.port_next(&want).unwrap_or_else(|| Value::default_for(ty, program)));
+            let next = self.image.port_next(ChannelId(i as u32), program).map_err(Trap::Bug)?;
+            return Ok(next.unwrap_or_else(|| Value::default_for(ty, program)));
         }
         Ok(self.image.committed_output(ChannelId(i as u32)).clone())
     }
@@ -556,7 +564,7 @@ impl Outer for MachineEnv<'_, '_> {
                 let Some(tx) = self.image.tx.get_mut(&c) else {
                     return bug(format!("Channel {} ist kein Ausgabestrom", c.0));
                 };
-                if bytes.len() as u32 > tx.free() {
+                if bytes.len() as u32 > tx.free() || tx.full_of_elements() {
                     let name = self.loaded.program.channels[c.index()].name.clone();
                     let drop = matches!(self.loaded.program.channels[c.index()].attrs.overflow, Some(Overflow::Drop));
                     if drop {
@@ -569,15 +577,14 @@ impl Outer for MachineEnv<'_, '_> {
                         });
                         return Ok(());
                     }
-                    return Err(Trap::Fault(Fault::new(
-                        FaultKind::StreamOverflow,
-                        format!("Sendepuffer `{name}` hat {} Byte frei, {} verlangt", tx.free(), bytes.len()),
-                        span,
-                        self.tick,
-                    )));
+                    let message = if tx.full_of_elements() {
+                        format!("Sendepuffer `{name}` fasst keine {}. Element", tx.capacity + 1)
+                    } else {
+                        format!("Sendepuffer `{name}` hat {} Byte frei, {} verlangt", tx.free(), bytes.len())
+                    };
+                    return Err(Trap::Fault(Fault::new(FaultKind::StreamOverflow, message, span, self.tick)));
                 }
-                tx.fresh = tx.fresh.saturating_add(u32::try_from(bytes.len()).unwrap_or(u32::MAX));
-                tx.queued.extend(bytes);
+                tx.push(bytes);
                 // 5.6: Die Stelle des Verwurfs ist eine Alert-Stelle der
                 // Runtime; ohne Verwurf ist sie inaktiv.
                 if matches!(self.loaded.program.channels[c.index()].attrs.overflow, Some(Overflow::Drop)) {
@@ -979,23 +986,17 @@ impl<'p> Sim<'p> {
 
     /// Der Treiber holt die gesendeten Bytes ab (8.8) — in jedem Tick, auch
     /// im Tick 0. Ein Modell liest den Ausgabestrom mit Unit-Delay (8.3):
-    /// was der Treiber jetzt abgeholt hat, steht im naechsten Tick im Fenster.
+    /// was der Treiber jetzt abgeholt hat, steht im naechsten Tick als
+    /// Elemente seines Typs im Fenster, mit der Zeit dieses Commits.
     fn drain_tx(&mut self, now: i64) {
         let program = self.loaded.program;
         for tx in self.image.tx.values_mut() {
             tx.drain();
         }
-        let taken: Vec<(ChannelId, Vec<u8>)> = self
-            .image
-            .tx
-            .iter()
-            .filter(|(c, t)| !t.sent.is_empty() && self.image.channel_bufs.contains_key(c))
-            .map(|(c, t)| (*c, t.sent.clone()))
-            .collect();
-        for (c, bytes) in taken {
-            let value = crate::image::element_of(&bytes, program.channels[c.index()].ty, program);
-            let drop_oldest = matches!(program.channels[c.index()].attrs.overflow, Some(Overflow::DropOldest));
-            self.image.push_element(c, now, value, drop_oldest);
+        let read: Vec<ChannelId> =
+            self.image.tx.keys().filter(|c| self.image.channel_bufs.contains_key(c)).copied().collect();
+        for c in read {
+            self.image.deliver_sent(program, c, c, now);
         }
     }
 

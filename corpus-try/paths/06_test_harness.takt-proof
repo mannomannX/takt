@@ -4,3 +4,4 @@ solver z3 4.13.4
 site 1211 1216 valid k=5
 site 1239 1244 valid k=5
 site 1943 1955 fin k=5
+site 1994 2006 fin k=5

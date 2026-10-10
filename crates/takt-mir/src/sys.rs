@@ -1,5 +1,6 @@
-//! Das eingebaute Geraet `sys` (12.7, 7.4): Anfang und Ende eines Laufs und
-//! die Wanduhr. Pruefung 60 kennt seine Kanaele ohne Hardware-Konfiguration —
+//! Das eingebaute Geraet `sys` (12.7, 7.4, 13.3): Anfang und Ende eines
+//! Laufs, die Wanduhr und die Faults von aussen. Pruefung 60 kennt seine
+//! Kanaele ohne Hardware-Konfiguration —
 //! eine Konfiguration muss sie nicht wiederholen, und ein Tippfehler
 //! (`sys/next_rnu`) faellt auf.
 //!
@@ -17,6 +18,8 @@ pub enum SysType {
     Enum(&'static str),
     /// `Duration`.
     Duration,
+    /// `bool`.
+    Bool,
 }
 
 impl SysType {
@@ -25,6 +28,7 @@ impl SysType {
         match self {
             SysType::Enum(n) => n,
             SysType::Duration => "Duration",
+            SysType::Bool => "bool",
         }
     }
 }
@@ -38,10 +42,13 @@ pub struct SysChannel {
     pub dir: Direction,
     /// Typ.
     pub ty: SysType,
+    /// Stellt der Kern den Kanal selbst, statt dass der Wirt ihn liefert?
+    /// Dann gibt es weder einen Treiber noch eine `sim`-Quelle.
+    pub core: bool,
 }
 
 const fn sys(address: &'static str, dir: Direction, ty: SysType) -> SysChannel {
-    SysChannel { address, dir, ty }
+    SysChannel { address, dir, ty, core: false }
 }
 
 /// Wie der vorige Lauf endete (12.7).
@@ -51,13 +58,26 @@ pub const PREVIOUS_RUN: &str = "sys/previous_run";
 /// den laufenden.
 pub const NEXT_RUN: &str = "sys/next_run";
 
-/// Die Kanaele des Geraets: Anfang und Ende eines Laufs (12.7) und die
-/// Wanduhr (7.4).
-pub const SYS: [SysChannel; 3] = [
+/// Ob in diesem Tick ein Fault von aussen kam: ein Operator-Abort oder ein
+/// Runtime-Fault (5.4, 7.3). Der Kern stellt ihn; eine Eigenschaft, die nur
+/// den Normalbetrieb meint, nimmt ihn als Annahme (13.3).
+pub const OUTER_FAULT: &str = "sys/outer_fault";
+
+/// Die Kanaele des Geraets: Anfang und Ende eines Laufs (12.7), die Wanduhr
+/// (7.4) und die Faults von aussen (13.3).
+pub const SYS: [SysChannel; 4] = [
     sys(PREVIOUS_RUN, Direction::Input, SysType::Enum("PreviousRun")),
     sys(NEXT_RUN, Direction::Output, SysType::Enum("NextRun")),
     sys("sys/clock", Direction::Input, SysType::Duration),
+    SysChannel { core: true, ..sys(OUTER_FAULT, Direction::Input, SysType::Bool) },
 ];
+
+/// Der Kanal des Programms an `sys/outer_fault`, wenn es ihn deklariert.
+pub fn outer_fault(p: &Program) -> Option<usize> {
+    p.channels
+        .iter()
+        .position(|c| c.dir == Direction::Input && matches!(&c.binding, Binding::Hw(a) if a.text() == OUTER_FAULT))
+}
 
 /// Der Kanal zu einer Adresse, wenn sie zum Geraet gehoert.
 pub fn channel(address: &str) -> Option<&'static SysChannel> {

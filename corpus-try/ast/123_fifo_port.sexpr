@@ -1,0 +1,62 @@
+(system
+  (language 1)
+  (tick 10ms))
+(record RxData layout=little
+  (byte: u8)
+  (bits flags: u8
+    (parity: bool at 0)))
+(record RxStatus layout=little
+  (level: u8)
+  (bits flags: u8
+    (overrun: bool at 0)))
+(port rx_data :RxData @mmio(0x40002000))
+(port rx_stat :RxStatus @mmio(0x40002004))
+(output rx_fifo :stream<RxData> @sim("mmio/0x40002000/r") capacity=8)
+(output rx_st :RxStatus @sim("mmio/0x40002004/r"))
+(command burst)
+(output received :int in 0..9999 @sim("received"))
+(output checksum :int in 0..255 @sim("checksum"))
+(output last :int in 0..255 @sim("last"))
+(output errors :int in 0..999 @sim("errors"))
+(output overruns :int in 0..999 @sim("overruns"))
+(machine uart_model every=10ms
+  (var next :int in 0..255 65)
+  (var left :int in 0..99 5)
+  (var lost :int in 0..999 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (if burst
+        (= left (call min (+ left 12) 99)))
+      (for _i in (range 3)
+        (if (> left 0)
+          (if (>= (.free rx_fifo) 2)
+            (send rx_fifo (RxData byte=(as next u8) flags=(if (== (% next 7) 0) 1 0)))
+            (= next (% (paren (+ next 1)) 256)))
+          (else
+            (= lost (% (paren (+ lost 1)) 1000)))
+          (= left (- left 1))))
+      (= rx_st (RxStatus level=(as (paren (/ (paren (- 8 (.free rx_fifo))) 2)) u8) flags=(if (> lost 0) 1 0)))
+      (= overruns lost))))
+(driver-machine rx every=10ms
+  (var n :int in 0..9999 0)
+  (var sum :int in 0..255 0)
+  (var bad :int in 0..999 0)
+  (var prev :int in 0..2 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (var ready :int in (- 2)..255 (- (paren (as (.level rx_stat) int)) prev))
+      (= prev 0)
+      (for i in (range 2)
+        (if (< i ready)
+          (= prev (+ prev 1))
+          (var d :RxData rx_data)
+          (= n (% (paren (+ n 1)) 10000))
+          (= sum (% (paren (+ sum (paren (as (.byte d) int)))) 256))
+          (= last (as (.byte d) int))
+          (if (.parity (.flags d))
+            (= bad (% (paren (+ bad 1)) 1000)))))
+      (= received n)
+      (= checksum sum)
+      (= errors bad))))
