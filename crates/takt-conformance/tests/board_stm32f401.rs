@@ -13,7 +13,7 @@ use std::time::Duration;
 use common::board::{
     Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, last_output,
     long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, runs_shared,
-    simultaneous_jobs_finish_on_time, the_interrupt_form_keeps_its_deadline,
+    simultaneous_jobs_finish_on_time, the_interrupt_form_keeps_its_deadline, the_poll_form_keeps_its_round,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, Form, Options};
@@ -251,14 +251,49 @@ fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
-/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern
-/// und in der Interruptform (4.5, 12.11). Unter RTIC gibt die Takt-Aufgabe
-/// einen Job je Grenze aus (FB-512, Schritt 14c).
+/// **In der Pollform rechnet der Korpus wie der Interpreter** (12.11, M11
+/// Schritt 14): Die Hauptschleife des Bring-ups ruft `service`, sobald die
+/// Frist erreicht ist, Jobs rechnen im Job-Interrupt. In logischer Zeit
+/// oeffnet sie das Tor der Frist in jeder Runde, und der Job-Interrupt
+/// rechnet, bevor sie weiterlaeuft.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_board_agrees_with_the_interpreter_in_the_poll_form() {
+    let Some((mut board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_F401_ONLY").ok();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
+    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Poll));
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// Die laengste Runde der Hauptschleife, die die Hardware-Konfiguration des
+/// Boards fuer die Pollform nennt (8.10).
+fn main_loop_ns() -> u64 {
+    let text = std::fs::read_to_string(board::root().join("corpus-try/hw/stm32f401.hw")).expect("hw lesbar");
+    let hw = takt_mir::hardware::parse(&text).unwrap_or_else(|e| panic!("{}: {}", e.line, e.message));
+    let ns = hw.target("thumbv7em").and_then(|t| t.host.main_loop_ns).expect("`main_loop_ns` im Ziel thumbv7em");
+    u64::try_from(ns).expect("eine Dauer")
+}
+
+/// **In der Pollform kommt der Schritt binnen einer Runde der
+/// Hauptschleife** (12.11): gegen `main_loop_ns` aus `stm32f401.hw`; der
+/// Aufruf, der den Tick rechnet, darf 20 us dazugeben.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_poll_form_steps_within_a_round_of_its_main_loop() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = the_poll_form_keeps_its_round(&mut board, main_loop_ns(), 20_000);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern,
+/// in der Interrupt- und in der Pollform (4.5, 12.11). Unter RTIC gibt die
+/// Takt-Aufgabe einen Job je Grenze aus (FB-512, Schritt 14c).
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn simultaneous_jobs_finish_on_time_on_the_board() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed: Vec<String> = [Form::Own, Form::Interrupt]
+    let failed: Vec<String> = [Form::Own, Form::Interrupt, Form::Poll]
         .into_iter()
         .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
         .collect();

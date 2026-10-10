@@ -74,6 +74,10 @@ rtos = ["dep:rtic", "dep:rtic-sync", "dep:takt-rt-rtos"]
 # Die Interruptform (12.11): Den Schritt rechnet die ISR von TIM2 zur Frist,
 # darunter laeuft eine fremde Hauptschleife.
 interrupt = []
+# Die Pollform (12.11): Die Hauptschleife des Wirts ruft `service`, sobald
+# die Frist erreicht ist; ihre laengste Runde steht in der
+# Hardware-Konfiguration.
+poll = []
 bench = []
 
 # Das Messprogramm von `takt bench` (13.8): `bench` bindet die Bibliothek aus

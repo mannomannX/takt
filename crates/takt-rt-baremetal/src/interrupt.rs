@@ -15,6 +15,11 @@
 //! System ruht ([`release`]), und die Uhr steht mit jedem Alarm auf seiner
 //! Frist ([`Time::Logical`]). So haelt jeder Job seine Dauer, und keine
 //! Zeile geht verloren, wie unter [`crate::LogicalClock`].
+//!
+//! **Die Pollform** (12.11) ist dieselbe Form ohne Zeitgeber: Die
+//! Hauptschleife des Wirts fragt je Runde die Frist ab und ist selbst der
+//! Schrittkontext ([`Form::poll`]); der Alarm [`Polled`] stellt nur den
+//! Job-Interrupt.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -155,12 +160,59 @@ impl<A: Alarm> Form<A> {
         }
     }
 
+    /// Eine Runde der Hauptschleife in der Pollform (12.11): Hat der
+    /// Job-Interrupt seit der letzten Runde einen Auftrag gerechnet
+    /// (`job_done`), verteilt `service` den naechsten
+    /// ([`Form::on_job_done`]); sonst rechnet es, sobald die Frist erreicht
+    /// ist ([`Form::on_alarm`]). In logischer Zeit ist sie in jeder Runde
+    /// erreicht, in der das Tor offen ist: Die Hauptschleife laeuft erst,
+    /// wenn der Job-Interrupt ruht. Am Ende des Laufs die Bilanz.
+    pub fn poll<G, C, W, F, N, P, const R: usize>(
+        &mut self,
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+        persist: Option<&mut Persist<'_, N>>,
+        tunables: Option<&mut dyn Tunables>,
+        job_done: bool,
+    ) -> Option<Stats>
+    where
+        G: Program,
+        C: Clock,
+        W: Watchdog,
+        F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+        N: Nvm,
+        P: Port + 'static,
+    {
+        if job_done {
+            self.on_job_done(rt, persist, tunables);
+            return None;
+        }
+        let due = match self.gate {
+            Some(gate) => gate.swap(false, Ordering::AcqRel),
+            None => rt.clock.now() >= self.at,
+        };
+        if due { self.on_alarm(rt, persist, tunables) } else { None }
+    }
+
     fn arm(&mut self, at: i64) {
         self.at = at;
         match self.gate {
             Some(gate) => gate.store(true, Ordering::Release),
             None => self.alarm.arm(at),
         }
+    }
+}
+
+/// Der Alarm der Pollform (12.11): Einen Zeitgeber gibt es nicht, die
+/// Hauptschleife fragt die Frist ab ([`Form::poll`]). `pend` laesst den
+/// Job-Interrupt anstehen.
+#[derive(Debug)]
+pub struct Polled<F>(pub F);
+
+impl<F: FnMut()> Alarm for Polled<F> {
+    fn arm(&mut self, _at: i64) {}
+
+    fn pend_jobs(&mut self) {
+        (self.0)();
     }
 }
 
@@ -341,6 +393,36 @@ mod tests {
     fn every_waiting_job_runs_before_the_next_boundary() {
         let (_, program, form) = interrupt_run(Counting::new(u64::MAX).with_jobs(5, 3), Cadence::of(10, 1), 0);
         assert_eq!((program.dispatched, form.alarm.jobs), (std::vec![6, 6, 6], 3));
+    }
+
+    /// **Die Pollform**: Die Hauptschleife fragt je Runde die Frist ab, eine
+    /// Runde dauert ein Siebtel der Periode. Jeder Tick liegt auf seinem
+    /// Raster, keiner faellt aus, und nach jedem Auftrag des Job-Interrupts
+    /// verteilt die naechste Runde den naechsten Job, alle vor der naechsten
+    /// Grenze.
+    #[test]
+    fn the_poll_form_steps_on_the_grid_and_dispatches_every_job() {
+        let now = Cell::new(0);
+        let trace: Line = Trace::new(Cadence::of(20, 1), T0, no_line);
+        let program = Counting::new(u64::MAX).with_jobs(5, 3);
+        let mut rt = Runtime::new(program, Shared(&now), NoWatchdog, trace, Profile::SHARED, T0, Policy::Alert);
+        let pended = Cell::new(0u32);
+        let mut form = Form::start(&mut rt, Polled(|| pended.set(pended.get() + 1)), None);
+        let round = T0 / 7;
+        let mut done = 0;
+        let stats = loop {
+            // Der Job-Interrupt rechnet, sobald er ansteht, und meldet es der naechsten Runde.
+            let job_done = pended.get() > done;
+            done = pended.get();
+            if let Some(stats) = form.poll(&mut rt, no_journal(), None, job_done) {
+                break stats;
+            }
+            now.set(now.get() + round);
+        };
+        assert_eq!((stats.next_run, rt.program.ticks), (None, 20));
+        let k = 1..=20;
+        assert!(rt.program.times.iter().zip(k).all(|(t, k)| *t == k * T0), "das Raster: {:?}", rt.program.times);
+        assert_eq!((rt.program.dispatched, pended.get()), (std::vec![6, 6, 6], 3));
     }
 
     /// In logischer Zeit stellt der Alarm keinen Zeitgeber, sondern

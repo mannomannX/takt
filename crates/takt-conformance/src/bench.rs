@@ -916,6 +916,7 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
             match options.form {
                 Form::Own => "",
                 Form::Interrupt => " in der Interruptform",
+                Form::Poll => " in der Pollform",
                 Form::Rtos => " unter RTOS",
             },
             if options.timed { " in Echtzeit" } else { " in logischer Zeit" },

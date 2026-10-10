@@ -84,7 +84,7 @@ pub(crate) struct Embed<'a> {
 
 /// Schreibt die Lieferform nach `e.out`.
 pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
-    check_form(e.program, e.form)?;
+    check_form(e.program, e.form, e.hardware.and_then(|hw| hw.target(e.target.name)), e.target.name)?;
     let x = e.prefix;
     std::fs::create_dir_all(&e.out).map_err(|err| format!("{}: {err}", e.out.display()))?;
     // 8.10: was das Ziel ueber Speicher und Stack sagt.
@@ -243,18 +243,60 @@ struct Placement {
     protect: Option<(takt_mir::hardware::Protect, takt_mir::hardware::Window)>,
 }
 
-/// Das Profil im Programm darf der Form nicht widersprechen (12.8, 12.11):
-/// Die Form legt es fest, und ein anderes im Programm ist ein Fehler mit
-/// beiden Namen.
-fn check_form(p: &takt_mir::Program, form: Form) -> Result<(), String> {
-    let (Some(declared), Some(wanted)) = (p.config.runtime_profile(), form.profile()) else { return Ok(()) };
-    if p.config.target.is_some() && declared != wanted {
+/// Was die Form verlangt (12.8, 12.11). Das Profil im Programm darf ihr
+/// nicht widersprechen: Die Form legt es fest, und ein anderes im Programm
+/// ist ein Fehler mit beiden Namen. Die Pollform prueft dazu die
+/// Hauptschleife des Wirts ([`check_poll`]) im Ziel `name` der
+/// Hardware-Konfiguration.
+fn check_form(
+    p: &takt_mir::Program,
+    form: Form,
+    target: Option<&takt_mir::hardware::Target>,
+    name: &str,
+) -> Result<(), String> {
+    if let (Some(declared), Some(wanted)) = (p.config.runtime_profile(), form.profile())
+        && p.config.target.is_some()
+        && declared != wanted
+    {
         return Err(format!(
             "das Programm nennt `system: target = {}`, die Form `{}` verlangt `{}`; `system: target` weglassen, die \
              Form legt das Profil fest (12.11)",
             declared.name(),
             form.name(),
             wanted.name()
+        ));
+    }
+    if form == Form::Poll {
+        check_poll(p, target.map(|t| t.host).unwrap_or_default(), name)?;
+    }
+    Ok(())
+}
+
+/// Die Pollform (12.11): Zwischen zwei Aufrufen von `service` liegt eine
+/// Runde der Hauptschleife des Wirts. Ihre laengste Runde nennt die
+/// Hardware-Konfiguration; ohne sie ist die Form nicht zu pruefen und baut
+/// nicht. Ein Tick, der kuerzer ist, kaeme jedes Mal zu spaet, und Jobs
+/// rechnen nur, wenn der Wirt einen Job-Interrupt stellt.
+fn check_poll(p: &takt_mir::Program, host: takt_mir::hardware::Host, name: &str) -> Result<(), String> {
+    let Some(round) = host.main_loop_ns else {
+        return Err(format!(
+            "die Pollform braucht die laengste Runde der Hauptschleife des Wirts: `main_loop_ns` im Ziel `{name}` \
+             der Hardware-Konfiguration (`--hardware`; 8.10, 12.11)"
+        ));
+    };
+    if p.config.tick < round {
+        return Err(format!(
+            "der Tick ({} ns) ist kuerzer als die laengste Runde der Hauptschleife (`main_loop_ns = {round}`): In \
+             der Pollform kaeme `service` jedes Mal nach seiner Frist; Tick verlaengern, Runde kuerzen oder die \
+             Interruptform (12.11)",
+            p.config.tick
+        ));
+    }
+    if !host.job_interrupt && !takt_frame::parts::job_slots(p).is_empty() {
+        return Err(format!(
+            "das Programm startet Jobs (4.5), der Wirt stellt in der Pollform keinen Job-Interrupt \
+             (`job_interrupt = true` im Ziel `{name}` der Hardware-Konfiguration); einen Interrupt niedrigster \
+             Prioritaet stellen, der `job_work` ruft, oder die Interruptform (12.11)"
         ));
     }
     Ok(())
@@ -413,4 +455,83 @@ pub(crate) fn archive(lib: &Path, objs: &[&Path]) -> Result<(), String> {
     let _ = std::fs::remove_file(lib);
     let ok = Command::new(&ar).arg("crs").arg(lib).args(objs).status().is_ok_and(|s| s.success());
     if ok { Ok(()) } else { Err(format!("{}: llvm-ar schlug fehl", lib.display())) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use takt_mir::hardware::Host;
+
+    fn compile(src: &str) -> takt_mir::Program {
+        let options = takt_sema::Options { build: takt_sema::Build::Hw, ..Default::default() };
+        let out = takt_sema::compile(src, &options);
+        out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics))
+    }
+
+    fn source(path: &str) -> String {
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(path)).expect("Quelle")
+    }
+
+    /// `valve` mit `system: target = profile`, ohne Angabe ohne Profil.
+    fn valve(profile: Option<&str>) -> takt_mir::Program {
+        let text = source("examples/rust-host/takt/valve.takt");
+        let line = profile.map_or_else(String::new, |p| format!("    target   = {p}\n"));
+        compile(&text.replace("    tick     = 10 ms\n", &format!("    tick     = 10 ms\n{line}")))
+    }
+
+    fn poll_host(main_loop_ns: i64, job_interrupt: bool) -> takt_mir::hardware::Target {
+        takt_mir::hardware::Target {
+            host: Host { main_loop_ns: Some(main_loop_ns), job_interrupt },
+            ..Default::default()
+        }
+    }
+
+    /// **Jede Form weist ein Profil ab, das sie nicht setzt** (12.8, 12.11,
+    /// GEN-036): Profil mal Form, mit beiden Namen im Fehler. Ohne Profil im
+    /// Programm baut jede Form; die logische Zeit setzt keines und nimmt
+    /// jedes.
+    #[test]
+    fn every_form_refuses_a_profile_it_does_not_set() {
+        let host = poll_host(1_000_000, false);
+        for form in Form::ALL {
+            assert_eq!(check_form(&valve(None), form, Some(&host), "x86_64"), Ok(()), "{}", form.name());
+            for profile in [RuntimeProfile::Baremetal, RuntimeProfile::Shared, RuntimeProfile::LinuxRt] {
+                let result = check_form(&valve(Some(profile.name())), form, Some(&host), "x86_64");
+                match form.profile() {
+                    Some(wanted) if wanted != profile => {
+                        let e = result.expect_err("widerspricht");
+                        assert!(
+                            e.contains(profile.name()) && e.contains(&format!("`{}`", form.name())),
+                            "{}/{}: {e}",
+                            profile.name(),
+                            form.name()
+                        );
+                    }
+                    _ => assert_eq!(result, Ok(()), "{}/{}", profile.name(), form.name()),
+                }
+            }
+        }
+    }
+
+    /// **Die Pollform prueft die Hauptschleife des Wirts** (12.11, GEN-036):
+    /// Ohne Runde baut sie nicht; ein Tick von 10 ms unter einer Runde von
+    /// 20 ms ist ein Fehler mit beiden Zahlen; Jobs brauchen den
+    /// Job-Interrupt. Die anderen Formen fragen nicht danach.
+    #[test]
+    fn the_poll_form_checks_the_main_loop_of_its_host() {
+        let valve = valve(None);
+        let e = check_form(&valve, Form::Poll, None, "thumbv7em").expect_err("ohne Runde");
+        assert!(e.contains("main_loop_ns") && e.contains("`thumbv7em`"), "{e}");
+        let e = check_form(&valve, Form::Poll, Some(&poll_host(20_000_000, false)), "x86_64").expect_err("zu kurz");
+        assert!(e.contains("10000000 ns") && e.contains("main_loop_ns = 20000000"), "{e}");
+        assert_eq!(check_form(&valve, Form::Poll, Some(&poll_host(10_000_000, false)), "x86_64"), Ok(()));
+
+        let jobs = compile(&source("corpus-try/40_jobs.takt"));
+        let e = check_form(&jobs, Form::Poll, Some(&poll_host(1_000_000, false)), "x86_64").expect_err("Jobs");
+        assert!(e.contains("Job-Interrupt") && e.contains("job_interrupt = true"), "{e}");
+        assert_eq!(check_form(&jobs, Form::Poll, Some(&poll_host(1_000_000, true)), "x86_64"), Ok(()));
+        for form in [Form::Own, Form::Interrupt, Form::Rtos] {
+            assert_eq!(check_form(&jobs, form, None, "x86_64"), Ok(()), "{}", form.name());
+        }
+    }
 }

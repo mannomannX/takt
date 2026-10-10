@@ -49,12 +49,12 @@ use stm32f4::stm32f401::NVIC;
 use stm32f4::stm32f401::{Peripherals, interrupt};
 #[cfg(form = "own")]
 use takt_board_stm32f401::JobContext;
-#[cfg(form = "interrupt")]
+#[cfg(timer = "free")]
 use takt_board_stm32f401::alarm::Tim2Alarm;
 use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Iwdg, Led, Mpu, Telemetry, Wire, cycles, mpu, platform};
-#[cfg(not(form = "interrupt"))]
+#[cfg(timer = "periodic")]
 use takt_board_stm32f401::{Tim2Tick, tick};
-#[cfg(not(form = "interrupt"))]
+#[cfg(timer = "periodic")]
 use takt_rt_baremetal::TimerClock;
 use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, Trace};
 #[cfg(form = "own")]
@@ -107,7 +107,7 @@ const HOSTILE_FPU: bool = option_env!("TAKT_HOSTILE_FPU").is_some();
 const HOSTILE_FPSCR: u32 = 0x03C0_0000;
 
 /// Der Zyklenstand der vorigen Tickgrenze des periodischen Zeitgebers.
-#[cfg(not(form = "interrupt"))]
+#[cfg(timer = "periodic")]
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 
 /// Die Telemetrie, statisch: Der erzeugte Rahmen ruft `takt_board_trace`
@@ -378,20 +378,20 @@ mod devices {
     }
 
     /// `test/tick_stretch`, das Pruefgeraet fuer 12.6 Zeile 7: streckt die
-    /// Periode von TIM2 um den geschriebenen Prozentsatz. In der
-    /// Interruptform laeuft TIM2 frei und hat keine Periode: Das Geraet
-    /// schreibt nicht.
+    /// Periode von TIM2 um den geschriebenen Prozentsatz. In Interrupt- und
+    /// Pollform laeuft TIM2 frei und hat keine Periode: Das Geraet schreibt
+    /// nicht.
     #[derive(Debug, Default)]
     pub struct TestTickStretch;
 
     impl Output<u8> for TestTickStretch {
-        #[cfg(not(form = "interrupt"))]
+        #[cfg(timer = "periodic")]
         fn write(&mut self, percent: u8, _now: i64) -> bool {
             takt_board_stm32f401::tick::stretch(u32::from(percent));
             true
         }
 
-        #[cfg(form = "interrupt")]
+        #[cfg(timer = "free")]
         fn write(&mut self, _percent: u8, _now: i64) -> bool {
             false
         }
@@ -435,7 +435,7 @@ fn EXTI0() {
 }
 
 /// Die Tickgrenze (12.3): Zeitstempel fuer die Periode, Tickzaehler.
-#[cfg(not(form = "interrupt"))]
+#[cfg(timer = "periodic")]
 fn on_tim2() {
     mpu::isr(|| {
         let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
@@ -576,11 +576,11 @@ fn hostile_fpu() {
     }
 }
 
-/// Der Zeitgeber der Form: periodisch fuer den eigenen Kern und RTIC, ein
-/// Alarm auf die Frist in der Interruptform.
-#[cfg(not(form = "interrupt"))]
+/// Der Zeitgeber der Form: periodisch fuer den eigenen Kern und RTIC, frei
+/// als Zeitachse in Interrupt- und Pollform.
+#[cfg(timer = "periodic")]
 type Timer = Tim2Tick;
-#[cfg(form = "interrupt")]
+#[cfg(timer = "free")]
 type Timer = Tim2Alarm;
 
 /// Was jede Bindung vor dem ersten Tick einrichtet.
@@ -606,11 +606,10 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
 
-    #[cfg(not(form = "interrupt"))]
+    #[cfg(timer = "periodic")]
     let timer = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS);
-    #[cfg(form = "interrupt")]
-    let timer =
-        takt_board_stm32f401::init_alarm(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, interrupt_form::JOB_LINE);
+    #[cfg(timer = "free")]
+    let timer = takt_board_stm32f401::init_alarm(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, host::JOB_LINE);
     let Ok(timer) = timer else {
         // Ohne Takt keine Telemetrie: Die LED bleibt an.
         led.on();
@@ -656,10 +655,11 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     if HOSTILE_FPU {
         hostile_fpu();
     }
-    #[cfg(not(form = "interrupt"))]
+    #[cfg(timer = "periodic")]
     banner(timer.nominal_ns());
-    // Der Alarm steht auf jeder Frist: Seine Periode ist die nominale.
-    #[cfg(form = "interrupt")]
+    // Ohne periodischen Zeitgeber kommt jeder Schritt zu seiner Frist: Die
+    // Periode ist die nominale.
+    #[cfg(timer = "free")]
     banner(TICK_NS);
     unsafe { LED = Some(led) };
     Setup {
@@ -742,13 +742,103 @@ fn main() -> ! {
     }
 }
 
-#[cfg(form = "interrupt")]
+#[cfg(timer = "free")]
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
     let Setup { timer, protection, nvic } = setup(dp, cp);
-    interrupt_form::run(timer, protection, nvic)
+    #[cfg(form = "interrupt")]
+    interrupt_form::run(timer, protection, nvic);
+    #[cfg(form = "poll")]
+    poll_form::run(timer, protection, nvic);
+}
+
+/// Was Interrupt- und Pollform teilen (12.11): den Job-Interrupt, die
+/// fremde Arbeit der Hauptschleife und das Ende des Laufs, das in diesen
+/// Formen dem Wirt gehoert.
+#[cfg(timer = "free")]
+mod host {
+    use stm32f4::stm32f401::Interrupt;
+    use takt_board_stm32f401::{Iwdg, WfiSleep};
+    use takt_rt_baremetal::Sleep;
+
+    use super::{DRAIN_ROUNDS, HW_ADDRESSES, JOBS, LED, probe, uart};
+
+    /// Die Leitung des Job-Interrupts: eine, die kein Treiber benutzt (4.5).
+    pub const JOB_LINE: Interrupt = Interrupt::EXTI1;
+
+    /// Die Jobs unter allen Interrupts; nur die Hauptschleife liegt darunter.
+    pub const JOB_PRIORITY: u8 = 0xF0;
+
+    /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
+    const BLINK_NS: i64 = 500_000_000;
+
+    /// Rechnet den Auftrag, den der Schrittkontext dem Job-Interrupt gab
+    /// (4.5).
+    pub fn work_jobs() {
+        // SAFETY: Den Griff legt die Form vor dem ersten Schritt ab; danach
+        // rechnet nur der Job-Interrupt mit ihm.
+        if let Some(jobs) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
+            jobs.work();
+        }
+    }
+
+    /// Die fremde Arbeit der Hauptschleife: Sie zaehlt ihre Runden und
+    /// laesst die LED blinken, wenn das Programm sie nicht selbst fuehrt.
+    pub struct Work {
+        blink: bool,
+        lit: bool,
+        rounds: u64,
+    }
+
+    impl Work {
+        pub fn new() -> Work {
+            Work { blink: !HW_ADDRESSES.contains(&"ui/led"), lit: false, rounds: 0 }
+        }
+
+        /// Eine Runde zur Zeit `now_ns` der Zeitachse.
+        pub fn round(&mut self, now_ns: i64) {
+            self.rounds = self.rounds.wrapping_add(1);
+            let on = now_ns / BLINK_NS % 2 == 0;
+            if self.blink && on != self.lit {
+                self.lit = on;
+                // SAFETY: Das Programm bindet die LED nicht; nur diese
+                // Schleife schaltet sie.
+                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
+                    if on { led.on() } else { led.off() }
+                }
+            }
+            probe();
+        }
+
+        /// Die Zeile vor der Bilanz: Die Runden zeigen, dass der Wirt neben
+        /// dem Schritt lief; `longest` ist die laengste in Nanosekunden.
+        pub fn report(&self, longest: Option<u64>) {
+            let Some(u) = uart() else { return };
+            u.drain(DRAIN_ROUNDS);
+            u.write("takt wirt runden ");
+            u.write_u64(self.rounds);
+            if let Some(ns) = longest {
+                u.write(" laengste ");
+                u.write_u64(ns);
+                u.write(" ns");
+            }
+            u.newline();
+        }
+    }
+
+    /// Nach dem Lauf bleibt die Leitung offen wie im eigenen Kern (FB-275).
+    pub fn park() -> ! {
+        let mut sleep = WfiSleep;
+        loop {
+            sleep.sleep_until_event();
+            if let Some(u) = uart() {
+                u.flush();
+            }
+            Iwdg::feed();
+        }
+    }
 }
 
 /// Die Interruptform (12.11, `plan/m11.md` 2.4): Den Schritt rechnet die
@@ -769,27 +859,16 @@ mod interrupt_form {
     use core::sync::atomic::{AtomicBool, Ordering};
 
     use stm32f4::stm32f401::{Interrupt, NVIC, interrupt};
-    use takt_board_stm32f401::WfiSleep;
     use takt_board_stm32f401::alarm::{self, Tim2Alarm};
-    use takt_rt_baremetal::Sleep;
     use takt_rt_baremetal::interrupt::{Form, Time, release};
 
+    use super::host::{self, JOB_LINE, JOB_PRIORITY, Work};
     use super::{
-        Console, DRAIN_ROUNDS, HW_ADDRESSES, Iwdg, JOBS, LED, LOGICAL, Mpu, Profile, Stats, Takt, conclude,
-        hand_over_jobs, mpu, no_journal, probe, program, runtime, uart,
+        Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, no_journal, program, runtime, uart,
     };
-
-    /// Die Leitung des Job-Interrupts: eine, die kein Treiber benutzt.
-    pub const JOB_LINE: Interrupt = Interrupt::EXTI1;
 
     /// Der Schritt unter Leitung und Pruef-ISR.
     const STEP_PRIORITY: u8 = 0x20;
-
-    /// Die Jobs unter allem.
-    const JOB_PRIORITY: u8 = 0xF0;
-
-    /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
-    const BLINK_NS: i64 = 500_000_000;
 
     /// Was die ISR des Alarms haelt.
     struct Stepping {
@@ -851,11 +930,7 @@ mod interrupt_form {
     #[interrupt]
     fn EXTI1() {
         mpu::isr(|| {
-            // SAFETY: `run` legt den Griff vor dem ersten Schritt ab; danach
-            // rechnet nur dieser Interrupt mit ihm.
-            if let Some(jobs) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
-                jobs.work();
-            }
+            host::work_jobs();
             JOB_DONE.store(true, Ordering::Release);
             NVIC::pend(Interrupt::TIM2);
         });
@@ -897,46 +972,138 @@ mod interrupt_form {
     /// laeuft, denn dann ruht das System (`release`). Nach dem Ende schreibt
     /// sie die Bilanz und fuehrt im Betrieb `next_run` aus.
     fn host(mut alarm: Tim2Alarm) -> ! {
-        let blink = !HW_ADDRESSES.contains(&"ui/led");
-        let mut lit = false;
-        let mut rounds: u64 = 0;
+        let mut work = Work::new();
         while !ENDED.load(Ordering::Acquire) {
-            rounds = rounds.wrapping_add(1);
             if LOGICAL {
                 release(&GATE, &mut alarm);
             }
-            let on = alarm.now_ns() / BLINK_NS % 2 == 0;
-            if blink && on != lit {
-                lit = on;
-                // SAFETY: Das Programm bindet die LED nicht; nur diese
-                // Schleife schaltet sie.
-                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
-                    if on { led.on() } else { led.off() }
-                }
-            }
-            probe();
+            work.round(alarm.now_ns());
         }
         // SAFETY: Nach dem Ende steht kein Alarm mehr; der Lauf gehoert jetzt
         // dieser Schleife.
         if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
-            // Die Runden des Wirts zeigen, dass er neben dem Schritt lief.
-            if let Some(u) = uart() {
-                u.drain(DRAIN_ROUNDS);
-                u.write("takt wirt runden ");
-                u.write_u64(rounds);
-                u.newline();
-            }
+            work.report(None);
             conclude(&s.rt, &s.ended.unwrap_or_default());
         }
-        // Wie im eigenen Kern bleibt die Leitung offen (FB-275).
-        let mut sleep = WfiSleep;
-        loop {
-            sleep.sleep_until_event();
+        host::park()
+    }
+}
+
+/// Die Pollform (12.11, `plan/m11.md` 2.4): Die Hauptschleife des Wirts ist
+/// der Schrittkontext. Sie fragt je Runde die Frist ab und ruft `service`,
+/// sobald sie erreicht ist (`Form::poll`); dazwischen tut sie ihre eigene
+/// Arbeit, [`HOST_WORK_US`](poll_form::HOST_WORK_US) je Runde. Die laengste
+/// Runde steht in der Hardware-Konfiguration (`main_loop_ns`), und die Bilanz
+/// nennt die gemessene. Jobs rechnen im Job-Interrupt (EXTI1); hat er einen
+/// Auftrag gerechnet, verteilt die naechste Runde den naechsten. TIM2 laeuft
+/// frei als Zeitachse, ohne Alarm.
+///
+/// **Prioritaeten.** Leitung und Pruef-ISR wie in der Interruptform; TIM2
+/// zaehlt nur die Epochen der Zeitachse. Der Job-Interrupt liegt unter allen
+/// und doch ueber der Hauptschleife im Thread-Modus: Er rechnet, sobald er
+/// ansteht.
+#[cfg(form = "poll")]
+mod poll_form {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use stm32f4::stm32f401::{Interrupt, NVIC, interrupt};
+    use takt_board_stm32f401::alarm::{self, Tim2Alarm};
+    use takt_board_stm32f401::cycles;
+    use takt_rt_baremetal::interrupt::{Form, Polled, Time};
+
+    use super::host::{self, JOB_LINE, JOB_PRIORITY, Work};
+    use super::{
+        CORE_HZ, Console, LOGICAL, Mpu, Profile, conclude, hand_over_jobs, mpu, no_journal, program, runtime, uart,
+    };
+
+    /// Die fremde Arbeit je Runde der Hauptschleife, in Mikrosekunden.
+    pub const HOST_WORK_US: u32 = 10;
+
+    /// In logischer Zeit das Tor der Frist; die Hauptschleife oeffnet es,
+    /// sobald sie laeuft.
+    static GATE: AtomicBool = AtomicBool::new(false);
+
+    /// Der Job-Interrupt hat seinen Auftrag gerechnet; die naechste Runde
+    /// verteilt den naechsten.
+    static JOB_DONE: AtomicBool = AtomicBool::new(false);
+
+    /// Die Zeitachse: Ein Ueberlauf von TIM2 zaehlt ihre Epoche.
+    #[interrupt]
+    fn TIM2() {
+        mpu::isr(|| {
+            alarm::on_interrupt();
+        });
+    }
+
+    /// Der Job-Interrupt (4.5): rechnet den Auftrag und meldet ihn der
+    /// naechsten Runde.
+    #[interrupt]
+    fn EXTI1() {
+        mpu::isr(|| {
+            host::work_jobs();
+            JOB_DONE.store(true, Ordering::Release);
+        });
+    }
+
+    /// Laesst den Job-Interrupt anstehen. Er rechnet, bevor die Hauptschleife
+    /// weiterlaeuft: Die naechste Runde sieht seinen Auftrag schon fertig.
+    fn pend_jobs() {
+        NVIC::pend(JOB_LINE);
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+    }
+
+    /// Rechnet `us` Mikrosekunden lang nichts: die Arbeit des Wirts.
+    fn spin(us: u32) {
+        let n = CORE_HZ / 1_000_000 * us;
+        let start = cycles::now();
+        while cycles::now().wrapping_sub(start) < n {}
+    }
+
+    /// Der Lauf in der Hauptschleife des Wirts, danach die Bilanz.
+    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC) -> ! {
+        // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
+        let mut program = unsafe { program() };
+        hand_over_jobs(&mut program);
+        let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
+        let mut rt = runtime(clock, protection, Profile::SHARED, program);
+        let mut form = Form::start(&mut rt, Polled(pend_jobs), LOGICAL.then_some(&GATE));
+        let mut tunes = Console::new(takt_board_stm32f401::console_byte);
+        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Schritt
+        // und Jobs reichte: gemalt erst hier, der Aufbau zaehlt nicht (12.3).
+        takt_board_stm32f401::stack::paint();
+        // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
+        // oben sind bereit.
+        unsafe {
+            for (line, priority) in [
+                (Interrupt::USART1, mpu::ISR_PRIORITY),
+                (Interrupt::EXTI0, mpu::ISR_PRIORITY),
+                (Interrupt::TIM2, mpu::ISR_PRIORITY),
+                (JOB_LINE, JOB_PRIORITY),
+            ] {
+                nvic.set_priority(line, priority);
+                NVIC::unmask(line);
+            }
+        }
+        let mut work = Work::new();
+        let mut longest: u32 = 0;
+        let stats = loop {
+            let job_done = JOB_DONE.swap(false, Ordering::AcqRel);
+            if let Some(stats) = form.poll(&mut rt, no_journal(), Some(&mut tunes), job_done) {
+                break stats;
+            }
+            // Eine Runde des Wirts, vom Ende eines Aufrufs bis zum naechsten.
+            let started = cycles::now();
             if let Some(u) = uart() {
                 u.flush();
             }
-            Iwdg::feed();
-        }
+            spin(HOST_WORK_US);
+            work.round(alarm.now_ns());
+            longest = longest.max(cycles::now().wrapping_sub(started));
+        };
+        work.report(Some(u64::from(longest) * 1_000_000_000 / u64::from(CORE_HZ)));
+        conclude(&rt, &stats);
+        host::park()
     }
 }
 

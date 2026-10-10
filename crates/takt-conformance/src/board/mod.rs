@@ -224,6 +224,9 @@ pub enum Form {
     /// Die ISR eines Alarms auf die Frist rechnet den Schritt, darunter
     /// laeuft eine fremde Hauptschleife.
     Interrupt,
+    /// Die Hauptschleife des Wirts ruft `service`, sobald die Frist
+    /// erreicht ist; ihre laengste Runde nennt die Hardware-Konfiguration.
+    Poll,
     /// Takt als hoechstpriore Aufgabe unter dem RTOS des Boards, mit
     /// Treiber-Aufgabe und Funk-ISR als Last.
     Rtos,
@@ -236,6 +239,7 @@ impl Form {
         match self {
             Form::Own => None,
             Form::Interrupt => Some("interrupt"),
+            Form::Poll => Some("poll"),
             Form::Rtos => Some("rtos"),
         }
     }

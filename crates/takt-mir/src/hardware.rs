@@ -96,8 +96,10 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// `stack`-Vertrag (4.5, 12.3); eine aeltere Datei kennt beide nicht: keine
 /// Schutzregion, die Reserve des Rahmens. 15: Edition und Compiler-Version
 /// des Werkzeugs, das die Datei zuletzt schrieb, in der Kopfzeile (11.3,
-/// FB-441); eine Datei von Hand traegt keine.
-pub const FORMAT_VERSION: u32 = 15;
+/// FB-441); eine Datei von Hand traegt keine. 16: `main_loop_ns` und
+/// `job_interrupt`, die Hauptschleife des Wirts in der Pollform (8.10,
+/// 12.11); eine aeltere Datei kennt beide nicht und baut keine Pollform.
+pub const FORMAT_VERSION: u32 = 16;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -260,6 +262,20 @@ pub struct Target {
     pub nvm: Option<NvmGeometry>,
     /// Speicher und Stack-Reserven (11.5, 12.3).
     pub memory: Memory,
+    /// Die Hauptschleife des Wirts in der Pollform (12.11).
+    pub host: Host,
+}
+
+/// Die Hauptschleife des Wirts (8.10: „Hauptschleife"): Was die Pollform
+/// braucht, um zu bauen (12.11).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Host {
+    /// Die laengste Runde der Hauptschleife in Nanosekunden: So spaet kann
+    /// `service` nach seiner Frist kommen.
+    pub main_loop_ns: Option<i64>,
+    /// Der Wirt stellt einen Job-Interrupt (4.5); ohne ihn baut ein Programm
+    /// mit Jobs in der Pollform nicht.
+    pub job_interrupt: bool,
 }
 
 impl Target {
@@ -741,6 +757,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
             })?;
             target.memory.protect = Some(unit);
         }
+        "main_loop_ns" => target.host.main_loop_ns = Some(field::<i64>(value, line)?),
+        "job_interrupt" => target.host.job_interrupt = boolean(value, line)?,
         _ => {
             if let Some((h, c)) = heavy_pairs().find(|(h, c)| heavy_key(*h, *c).as_deref() == Some(key)) {
                 target.c_target.set_heavy(h, c, number(value, line)?);
@@ -750,7 +768,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: cost_model, core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
-                     stack_reserve, stack_margin, job_stack_reserve, protect, nvm_sector_bytes, nvm_sectors, nvm_min_interval, nvm_erase_ns, \
+                     stack_reserve, stack_margin, job_stack_reserve, protect, main_loop_ns, job_interrupt, nvm_sector_bytes, \
+                     nvm_sectors, nvm_min_interval, nvm_erase_ns, \
                      nvm_program_ns, nvm_blocking, die Klassen {} und die eigenen Gewichte {}",
                     CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "),
                     heavy_pairs().filter_map(|(h, c)| heavy_key(h, c)).collect::<Vec<_>>().join(", ")
@@ -1055,6 +1074,12 @@ pub fn render(hw: &Hardware) -> String {
         if let Some(p) = m.protect {
             s.push_str(&format!("protect = {}\n", p.name()));
         }
+        if let Some(n) = target.host.main_loop_ns {
+            s.push_str(&format!("main_loop_ns = {n}\n"));
+        }
+        if target.host.job_interrupt {
+            s.push_str("job_interrupt = true\n");
+        }
     }
     for d in hw.devices.values() {
         s.push_str(&format!("\n[device.{}]\n", d.name));
@@ -1172,6 +1197,20 @@ t_io = 120000
         assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
         let e = parse(&text.replace("armv7m_mpu", "pmp")).expect_err("unbekannt");
         assert!(e.message.contains("armv7m_mpu"), "{}", e.message);
+    }
+
+    /// **Die Hauptschleife der Pollform** (8.10, 12.11, Version 16): Runde
+    /// und Job-Interrupt, gelesen, geschrieben und wieder gelesen; ohne
+    /// beide nennt das Ziel keine Runde und keinen Job-Interrupt.
+    #[test]
+    fn the_main_loop_of_the_poll_form_round_trips() {
+        let text = format!("# {MAGIC} 16\n[target.thumbv7em]\nmain_loop_ns = 50000\njob_interrupt = true\n");
+        let hw = parse(&text).expect("lesbar");
+        let host = hw.target("thumbv7em").expect("Ziel").host;
+        assert_eq!(host, Host { main_loop_ns: Some(50_000), job_interrupt: true });
+        assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
+        let bare = parse(&format!("# {MAGIC} 15\n[target.thumbv7em]\nram = 1024\n")).expect("Version 15");
+        assert_eq!(bare.target("thumbv7em").expect("Ziel").host, Host::default());
     }
 
     /// **Die Region der ARMv7-M-MPU** (12.3): eine Zweierpotenz ab 32 Byte;

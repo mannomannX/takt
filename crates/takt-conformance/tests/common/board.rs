@@ -571,48 +571,111 @@ pub fn simultaneous_jobs_finish_on_time(board: &mut dyn Board, form: Form) -> Ve
     }
 }
 
-/// **In der Interruptform beginnt der Schritt auf seiner Frist, neben einer
-/// fremden Hauptschleife** (12.11): `drift` ueber 3000 Ticks bei 1 ms, und
-/// die Hauptschleife des Wirts drehte dabei ihre Runden — der Schritt
-/// rechnete in der ISR, nicht in ihr.
-pub fn the_interrupt_form_keeps_its_deadline(board: &mut dyn Board) -> Vec<String> {
+/// Ein Lauf in Echtzeit neben einer fremden Hauptschleife (12.11): 3000
+/// Ticks bei 1 ms in der Form `form`, mit `drift` jedes Ticks und der Zeile
+/// des Wirts (`takt wirt runden N [laengste M ns]`).
+pub struct HostRun {
+    /// Wie spaet die Ticks begannen.
+    pub drift: Drift,
+    /// Die Runden der Hauptschleife.
+    pub rounds: Option<u64>,
+    /// Ihre laengste Runde in Nanosekunden, wo die Form sie misst.
+    pub longest_ns: Option<u64>,
+    /// Der Trace.
+    pub text: String,
+}
+
+/// Faehrt `rtos_jitter.takt` in Echtzeit in der Form `form`.
+pub fn host_run(board: &mut dyn Board, form: Form) -> Result<HostRun, String> {
     let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
-    let options = Options::timed(3000).in_form(Form::Interrupt);
-    let text = match board.build(&program, &options).and_then(|elf| board.run(&elf, &options)) {
-        Ok(t) => t,
+    let options = Options::timed(3000).in_form(form);
+    let text = board.build(&program, &options).and_then(|elf| board.run(&elf, &options))?;
+    let host = text.lines().find_map(|l| l.strip_prefix("takt wirt runden ")).unwrap_or_default();
+    let mut words = host.split_whitespace();
+    let rounds = words.next().and_then(|w| w.parse().ok());
+    let longest_ns = words.skip_while(|w| *w != "laengste").nth(1).and_then(|w| w.parse().ok());
+    let run = HostRun { drift: Drift::of(&text), rounds, longest_ns, text };
+    eprintln!(
+        "{} {form:?}: {} Ticks, Median {} ns, spaetester {} ns darueber (Tick und Drift: {:?}), {:?} Runden des          Wirts, laengste {:?} ns",
+        board.name(),
+        run.drift.ticks,
+        run.drift.median,
+        run.drift.late,
+        run.drift.latest,
+        run.rounds,
+        run.longest_ns
+    );
+    Ok(run)
+}
+
+impl HostRun {
+    /// Was jeder Lauf neben einer fremden Hauptschleife zeigt: genug
+    /// Zeitzeilen, Ausgaben, und die Hauptschleife drehte mehr Runden als
+    /// Ticks — der Schritt nahm ihr den Kern nicht.
+    fn basics(&self) -> Vec<String> {
+        let mut failed = Vec::new();
+        if self.drift.ticks < 2000 {
+            failed.push(format!("{} Zeitzeilen", self.drift.ticks));
+        }
+        match self.rounds {
+            Some(r) if r > 3000 => {}
+            Some(r) => failed.push(format!("die Hauptschleife drehte {r} Runden in 3000 Ticks")),
+            None => failed.push("die Bilanz nennt die Runden des Wirts nicht".to_string()),
+        }
+        if !self.text.contains(" out count ") {
+            failed.push("keine Ausgaben".to_string());
+        }
+        failed
+    }
+
+    fn with_trace(&self, mut failed: Vec<String>) -> Vec<String> {
+        if !failed.is_empty() {
+            failed.push(self.text.clone());
+        }
+        failed
+    }
+}
+
+/// **In der Interruptform beginnt der Schritt auf seiner Frist, neben einer
+/// fremden Hauptschleife** (12.11): Im Mittel binnen 20 us, kein Tick mehr
+/// als 50 us spaeter; der Schritt rechnete in der ISR, nicht in der
+/// Hauptschleife.
+pub fn the_interrupt_form_keeps_its_deadline(board: &mut dyn Board) -> Vec<String> {
+    let run = match host_run(board, Form::Interrupt) {
+        Ok(run) => run,
         Err(e) => return vec![format!("kein Lauf: {e}")],
     };
-    let drift = Drift::of(&text);
-    let rounds = text.lines().find_map(|l| l.strip_prefix("takt wirt runden ")?.trim().parse::<u64>().ok());
-    eprintln!(
-        "{} interrupt: {} Ticks, Median {} ns, spaetester {} ns darueber, {rounds:?} Runden des Wirts",
-        board.name(),
-        drift.ticks,
-        drift.median,
-        drift.late
-    );
-    let mut failed = Vec::new();
-    if drift.ticks < 2000 {
-        failed.push(format!("{} Zeitzeilen", drift.ticks));
+    let mut failed = run.basics();
+    if run.drift.median >= 20_000 {
+        failed.push(format!("der Schritt beginnt im Mittel {} ns nach der Frist", run.drift.median));
     }
-    if drift.median >= 20_000 {
-        failed.push(format!("der Schritt beginnt im Mittel {} ns nach der Frist", drift.median));
+    if run.drift.late >= 50_000 {
+        failed.push(format!("ein Tick {} ns spaeter als im Mittel", run.drift.late));
     }
-    if drift.late >= 50_000 {
-        failed.push(format!("ein Tick {} ns spaeter als im Mittel", drift.late));
+    run.with_trace(failed)
+}
+
+/// **In der Pollform kommt der Schritt binnen einer Runde der
+/// Hauptschleife** (12.11): Die gemessene laengste Runde bleibt unter
+/// `main_loop_ns` der Hardware-Konfiguration, und kein Tick beginnt spaeter
+/// als eine solche Runde und der Aufruf, der ihn rechnet (`slack_ns`), nach
+/// seiner Grenze.
+pub fn the_poll_form_keeps_its_round(board: &mut dyn Board, main_loop_ns: u64, slack_ns: u64) -> Vec<String> {
+    let run = match host_run(board, Form::Poll) {
+        Ok(run) => run,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let mut failed = run.basics();
+    match run.longest_ns {
+        Some(ns) if ns <= main_loop_ns => {}
+        Some(ns) => failed.push(format!("die laengste Runde dauerte {ns} ns, `main_loop_ns` sagt {main_loop_ns}")),
+        None => failed.push("die Bilanz nennt die laengste Runde nicht".to_string()),
     }
-    match rounds {
-        Some(r) if r > 3000 => {}
-        Some(r) => failed.push(format!("die Hauptschleife drehte {r} Runden in 3000 Ticks")),
-        None => failed.push("die Bilanz nennt die Runden des Wirts nicht".to_string()),
+    let latest = run.drift.median + run.drift.late;
+    if u64::try_from(latest).is_ok_and(|ns| ns > main_loop_ns + slack_ns) {
+        failed.push(format!("ein Tick begann {latest} ns nach seiner Grenze, eine Runde ist {main_loop_ns} ns"));
     }
-    if !text.contains(" out count ") {
-        failed.push("keine Ausgaben".to_string());
-    }
-    if !failed.is_empty() {
-        failed.push(text);
-    }
-    failed
+    run.with_trace(failed)
 }
 
 /// Darf das Programm in einer Form unter `shared` laufen, unter RTIC oder in
@@ -626,7 +689,7 @@ pub fn runs_shared(name: &str) -> bool {
 
 /// Wie spaet die Ticks eines Laufs nach ihrer Grenze begannen (`drift`
 /// der Zeitzeilen, 7.3); die ersten beiden laufen noch an.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Drift {
     /// Zeitzeilen.
     pub ticks: usize,
@@ -634,19 +697,27 @@ pub struct Drift {
     pub median: i64,
     /// Der spaeteste Tick, in ns ueber dem Median.
     pub late: i64,
+    /// Die fuenf spaetesten Ticks mit ihrer Nummer und Drift: Ihr Abstand
+    /// verraet, was sie aufhielt.
+    pub latest: Vec<(u64, i64)>,
 }
 
 impl Drift {
     /// Aus dem Trace eines Laufs in Echtzeit.
     pub fn of(text: &str) -> Drift {
-        let mut drifts: Vec<i64> = text
+        let mut drifts: Vec<(u64, i64)> = text
             .lines()
-            .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok())
+            .filter_map(|l| {
+                let tick = l.strip_prefix("t=")?.split_whitespace().next()?.parse().ok()?;
+                Some((tick, l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok()?))
+            })
             .skip(2)
             .collect();
-        drifts.sort_unstable();
-        let median = drifts.get(drifts.len() / 2).copied().unwrap_or(0);
-        Drift { ticks: drifts.len(), median, late: drifts.last().map_or(0, |d| d - median) }
+        drifts.sort_unstable_by_key(|&(_, d)| d);
+        let median = drifts.get(drifts.len() / 2).map_or(0, |&(_, d)| d);
+        let late = drifts.last().map_or(0, |&(_, d)| d - median);
+        let latest = drifts.iter().rev().take(5).copied().collect();
+        Drift { ticks: drifts.len(), median, late, latest }
     }
 }
 
@@ -814,12 +885,22 @@ fn run_one(
     let diffs = compare(&widened, &text);
     if !missing.is_empty() || !diffs.is_empty() {
         let list: Vec<String> = diffs.iter().take(8).map(|d| format!("  {d}")).collect();
+        // Was an den abweichenden Ticks steht, und was das Board ausserhalb
+        // des Traces schrieb: Ein Neustart oder ein Panic mitten im Lauf
+        // zeigt sich dort, nicht in den ersten Zeilen.
+        let ticks: BTreeSet<String> = diffs.iter().take(3).map(|d| format!("t={} ", d.tick)).collect();
+        let at_diffs: Vec<&str> = text.lines().filter(|l| ticks.iter().any(|t| l.starts_with(t.as_str()))).collect();
+        let outside: Vec<&str> =
+            text.lines().filter(|l| !l.starts_with("t=") && !l.trim().is_empty()).take(20).collect();
         failed.push(format!(
-            "{name}: {} Abweichungen, fehlende Ausgaenge {missing:?}\n{}\n--- Interpreter ---\n{}\n--- Board ---\n{}",
+            "{name}: {} Abweichungen, fehlende Ausgaenge {missing:?}\n{}\n--- Interpreter ---\n{}\n--- Board ---\n{}\n\
+             --- Board an den Abweichungen ---\n{}\n--- Board ausserhalb des Traces ---\n{}",
             diffs.len(),
             list.join("\n"),
             interpreted.lines().take(12).collect::<Vec<_>>().join("\n"),
-            text.lines().filter(|l| l.starts_with("t=")).take(12).collect::<Vec<_>>().join("\n")
+            text.lines().filter(|l| l.starts_with("t=")).take(12).collect::<Vec<_>>().join("\n"),
+            at_diffs.join("\n"),
+            outside.join("\n")
         ));
     }
     eprintln!("{} {name}: {} Abweichungen", board.name(), diffs.len());

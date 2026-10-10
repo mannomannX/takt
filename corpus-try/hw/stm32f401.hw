@@ -1,4 +1,4 @@
-# takt-hw 15 edition 1 compiler 0.1.0
+# takt-hw 16 edition 1 compiler 0.1.0
 # WeAct Black Pill (STM32F401CCU6, Cortex-M4F): Kalibrierung, Speicher,
 # Geraete und Kanaele fuer 29_heartbeat.takt (8.10).
 #
@@ -48,6 +48,11 @@ tick_jitter_ns = 0
 # (`bench/load.takt`) in Echtzeit und logischer Zeit, auch unter RTIC,
 # gemalt ab der Tickschleife, ohne seinen Programmanteil.
 stack_reserve = 2920
+# Die Hauptschleife des Bring-ups in der Pollform (12.11): je Runde 10 us
+# fremde Arbeit, dazu Leitung, LED und Pruefzugriffe; die Bilanz nennt die
+# gemessene laengste Runde. EXTI1 ist der Job-Interrupt.
+main_loop_ns = 50000
+job_interrupt = true
 f32_fma = 268349
 f64_fma = 6517037
 f32_sqrt = 456284

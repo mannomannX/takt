@@ -209,10 +209,25 @@ fn the_rust_example_builds_with_one_call_and_agrees_with_the_interpreter() {
 /// Baut die Lieferform von `valve` und liefert das Verzeichnis.
 fn deliver(name: &str, triple: &str, form: &str) -> PathBuf {
     let dir = scratch(name);
-    let out = dir.to_str().expect("Pfad");
-    let run = takt(&["build", VALVE, "--emit", "embed", "--target", triple, "--form", form, "--out", out]);
+    let out = dir.join("out");
+    let hw = host_of(&dir, form);
+    let mut args = vec!["build", VALVE, "--emit", "embed", "--target", triple, "--form", form];
+    args.extend(hw.iter().flat_map(|hw| ["--hardware", hw.to_str().expect("Pfad")]));
+    args.extend(["--out", out.to_str().expect("Pfad")]);
+    let run = takt(&args);
     assert!(run.status.success(), "{triple} {form}: {}", String::from_utf8_lossy(&run.stderr));
-    dir
+    out
+}
+
+/// Fuer die Pollform eine Hardware-Konfiguration in `dir`, die die laengste
+/// Runde der Hauptschleife nennt (8.10, 12.11): ohne sie baut die Form
+/// nicht. Die anderen Formen brauchen keine.
+fn host_of(dir: &Path, form: &str) -> Option<PathBuf> {
+    (form == "poll").then(|| {
+        let hw = dir.join("host.hw");
+        std::fs::write(&hw, "# takt-hw 16\n[target.thumbv7em]\nmain_loop_ns = 1000000\n").expect("hw");
+        hw
+    })
 }
 
 /// **Eine geschuetzte Arena ist ihre Region** (8.10 `protect`, 12.3, M11
@@ -439,18 +454,12 @@ fn every_profile_against_a_foreign_form_is_refused() {
         )
         .expect("Programm");
         let out = dir.join("out");
-        let run = takt(&[
-            "build",
-            src.to_str().expect("Pfad"),
-            "--emit",
-            "embed",
-            "--target",
-            "thumbv7em-none-eabihf",
-            "--form",
-            form,
-            "--out",
-            out.to_str().expect("Pfad"),
-        ]);
+        let hw = host_of(&dir, form);
+        let mut args = vec!["build", src.to_str().expect("Pfad"), "--emit", "embed", "--target"];
+        args.extend(["thumbv7em-none-eabihf", "--form", form]);
+        args.extend(hw.iter().flat_map(|hw| ["--hardware", hw.to_str().expect("Pfad")]));
+        args.extend(["--out", out.to_str().expect("Pfad")]);
+        let run = takt(&args);
         let err = String::from_utf8_lossy(&run.stderr);
         if accepted {
             assert!(run.status.success(), "{profile} unter {form}: {err}");
