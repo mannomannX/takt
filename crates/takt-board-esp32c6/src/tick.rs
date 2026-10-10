@@ -88,13 +88,16 @@ pub fn count() -> u64 {
 pub struct SystimerTick {
     counts_per_tick: u32,
     timer_hz: u32,
+    /// Der Massstab des Zaehlers, einmal gerechnet: Die Uhr wird im Tick
+    /// mehrmals gelesen.
+    scale: takt_board_support::clock::Scale,
 }
 
 impl SystimerTick {
     /// Eine Tick-Quelle mit `counts_per_tick` Schritten eines Zaehlers
     /// von `timer_hz`.
     pub fn new(timer_hz: u32, counts_per_tick: u32) -> SystimerTick {
-        SystimerTick { counts_per_tick, timer_hz }
+        SystimerTick { counts_per_tick, timer_hz, scale: takt_board_support::clock::Scale::of(timer_hz) }
     }
 
     /// Die nominale Periode in Nanosekunden.
@@ -113,7 +116,7 @@ impl TickSource for SystimerTick {
     fn now_ns(&self) -> i64 {
         // Dasselbe Raster wie `ticks`: Die Uhr rechnet ihr Ziel als
         // `Frist / Periode`.
-        takt_board_support::clock::elapsed_ns(self.timer_hz, since_origin())
+        self.scale.ns(since_origin())
     }
 
     #[esp_hal::ram]

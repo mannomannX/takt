@@ -14,7 +14,8 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::interrupt::Mutex;
 use cortex_m::peripheral::NVIC;
 use stm32f4::stm32f401::{Interrupt, TIM2};
-use takt_board_support::alarm::{Compare, compare, counts, counts_at, ns, passed};
+use takt_board_support::alarm::{Compare, compare, counts, passed};
+use takt_board_support::clock::Scale;
 
 /// Wie oft TIM2 uebergelaufen ist; die ISR zaehlt.
 static EPOCH: AtomicU32 = AtomicU32::new(0);
@@ -115,7 +116,7 @@ pub fn on_interrupt() -> bool {
 /// der Interruptform: die Zeitachse in Nanosekunden seit dem Start.
 #[derive(Clone, Copy, Debug)]
 pub struct Tim2Alarm {
-    timer_hz: u32,
+    scale: Scale,
     /// Die Leitung des Job-Interrupts.
     jobs: Interrupt,
 }
@@ -123,18 +124,18 @@ pub struct Tim2Alarm {
 impl Tim2Alarm {
     /// Der Alarm auf TIM2 mit `timer_hz`; Jobs laufen im Interrupt `jobs`.
     pub fn new(timer_hz: u32, jobs: Interrupt) -> Tim2Alarm {
-        Tim2Alarm { timer_hz, jobs }
+        Tim2Alarm { scale: Scale::of(timer_hz), jobs }
     }
 
     /// Jetzt, in Nanosekunden seit dem Start des Zaehlers.
     pub fn now_ns(&self) -> i64 {
-        ns(self.timer_hz, now_counts())
+        self.scale.ns(now_counts())
     }
 }
 
 impl takt_rt_baremetal::interrupt::Alarm for Tim2Alarm {
     fn arm(&mut self, at: i64) {
-        let target = counts_at(self.timer_hz, at);
+        let target = self.scale.counts_at(at);
         cortex_m::interrupt::free(|cs| TARGET.borrow(cs).set(Some(target)));
         aim(target);
     }

@@ -16,14 +16,19 @@ use esp_hal::interrupt::InterruptHandler;
 use esp_hal::interrupt::software::SoftwareInterrupt;
 use esp_hal::peripherals::SYSTIMER;
 use esp_hal::timer::systimer::{SystemTimer, Unit};
-use takt_board_support::alarm::{counts_at, ns, passed};
+use takt_board_support::alarm::passed;
+use takt_board_support::clock::Scale;
 
 use crate::TIMER_HZ;
+
+
+/// Nanosekunden je Schritt der Einheit.
+const SCALE: Scale = Scale::of(TIMER_HZ);
 
 /// So weit liegt ein Ziel mindestens vor dem Zaehler: Ein Ziel, das beim
 /// Stellen schon erreicht ist, loest nicht sicher aus. Zwei Mikrosekunden,
 /// wie `esp_timer` aus ESP-IDF sie nimmt.
-const MARGIN: u64 = 2 * TIMER_HZ as u64 / 1_000_000;
+const MARGIN: u64 = SCALE.counts_at(2_000);
 
 /// Der Stand der Einheit beim Start: Die Zeitachse zaehlt ab hier.
 static ORIGIN: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
@@ -125,14 +130,14 @@ impl SystimerAlarm {
     /// Jetzt, in Nanosekunden seit dem Start der Zeitachse.
     #[esp_hal::ram]
     pub fn now_ns(&self) -> i64 {
-        ns(TIMER_HZ, now_counts())
+        SCALE.ns(now_counts())
     }
 }
 
 impl takt_rt_baremetal::interrupt::Alarm for SystimerAlarm {
     #[esp_hal::ram]
     fn arm(&mut self, at: i64) {
-        let target = counts_at(TIMER_HZ, at);
+        let target = SCALE.counts_at(at);
         critical_section::with(|cs| {
             TARGET.borrow(cs).set(Some(target));
             aim(target);

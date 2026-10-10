@@ -72,22 +72,61 @@ pub fn period_ns(timer_hz: u32, counts: u32) -> i64 {
     i64::try_from(u128::from(counts) * 1_000_000_000 / u128::from(timer_hz)).unwrap_or(i64::MAX)
 }
 
-/// Die Zeit, die `counts` Schritte eines Zaehlers ausmachen — exakt in
-/// `u128`, weil der Zaehler ueber Stunden laeuft und ein Rundungsfehler
-/// je Schritt sich summierte (FB-192).
+/// Die Zeit, die `counts` Schritte eines Zaehlers ausmachen — exakt, weil
+/// der Zaehler ueber Stunden laeuft und ein Rundungsfehler je Schritt sich
+/// summierte (FB-192). Wer oft abliest, haelt den [`Scale`].
 pub fn elapsed_ns(timer_hz: u32, counts: u64) -> i64 {
-    if timer_hz == 0 {
-        return 0;
+    Scale::of(timer_hz).ns(counts)
+}
+
+/// Der Massstab eines Zaehlers: Nanosekunden je Schritt als gekuerzter
+/// Bruch `num / den`, einmal beim Einrichten gerechnet.
+///
+/// **Die Uhr wird im Schritt mehrmals gelesen.** Den Bruch je Ablesung neu
+/// zu kuerzen kostete einen ggT und vier Divisionen in 64 Bit, und die sind
+/// auf Cortex-M4 und RV32 Bibliotheksaufrufe: In der Interruptform des F401
+/// begann der Schritt so im Mittel 20 us nach seiner Frist. Gekuerzt ist
+/// der Nenner bei 1 MHz eins und bei 16 MHz zwei — eine Multiplikation und
+/// eine Verschiebung.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scale {
+    num: u64,
+    den: u64,
+}
+
+impl Scale {
+    /// Der Massstab eines Zaehlers mit `timer_hz`; ohne Takt ist jede Zeit
+    /// null.
+    pub const fn of(timer_hz: u32) -> Scale {
+        if timer_hz == 0 {
+            return Scale { num: 0, den: 1 };
+        }
+        let g = gcd(1_000_000_000, timer_hz as u64);
+        Scale { num: 1_000_000_000 / g, den: timer_hz as u64 / g }
     }
-    // Gekuerzt bleibt die Rechnung in `u64` (bei 16 MHz: 290 Jahre); erst
-    // darueber kostet sie `u128`. Der Wert ist derselbe.
-    let g = gcd(1_000_000_000, u64::from(timer_hz));
-    let (num, den) = (1_000_000_000 / g, u64::from(timer_hz) / g);
-    let ns = match counts.checked_mul(num) {
-        Some(p) => u128::from(p / den),
-        None => u128::from(counts) * u128::from(num) / u128::from(den),
-    };
-    i64::try_from(ns).unwrap_or(i64::MAX)
+
+    /// Nanosekunden fuer `counts` Schritte, abgerundet. In `u64` bis zu
+    /// Jahrhunderten bei jedem gaengigen Takt; erst darueber in `u128`, mit
+    /// demselben Wert.
+    pub fn ns(self, counts: u64) -> i64 {
+        let ns = match counts.checked_mul(self.num) {
+            Some(p) if self.den == 1 => u128::from(p),
+            Some(p) if self.den.is_power_of_two() => u128::from(p >> self.den.trailing_zeros()),
+            Some(p) => u128::from(p / self.den),
+            None => u128::from(counts) * u128::from(self.num) / u128::from(self.den),
+        };
+        i64::try_from(ns).unwrap_or(i64::MAX)
+    }
+
+    /// Der erste Zaehlerstand, der `ns` Nanosekunden nicht unterschreitet:
+    /// Ein Alarm darauf feuert nie vor seiner Frist.
+    pub const fn counts_at(self, ns: i64) -> u64 {
+        if ns <= 0 || self.num == 0 {
+            return 0;
+        }
+        let counts = (ns.unsigned_abs() as u128 * self.den as u128).div_ceil(self.num as u128);
+        if counts > u64::MAX as u128 { u64::MAX } else { counts as u64 }
+    }
 }
 
 /// Eine Periode in ganzen Mikrosekunden, fuer Zeitgeber, die nur solche
@@ -119,6 +158,27 @@ mod tests {
     }
 
     const MHZ: u32 = 1_000_000;
+
+    /// **Der Massstab rechnet wie der Bruch, den er kuerzt**: abgerundet
+    /// `counts · 10⁹ / timer_hz`, auch jenseits von `u64`; und der Stand
+    /// zu einer Frist ist der erste, der sie nicht unterschreitet.
+    #[test]
+    fn the_scale_is_the_exact_fraction_both_ways() {
+        for hz in [1_000_000, 16_000_000, 84_000_000, 40_000_000, 32_768, 3, 1_000_000_000] {
+            let scale = Scale::of(hz);
+            for counts in [0, 1, 2, 999, 1_000_001, u64::from(u32::MAX), 1 << 50, u64::MAX / 3] {
+                let exact = u128::from(counts) * 1_000_000_000 / u128::from(hz);
+                assert_eq!(scale.ns(counts), i64::try_from(exact).unwrap_or(i64::MAX), "{hz} Hz, {counts}");
+            }
+            for ns in [1, 999, 1_000, 1_000_001, 59_999_999_999, 1 << 50] {
+                let c = scale.counts_at(ns);
+                assert!(scale.ns(c) >= ns, "{hz} Hz, {ns} ns: {c}");
+                assert!(c == 0 || scale.ns(c - 1) < ns, "{hz} Hz, {ns} ns: {c} ist nicht der erste");
+            }
+        }
+        assert_eq!((Scale::of(0).ns(5), Scale::of(0).counts_at(5)), (0, 0));
+        assert_eq!(Scale::of(16_000_000), Scale { num: 125, den: 2 });
+    }
 
     #[test]
     fn elapsed_time_is_exact_over_hours() {

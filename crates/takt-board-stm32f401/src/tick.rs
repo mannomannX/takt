@@ -89,6 +89,8 @@ pub struct Tim2Tick {
     counts_per_tick: u32,
     /// Die Frequenz, mit der der Timer zaehlt.
     timer_hz: u32,
+    /// Ihr Massstab, einmal gerechnet: Die Uhr wird im Tick mehrmals gelesen.
+    scale: takt_board_support::clock::Scale,
     /// Die Frequenz des Kerns — sie deutet [`LAST_CYCLES`].
     core_hz: u32,
 }
@@ -96,7 +98,7 @@ pub struct Tim2Tick {
 impl Tim2Tick {
     /// Bindet die Tickquelle an die Konfiguration des Timers.
     pub fn new(timer_hz: u32, counts_per_tick: u32, core_hz: u32) -> Tim2Tick {
-        Tim2Tick { counts_per_tick, timer_hz, core_hz }
+        Tim2Tick { counts_per_tick, timer_hz, scale: takt_board_support::clock::Scale::of(timer_hz), core_hz }
     }
 
     /// Die nominale Periode in Nanosekunden aus der Timerkonfiguration.
@@ -133,7 +135,7 @@ impl TickSource for Tim2Tick {
                 break before * u64::from(self.counts_per_tick) + cnt;
             }
         };
-        takt_board_support::clock::elapsed_ns(self.timer_hz, counts)
+        self.scale.ns(counts)
     }
 
     /// Ein `wfi`, ausser der Tick ist schon da; geprueft bei gesperrten
