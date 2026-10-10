@@ -207,12 +207,14 @@ impl Runner {
         pre: Option<&[Val]>,
         inputs: &BTreeMap<(u64, String), Val>,
     ) -> Result<(Vec<Val>, Vec<Val>), Stop> {
-        let now: HashMap<&str, Val> =
-            inputs.range((k, String::new())..(k + 1, String::new())).map(|((_, n), v)| (n.as_str(), *v)).collect();
+        let now: HashMap<&str, Val> = inputs
+            .range((k, String::new())..(k + 1, String::new()))
+            .map(|((_, n), v)| (n.as_str(), v.clone()))
+            .collect();
         let mut given = Vec::with_capacity(model.inputs.len());
         for (n, sort) in &model.inputs {
-            let v = now.get(n.as_str()).copied().unwrap_or(Val::zero(*sort));
-            if sort_of(v) != *sort {
+            let v = now.get(n.as_str()).cloned().unwrap_or_else(|| Val::zero(*sort));
+            if v.sort() != *sort {
                 return Err(Stop::Gap {
                     tick: k,
                     what: format!("die Eingabe `{n}` hat die Sorte {sort:?}, nicht {v:?}"),
@@ -222,7 +224,7 @@ impl Runner {
         }
         let next = match pre {
             None => {
-                let env: Env = model.inputs.iter().map(|(n, _)| n.clone()).zip(given.iter().copied()).collect();
+                let env: Env = model.inputs.iter().map(|(n, _)| n.clone()).zip(given.iter().cloned()).collect();
                 eval::eval_all(model.state.iter().map(|v| &v.init), &env)
             }
             Some(pre) => self.next.0.eval(&gather(&self.next.1, pre, &given)),
@@ -232,7 +234,7 @@ impl Runner {
 
     /// Die Orte des Zustands, die der Trace liest, mit ihrem Wert.
     fn observed(&self, model: &Model, state: &[Val]) -> Env {
-        self.observed.iter().map(|&i| (model.state[i].name.clone(), state[i])).collect()
+        self.observed.iter().map(|&i| (model.state[i].name.clone(), state[i].clone())).collect()
     }
 }
 
@@ -241,8 +243,8 @@ fn gather(sources: &[Source], state: &[Val], given: &[Val]) -> Vec<Val> {
     sources
         .iter()
         .map(|s| match *s {
-            Source::State(i) => state[i],
-            Source::Input(j) => given[j],
+            Source::State(i) => state[i].clone(),
+            Source::Input(j) => given[j].clone(),
             Source::Zero(sort) => Val::zero(sort),
         })
         .collect()
@@ -298,15 +300,6 @@ pub fn mismatches(interpreter: &Trace, model: &Trace) -> Vec<String> {
         }
     }
     out
-}
-
-fn sort_of(v: Val) -> Sort {
-    match v {
-        Val::Bool(_) => Sort::Bool,
-        Val::Int(_) => Sort::Int,
-        Val::F32(_) => Sort::F32,
-        Val::F64(_) => Sort::F64,
-    }
 }
 
 /// Die Eingaben des Modells je Tick und Name.
@@ -407,7 +400,7 @@ fn inputs(
                 tunes.insert(name.clone(), v);
             }
         }
-        out.extend(tunes.iter().map(|(n, v)| ((k, format!("i.tune.{n}")), *v)));
+        out.extend(tunes.iter().map(|(n, v)| ((k, format!("i.tune.{n}")), v.clone())));
         let samples = usize::try_from(k).ok().and_then(|k| seen.inputs.get(k));
         for (c, s) in p.channels.iter().zip(samples.into_iter().flatten()) {
             if c.dir == Direction::Input && !matches!(p.types.get(c.ty), Type::Stream(_)) {
@@ -696,8 +689,16 @@ impl<'a> Writer<'a> {
                 let sent = format!("s.tx.{}.sent", c.name);
                 let n = int(s, &format!("{sent}.len"), k)?;
                 if n > 0 {
-                    let bytes = (0..n)
-                        .map(|j| u8::try_from(int(s, &format!("{sent}[{j}]"), k)?).map_err(|_| missing(k, &sent)));
+                    // Die Bytes einzeln oder in einem Array (FB-497).
+                    let array = s.get(&format!("{sent}[*]"));
+                    let byte = |j: i64| match array {
+                        Some(Val::Arr(a)) => match a.get(j) {
+                            Val::Int(b) => Ok(b),
+                            _ => Err(missing(k, &sent)),
+                        },
+                        _ => int(s, &format!("{sent}[{j}]"), k),
+                    };
+                    let bytes = (0..n).map(|j| u8::try_from(byte(j)?).map_err(|_| missing(k, &sent)));
                     let value = value_text(&Value::Bytes(bytes.collect::<Result<_, _>>()?), c.ty, p);
                     self.push(k, LineKind::Output { channel: c.name.clone(), value });
                 }

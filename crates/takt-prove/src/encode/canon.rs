@@ -84,8 +84,10 @@ pub(super) struct Read {
 }
 
 impl Enc<'_> {
-    /// Die kanonische Form eines Werts (`bytes::write`).
+    /// Die kanonische Form eines Werts (`bytes::write`); Plaetze in Arrays
+    /// Platz fuer Platz.
     pub(super) fn canonical(&self, ty: TypeId, v: V, span: Span) -> R<Form> {
+        let v = if v.has_seq() { v.flat_at(span)? } else { v };
         Ok(match self.p.types.get(ty).clone() {
             Type::Bool => Form::fixed(vec![Term::ite(v.leaf(span)?, int(1), int(0))]),
             Type::Int { width, .. } => Form::fixed(le_bytes(&v.leaf(span)?, i64::from(width.bits() / 8))),

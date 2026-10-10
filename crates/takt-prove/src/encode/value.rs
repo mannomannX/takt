@@ -7,7 +7,9 @@
 //! hinter der Laenge sind null wie im Standardwert des Interpreters
 //! (`Value::default_for`); darum gilt Gleichheit Blatt fuer Blatt. Ein
 //! Ergebnis `T!E` ist `.is_err`, der Wert und der Fehler — der
-//! Standardwert ist `OK(…)`, das Flag also falsch.
+//! Standardwert ist `OK(…)`, das Flag also falsch. Die Plaetze einer
+//! grossen Sammlung stehen als Arrays der SMT-Theorie an `…[*]` (FB-497,
+//! `array.rs`).
 
 use std::ops::Not;
 
@@ -18,6 +20,7 @@ use takt_mir::stmt::{ArmPattern, Block, Method, Place};
 use takt_mir::types::Type;
 use takt_mir::{EnumId, MachineId, TypeId};
 
+use super::array::Places;
 use super::{Cx, Enc, Env, Exit, ExitKind, Flow, R, ite_env, no};
 use crate::term::{Op, Sort, Term};
 
@@ -27,6 +30,12 @@ use crate::term::{Op, Sort, Term};
 pub(super) enum V {
     Leaf(Term),
     Node(Vec<V>),
+    /// Die Plaetze einer grossen Sammlung als Arrays der SMT-Theorie
+    /// (FB-497): die Gestalt eines Platzes, an jedem Blatt das Array dieses
+    /// Blatts ueber die Plaetze. `Some(n)`: `n` Plaetze ab null, in einem
+    /// Knoten stehen sie fuer `n` Teile (`flat`); `None`: die Eintraege einer
+    /// map nach ihrem Schluessel.
+    Seq(Option<u32>, Box<V>),
 }
 
 impl V {
@@ -34,7 +43,7 @@ impl V {
     pub(super) fn leaf(self, span: Span) -> R<Term> {
         match self {
             V::Leaf(t) => Ok(t),
-            V::Node(_) => no("zusammengesetzter Wert an dieser Stelle", span),
+            V::Node(_) | V::Seq(..) => no("zusammengesetzter Wert an dieser Stelle", span),
         }
     }
 
@@ -46,12 +55,35 @@ impl V {
         }
     }
 
-    /// Je Blatt `if c then a else b`; beide haben dieselbe Gestalt.
+    /// Je Blatt `if c then a else b`; beide haben dieselbe Gestalt. Steht
+    /// auf einer Seite eine Folge und auf der anderen ihre Plaetze, mischt
+    /// es die Plaetze.
     pub(super) fn ite(c: &Term, a: V, b: V) -> V {
         match (a, b) {
-            (V::Node(x), V::Node(y)) => V::Node(x.into_iter().zip(y).map(|(a, b)| V::ite(c, a, b)).collect()),
             (V::Leaf(x), V::Leaf(y)) => V::Leaf(Term::ite(c.clone(), x, y)),
+            (V::Seq(n, x), V::Seq(m, y)) if n == m => V::Seq(n, Box::new(V::ite(c, *x, *y))),
+            (V::Node(x), V::Node(y)) if V::aligned(&x, &y) => {
+                V::Node(x.into_iter().zip(y).map(|(a, b)| V::ite(c, a, b)).collect())
+            }
+            (a, b) if a.has_seq() || b.has_seq() => match (a.clone().flat(), b.flat()) {
+                (Some(x), Some(y)) => V::ite(c, x, y),
+                _ => a,
+            },
             (a, _) => a,
+        }
+    }
+
+    /// Haben zwei Folgen von Teilen dieselbe Form, Folge gegen Folge?
+    fn aligned(x: &[V], y: &[V]) -> bool {
+        x.len() == y.len() && x.iter().zip(y).all(|(a, b)| matches!(a, V::Seq(..)) == matches!(b, V::Seq(..)))
+    }
+
+    /// Steckt in dem Wert eine Folge?
+    pub(super) fn has_seq(&self) -> bool {
+        match self {
+            V::Leaf(_) => false,
+            V::Seq(..) => true,
+            V::Node(parts) => parts.iter().any(V::has_seq),
         }
     }
 
@@ -59,6 +91,7 @@ impl V {
         match self {
             V::Leaf(t) => out.push(t),
             V::Node(parts) => parts.iter().for_each(|p| p.leaves(out)),
+            V::Seq(_, t) => t.leaves(out),
         }
     }
 }
@@ -80,6 +113,11 @@ pub(super) enum Shape {
     Byte,
     /// Teile mit ihrem Pfad: `.feld`, `[i]`.
     Node(Vec<(String, Shape)>),
+    /// Die Plaetze einer grossen Sammlung als Arrays der SMT-Theorie
+    /// (FB-497), im Knoten unter dem Pfad `[*]`: `Some(n)` Plaetze ab null,
+    /// `None` die Eintraege einer map nach ihrem Schluessel; dazu die
+    /// Gestalt eines Platzes. Ein Blatt darin ist ein Array.
+    Seq(Option<u32>, Box<Shape>),
 }
 
 /// Die obere Grenze eines Index einer Zuweisungsstelle, geprueft, wenn alle
@@ -176,7 +214,8 @@ impl Enc<'_> {
                 }
                 Shape::Node(parts)
             }
-            Type::Array { elem, len } | Type::Samples { elem, len } => {
+            Type::Array { elem, len } => Shape::Node(self.place_shapes(*len, self.shape(*elem, span)?)),
+            Type::Samples { elem, len } => {
                 let s = self.shape(*elem, span)?;
                 Shape::Node((0..*len).map(|i| (format!("[{i}]"), s.clone())).collect())
             }
@@ -186,14 +225,14 @@ impl Enc<'_> {
             }
             Type::Bytes { cap } => Shape::Node(
                 std::iter::once((".len".to_string(), Shape::Count(*cap)))
-                    .chain((0..*cap).map(|i| (format!("[{i}]"), Shape::Byte)))
+                    .chain(self.place_shapes(*cap, Shape::Byte))
                     .collect(),
             ),
             Type::Vec { elem, cap } => {
                 let s = self.shape(*elem, span)?;
                 Shape::Node(
                     std::iter::once((".len".to_string(), Shape::Count(*cap)))
-                        .chain((0..*cap).map(|i| (format!("[{i}]"), s.clone())))
+                        .chain(self.place_shapes(*cap, s))
                         .collect(),
                 )
             }
@@ -214,11 +253,19 @@ impl Enc<'_> {
                 ])
             }
             Type::Map { key, value, cap } => {
+                let value = self.shape(*value, span)?;
                 let slot = Shape::Node(vec![
                     (".has".into(), Shape::Flag),
                     (".key".into(), self.shape(*key, span)?),
-                    (".value".into(), self.shape(*value, span)?),
+                    (".value".into(), value.clone()),
                 ]);
+                if self.keyed(ty, *key, *cap, &slot) {
+                    let entry = Shape::Node(vec![(".has".into(), Shape::Flag), (".value".into(), value)]);
+                    return Ok(Shape::Node(vec![
+                        (".len".into(), Shape::Count(*cap)),
+                        ("[*]".into(), Shape::Seq(None, Box::new(entry))),
+                    ]));
+                }
                 Shape::Node((0..*cap).map(|i| (format!("[{i}]"), slot.clone())).collect())
             }
             // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge;
@@ -267,12 +314,17 @@ impl Enc<'_> {
             .collect()
     }
 
+    /// Die Sorte eines Blatts; in einer Folge ein Array ueber die Sorte.
     pub(super) fn leaf_sort(&self, s: &Shape, span: Span) -> R<Sort> {
         match s {
             Shape::Leaf(ty) => self.sort_of(*ty, span),
             Shape::Flag => Ok(Sort::Bool),
             Shape::Tag(_) | Shape::Count(_) | Shape::Byte => Ok(Sort::Int),
             Shape::Plain(sort) => Ok(*sort),
+            Shape::Seq(_, inner) => match self.leaf_sort(inner, span)?.array_of() {
+                Some(s) => Ok(s),
+                None => no("ein Array in einem Array in einem Array", span),
+            },
             Shape::Node(_) => no("zusammengesetzter Wert", span),
         }
     }
@@ -282,15 +334,19 @@ impl Enc<'_> {
         self.zero_value(&self.shape(ty, span)?, span)
     }
 
-    /// Der Standardwert (`Value::default_for`): null in jedem Blatt.
+    /// Der Standardwert (`Value::default_for`): null in jedem Blatt, in einer
+    /// Folge an jedem Index.
     pub(super) fn zero_value(&self, s: &Shape, span: Span) -> R<V> {
         Ok(match s {
             Shape::Node(parts) => V::Node(parts.iter().map(|(_, p)| self.zero_value(p, span)).collect::<R<Vec<_>>>()?),
+            Shape::Seq(n, elem) => V::Seq(*n, Box::new(self.zero_value(elem, span)?.map_leaves(&Term::const_array))),
             leaf => V::Leaf(Enc::zero(self.leaf_sort(leaf, span)?)),
         })
     }
 
-    /// Ein Wert aus seinen Blaettern; `get` liefert den Term eines Orts.
+    /// Ein Wert aus seinen Blaettern; `get` liefert den Term eines Orts. Ein
+    /// Blatt einer Folge fragt `get` mit der Gestalt `Seq` um das Blatt: Es
+    /// ist ein Array.
     pub(super) fn gather(
         &mut self,
         base: &str,
@@ -305,6 +361,12 @@ impl Enc<'_> {
                 }
                 V::Node(out)
             }
+            Shape::Seq(n, elem) => {
+                let n = *n;
+                let mut arrays =
+                    |enc: &mut Self, loc: &str, leaf: &Shape| get(enc, loc, &Shape::Seq(n, Box::new(leaf.clone())));
+                V::Seq(n, Box::new(self.gather(base, elem, &mut arrays)?))
+            }
             leaf => V::Leaf(get(self, base, leaf)?),
         })
     }
@@ -316,18 +378,20 @@ impl Enc<'_> {
         })
     }
 
-    /// Schreibt einen Wert an seinen Ort, Blatt fuer Blatt.
+    /// Schreibt einen Wert an seinen Ort, Blatt fuer Blatt; Plaetze, die
+    /// der Ort als Folge fuehrt, werden zu ihren Arrays.
     pub(super) fn store(env: &mut Env, base: &str, s: &Shape, v: V) {
         match (s, v) {
             (Shape::Node(parts), V::Node(values)) => {
-                for ((path, p), v) in parts.iter().zip(values) {
+                for ((path, p), v) in parts.iter().zip(Enc::regroup(parts, values)) {
                     Enc::store(env, &format!("{base}{path}"), p, v);
                 }
             }
+            (Shape::Seq(_, elem), V::Seq(_, t)) => Enc::store(env, base, elem, *t),
             (_, V::Leaf(t)) => {
                 env.insert(base.to_string(), t);
             }
-            (_, V::Node(_)) => {}
+            (_, V::Node(_) | V::Seq(..)) => {}
         }
     }
 
@@ -358,21 +422,29 @@ impl Enc<'_> {
         }
     }
 
-    /// Die Orte der Blaetter mit ihrer Gestalt.
-    /// Wie viele Blaetter ein Wert dieser Gestalt hat.
+    /// Wie viele Blaetter ein Wert dieser Gestalt hat; eine Folge eins je
+    /// Array.
     pub(super) fn leaf_count(s: &Shape) -> u64 {
         match s {
             Shape::Node(parts) => parts.iter().map(|(_, p)| Enc::leaf_count(p)).sum(),
+            Shape::Seq(_, elem) => Enc::leaf_count(elem),
             _ => 1,
         }
     }
 
+    /// Die Orte der Blaetter mit ihrer Gestalt; ein Blatt einer Folge mit
+    /// der Gestalt `Seq` um das Blatt.
     pub(super) fn leaf_locs(base: &str, s: &Shape, out: &mut Vec<(String, Shape)>) {
         match s {
             Shape::Node(parts) => {
                 for (path, p) in parts {
                     Enc::leaf_locs(&format!("{base}{path}"), p, out);
                 }
+            }
+            Shape::Seq(n, elem) => {
+                let mut inner = Vec::new();
+                Enc::leaf_locs(base, elem, &mut inner);
+                out.extend(inner.into_iter().map(|(loc, leaf)| (loc, Shape::Seq(*n, Box::new(leaf)))));
             }
             leaf => out.push((base.to_string(), leaf.clone())),
         }
@@ -393,12 +465,20 @@ impl Enc<'_> {
             Shape::Byte => {
                 Some(Term::and(vec![Term::bin(Op::Ge, x.clone(), Term::int(0)), Term::bin(Op::Le, x, Term::int(255))]))
             }
-            Shape::Flag | Shape::Plain(_) | Shape::Node(_) => None,
+            // Ein Array traegt keine: Sie hiesse „an jedem Index", und das
+            // braucht einen Quantor (13.3).
+            Shape::Flag | Shape::Plain(_) | Shape::Node(_) | Shape::Seq(..) => None,
         }
     }
 
-    /// Sind zwei Werte gleich? Blatt fuer Blatt, Fliesskomma nach IEEE.
+    /// Sind zwei Werte gleich? Blatt fuer Blatt, Fliesskomma nach IEEE;
+    /// eine Folge Platz fuer Platz.
     pub(super) fn equal(a: &V, b: &V) -> Term {
+        if (a.has_seq() || b.has_seq())
+            && let (Some(x), Some(y)) = (a.clone().flat(), b.clone().flat())
+        {
+            return Enc::equal(&x, &y);
+        }
         let (mut x, mut y) = (Vec::new(), Vec::new());
         a.leaves(&mut x);
         b.leaves(&mut y);
@@ -414,18 +494,34 @@ impl Enc<'_> {
     }
 
     /// Die Plaetze und, bei einer Sammlung, ihre Laenge.
-    pub(super) fn places(&self, ty: TypeId, v: V, span: Span) -> R<(Vec<V>, Option<Term>)> {
+    pub(super) fn places(&self, ty: TypeId, v: V, span: Span) -> R<(Places, Option<Term>)> {
         let V::Node(mut parts) = v else { return no("Index", span) };
         if self.collection(ty).is_none() {
-            return Ok((parts, None));
+            return Ok((Places::of(parts), None));
         }
         let rest = parts.split_off(1);
         let len = parts.pop().expect("Laenge").leaf(span)?;
-        Ok((rest, Some(len)))
+        Ok((Places::of(rest), Some(len)))
+    }
+
+    /// Ein Wert in der Form, die die Gestalt fuehrt: Plaetze einer Folge
+    /// werden zu ihren Arrays.
+    pub(super) fn conform(s: &Shape, v: V) -> V {
+        match (s, v) {
+            (Shape::Node(parts), V::Node(values)) => {
+                V::Node(parts.iter().zip(Enc::regroup(parts, values)).map(|((_, p), v)| Enc::conform(p, v)).collect())
+            }
+            (_, v) => v,
+        }
     }
 
     /// Das Element `index` (ohne Pruefung: ausserhalb ist es das letzte).
     pub(super) fn select(elems: Vec<V>, index: &Term) -> V {
+        if let crate::term::Node::Int(k) = &*index.0 {
+            let last = elems.len().saturating_sub(1);
+            let k = usize::try_from(*k).ok().filter(|k| *k < elems.len()).unwrap_or(last);
+            return elems.into_iter().nth(k).unwrap_or(V::Node(Vec::new()));
+        }
         let mut it = elems.into_iter().enumerate().rev();
         let Some((_, mut acc)) = it.next() else { return V::Node(Vec::new()) };
         for (k, e) in it {
@@ -440,7 +536,7 @@ impl Enc<'_> {
         let part = match (step, v) {
             (Step::Field(i), v) => v.part(*i, span)?,
             (Step::Index { index, offset }, V::Node(parts)) => {
-                Enc::select(parts.into_iter().skip(*offset).collect(), index)
+                Places::of(parts.into_iter().skip(*offset).collect()).get(index)
             }
             _ => return no("Teil eines Werts", span),
         };
@@ -457,11 +553,10 @@ impl Enc<'_> {
                 parts[*i] = Enc::update(old, rest, new, span)?;
             }
             Step::Index { index, offset } => {
-                for (k, part) in parts.iter_mut().enumerate().skip(*offset) {
-                    let changed = Enc::update(part.clone(), rest, new.clone(), span)?;
-                    let here = Term::eq(index.clone(), Term::int((k - offset) as i64));
-                    *part = V::ite(&here, changed, part.clone());
-                }
+                let places = Places::of(parts.split_off(*offset));
+                let changed =
+                    places.update(index, &Term::bool(true), &mut |old| Enc::update(old, rest, new.clone(), span))?;
+                parts.extend(changed.into_parts());
             }
         }
         Ok(V::Node(parts))
@@ -498,7 +593,7 @@ impl Enc<'_> {
             }
             ExprKind::Output(c) => {
                 let ch = &self.p.channels[c.index()];
-                if ch.owner.is_some_and(|o| !self.order.contains(&o)) {
+                if self.foreign(ch.owner) {
                     return no("zusammengesetzter Output einer anderen Maschine", span);
                 }
                 let own = cx.m.is_some() && ch.owner == cx.m;
@@ -536,12 +631,15 @@ impl Enc<'_> {
                     return Ok(V::Node(rows.flatten().collect()));
                 }
                 if self.collection(e.ty).is_none() {
-                    return Ok(V::Node(parts));
+                    return Ok(Enc::conform(&shape, V::Node(parts)));
                 }
                 // Eine Sammlung: die Laenge, die Elemente, dahinter null.
-                let V::Node(zero) = self.zero_value(&shape, span)? else { return no("Sammlung", span) };
+                let (mut places, _) = self.places(e.ty, self.zero_value(&shape, span)?, span)?;
                 let len = V::Leaf(Term::int(parts.len() as i64));
-                V::Node(std::iter::once(len).chain(parts).chain(zero.into_iter().skip(1 + items.len())).collect())
+                for (k, x) in parts.into_iter().enumerate() {
+                    places = places.set(&Term::int(k as i64), x, &Term::bool(true));
+                }
+                V::Node(std::iter::once(len).chain(places.into_parts()).collect())
             }
             ExprKind::Variant { variant, fields, .. } => {
                 let mut values = Vec::new();
@@ -632,11 +730,11 @@ impl Enc<'_> {
                 }
                 let (elems, len) = self.places(base.ty, b, span)?;
                 let i = self.expr(arg, cx, env, flow)?;
-                let n = len.unwrap_or_else(|| Term::int(elems.len() as i64));
+                let n = len.unwrap_or_else(|| Term::int(elems.count() as i64));
                 let inside =
                     Term::and(vec![Term::bin(Op::Ge, i.clone(), Term::int(0)), Term::bin(Op::Lt, i.clone(), n)]);
                 let zero = self.zero_value(&shape, span)?.part(1, span)?;
-                V::Node(vec![V::Leaf(inside.clone()), V::ite(&inside, Enc::select(elems, &i), zero)])
+                V::Node(vec![V::Leaf(inside.clone()), V::ite(&inside, elems.get(&i), zero)])
             }
             ExprKind::Accessor { base, accessor: Accessor::Encode, .. } => {
                 let Type::Record(r) = self.p.types.get(base.ty) else { return no("`encode` ohne Record", span) };
@@ -729,7 +827,7 @@ impl Enc<'_> {
         let v = self.value(base, cx, env, flow)?;
         let (elems, _) = self.places(base.ty, v, span)?;
         let i = self.expr(index, cx, env, flow)?;
-        Ok(Enc::select(elems, &i))
+        Ok(elems.get(&i))
     }
 
     /// `b[from..to]` auf Bytes oder einem Vektor (`eval.rs`): ausserhalb
@@ -774,11 +872,11 @@ impl Enc<'_> {
             None => V::Leaf(Term::int(0)),
         };
         let mut parts = vec![V::Leaf(n.clone())];
-        for j in 0..elems.len() as i64 {
-            let item = Enc::select(elems.clone(), &Term::bin(Op::Add, a.clone(), Term::int(j)));
+        for j in 0..elems.count() as i64 {
+            let item = elems.get(&Term::bin(Op::Add, a.clone(), Term::int(j)));
             parts.push(V::ite(&Term::bin(Op::Lt, Term::int(j), n.clone()), item, zero.clone()));
         }
-        Ok(V::Node(parts))
+        Ok(Enc::conform(&self.shape(base.ty, span)?, V::Node(parts)))
     }
 
     /// Ein skalarer Zugriff auf einen zusammengesetzten Wert: ob ein
@@ -895,7 +993,7 @@ impl Enc<'_> {
                 Type::Array { elem, .. } | Type::Samples { elem, .. },
             ) => {
                 let sort = self.sort_of(*elem, span)?;
-                let items = self.value(base, cx, env, flow)?;
+                let items = self.value(base, cx, env, flow)?.flat_at(span)?;
                 self.reduce(accessor, items, (sort, self.unsigned(*elem)), flow, span)
             }
             // `.last` (8.9): das letzte Element; ein leeres Array faultet.
@@ -909,7 +1007,7 @@ impl Enc<'_> {
                     flow.alive = Term::bool(false);
                     return Ok(Enc::zero(self.sort_of(base.ty, span).unwrap_or(Sort::Int)));
                 };
-                items.part(last as usize, span)?.leaf(span)
+                self.places(base.ty, items, span)?.0.item(last as usize).leaf(span)
             }
             _ => no(format!("Zugriff `.{}`", accessor.name()), span),
         }
@@ -1068,8 +1166,9 @@ impl Enc<'_> {
             // Eine Matrix, das Ergebnis von `fft256`: jedes Element endlich.
             CheckedKind::NonFinite if self.composite(node.ty) => {
                 let v = self.value(inner, cx, env, flow)?;
+                let flat = v.clone().flat_at(node.span)?;
                 let mut leaves = Vec::new();
-                v.leaves(&mut leaves);
+                flat.leaves(&mut leaves);
                 let floats = leaves.into_iter().filter(|x| matches!(x.sort(), Sort::F32 | Sort::F64));
                 let finite = Term::and(floats.map(|x| Term::app(Op::IsFinite, vec![x.clone()])).collect());
                 self.fault(kind, node.span, finite.not(), cx, flow);
@@ -1128,7 +1227,7 @@ impl Enc<'_> {
         let bound = dynamic.unwrap_or_else(|| Term::int(i64::from(len)));
         let fail = Term::or(vec![Term::bin(Op::Lt, i.clone(), Term::int(0)), Term::bin(Op::Ge, i.clone(), bound)]);
         self.fault(kind, span, fail, cx, flow);
-        Ok(Enc::select(elems, &i))
+        Ok(elems.get(&i))
     }
 
     /// Das Auspacken eines Optional (`Checked{Missing}`): ohne Wert ein
@@ -1401,36 +1500,44 @@ impl Enc<'_> {
         Ok(match (method, xs) {
             (Method::Push, [x]) => {
                 let room = Term::bin(Op::Lt, len.clone(), cap);
-                let parts: Vec<V> = elems
-                    .into_iter()
-                    .enumerate()
-                    .map(|(k, e)| {
-                        let here = Term::and(vec![room.clone(), Term::eq(len.clone(), Term::int(k as i64))]);
-                        V::ite(&here, x.clone(), e)
-                    })
-                    .collect();
+                let parts = elems.set(&len, x.clone(), &room).into_parts();
                 let grown = Term::ite(room.clone(), Term::bin(Op::Add, len.clone(), Term::int(1)), len);
                 (V::Node(std::iter::once(V::Leaf(grown)).chain(parts).collect()), room)
             }
             (Method::Append, [other]) => {
                 let (theirs, their_len) = self.places(ty, other.clone(), span)?;
                 let their_len = their_len.expect("Sammlung");
-                let total = Term::bin(Op::Add, len.clone(), their_len);
+                let total = Term::bin(Op::Add, len.clone(), their_len.clone());
                 let fits = Term::bin(Op::Le, total.clone(), cap);
-                let V::Node(zero) = self.zero_value(&shape, span)? else { return no("Sammlung", span) };
-                let parts: Vec<V> = elems
-                    .into_iter()
-                    .zip(zero.into_iter().skip(1))
-                    .enumerate()
-                    .map(|(k, (e, z))| {
-                        let k = Term::int(k as i64);
-                        let from = Term::bin(Op::Sub, k.clone(), len.clone());
-                        let appended =
-                            V::ite(&Term::bin(Op::Lt, k.clone(), total.clone()), Enc::select(theirs.clone(), &from), z);
-                        let next = V::ite(&Term::bin(Op::Lt, k, len.clone()), e.clone(), appended);
-                        V::ite(&fits, next, e)
-                    })
-                    .collect();
+                let parts = match elems {
+                    // In Arrays: ihre Plaetze hinter die Laenge, je einer unter ihrer Laenge.
+                    Places::Arrays(..) => {
+                        let mut places = elems;
+                        for j in 0..theirs.count() {
+                            let j = Term::int(j as i64);
+                            let at = Term::bin(Op::Add, len.clone(), j.clone());
+                            let here = Term::and(vec![fits.clone(), Term::bin(Op::Lt, j.clone(), their_len.clone())]);
+                            places = places.set(&at, theirs.get(&j), &here);
+                        }
+                        places.into_parts()
+                    }
+                    Places::List(items) => {
+                        let (zero, _) = self.places(ty, self.zero_value(&shape, span)?, span)?;
+                        items
+                            .into_iter()
+                            .zip(zero.items())
+                            .enumerate()
+                            .map(|(k, (e, z))| {
+                                let k = Term::int(k as i64);
+                                let from = Term::bin(Op::Sub, k.clone(), len.clone());
+                                let inside = Term::bin(Op::Lt, k.clone(), total.clone());
+                                let appended = V::ite(&inside, theirs.get(&from), z);
+                                let next = V::ite(&Term::bin(Op::Lt, k, len.clone()), e.clone(), appended);
+                                V::ite(&fits, next, e)
+                            })
+                            .collect()
+                    }
+                };
                 let grown = Term::ite(fits.clone(), total, len);
                 (V::Node(std::iter::once(V::Leaf(grown)).chain(parts).collect()), fits)
             }
@@ -1492,7 +1599,8 @@ impl Enc<'_> {
         let v = self.value(iter, cx, env, flow)?;
         let (items, len) = self.places(iter.ty, v, span)?;
         let Some(len) = len else { return no("`for … in`", span) };
-        self.unroll_steps(items.len() as i64, span)?;
+        self.unroll_steps(items.count() as i64, span)?;
+        let items = items.items();
         self.breaks.push(Vec::new());
         for (k, item) in items.into_iter().enumerate() {
             let inside = Term::bin(Op::Lt, Term::int(k as i64), len.clone());

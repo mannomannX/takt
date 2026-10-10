@@ -22,8 +22,9 @@ use takt_mir::stmt::Block;
 use takt_mir::types::Type;
 use takt_mir::{MachineId, TypeId, VarId};
 
+use super::array::Places;
 use super::text::Text;
-use super::value::V;
+use super::value::{Shape, V};
 use super::{Cx, Enc, Env, Exit, ExitKind, Flow, Mode, NOW, R, ite_env, no};
 use crate::term::{Op, Sort, Term};
 
@@ -134,10 +135,6 @@ pub(super) fn stream_of(e: &Expr) -> Option<StreamRef> {
 
 fn loc(s: &Stream, part: &str) -> String {
     format!("s.stream.{}.{part}", s.name)
-}
-
-fn slot(s: &Stream, i: u32) -> String {
-    format!("s.stream.{}.buf[{i}]", s.name)
 }
 
 /// `x` im Ring: `x` liegt unter dem Doppelten der Kapazitaet.
@@ -320,18 +317,38 @@ impl Enc<'_> {
     /// Die Bytes, die der Ring gerade belegt.
     fn used(&mut self, s: &Stream, env: &Env) -> R<Term> {
         let span = Span::default();
-        let shape = self.shape(s.elem, span)?;
         let (head, len) = (env[&loc(s, "head")].clone(), env[&loc(s, "len")].clone());
+        let places = self.ring_places(s, env)?;
         let mut sum = Term::int(0);
         for i in 0..s.cap {
             let d = sub(Term::int(i64::from(i)), head.clone());
             let index =
                 Term::ite(Term::bin(Op::Lt, d.clone(), Term::int(0)), add(d.clone(), Term::int(i64::from(s.cap))), d);
-            let v = self.load(env, &format!("{}.v", slot(s, i)), &shape, span)?;
+            let v = places.item(i as usize).part(1, span)?;
             let load = self.byte_load(s.elem, &v, span)?;
             sum = add(sum, Term::ite(Term::bin(Op::Lt, index, len.clone()), load, Term::int(0)));
         }
         Ok(sum)
+    }
+
+    /// Die Gestalt des Rings: je Platz Zeitstempel und Wert, ab
+    /// [`ARRAY_FROM`](super::array::ARRAY_FROM) Blaettern als Arrays ueber
+    /// die Plaetze (FB-497).
+    fn ring_shape(&self, s: &Stream) -> R<Shape> {
+        let slot = Shape::Node(vec![
+            (".t".to_string(), Shape::Plain(Sort::Int)),
+            (".v".to_string(), self.shape(s.elem, Span::default())?),
+        ]);
+        Ok(Shape::Node(self.place_shapes(s.cap, slot)))
+    }
+
+    /// Die Plaetze des Rings im Zustand `env`, je Platz `[t, v]`.
+    fn ring_places(&mut self, s: &Stream, env: &Env) -> R<Places> {
+        let shape = self.ring_shape(s)?;
+        let V::Node(parts) = self.load(env, &format!("s.stream.{}.buf", s.name), &shape, Span::default())? else {
+            return no("Ring eines Stroms", Span::default());
+        };
+        Ok(Places::of(parts))
     }
 
     /// Ein Wert als Element eines Stroms (`as_element`): Text in einen
@@ -345,11 +362,12 @@ impl Enc<'_> {
             return Ok(v);
         }
         let t = Text::of(v, span)?;
-        Ok(match self.p.types.get(elem) {
+        let flat = match self.p.types.get(elem) {
             Type::Bytes { cap } | Type::Str { cap } => t.value(*cap, None),
             Type::Line { cap } => t.value(*cap, Some(Term::bool(false))),
             _ => return no("Element", span),
-        })
+        };
+        Ok(Enc::conform(&self.shape(elem, span)?, flat))
     }
 
     /// Die Bytelast eines Elements fester Groesse (`stream::byte_len` im
@@ -427,12 +445,8 @@ impl Enc<'_> {
                 env.insert(loc(&s, part), Term::int(0));
             }
             let span = Span::default();
-            let shape = self.shape(s.elem, span)?;
-            let zero = self.zero_value(&shape, span)?;
-            for i in 0..s.cap {
-                env.insert(format!("{}.t", slot(&s, i)), Term::int(0));
-                Enc::store(env, &format!("{}.v", slot(&s, i)), &shape, zero.clone());
-            }
+            let shape = self.ring_shape(&s)?;
+            Enc::store(env, &format!("s.stream.{}.buf", s.name), &shape, self.zero_value(&shape, span)?);
             for &(m, c) in &s.readers {
                 env.insert(self.loc_cursor(m, c), Term::int(0));
                 env.insert(self.loc_missed(m, c), Term::int(0));
@@ -449,23 +463,11 @@ impl Enc<'_> {
     /// Ein Platz des Rings an einer berechneten Stelle.
     fn slot_at(&mut self, s: &Stream, env: &Env, pos: &Term) -> R<(Term, V)> {
         let span = Span::default();
-        let shape = self.shape(s.elem, span)?;
-        let mut acc: Option<(Term, V)> = None;
-        for i in (0..s.cap).rev() {
-            let t = env[&format!("{}.t", slot(s, i))].clone();
-            let v = self.load(env, &format!("{}.v", slot(s, i)), &shape, span)?;
-            acc = Some(match acc {
-                None => (t, v),
-                Some((ta, va)) => {
-                    let here = Term::eq(pos.clone(), Term::int(i64::from(i)));
-                    (Term::ite(here.clone(), t, ta), V::ite(&here, v, va))
-                }
-            });
+        if s.cap == 0 {
+            return Ok((Term::int(0), self.zero_of(s.elem, span)?));
         }
-        match acc {
-            Some(x) => Ok(x),
-            None => Ok((Term::int(0), self.zero_value(&shape, span)?)),
-        }
+        let slot = self.ring_places(s, env)?.get(pos);
+        Ok((slot.clone().part(0, span)?.leaf(span)?, slot.part(1, span)?))
     }
 
     /// Haengt ein Element an, wo `cond` gilt.
@@ -473,20 +475,12 @@ impl Enc<'_> {
         if s.cap == 0 || cond.is_bool(false) {
             return Ok(());
         }
-        let span = Span::default();
-        let shape = self.shape(s.elem, span)?;
         let (head, len, next) =
             (env[&loc(s, "head")].clone(), env[&loc(s, "len")].clone(), env[&loc(s, "next")].clone());
         let pos = wrap(add(head, len.clone()), s.cap);
-        for i in 0..s.cap {
-            let here = Term::and(vec![cond.clone(), Term::eq(pos.clone(), Term::int(i64::from(i)))]);
-            let at = format!("{}.t", slot(s, i));
-            let old = env[&at].clone();
-            env.insert(at, Term::ite(here.clone(), t.clone(), old));
-            let base = format!("{}.v", slot(s, i));
-            let old = self.load(env, &base, &shape, span)?;
-            Enc::store(env, &base, &shape, V::ite(&here, value.clone(), old));
-        }
+        let entry = V::Node(vec![V::Leaf(t.clone()), value.clone()]);
+        let places = self.ring_places(s, env)?.set(&pos, entry, cond);
+        Enc::store(env, &format!("s.stream.{}.buf", s.name), &self.ring_shape(s)?, V::Node(places.into_parts()));
         env.insert(loc(s, "len"), Term::ite(cond.clone(), add(len.clone(), Term::int(1)), len));
         env.insert(loc(s, "next"), Term::ite(cond.clone(), add(next.clone(), Term::int(1)), next));
         Ok(())
@@ -675,8 +669,10 @@ impl Enc<'_> {
                 Type::Str { cap } | Type::Bytes { cap } => (*cap, None),
                 _ => return no("Element mit Grenzen ohne Textgestalt", Span::default()),
             };
+            let shape = self.shape(s.elem, Span::default())?;
             for (present, text) in elements {
-                self.push(s, cur, &present, &now, &text.value(cap, truncated.clone()))?;
+                let value = Enc::conform(&shape, text.value(cap, truncated.clone()));
+                self.push(s, cur, &present, &now, &value)?;
             }
             return Ok(());
         }
@@ -767,11 +763,17 @@ impl Enc<'_> {
                     _ => (None, false, false),
                 };
                 if let Some(width) = width {
-                    let len = Term::var(format!("{base}.len"), Sort::Int);
-                    let bytes: Vec<Term> = (0..width).map(|i| Term::var(format!("{base}[{i}]"), Sort::Int)).collect();
+                    // Die Bytes als Blaetter oder Platz fuer Platz aus ihrem
+                    // Array; dort traegt ein Byte seine Range hier, weil ein
+                    // Array keine Invariante hat (FB-497).
+                    let Text { len, bytes } = Text::of(self.element_input(&s, j)?, span)?;
+                    let arrayed = shape.has_seq();
                     for (i, b) in bytes.iter().enumerate() {
                         let inside = Term::bin(Op::Lt, Term::int(i as i64), len.clone());
                         out.push(implies(used.clone(), Term::or(vec![inside, Term::eq(b.clone(), Term::int(0))])));
+                        if arrayed && let Some(byte) = self.leaf_invariant(b.clone(), &super::value::Shape::Byte) {
+                            out.push(implies(used.clone(), byte));
+                        }
                     }
                     if text {
                         out.push(implies(used.clone(), super::text::utf8(&Text { len: len.clone(), bytes })));

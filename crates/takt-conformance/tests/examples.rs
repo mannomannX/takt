@@ -50,14 +50,7 @@ const GAPS: &[(&str, &str, &str)] = &[(
 /// Meldung von `takt_prove::encode` oder `Model::run` und was dahinter
 /// steht. Eine Ratsche wie [`GAPS`]: Jede Luecke muss noch auftreten, eine
 /// neue faellt nie hinein.
-const MODEL_GAPS: &[(&str, &str, &str)] = &[
-    (
-        "14_8",
-        "Eingabestrom aus dem `sim`-Ausgang einer anderen Maschine",
-        "der Kodierer ordnet den Sendestrom des Flash-Modells (`flash_model`, 8.10) in `fallback` und `no_image` keiner kodierten Maschine zu",
-    ),
-    ("14_8", "ein Zustand aus mehr als 32768 Blaettern", "das Flash-Modell, ein Zustand ueber `STATE_LIMIT` (FB-485)"),
-];
+const MODEL_GAPS: &[(&str, &str, &str)] = &[];
 
 /// Eine Zeile von `corpus-try/sim/manifest.csv`.
 struct Case {

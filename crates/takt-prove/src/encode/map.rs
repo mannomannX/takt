@@ -5,6 +5,13 @@
 //! Rueckwaertsverschiebung — dieselbe Sondierung wie im Interpreter und im
 //! erzeugten Code, also dieselbe Slot-Folge, ueber die `for (k, v) in m`
 //! laeuft.
+//!
+//! Eine grosse map, deren Slotfolge nichts im Programm beobachtet, fuehrt
+//! das Modell nach ihren Schluesseln (FB-497, `array::slot_order_observed`):
+//! die Zahl ihrer Eintraege und je Blatt eines Eintrags — belegt, Wert — ein
+//! Array, dessen Index der Schluessel ist. `get`, `insert`, `remove`, `len`
+//! und `clear` ergeben dasselbe wie die Slots: Ein neuer Schluessel findet
+//! genau dann einen freien Slot, wenn weniger als N belegt sind.
 
 use std::ops::Not;
 
@@ -14,9 +21,10 @@ use takt_mir::expr::Expr;
 use takt_mir::stmt::{Block, Method};
 use takt_mir::types::Type;
 
+use super::array::seq_item;
 use super::value::V;
 use super::{Cx, Enc, Env, Flow, R, ite_env, no};
-use crate::term::{Op, Term};
+use crate::term::{Op, Sort, Term};
 
 fn int(i: i64) -> Term {
     Term::int(i)
@@ -173,7 +181,72 @@ impl Table {
     }
 }
 
+/// Eine map nach Schluesseln: die Zahl ihrer Eintraege, das Array, ob ein
+/// Schluessel belegt ist, und je Blatt des Werts ein Array.
+struct Keyed {
+    count: Term,
+    has: Term,
+    value: V,
+}
+
+impl Keyed {
+    /// Die Teile einer map nach Schluesseln; `None` fuer eine aus Slots.
+    fn of(v: &V) -> Option<Keyed> {
+        let V::Node(parts) = v else { return None };
+        let [V::Leaf(count), V::Seq(None, entry)] = parts.as_slice() else { return None };
+        let V::Node(entry) = entry.as_ref() else { return None };
+        let [V::Leaf(has), value] = entry.as_slice() else { return None };
+        Some(Keyed { count: count.clone(), has: has.clone(), value: value.clone() })
+    }
+
+    fn into_v(self) -> V {
+        let entry = V::Node(vec![V::Leaf(self.has), self.value]);
+        V::Node(vec![V::Leaf(self.count), V::Seq(None, Box::new(entry))])
+    }
+}
+
+/// Die Sorte der Elemente eines Arrays.
+fn element_sort(a: &Term) -> Sort {
+    match a.sort() {
+        Sort::Array(e) => e.sort(),
+        other => other,
+    }
+}
+
 impl Enc<'_> {
+    /// `insert`, `remove` und `clear` einer map nach Schluesseln.
+    fn keyed_update(&self, method: Method, ty: TypeId, mut m: Keyed, xs: &[V], span: Span) -> R<(V, Term)> {
+        let Type::Map { cap, .. } = self.p.types.get(ty) else { return no("map", span) };
+        let cap = int(i64::from(*cap));
+        let done = match (method, xs) {
+            (Method::Insert, [k, v]) => {
+                let i = self.key_index(k.clone(), span)?;
+                let present = Term::select(m.has.clone(), i.clone());
+                let ok = Term::or(vec![present.clone(), Term::bin(Op::Lt, m.count.clone(), cap)]);
+                m.has = Term::ite(ok.clone(), Term::store(m.has.clone(), i.clone(), Term::bool(true)), m.has);
+                m.value = super::array::seq_store(m.value, &i, v.clone(), &ok);
+                let grows = Term::and(vec![ok.clone(), present.not()]);
+                m.count = Term::ite(grows, add(m.count.clone(), int(1)), m.count);
+                ok
+            }
+            (Method::Remove, [k]) => {
+                let i = self.key_index(k.clone(), span)?;
+                let present = Term::select(m.has.clone(), i.clone());
+                m.has = Term::ite(present.clone(), Term::store(m.has.clone(), i, Term::bool(false)), m.has);
+                m.count = Term::ite(present.clone(), Term::bin(Op::Sub, m.count.clone(), int(1)), m.count);
+                present
+            }
+            (Method::Clear, []) => {
+                m.has = Term::const_array(Term::bool(false));
+                m.value = m.value.map_leaves(&|a| Term::const_array(Enc::zero(element_sort(&a))));
+                m.count = int(0);
+                Term::bool(true)
+            }
+            _ => return no("Methode einer map", span),
+        };
+        Ok((m.into_v(), done))
+    }
+
     /// Die Slots einer Map mit den Hashes ihrer Schluessel.
     fn table(&self, ty: TypeId, v: V, span: Span) -> R<Table> {
         let Type::Map { key, .. } = self.p.types.get(ty) else { return no("map", span) };
@@ -217,6 +290,9 @@ impl Enc<'_> {
     /// `insert`, `remove` und `clear` (`maps.rs`): die neue Map und das
     /// Ergebnis.
     pub(super) fn map_update(&self, method: Method, ty: TypeId, old: V, xs: &[V], span: Span) -> R<(V, Term)> {
+        if let Some(m) = Keyed::of(&old) {
+            return self.keyed_update(method, ty, m, xs, span);
+        }
         let empty = self.empty_slot(ty, span)?;
         let mut t = self.table(ty, old, span)?;
         let done = match (method, xs) {
@@ -250,6 +326,12 @@ impl Enc<'_> {
 
     /// `m.get(k)` als Optional.
     pub(super) fn map_get(&self, ty: TypeId, m: V, key: V, span: Span) -> R<V> {
+        if let Some(m) = Keyed::of(&m) {
+            let i = self.key_index(key, span)?;
+            let present = Term::select(m.has, i.clone());
+            let zero = self.empty_slot(ty, span)?.value;
+            return Ok(V::Node(vec![V::Leaf(present.clone()), V::ite(&present, seq_item(&m.value, &i), zero)]));
+        }
         let t = self.table(ty, m, span)?;
         let hash = self.key_hash(t.key, key.clone(), span)?;
         let (found, at) = t.find(&key, &hash);
@@ -258,13 +340,20 @@ impl Enc<'_> {
         Ok(V::Node(vec![V::Leaf(found.clone()), V::ite(&found, slot.value, zero)]))
     }
 
-    /// Die Slots in ihrer Folge: belegt, Schluessel, Wert.
+    /// Die Slots in ihrer Folge: belegt, Schluessel, Wert. Eine map nach
+    /// Schluesseln hat keine Folge.
     pub(super) fn map_entries(&self, ty: TypeId, m: V, span: Span) -> R<Vec<(Term, V, V)>> {
+        if Keyed::of(&m).is_some() {
+            return no("die Slotfolge einer map, die das Modell nach ihren Schluesseln fuehrt", span);
+        }
         Ok(self.table(ty, m, span)?.slots.into_iter().map(|s| (s.has, s.key, s.value)).collect())
     }
 
     /// `m.len`: die belegten Slots.
     pub(super) fn map_len(&self, ty: TypeId, m: V, span: Span) -> R<Term> {
+        if let Some(m) = Keyed::of(&m) {
+            return Ok(m.count);
+        }
         Ok(self.table(ty, m, span)?.len())
     }
 

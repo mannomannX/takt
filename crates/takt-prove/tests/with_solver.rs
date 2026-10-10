@@ -94,27 +94,109 @@ fn machine_with(top: &str, var: &str, body: &str) -> Program {
 /// **Die Grenze des Zustands.** Das Flash-Modell der Prelude haelt 256
 /// Chunks zu 256 Byte, ueber 65 000 Blaetter; jede Verzweigung mischte sie
 /// alle, und der Wahrheitstest der Matrix starb daran am Speicher (FB-485).
-/// Ein Viertel davon kodiert weiter.
+/// Seit grosse Sammlungen Arrays der SMT-Theorie sind (FB-497), haelt es je
+/// Blatt eines Chunks ein Array nach dem Schluessel. Eine map, ueber die
+/// `for (k, v)` laeuft, bleibt aus Slots und darum ueber der Grenze.
 #[test]
 fn a_state_beyond_the_limit_is_out_of_reach() {
-    let e = encode(&machine_with("", "mem : map<int, bytes<256>, 256> = default", "")).expect_err("ueber der Grenze");
+    let r = encode(&machine_with("", "mem : map<int, bytes<256>, 256> = default", ""));
+    let model = r.unwrap_or_else(|e| panic!("in Reichweite: {}", e.what));
+    assert!(model.state.len() < 100, "{} Orte", model.state.len());
+    let walked = "            for (k, v) in mem:\n                n = k % 7\n";
+    let e =
+        encode(&machine_with("", "mem : map<int, bytes<200>, 256> = default", walked)).expect_err("ueber der Grenze");
     assert!(e.what.contains(&takt_prove::encode::STATE_LIMIT.to_string()), "{}", e.what);
-    let r = encode(&machine_with("", "mem : map<int, bytes<64>, 256> = default", ""));
+    let r = encode(&machine_with("", "mem : map<int, bytes<64>, 256> = default", walked));
     assert!(r.is_ok(), "unter der Grenze: {:?}", r.err());
 }
 
-/// **Die Knotengrenze vor dem Bau.** `send` eines Elements aus 4096 Byte
-/// in einen Sendepuffer aus 4096 Byte waehlt fuer jeden Platz unter jedem
-/// Byte des Werts; das sind ueber 50 Millionen Knoten, und der Kodierer
-/// lehnt ab, bevor er einen baut (FB-485).
+/// **Die Knotengrenze vor dem Bau.** Wartet ein Element aus 4096 Byte
+/// ueber Commits, weil der Treiber je Tick ein Byte abholt, rechnet jeder
+/// Commit fuer jeden der 8192 Plaetze jedes Element aus den abgeholten
+/// Bytes; das sind weit ueber 16 Millionen Knoten, und der Kodierer lehnt
+/// ab, bevor er einen baut (FB-485). `send` selbst in einen Puffer aus
+/// Arrays kostet je Byte wenige Knoten (FB-497).
 #[test]
 fn a_send_beyond_the_node_limit_is_refused_before_it_is_built() {
-    let decl = "output rx : stream<bytes<4096>> @ hw(\"rx\") with capacity = 4096";
+    let reader = "input  rx : stream<bytes<4096>> @ hw(\"bus/x\") with max_rate = 100 Hz, capacity = 2\n\
+                  output tx : stream<bytes<4096>> @ sim(\"bus/x\") with max_rate = 100 Hz, capacity = 8192\n\
+                  output seen : int @ hw(\"seen\") with safe = 0\n\n\
+                  machine r:\n    initial RUN\n    state RUN:\n        on rx as e:\n            seen = e.data.len\n";
     let built = takt_prove::term::built();
-    let program = machine_with(decl, "page : bytes<4096> = default", "            send rx, page\n");
+    let program = machine_with(reader, "page : bytes<4096> = default", "            send tx, page\n");
     let e = encode(&program).expect_err("ueber der Grenze");
     assert!(e.what.contains(&takt_prove::encode::MODEL_LIMIT.to_string()), "{}", e.what);
     assert!(takt_prove::term::built() - built < takt_prove::encode::MODEL_LIMIT / 4, "gebaut, dann abgelehnt");
+    let direct = "output rx : stream<bytes<4096>> @ hw(\"rx\") with capacity = 4096";
+    let built = takt_prove::term::built();
+    let program = machine_with(direct, "page : bytes<4096> = default", "            send rx, page\n");
+    encode(&program).unwrap_or_else(|e| panic!("ein Puffer aus Arrays: {}", e.what));
+    assert!(takt_prove::term::built() - built < 1 << 20, "{} Knoten", takt_prove::term::built() - built);
+}
+
+/// **Ein Pfad durch einen grossen Puffer** (FB-497): Das Element vom Rand
+/// ist ein Array aus 300 Bytes; der Solver waehlt sein letztes Byte, der
+/// Stimulus schreibt es Byte fuer Byte, und der Interpreter bestaetigt den
+/// Fault.
+#[test]
+fn a_path_through_a_large_buffer_is_confirmed() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input  rx   : stream<bytes<300>> @ hw(\"bus/rx\") with max_rate = 100 Hz, capacity = 2
+output seen : int in 0..300 @ hw(\"o/seen\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        on rx as e:
+            seen = e.data.len
+            check not (e.data.len == 300 and e.data[299] == 90), \"Marke\"
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert!(model.inputs.iter().any(|(n, _)| n == "i.stream.rx.0.v[*]"), "das Element ist ein Array");
+    let reports = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let check = reports.iter().find(|r| r.kind == "check").expect("die `check`-Stelle");
+    let CheckVerdict::Reachable { stimulus, .. } = &check.verdict else { panic!("{check:?}") };
+    assert!(stimulus.contains("in rx 0x") && stimulus.contains("5a t="), "{stimulus}");
+}
+
+/// **Eine induktive Invariante ueber einer grossen map** (FB-497): Die map
+/// steht nach ihren Schluesseln; der Schluessel 500 kommt nie hinein. Die
+/// k-Induktion sieht einen freien Zustand, in dem er steht; Spacer findet,
+/// dass er nie belegt ist.
+#[test]
+fn an_inductive_invariant_over_a_large_map_is_proven() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+output hit : bool @ hw(\"o/hit\") with safe = false
+
+machine m:
+    var table : map<int, int, 300> = default
+    var t     : int in 0..9 = 0
+    var r     : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            t = (t + 1) % 10
+            r = table.insert(t, t)
+            hit = table.get(500).valid
+
+property never_hit: never(hit)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert!(model.state.iter().any(|v| v.name == "s.m.v.table[*].has"), "die map steht nach Schluesseln");
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    assert_eq!(reports[0].verdict, Verdict::Proven { k: 0, assumptions: vec![] }, "{:?}", reports[0]);
 }
 
 #[test]

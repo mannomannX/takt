@@ -15,22 +15,113 @@ use crate::eval::{Env, Val};
 use crate::term::Sort;
 
 /// Der Wert eines Typs an `base` im Zustand `env`; `None`, wenn ein Blatt
-/// fehlt oder der Typ keine Textform im Trace hat.
+/// fehlt oder der Typ keine Textform im Trace hat. Plaetze in Arrays
+/// (FB-497) liest er Platz fuer Platz; eine map nach Schluesseln hat keine
+/// Folge von Slots und damit keine Textform.
 pub fn value_at(p: &Program, ty: TypeId, base: &str, env: &Env) -> Option<Value> {
     let enc = Enc::new(p, Vec::new(), None);
     let shape = enc.shape(ty, Span::default()).ok()?;
+    if shape.has_seq() {
+        let mut flat = Env::new();
+        let shape = unfold(&shape, base, env, &mut flat)?;
+        return read(&enc, ty, &shape, base, &flat);
+    }
     read(&enc, ty, &shape, base, env)
 }
 
 /// Die Blaetter eines Werts an `base`, mit der Sorte, die das Modell fuer
 /// sie fuehrt; hinter der Laenge einer Sammlung und in einem leeren
-/// Optional null.
+/// Optional null. Plaetze, die das Modell als Array fuehrt, stehen als ein
+/// Array an `…[*]`.
 pub fn leaves_at(p: &Program, ty: TypeId, v: &Value, base: &str) -> Option<Vec<(String, Val)>> {
     let enc = Enc::new(p, Vec::new(), None);
     let shape = enc.shape(ty, Span::default()).ok()?;
     let mut out = Vec::new();
-    write(&enc, ty, &shape, Some(v), base, &mut out)?;
-    Some(out)
+    if !shape.has_seq() {
+        write(&enc, ty, &shape, Some(v), base, &mut out)?;
+        return Some(out);
+    }
+    let flat = unfold(&shape, base, &Env::new(), &mut Env::new())?;
+    write(&enc, ty, &flat, Some(v), base, &mut out)?;
+    let mut leaves: Env = out.into_iter().collect();
+    refold(&enc, &shape, base, &mut leaves)?;
+    Some(leaves.into_iter().collect())
+}
+
+/// Die Gestalt ohne Arrays: jede Folge `[*]` als ihre Plaetze `[k]`. Mit
+/// den Werten aus `env` schreibt sie die Blaetter dieser Plaetze nach
+/// `out`; fehlt ein Wert, nur die Gestalt. `None` fuer eine map nach
+/// Schluesseln.
+fn unfold(shape: &Shape, base: &str, env: &Env, out: &mut Env) -> Option<Shape> {
+    match shape {
+        Shape::Node(parts) => {
+            let mut flat = Vec::with_capacity(parts.len());
+            for (path, p) in parts {
+                match p {
+                    Shape::Seq(Some(n), elem) => {
+                        for k in 0..*n {
+                            let item = format!("{base}[{k}]");
+                            unfold_place(elem, &format!("{base}{path}"), k, env, &item, out);
+                            flat.push((format!("[{k}]"), (**elem).clone()));
+                        }
+                    }
+                    Shape::Seq(None, _) => return None,
+                    p => flat.push((path.clone(), unfold(p, &format!("{base}{path}"), env, out)?)),
+                }
+            }
+            Some(Shape::Node(flat))
+        }
+        Shape::Seq(..) => None,
+        leaf => {
+            if let Some(v) = env.get(base) {
+                out.insert(base.to_string(), v.clone());
+            }
+            Some(leaf.clone())
+        }
+    }
+}
+
+/// Die Blaetter des Platzes `k` einer Folge: aus dem Array an `array…` nach
+/// `item…`.
+fn unfold_place(elem: &Shape, array: &str, k: u32, env: &Env, item: &str, out: &mut Env) {
+    match elem {
+        Shape::Node(parts) => {
+            for (path, p) in parts {
+                unfold_place(p, &format!("{array}{path}"), k, env, &format!("{item}{path}"), out);
+            }
+        }
+        _ => {
+            if let Some(Val::Arr(a)) = env.get(array) {
+                out.insert(item.to_string(), a.get(i64::from(k)));
+            }
+        }
+    }
+}
+
+/// Fasst die Blaetter der Plaetze `…[k]…` einer Folge zu ihren Arrays
+/// `…[*]…` zusammen; ein fehlender Platz ist null.
+fn refold(enc: &Enc<'_>, shape: &Shape, base: &str, leaves: &mut Env) -> Option<()> {
+    let Shape::Node(parts) = shape else { return Some(()) };
+    for (path, p) in parts {
+        match p {
+            Shape::Seq(Some(n), elem) => {
+                let mut locs = Vec::new();
+                Enc::leaf_locs("", elem, &mut locs);
+                for (leaf_path, s) in locs {
+                    let zero = Val::zero(enc.leaf_sort(&s, Span::default()).ok()?);
+                    let mut a = crate::eval::Array::new(zero);
+                    for k in 0..*n {
+                        if let Some(v) = leaves.remove(&format!("{base}[{k}]{leaf_path}")) {
+                            a = a.set(i64::from(k), v);
+                        }
+                    }
+                    leaves.insert(format!("{base}{path}{leaf_path}"), Val::Arr(a));
+                }
+            }
+            p => refold(enc, p, &format!("{base}{path}"), leaves)?,
+        }
+    }
+    Some(())
 }
 
 fn read(enc: &Enc<'_>, ty: TypeId, shape: &Shape, base: &str, env: &Env) -> Option<Value> {

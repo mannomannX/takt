@@ -43,6 +43,7 @@ use takt_mir::{BlockId, ChannelId, CommandId, MachineId, StateId, TypeId, VarId}
 use crate::eval;
 use crate::term::{self, Fun, Node, Op, Rounding, Sort, Term};
 
+mod array;
 mod canon;
 mod composite;
 mod fault;
@@ -363,21 +364,22 @@ impl Cx<'_> {
 /// vertieft die Terme der Variablen, die er schreibt; nichts rekursiert
 /// ueber diese Tiefe (`term::post_order`). Die Grenze lehnt eine lange
 /// Schleife ab, bevor sie gebaut ist (FB-403); was ein Durchlauf baut,
-/// zaehlt [`MODEL_LIMIT`].
-pub const UNROLL_LIMIT: i64 = 4096;
+/// zaehlt [`MODEL_LIMIT`]. Ueber einem Puffer aus Arrays kostet ein
+/// Durchlauf wenige Knoten (FB-497): Das Flash-Modell liest auf einem Pfad
+/// 17 Chunks und schreibt 4096 Bytes.
+pub const UNROLL_LIMIT: i64 = 8192;
 
 /// Wie viele Knoten die Kodierung eines Programms baut. Ein Durchlauf
-/// kostet, was sein Rumpf baut: `push` auf `bytes<4096>` mit freier Laenge
-/// schreibt jeden der 4096 Plaetze, und 256 solche Durchlaeufe liegen tief
-/// unter [`UNROLL_LIMIT`] (`long_job.takt`, 8 Millionen Knoten). Die Grenze
-/// haelt Zeit und Speicher der Kodierung in dem, was Auswertung und Solver
-/// tragen (FB-485).
+/// kostet, was sein Rumpf baut: `push` auf einen Vektor aus Blaettern mit
+/// freier Laenge schreibt jeden seiner Plaetze. Die Grenze haelt Zeit und
+/// Speicher der Kodierung in dem, was Auswertung und Solver tragen (FB-485).
 pub const MODEL_LIMIT: u64 = 1 << 24;
 
 /// Wie viele Blaetter der Zustand hat. Jede Verzweigung mischt den ganzen
 /// Zustand, und jeder Schritt einer Pruefung deklariert ihn neu; der
-/// groesste Zustand im Korpus hat knapp 9000 Blaetter, das Flash-Modell
-/// mit 256 Chunks zu 256 Byte ueber 65 000 (FB-485).
+/// groesste Zustand im Korpus hatte knapp 9000 Blaetter, das Flash-Modell
+/// mit 256 Chunks zu 256 Byte als Blaetter ueber 65 000 (FB-485). Ein Array
+/// einer grossen Sammlung ist ein Blatt (FB-497).
 pub const STATE_LIMIT: usize = 1 << 15;
 
 /// Bis zu so vielen Ticks seit der letzten guten Lieferung steht die Grenze
@@ -467,6 +469,21 @@ struct Enc<'p> {
     /// Wann eine Maschine in diesem Tick einen Fault-Pfad nahm: Dann laufen
     /// die `exit:`-Bloecke ihrer gescopten Instanzen nicht (5.11).
     fault_paths: BTreeMap<MachineId, Vec<Term>>,
+    /// Die map-Typen, deren Slotfolge ein Lauf beobachten kann; erst
+    /// gerechnet, wenn eine grosse map nach Schluesseln in Frage kommt
+    /// (`array::slot_order_observed`).
+    observed_maps: std::cell::OnceCell<BTreeSet<TypeId>>,
+    /// Die Aufrufe geschlossener Funktionen ohne Argumente, einmal kodiert.
+    calls: BTreeMap<takt_mir::FnId, Called>,
+}
+
+/// Ein kodierter Rumpf einer Funktion ohne die Bedingung seines Aufrufs:
+/// der Wert, die Faults und die Pruefstellen, die er feuern kann.
+#[derive(Clone, Debug)]
+struct Called {
+    ret: V,
+    exits: Vec<Exit>,
+    sites: Vec<(SiteKey, Term)>,
 }
 
 /// Unter welchen Indexpfaden die Zaehler einer Maschine laufen: je
@@ -577,7 +594,7 @@ impl Edge {
     /// `since` Ticks zurueckliegt. Daraus wird unter `debounce` `Suspect`.
     pub fn violation(&self, last: Option<&eval::Val>, since: i64) -> Option<eval::Val> {
         if let Some(v) = &self.outside {
-            return Some(*v);
+            return Some(v.clone());
         }
         let jump = 2.0 * self.slew? * (self.tick as f64 / 1e9) * (since + 1) as f64 + 1.0;
         Some(match last? {
@@ -585,7 +602,7 @@ impl Edge {
             eval::Val::Int(x) => eval::Val::Int(x.saturating_add(jump.ceil() as i64)),
             eval::Val::F64(x) => eval::Val::F64(x + jump),
             eval::Val::F32(x) => eval::Val::F32(x + jump as f32),
-            eval::Val::Bool(_) => return None,
+            eval::Val::Bool(_) | eval::Val::Arr(_) => return None,
         })
     }
 }
@@ -801,6 +818,8 @@ impl<'p> Enc<'p> {
             loop_path: Vec::new(),
             counter_paths: BTreeMap::new(),
             fault_paths: BTreeMap::new(),
+            observed_maps: std::cell::OnceCell::new(),
+            calls: BTreeMap::new(),
         }
     }
 }
@@ -868,6 +887,7 @@ impl Enc<'_> {
         match sort {
             Sort::Bool => Term::bool(false),
             Sort::Int => Term::int(0),
+            Sort::Array(_) | Sort::Array2(_) => Term::const_array(Enc::zero(sort.element().unwrap_or(Sort::Int))),
             s => Term::float(0.0, s),
         }
     }
@@ -1717,6 +1737,7 @@ impl Enc<'_> {
         let Some(f) = Native::by_name(&n.name) else { return no(format!("Projekt-Native `{}`", n.name), span) };
         // `fft256` nimmt ihre Fliesskommazahlen selbst und liefert solche
         // derselben Breite.
+        let args = args.into_iter().map(|v| v.flat_at(span)).collect::<R<Vec<_>>>()?;
         if f == Native::Fft256 {
             let mut leaves = Vec::new();
             for v in &args {
@@ -1906,7 +1927,7 @@ impl Enc<'_> {
                 let (ge, le) = match x.sort() {
                     Sort::Int if self.unsigned(inner.ty) => (Op::UGe, Op::ULe),
                     Sort::Int => (Op::Ge, Op::Le),
-                    Sort::Bool | Sort::F32 | Sort::F64 => (Op::FGe, Op::FLe),
+                    Sort::Bool | Sort::F32 | Sort::F64 | Sort::Array(_) | Sort::Array2(_) => (Op::FGe, Op::FLe),
                 };
                 let fail = Term::and(vec![Term::bin(ge, x.clone(), lo), Term::bin(le, x.clone(), hi)]).not();
                 (x, fail)
@@ -2068,6 +2089,11 @@ impl Enc<'_> {
         flow: &mut Flow,
         span: Span,
     ) -> R<V> {
+        if args.is_empty()
+            && let Some(done) = self.calls.get(&callee).cloned()
+        {
+            return Ok(self.returned(done, cx, flow));
+        }
         let f = self.p.fns[callee.index()].clone();
         // Ein `inout`-Parameter ist die Rueckgabe (3.9); die Sema schreibt
         // ihn an der Aufrufstelle zurueck.
@@ -2082,7 +2108,13 @@ impl Enc<'_> {
         }
         let inner =
             Cx { m: cx.m, leaf: cx.leaf, mode: Mode::Entry, pre: cx.pre, active: cx.active, locals: Some(locals) };
-        let mut sub = Flow::new(flow.alive.clone());
+        // Der Rumpf entsteht ohne die Bedingung, unter der der Aufruf laeuft:
+        // Sein Wert gilt nur, wo der Aufrufer lebt, und ohne sie faltet ein
+        // Rumpf aus Konstanten zu Konstanten, statt jede Zuweisung unter
+        // ihr zu mischen. Ausgaenge und Pruefstellen des Rumpfs gelten erst
+        // mit ihr (`returned`).
+        let before: BTreeMap<SiteKey, usize> = self.sites.iter().map(|(k, v)| (k.clone(), v.len())).collect();
+        let mut sub = Flow::new(Term::bool(true));
         let mut ret_val = self.zero_of(ret, span)?;
         let mut env = env.clone();
         let mut inner = inner;
@@ -2090,11 +2122,69 @@ impl Enc<'_> {
         let outer = std::mem::replace(&mut self.local_types, types);
         self.fn_block(&f.body, &mut inner, &mut env, &mut sub, &mut ret_val)?;
         self.local_types = outer;
-        // Die Funktion kehrt zurueck; nur ihre Faults beenden den Aufrufer.
-        let faults = Term::or(sub.exits.iter().map(|x| x.cond.clone()).collect());
-        flow.exits.extend(sub.exits);
-        flow.alive = Term::and(vec![flow.alive.clone(), !faults]);
-        Ok(ret_val)
+        let mut sites = Vec::new();
+        for (key, fires) in self.sites.iter_mut() {
+            let from = before.get(key).copied().unwrap_or(0);
+            sites.extend(fires.split_off(from).into_iter().map(|t| (key.clone(), t)));
+        }
+        let done = Called { ret: ret_val, exits: sub.exits, sites };
+        // Ohne Argumente hat eine Funktion, die nur ihre Lokalen liest, in
+        // jedem Aufruf denselben Rumpf: einmal kodiert.
+        if args.is_empty() && self.closed(callee, 0) {
+            self.calls.insert(callee, done.clone());
+        }
+        Ok(self.returned(done, cx, flow))
+    }
+
+    /// Der Wert eines Aufrufs an der Stelle `flow`: Pruefstellen und Faults
+    /// des Rumpfs unter der Bedingung des Aufrufers; nur Faults beenden ihn.
+    fn returned(&mut self, done: Called, cx: &Cx<'_>, flow: &mut Flow) -> V {
+        let alive = flow.alive.clone();
+        for (key, t) in done.sites {
+            if let Some(m) = cx.m {
+                let span = Span::new(key.0, key.1);
+                self.site_info.insert(key.clone(), (span, self.machine(m).name.clone()));
+            }
+            self.sites.entry(key).or_default().push(Term::and(vec![alive.clone(), t]));
+        }
+        let mut faults = Vec::new();
+        for mut x in done.exits {
+            x.cond = Term::and(vec![alive.clone(), x.cond]);
+            faults.push(x.cond.clone());
+            flow.exits.push(x);
+        }
+        flow.alive = Term::and(vec![alive, !Term::or(faults)]);
+        done.ret
+    }
+
+    /// Liest der Rumpf einer Funktion nur ihre Lokalen, Konstanten,
+    /// Parameter und Funktionen, die das auch tun? Dann haengt ihr Wert nur
+    /// an ihren Argumenten.
+    fn closed(&self, f: takt_mir::FnId, depth: u32) -> bool {
+        // Rekursion gibt es nicht (4.4); die Schranke begrenzt nur die Arbeit.
+        if depth > 8 {
+            return false;
+        }
+        let mut ok = true;
+        takt_mir::visit::for_each_expr_block(&self.p.fns[f.index()].body, &mut |e| {
+            ok &= match &e.kind {
+                ExprKind::Command(_)
+                | ExprKind::Input { .. }
+                | ExprKind::Output(_)
+                | ExprKind::Published { .. }
+                | ExprKind::StateOf(_)
+                | ExprKind::Signal { .. }
+                | ExprKind::Builtin(_)
+                | ExprKind::Armed(_)
+                | ExprKind::PortRead(_)
+                | ExprKind::JobState { .. }
+                | ExprKind::Stream(_)
+                | ExprKind::BlockInit { .. } => false,
+                ExprKind::Call { callee, .. } => self.closed(*callee, depth + 1),
+                _ => true,
+            };
+        });
+        ok
     }
 
     /// Der Rumpf einer Funktion: Zuweisungen an Lokale, `if`, `return`,
@@ -2167,6 +2257,7 @@ impl Enc<'_> {
                         ForVars::One(var) => {
                             let (items, len) = self.places(iter.ty, v, s.span)?;
                             items
+                                .items()
                                 .into_iter()
                                 .enumerate()
                                 .map(|(k, item)| {
@@ -2393,7 +2484,8 @@ impl Enc<'_> {
                 StmtKind::ForEach { vars: ForVars::One(var), iter, body }
                     if matches!(self.p.types.get(iter.ty), Type::Array { .. } | Type::Samples { .. }) =>
                 {
-                    let V::Node(items) = self.value(iter, cx, env, flow)? else { return no("`for … in`", span) };
+                    let v = self.value(iter, cx, env, flow)?;
+                    let items = self.places(iter.ty, v, span)?.0.items();
                     self.unroll_steps(items.len() as i64, span)?;
                     let (loc, ty) = (self.loc_var(m, *var), self.machine(m).vars[var.index()].ty);
                     self.breaks.push(Vec::new());
@@ -3440,7 +3532,7 @@ impl Enc<'_> {
     fn run_end(&self) -> Option<(String, Vec<i64>)> {
         let (index, variants) = takt_mir::sys::next_run(self.p)?;
         let c = &self.p.channels[index];
-        if c.owner.is_some_and(|o| !self.order.contains(&o)) {
+        if self.foreign(c.owner) {
             return None;
         }
         let base = self.loc_out(ChannelId(index as u32));
@@ -3459,7 +3551,10 @@ impl Enc<'_> {
     /// Gehoert ein Output einer Maschine ausserhalb einer Kodierung je
     /// Maschine (13.3)? Dann ist er dort eine freie Eingabe. Im Gesamtmodell
     /// ist ein Besitzer ausserhalb der Schrittordnung ein Szenario, das nicht
-    /// laeuft: Sein Output steht fest auf dem Anfangswert, wie im Lauf.
+    /// laeuft: Zwei Szenarien duerfen denselben `sim`-Output stellen (13.6),
+    /// und die Sema nennt eines davon. Den Output schreibt im Lauf das
+    /// laufende Szenario oder keines; bis dahin steht er auf dem
+    /// Anfangswert, wie im Interpreter.
     fn foreign(&self, owner: Option<MachineId>) -> bool {
         self.scope.is_some() && owner.is_some_and(|o| !self.order.contains(&o))
     }
@@ -4059,7 +4154,7 @@ impl Enc<'_> {
                 let items = self.input_items(&edge, span)?;
                 let (elems, _) = self.places(array.ty, items, span)?;
                 let i = self.expr(index, cx, env, flow)?;
-                let x = Enc::select(elems, &i);
+                let x = elems.get(&i);
                 let d = self.guarded(&ok.clone().not(), flow, |enc, flow| enc.value(default, cx, env, flow))?;
                 V::ite(&ok, x, d)
             }

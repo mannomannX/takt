@@ -366,9 +366,9 @@ pub fn classify_transitions(
                 match answer(&ind) {
                     "unsat" => CheckVerdict::Unreachable { k: depth },
                     "sat" => match invariant(model, target, solver, timeout_s)? {
-                        Some(true) => CheckVerdict::Unreachable { k: 0 },
+                        Search::Invariant => CheckVerdict::Unreachable { k: 0 },
                         found => CheckVerdict::Undecided {
-                            reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, found)),
+                            reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
                         },
                     },
                     other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
@@ -436,19 +436,37 @@ fn classify_site(
 /// wenn es einen Pfad ueber jede Tiefe hinaus gibt, `None` ohne Urteil —
 /// auch ausserhalb des ganzzahligen Fragments und mit cvc5, das keine
 /// Horn-Klauseln liest.
-fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> Result<Option<bool>, String> {
-    let Some(q) = horn(model, target).filter(|_| !solver.is_cvc5()) else { return Ok(None) };
+fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> Result<Search, String> {
+    if solver.is_cvc5() {
+        return Ok(Search::Outside("cvc5 sucht keine induktive Invariante (Spacer ist ein Teil von z3)".into()));
+    }
+    let q = match horn(model, target) {
+        Ok(q) => q,
+        Err(why) => return Ok(Search::Outside(why)),
+    };
     let text = solver.run(&q, timeout_s, "horn")?;
     Ok(match answer(&text) {
-        "sat" => Some(true),
-        "unsat" => Some(false),
-        _ => None,
+        "sat" => Search::Invariant,
+        "unsat" => Search::Path,
+        _ => Search::Open,
     })
 }
 
+/// Was die Invariantensuche (Spacer) ergab.
+enum Search {
+    /// Eine induktive Invariante: Das Ziel gilt in jeder Tiefe.
+    Invariant,
+    /// Ein Pfad zur Verletzung, tiefer als die Anfrage.
+    Path,
+    /// Weder noch, etwa im Zeitlimit.
+    Open,
+    /// Nicht gesucht: Der Kegel des Ziels liegt ausserhalb des Fragments.
+    Outside(String),
+}
+
 /// Warum ein Induktionsschritt offen bleibt, und was er braucht.
-fn open(model: &Model, depth: u32, found: Option<bool>) -> String {
-    if found == Some(false) {
+fn open(model: &Model, depth: u32, search: &Search) -> String {
+    if let Search::Path = search {
         return format!(
             "die Invariantensuche findet einen Pfad ueber Tiefe {depth} hinaus; eine groessere Tiefe zeigt ihn"
         );
@@ -458,7 +476,11 @@ fn open(model: &Model, depth: u32, found: Option<bool>) -> String {
     } else {
         format!("; die laengste Frist braucht k = {} (`--depth auto`)", model.horizon + 1)
     };
-    format!("Induktionsschritt offen (k = {depth}){deadline}")
+    let outside = match search {
+        Search::Outside(why) => format!("; keine Invariantensuche, ausserhalb ihres Fragments: {why}"),
+        _ => String::new(),
+    };
+    format!("Induktionsschritt offen (k = {depth}){deadline}{outside}")
 }
 
 fn induction_verdict(
@@ -472,9 +494,9 @@ fn induction_verdict(
     Ok(match answer(&ind) {
         "unsat" => CheckVerdict::Unreachable { k: depth },
         "sat" => match invariant(model, Target::Check(i), solver, timeout_s)? {
-            Some(true) => CheckVerdict::Unreachable { k: 0 },
+            Search::Invariant => CheckVerdict::Unreachable { k: 0 },
             found => CheckVerdict::Undecided {
-                reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, found)),
+                reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
             },
         },
         other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
@@ -533,7 +555,7 @@ pub fn verify_contracts(model: &Model, solver: &Solver, timeout_s: u64) -> Resul
                     .vars
                     .iter()
                     .filter_map(|(n, _)| {
-                        values.get(n).map(|v| format!("{} = {}", n.trim_start_matches("c."), val_text(*v)))
+                        values.get(n).map(|v| format!("{} = {}", n.trim_start_matches("c."), val_text(v)))
                     })
                     .collect();
                 ContractVerdict::Violated { values: shown.join(", ") }
@@ -545,12 +567,13 @@ pub fn verify_contracts(model: &Model, solver: &Solver, timeout_s: u64) -> Resul
     Ok(out)
 }
 
-fn val_text(v: Val) -> String {
+fn val_text(v: &Val) -> String {
     match v {
         Val::Bool(b) => b.to_string(),
         Val::Int(i) => i.to_string(),
         Val::F32(f) => format!("{f:?}"),
         Val::F64(f) => format!("{f:?}"),
+        Val::Arr(a) => format!("{a:?}"),
     }
 }
 
@@ -580,11 +603,11 @@ fn confirm_requires(
     values: &BTreeMap<(u32, String), Val>,
     depth: u32,
 ) -> Option<u64> {
-    let states = model.simulate(u64::from(depth), &|k, n| values.get(&(k as u32, n.to_string())).copied());
+    let states = model.simulate(u64::from(depth), &|k, n| values.get(&(k as u32, n.to_string())).cloned());
     let mut env: crate::eval::Env = BTreeMap::new();
     for (name, _) in &model.inputs {
         if let Some(v) = values.get(&(0, name.clone())) {
-            env.insert(name.clone(), *v);
+            env.insert(name.clone(), v.clone());
         }
     }
     if crate::eval::eval(&site.init, &env) == Val::Bool(true) {
@@ -594,7 +617,7 @@ fn confirm_requires(
         let mut env = states[k as usize].clone();
         for (name, _) in &model.inputs {
             if let Some(v) = values.get(&(k + 1, name.clone())) {
-                env.insert(name.clone(), *v);
+                env.insert(name.clone(), v.clone());
             }
         }
         if crate::eval::eval(&site.fires, &env) == Val::Bool(true) {
@@ -699,9 +722,11 @@ pub fn prove(
                 match answer(&ind) {
                     "unsat" => Verdict::Proven { k: depth, assumptions: assumptions_of(model, Target::Property(i)) },
                     "sat" => match invariant(model, Target::Property(i), solver, timeout_s)? {
-                        Some(true) => Verdict::Proven { k: 0, assumptions: assumptions_of(model, Target::Property(i)) },
+                        Search::Invariant => {
+                            Verdict::Proven { k: 0, assumptions: assumptions_of(model, Target::Property(i)) }
+                        }
                         found => Verdict::Unproven {
-                            reason: format!("kein Gegenbeispiel bis Tiefe {depth}, {}", open(model, depth, found)),
+                            reason: format!("kein Gegenbeispiel bis Tiefe {depth}, {}", open(model, depth, &found)),
                         },
                     },
                     other => Verdict::Unproven { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
@@ -822,6 +847,39 @@ fn parse_sx(tokens: &[String], pos: &mut usize) -> Option<Sx> {
 
 /// Ein Wert der Solver-Ausgabe.
 fn value_of(sx: &Sx) -> Option<Val> {
+    value_in(sx, &BTreeMap::new())
+}
+
+/// Ein Wert der Solver-Ausgabe unter den Bindungen `bound`: z3 schreibt
+/// lange Ketten von `store` mit `let`.
+fn value_in(sx: &Sx, bound: &BTreeMap<String, Val>) -> Option<Val> {
+    match sx {
+        Sx::Atom(a) if bound.contains_key(a) => bound.get(a).cloned(),
+        Sx::List(items) if matches!(items.first(), Some(Sx::Atom(a)) if a == "let") => {
+            let [_, Sx::List(binds), body] = items.as_slice() else { return None };
+            let mut inner = bound.clone();
+            for b in binds {
+                let Sx::List(pair) = b else { return None };
+                let [Sx::Atom(name), value] = pair.as_slice() else { return None };
+                let v = value_in(value, bound)?;
+                inner.insert(name.clone(), v);
+            }
+            value_in(body, &inner)
+        }
+        // Ein Array (FB-497): z3 und cvc5 schreiben `store` ueber einem
+        // konstanten Array.
+        Sx::List(items) if matches!(items.first(), Some(Sx::Atom(a)) if a == "store") => {
+            let [_, a, i, x] = items.as_slice() else { return None };
+            let (Val::Arr(a), Val::Int(i)) = (value_in(a, bound)?, value_in(i, bound)?) else { return None };
+            Some(Val::Arr(a.set(i, value_in(x, bound)?)))
+        }
+        _ => value_flat(sx),
+    }
+}
+
+/// Ein Wert ohne Bindungen: Wahrheitswert, Bitvektor, Fliesskommazahl,
+/// konstantes Array.
+fn value_flat(sx: &Sx) -> Option<Val> {
     match sx {
         Sx::Atom(a) => match a.as_str() {
             "true" => Some(Val::Bool(true)),
@@ -836,6 +894,11 @@ fn value_of(sx: &Sx) -> Option<Val> {
                 None
             }
         },
+        Sx::List(items) if matches!(items.first(), Some(Sx::List(head)) if matches!(head.as_slice(), [Sx::Atom(a), Sx::Atom(c), _] if a == "as" && c == "const")) =>
+        {
+            let [_, x] = items.as_slice() else { return None };
+            Some(Val::Arr(crate::eval::Array::new(value_of(x)?)))
+        }
         Sx::List(items) => {
             let atoms: Vec<&str> = items.iter().map(|i| if let Sx::Atom(a) = i { a.as_str() } else { "" }).collect();
             match atoms.as_slice() {
@@ -939,16 +1002,17 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 continue;
             }
             let passed = values.get(&(k, format!("i.{}.pass", c.name))) == Some(&Val::Bool(true));
-            let delivered = values.get(&(k, format!("i.{}.d", c.name))).copied().unwrap_or(*v);
+            let delivered = values.get(&(k, format!("i.{}.d", c.name))).cloned().unwrap_or_else(|| v.clone());
             let line = match q {
                 quality::SUSPECT | quality::STALE if passed => {
+                    let text = value_text(program, c.ty, &delivered);
                     (*last, *since) = (Some(delivered), -1);
                     let flag = if q == quality::SUSPECT { "suspect" } else { "stale" };
-                    format!("{} {flag}", value_text(program, c.ty, &delivered))
+                    format!("{text} {flag}")
                 }
                 quality::SUSPECT => {
                     let edge = edges.iter().find(|e| e.name == c.name);
-                    let wrong = edge.and_then(|e| e.violation(last.as_ref(), *since)).unwrap_or(*v);
+                    let wrong = edge.and_then(|e| e.violation(last.as_ref(), *since)).unwrap_or_else(|| v.clone());
                     value_text(program, c.ty, &wrong)
                 }
                 quality::STALE => "stale".to_string(),
@@ -957,7 +1021,7 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                     format!("{} bad", value_text(program, c.ty, v))
                 }
                 _ => {
-                    (*last, *since) = (Some(*v), -1);
+                    (*last, *since) = (Some(v.clone()), -1);
                     value_text(program, c.ty, v)
                 }
             };
@@ -983,7 +1047,7 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 } else if let Some(wire) = record_wire(program, *elem, &format!("{base}.v"), values, k) {
                     wire
                 } else {
-                    element_text(program, *elem, &format!("{base}.v"), &|at| values.get(&(k, at.to_string())).copied())
+                    element_text(program, *elem, &format!("{base}.v"), &|at| lookup(values, k, at))
                 };
                 let _ = writeln!(out, "t={k} in {} {text} t={t}", c.name);
             }
@@ -1019,6 +1083,41 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
     out
 }
 
+/// Ein Blatt der Belegung im Schritt `k`. Steht es in einem Array (FB-497),
+/// heisst sein Ort dort `…[*]…`: Die Indizes `[i]` von links werden zu
+/// `[*]`, bis das Array gefunden ist, und waehlen dann in dieser Folge.
+fn lookup(values: &BTreeMap<(u32, String), Val>, k: u32, at: &str) -> Option<Val> {
+    if let Some(v) = values.get(&(k, at.to_string())) {
+        return Some(v.clone());
+    }
+    let mut name = at.to_string();
+    let mut indices = Vec::new();
+    while let Some((start, end, i)) = first_index(&name) {
+        name.replace_range(start..end, "[*]");
+        indices.push(i);
+        if let Some(found) = values.get(&(k, name.clone())) {
+            return indices.iter().try_fold(found.clone(), |v, i| match v {
+                Val::Arr(a) => Some(a.get(*i)),
+                _ => None,
+            });
+        }
+    }
+    None
+}
+
+/// Das erste `[i]` mit einer Zahl in einem Ort: Anfang, Ende, Zahl.
+fn first_index(name: &str) -> Option<(usize, usize, i64)> {
+    let mut from = 0;
+    while let Some(open) = name[from..].find('[').map(|o| o + from) {
+        let close = open + name[open..].find(']')?;
+        if let Ok(i) = name[open + 1..close].parse::<i64>() {
+            return Some((open, close + 1, i));
+        }
+        from = close + 1;
+    }
+    None
+}
+
 /// Hat ein Input einen zusammengesetzten Wert (`Enc::composite`)?
 fn composite_type(program: &Program, ty: takt_mir::TypeId) -> bool {
     match program.types.get(ty) {
@@ -1037,7 +1136,7 @@ fn composite_line(
     c: &takt_mir::program::Channel,
     out: &mut String,
 ) {
-    let get = |at: &str| values.get(&(k, at.to_string())).copied();
+    let get = |at: &str| lookup(values, k, at);
     let Some(Val::Int(q)) = get(&format!("i.{}.q", c.name)) else { return };
     if get(&format!("i.{}.held", c.name)) == Some(Val::Bool(true)) {
         return;
@@ -1065,19 +1164,20 @@ fn samples_line(
     len: u32,
     out: &mut String,
 ) {
-    let get = |at: String| values.get(&(k, at)).copied();
+    let get = |at: String| lookup(values, k, &at);
     let Some(Val::Int(q)) = get(format!("i.{name}.q")) else { return };
     if get(format!("i.{name}.held")) == Some(Val::Bool(true)) {
         return;
     }
     let zero = if matches!(program.types.get(elem), Type::Float { .. }) { Val::F64(0.0) } else { Val::Int(0) };
-    let delivered: Vec<Val> = (0..len).map(|j| get(format!("i.{name}.d[{j}]")).unwrap_or(zero)).collect();
+    let delivered: Vec<Val> =
+        (0..len).map(|j| get(format!("i.{name}.d[{j}]")).unwrap_or_else(|| zero.clone())).collect();
     let items: Vec<String> = delivered.iter().map(|d| value_text(program, elem, d)).collect();
     let checked = get(format!("i.{name}.pass")) == Some(Val::Bool(true));
     // Zeigt das Array die Lieferung selbst, liess der Rand sie durch: Ein
     // `Suspect` des Rands haelt das letzte gute, das die Lieferung nicht ist.
     let shown = get(format!("i.{name}.v")) == Some(Val::Bool(true))
-        && delivered.iter().enumerate().all(|(j, d)| get(format!("i.{name}[{j}]")) == Some(*d));
+        && delivered.iter().enumerate().all(|(j, d)| get(format!("i.{name}[{j}]")).as_ref() == Some(d));
     let line = match q {
         crate::encode::quality::SUSPECT if shown => format!("[{}] suspect", items.join(", ")),
         crate::encode::quality::STALE if checked => format!("[{}] stale", items.join(", ")),
@@ -1140,7 +1240,7 @@ fn record_wire(
     let env: crate::eval::Env = values
         .range((k, base.to_string())..(k + 1, String::new()))
         .filter(|((_, name), _)| name.starts_with(base))
-        .map(|((_, name), v)| (name.clone(), *v))
+        .map(|((_, name), v)| (name.clone(), v.clone()))
         .collect();
     let v = crate::encode::value_at(program, ty, base, &env)?;
     let bytes = takt_interp::bytes::encode(program, &v, ty).ok()?;
@@ -1167,13 +1267,20 @@ fn variable_length(program: &Program, ty: takt_mir::TypeId) -> bool {
 /// Bytes als `0x…`; ein fehlendes Blatt ist null.
 fn element_text(program: &Program, ty: takt_mir::TypeId, base: &str, get: &dyn Fn(&str) -> Option<Val>) -> String {
     let leaf = |at: &str| get(at).unwrap_or(Val::Int(0));
+    // Die Bytes als Blaetter oder, bei einer grossen Kapazitaet, als Array
+    // (FB-497).
     let bytes = |at: &str| {
         let len = match leaf(&format!("{at}.len")) {
             Val::Int(n) => usize::try_from(n).unwrap_or(0),
             _ => 0,
         };
+        let array = get(&format!("{at}[*]"));
         (0..len)
-            .map(|i| match leaf(&format!("{at}[{i}]")) {
+            .map(|i| match &array {
+                Some(Val::Arr(a)) => a.get(i as i64),
+                _ => leaf(&format!("{at}[{i}]")),
+            })
+            .map(|b| match b {
                 Val::Int(b) => u8::try_from(b).unwrap_or(0),
                 _ => 0,
             })
@@ -1267,6 +1374,8 @@ fn value_text(program: &Program, ty: takt_mir::TypeId, v: &Val) -> String {
         (_, Val::F64(f)) => format!("{f:?}"),
         (_, Val::F32(f)) => format!("{f:?}"),
         (_, Val::Bool(b)) => b.to_string(),
+        // Ein Array ist kein Wert eines Inputs; die Elemente schreibt `element_text`.
+        (_, Val::Arr(a)) => format!("{a:?}"),
     }
 }
 

@@ -1,8 +1,9 @@
 //! Terme der Kodierung: Bitvektoren fester Breite fuer Ganzzahlen, Enums
 //! und Dauern, `Float32`/`Float64` der SMT-FP-Theorie fuer `float`, `Bool`
-//! (plan/m6.md 2.8). Ein Term ist ein geteilter Graph (`Rc`): Die Mischung
-//! der Zweige (`ite`) verweist auf dieselben Teilterme, und der Drucker
-//! benennt jeden Knoten einmal.
+//! (plan/m6.md 2.8), dazu Arrays der SMT-Theorie mit einem 64-Bit-Index fuer
+//! grosse Sammlungen (FB-497). Ein Term ist ein geteilter Graph (`Rc`): Die
+//! Mischung der Zweige (`ite`) verweist auf dieselben Teilterme, und der
+//! Drucker benennt jeden Knoten einmal.
 //!
 //! Ein ausgerollter Pfad ist tausende Knoten tief (FB-403); nichts, was
 //! einen Term durchlaeuft oder abbaut, rekursiert darum ueber seine Tiefe:
@@ -35,6 +36,66 @@ pub enum Sort {
     F32,
     /// `Float64`
     F64,
+    /// `(Array (_ BitVec 64) E)`: ein Array der SMT-Theorie mit einem Index
+    /// wie `Int` und Elementen der Sorte `E`.
+    Array(Elem),
+    /// `(Array (_ BitVec 64) (Array (_ BitVec 64) E))`: je Index ein Array,
+    /// etwa die Bytes je Eintrag einer map aus Puffern.
+    Array2(Elem),
+}
+
+impl Sort {
+    /// Die Sorte eines Elements; `None` fuer einen Skalar.
+    pub fn element(self) -> Option<Sort> {
+        match self {
+            Sort::Array(e) => Some(e.sort()),
+            Sort::Array2(e) => Some(Sort::Array(e)),
+            Sort::Bool | Sort::Int | Sort::F32 | Sort::F64 => None,
+        }
+    }
+
+    /// Die Sorte eines Arrays mit Elementen dieser Sorte; `None` ueber
+    /// zwei Stufen hinaus.
+    pub fn array_of(self) -> Option<Sort> {
+        match self {
+            Sort::Array(e) => Some(Sort::Array2(e)),
+            Sort::Array2(_) => None,
+            scalar => Elem::of(scalar).map(Sort::Array),
+        }
+    }
+}
+
+/// Die Sorte der Elemente eines Arrays: ein Skalar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[allow(missing_docs)]
+pub enum Elem {
+    Bool,
+    Int,
+    F32,
+    F64,
+}
+
+impl Elem {
+    /// Die Sorte eines Elements.
+    pub fn sort(self) -> Sort {
+        match self {
+            Elem::Bool => Sort::Bool,
+            Elem::Int => Sort::Int,
+            Elem::F32 => Sort::F32,
+            Elem::F64 => Sort::F64,
+        }
+    }
+
+    /// Die Elementsorte zu einem Skalar; `None` fuer ein Array.
+    pub fn of(sort: Sort) -> Option<Elem> {
+        match sort {
+            Sort::Bool => Some(Elem::Bool),
+            Sort::Int => Some(Elem::Int),
+            Sort::F32 => Some(Elem::F32),
+            Sort::F64 => Some(Elem::F64),
+            Sort::Array(_) | Sort::Array2(_) => None,
+        }
+    }
 }
 
 /// Eine korrekt gerundete Funktion aus `libtaktm` (4.2): in der Auswertung
@@ -191,6 +252,12 @@ pub enum Op {
     Round(Rounding),
     /// Eine ganzzahlige Fliesskommazahl als Ganzzahl.
     FloatToInt,
+    /// `select a i`: das Element am Index `i`.
+    Select,
+    /// `store a i x`: das Array mit `x` am Index `i`.
+    Store,
+    /// Das Array, das an jedem Index sein Argument traegt.
+    ConstArray,
 }
 
 /// Eine Matrixfunktion aus `libtaktm::mat`.
@@ -291,6 +358,32 @@ pub fn post_order(root: &Term, known: impl Fn(&Term) -> bool) -> Vec<Term> {
     out
 }
 
+/// Wie viele Schreibvorgaenge `select` bei festem Index hoechstens
+/// uebergeht, um den gelesenen Wert schon beim Bau zu finden.
+const READ_OVER_WRITE: usize = 64;
+
+/// `select a i` bei festem Index, wenn der Wert schon feststeht: der Wert
+/// eines konstanten Arrays oder des juengsten `store` an diesen Index;
+/// `store` an andere feste Indizes uebergeht die Suche, hoechstens
+/// [`READ_OVER_WRITE`] davon.
+fn read_over_write(a: &Term, i: &Term) -> Option<Term> {
+    let Node::Int(want) = &*i.0 else { return None };
+    let mut cur = a;
+    for _ in 0..READ_OVER_WRITE {
+        let Node::App(op, args) = &*cur.0 else { return None };
+        match (op, args.as_slice()) {
+            (Op::ConstArray, [x]) => return Some(x.clone()),
+            (Op::Store, [inner, j, x]) => match &*j.0 {
+                Node::Int(at) if at == want => return Some(x.clone()),
+                Node::Int(_) => cur = inner,
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    None
+}
+
 impl std::ops::Not for Term {
     type Output = Term;
 
@@ -350,6 +443,11 @@ impl Term {
                 (Node::Bool(x), Node::Bool(y)) => return Term::bool(x == y),
                 _ => {}
             },
+            (Op::Select, [a, i]) => {
+                if let Some(x) = read_over_write(a, i) {
+                    return x;
+                }
+            }
             // Wie `eval`: Ganzzahlen wickeln in 64 Bit.
             (Op::Add | Op::Sub | Op::Lt | Op::Le | Op::Gt | Op::Ge, [a, b]) => {
                 if let (Node::Int(x), Node::Int(y)) = (&*a.0, &*b.0) {
@@ -409,6 +507,21 @@ impl Term {
     /// `ite`.
     pub fn ite(c: Term, a: Term, b: Term) -> Term {
         Term::app(Op::Ite, vec![c, a, b])
+    }
+
+    /// Das Element am Index `i` eines Arrays.
+    pub fn select(a: Term, i: Term) -> Term {
+        Term::app(Op::Select, vec![a, i])
+    }
+
+    /// Das Array `a` mit `x` am Index `i`.
+    pub fn store(a: Term, i: Term, x: Term) -> Term {
+        Term::app(Op::Store, vec![a, i, x])
+    }
+
+    /// Das Array mit `x` an jedem Index.
+    pub fn const_array(x: Term) -> Term {
+        Term::app(Op::ConstArray, vec![x])
     }
 
     /// `=`.
@@ -480,6 +593,12 @@ impl Term {
                     | Op::FloatToInt => return Sort::Int,
                     Op::Native { sort, .. } => return *sort,
                     Op::Mat { f, n, k, part } if *part == f.elements(*n, *k) => return Sort::Bool,
+                    Op::Select => {
+                        let a = args[0].sort();
+                        return a.element().unwrap_or(a);
+                    }
+                    Op::Store => &args[0],
+                    Op::ConstArray => return args[0].sort().array_of().unwrap_or(Sort::Int),
                     Op::FNeg
                     | Op::FAdd
                     | Op::FSub
