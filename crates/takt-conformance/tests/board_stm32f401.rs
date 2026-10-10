@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use common::board::{
     Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, last_output,
-    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine,
+    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, simultaneous_jobs_finish_on_time,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
-use takt_conformance::board::{self, Board, Options};
+use takt_conformance::board::{self, Board, Form, Options};
 
 /// Was der F401 nicht fasst (Pruefung 39): `45_journal_cut` und
 /// `110_journal_log` halten ein Flash-Modell mit seinen Sektoren im RAM, das
@@ -187,10 +187,11 @@ fn the_board_agrees_with_the_interpreter() {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
-/// Darf das Programm unter RTIC laufen? Wer sein Profil nennt und ein anderes
-/// als `shared` verlangt, bindet sich nicht in die Form `rtos` (12.11):
-/// `07_embedded_field` nennt `baremetal`.
-fn runs_under_rtos(name: &str) -> bool {
+/// Darf das Programm in einer Form unter `shared` laufen, unter RTIC oder in
+/// der Interruptform? Wer sein Profil nennt und ein anderes verlangt,
+/// bindet sich nicht in diese Formen (12.11): `07_embedded_field` nennt
+/// `baremetal`.
+fn runs_shared(name: &str) -> bool {
     let p = common::board::program(&board::corpus_path(name));
     p.config.runtime_profile().is_none_or(|profile| profile == takt_mir::program::RuntimeProfile::Shared)
 }
@@ -205,8 +206,23 @@ fn runs_under_rtos(name: &str) -> bool {
 fn the_board_agrees_with_the_interpreter_under_rtos() {
     let Some((mut board, _guard)) = board() else { return };
     let only = std::env::var("TAKT_F401_ONLY").ok();
-    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_under_rtos(n)).collect();
-    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).under_rtos());
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
+    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Rtos));
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **In der Interruptform rechnet der Korpus wie der Interpreter** (12.11,
+/// M11 Schritt 14): Den Schritt rechnet die ISR von TIM2 zu der Frist, die
+/// `service` nennt, Jobs der Job-Interrupt, und darunter laeuft eine fremde
+/// Hauptschleife. In logischer Zeit gibt sie den Alarm erst frei, wenn das
+/// System ruht.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_board_agrees_with_the_interpreter_in_the_interrupt_form() {
+    let Some((mut board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_F401_ONLY").ok();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
+    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Interrupt));
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
@@ -222,7 +238,7 @@ fn the_board_agrees_with_the_interpreter_under_rtos() {
 fn the_rtos_task_starts_within_tens_of_microseconds() {
     let Some((mut board, _guard)) = board() else { return };
     let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
-    let options = Options::timed(3000).under_rtos();
+    let options = Options::timed(3000).in_form(Form::Rtos);
     let text =
         board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
     let drift = Drift::of(&text);
@@ -231,6 +247,48 @@ fn the_rtos_task_starts_within_tens_of_microseconds() {
     assert!(drift.late > 0, "die Last traf keine Tickgrenze");
     assert!(drift.late < 100_000, "ein Tick {} ns spaeter als im Mittel", drift.late);
     assert!(text.contains(" out count "), "keine Ausgaben");
+}
+
+/// **In der Interruptform beginnt der Schritt auf seiner Frist, neben einer
+/// fremden Hauptschleife** (12.11): `drift` ueber 3000 Ticks bei 1 ms, und
+/// die Hauptschleife des Wirts drehte dabei ihre Runden — der Schritt
+/// rechnete in der ISR, nicht in ihr.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
+    let Some((mut board, _guard)) = board() else { return };
+    let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
+    let options = Options::timed(3000).in_form(Form::Interrupt);
+    let text =
+        board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
+    let drift = Drift::of(&text);
+    let rounds: u64 = text
+        .lines()
+        .find_map(|l| l.strip_prefix("takt wirt runden ")?.trim().parse().ok())
+        .expect("die Bilanz nennt die Runden des Wirts");
+    eprintln!(
+        "interrupt: {} Ticks, Median {} ns, spaetester {} ns darueber, {rounds} Runden des Wirts",
+        drift.ticks, drift.median, drift.late
+    );
+    assert!(drift.ticks >= 2000, "{} Zeitzeilen", drift.ticks);
+    assert!(drift.median < 20_000, "der Schritt beginnt im Mittel {} ns nach der Frist", drift.median);
+    assert!(drift.late < 50_000, "ein Tick {} ns spaeter als im Mittel", drift.late);
+    assert!(rounds > 3000, "die Hauptschleife drehte {rounds} Runden in 3000 Ticks");
+    assert!(text.contains(" out count "), "keine Ausgaben");
+}
+
+/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern
+/// und in der Interruptform (4.5, 12.11). Unter RTIC gibt die Takt-Aufgabe
+/// einen Job je Grenze aus (FB-512, Schritt 14c).
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn simultaneous_jobs_finish_on_time_on_the_board() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed: Vec<String> = [Form::Own, Form::Interrupt]
+        .into_iter()
+        .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
+        .collect();
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
 #[test]

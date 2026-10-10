@@ -39,19 +39,25 @@
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
-#[cfg(not(feature = "rtos"))]
+#[cfg(not(form = "rtos"))]
 use cortex_m_rt::entry;
 use panic_halt as _;
-#[cfg(not(feature = "rtos"))]
-use stm32f4::stm32f401::{Interrupt, NVIC};
+#[cfg(form = "own")]
+use stm32f4::stm32f401::Interrupt;
+#[cfg(not(form = "rtos"))]
+use stm32f4::stm32f401::NVIC;
 use stm32f4::stm32f401::{Peripherals, interrupt};
-#[cfg(not(feature = "rtos"))]
+#[cfg(form = "own")]
 use takt_board_stm32f401::JobContext;
-use takt_board_stm32f401::{
-    BAUD, Board, CORE_HZ, Iwdg, Led, Mpu, Telemetry, Tim2Tick, Wire, cycles, mpu, platform, tick,
-};
-use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, TimerClock, Trace};
-#[cfg(not(feature = "rtos"))]
+#[cfg(form = "interrupt")]
+use takt_board_stm32f401::alarm::Tim2Alarm;
+use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Iwdg, Led, Mpu, Telemetry, Wire, cycles, mpu, platform};
+#[cfg(not(form = "interrupt"))]
+use takt_board_stm32f401::{Tim2Tick, tick};
+#[cfg(not(form = "interrupt"))]
+use takt_rt_baremetal::TimerClock;
+use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, Trace};
+#[cfg(form = "own")]
 use takt_rt_baremetal::{LogicalClock, Sleep};
 use takt_rt_core::{Clock, FakeNvm, NextRun, Persist, Policy, Profile, Runtime};
 
@@ -100,6 +106,8 @@ const HOSTILE_FPU: bool = option_env!("TAKT_HOSTILE_FPU").is_some();
 /// DN (25), FZ (24) und RMode = gegen null (23:22) in FPSCR und FPDSCR.
 const HOSTILE_FPSCR: u32 = 0x03C0_0000;
 
+/// Der Zyklenstand der vorigen Tickgrenze des periodischen Zeitgebers.
+#[cfg(not(form = "interrupt"))]
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 
 /// Die Telemetrie, statisch: Der erzeugte Rahmen ruft `takt_board_trace`
@@ -370,21 +378,29 @@ mod devices {
     }
 
     /// `test/tick_stretch`, das Pruefgeraet fuer 12.6 Zeile 7: streckt die
-    /// Periode von TIM2 um den geschriebenen Prozentsatz.
+    /// Periode von TIM2 um den geschriebenen Prozentsatz. In der
+    /// Interruptform laeuft TIM2 frei und hat keine Periode: Das Geraet
+    /// schreibt nicht.
     #[derive(Debug, Default)]
     pub struct TestTickStretch;
 
     impl Output<u8> for TestTickStretch {
+        #[cfg(not(form = "interrupt"))]
         fn write(&mut self, percent: u8, _now: i64) -> bool {
             takt_board_stm32f401::tick::stretch(u32::from(percent));
             true
+        }
+
+        #[cfg(form = "interrupt")]
+        fn write(&mut self, _percent: u8, _now: i64) -> bool {
+            false
         }
     }
 }
 
 /// Fuehrt einen angeforderten Pruefzugriff aus; ausserhalb des Ticks, wo
 /// kein Code der TCB den Programmzustand beschreiben darf.
-#[cfg(not(feature = "rtos"))]
+#[cfg(not(form = "rtos"))]
 fn probe() {
     let target = match PROBE.load(Ordering::Relaxed) {
         1 => Some(mpu::state_address()),
@@ -419,6 +435,7 @@ fn EXTI0() {
 }
 
 /// Die Tickgrenze (12.3): Zeitstempel fuer die Periode, Tickzaehler.
+#[cfg(not(form = "interrupt"))]
 fn on_tim2() {
     mpu::isr(|| {
         let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
@@ -430,7 +447,7 @@ fn on_tim2() {
     });
 }
 
-#[cfg(not(feature = "rtos"))]
+#[cfg(form = "own")]
 #[interrupt]
 fn TIM2() {
     on_tim2();
@@ -438,7 +455,7 @@ fn TIM2() {
 
 /// Die Leitung: senden ohne zu warten, und der Host kann das Board
 /// zurueckverlangen.
-#[cfg(not(feature = "rtos"))]
+#[cfg(not(form = "rtos"))]
 #[interrupt]
 fn USART1() {
     mpu::isr(takt_board_stm32f401::uart::on_interrupt);
@@ -475,7 +492,7 @@ fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
 }
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
-#[cfg(not(feature = "rtos"))]
+#[cfg(form = "own")]
 fn conduct(clock: impl Clock, protection: Mpu, program: app::Program<'static>) {
     let mut rt = runtime(clock, protection, Profile::BAREMETAL, program);
     // 8.4: Tunes vom Host kommen ueber die Gegenrichtung der Konsole.
@@ -514,9 +531,12 @@ fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
         }
         let stacks = takt_rt_baremetal::Stacks {
             tick: Some(takt_board_stm32f401::stack::high_water()),
-            // Unter RTIC liegt die Job-Aufgabe mit auf dem Hauptstack (FB-459).
-            tick_bound: u32::try_from(app::TICK_STACK_BYTES + if cfg!(feature = "rtos") { app::JOB_STACK_BYTES } else { 0 })
-                .ok(),
+            // Unter RTIC und in der Interruptform rechnen die Jobs mit auf
+            // dem Hauptstack (FB-459).
+            tick_bound: u32::try_from(
+                app::TICK_STACK_BYTES + if cfg!(form = "own") { 0 } else { app::JOB_STACK_BYTES },
+            )
+            .ok(),
             tick_program: env!("TAKT_TICK_STACK_PROGRAM").parse().ok(),
             job: takt_board_stm32f401::jobs::high_water(),
             job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),
@@ -556,16 +576,23 @@ fn hostile_fpu() {
     }
 }
 
+/// Der Zeitgeber der Form: periodisch fuer den eigenen Kern und RTIC, ein
+/// Alarm auf die Frist in der Interruptform.
+#[cfg(not(form = "interrupt"))]
+type Timer = Tim2Tick;
+#[cfg(form = "interrupt")]
+type Timer = Tim2Alarm;
+
 /// Was jede Bindung vor dem ersten Tick einrichtet.
 struct Setup {
-    timer: Tim2Tick,
+    timer: Timer,
     protection: Mpu,
-    /// Der Stack des Job-Fadens auf dem blanken Board (4.5); unter RTIC
-    /// rechnen Jobs in einer eigenen Aufgabe.
-    #[cfg(not(feature = "rtos"))]
+    /// Der Stack des Job-Fadens im eigenen Kern (4.5); unter RTIC rechnen
+    /// Jobs in einer eigenen Aufgabe, in der Interruptform im Job-Interrupt.
+    #[cfg(form = "own")]
     job_stack: Option<&'static mut [u8]>,
     /// Unter RTIC richtet die App die Interrupts nach ihren Prioritaeten ein.
-    #[cfg(not(feature = "rtos"))]
+    #[cfg(not(form = "rtos"))]
     nvic: NVIC,
 }
 
@@ -579,7 +606,12 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
 
-    let Ok(timer) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS) else {
+    #[cfg(not(form = "interrupt"))]
+    let timer = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS);
+    #[cfg(form = "interrupt")]
+    let timer =
+        takt_board_stm32f401::init_alarm(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, interrupt_form::JOB_LINE);
+    let Ok(timer) = timer else {
         // Ohne Takt keine Telemetrie: Die LED bleibt an.
         led.on();
         loop {
@@ -600,13 +632,14 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
         unsafe { WIRE = Some(Wire::new(dp.GPIOA, &dp.RCC)) };
     }
 
-    // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden auf
-    // ihrem Stack; unter dessen Ende liegt ein Waechter (12.3). Unter RTIC
-    // rechnet die Job-Aufgabe auf dem Stack des RTOS.
+    // 4.5: Jobs rechnen im eigenen Kern in der Wartezeit bis zum Tick, im
+    // eigenen Faden auf ihrem Stack; unter dessen Ende liegt ein Waechter
+    // (12.3). Unter RTIC und in der Interruptform rechnen sie auf dem
+    // Hauptstack.
     // SAFETY: einmal beim Aufbau; danach haelt nur der Job-Faden den Stack.
-    let job_stack = if cfg!(feature = "rtos") { None } else { unsafe { (*(&raw mut JOB_STACK)).bytes() } };
+    let job_stack = if cfg!(form = "own") { unsafe { (*(&raw mut JOB_STACK)).bytes() } } else { None };
 
-    #[cfg(not(feature = "rtos"))]
+    #[cfg(not(form = "rtos"))]
     let nvic = cp.NVIC;
     let (mut dcb, mut dwt, mut core_mpu, mut scb) = (cp.DCB, cp.DWT, cp.MPU, cp.SCB);
     cycles::enable(&mut dcb, &mut dwt);
@@ -623,19 +656,23 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     if HOSTILE_FPU {
         hostile_fpu();
     }
+    #[cfg(not(form = "interrupt"))]
     banner(timer.nominal_ns());
+    // Der Alarm steht auf jeder Frist: Seine Periode ist die nominale.
+    #[cfg(form = "interrupt")]
+    banner(TICK_NS);
     unsafe { LED = Some(led) };
     Setup {
         timer,
         protection,
-        #[cfg(not(feature = "rtos"))]
+        #[cfg(form = "own")]
         job_stack,
-        #[cfg(not(feature = "rtos"))]
+        #[cfg(not(form = "rtos"))]
         nvic,
     }
 }
 
-#[cfg(not(feature = "rtos"))]
+#[cfg(form = "own")]
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
@@ -705,9 +742,207 @@ fn main() -> ! {
     }
 }
 
+#[cfg(form = "interrupt")]
+#[entry]
+fn main() -> ! {
+    let dp = Peripherals::take().expect("Peripherie");
+    let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
+    let Setup { timer, protection, nvic } = setup(dp, cp);
+    interrupt_form::run(timer, protection, nvic)
+}
+
+/// Die Interruptform (12.11, `plan/m11.md` 2.4): Den Schritt rechnet die
+/// ISR von TIM2 zu der Frist, die `service` nennt, Jobs rechnen im
+/// Job-Interrupt (EXTI1). Darunter laeuft die Hauptschleife des Wirts: Sie
+/// zaehlt ihre Runden und laesst die LED blinken, wenn das Programm sie
+/// nicht selbst fuehrt. Das Ende des Laufs gehoert in dieser Form dem Wirt
+/// (12.11): Die Hauptschleife schreibt die Bilanz und fuehrt `next_run` aus.
+///
+/// **Prioritaeten, von oben.** `MemoryManagement` steht ueber allen (12.3).
+/// Die Leitung (USART1) und die Pruef-ISR (EXTI0) unterbrechen den Schritt:
+/// Im Konformitaetslauf wartet ein voller Ring im Schritt auf die Leitung,
+/// und die Pruef-ISR soll den offenen Programmzustand treffen. Darunter der
+/// Schritt (TIM2), ganz unten die Jobs (EXTI1). Die Hauptschleife laeuft
+/// nur, wenn keine ISR aktiv ist.
+#[cfg(form = "interrupt")]
+mod interrupt_form {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use stm32f4::stm32f401::{Interrupt, NVIC, interrupt};
+    use takt_board_stm32f401::WfiSleep;
+    use takt_board_stm32f401::alarm::{self, Tim2Alarm};
+    use takt_rt_baremetal::Sleep;
+    use takt_rt_baremetal::interrupt::{Form, Time, release};
+
+    use super::{
+        Console, DRAIN_ROUNDS, HW_ADDRESSES, Iwdg, JOBS, LED, LOGICAL, Mpu, Profile, Stats, Takt, conclude,
+        hand_over_jobs, mpu, no_journal, probe, program, runtime, uart,
+    };
+
+    /// Die Leitung des Job-Interrupts: eine, die kein Treiber benutzt.
+    pub const JOB_LINE: Interrupt = Interrupt::EXTI1;
+
+    /// Der Schritt unter Leitung und Pruef-ISR.
+    const STEP_PRIORITY: u8 = 0x20;
+
+    /// Die Jobs unter allem.
+    const JOB_PRIORITY: u8 = 0xF0;
+
+    /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
+    const BLINK_NS: i64 = 500_000_000;
+
+    /// Was die ISR des Alarms haelt.
+    struct Stepping {
+        rt: Takt<Time<Tim2Alarm>>,
+        form: Form<Tim2Alarm>,
+        /// 8.4: Tunes vom Host ueber die Gegenrichtung der Konsole.
+        tunes: Console<fn() -> Option<u8>>,
+        /// Die Bilanz, sobald der Lauf endet.
+        ended: Option<Stats>,
+    }
+
+    /// Der Lauf. Bis zu seinem Ende rechnet nur die ISR des Alarms mit ihm;
+    /// danach ([`ENDED`]) steht kein Alarm mehr, und er gehoert der
+    /// Hauptschleife.
+    static mut STEPPING: Option<Stepping> = None;
+
+    /// Der Lauf ist zu Ende, seine Bilanz steht in [`STEPPING`].
+    static ENDED: AtomicBool = AtomicBool::new(false);
+
+    /// In logischer Zeit das Tor, hinter dem der Alarm wartet.
+    static GATE: AtomicBool = AtomicBool::new(false);
+
+    /// Der Job-Interrupt hat seinen Auftrag gerechnet; der Schrittkontext
+    /// verteilt den naechsten.
+    static JOB_DONE: AtomicBool = AtomicBool::new(false);
+
+    /// Der Schrittkontext: An der Frist rechnet er den Schritt, nach einem
+    /// Auftrag des Job-Interrupts verteilt er den naechsten; danach nimmt
+    /// die Leitung, was in ihren FIFO passt. Ein Ueberlauf der Zeitachse
+    /// zaehlt nur ihre Epoche.
+    #[interrupt]
+    fn TIM2() {
+        mpu::isr(|| {
+            let due = alarm::on_interrupt();
+            let job_done = JOB_DONE.swap(false, Ordering::AcqRel);
+            if ENDED.load(Ordering::Acquire) {
+                return;
+            }
+            // SAFETY: Bis zum Ende gehoert der Lauf dieser ISR (`STEPPING`).
+            let Some(s) = (unsafe { (&raw mut STEPPING).as_mut().and_then(Option::as_mut) }) else { return };
+            if due {
+                if let Some(stats) = s.form.on_alarm(&mut s.rt, no_journal(), Some(&mut s.tunes)) {
+                    s.ended = Some(stats);
+                    ENDED.store(true, Ordering::Release);
+                }
+            } else if job_done {
+                s.form.on_job_done(&mut s.rt, no_journal(), Some(&mut s.tunes));
+            } else {
+                return;
+            }
+            if let Some(u) = uart() {
+                u.flush();
+            }
+        });
+    }
+
+    /// Der Job-Interrupt (4.5): rechnet den Auftrag, den der Schritt gab,
+    /// und laesst den Schrittkontext den naechsten verteilen.
+    #[interrupt]
+    fn EXTI1() {
+        mpu::isr(|| {
+            // SAFETY: `run` legt den Griff vor dem ersten Schritt ab; danach
+            // rechnet nur dieser Interrupt mit ihm.
+            if let Some(jobs) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
+                jobs.work();
+            }
+            JOB_DONE.store(true, Ordering::Release);
+            NVIC::pend(Interrupt::TIM2);
+        });
+    }
+
+    /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
+    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC) -> ! {
+        // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
+        let mut program = unsafe { program() };
+        hand_over_jobs(&mut program);
+        let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
+        let mut rt = runtime(clock, protection, Profile::SHARED, program);
+        let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
+        let tunes = Console::new(takt_board_stm32f401::console_byte as fn() -> Option<u8>);
+        // SAFETY: TIM2 ist noch maskiert; ab seiner Freigabe gehoert der Lauf
+        // seiner ISR.
+        unsafe { STEPPING = Some(Stepping { rt, form, tunes, ended: None }) };
+        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
+        // Schritt reichte: gemalt erst hier, der Aufbau zaehlt nicht (12.3).
+        takt_board_stm32f401::stack::paint();
+        // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
+        // oben sind bereit.
+        unsafe {
+            for (line, priority) in [
+                (Interrupt::USART1, mpu::ISR_PRIORITY),
+                (Interrupt::EXTI0, mpu::ISR_PRIORITY),
+                (Interrupt::TIM2, STEP_PRIORITY),
+                (JOB_LINE, JOB_PRIORITY),
+            ] {
+                nvic.set_priority(line, priority);
+                NVIC::unmask(line);
+            }
+        }
+        host(alarm)
+    }
+
+    /// Die Hauptschleife des Wirts: fremde Arbeit, die jede ISR
+    /// unterbricht. In logischer Zeit gibt sie den Alarm frei, sobald sie
+    /// laeuft, denn dann ruht das System (`release`). Nach dem Ende schreibt
+    /// sie die Bilanz und fuehrt im Betrieb `next_run` aus.
+    fn host(mut alarm: Tim2Alarm) -> ! {
+        let blink = !HW_ADDRESSES.contains(&"ui/led");
+        let mut lit = false;
+        let mut rounds: u64 = 0;
+        while !ENDED.load(Ordering::Acquire) {
+            rounds = rounds.wrapping_add(1);
+            if LOGICAL {
+                release(&GATE, &mut alarm);
+            }
+            let on = alarm.now_ns() / BLINK_NS % 2 == 0;
+            if blink && on != lit {
+                lit = on;
+                // SAFETY: Das Programm bindet die LED nicht; nur diese
+                // Schleife schaltet sie.
+                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
+                    if on { led.on() } else { led.off() }
+                }
+            }
+            probe();
+        }
+        // SAFETY: Nach dem Ende steht kein Alarm mehr; der Lauf gehoert jetzt
+        // dieser Schleife.
+        if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
+            // Die Runden des Wirts zeigen, dass er neben dem Schritt lief.
+            if let Some(u) = uart() {
+                u.drain(DRAIN_ROUNDS);
+                u.write("takt wirt runden ");
+                u.write_u64(rounds);
+                u.newline();
+            }
+            conclude(&s.rt, &s.ended.unwrap_or_default());
+        }
+        // Wie im eigenen Kern bleibt die Leitung offen (FB-275).
+        let mut sleep = WfiSleep;
+        loop {
+            sleep.sleep_until_event();
+            if let Some(u) = uart() {
+                u.flush();
+            }
+            Iwdg::feed();
+        }
+    }
+}
+
 /// Die Tickgrenze unter RTIC (12.8): Vor dem Warten gibt die Takt-Aufgabe
 /// den naechsten Job-Auftrag aus (4.5) und fuellt die Leitung nach.
-#[cfg(feature = "rtos")]
+#[cfg(form = "rtos")]
 struct TaskBoundary {
     reached: rtic_sync::signal::SignalReader<'static, ()>,
     work: rtic_sync::signal::SignalWriter<'static, ()>,
@@ -716,13 +951,13 @@ struct TaskBoundary {
 /// Die Tickgrenze mit dem Griff, der verteilt: Er entsteht mit dem Programm
 /// in der Takt-Aufgabe und bleibt dort, darum nicht in [`TaskBoundary`], das
 /// RTIC von `init` an die Aufgabe gibt.
-#[cfg(feature = "rtos")]
+#[cfg(form = "rtos")]
 struct Dispatching {
     boundary: TaskBoundary,
     dispatch: Option<app::Dispatch<'static>>,
 }
 
-#[cfg(feature = "rtos")]
+#[cfg(form = "rtos")]
 impl takt_rt_rtos::Boundary for Dispatching {
     async fn reached(&mut self) {
         if self.dispatch.as_mut().is_some_and(takt_embed::Dispatch::next) {
@@ -737,7 +972,7 @@ impl takt_rt_rtos::Boundary for Dispatching {
 
 /// Die Takt-Aufgabe (12.8): der Lauf, die Abschlusszeile, danach die
 /// offene Leitung wie auf dem blanken Board.
-#[cfg(feature = "rtos")]
+#[cfg(form = "rtos")]
 async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, boundary: TaskBoundary) {
     // SAFETY: einmal je Lauf; die Aufgabe kehrt nicht zurueck.
     let mut program = unsafe { program() };
@@ -767,7 +1002,7 @@ async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, boundary: TaskBoundary) 
 /// unterbricht, und eine Treiber-Aufgabe mit kritischen Abschnitten. Ihre
 /// Zahlen liegen in der Groessenordnung, die 12.8 nennt — die Takt-Aufgabe
 /// beginnt zweistellige Mikrosekunden nach der Grenze.
-#[cfg(feature = "rtos")]
+#[cfg(form = "rtos")]
 mod load {
     use takt_board_stm32f401::{CORE_HZ, TIMER_HZ, cycles};
 
@@ -836,7 +1071,7 @@ mod load {
 /// eines RTOS bis zu seiner hoechsten Systemprioritaet maskiert. Sie haelt
 /// so Tick und Takt-Aufgabe auf, die Funk-ISR und die Leitung nicht. Was
 /// die Takt-Aufgabe verspaetet, misst `drift` jedes Ticks.
-#[cfg(feature = "rtos")]
+#[cfg(form = "rtos")]
 #[rtic::app(device = stm32f4::stm32f401, peripherals = true, dispatchers = [SPI1, SPI2, SPI3])]
 mod rtic_app {
     use rtic_sync::signal::{Signal, SignalReader, SignalWriter};

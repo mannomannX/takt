@@ -48,6 +48,7 @@
 #![no_std]
 #![allow(unsafe_code, reason = "Registerzugriff ueber die PAC; 9.5 fuehrt Treiber in der TCB")]
 
+pub mod alarm;
 pub mod bootloader;
 pub mod cycles;
 pub mod guard;
@@ -168,6 +169,25 @@ pub fn init(
     tick::set_counts_per_tick(counts);
     start_tim2(rcc, tim2, psc, counts);
     Ok(Tim2Tick::new(TIMER_HZ, counts, CORE_HZ))
+}
+
+/// Wie [`init`], fuer die Interruptform (12.11): TIM2 laeuft frei als
+/// Zeitachse des Alarms ([`alarm::Tim2Alarm`]) statt periodisch; den Takt
+/// gibt die Frist, die `service` nennt. Jobs laufen im Interrupt `jobs`.
+pub fn init_alarm(
+    board: Board,
+    rcc: &stm32f4::stm32f401::RCC,
+    flash: &stm32f4::stm32f401::FLASH,
+    pwr: &stm32f4::stm32f401::PWR,
+    tim2: &stm32f4::stm32f401::TIM2,
+    jobs: stm32f4::stm32f401::Interrupt,
+) -> Result<alarm::Tim2Alarm, InitError> {
+    bootloader::enter_if_requested();
+    let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
+    let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
+    clocks(rcc, flash, pwr, pllm)?;
+    alarm::start(rcc, tim2, psc);
+    Ok(alarm::Tim2Alarm::new(TIMER_HZ, jobs))
 }
 
 /// PLL auf 84 MHz aus dem Quarz des Boards.

@@ -235,6 +235,37 @@ So arbeitet jeder Strang, als wäre er allein:
 - **Hinweise:** Board-Einrichtung siehe Gedächtnis (C6 an COM4, die Brücke
   an COM5 blockiert RX; F401 an COM7, DfuSe-Schreiber). Board-Läufe über
   `tools/board-run.ps1`.
+- **Ausgangslage (2026-10-10):** Beide Boards laufen in der Form „eigener
+  Kern“ mit periodischem Timer. Den Kern ohne Warten (`service`, `Next`) gibt
+  es, die Form `--form interrupt|poll` setzt aber nur das Profil. RTIC hängt
+  an `takt-rt-rtos` mit periodischem TIM2. Embassy fehlt ganz; dafür müssen
+  `embassy-executor`, `embassy-time`, `embassy-stm32` und die Anbindung des C6
+  aus crates.io nachgeladen werden. Die Hülle `Program` hält rohe Zeiger und
+  ist nicht `Send`.
+- **Teilschritte:**
+  - **14a Interruptform**, je Board.
+    1. Die 64-Bit-Zeit aus einem 32-Bit-Zähler und den Vergleich mit der Frist
+       als reine Rechnung in `takt-board-support`, mit Tests auf dem Wirt.
+    2. Der Port in `takt-rt-baremetal` (`interrupt`): Die Timer-ISR ruft
+       `service_with`, stellt den Alarm auf `deadline`, löst bei `jobs` den
+       Job-Interrupt aus und endet mit der Bilanz.
+    3. Je Board ein Alarm: TIM2 freilaufend mit Compare (F401), SYSTIMER-Ziel
+       (C6). Dazu die Uhr und ein Job-Interrupt niedrigster Priorität.
+    4. Im Bring-up ein Feature je Form und eine fremde Hauptschleife, die
+       zählt und die LED führt.
+    5. In der Abnahme wird `Options::rtos` zu einer Form. Board-Tests: eine
+       Korpusauswahl gleich dem Interpreter, `drift` im Bericht.
+  - **14b Pollform** auf dem F401: Die Hauptschleife ruft `service` an
+    `deadline`. `check_form` prüft die Regeln aus GEN-036 (Jobs nur mit
+    Job-Interrupt; der Tick nicht kürzer als die längste Runde). Die
+    Rundenlänge wird ein Schlüssel der Hardware-Konfiguration.
+  - **14c RTIC** als Interruptform mit dem Planer von RTIC: die Grenze aus
+    `deadline`; die Umbenennung von Feature `rtos`, `Options::rtos` und
+    `takt-rt-rtos`.
+  - **14d Embassy** auf beiden Boards: eine Aufgabe auf einem
+    `InterruptExecutor`, die Zeit aus `embassy-time`.
+  - Unterwegs: FB-385 (der Port verlangt das Journal) und FB-458 (der
+    Stack von `main` auf dem C6).
 
 ### 17 — Wirt mit Instanzen in Fäden, `linux_rt`
 

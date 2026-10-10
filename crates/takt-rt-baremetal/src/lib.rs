@@ -36,6 +36,7 @@ pub mod bench;
 pub mod board;
 pub mod clock;
 pub mod console;
+pub mod interrupt;
 pub mod protect;
 pub mod run;
 pub mod telemetry;

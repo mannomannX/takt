@@ -54,7 +54,7 @@ use std::path::{Path, PathBuf};
 use takt_mir::fns::{CostClass, CostVec, Heavy};
 use takt_mir::hardware::CTarget;
 
-use crate::board::{Board, Options};
+use crate::board::{Board, Form, Options};
 
 pub mod library;
 pub mod log;
@@ -716,11 +716,10 @@ const LOOP_TICKS: u64 = 1000;
 pub const LOAD_KERNEL: &str = include_str!("../bench/load.takt");
 
 /// Wie der Lastkern laeuft: in Echtzeit und in logischer Zeit, wo der Trace
-/// nichts verwirft, und beides unter dem RTOS, wenn das Board eines hat.
-fn load_runs(rtos: bool) -> Vec<Options> {
-    let own = [Options::timed(LOOP_TICKS), Options::fresh(LOOP_TICKS)].map(Options::calibrating);
-    let shared = own.clone().map(Options::under_rtos);
-    own.into_iter().chain(shared.into_iter().filter(|_| rtos)).collect()
+/// nichts verwirft, und beides in jeder Form, die das Board kennt.
+fn load_runs(forms: &[Form]) -> Vec<Options> {
+    let runs = [Options::timed(LOOP_TICKS), Options::fresh(LOOP_TICKS)].map(Options::calibrating);
+    forms.iter().flat_map(|&form| runs.clone().map(|o| o.in_form(form))).collect()
 }
 
 /// Die Stack-Reserve (12.3) aus Laeufen in der Tickschleife: je Lauf die
@@ -909,12 +908,16 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
     ));
     logs.looped = Some(looped);
     let load = write_kernel("load", LOAD_KERNEL)?;
-    for options in load_runs(board.rtos()) {
+    for options in load_runs(board.forms()) {
         let elf = board.build(&load, &options)?;
         let text = board.run(&elf, &options)?;
         log(&format!(
             "Lastkern{}{}: Stack {:?} Byte, davon Programm {:?}",
-            if options.rtos { " unter RTOS" } else { "" },
+            match options.form {
+                Form::Own => "",
+                Form::Interrupt => " in der Interruptform",
+                Form::Rtos => " unter RTOS",
+            },
             if options.timed { " in Echtzeit" } else { " in logischer Zeit" },
             crate::board::counter(&text, "stack"),
             crate::board::counter(&text, "programm")

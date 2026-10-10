@@ -20,7 +20,7 @@ use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
 use super::dfuse::Dfuse;
-use super::{Board, Bringup, Builder, ConsoleLine, Options, capture};
+use super::{Board, Bringup, Builder, ConsoleLine, Form, Options, capture};
 
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-stm32f401",
@@ -190,9 +190,10 @@ impl Board for Stm32f401 {
         &[0, 8, 24]
     }
 
-    /// RTIC (12.8): Takt als Aufgabe, darueber Funk-ISR und Treiber-Aufgabe.
-    fn rtos(&self) -> bool {
-        true
+    /// Die Interruptform auf TIM2 und RTIC (12.8): Takt als Aufgabe,
+    /// darueber Funk-ISR und Treiber-Aufgabe.
+    fn forms(&self) -> &'static [Form] {
+        &[Form::Own, Form::Interrupt, Form::Rtos]
     }
 }
 

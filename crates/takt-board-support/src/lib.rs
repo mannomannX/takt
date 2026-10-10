@@ -17,6 +17,7 @@
 
 #![no_std]
 
+pub mod alarm;
 pub mod clock;
 pub mod console;
 pub mod counter;

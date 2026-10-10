@@ -57,7 +57,7 @@ fn main() {
         println!("cargo:rustc-env=TAKT_HOSTILE_FPU=1");
     }
 
-    build_takt_program(&out);
+    build_takt_program(&out, form());
     bench();
     native_vectors(&out);
     math_vectors(&out);
@@ -72,7 +72,8 @@ fn text_shift(out: &Path) {
         .map_or(Ok(0), |s| s.parse())
         .unwrap_or_else(|e| panic!("TAKT_BENCH_SHIFT: keine Zahl ({e})"));
     assert!(shift % 8 == 0, "TAKT_BENCH_SHIFT = {shift}: nur Vielfache von 8 Byte (`memory.x`)");
-    let text = format!("/* Erzeugt von `build.rs`: die Verschiebung von `.text` (FB-367). */\nTAKT_TEXT_SHIFT = {shift};\n");
+    let text =
+        format!("/* Erzeugt von `build.rs`: die Verschiebung von `.text` (FB-367). */\nTAKT_TEXT_SHIFT = {shift};\n");
     fs::write(out.join("takt_shift.x"), text).expect("takt_shift.x schreiben");
     println!("cargo:rustc-env=TAKT_BENCH_SHIFT={shift}");
 }
@@ -96,7 +97,7 @@ fn bench() {
 ///
 /// `blink` und `minimal` bleiben baubar: Sie binden weder die Bibliothek
 /// noch die erzeugten Konstanten ein.
-fn build_takt_program(out: &Path) {
+fn build_takt_program(out: &Path, form: &str) {
     let program = program_path();
     println!("cargo:rerun-if-env-changed=TAKT_PROGRAM");
     println!("cargo:rerun-if-changed={program}");
@@ -110,8 +111,6 @@ fn build_takt_program(out: &Path) {
     let wiring =
         bringup::wiring(&[&here.join(bringup::WIRING), &here.join("../takt-driver-probe").join(bringup::WIRING)]);
     bringup::rig(&p, &wiring, &out.join("takt_rig.rs"));
-    // 12.8, 12.11: Unter RTIC ist das Programm eine Aufgabe neben anderen.
-    let form = if env::var_os("CARGO_FEATURE_RTOS").is_some() { "rtos" } else { "own" };
     let mut embed = takt_embed::build::Program::new(&program)
         .tool(bringup::takt())
         .prefix(takt_llvm::symbols::Prefix::default().as_str())
@@ -135,15 +134,35 @@ fn build_takt_program(out: &Path) {
         "das F401 schuetzt die Arena mit seiner MPU: `protect = armv7m_mpu` in der Hardware-Konfiguration (12.3)"
     );
     state_section(out, &built.value("protect_bytes"));
-    // 12.11: Unter RTIC rechnet die Job-Aufgabe auf dem Hauptstack, und die
-    // Takt-Aufgabe unterbricht sie dort; der Hauptstack fasst dann beide (FB-459).
+    // 12.11: Unter RTIC und in der Interruptform rechnen die Jobs auf dem
+    // Hauptstack, und der Schritt unterbricht sie dort; der Hauptstack fasst
+    // dann beide (FB-459).
     let tick: u64 = built.value("tick_stack_bytes").parse().expect("tick_stack_bytes: Zahl");
     let job: u64 = built.value("job_stack_bytes").parse().expect("job_stack_bytes: Zahl");
-    tick_stack(out, &(tick + if form == "rtos" { job } else { 0 }).to_string());
+    tick_stack(out, &(tick + if form == "own" { 0 } else { job }).to_string());
     // 13.8: Die Bilanz nennt den Anteil des Programms; `takt bench` zieht ihn
     // von der Tiefe ab.
     println!("cargo:rustc-env=TAKT_TICK_STACK_PROGRAM={}", built.value("tick_stack_program"));
     println!("cargo:rustc-link-arg=--icf=all");
+}
+
+/// Die Form des Ports (12.11) aus den Merkmalen: `rtos` (RTIC),
+/// `interrupt`, ohne beide der eigene Kern. Das Binary waehlt seinen Pfad
+/// mit `cfg(form = "…")`.
+fn form() -> &'static str {
+    let rtos = env::var_os("CARGO_FEATURE_RTOS").is_some();
+    let interrupt = env::var_os("CARGO_FEATURE_INTERRUPT").is_some();
+    assert!(!(rtos && interrupt), "`rtos` und `interrupt` sind zwei Formen; ein Bau hat eine (12.11)");
+    let form = if rtos {
+        "rtos"
+    } else if interrupt {
+        "interrupt"
+    } else {
+        "own"
+    };
+    println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\", \"rtos\"))");
+    println!("cargo:rustc-cfg=form=\"{form}\"");
+    form
 }
 
 /// Die Hardware-Konfiguration des Boards (8.10): Kalibrierung, Speicher,

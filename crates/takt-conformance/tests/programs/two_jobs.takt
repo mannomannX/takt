@@ -1,0 +1,47 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# 4.5, 12.11: Zwei Jobs beginnen im selben Tick und dauern je einen Tick;
+# beide sind im naechsten Tick fertig. Der Job-Kontext rechnet sie
+# nacheinander, und der Port muss ihm nach dem ersten den zweiten geben,
+# bevor die Grenze kommt — verteilt er einen Job je Grenze, kommt der
+# zweite einen Tick zu spaet (`late`).
+
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 10 ms, total
+
+output left_word  : u32 @ hw("o/left")  with safe = 0
+output right_word : u32 @ hw("o/right") with safe = 0
+
+fn first(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
+
+machine left:
+    var msg : bytes<64> = default
+    initial RUN
+    state RUN:
+        sequence:
+            msg.push(0x61)
+            job v = sha256(msg)
+            until v.done timeout 1 s -> FAILED
+            left_word = first(v.result.or(default))
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state FAILED:
+        when false: -> RUN
+
+machine right:
+    var msg : bytes<64> = default
+    initial RUN
+    state RUN:
+        sequence:
+            msg.push(0x62)
+            job v = sha256(msg)
+            until v.done timeout 1 s -> FAILED
+            right_word = first(v.result.or(default))
+            -> DONE
+    state DONE:
+        when false: -> RUN
+    state FAILED:
+        when false: -> RUN

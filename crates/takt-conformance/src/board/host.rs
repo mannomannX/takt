@@ -28,8 +28,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use super::{
-    ATTEMPTS, Bin, Board, Builder, END, Options, complete, hash_build_inputs, hash_program, hash_tree, publish_checked,
-    root, run_bounded,
+    ATTEMPTS, Bin, Board, Builder, END, Form, Options, complete, hash_build_inputs, hash_program, hash_tree,
+    publish_checked, root, run_bounded,
 };
 use crate::bringup::WIRING;
 
@@ -232,7 +232,7 @@ impl Host {
     /// Das Programm mit dem Wirtsrahmen als ausfuehrbare Datei, aus dem
     /// Zwischenspeicher oder frisch gebaut ([`Board::build`]).
     fn image(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
-        if options.bin != Bin::Takt || options.timed || options.rtos || options.hostile_fpu {
+        if options.bin != Bin::Takt || options.timed || options.form != Form::Own || options.hostile_fpu {
             return Err("der Wirt kennt nur den Konformitaetslauf in logischer Zeit".into());
         }
         self.check_wiring(program)?;

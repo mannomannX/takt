@@ -71,6 +71,9 @@ panic-halt = "1.0"
 
 [features]
 rtos = ["dep:rtic", "dep:rtic-sync", "dep:takt-rt-rtos"]
+# Die Interruptform (12.11): Den Schritt rechnet die ISR von TIM2 zur Frist,
+# darunter laeuft eine fremde Hauptschleife.
+interrupt = []
 bench = []
 
 # Das Messprogramm von `takt bench` (13.8): `bench` bindet die Bibliothek aus

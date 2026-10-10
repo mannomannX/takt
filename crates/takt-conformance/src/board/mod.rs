@@ -214,6 +214,33 @@ pub enum Bin {
     Natives,
 }
 
+/// Die Form, in der das Bring-up den Kern ruft (12.11); jede ausser dem
+/// eigenen Kern rechnet im Profil `shared` (12.8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Form {
+    /// Die Runtime wartet selbst auf die Frist (12.3).
+    #[default]
+    Own,
+    /// Die ISR eines Alarms auf die Frist rechnet den Schritt, darunter
+    /// laeuft eine fremde Hauptschleife.
+    Interrupt,
+    /// Takt als hoechstpriore Aufgabe unter dem RTOS des Boards, mit
+    /// Treiber-Aufgabe und Funk-ISR als Last.
+    Rtos,
+}
+
+impl Form {
+    /// Das Merkmal des Bring-ups, das die Form waehlt; der eigene Kern
+    /// braucht keines.
+    pub fn feature(self) -> Option<&'static str> {
+        match self {
+            Form::Own => None,
+            Form::Interrupt => Some("interrupt"),
+            Form::Rtos => Some("rtos"),
+        }
+    }
+}
+
 /// Wie ein Programm auf das Board kommt.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Options {
@@ -234,10 +261,9 @@ pub struct Options {
     /// Outputs ihr `guard` (7.5). Ohne sie rechnet das Board wie die
     /// Simulation.
     pub hardware: Option<PathBuf>,
-    /// Im Profil `shared` (12.8): Takt als hoechstpriore Aufgabe unter dem
-    /// RTOS des Boards, mit Treiber-Aufgabe und Funk-ISR als Last. Ein
-    /// Board ohne Bindung baut dann nicht.
-    pub rtos: bool,
+    /// Die Form des Ports (12.11). Ein Board, dessen Bring-up sie nicht
+    /// kennt ([`Board::forms`]), baut dann nicht.
+    pub form: Form,
     /// Vor dem Lauf die Fliesskomma-Umgebung verstellen, wie ein Wirt es
     /// fuer seinen eigenen Code darf: Flush-to-Zero, Default-NaN, Rundung
     /// gegen null (4.2, 12.11). Takt rechnet trotzdem wie der Interpreter,
@@ -289,9 +315,9 @@ impl Options {
         Options { ticks, fresh: true, ..Options::default() }
     }
 
-    /// Derselbe Lauf im Profil `shared` unter dem RTOS des Boards (12.8).
-    pub fn under_rtos(self) -> Options {
-        Options { rtos: true, ..self }
+    /// Derselbe Lauf in der Form `form` (12.11).
+    pub fn in_form(self, form: Form) -> Options {
+        Options { form, ..self }
     }
 
     /// Derselbe Lauf mit der Hardware-Konfiguration `path`.
@@ -380,10 +406,10 @@ pub trait Board {
         &[0]
     }
 
-    /// Ob das Bring-up unter einem RTOS laufen kann ([`Options::rtos`],
-    /// 12.8): Dann misst `takt bench` die Stack-Reserve auch dort.
-    fn rtos(&self) -> bool {
-        false
+    /// Die Formen, in denen das Bring-up laufen kann ([`Options::form`],
+    /// 12.11): In jeder misst `takt bench` die Stack-Reserve.
+    fn forms(&self) -> &'static [Form] {
+        &[Form::Own]
     }
 }
 
@@ -504,7 +530,7 @@ impl Bringup {
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         hash_program(program, &mut h)?;
-        (options.ticks, options.fresh, options.timed, options.rtos, options.hostile_fpu, self.triple).hash(&mut h);
+        (options.ticks, options.fresh, options.timed, options.form, options.hostile_fpu, self.triple).hash(&mut h);
         (options.build == takt_sema::Build::Hw).hash(&mut h);
         if let Some(hw) = &options.hardware {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
@@ -573,8 +599,8 @@ impl Bringup {
         } else {
             cargo.env_remove("TAKT_HOSTILE_FPU");
         }
-        if options.rtos {
-            cargo.args(["--features", "rtos"]);
+        if let Some(feature) = options.form.feature() {
+            cargo.args(["--features", feature]);
         }
         match &options.bin {
             Bin::Bench { shift } => cargo.args(["--features", "bench"]).env("TAKT_BENCH_SHIFT", shift.to_string()),

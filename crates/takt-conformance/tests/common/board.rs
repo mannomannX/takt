@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use takt_conformance::board::{self, Board, Options};
+use takt_conformance::board::{self, Board, Form, Options};
 use takt_conformance::compare;
 use takt_mir::program::Program;
 
@@ -549,6 +549,26 @@ pub fn long_job_keeps_the_tick(board: &mut dyn Board) -> Vec<String> {
         failed.push(format!("{} Zeitzeilen, ein Tick {} ns spaeter als im Mittel:\n{text}", drift.ticks, drift.late));
     }
     failed
+}
+
+/// **Zwei Jobs desselben Ticks sind im naechsten fertig** (4.5, 12.11):
+/// `two_jobs.takt` startet zwei Jobs von einem Tick Dauer im selben Tick.
+/// Der Job-Kontext rechnet sie nacheinander, der Port gibt ihm den zweiten,
+/// sobald der erste fertig ist, und keiner steht als `late` im Trace. Ein
+/// Konformitaetslauf in der Form `form`.
+pub fn simultaneous_jobs_finish_on_time(board: &mut dyn Board, form: Form) -> Vec<String> {
+    let path = board::root().join("crates/takt-conformance/tests/programs/two_jobs.takt");
+    let options = Options::fresh(TICKS).in_form(form);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("{form:?}: kein Lauf: {e}")],
+    };
+    let diffs = compare(&replayed(&program(&path), &text), &text);
+    if diffs.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("{form:?}: {} Abweichungen: {diffs:?}\n{text}", diffs.len())]
+    }
 }
 
 /// Wie spaet die Ticks eines Laufs nach ihrer Grenze begannen (`drift`
