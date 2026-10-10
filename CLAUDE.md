@@ -37,6 +37,9 @@ Testdateien heissen nach dem, was sie pruefen: `examples.rs`,
   Golden-Dateien neu schreiben, wenn ein Korpusprogramm sich aendert
 - `pwsh tools/prune-target.ps1 [-Apply]` — veraltete Build-Artefakte im
   Zielverzeichnis (alte Testfassungen, Caches); vor langen Laeufen
+- `pwsh tools/board-run.ps1 [-Rev <stand>] [-Boards esp32c6|stm32f401]` —
+  die Board-Suiten in einem eigenen Worktree und Zielverzeichnis, ohne den
+  Hauptbaum zu blockieren; Protokolle unter `G:ustoard-runs`
 - `cargo run -p takt-cli -- fmt <datei>` — Korpusdateien kanonisch
   formatieren; ein Test prueft das
 
