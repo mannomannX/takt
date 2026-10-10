@@ -31,6 +31,7 @@ pub mod harness;
 pub mod limits;
 pub mod math;
 pub mod natives;
+pub mod paths;
 mod ports;
 pub mod report;
 pub mod run;

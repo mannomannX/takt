@@ -30,24 +30,29 @@ pub enum Solver {
     Missing,
 }
 
-/// Sucht `TAKT_SOLVER`, dann `z3` und `cvc5` auf dem PATH.
+/// Sucht `TAKT_SOLVER`, dann `z3` und `cvc5`, je auf dem PATH oder unter
+/// `~/.takt/bin`.
 pub fn find() -> Solver {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(p) = std::env::var("TAKT_SOLVER") {
-        candidates.push(PathBuf::from(p));
+    let given = std::env::var("TAKT_SOLVER").ok().map(PathBuf::from).filter(|p| answers(p));
+    match given {
+        Some(p) => Solver::At(p),
+        None => ["z3", "cvc5"].into_iter().map(named).find(Solver::works).unwrap_or(Solver::Missing),
     }
-    candidates.push(PathBuf::from("z3"));
-    candidates.push(PathBuf::from("cvc5"));
+}
+
+/// Der Solver `name` (`z3`, `cvc5`) auf dem PATH oder unter `~/.takt/bin`:
+/// Wer beide vergleicht, waehlt jeden selbst (M11 Schritt 28c).
+pub fn named(name: &str) -> Solver {
+    let mut candidates = vec![PathBuf::from(name)];
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
-        let bin = PathBuf::from(home).join(".takt").join("bin");
-        candidates.extend(["z3", "cvc5"].map(|n| bin.join(n)));
+        candidates.push(PathBuf::from(home).join(".takt").join("bin").join(name));
     }
-    for path in candidates {
-        if Command::new(&path).arg("--version").output().is_ok_and(|o| o.status.success()) {
-            return Solver::At(path);
-        }
-    }
-    Solver::Missing
+    candidates.into_iter().find(|p| answers(p)).map_or(Solver::Missing, Solver::At)
+}
+
+/// Antwortet das Werkzeug unter `path` auf `--version`?
+fn answers(path: &Path) -> bool {
+    Command::new(path).arg("--version").output().is_ok_and(|o| o.status.success())
 }
 
 impl Solver {
@@ -93,7 +98,10 @@ impl Solver {
         std::fs::write(&file, script).map_err(|e| e.to_string())?;
         let mut cmd = Command::new(path);
         if self.is_cvc5() {
-            cmd.args(["--lang=smt2", "--produce-models", &format!("--tlimit={}", timeout_s * 1000)]);
+            // Die Anfragen arbeiten mit `push`/`pop`; cvc5 lehnt das ohne
+            // `--incremental` ab und entschied so nichts (FB-492).
+            let limit = format!("--tlimit={}", timeout_s * 1000);
+            cmd.args(["--lang=smt2", "--incremental", "--produce-models", &limit]);
         } else {
             cmd.args(["-smt2", &format!("-T:{timeout_s}")]);
         }
@@ -267,8 +275,11 @@ pub fn classify_compositional(
     let in_whole = |site: &crate::encode::CheckSite| {
         whole.and_then(|w| w.checks.iter().position(|s| s.span == site.span && s.kind == site.kind))
     };
-    for (i, machine) in program.machines.iter().enumerate() {
-        let model = match crate::encode::encode_machine(program, takt_mir::MachineId(i as u32)) {
+    // Je laufende Maschine: Eine Vorlage hat ihre Zustaende erst in den
+    // Instanzen, ein Szenario laeuft nur unter `takt test` (FB-491).
+    for id in takt_mir::analysis::schedule::runnable(program) {
+        let machine = &program.machines[id.index()];
+        let model = match crate::encode::encode_machine(program, id) {
             Ok(m) => strengthened(&m, solver, timeout_s)?,
             Err(e) => {
                 notes.push(format!("`{}` nicht kodierbar: {}", machine.name, e.what));
@@ -536,10 +547,18 @@ fn unconfirmed(model: &Model) -> String {
 /// Art an einer anderen Stelle der Maschine hiesse, dass das Modell einen
 /// Pfad fand, den der Interpreter nicht geht — die Kodierung weicht ab.
 fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &str, depth: u32) -> Option<u64> {
-    use takt_mir::machine::{ArithKind, FaultKind};
     let trace = Trace::parse(stimulus).ok()?;
     let r = run(program, &trace, &RunOptions { ticks: u64::from(depth), ..Default::default() }).ok()?;
-    let implicit = match site.kind.as_str() {
+    fault_at(&r, &site.machine, &site.kind, site.span)
+}
+
+/// Faultet der Lauf `r` an der Pruefstelle der Art `kind` an `span` in
+/// `machine`? Der Tick des Faults; so bestaetigt `takt prove` einen Pfad,
+/// und so prueft der Vergleich, dass ein gespeicherter Pfad sein Ziel noch
+/// erreicht (M11 Schritt 28c).
+pub fn fault_at(r: &takt_interp::RunResult, machine: &str, kind: &str, span: takt_diag::Span) -> Option<u64> {
+    use takt_mir::machine::{ArithKind, FaultKind};
+    let implicit = match kind {
         "range" => FaultKind::Range,
         "div" => FaultKind::Arithmetic(ArithKind::DivZero),
         "ovf" => FaultKind::Arithmetic(ArithKind::Overflow),
@@ -550,17 +569,17 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
         // Der Lesevorgang eines ungueltigen Inputs (3.5).
         "valid" => FaultKind::SensorFault,
         "check" | "expect" => {
-            let name = format!("{} @{}", site.kind, site.start);
-            let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, site.machine.clone(), name));
+            let name = format!("{kind} @{}", span.start);
+            let fired = r.coverage.hits.get(&(takt_interp::CoverKind::CheckFailed, machine.to_string(), name));
             if fired.copied().unwrap_or(0) == 0 {
                 return None;
             }
-            let kind = if site.kind == "check" { "CheckFailed" } else { "Expect" };
+            let word = if kind == "check" { "CheckFailed" } else { "Expect" };
             return r
                 .trace
                 .lines
                 .iter()
-                .find(|l| matches!(&l.kind, takt_interp::trace::LineKind::Fault { machine, kind: k, .. } if *machine == site.machine && k == kind))
+                .find(|l| matches!(&l.kind, takt_interp::trace::LineKind::Fault { machine: m, kind: k, .. } if m == machine && k == word))
                 .map(|l| l.tick);
         }
         _ => return None,
@@ -568,11 +587,11 @@ fn confirm_check(program: &Program, site: &crate::encode::CheckSite, stimulus: &
     // Division, Definitionsbereich und der Index einer Zuweisungsstelle
     // prueft der Knoten am Operanden, der Interpreter meldet den Fault an der
     // Operation oder Anweisung, die ihn umschliesst.
-    let at = |s: takt_diag::Span| match site.kind.as_str() {
-        "div" | "dom" | "index" => s.start <= site.span.start && site.span.end <= s.end,
-        _ => s.start == site.span.start && s.end == site.span.end,
+    let at = |s: takt_diag::Span| match kind {
+        "div" | "dom" | "index" => s.start <= span.start && span.end <= s.end,
+        _ => s.start == span.start && s.end == span.end,
     };
-    r.faults.iter().find(|f| f.machine == site.machine && f.kind == implicit && at(f.span)).map(|f| f.tick)
+    r.faults.iter().find(|f| f.machine == machine && f.kind == implicit && at(f.span)).map(|f| f.tick)
 }
 
 /// Prueft jede Eigenschaft des Modells.
@@ -957,31 +976,28 @@ fn job_records(values: &BTreeMap<(u32, String), Val>, program: &Program, depth: 
     for m in &program.machines {
         for slot in &m.layout.job_slots {
             let handle = &m.vars[slot.handle.index()].name;
-            let loc = format!("s.{}.job.{handle}.due", m.name);
+            let at = |part: &str| format!("s.{}.job.{handle}.{part}", m.name);
             let d = program.natives[slot.native.index()].duration.unwrap_or(0).max(0);
             let span = d.saturating_add(tick - 1) / tick;
-            // Je Lauf Modell-Tick und Faelligkeit; ein Lauf, der die
-            // Faelligkeit seines Vorgaengers uebernimmt, hat keine eigene.
-            let mut runs = Vec::new();
+            // 4.5: Je Lauf sein Start und seine Faelligkeit; ein Lauf, der den
+            // Tick des Modells ueberschreitet, steht mit seinem Start in der
+            // Aufzeichnung. Wird er vorher abgebrochen, bleibt die Zeile
+            // ohne Wirkung.
             let mut prev = -1;
             for k in 0..=depth {
-                let Some(Val::Int(due)) = values.get(&(k, loc.clone())) else { continue };
-                if *due != prev {
-                    runs.push((i64::from(k) + span, due / tick));
-                    prev = *due;
+                let (Some(Val::Int(start)), Some(Val::Int(due))) =
+                    (values.get(&(k, at("start"))), values.get(&(k, at("due"))))
+                else {
+                    continue;
+                };
+                if *start < 0 || *start == prev {
+                    continue;
                 }
-            }
-            let mut records = Vec::new();
-            let mut later = false;
-            for &(modelled, due) in runs.iter().rev() {
-                if due > modelled || later {
-                    records.push(due);
+                prev = *start;
+                let s = start / tick;
+                if due / tick > s + span {
+                    let _ = writeln!(out, "t={} job {} {handle} done start={s}", due / tick, m.name);
                 }
-                later |= due > modelled;
-            }
-            records.sort_unstable();
-            for r in records {
-                let _ = writeln!(out, "t={r} job {} {handle} done", m.name);
             }
         }
     }

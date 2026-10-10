@@ -221,13 +221,14 @@ impl Enc<'_> {
                 ]);
                 Shape::Node((0..*cap).map(|i| (format!("[{i}]"), slot.clone())).collect())
             }
-            // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge.
+            // 8.9: `[t, pre, post, rate, samples]` in fester Reihenfolge;
+            // `pre` und `post` sind in der Byteform `u32` (FB-494).
             Type::Capture { elem, len } => {
                 let item = self.shape(*elem, span)?;
                 Shape::Node(vec![
                     (".t".into(), Shape::Plain(Sort::Int)),
-                    (".pre".into(), Shape::Plain(Sort::Int)),
-                    (".post".into(), Shape::Plain(Sort::Int)),
+                    (".pre".into(), Shape::Count(u32::MAX)),
+                    (".post".into(), Shape::Count(u32::MAX)),
                     (".rate".into(), Shape::Plain(Sort::F64)),
                     (".samples".into(), Shape::Node((0..*len).map(|i| (format!("[{i}]"), item.clone())).collect())),
                 ])
@@ -1527,7 +1528,7 @@ impl Enc<'_> {
                 let (p, ty) = (*p, self.p.ports[p.index()].ty);
                 let old = self.port_value(p, span)?;
                 let new = self.write_into(place, indices, pending, ty, &old, v, cx, flow, span)?;
-                return self.port_write(p, new, flow, span);
+                return self.port_write(p, new, env, flow, span);
             }
             _ => return no("Zuweisung an diese Stelle", span),
         };

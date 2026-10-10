@@ -60,7 +60,7 @@ t=14 out flash_cmd NONE
 t=14 out flash_status_sim DONE
 t=15 state flash IDLE
 t=15 out flash_status_sim IDLE
-t=134 job bootloader v done
+t=134 job bootloader v done start=14
 t=134 state bootloader VERIFY.S1
 t=135 log bootloader "booting slot 1, version 1"
 t=135 state bootloader JUMP

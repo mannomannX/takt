@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use common::board::{
     TICKS, agreement, corpus, driver_edge_agrees, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, run_interpreted,
+    overrun_reaches_every_machine, replayed,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Board, Options};
@@ -185,7 +185,11 @@ fn a_schedule_inside_the_guard_is_a_timing_fault() {
 #[test]
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn a_driver_machine_writes_uart0_registers() {
-    let uart = std::env::var("TAKT_ESP32C6_UART_PORT").expect("TAKT_ESP32C6_UART_PORT nennt keinen UART-Anschluss");
+    // Die Bruecke an UART0 (CP2102) steckt nicht an jedem Rechner; fehlt
+    // sie, ueberspringt nur `TAKT_ALLOW_MISSING=uart-bridge` den Test.
+    let port = std::env::var("TAKT_ESP32C6_UART_PORT").ok();
+    let hint = "`TAKT_ESP32C6_UART_PORT` auf den Anschluss der Bruecke setzen (COM5)";
+    let Some(uart) = takt_testkit::require("uart-bridge", port, hint) else { return };
     let Some((board, _guard)) = board() else { return };
     // Zehn Ticks je Zeile, plus Rand: Der Lauf muss ueber `WANT` Zeilen
     // hinaus reichen, sonst haelt das Programm mittendrin. In Echtzeit,
@@ -313,7 +317,7 @@ fn an_idle_state_sleeps_in_virtual_ticks() {
     let text = run_corpus(&mut board, name, true);
     let slept = slept(&text).unwrap_or_else(|| panic!("keine Schlafzeile:\n{text}"));
     assert!(slept >= 40, "60 Ticks mit 500 ms `idle` bei 10 ms Tick: mehr als 40 virtuelle erwartet, {slept}:\n{text}");
-    let diffs = compare(&run_interpreted(&corpus(name)), &text);
+    let diffs = compare(&replayed(&corpus(name), &text), &text);
     assert!(diffs.is_empty(), "{diffs:?}");
 }
 
@@ -407,7 +411,7 @@ fn the_journal_costs_time_but_not_semantics() {
     );
     let times = text.lines().filter(|l| l.contains(" time took=")).count();
     assert!(times as u64 >= TICKS, "die Zeitzeilen fehlen ({times} von {TICKS}):\n{text}");
-    let diffs = compare(&run_interpreted(&corpus(name)), &text);
+    let diffs = compare(&replayed(&corpus(name), &text), &text);
     assert!(diffs.is_empty(), "{diffs:?}");
 }
 
@@ -431,7 +435,7 @@ fn the_journal_writes_in_sleep_windows() {
         "ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}"
     );
     assert_eq!(board::counter(&text, "ueberlaeufe"), Some(0), "{text}");
-    let diffs = compare(&run_interpreted(&corpus(name)), &text);
+    let diffs = compare(&replayed(&corpus(name), &text), &text);
     assert!(diffs.is_empty(), "{diffs:?}");
 }
 

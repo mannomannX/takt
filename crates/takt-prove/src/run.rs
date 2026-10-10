@@ -22,7 +22,7 @@ use takt_mir::program::{Channel, Direction};
 use takt_mir::types::Type;
 use takt_mir::{MachineId, Program};
 
-use crate::encode::{Model, fault_kind, leaves_at, quality, value_at};
+use crate::encode::{Model, Position, fault_kind, leaves_at, quality, value_at};
 use crate::eval::{self, Env, Plan, Val};
 use crate::term::{Sort, Term};
 
@@ -65,8 +65,11 @@ pub const UNMODELLED: &[(&str, &str)] = &[
     ("measure", "ein Messwert ohne Zustand (13.5)"),
     ("verify", "das Urteil eines Szenarios (13.5)"),
     ("verdict", "das Urteil eines Szenarios (13.5)"),
-    // TODO(Schritt 28c): die Monitore des Modells als Zeilen `property`.
-    ("property", "die Position einer Verletzung nennt der Monitor des Interpreters"),
+    // Eine Verletzung schreibt das Modell, sobald sie entschieden ist, und
+    // `mismatches` haelt sie gegen den Interpreter. Was erst das Laufende
+    // entscheidet (`Monitor::close`), entscheidet das Modell nicht; der
+    // erzeugte Code schreibt auch das.
+    ("property", "was erst das Laufende entscheidet, entscheidet das Modell nicht"),
     ("assumption", "wie `property`"),
 ];
 
@@ -89,6 +92,7 @@ impl Model {
             let next = runner.step(self, k, state.as_deref(), &inputs)?;
             let shown = runner.observed(self, &next);
             writer.tick(k, &shown)?;
+            writer.goals(k, self, &runner.held, &shown)?;
             // 12.7: Die Zeile `end` markiert die Entscheidung; die Outputs auf
             // `safe` stehen im Zustand danach und im Trace im selben Tick.
             if shown.get(ENDED) == Some(&Val::Bool(true)) {
@@ -111,6 +115,10 @@ struct Runner {
     next: (Plan, Vec<Source>),
     invariants: (Plan, Vec<Source>),
     assumptions: (Plan, Vec<Source>),
+    /// Die Ziele der Eigenschaften ueber dem Zustand danach und den Eingaben.
+    goals: (Plan, Vec<Source>),
+    /// Je Ziel, ob es im letzten Tick galt.
+    held: Vec<bool>,
     /// Die Plaetze des Zustands, die der Trace liest.
     observed: Vec<usize>,
 }
@@ -145,6 +153,8 @@ impl Runner {
             next: plan(model.state.iter().map(|v| &v.next).collect(), true),
             invariants: plan(model.invariants.iter().collect(), false),
             assumptions: plan(model.assumptions.iter().collect(), true),
+            goals: plan(model.properties.iter().map(|g| &g.formula).collect(), true),
+            held: vec![true; model.properties.len()],
             observed: (0..model.state.len()).filter(|&i| reads(&model.state[i].name)).collect(),
         }
     }
@@ -186,6 +196,8 @@ impl Runner {
         if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
             return Err(Stop::Violated { tick: k, what: format!("Annahme {i}") });
         }
+        let goals = self.goals.0.eval(&gather(&self.goals.1, &next, &given));
+        self.held = goals.iter().map(|v| *v == Val::Bool(true)).collect();
         Ok(next)
     }
 
@@ -214,7 +226,10 @@ const ENDED: &str = "s.run.ended";
 /// Tick die Zeilen der Arten, die das Modell schreibt, ein Fault mit Maschine
 /// und Art. Strenger als der Vergleich mit dem erzeugten Code — Zustaende
 /// und `pub var` schreibt der nicht, und die Werte stehen hier in derselben
-/// Textform (`value_text`), also Zeichen fuer Zeichen.
+/// Textform (`value_text`), also Zeichen fuer Zeichen. Eine Verletzung, die
+/// der Interpreter erst im letzten Tick meldet, kann das Laufende
+/// entschieden haben (`Monitor::close`); das Modell entscheidet sie nicht,
+/// sie zaehlt nur, wenn es sie auch meldet.
 pub fn mismatches(interpreter: &Trace, model: &Trace) -> Vec<String> {
     let by_tick = |t: &Trace| {
         let mut out: BTreeMap<u64, Vec<String>> = BTreeMap::new();
@@ -226,6 +241,7 @@ pub fn mismatches(interpreter: &Trace, model: &Trace) -> Vec<String> {
                 | LineKind::Published { .. }
                 | LineKind::Signal { .. }
                 | LineKind::Stream { .. }
+                | LineKind::Property { .. }
                 | LineKind::End { .. } => render_line(l),
                 _ => continue,
             };
@@ -234,7 +250,14 @@ pub fn mismatches(interpreter: &Trace, model: &Trace) -> Vec<String> {
         out.values_mut().for_each(|v| v.sort());
         out
     };
-    let (a, b) = (by_tick(interpreter), by_tick(model));
+    let (mut a, b) = (by_tick(interpreter), by_tick(model));
+    if let Some(last) = interpreter.lines.iter().map(|l| l.tick).max()
+        && let Some(lines) = a.get_mut(&last)
+    {
+        let theirs = b.get(&last).cloned().unwrap_or_default();
+        let closing = |l: &String| l.contains(" violated ") && !theirs.contains(l);
+        lines.retain(|l| !closing(l));
+    }
     let ticks: std::collections::BTreeSet<u64> = a.keys().chain(b.keys()).copied().collect();
     let mut out = Vec::new();
     for t in ticks {
@@ -430,8 +453,9 @@ fn val_of(v: &Value) -> Option<Val> {
     })
 }
 
-/// 4.5: Die Verspaetung eines Jobs, der im Tick k startet, bis zur
-/// fruehesten Zeile `job` ab seinem Modell-Tick (`job_start`).
+/// 4.5: Die Verspaetung eines Jobs, der im Tick k startet, aus den Zeilen
+/// `job … start=k` (`job_start`): bis zu `done`, mit `late` allein so weit,
+/// dass er im Lauf nicht mehr fertig wird.
 fn job_delays(
     model: &Model,
     p: &Program,
@@ -452,16 +476,24 @@ fn job_delays(
         let t0 = p.config.tick.max(1);
         let span = (p.natives[slot.native.index()].duration.unwrap_or(0).max(0) + t0 - 1) / t0;
         let span = u64::try_from(span).unwrap_or(0);
-        let records: Vec<u64> = stimulus
-            .lines
-            .iter()
-            .filter(|l| matches!(&l.kind, LineKind::Job { machine: m, handle: h } if m == machine && h == handle))
-            .map(|l| l.tick)
-            .collect();
+        let mut records: BTreeMap<u64, Option<u64>> = BTreeMap::new();
+        for l in &stimulus.lines {
+            if let LineKind::Job { machine: m, handle: h, start, late } = &l.kind
+                && m == machine
+                && h == handle
+            {
+                let done = records.entry(*start).or_default();
+                *done = done.or((!late).then_some(l.tick));
+            }
+        }
+        let never = crate::encode::job::LATEST / t0;
         for k in 0..=ticks {
-            let modelled = k + span;
-            let late = records.iter().filter(|&&r| r >= modelled).min().map_or(0, |r| r - modelled);
-            out.insert((k, n.clone()), Val::Int(i64::try_from(late).unwrap_or(i64::MAX)));
+            let late = match records.get(&k) {
+                None => 0,
+                Some(Some(done)) => i64::try_from(done.saturating_sub(k + span)).unwrap_or(never),
+                Some(None) => never,
+            };
+            out.insert((k, n.clone()), Val::Int(late));
         }
     }
     Ok(())
@@ -477,6 +509,10 @@ struct Writer<'a> {
     machines: Vec<MachineId>,
     lines: Vec<TraceLine>,
     shown: BTreeMap<String, String>,
+    /// Die Eigenschaften, deren Verletzung gemeldet ist.
+    violated: Vec<bool>,
+    /// Je Zaehler einer Position `Oldest` sein Stand in jedem Tick.
+    counters: BTreeMap<String, Vec<i64>>,
 }
 
 impl<'a> Writer<'a> {
@@ -485,7 +521,40 @@ impl<'a> Writer<'a> {
             .map(|i| MachineId(i as u32))
             .filter(|m| model.paths.contains_key(&p.machines[m.index()].name))
             .collect();
-        Writer { model, p, machines, lines: Vec::new(), shown: BTreeMap::new() }
+        let violated = vec![false; model.properties.len()];
+        let counters = model
+            .properties
+            .iter()
+            .filter_map(|g| match &g.position {
+                Position::Oldest { counter, .. } => Some((counter.clone(), Vec::new())),
+                Position::Lag(_) => None,
+            })
+            .collect();
+        Writer { model, p, machines, lines: Vec::new(), shown: BTreeMap::new(), violated, counters }
+    }
+
+    /// 13.3: die erste Verletzung jeder Eigenschaft, an der Position, die
+    /// der Tick entscheidet — wie `Monitor::observe`, das danach schweigt.
+    fn goals(&mut self, k: u64, model: &Model, held: &[bool], s: &Env) -> Result<(), Stop> {
+        for (loc, seen) in &mut self.counters {
+            seen.push(int(s, loc, k)?);
+        }
+        for (i, g) in model.properties.iter().enumerate() {
+            if held.get(i) != Some(&false) || self.violated[i] {
+                continue;
+            }
+            self.violated[i] = true;
+            let at = match &g.position {
+                Position::Lag(n) => k.saturating_sub(*n),
+                Position::Oldest { counter, window } => {
+                    let seen = &self.counters[counter];
+                    let first = k.saturating_sub(*window);
+                    (first..=k).find(|t| usize::try_from(*t).ok().and_then(|t| seen.get(t)) == Some(&0)).unwrap_or(k)
+                }
+            };
+            self.push(k, LineKind::Property { assumption: g.assumption, name: g.name.clone(), at });
+        }
+        Ok(())
     }
 
     /// Liest der Trace den Ort `name` des Zustands? Nur diese Orte gehen je
@@ -495,7 +564,7 @@ impl<'a> Writer<'a> {
             name.strip_prefix(base)
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with('.') || rest.starts_with('['))
         };
-        if name == ENDED {
+        if name == ENDED || self.counters.contains_key(name) {
             return true;
         }
         for &m in &self.machines {

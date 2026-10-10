@@ -44,9 +44,11 @@ pub enum LineKind {
     Published { machine: String, var: String, value: String },
     /// `signal <maschine> <name>`
     Signal { machine: String, name: String },
-    /// `job <maschine> <handle> done`: Fertigstellung eines Jobs (4.5);
-    /// als Stimulus verlegt sie den Tick des Modells.
-    Job { machine: String, handle: String },
+    /// `job <maschine> <handle> done start=<s>`: Fertigstellung des Laufs,
+    /// der im Tick `s` startete (4.5); als Stimulus verlegt sie den Tick des
+    /// Modells. `late` statt `done`: Der Lauf war im Tick seiner Faelligkeit
+    /// nicht fertig; ohne `done` bleibt er offen.
+    Job { machine: String, handle: String, start: u64, late: bool },
     /// `fault <maschine> <art> "<meldung>" -> <ziel>`
     Fault { machine: String, kind: String, message: String, target: String },
     /// `log <maschine> "<text>"`
@@ -62,6 +64,11 @@ pub enum LineKind {
     /// `property|assumption <name> violated <tick>`: eine Eigenschaft ist
     /// an Position `at` entschieden verletzt (13.3).
     Property { assumption: bool, name: String, at: u64 },
+    /// `tx <strom> free=<n> idle=<b>`: was der Treiber eines Ausgabestroms
+    /// zu Tickbeginn meldet, sobald es sich aendert (8.8, 12.5). Ein Lauf auf
+    /// Hardware schreibt sie, die Simulation rechnet beides aus ihrem Modell;
+    /// als Stimulus gilt der Stand bis zur naechsten Zeile.
+    Tx { stream: String, free: u32, idle: bool },
     /// `stream <name> dropped=<n> overflowed=<n> malformed=<n>` — die
     /// Zaehler eines Stroms, wenn sie sich aendern (8.6).
     Stream { name: String, dropped: u32, overflowed: u32, malformed: u32 },
@@ -187,6 +194,19 @@ pub(crate) fn parse_line(line: &str) -> Result<TraceLine, String> {
             LineKind::Record { channel: channel.to_string(), sample: parse_sample(value)? }
         }
         "cmd" => LineKind::Command { name: nonempty(args, "`cmd <command>`")?.to_string() },
+        "tx" => {
+            let what = "`tx <strom> free=<n> idle=<true|false>`";
+            let (stream, rest) = split_first(args);
+            let (free, idle) = split_first(rest);
+            let free = free.strip_prefix("free=").and_then(|n| n.parse::<u32>().ok());
+            let idle = match idle.trim().strip_prefix("idle=") {
+                Some("true") => Some(true),
+                Some("false") => Some(false),
+                _ => None,
+            };
+            let (Some(free), Some(idle)) = (free, idle) else { return Err(format!("{what} erwartet")) };
+            LineKind::Tx { stream: nonempty(stream, what)?.to_string(), free, idle }
+        }
         "tune" => {
             let (name, value) = split_first(args);
             let (value, accepted) = match value.strip_suffix(" rejected") {
@@ -238,14 +258,21 @@ pub(crate) fn parse_line(line: &str) -> Result<TraceLine, String> {
             }
         }
         "job" => {
+            let what = "`job <maschine> <handle> done|late start=<tick>`";
             let (machine, rest) = split_first(args);
-            let (handle, done) = split_first(rest);
-            if done.trim() != "done" {
-                return Err("`job <maschine> <handle> done` erwartet".into());
-            }
+            let (handle, rest) = split_first(rest);
+            let (event, rest) = split_first(rest);
+            let late = match event {
+                "done" => false,
+                "late" => true,
+                _ => return Err(format!("{what} erwartet")),
+            };
+            let start = rest.trim().strip_prefix("start=").and_then(|s| s.parse::<u64>().ok());
             LineKind::Job {
-                machine: nonempty(machine, "`job <maschine> <handle> done`")?.to_string(),
-                handle: nonempty(handle, "`job <maschine> <handle> done`")?.to_string(),
+                machine: nonempty(machine, what)?.to_string(),
+                handle: nonempty(handle, what)?.to_string(),
+                start: start.ok_or_else(|| format!("{what} erwartet"))?,
+                late,
             }
         }
         "property" | "assumption" => {
@@ -508,6 +535,7 @@ pub fn render_line(line: &TraceLine) -> String {
         LineKind::Input { channel, sample } => format!("t={t} in {channel}{}", sample_text(sample)),
         LineKind::Record { channel, sample } => format!("t={t} rec {channel}{}", sample_text(sample)),
         LineKind::Command { name } => format!("t={t} cmd {name}"),
+        LineKind::Tx { stream, free, idle } => format!("t={t} tx {stream} free={free} idle={idle}"),
         LineKind::Abort => format!("t={t} abort"),
         LineKind::Runtime { kind, output: None } => format!("t={t} runtime {kind}"),
         LineKind::Runtime { kind, output: Some(o) } => format!("t={t} runtime {kind} {o}"),
@@ -518,7 +546,9 @@ pub fn render_line(line: &TraceLine) -> String {
         LineKind::Tune { name, value, accepted } => {
             format!("t={t} tune {name} {value}{}", if *accepted { "" } else { " rejected" })
         }
-        LineKind::Job { machine, handle } => format!("t={t} job {machine} {handle} done"),
+        LineKind::Job { machine, handle, start, late } => {
+            format!("t={t} job {machine} {handle} {} start={start}", if *late { "late" } else { "done" })
+        }
         // Texte stehen wie `str`-Werte (T2): in Anfuehrungszeichen mit den
         // Escapes von `{:?}`, damit `"` und Zeilenenden die Zeile nicht
         // zerreissen.

@@ -3,13 +3,15 @@
   (tick 1ms))
 (output a :bool @hw("o/a") safe=false)
 (machine blip (o:output bool) every=1ms
+  (signal left)
   (initial LOW)
   (state LOW
     (enter
       (= o true))
     (after 30ms -> LOW)
     (exit
-      (log "instanz verlassen"))))
+      (log "instanz verlassen")
+      (raise left))))
 (machine ctrl
   (initial FIRST)
   (state FIRST

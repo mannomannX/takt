@@ -43,6 +43,7 @@ pub fn for_each_block(m: &Machine, f: &mut impl FnMut(&Block)) {
 pub fn for_each_block_in(m: &Machine, f: &mut impl FnMut(&Block, bool)) {
     let Machine {
         name: _,
+        state_enum: _,
         kind: _,
         driver: _,
         polling_unchecked: _,

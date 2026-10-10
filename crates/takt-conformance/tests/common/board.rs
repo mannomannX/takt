@@ -467,7 +467,7 @@ pub fn long_job_keeps_the_tick(board: &mut dyn Board) -> Vec<String> {
         Err(e) => return vec![format!("kein Lauf: {e}")],
     };
     let mut failed = Vec::new();
-    let diffs = compare(&run_interpreted(&program(&path)), &text);
+    let diffs = compare(&replayed(&program(&path), &text), &text);
     if !diffs.is_empty() {
         failed.push(format!("{} Abweichungen: {diffs:?}\n{text}", diffs.len()));
     }
@@ -551,8 +551,16 @@ pub fn overrun_reaches_every_machine(board: &mut dyn Board) -> Vec<String> {
 
 /// Der Soll-Trace ueber [`TICKS`] Ticks.
 pub fn run_interpreted(p: &Program) -> String {
+    replayed(p, "")
+}
+
+/// Der Soll-Trace eines Board-Laufs: der Interpreter mit dem, was das Board
+/// als Input aufzeichnete (`recorded_inputs`, 12.5).
+pub fn replayed(p: &Program, board: &str) -> String {
+    let stimulus = takt_conformance::run::recorded_inputs(board);
+    let stimulus = takt_interp::Trace::parse(&stimulus).unwrap_or_else(|e| panic!("Aufzeichnung: {e}"));
     let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
-    match takt_interp::run(p, &takt_interp::Trace::default(), &options) {
+    match takt_interp::run(p, &stimulus, &options) {
         Ok(r) => r.trace.render(),
         Err(e) => panic!("Interpreter: {e:?}"),
     }
@@ -653,7 +661,7 @@ fn run_one(
             return;
         }
     };
-    let interpreted = run_interpreted(&p);
+    let interpreted = replayed(&p, &text);
     let missing: Vec<String> = output_names(&interpreted).difference(&output_names(&text)).cloned().collect();
     // Ein `f32` schreibt das Board als seinen Wert in `f64` (4.2, FB-356).
     let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));

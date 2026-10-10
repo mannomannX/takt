@@ -273,6 +273,13 @@ pub struct Builtins {
     pub last_fault_ty: TypeId,
 }
 
+/// Eine angemeldete Instanz: ohne Besitzer auf Dateiebene, sonst gescopt im
+/// Zustand ihres Besitzers (5.11); dazu ihr Name.
+pub type InstanceKey = (Option<(MachineId, StateId)>, String);
+
+/// Erste Id einer angemeldeten Instanz und `(Index, Laenge)` je Element.
+pub type Reserved = (MachineId, Vec<(i64, i64)>);
+
 /// Der Elaborator.
 pub struct Lowerer<'a> {
     /// Das entstehende Programm.
@@ -336,9 +343,9 @@ pub struct Lowerer<'a> {
     pub tys: Builtins,
     /// Zustandstypen je Maschine.
     pub state_enums: HashMap<MachineId, EnumId>,
-    /// Instanzen auf Dateiebene, deren Ids und Namen vor den Maschinen
-    /// stehen (5.11): erste Id und `(Index, Laenge)` je Element.
-    pub reserved: HashMap<String, (MachineId, Vec<(i64, i64)>)>,
+    /// Angemeldete Instanzen, deren Ids und Namen vor ihrem Rumpf stehen
+    /// (5.11), auf Dateiebene oder im Zustand ihres Besitzers.
+    pub reserved: HashMap<InstanceKey, Reserved>,
     /// Zustandsrecord je Block (Typ der Instanzen).
     pub block_records: HashMap<BlockId, RecordId>,
     /// Ausgehobene `step`-Aufrufe anonymer Instanzen (5.7); `stmts` stellt

@@ -798,6 +798,20 @@ pub fn full_program() -> Program {
     let s_coarse = m.add_state(State::new("COARSE", Some(s_manual)));
     let s_standby = m.add_state(State::new("STANDBY", None));
     m.initial = s_run;
+    // Festlegung 4: `hotfire.State` mit den Zustaenden und `FAULTED`.
+    let variants = ["RUN", "SAFE", "MANUAL", "COARSE", "STANDBY", "FAULTED"];
+    m.state_enum = Some(EnumId(p.enums.len() as u32));
+    p.enums.push(EnumDef {
+        name: "hotfire.State".into(),
+        variants: (0..)
+            .zip(variants)
+            .map(|(i, name)| VariantDef { name: name.into(), discriminant: i, fields: vec![], span: sp(33) })
+            .collect(),
+        layout: None,
+        open: false,
+        builtin: true,
+        span: sp(33),
+    });
     m.fault_target = FaultTarget::State(s_safe);
     let v_tries = m.add_var(VarDef {
         name: "tries".into(),

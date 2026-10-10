@@ -307,6 +307,9 @@ pub fn entries(machine: &Machine, p: &Program) -> Vec<(String, Shape)> {
     }
     let scoped = machine.states.iter().map(|s| s.instances.len()).sum::<usize>();
     out.extend((0..scoped).map(|i| (format!("scope_{i}"), shape(Pointers::State, "i1", &[]))));
+    if crate::psi::is_scoped(machine, p) {
+        out.push(("publish_inactive".into(), shape(Pointers::StateImage, "void", &[])));
+    }
     out
 }
 

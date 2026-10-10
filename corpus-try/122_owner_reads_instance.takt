@@ -1,0 +1,42 @@
+# 5.11: Der Besitzer liest Zustand und `pub var` seiner gescopten Instanz,
+# mit Unit-Delay (FB-483) — auch im Tick des Eintritts und nach einem
+# Wiedereintritt.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+command go
+
+output o    : int in 0..99 @ hw("o/o")    with safe = 0
+output seen : int in 0..99 @ hw("o/seen") with safe = 0
+output held : bool         @ hw("o/held") with safe = false
+
+machine counter(out: output int in 0..99):
+    pub var n : int in 0..99 = 0
+    initial UP
+
+    state UP:
+        loop:
+            n = (n + 1) % 100
+            out = n
+
+        when n >= 3: -> HOLD
+
+    state HOLD:
+        after 20 ms: -> UP
+
+machine owner:
+    initial IDLE
+
+    state IDLE:
+        when go: -> RUN
+
+    state RUN:
+        instance w = counter(out = o)
+
+        loop:
+            seen = w.n
+            held = w.state == HOLD
+
+        when go: -> IDLE

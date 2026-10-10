@@ -3,8 +3,8 @@
 //! Unit-Delay — im Modell sein Wert am Tick-Anfang —, ohne Modell der
 //! Default. Ein Schreibvorgang, auch auf ein Feld, setzt den gelesenen
 //! Record neu zusammen und stellt ihn als Element in den Eingabestrom
-//! `mmio/ADR/w`, nach den Schritten und dem Verwerfen; ein voller Strom
-//! verliert es und zaehlt den Ueberlauf.
+//! `mmio/ADR/w` wie ein `send`, das nicht faultet (FB-475): Ein voller
+//! Strom verliert es und zaehlt den Ueberlauf.
 
 use takt_diag::Span;
 use takt_mir::expr::StreamRef;
@@ -13,9 +13,8 @@ use takt_mir::program::{Binding, Direction};
 use takt_mir::types::Type;
 use takt_mir::{ChannelId, PortId};
 
-use super::stream::Queued;
 use super::value::V;
-use super::{Enc, Flow, R, no};
+use super::{Enc, Env, Flow, R, no};
 use crate::term::Term;
 
 impl Enc<'_> {
@@ -45,8 +44,9 @@ impl Enc<'_> {
 
     /// Ein Schreibvorgang auf einen Port (`port_write`): der ganze Record als
     /// Element des Schreibstroms, in kanonischer Form, wenn dieser Bytes
-    /// traegt.
-    pub(super) fn port_write(&mut self, p: PortId, v: V, flow: &Flow, span: Span) -> R<()> {
+    /// traegt — ein `send`, das nicht faultet: Was der Strom abweist, zaehlt
+    /// als `overflowed` (`Image::queue_port_write`).
+    pub(super) fn port_write(&mut self, p: PortId, v: V, env: &mut Env, flow: &Flow, span: Span) -> R<()> {
         let Some(c) = self.port_channel(p, "w", Direction::Input) else { return Ok(()) };
         let Type::Stream(elem) = self.p.types.get(self.p.channels[c.index()].ty) else { return Ok(()) };
         let (elem, ty) = (*elem, self.p.ports[p.index()].ty);
@@ -65,7 +65,6 @@ impl Enc<'_> {
             _ => return no("Schreibstrom eines Ports mit Elementen dieser Art", span),
         };
         let stream = self.stream_index(StreamRef::Channel(c), span)?;
-        self.queued.push(Queued { stream, cond: flow.alive.clone(), t: self.now.clone(), value, port: true });
-        Ok(())
+        self.offer(stream, value, env, &flow.alive, span)
     }
 }

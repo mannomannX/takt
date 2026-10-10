@@ -4,12 +4,13 @@ system:
 
 # Der Austritt einer gescopten Instanz (5.11): `ctrl` wechselt von selbst
 # zwischen FIRST und SECOND, `p` tritt also ein und aus. Beim Austritt
-# laeuft der `exit:`-Block der Instanz — wirksam fuer `log`, nicht fuer
-# ihre Outputs: die stehen danach auf `safe`.
+# laeuft der `exit:`-Block der Instanz — wirksam fuer `log` und Signale,
+# nicht fuer ihre Outputs: die stehen danach auf `safe`.
 
 output a : bool @ hw("o/a") with safe = false
 
 machine blip(o: output bool) every 1 ms:
+    signal left
     initial LOW
 
     state LOW:
@@ -20,6 +21,7 @@ machine blip(o: output bool) every 1 ms:
 
         exit:
             log "instanz verlassen"
+            raise left
 
 machine ctrl:
     initial FIRST

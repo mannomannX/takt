@@ -132,6 +132,14 @@ pub fn widen_f32(trace: &str, outputs: &std::collections::BTreeSet<String>) -> S
     out
 }
 
+/// Was ein Lauf auf Hardware als Input aufzeichnet und der Interpreter
+/// nachspielt (12.5): die Zeilen `tx` eines Ausgabestroms (FB-435). Der
+/// Vergleich selbst sieht sie nicht an — sie sind Eingaben, keine
+/// Beobachtungen.
+pub fn recorded_inputs(native: &str) -> String {
+    native.lines().filter(|l| l.split_whitespace().nth(1) == Some("tx")).map(|l| format!("{l}\n")).collect()
+}
+
 /// Vergleicht zwei Traces.
 ///
 /// Beide Seiten duerfen eine Zeile nur bei Aenderung schreiben (9.3); der

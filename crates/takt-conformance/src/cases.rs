@@ -3,16 +3,18 @@
 //! je Lauf denselben Stimulus ueber dieselben Ticks.
 //!
 //! Jedes Programm laeuft ohne Eingaben ueber seine Fristen (KON1-006) —
-//! der Weg, auf dem jeder Input `Bad` bleibt —, und wo ein Stimulus
-//! geschrieben ist, laeuft es auch mit ihm.
+//! der Weg, auf dem jeder Input `Bad` bleibt —, wo ein Stimulus
+//! geschrieben ist, auch mit ihm, und mit jedem Pfad, den der Solver zu einer
+//! Pruefstelle oder Verletzung fand (`crate::paths`, Schritt 28c).
 
 use takt_mir::Program;
 
 /// Ein Lauf: wie er heisst, sein Stimulus im Trace-Format und seine Ticks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Case {
-    /// `still` ohne Eingaben, `stimulus` mit dem geschriebenen.
-    pub label: &'static str,
+    /// `still` ohne Eingaben, `stimulus` mit dem geschriebenen, `pfad …`
+    /// mit einem des Solvers.
+    pub label: String,
     /// Der Stimulus.
     pub stimulus: String,
     /// Die Tickzahl.
@@ -21,10 +23,12 @@ pub struct Case {
 
 /// Die Laeufe des Programms `name`.
 pub fn cases(name: &str, p: &Program) -> Vec<Case> {
-    let mut out = vec![Case { label: "still", stimulus: String::new(), ticks: ticks_for(p) }];
+    let mut out = vec![Case { label: "still".into(), stimulus: String::new(), ticks: ticks_for(p) }];
     if let Some((stimulus, ticks)) = case(name) {
-        out.push(Case { label: "stimulus", stimulus, ticks });
+        out.push(Case { label: "stimulus".into(), stimulus, ticks });
     }
+    let paths = crate::paths::load(name).into_iter();
+    out.extend(paths.map(|p| Case { label: format!("pfad {}", p.label), stimulus: p.stimulus, ticks: p.ticks }));
     out
 }
 
@@ -254,6 +258,8 @@ t=15 in mode 1
             25,
         ),
         "64_scoped_exit.takt" | "121_scoped_abort.takt" => (String::new(), 20),
+        // Der Besitzer liest seine Instanz (FB-483): Eintritt, Austritt, Wiedereintritt.
+        "122_owner_reads_instance.takt" => ("t=2 cmd go\nt=12 cmd go\nt=15 cmd go\n".to_string(), 30),
         // Samples (Schritt 27c-10): je Tick ein volles Array, ab Tick 25 ueber `I_MAX`.
         "04_blocks_and_multirate.takt" => {
             let mut s = String::from(
@@ -274,7 +280,7 @@ t=0 in fan_sp_b 60.0
             (s, 40)
         }
         // Jobs (Schritt 27c-8): Die Aufzeichnung verlegt die Fertigstellung.
-        "40_jobs.takt" => ("t=6 job m v done\n".to_string(), 12),
+        "40_jobs.takt" => ("t=6 job m v done start=0\n".to_string(), 12),
         // Registerports (Schritt 27c-6).
         "68_uart_port.takt" | "120_port_writes.takt" => (String::new(), 30),
         // Instanz-Arrays (Schritt 27a-10).

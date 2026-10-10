@@ -461,6 +461,7 @@ impl Census<'_> {
     fn machine(&mut self, m: &Machine) {
         let Machine {
             name: _,
+            state_enum: _,
             kind,
             driver,
             polling_unchecked: _,

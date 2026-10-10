@@ -1,0 +1,4 @@
+takt-proof 2
+program b8369a6114b6d72b4f339e30a9b79f3090da39b8ef44a0d45e384dcf9723de22
+solver z3 4.13.4
+site 827 835 fin k=5

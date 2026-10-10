@@ -1,0 +1,4 @@
+takt-proof 2
+program 500e67614509e37a5ba9d7967b387fbbd14015b06e2e6c67c45b7d4902632c78
+solver z3 4.13.4
+site 322 328 range k=0

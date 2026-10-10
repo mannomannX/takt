@@ -27,8 +27,9 @@ const FAILED: i64 = 1;
 const PENDING: i64 = 2;
 
 /// Die groesste Verspaetung in Nanosekunden: Mit ihr bleibt die
-/// Faelligkeit ab `now` in 64 Bit.
-const LATEST: i64 = 1 << 62;
+/// Faelligkeit ab `now` in 64 Bit. Ein Lauf, den nur `late` aufzeichnet,
+/// verspaetet sich um sie (4.5).
+pub(crate) const LATEST: i64 = 1 << 62;
 
 impl Enc<'_> {
     /// Ort eines Teils eines Job-Slots: `s.<maschine>.job.<handle>.<teil>`.
@@ -63,8 +64,8 @@ impl Enc<'_> {
         self.p.natives[native.index()].name == takt_native::Native::AesGcmDecrypt.name()
     }
 
-    /// Die Slots einer Maschine vor dem ersten Lauf; `due` −1 liegt vor
-    /// jedem Modell-Tick.
+    /// Die Slots einer Maschine vor dem ersten Lauf; `start` und `due` −1
+    /// liegen vor jedem Tick.
     pub(super) fn jobs_initial(&self, m: MachineId, env: &mut Env) -> R<()> {
         for i in 0..self.machine(m).layout.job_slots.len() {
             for part in ["running", "done", "cancelled"] {
@@ -73,6 +74,7 @@ impl Enc<'_> {
             if self.job_fails(m, i) {
                 env.insert(self.loc_job(m, i, "failed"), Term::bool(false));
             }
+            env.insert(self.loc_job(m, i, "start"), Term::int(-1));
             env.insert(self.loc_job(m, i, "due"), Term::int(-1));
             let ret = self.job_ret(m, i);
             self.init_loc(
@@ -114,18 +116,19 @@ impl Enc<'_> {
                 Term::bin(Op::Le, late, Term::int(LATEST / tick)),
             ]));
         }
+        // 4.5: Jeder Lauf hat seine eigene Verspaetung; die Aufzeichnung
+        // nennt ihn an seinem Start (FB-476).
         let late = self.input(name, Sort::Int);
         let modelled = Term::bin(Op::Add, self.now.clone(), Term::int(self.job_span(native)));
-        let prev = env[&self.loc_job(m, slot, "due")].clone();
-        let due = Term::ite(
-            Term::bin(Op::Ge, prev.clone(), modelled.clone()),
-            prev,
-            Term::bin(Op::Add, modelled, Term::bin(Op::Mul, late, Term::int(tick))),
-        );
+        let due = Term::bin(Op::Add, modelled, Term::bin(Op::Mul, late, Term::int(tick)));
         let alive = flow.alive.clone();
-        for (part, new) in
-            [("running", Term::bool(true)), ("done", Term::bool(false)), ("cancelled", Term::bool(false)), ("due", due)]
-        {
+        for (part, new) in [
+            ("running", Term::bool(true)),
+            ("done", Term::bool(false)),
+            ("cancelled", Term::bool(false)),
+            ("start", self.now.clone()),
+            ("due", due),
+        ] {
             let at = self.loc_job(m, slot, part);
             let old = env[&at].clone();
             env.insert(at, Term::ite(alive.clone(), new, old));

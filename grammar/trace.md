@@ -28,7 +28,7 @@ Leerzeichen, außer im Rest einer Meldung.
 
 | Art | Rolle | Form |
 |---|---|---|
-| `in` | Stimulus | `in <channel> <wert>` oder `in <channel> <qualität> [reason=<grund>] [age=<dauer>]`, dahinter wahlweise `t=<ns>` — der Zeitstempel der Lieferung, ohne Angabe die Tickgrenze `k·T0` — und für ein Stromelement `seq=<n>`, ohne Angabe die nächste Nummer der lückenlosen Folge. Ein Text in Anführungszeichen ist ein Wort, auch mit `=` darin. Ein Element eines Stroms von Records, `bytes` oder `line` darf in seiner Drahtform stehen (`0x…`; ein Record in kanonischer Form, 8.6); misslingt bei einem Record `decode`, wird es verworfen und zählt `malformed` (12.6) |
+| `in` | Stimulus | `in <channel> <wert>` oder `in <channel> <qualität> [reason=<grund>] [age=<dauer>]`, dahinter wahlweise `t=<ns>` — der Zeitstempel der Lieferung, ohne Angabe die Tickgrenze `k·T0` — und für ein Stromelement `seq=<n>`, ohne Angabe die nächste Nummer der lückenlosen Folge. Ein Text in Anführungszeichen ist ein Wort, auch mit `=` darin. Ein Element eines Stroms von Records, Captures, `bytes` oder `line` darf in seiner Drahtform stehen (`0x…`; ein Record in kanonischer Form, 8.6, ein Capture in der Byteform aus 8.9); misslingt bei einem Record oder Capture `decode`, wird es verworfen und zählt `malformed` (12.6) |
 | `cmd` | Stimulus | `cmd <command>` — ein Tick lang wahr (8.5) |
 | `abort` | Stimulus | `abort` — Operator-Abort für alle Maschinen (5.4) |
 | `runtime` | Stimulus | `runtime <art> [<output>]` — ein Runtime-Fault (5.3, 7.3, 12.6), zugestellt wie ein Operator-Abort (5.4): `Overrun` und `Hardware` für alle Maschinen, `Driver <output>` für den Besitzer des Outputs. Die native Runtime schreibt die Zeile, wenn sie den Fault erhebt; als Stimulus spielt der Interpreter ihn nach (12.5) |
@@ -37,7 +37,7 @@ Leerzeichen, außer im Rest einer Meldung.
 | `state` | Golden | `state <maschine> <pfad>` — Blattpfad mit `.`, nur bei Änderung und in Tick 0 |
 | `pub` | Golden | `pub <maschine> <variable> <wert>` — bei Änderung |
 | `signal` | Golden | `signal <maschine> <name>` — im Tick des Pulses (5.8) |
-| `job` | Golden, Stimulus | `job <maschine> <handle> done` — Fertigstellung eines Jobs (4.5); als Stimulus ersetzt sie den Tick des Modells |
+| `job` | Golden, Stimulus | `job <maschine> <handle> done start=<s>` — Fertigstellung des Laufs, der im Tick `s` startete (4.5); als Stimulus ersetzt sie den Tick des Modells für diesen Lauf. `job <maschine> <handle> late start=<s>` — der Lauf war im ersten Schritt ab dem Tick des Modells nicht fertig; als Stimulus ohne `done` bleibt er offen, bis ein neuer Job oder ein Fault-Übergang ihn abbricht |
 | `fault` | Golden | `fault <maschine> <art> "<meldung>" -> <ziel>` |
 | `log` | Golden | `log <maschine> "<text>"` |
 | `alert` | Golden | `alert <maschine> on\|off "<text>"` — nur Flanken (5.6) |

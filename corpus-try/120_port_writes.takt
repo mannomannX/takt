@@ -2,8 +2,8 @@
 # FB-474): Ein Feld und der ganze Record gehen je als Element in den
 # Schreibstrom `mmio/ADR/w`, in kanonischer Form, wenn er Bytes traegt —
 # im Interpreter wie im erzeugten Code. Ein Port ohne Modell liest den
-# Default. Der Schreibstrom fasst alle Vorgaenge eines Ticks; was ein
-# voller Strom tut, ist offen (FB-475).
+# Default. Der Schreibstrom ist knapp: Ein Vorgang ist ein `send`, das
+# nicht faultet — was nicht passt, zaehlt als `overflowed` (FB-475).
 
 system:
     language = 1
@@ -23,7 +23,7 @@ port dev : Reg @ mmio(0x40000000)
 port bare : Reg @ mmio(0x40001000)
 
 output dev_r : RegModel         @ sim("mmio/0x40000000/r")
-input  dev_w : stream<bytes<4>> @ sim("mmio/0x40000000/w") with capacity = 8, max_rate = 200 Hz
+input  dev_w : stream<bytes<4>> @ sim("mmio/0x40000000/w") with capacity = 2, max_rate = 200 Hz
 
 output ready : bool          @ sim("ready")
 output count : int in 0..999 @ sim("count")

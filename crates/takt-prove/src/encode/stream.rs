@@ -46,8 +46,8 @@ pub(super) struct Stream {
     wake: bool,
     /// Vom Rand: ein Ueberlauf faultet die Leser beim naechsten Schritt.
     channel: bool,
-    /// Ein Record-Strom vom Rand: Was sich nicht dekodieren laesst, zaehlt
-    /// als `malformed` (8.6).
+    /// Ein Strom aus Records oder Captures vom Rand: Was sich nicht
+    /// dekodieren laesst, zaehlt als `malformed` (8.6, 8.9).
     decodes: bool,
     /// Die Leser unter den kodierten Maschinen: Maschine und Index ihres Cursors.
     readers: Vec<(MachineId, usize)>,
@@ -90,15 +90,13 @@ pub(super) struct Mark {
 }
 
 /// Ein `send` dieses Ticks auf einen internen Strom oder ein
-/// Schreibvorgang auf einen Port (`port`), der seinen Ueberlauf erst beim
-/// Zustellen zaehlt.
+/// Schreibvorgang auf einen Port (12.10).
 #[derive(Clone, Debug)]
 pub(super) struct Queued {
     pub(super) stream: usize,
     pub(super) cond: Term,
     pub(super) t: Term,
     pub(super) value: V,
-    pub(super) port: bool,
 }
 
 /// Was ein Guard ueber einem Strom ergibt (8.7): ob er feuert, die Bindung
@@ -224,7 +222,7 @@ impl Enc<'_> {
                 overflow: c.attrs.overflow.unwrap_or_default(),
                 wake: c.attrs.wake,
                 channel: fed.is_none(),
-                decodes: fed.is_none() && matches!(self.p.types.get(*elem), Type::Record(_)),
+                decodes: fed.is_none() && matches!(self.p.types.get(*elem), Type::Record(_) | Type::Capture { .. }),
                 readers: own,
                 foreign_readers: foreign,
                 fed,
@@ -681,6 +679,13 @@ impl Enc<'_> {
                 let mut leaves = Vec::new();
                 Enc::leaf_locs(&base, &shape, &mut leaves);
                 let used = Term::and(vec![here, bad.not()]);
+                // 8.6, 8.9: Ein Gleitkommafeld mit NaN- oder Inf-Bitmuster ist
+                // kein Element, die Rate im Kopf eines Captures auch nicht
+                // (`takt_native::bytes`, FB-494).
+                if matches!(self.p.types.get(s.elem), Type::Capture { .. }) {
+                    let rate = self.input(format!("{base}.rate"), Sort::F64);
+                    out.push(implies(used.clone(), Term::app(Op::IsFinite, vec![rate])));
+                }
                 // Text und Bytes: hinter der Laenge null, Text gueltiges UTF-8
                 // (3.9), eine gekuerzte Zeile endet hoechstens ein Zeichen vor
                 // ihrer Kapazitaet (`parse_value` schneidet an einer Zeichengrenze).
@@ -1051,6 +1056,34 @@ impl Enc<'_> {
         let s = self.streams[si].clone();
         let v = self.value(value, cx, env, flow)?;
         let v = self.as_element(v, value.ty, s.elem, span)?;
+        let full = self.rejects(si, &v, env, span)?;
+        let fits = Term::and(vec![flow.alive.clone(), full.clone().not()]);
+        if s.overflow != Overflow::Drop {
+            let over = Term::and(vec![flow.alive.clone(), full]);
+            bump(env, &loc(&s, "overflowed"), &over);
+            flow.exits
+                .push(Exit { cond: over, kind: ExitKind::Fault(None, self.cause(FaultKind::StreamOverflow, span)) });
+            flow.alive = fits.clone();
+        }
+        self.queued.push(Queued { stream: si, cond: fits, t: self.now.clone(), value: v });
+        Ok(())
+    }
+
+    /// Ein `send`, das nicht faultet (12.10, ein Schreibvorgang an einem
+    /// Port): Was der Strom abweist, zaehlt als `overflowed`.
+    pub(super) fn offer(&mut self, si: usize, v: V, env: &mut Env, alive: &Term, span: Span) -> R<()> {
+        let full = self.rejects(si, &v, env, span)?;
+        bump(env, &loc(&self.streams[si], "overflowed"), &Term::and(vec![alive.clone(), full.clone()]));
+        let fits = Term::and(vec![alive.clone(), full.not()]);
+        self.queued.push(Queued { stream: si, cond: fits, t: self.now.clone(), value: v });
+        Ok(())
+    }
+
+    /// Weist der Strom `si` das Element `v` ab, gemessen an Ring und
+    /// Sendungen des Ticks (9.6)? `drop_oldest` verdraengt beim Zustellen;
+    /// abgelehnt wird dort nur, was nie passt.
+    fn rejects(&mut self, si: usize, v: &V, env: &Env, span: Span) -> R<Term> {
+        let s = self.streams[si].clone();
         let mut count = env[&loc(&s, "len")].clone();
         for q in self.queued.iter().filter(|q| q.stream == si) {
             count = add(count, Term::ite(q.cond.clone(), Term::int(1), Term::int(0)));
@@ -1058,7 +1091,7 @@ impl Enc<'_> {
         let mut full = Term::bin(Op::Ge, count, Term::int(i64::from(s.cap)));
         let mut too_big = Term::bool(false);
         if let Some(budget) = s.budget {
-            let size = self.byte_load(s.elem, &v, span)?;
+            let size = self.byte_load(s.elem, v, span)?;
             let mut bytes = add(self.used(&s, env)?, size.clone());
             for q in self.queued.clone().iter().filter(|q| q.stream == si) {
                 let load = self.byte_load(s.elem, &q.value, span)?;
@@ -1068,22 +1101,11 @@ impl Enc<'_> {
             full = Term::or(vec![full, Term::bin(Op::Gt, bytes, budget.clone())]);
             too_big = Term::bin(Op::Gt, size, budget);
         }
-        // `drop_oldest` verdraengt beim Zustellen; abgelehnt wird nur, was nie passt.
-        let full = match s.overflow {
+        Ok(match s.overflow {
             Overflow::DropOldest if s.cap > 0 => too_big,
             Overflow::DropOldest => Term::bool(true),
             _ => full,
-        };
-        let fits = Term::and(vec![flow.alive.clone(), full.clone().not()]);
-        if s.overflow != Overflow::Drop {
-            let over = Term::and(vec![flow.alive.clone(), full]);
-            bump(env, &loc(&s, "overflowed"), &over);
-            flow.exits
-                .push(Exit { cond: over, kind: ExitKind::Fault(None, self.cause(FaultKind::StreamOverflow, span)) });
-            flow.alive = fits.clone();
-        }
-        self.queued.push(Queued { stream: si, cond: fits, t: self.now.clone(), value: v, port: false });
-        Ok(())
+        })
     }
 
     /// Das Tick-Ende (9.6): Cursor hinter das zuletzt untersuchte Element,
@@ -1150,9 +1172,7 @@ impl Enc<'_> {
     pub(super) fn flush_sends(&mut self, cur: &mut Env) -> R<()> {
         for q in std::mem::take(&mut self.queued) {
             let s = self.streams[q.stream].clone();
-            if q.port {
-                self.push_as(&s, cur, &q.cond, &q.t, &q.value, false)?;
-            } else if s.overflow == Overflow::DropOldest {
+            if s.overflow == Overflow::DropOldest {
                 self.push(&s, cur, &q.cond, &q.t, &q.value)?;
             } else {
                 self.append(&s, cur, &q.cond, &q.t, &q.value)?;

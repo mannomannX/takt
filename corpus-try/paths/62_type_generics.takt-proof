@@ -1,0 +1,5 @@
+takt-proof 2
+program dfd8d9d6b9fe4a9d7e4398629e378c6745a967ede1980d471d83c023b5c0becf
+solver z3 4.13.4
+site 1208 1209 valid k=5
+site 1225 1226 valid k=5

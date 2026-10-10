@@ -554,6 +554,9 @@ pub enum MachineKind {
 pub struct Machine {
     /// Name; Instanzen `maschine.ZUSTAND.inst` (5.11).
     pub name: String,
+    /// Aufzaehlung `<m>.State` (Festlegung 4); eine Instanz teilt die ihrer
+    /// Vorlage. Fehlt sie (MIR vor Format 20), gilt die namens `<name>.State`.
+    pub state_enum: Option<EnumId>,
     /// Rolle.
     pub kind: MachineKind,
     /// `driver machine`.
@@ -625,6 +628,7 @@ impl Machine {
     pub fn new(name: impl Into<String>) -> Self {
         Machine {
             name: name.into(),
+            state_enum: None,
             kind: MachineKind::Regular,
             driver: false,
             polling_unchecked: false,

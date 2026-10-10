@@ -1175,7 +1175,9 @@ machine s every 20 ms:
 
 #[test]
 fn jobs_agree() {
-    let stim = "t=1 job m c done\nt=7 job m a done\nt=12 cmd hit\nt=30 job m c done\n";
+    // `a` aus Tick 2 kommt spaet, `a` aus Tick 15 nie, `c` aus Tick 7 nach dem Lauf (FB-476).
+    let stim = "t=1 job m c done start=0\nt=7 job m a done start=2\nt=12 cmd hit\nt=18 job m a late start=15\n\
+                t=30 job m c done start=7\n";
     agree_program("JOBS", &compile("JOBS", JOBS), stim, 25);
 }
 
@@ -2060,4 +2062,94 @@ machine m:
         out.report.sites.iter().any(|s| s.span.start == site.start),
         "dieselbe Stelle, die `takt check --checks` nennt"
     );
+}
+
+/// Das Ventil aus `temporal.rs`: `go` oeffnet es fuer drei Ticks und
+/// schaerft `armed` fuer immer.
+const VALVE: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+command go
+
+output valve : bool @ hw(\"o/valve\") with safe = false
+output armed : bool @ hw(\"o/armed\") with safe = false
+
+machine v:
+    initial CLOSED
+
+    state CLOSED:
+        enter:
+            valve = false
+        when go: -> OPEN
+
+    state OPEN:
+        enter:
+            valve = true
+            armed = true
+        after 30 ms: -> CLOSED
+";
+
+/// **Die Ziele der Eigenschaften melden Verletzungen wie der Interpreter**
+/// (13.3, M11 Schritt 28c): jede Form des Monitors — Vergangenheit,
+/// Antwort, Ring, `never` — bewiesen und verletzt, und die erste Verletzung
+/// steht im selben Tick an derselben Position. Ein Ziel, das schwaecher
+/// waere als der Monitor des Interpreters, bewiese eine Eigenschaft, die
+/// ein Lauf verletzt.
+#[test]
+fn property_violations_agree() {
+    let formulas = [
+        "always(valve implies once[30 ms](go))",
+        "always(valve implies once[10 ms](go))",
+        "always(valve implies eventually[50 ms](not valve))",
+        "always(valve implies eventually[10 ms](not valve))",
+        "always(valve implies stable[50 ms](armed))",
+        "always(valve implies stable[20 ms](valve))",
+        "always(stable[20 ms](armed) or not armed)",
+        "always(eventually[20 ms](valve) implies once[50 ms](go))",
+        "never(valve and not once[30 ms](go))",
+        "never(valve and stable[20 ms](valve))",
+    ];
+    let props: String = formulas.iter().enumerate().map(|(i, f)| format!("property p{i}: {f}\n")).collect();
+    let p = compile("VALVE", &format!("{VALVE}\n{props}"));
+    let model = encode(&p).expect("kodierbar");
+    assert_eq!(model.properties.len(), formulas.len(), "jede Eigenschaft ist ein Ziel: {:?}", model.notes);
+    let stim = Trace::parse("t=2 cmd go\nt=12 cmd go\n").expect("Stimulus");
+    let r = run(&p, &stim, &RunOptions { ticks: 30, inputs: true, ..Default::default() }).expect("Lauf");
+    let traced = model.run(&p, &stim, &r, 30).expect("Lauf des Modells");
+    let diffs = takt_prove::mismatches(&r.trace, &traced);
+    assert!(diffs.is_empty(), "{}", diffs.join("\n"));
+    let violations = traced.render().lines().filter(|l| l.contains(" violated ")).count();
+    assert_eq!(violations, 5, "fuenf Formeln sind verletzt:\n{}", traced.render());
+}
+
+/// **Ein Capture-Kopf ausserhalb seiner Byteform ist `malformed`** (8.9,
+/// FB-494): `pre` und `post` sind `u32`, die Rate ein endliches `f64`. Der
+/// Interpreter verwirft und zaehlt solche Elemente, das Modell ebenso; ein
+/// gueltiges dazwischen kommt in beiden an.
+#[test]
+fn a_capture_head_outside_its_byte_form_is_malformed() {
+    let src = "system:
+    language = 1
+    tick     = 10 ms
+
+input  wave  : stream<capture<float[V], 4>> @ hw(\"daq/cap0\") with max_rate = 100 Hz, capacity = 2
+output count : int in 0..9 @ hw(\"o/count\") with safe = 0
+
+machine ctrl:
+    initial RUN
+
+    state RUN:
+        on wave as w:
+            count = w.data.pre + w.data.post
+";
+    let p = compile("CAPTURE_HEAD", src);
+    let stimulus = "t=1 in wave 5000000;-1;2;1000.0;[1.0, 2.0]\n\
+                    t=2 in wave 15000000;1;2;NaN;[1.0, 2.0]\n\
+                    t=3 in wave 25000000;3;4;1000.0;[1.0, 2.0]\n";
+    agree_program("CAPTURE_HEAD", &p, stimulus, 6);
+    let r = run(&p, &Trace::parse(stimulus).expect("Stimulus"), &RunOptions { ticks: 6, ..Default::default() })
+        .expect("Lauf");
+    let text = r.trace.render();
+    assert!(text.contains("malformed=2") && text.contains("out count 7"), "{text}");
 }

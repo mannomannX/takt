@@ -83,10 +83,15 @@ pub enum Observation {
         /// Name des Signals.
         name: String,
     },
-    /// Ein Job ist fertig (4.5): `job <maschine> <handle> done`.
+    /// Ein Job ist fertig oder verspaetet (4.5): `job <maschine> <handle>
+    /// done|late start=<s>`.
     Job {
         /// Name des Handles.
         handle: String,
+        /// Start-Tick des Laufs.
+        start: u64,
+        /// Verspaetet statt fertig.
+        late: bool,
     },
     /// Coverage (13.2): ein Zustand betreten, eine Transition genommen, ein
     /// `check` ausgewertet, ein Handler gefeuert, ein irreversibler Output

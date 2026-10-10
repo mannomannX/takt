@@ -577,8 +577,11 @@ pub struct Port {
 impl Program {
     /// Die Varianten von `<m>.State`: alle Zustandsnamen und `FAULTED`.
     pub fn state_variants(&self, m: &Machine) -> &[crate::types::VariantDef] {
-        let name = format!("{}.State", m.name);
-        self.enums.iter().find(|e| e.name == name).map_or(&[], |e| e.variants.as_slice())
+        let e = match m.state_enum {
+            Some(e) => self.enums.get(e.index()),
+            None => self.enums.iter().find(|e| e.name == format!("{}.State", m.name)),
+        };
+        e.map_or(&[], |e| e.variants.as_slice())
     }
 
     /// `m.state` eines Blatts als Variante von `<m>.State` (Festlegung 4):

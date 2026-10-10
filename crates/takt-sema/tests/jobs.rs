@@ -69,11 +69,13 @@ fn a_job_completes_after_its_duration() {
 
 #[test]
 fn a_recording_moves_the_completion_tick() {
-    // 4.5: Die Aufzeichnung ersetzt das Modell.
+    // 4.5: Die Aufzeichnung ersetzt das Modell; im Tick des Modells meldet
+    // der Lauf seine Verspaetung (FB-476).
     let p = ok(&format!("{JOB}{HASHING}"));
-    let t = trace(&p, "t=6 job m v done\n", 10);
-    assert!(t.contains("t=6 job m v done"), "{t}");
-    assert!(!t.contains("t=3 job"), "{t}");
+    let t = trace(&p, "t=6 job m v done start=0\n", 10);
+    assert!(t.contains("t=6 job m v done start=0"), "{t}");
+    assert!(t.contains("t=3 job m v late start=0"), "{t}");
+    assert!(!t.contains("t=3 job m v done"), "{t}");
     assert!(t.contains("t=6 out word 3205920954"), "{t}");
 }
 
@@ -207,7 +209,7 @@ fn the_completion_tick_rounds_the_duration_up() {
         );
         let t = trace(&ok(&format!("{job}{HASHING}")), "", 10);
         let done: Vec<&str> = t.lines().filter(|l| l.contains("job m v done")).collect();
-        assert_eq!(done, [format!("t={tick} job m v done")], "{duration}:\n{t}");
+        assert_eq!(done, [format!("t={tick} job m v done start=0")], "{duration}:\n{t}");
         assert!(t.contains(&format!("t={tick} out word 3205920954")), "{duration}:\n{t}");
     }
 }

@@ -1,0 +1,27 @@
+(system
+  (language 1)
+  (tick 10ms))
+(command go)
+(output o :int in 0..99 @hw("o/o") safe=0)
+(output seen :int in 0..99 @hw("o/seen") safe=0)
+(output held :bool @hw("o/held") safe=false)
+(machine counter (out:output int in 0..99)
+  (pub-var n :int in 0..99 0)
+  (initial UP)
+  (state UP
+    (loop
+      (= n (% (paren (+ n 1)) 100))
+      (= out n))
+    (when (>= n 3) -> HOLD))
+  (state HOLD
+    (after 20ms -> UP)))
+(machine owner
+  (initial IDLE)
+  (state IDLE
+    (when go -> RUN))
+  (state RUN
+    (instance w counter out=o)
+    (loop
+      (= seen (.n w))
+      (= held (== (.state w) HOLD)))
+    (when go -> IDLE)))

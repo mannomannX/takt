@@ -45,9 +45,10 @@ pub struct Image {
     fresh: Vec<bool>,
     /// Parameterwerte des Laufs (8.4).
     pub params: Vec<Value>,
-    /// Aufgezeichnete Fertigstellungen aus dem Stimulus (4.5): Maschine,
-    /// Slot, Tick — sie ersetzen das Modell `duration`.
-    pub job_records: Vec<(MachineId, usize, u64)>,
+    /// Aufgezeichnete Laeufe aus dem Stimulus (4.5): Maschine, Slot,
+    /// Start-Tick und der Tick der Fertigstellung — `None`, wenn nur `late`
+    /// aufgezeichnet ist. Sie ersetzen das Modell `duration`.
+    pub job_records: Vec<(MachineId, usize, u64, Option<u64>)>,
     /// Adresse → `sim`-Output, der einen `hw`-Input speist (8.3).
     sim_sources: HashMap<String, ChannelId>,
     /// Adresse → `hw`-Input.
@@ -58,7 +59,7 @@ pub struct Image {
     port_last: HashMap<String, Value>,
     /// Schreibvorgaenge an Registerports in diesem Tick, zugestellt nach
     /// allen Schritten (12.10).
-    port_writes: Vec<(ChannelId, i64, Value)>,
+    port_writes: Vec<(ChannelId, i64, Value, bool)>,
     /// Inputs, die der Stimulus in diesem Tick gesetzt hat; ihre
     /// `sim`-Bindung ruht so lange (8.3).
     driven: Vec<bool>,
@@ -108,12 +109,28 @@ pub struct TxBuffer {
     /// dann wahr, wenn der Puffer leer ist (`free == capacity`). Ein `send`
     /// im Tick aendert es erst im naechsten.
     pub idle: bool,
+    /// `free` und `idle`, wie eine aufgezeichnete Zeile `tx` sie meldet
+    /// (12.5); sie gelten statt des Modells bis zur naechsten Zeile.
+    pub reported: Option<(u32, bool)>,
+    /// Bytes, die dieser Tick gesendet hat: Um sie sinkt `free` gegenueber
+    /// dem gemeldeten Stand.
+    pub fresh: u32,
 }
 
 impl TxBuffer {
-    /// Freier Platz (`tx.free`, 8.8).
+    /// Freier Platz (`tx.free`, 8.8): aus dem Modell, oder der gemeldete
+    /// Stand des Tickbeginns abzueglich der Sendungen des Ticks.
     pub fn free(&self) -> u32 {
-        self.capacity.saturating_sub(self.queued.len() as u32)
+        match self.reported {
+            Some((free, _)) => free.saturating_sub(self.fresh),
+            None => self.capacity.saturating_sub(self.queued.len() as u32),
+        }
+    }
+
+    /// Eine Zeile `tx` zu Tickbeginn (12.5).
+    pub fn report(&mut self, free: u32, idle: bool) {
+        self.reported = Some((free, idle));
+        self.idle = idle;
     }
 
     /// Der Treiber holt bis zu `per_tick` Bytes ab (8.8: „die Simulation
@@ -121,9 +138,10 @@ impl TxBuffer {
     pub fn drain(&mut self) {
         let n = (self.per_tick as usize).min(self.queued.len());
         self.sent = self.queued.drain(..n).collect();
+        self.fresh = 0;
         // Was nach dem Commit im Puffer steht, steht zu Beginn des naechsten
         // Ticks darin: dort wird `idle` gesampelt.
-        self.idle = self.queued.is_empty();
+        self.idle = self.reported.map_or(self.queued.is_empty(), |(_, idle)| idle);
     }
 }
 
@@ -343,18 +361,42 @@ impl Image {
         }
     }
 
-    /// Merkt einen Schreibvorgang an einem Registerport vor (12.10).
-    pub fn queue_port_write(&mut self, c: ChannelId, t: i64, value: Value) {
-        self.port_writes.push((c, t, value));
+    /// Ein Schreibvorgang an einem Registerport (12.10) ist ein `send` in
+    /// seinen Schreibstrom, das nicht faultet: Er passt, wenn der Ring samt
+    /// den Vorgaengen des Ticks unter Kapazitaet und Byteschranke bleibt
+    /// (9.6); mit `drop_oldest` verdraengt er erst beim Zustellen und
+    /// scheitert nur, wenn er allein die Byteschranke sprengt. Was nicht
+    /// passt, zaehlt als `overflowed` (FB-475).
+    pub fn queue_port_write(&mut self, c: ChannelId, t: i64, value: Value, drop_oldest: bool) {
+        let Some(buf) = self.channel_bufs.get_mut(&c) else { return };
+        let bytes = crate::stream::byte_len(&value);
+        let rejected = if drop_oldest {
+            bytes > buf.cap_bytes || buf.cap == 0
+        } else {
+            let queued: Vec<u64> = self
+                .port_writes
+                .iter()
+                .filter(|w| w.0 == c)
+                .map(|w| u64::from(crate::stream::byte_len(&w.2)))
+                .collect();
+            let count = buf.items.len() + queued.len() + 1;
+            let used = u64::from(buf.bytes) + queued.iter().sum::<u64>() + u64::from(bytes);
+            count as u64 > u64::from(buf.cap) || used > u64::from(buf.cap_bytes)
+        };
+        if rejected {
+            buf.overflowed += 1;
+        } else {
+            self.port_writes.push((c, t, value, drop_oldest));
+        }
     }
 
-    /// Stellt die Schreibvorgaenge des Ticks zu, in Reihenfolge. Nach allen
-    /// Schritten, damit ein Modell sie im naechsten Tick sieht, ob es vor
-    /// oder nach dem Treiber schreitet (Satz 9.4.1) — wie ein Element eines
-    /// internen Stroms (9.6).
+    /// Stellt die Schreibvorgaenge des Ticks zu, in Reihenfolge, nach allen
+    /// Schritten und dem Verwerfen: Ein Modell sieht sie im naechsten Tick,
+    /// ob es vor oder nach dem Treiber schreitet (Satz 9.4.1), und vor den
+    /// Elementen, die der Rand dann liefert.
     pub fn deliver_port_writes(&mut self) {
-        for (c, t, value) in std::mem::take(&mut self.port_writes) {
-            self.push_element(c, t, value, false);
+        for (c, t, value, drop_oldest) in std::mem::take(&mut self.port_writes) {
+            self.push_element(c, t, value, drop_oldest);
         }
     }
 

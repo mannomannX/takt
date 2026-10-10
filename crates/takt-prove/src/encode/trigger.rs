@@ -156,7 +156,7 @@ impl Enc<'_> {
             }
             // `fired` traegt das Element, sichtbar im naechsten Tick (8.6).
             let si = self.stream_index(StreamRef::Internal(t.fired), t.span)?;
-            self.queued.push(Queued { stream: si, cond: found, t: self.now.clone(), value: event, port: false });
+            self.queued.push(Queued { stream: si, cond: found, t: self.now.clone(), value: event });
         }
         Ok(())
     }

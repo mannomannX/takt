@@ -329,6 +329,85 @@ machine consumer:
     assert_eq!((site.machine.as_str(), &site.verdict), ("consumer", &CheckVerdict::Unreachable { k: 5 }), "{site:?}");
 }
 
+/// **z3 und cvc5 widersprechen sich nicht** (M11 Schritt 28c, 2.13 h): An
+/// denselben Programmen beweist keiner eine Pruefstelle unerreichbar, die
+/// der andere mit bestaetigtem Pfad erreicht, und keiner eine Eigenschaft,
+/// die der andere widerlegt. Unentschieden darf jeder bleiben — cvc5 sucht
+/// keine Invariante nach Horn-Klauseln —, aber beide entscheiden etwas.
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other() {
+    let need = |name: &str| {
+        let found = Some(takt_prove::named(name)).filter(|s| !matches!(s, Solver::Missing));
+        takt_testkit::require(name, found, "nach `~/.takt/bin` legen (z3 4.13.4, cvc5 1.2.0)")
+    };
+    let (Some(z3), Some(cvc5)) = (need("z3"), need("cvc5")) else { return };
+    let mut decided = 0;
+    for name in ["01_minimal.takt", "03_sequences_and_faults.takt", "19_faults.takt", "47_monitors.takt"] {
+        let p = corpus_with(name, "");
+        let whole = encode(&p).ok();
+        let judge = |solver: &Solver| {
+            let checks = classify_compositional(&p, whole.as_ref(), 3, solver, 30).expect("Solver laeuft").0;
+            let props = whole.as_ref().map(|m| prove(m, &p, 3, solver, 30).expect("Solver laeuft")).unwrap_or_default();
+            (checks, props)
+        };
+        let ((zc, zp), (cc, cp)) = (judge(&z3), judge(&cvc5));
+        for z in &zc {
+            let Some(c) = cc.iter().find(|c| c.start == z.start && c.kind == z.kind && c.machine == z.machine) else {
+                panic!("{name}: cvc5 kennt `{} {}` nicht", z.kind, z.start)
+            };
+            let contradiction = matches!(
+                (&z.verdict, &c.verdict),
+                (CheckVerdict::Unreachable { .. }, CheckVerdict::Reachable { .. })
+                    | (CheckVerdict::Reachable { .. }, CheckVerdict::Unreachable { .. })
+            );
+            assert!(!contradiction, "{name} {} {}: z3 {:?}, cvc5 {:?}", z.kind, z.start, z.verdict, c.verdict);
+            decided += usize::from(
+                !matches!(z.verdict, CheckVerdict::Undecided { .. })
+                    && !matches!(c.verdict, CheckVerdict::Undecided { .. }),
+            );
+        }
+        for z in &zp {
+            let c = cp.iter().find(|c| c.name == z.name).expect("dieselbe Eigenschaft");
+            let contradiction = matches!(
+                (&z.verdict, &c.verdict),
+                (Verdict::Proven { .. }, Verdict::Violated { .. }) | (Verdict::Violated { .. }, Verdict::Proven { .. })
+            );
+            assert!(!contradiction, "{name} `{}`: z3 {:?}, cvc5 {:?}", z.name, z.verdict, c.verdict);
+        }
+    }
+    assert!(decided > 0, "keine Pruefstelle haben beide entschieden");
+}
+
+/// **Eine Vorlage wird nicht fuer sich klassifiziert** (FB-491): Ihre
+/// Zustaende hat sie erst in den Instanzen. `takt prove` brach an
+/// `04_blocks_and_multirate` mit einem Index ausserhalb ab.
+#[test]
+fn a_template_is_classified_through_its_instances() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input  sp : int in 0..100 @ hw(\"i/sp\")
+output o  : int in 0..10  @ hw(\"o/o\") with safe = 0
+
+machine scale(setpoint: input int in 0..100, out: output int in 0..10):
+    initial RUN
+    state RUN:
+        loop:
+            out = setpoint / 5
+
+instance one = scale(setpoint = sp, out = o)
+",
+    );
+    let whole = encode(&p).expect("kodierbar");
+    let (sites, _) = classify_compositional(&p, Some(&whole), 2, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "range").unwrap_or_else(|| panic!("Range-Stelle: {sites:?}"));
+    assert_eq!(site.machine, "one", "{site:?}");
+    assert!(matches!(site.verdict, CheckVerdict::Reachable { .. }), "100 / 5 = 20 liegt ausserhalb 0..10: {site:?}");
+}
+
 /// Ein Pfad im Maschinenmodell wird am Gesamtmodell gesucht und dort
 /// vom Interpreter bestaetigt.
 #[test]

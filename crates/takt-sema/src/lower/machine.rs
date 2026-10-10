@@ -253,6 +253,7 @@ impl Lowerer<'_> {
             self.stage(n.span, "Knotenplatzierung", Stage::V2);
         }
         let state_enum = self.state_enums[&id];
+        m.state_enum = Some(state_enum);
         // Zustandsnamen sammeln, Baum anlegen
         let mut states: HashMap<String, StateId> = HashMap::new();
         let mut faulted_decl: Option<&ast::StateDecl> = None;
@@ -497,10 +498,13 @@ impl Lowerer<'_> {
                 ast::StatePrelude::Var(v) => {
                     self.machine_var(v, VarScope::State(id));
                 }
-                // 5.11: erst nach dem Besitzer, weil `lower_machine` den
-                // Kontext ersetzt.
+                // 5.11: gesenkt erst nach dem Besitzer, weil `lower_machine`
+                // den Kontext ersetzt; angemeldet aber schon hier, damit der
+                // Zustand und seine Kinder `inst.state` und `inst.pub_var`
+                // lesen (FB-483).
                 ast::StatePrelude::Instance(i) => {
                     let owner = self.mctx.as_ref().expect("Maschine").id;
+                    self.reserve_instance(i, Some((owner, id)));
                     self.pending_scoped.push((owner, id, i.clone()));
                 }
             }
@@ -834,9 +838,11 @@ impl Lowerer<'_> {
         }
     }
 
-    /// Meldet eine Instanz auf Dateiebene an, bevor die Maschinen gesenkt
-    /// werden (5.11): Ids und Name stehen fest, der Rumpf kommt spaeter.
-    pub fn reserve_instance(&mut self, decl: &ast::InstanceDecl) {
+    /// Meldet eine Instanz an, bevor sie gesenkt wird (5.11): Ids und Name
+    /// stehen fest, der Rumpf kommt spaeter — auf Dateiebene vor allen
+    /// Maschinen, gescopt (`scope`) im Zustand ihres Besitzers, wo der Name
+    /// dann gilt.
+    pub fn reserve_instance(&mut self, decl: &ast::InstanceDecl, scope: Option<(MachineId, StateId)>) {
         let Some(Entity::MachineTemplate(idx)) = self.peek(&decl.template.name).cloned() else { return };
         let Some(indices) = self.instance_indices(decl) else { return };
         self.template_id(idx);
@@ -875,7 +881,7 @@ impl Lowerer<'_> {
             Some(_) => Entity::MachineArray(first, indices.len() as u32),
         };
         self.declare(&decl.name, entity);
-        self.reserved.insert(decl.name.name.clone(), (first, indices));
+        self.reserved.insert((scope, decl.name.name.clone()), (first, indices));
     }
 
     /// `instance NAME = tmpl(args) in ZUSTAND [resume]` (5.11): dieselbe
@@ -896,7 +902,8 @@ impl Lowerer<'_> {
         }
         let t = self.templates.machines[idx].clone();
         let template = self.template_id(idx);
-        let reserved = scope.is_none().then(|| self.reserved.remove(&decl.name.name)).flatten();
+        let reserved = self.reserved.remove(&(scope, decl.name.name.clone()));
+        let announced = reserved.is_some();
         let (first, indices) = match reserved {
             Some(r) => r,
             None => {
@@ -908,7 +915,6 @@ impl Lowerer<'_> {
                 (first, indices)
             }
         };
-        let declared = scope.is_none();
         for (k, (i, len)) in indices.iter().enumerate() {
             let id = MachineId(first.0 + k as u32);
             self.state_enums.insert(id, t.state_enum);
@@ -933,7 +939,7 @@ impl Lowerer<'_> {
                 self.program.machines[owner.index()].states[state.index()].instances.push(inst);
             }
         }
-        if !declared {
+        if !announced {
             let entity = match &decl.index {
                 None => Entity::Machine(first),
                 Some(_) => Entity::MachineArray(first, indices.len() as u32),

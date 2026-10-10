@@ -153,3 +153,21 @@ fn sent_without_max_rate_carries_the_whole_capacity() {
         assert!(t.contains(line), "`{line}` fehlt:\n{t}");
     }
 }
+
+/// 12.5, FB-435: Was der Treiber als `tx` meldet, gilt statt des Modells bis
+/// zur naechsten Zeile, und ein `send` im Tick zieht davon ab. Das Modell
+/// haette in Tick 2 zwei Byte frei; gemeldet sind vier, und sie halten auch
+/// in Tick 3. Erst die Meldung von zwei Byte in Tick 4 laesst den `send`
+/// ueberlaufen. Die Simulation selbst schreibt keine Zeile `tx`.
+#[test]
+fn a_recorded_tx_line_holds_until_the_next() {
+    let p = overflowing("");
+    let stimulus =
+        "t=1 cmd go\nt=2 tx tx free=4 idle=false\nt=2 cmd go\nt=3 cmd go\nt=4 tx tx free=2 idle=false\nt=4 cmd go\n";
+    let parsed = Trace::parse(stimulus).expect("Stimulus");
+    assert_eq!(parsed.render(), stimulus, "Zeile `tx` hin und zurueck");
+    let t = run(&p, &parsed, &RunOptions { ticks: 6, ..Default::default() }).expect("Lauf").trace.render();
+    assert!(!t.contains("t=2 fault") && !t.contains("t=3 fault"), "{t}");
+    assert!(t.contains("t=4 fault dut StreamOverflow \"Sendepuffer `tx` hat 2 Byte frei, 3 verlangt\" -> SAFE"), "{t}");
+    assert!(!t.contains(" tx tx "), "{t}");
+}

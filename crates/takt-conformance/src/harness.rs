@@ -317,6 +317,13 @@ fn build_inner(
     // Die Lieferungen des Ticks 0 gehen vor jedem Init durch den Rand, wie
     // `Run::new` den Stimulus vor `Sim::init` einspeist.
     let _ = writeln!(t.code, "    takt_edge_stimulus(a, 0);");
+    // 8.5: Ein Command des Ticks 0 gilt schon fuer die Eintritte, wie im
+    // Interpreter; die Schleife setzt es ab Tick 1 zurueck (FB-493).
+    for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
+        if command_ticks(inputs, &name).contains(&0) {
+            let _ = writeln!(t.code, "    a->image[{slot}] = 1; /* {name} */");
+        }
+    }
     // Wie `Sim::init`: erst die Variablen aller Maschinen, dann die
     // geladenen Werte (5.9), dann die Eintritte in Schrittordnung — und
     // nach jedem `fresh[m] = publish_m(v_m)`, damit ein Follower schon im
@@ -352,13 +359,7 @@ fn build_inner(
     // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
     // Schritt und loescht es danach — wie die Runtime (12.1).
     for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {
-        let ticks_of: Vec<String> = inputs
-            .iter()
-            .filter_map(|s| match s {
-                Stimulus::Command { tick, name: n } if *n == name => Some(tick.to_string()),
-                _ => None,
-            })
-            .collect();
+        let ticks_of = command_ticks(inputs, &name);
         if ticks_of.is_empty() {
             continue;
         }
@@ -386,7 +387,7 @@ fn build_inner(
         );
     }
     steps(&mut t.code, p, &layout, &driven, "        ", "a->tick", x);
-    abort_phase(&mut t.code, p, &driven, "        ", "a->tick", x);
+    abort_phase(&mut t.code, p, &layout, &driven, "        ", "a->tick", x);
     idle_drops(&mut t.code, p, &driven, "        ", x);
     commit_sequence(&mut t.code, p, &driven, "        ", "a->tick");
     crate::ports::sample(&mut t.code, p, "        ");
@@ -867,4 +868,15 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         "static _Bool takt_jobs_active(struct {x}_arena *a) {{ int i; for (i = 0; i < {slots}; i++) if (a->jobs[i].active) return 1; return 0; }}"
     );
     let _ = writeln!(s);
+}
+
+/// Die Ticks, in denen der Stimulus das Command `name` setzt.
+fn command_ticks(inputs: &[Stimulus], name: &str) -> Vec<u64> {
+    inputs
+        .iter()
+        .filter_map(|s| match s {
+            Stimulus::Command { tick, name: n } if n == name => Some(*tick),
+            _ => None,
+        })
+        .collect()
 }

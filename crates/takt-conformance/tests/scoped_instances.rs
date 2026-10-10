@@ -3,7 +3,8 @@
 //! Der Differentialtest vergleicht nur Outputs — was ein `exit:`-Block
 //! einer Instanz tut, ist dort unsichtbar, weil ihre Outputs danach
 //! ohnehin auf `safe` stehen. Diese Datei prueft darum die Wirkungen, die
-//! 5.11 dem Austritt zuschreibt und die im Trace stehen: `log`.
+//! 5.11 dem Austritt zuschreibt und die im Trace stehen: `log` und die
+//! Signale, die der Austritt hebt.
 
 mod common;
 
@@ -46,4 +47,9 @@ fn the_exit_blocks_of_a_scoped_instance_run_in_both() {
     let b = logs(&native);
     assert!(!a.is_empty(), "der Interpreter meldet keinen Austritt:\n{interpreted}");
     assert_eq!(a.len(), b.len(), "Interpreter {a:?}\nnativ {b:?}");
+    // FB-495: Je Austritt das Signal aus `exit:`, im Tick des Austritts.
+    let ticks_of = |what: &str| -> Vec<String> {
+        interpreted.lines().filter(|l| l.contains(what)).filter_map(|l| l.split(' ').next().map(String::from)).collect()
+    };
+    assert_eq!(ticks_of(" signal p left"), ticks_of(" log p "), "{interpreted}");
 }

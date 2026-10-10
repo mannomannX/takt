@@ -1,0 +1,5 @@
+takt-proof 2
+program d6320797766c9cfda41428ad2fd9af060f63ad830c837b3a569bf306c442ebac
+solver z3 4.13.4
+site 600 604 index k=5
+site 631 635 index k=5

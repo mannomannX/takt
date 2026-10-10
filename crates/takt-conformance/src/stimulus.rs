@@ -128,8 +128,12 @@ impl Stimulus {
                     };
                     out.push(Stimulus::Runtime { tick, kind, output: output.clone() });
                 }
-                LineKind::Job { machine, handle } => {
-                    return Err(format!("t={tick}: `job {machine} {handle} done` kann der Rahmen nicht nachspielen"));
+                LineKind::Job { machine, handle, .. } => {
+                    return Err(format!("t={tick}: `job {machine} {handle}` kann der Rahmen nicht nachspielen"));
+                }
+                // 12.5: Der Rahmen rechnet `free` und `idle` aus seinem Modell.
+                LineKind::Tx { stream, .. } => {
+                    return Err(format!("t={tick}: `tx {stream}` kann der Rahmen nicht nachspielen"));
                 }
                 LineKind::Tune { accepted: false, .. }
                 | LineKind::Output { .. }
@@ -210,7 +214,7 @@ mod tests {
     /// ist ein Fehler und kein stilles Weglassen.
     #[test]
     fn a_line_the_frame_cannot_replay_is_an_error() {
-        assert!(stimulus("t=3 job m h done\n").is_err_and(|e| e.contains("job m h done")));
+        assert!(stimulus("t=3 job m h done start=1\n").is_err_and(|e| e.contains("job m h")));
         assert!(stimulus("t=3 runtime Brownout\n").is_err_and(|e| e.contains("Brownout")));
     }
 

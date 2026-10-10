@@ -98,7 +98,7 @@ fn a_time_line_does_not_change_the_chain() {
 }
 
 /// Wie viele Arten `LineKind` hat; `index_of` zaehlt sie ab.
-const KINDS: usize = 24;
+const KINDS: usize = 25;
 
 /// Die Nummer einer Art. Das `match` nennt jede Variante: Eine neue Art
 /// uebersetzt hier erst, wenn sie eine Nummer und damit eine Zeile in
@@ -129,6 +129,7 @@ fn index_of(kind: &LineKind) -> usize {
         LineKind::Persist { .. } => 21,
         LineKind::Time { .. } => 22,
         LineKind::Record { .. } => 23,
+        LineKind::Tx { .. } => 24,
     }
 }
 
@@ -146,7 +147,8 @@ fn one_of_each() -> Vec<LineKind> {
         LineKind::State { machine: "m".into(), path: "RUN.INNER".into() },
         LineKind::Published { machine: "m".into(), var: "count".into(), value: "3".into() },
         LineKind::Signal { machine: "m".into(), name: "done".into() },
-        LineKind::Job { machine: "m".into(), handle: "v".into() },
+        LineKind::Job { machine: "m".into(), handle: "v".into(), start: 3, late: false },
+        LineKind::Job { machine: "m".into(), handle: "v".into(), start: 4, late: true },
         LineKind::Fault { machine: "m".into(), kind: "Timeout".into(), message: text.clone(), target: "SAFE".into() },
         LineKind::Log { machine: "m".into(), text: text.clone() },
         LineKind::Alert { machine: "m".into(), on: true, text: text.clone() },
@@ -162,6 +164,7 @@ fn one_of_each() -> Vec<LineKind> {
         LineKind::Persist { hex: "0aff".into() },
         LineKind::Time { took: 5, drift: -7, slept: 1 },
         LineKind::Record { channel: "daq1_ai3".into(), sample: sample("21.5 degC") },
+        LineKind::Tx { stream: "uart_tx".into(), free: 64, idle: false },
     ];
     let mut seen = [false; KINDS];
     for kind in &all {

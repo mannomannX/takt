@@ -1,0 +1,7 @@
+takt-proof 2
+program 681656f9d4ef0976bfffd14507d6444ffd674f5b5ce7a48a0d5d5808d3d6b5c5
+solver z3 4.13.4
+site 703 716 ovf k=5
+site 1201 1224 range k=5
+site 1343 1370 range k=5
+site 2195 2217 range k=5

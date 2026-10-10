@@ -46,22 +46,20 @@ const UNFIRED: &[(&str, usize)] = &[
     ("40_jobs.takt", 3),
     ("43_sent.takt", 1),
     ("45_journal_cut.takt", 14),
-    ("47_monitors.takt", 2),
     ("50_clause_words.takt", 2),
     ("53_stream_kinds.takt", 1),
-    ("63_scoped_instances.takt", 6),
+    ("63_scoped_instances.takt", 5),
     ("64_scoped_exit.takt", 1),
     ("87_fault_kinds.takt", 3),
     ("88_capture_segments.takt", 3),
     ("92_idle_streams.takt", 1),
     ("04_blocks_and_multirate.takt", 2),
     ("05_streams_and_protocol.takt", 3),
-    ("06_test_harness.takt", 5),
+    ("06_test_harness.takt", 2),
     ("07_embedded_field.takt", 13),
     ("30_idle.takt", 1),
     ("31_idle_multirate.takt", 1),
-    ("38_scenarios.takt", 2),
-    ("61_requirements.takt", 4),
+    ("61_requirements.takt", 2),
     ("116_sequence_timeout.takt", 2),
     // Der Timeout ist der Zweck: `until go` wird nie wahr.
     ("119_timeout_cancels_schedule.takt", 1),
@@ -80,7 +78,9 @@ fn corpus(name: &str) -> Program {
         profile: None,
         ..Default::default()
     };
-    let out = takt_sema::compile(&src, &options);
+    // M11 Schritt 28c: mit den Beweisen des Solvers — der Codegen laesst die
+    // bewiesenen Pruefungen aus, der Interpreter prueft sie weiter.
+    let out = takt_sema::compile_with(&src, &options, takt_conformance::paths::proof(name).as_ref());
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     assert!(errors.is_empty(), "{name}:\n{}", errors.join("\n"));
     out.program.unwrap_or_else(|| panic!("{name}: kein Programm"))
@@ -312,7 +312,9 @@ fn the_three_executors_agree() {
                 .and_then(|inputs| common::run_native_all_with(&clang, &p, name, case.ticks, &inputs));
             match &native {
                 Ok(native) => failed.extend(disagreement(&run, "Interpreter", &widened, "nativ", native)),
-                Err(e) => gaps.push((name, case.label, "nativ", e.lines().next().unwrap_or_default().to_string())),
+                Err(e) => {
+                    gaps.push((name, case.label.clone(), "nativ", e.lines().next().unwrap_or_default().to_string()))
+                }
             }
             let Some(model) = &model else { continue };
             let traced = match model.run(&p, &stimulus, &result, case.ticks) {
@@ -328,7 +330,11 @@ fn the_three_executors_agree() {
                 failed.push(format!("{run}: Interpreter und Modell weichen ab:\n{}", list.join("\n")));
             }
             if let Ok(native) = &native {
-                let modelled = takt_conformance::run::widen_f32(&traced.render(), &f32s);
+                // Die entschiedenen Verletzungen des Modells haelt `mismatches`
+                // gegen den Interpreter; gegen den erzeugten Code fallen sie auf
+                // beiden Seiten weg.
+                let modelled =
+                    without(&takt_conformance::run::widen_f32(&traced.render(), &f32s), takt_prove::UNMODELLED);
                 let native = without(native, takt_prove::UNMODELLED);
                 failed.extend(disagreement(&run, "Modell", &modelled, "nativ", &native));
             }
@@ -344,9 +350,9 @@ fn the_three_executors_agree() {
         }
     }
     let expected: Vec<(&str, &str, &str)> = GAPS.iter().map(|&(n, l, c, _)| (n, l, c)).collect();
-    let found: Vec<(&str, &str, &str)> = gaps.iter().map(|(n, l, c, _)| (*n, *l, *c)).collect();
+    let found: Vec<(&str, &str, &str)> = gaps.iter().map(|(n, l, c, _)| (*n, l.as_str(), *c)).collect();
     for (n, l, c, why) in &gaps {
-        if !expected.contains(&(*n, *l, *c)) {
+        if !expected.contains(&(*n, l.as_str(), *c)) {
             failed.push(format!("{n} ({l}): die Spalte `{c}` rechnet nicht, `GAPS` nennt das nicht: {why}"));
         }
     }

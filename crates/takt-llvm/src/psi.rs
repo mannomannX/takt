@@ -217,30 +217,67 @@ pub fn raise(machine: MachineId, signal: SignalId, p: &Program, m: &mut Module) 
 /// `void <m>_publish(ptr st, ptr image)`: `publish_m(v_m)` (9.4) — Zustand
 /// und `pub var` nach Ψ_{k+1}, dazu `fresh`. Signale schreibt `raise`.
 pub fn publish_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+    publish_with(m, st, p, module, "publish", None)
+}
+
+/// `void <m>_publish_inactive(ptr st, ptr image)`: Ψ einer gescopten
+/// Instanz ohne Konfiguration (5.11) — vor dem ersten Eintritt und nach
+/// jedem Austritt, bevor der Rahmen ihren Zustand loescht: `pub var` wie
+/// `publish`, als Zustand das Blatt unter `initial`, das der naechste
+/// Eintritt betritt (`Sim::entry_leaf`).
+pub fn publish_inactive_function(
+    m: &Machine,
+    st: &StateStruct,
+    p: &Program,
+    module: &mut Module,
+) -> Result<(), NotYet> {
+    let leaf = machine::initial_leaf(m, m.initial).ok_or(NotYet { what: "Anfangsblatt" })?;
+    publish_with(m, st, p, module, "publish_inactive", Some(p.state_variant(m, leaf)))
+}
+
+/// Ist `m` eine gescopte Instanz (5.11)?
+pub fn is_scoped(m: &Machine, p: &Program) -> bool {
+    takt_mir::machine::scoped_instances(p).iter().any(|(_, si)| p.machines[si.machine.index()].name == m.name)
+}
+
+/// `publish` mit dem Zustand aus der Konfiguration, oder mit `state` fest.
+fn publish_with(
+    m: &Machine,
+    st: &StateStruct,
+    p: &Program,
+    module: &mut Module,
+    suffix: &str,
+    state: Option<u32>,
+) -> Result<(), NotYet> {
     let id = MachineId(p.machines.iter().position(|x| x.name == m.name).ok_or(NotYet { what: "Maschine" })? as u32);
     let next = region_offset(id, true, p).ok_or(NotYet { what: "Psi-Region" })?;
-    let leaves = machine::leaves(m);
     let mark = module.mark();
-    module.begin(&format!("{}_publish", m.name), &LlvmType::Void, &[LlvmType::Ptr, LlvmType::Ptr]);
+    module.begin(&format!("{}_{suffix}", m.name), &LlvmType::Void, &[LlvmType::Ptr, LlvmType::Ptr]);
     let flag = module.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {next}"));
     module.void_inst(&format!("store i8 1, ptr {flag}"));
 
     let state_ty = format!("%{}_state", crate::fns::sanitized(&m.name));
-    let Some(conf_i) = st.index_of(Role::Conf, 0) else {
-        module.abort(mark);
-        return Err(NotYet { what: "conf im Zustand" });
+    let acc = match state {
+        Some(v) => v.to_string(),
+        None => {
+            let Some(conf_i) = st.index_of(Role::Conf, 0) else {
+                module.abort(mark);
+                return Err(NotYet { what: "conf im Zustand" });
+            };
+            let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
+            let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
+            let cur = module.inst(&format!("load i8, ptr {slot}"));
+            // Hinter dem letzten Blatt steht `FAULTED` (step.rs, `leave_configuration`).
+            let mut acc = p.faulted_variant(m).to_string();
+            for (i, leaf) in machine::leaves(m).iter().enumerate() {
+                // Ein Segment meldet den Zustand seiner Sequenz (FB-469).
+                let v = p.state_variant(m, *leaf);
+                let eq = module.inst(&format!("icmp eq i8 {cur}, {i}"));
+                acc = module.inst(&format!("select i1 {eq}, i32 {v}, i32 {acc}")).to_string();
+            }
+            acc
+        }
     };
-    let conf = module.inst(&format!("getelementptr inbounds {state_ty}, ptr %0, i32 0, i32 {conf_i}"));
-    let slot = module.inst(&format!("getelementptr inbounds [{} x i8], ptr {conf}, i32 0, i32 0", st.depth));
-    let cur = module.inst(&format!("load i8, ptr {slot}"));
-    // Hinter dem letzten Blatt steht `FAULTED` (step.rs, `leave_configuration`).
-    let mut acc = p.faulted_variant(m).to_string();
-    for (i, leaf) in leaves.iter().enumerate() {
-        // Ein Segment meldet den Zustand seiner Sequenz (FB-469).
-        let v = p.state_variant(m, *leaf);
-        let eq = module.inst(&format!("icmp eq i8 {cur}, {i}"));
-        acc = module.inst(&format!("select i1 {eq}, i32 {v}, i32 {acc}")).to_string();
-    }
     let state = module.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {}", next + 8));
     module.void_inst(&format!("store i32 {acc}, ptr {state}"));
 

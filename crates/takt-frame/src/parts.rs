@@ -322,10 +322,12 @@ pub fn raised(t: &mut Text, p: &Program, x: &Prefix) {
 
 /// Die Abort-Phase (5.4, 9.4): Nach den Schritten nimmt jede Maschine mit
 /// vorgemerktem Abort ihren Fault-Pfad, in statischer Reihenfolge und
-/// unabhaengig davon, ob sie in diesem Tick aktiv war.
+/// unabhaengig davon, ob sie in diesem Tick aktiv war. Was ein Besitzer
+/// dabei verliess, tritt noch in diesem Tick aus (5.11, FB-481).
 pub fn abort_phase(
     s: &mut String,
     p: &Program,
+    layout: &Layout,
     driven: &[&takt_mir::machine::Machine],
     indent: &str,
     tick: &str,
@@ -370,6 +372,7 @@ pub fn abort_phase(
         );
     }
     let _ = writeln!(s, "{indent}memset(a->raised, 0, sizeof a->raised);");
+    scoped_lifecycle(s, p, layout, indent, x);
 }
 
 /// Der Verwurf im `idle` (5.10, 9.6 `advance_cursors`) nach der
@@ -602,7 +605,8 @@ pub fn note_fault(s: &mut String, p: &Program, indent: &str) {
 
 /// Die Eintritte vor dem ersten Tick, in Schrittordnung und nach jedem
 /// `publish`, damit Follower schon im Tick 0 frisch lesen (7.2, 9.4).
-/// Eine gescopte Instanz betritt nichts, solange ihr Scope nicht steht;
+/// Eine gescopte Instanz betritt nichts, solange ihr Scope nicht steht —
+/// sie veroeffentlicht ihre Anfangswerte und ihr `initial` —;
 /// `scoped_lifecycle` nach dem `enter` des Besitzers holt sie herein
 /// (5.11).
 pub fn enter_machines(
@@ -614,9 +618,13 @@ pub fn enter_machines(
     x: &Prefix,
 ) {
     let scoped: Vec<String> = scoped_of(p).into_iter().map(|(_, inst, _)| inst).collect();
-    for m in driven.iter().filter(|m| !scoped.contains(&m.name)) {
-        let _ = writeln!(s, "{indent}{x}_{0}_enter(a);", m.name);
-        let _ = writeln!(s, "{indent}{x}_{0}_publish(a);", m.name);
+    for m in driven {
+        if scoped.contains(&m.name) {
+            let _ = writeln!(s, "{indent}{x}_{0}_publish_inactive(a);", m.name);
+        } else {
+            let _ = writeln!(s, "{indent}{x}_{0}_enter(a);", m.name);
+            let _ = writeln!(s, "{indent}{x}_{0}_publish(a);", m.name);
+        }
     }
     scoped_lifecycle(s, p, layout, indent, x);
 }
@@ -639,7 +647,7 @@ pub fn steps(
     // 9.6 `deliver(D_k)`: Was der vorige Tick an Stroeme mit `drop_oldest`
     // gesendet hat, wird vor der Trigger-Phase sichtbar (7.5).
     if crate::streams::stages(p) {
-        let _ = writeln!(s, "{indent}takt_int_deliver_sent(a);");
+        let _ = writeln!(s, "{indent}takt_int_deliver_sent(a, 0);");
     }
     for m in driven {
         if !m.layout.trigger_flags.is_empty() {
@@ -689,7 +697,9 @@ pub fn scoped_of(p: &Program) -> Vec<(String, String, usize)> {
 
 /// Der Lebenszyklus der gescopten Instanzen nach dem Schritt des
 /// Besitzers (5.11): Eintritt initialisiert frisch und betritt `initial`,
-/// Austritt setzt die Outputs auf `safe` und verwirft den Zustand.
+/// Austritt setzt die Outputs auf `safe`, veroeffentlicht die Werte nach
+/// den `exit:`-Bloecken mit dem Blatt des naechsten Eintritts und verwirft
+/// den Zustand; bis zum Wiedereintritt bleibt Ψ so stehen.
 ///
 /// Das Aktivitaetsbit steht im Rahmen, nicht im Zustands-Struct: Es ist
 /// eine Aussage ueber den *Besitzer*, und der Rahmen fragt sie ohnehin
@@ -711,8 +721,8 @@ pub fn scoped_lifecycle(s: &mut String, p: &Program, layout: &Layout, indent: &s
         // Besitzer den Zustand ueber einen Fault, laufen keine `exit:`.
         let _ = writeln!(s, "{indent}    if (!({by_fault})) {x}_{inst}_exit_all(a);");
         safe_outputs_of(s, p, layout, &inst, &format!("{indent}    "));
+        let _ = writeln!(s, "{indent}    {x}_{inst}_publish_inactive(a);");
         let _ = writeln!(s, "{indent}    memset(a->{state}, 0, sizeof a->{state});");
-        let _ = writeln!(s, "{indent}    {x}_{inst}_publish(a);");
         let _ = writeln!(s, "{indent}  }}");
         let _ = writeln!(s, "{indent}  a->scope_{owner}_{i} = now; }}");
     }
@@ -778,6 +788,9 @@ pub fn commit_sequence(s: &mut String, p: &Program, driven: &[&takt_mir::machine
     sim_bindings(s, p, indent);
     let _ = writeln!(s, "{indent}takt_tx_commit(a, {tick});");
     let _ = writeln!(s, "{indent}takt_int_commit(a);");
+    if crate::streams::port_stages(p) {
+        let _ = writeln!(s, "{indent}takt_int_deliver_sent(a, 1);");
+    }
 }
 
 /// Der Ψ-Tausch nach dem Commit (8.3, 11.2): Was eine Maschine ausgab,

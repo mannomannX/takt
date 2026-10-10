@@ -1,0 +1,4 @@
+takt-proof 2
+program 0f02e2102b70f8090d5063e94962736ec007ecbdd63c54c3fe7ef358129741bb
+solver z3 4.13.4
+site 949 973 ovf k=5

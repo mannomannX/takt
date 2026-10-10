@@ -34,7 +34,7 @@ t=2 out timed 0
 t=2 out count 0
 t=2 out big_out 0
 t=3 out planned 2
-t=4 job restart v done
+t=4 job restart v done start=1
 t=4 state restart RUN.S2
 t=4 out word 4229992187
 t=4 out ready 1

@@ -183,7 +183,7 @@ impl Lowerer<'_> {
         // `cells[k].value` in einer Maschine findet sie so (FB-210).
         for item in &file.items {
             if let ast::Item::Instance(i) = item {
-                self.reserve_instance(i);
+                self.reserve_instance(i, None);
             }
         }
         for item in &file.items {

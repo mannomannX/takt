@@ -188,6 +188,11 @@ fn program_into(p: &Program, mut m: Module) -> Lowered {
         if let Err(e) = crate::psi::publish_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
         }
+        if crate::psi::is_scoped(machine, p)
+            && let Err(e) = crate::psi::publish_inactive_function(machine, &st, p, &mut m)
+        {
+            skipped.push(Skipped { machine: machine.name.clone(), reason: format!("Psi ohne Scope: {}", e.what) });
+        }
         if let Err(e) = crate::step::step_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
         }

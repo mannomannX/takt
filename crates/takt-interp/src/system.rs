@@ -389,15 +389,19 @@ impl Outer for MachineEnv<'_, '_> {
 
     fn job_start(&mut self, handle: VarId, value: Option<Value>, due: u64) -> EvalResult<()> {
         let slot = self.job_slot(handle)?;
-        // 4.5: Eine Aufzeichnung ersetzt den Tick des Modells, aber nur ein
-        // Job, der seine Dauer ueberschritt, wird aufgezeichnet: Was vor
-        // `due` steht, gehoert nicht zu diesem Lauf, sondern zu einem
-        // frueheren auf demselben Handle oder zu keinem.
-        let id = self.id;
-        let recorded =
-            self.image.job_records.iter().filter(|(m, s, t)| *m == id && *s == slot && *t >= due).map(|r| r.2).min();
-        let due = recorded.unwrap_or(due);
-        self.state.jobs.get_mut(slot).ok_or_else(|| Trap::Bug(format!("Job-Slot {slot} fehlt")))?.start(value, due);
+        // 4.5: Eine Aufzeichnung nennt ihren Lauf am Start-Tick. `done`
+        // ersetzt den Tick des Modells, aber nie durch einen frueheren;
+        // `late` allein haelt den Lauf offen, bis ihn ein neuer Job oder ein
+        // Fault-Uebergang abbricht.
+        let (id, start) = (self.id, self.tick);
+        let recorded = self.image.job_records.iter().find(|r| r.0 == id && r.1 == slot && r.2 == start).map(|r| r.3);
+        let at = match recorded {
+            None => due,
+            Some(None) => u64::MAX,
+            Some(Some(done)) => done.max(due),
+        };
+        let job = self.state.jobs.get_mut(slot).ok_or_else(|| Trap::Bug(format!("Job-Slot {slot} fehlt")))?;
+        job.start(value, start, due, at);
         Ok(())
     }
 
@@ -461,7 +465,8 @@ impl Outer for MachineEnv<'_, '_> {
 
     /// 12.10: Ein Schreibvorgang wird ein Element des Eingangsstroms
     /// `mmio/ADR/w` — in Reihenfolge, auch mehrere je Tick, sichtbar ab dem
-    /// naechsten Tick (`Image::deliver_port_writes`). Traegt der Strom Bytes,
+    /// naechsten Tick, mit der Politik des Stroms (`Image::queue_port_write`,
+    /// `deliver_port_writes`). Traegt der Strom Bytes,
     /// ist das Element die kanonische Form des Records, wie im erzeugten Code
     /// (FB-474).
     fn port_write(&mut self, p: PortId, v: Value) -> EvalResult<()> {
@@ -480,7 +485,8 @@ impl Outer for MachineEnv<'_, '_> {
             _ => v,
         };
         let t = i64::try_from(self.tick).unwrap_or(i64::MAX).saturating_mul(self.tick_ns);
-        self.image.queue_port_write(ChannelId(i as u32), t, value);
+        let drop_oldest = matches!(program.channels[i].attrs.overflow, Some(Overflow::DropOldest));
+        self.image.queue_port_write(ChannelId(i as u32), t, value, drop_oldest);
         Ok(())
     }
 
@@ -570,6 +576,7 @@ impl Outer for MachineEnv<'_, '_> {
                         self.tick,
                     )));
                 }
+                tx.fresh = tx.fresh.saturating_add(u32::try_from(bytes.len()).unwrap_or(u32::MAX));
                 tx.queued.extend(bytes);
                 // 5.6: Die Stelle des Verwurfs ist eine Alert-Stelle der
                 // Runtime; ohne Verwurf ist sie inaktiv.
@@ -1502,8 +1509,11 @@ impl<'p> Sim<'p> {
         self.image.cancel_all_scheduled(&def.layout.output_queues);
         let old = std::mem::replace(&mut self.states[inst.index()], MachineState::new(def));
         // Die Werte bleiben stehen, bis der Wiedereintritt sie initialisiert:
-        // `persist` gehoert weiter zur kanonischen Form (5.9).
+        // `persist` gehoert weiter zur kanonischen Form (5.9). Was `exit:`
+        // an Signalen hob, gilt in diesem Tick wie jedes andere (5.11,
+        // FB-495).
         self.states[inst.index()].vars = old.vars;
+        self.states[inst.index()].raised_signals = old.raised_signals;
         // 5.12: Mit `resume` bleibt die Konfiguration, ausser nach einem
         // Fault-Uebergang des Besitzers.
         if resume && !by_fault {
@@ -1571,6 +1581,10 @@ impl<'p> Sim<'p> {
             self.raise_all();
         }
         self.abort_phase(tick_ns, &active)?;
+        // 5.11: Verliess ein Besitzer seinen Zustand ueber einen Fault-Pfad
+        // der Abort-Phase, tritt seine Instanz noch in diesem Tick aus, ohne
+        // `exit:` (FB-481).
+        self.scoped_lifecycle(tick_ns)?;
         // advance_cursors(): `cur[s, m] = examined + 1`, danach Eviction
         // unterhalb des kleinsten Cursors (9.6).
         self.advance_cursors();
@@ -1669,6 +1683,7 @@ impl<'p> Sim<'p> {
         let machine = &program.machines[id.index()];
         let vars = self.states[id.index()].vars.clone();
         let signals = self.states[id.index()].raised_signals.clone();
+        let entry = self.entry_leaf(id);
         let mut out = Vec::new();
         let env = MachineEnv::new(
             &self.loaded,
@@ -1678,8 +1693,25 @@ impl<'p> Sim<'p> {
             &mut out,
             program.config.tick,
         );
-        let state = env.state_value(&self.loaded);
+        let state = match entry {
+            Some(leaf) => Value::Enum { variant: program.state_variant(machine, leaf), fields: Vec::new() },
+            None => env.state_value(&self.loaded),
+        };
         self.image.publish(id, machine, &vars, state, &signals);
+    }
+
+    /// 5.11: Eine gescopte Instanz ohne Konfiguration — vor dem ersten
+    /// Eintritt und nach jedem Austritt — meldet als `inst.state` das Blatt,
+    /// das ihr naechster Eintritt betritt: das gemerkte bei `resume` (5.12),
+    /// sonst das unter `initial`.
+    fn entry_leaf(&self, id: MachineId) -> Option<takt_mir::StateId> {
+        let i = self.scoped.iter().position(|(_, si)| si.machine == id)?;
+        let state = &self.states[id.index()];
+        if state.faulted || !state.conf.is_empty() {
+            return None;
+        }
+        let def = &self.loaded.program.machines[id.index()];
+        self.resumed[i].or_else(|| machine::descend(def, def.initial).last().copied())
     }
 
     /// Zustandspfad einer Maschine.

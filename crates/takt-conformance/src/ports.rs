@@ -7,8 +7,9 @@
 //! jeder Modellwert (8.3), ohne Modell der Default des Records. Geschrieben
 //! wird ein Element in den Eingabestrom `mmio/ADR/w`, und zwar der ganze
 //! Record in kanonischer Form: Ein Feld darunter wird in den gelesenen
-//! Record eingesetzt, wie `Eval::assign` es tut. Der Ring des Stroms zeigt
-//! das Element ab dem naechsten Tick.
+//! Record eingesetzt, wie `Eval::assign` es tut. Der Schreibvorgang ist ein
+//! `send`, das nicht faultet (`takt_int_offer`, FB-475); der Ring zeigt das
+//! Element ab dem naechsten Tick.
 
 use std::fmt::Write;
 
@@ -143,7 +144,7 @@ pub(crate) fn emit(t: &mut Text, p: &Program, x: &Prefix) {
                 let _ = writeln!(send, "        memcpy(out + {len}, whole + {at}, {n});");
                 len += n;
             }
-            let _ = writeln!(send, "        (void)takt_int_send(a, takt_int_slot({c}), (const char *)out, {len});");
+            let _ = writeln!(send, "        takt_int_offer(a, takt_int_slot({c}), (const char *)out, {len});");
             let _ = writeln!(send, "        return;");
             widest = widest.max(len);
         }

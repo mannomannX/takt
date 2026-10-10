@@ -5,8 +5,8 @@
 //! (`resume`, 5.12); Austritt mit den `exit:`-Bloecken von innen nach
 //! aussen, ausser der Besitzer verliess den Zustand ueber einen Fault, dann
 //! gehen ihre Outputs auf `safe`, ihre geplanten Ausgaben verfallen, und die
-//! Konfiguration ist leer — das Blatt −1, veroeffentlicht als erste
-//! Variante.
+//! Konfiguration ist leer — das Blatt −1, veroeffentlicht als das Blatt,
+//! das der naechste Eintritt betritt (`Sim::entry_leaf`).
 
 use std::collections::BTreeMap;
 use std::ops::Not;
@@ -17,6 +17,7 @@ use takt_mir::program::Direction;
 use takt_mir::{MachineId, StateId};
 
 use super::{Cx, Enc, Env, Flow, Mode, R, Target, ite_env};
+use crate::encode::Unsupported;
 use crate::term::Term;
 
 impl Enc<'_> {
@@ -40,6 +41,19 @@ impl Enc<'_> {
     /// Das Blatt, in das eine Instanz mit `resume` zurueckkehrt, sonst −1.
     fn loc_resumed(&self, inst: MachineId) -> String {
         format!("s.{}.resumed", self.machine(inst).name)
+    }
+
+    /// `m.state` liest zum Blatt −1 das Blatt, das der naechste Eintritt
+    /// betritt (5.11, `Sim::entry_leaf`): das gemerkte bei `resume`, sonst
+    /// das unter `initial`.
+    pub(super) fn entry_leaf(&mut self, m: MachineId, leaf: Term, cx: &Cx<'_>, env: &Env, span: Span) -> R<Term> {
+        let resumed = self.psi(cx, env, m, &self.loc_resumed(m), span)?;
+        let machine = self.machine(m);
+        let Some(&initial) = self.descend(m, machine.initial).last() else {
+            return Err(Unsupported { what: "Instanz ohne Zustand".into(), span });
+        };
+        let entry = Term::ite(Term::eq(resumed.clone(), Term::int(-1)), Term::int(self.code(m, initial)), resumed);
+        Ok(Term::ite(Term::eq(leaf.clone(), Term::int(-1)), entry, leaf))
     }
 
     /// Vor dem ersten Tick ist keine Instanz aktiv.
@@ -140,7 +154,8 @@ impl Enc<'_> {
     /// `leave_scoped`: die `exit:`-Bloecke, wenn der Besitzer nicht ueber
     /// einen Fault ging — scheitert einer, entfallen die restlichen ohne
     /// Fault-Pfad —, dann `safe`, die Warteschlangen leer, die Konfiguration
-    /// leer; mit `resume` bleibt das Blatt gemerkt.
+    /// leer, die gehobenen Signale bis zum Tick-Ende; mit `resume` bleibt das
+    /// Blatt gemerkt.
     fn leave_scoped(
         &mut self,
         si: &ScopedInstance,
@@ -181,7 +196,13 @@ impl Enc<'_> {
             .filter(|s| machine.states[s.index()].resume)
             .map(|s| (self.loc_saved(m, s), env[&self.loc_saved(m, s)].clone()))
             .collect();
+        // 5.11: Was `exit:` an Signalen hob, gilt in diesem Tick (FB-495).
+        let raised: Vec<(String, Term)> =
+            (0..machine.signals.len()).map(|i| (self.loc_sig(m, i), env[&self.loc_sig(m, i)].clone())).collect();
         self.machine_defaults(m, env, false)?;
+        for (at, v) in raised {
+            env.insert(at, v);
+        }
         if si.resume {
             // 5.12: nach einem Fault-Uebergang des Besitzers nicht.
             let keep = by_fault.clone().not();

@@ -1,0 +1,12 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritt 28c)
+# ziel check check rig 1143 1191 1
+# ticks 7
+t=0 in press stale
+t=1 in press 36.0
+t=1 cmd start
+t=2 in press stale
+t=2 cmd reset
+t=3 in press -0.0
+t=3 cmd start
+t=4 in press 20.0
+t=5 in press 3.1151034019100827e-307

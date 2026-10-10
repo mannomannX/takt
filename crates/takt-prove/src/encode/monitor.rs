@@ -23,7 +23,7 @@ use takt_diag::Span;
 use takt_mir::expr::{Expr, TProp, TemporalOp};
 use takt_mir::program::Property;
 
-use super::{Cx, Edge, Enc, Env, Flow, Mode, R, no};
+use super::{Cx, Edge, Enc, Env, Flow, Mode, Position, R, no};
 use crate::term::{Op, Term};
 
 /// Eine Formel unter `always` mit Fenstern in Ticks; jedes `once` hat
@@ -94,6 +94,9 @@ pub(super) struct Monitor {
     plan: Plan,
     /// Die `once`-Zaehler mit ihrem Fenster.
     onces: Vec<(usize, i64)>,
+    /// Bei `a implies stable[d](b)` der Zaehler von `a` und `d`: Die Position
+    /// einer Verletzung ist die aelteste im Fenster, an der `a` galt.
+    oldest: Option<(usize, i64)>,
 }
 
 impl Monitor {
@@ -132,6 +135,21 @@ impl Monitor {
             Plan::Response { n, .. } => (*n).max(onces),
             Plan::Past(_) => onces,
         }
+    }
+
+    /// Welche Position ein Tick entscheidet: bei einer Antwort die aelteste
+    /// offene Pflicht, deren Zaehler eben ablief, im Ring die Zukunftstiefe
+    /// zurueck, bei `a implies stable[d](b)` die aelteste Position mit `a`.
+    pub(super) fn position(&self) -> Position {
+        let ticks = |n: i64| u64::try_from(n).unwrap_or(0);
+        if let Some((id, n)) = self.oldest {
+            return Position::Oldest { counter: self.once(id), window: ticks(n) };
+        }
+        Position::Lag(match &self.plan {
+            Plan::Past(_) => 0,
+            Plan::Response { n, .. } => ticks(*n),
+            Plan::Ring { future, .. } => ticks(*future),
+        })
     }
 
     /// Wie weit die Entscheidung einer Position hinter dem Tick liegt.
@@ -185,6 +203,7 @@ impl Enc<'_> {
         let mut next_once = 0;
         let formula = self.mon(inner, &mut atoms, &mut next_once, prop.span)?;
         let formula = if negate { Mon::Not(Box::new(formula)) } else { formula };
+        let mut oldest = None;
         let plan = match formula {
             f if f.future() == 0 => Plan::Past(f),
             Mon::Or(a, b) => match (*a, *b) {
@@ -194,6 +213,7 @@ impl Enc<'_> {
                 // `a implies stable[d](b)`: verletzt, wenn `b` faellt, solange
                 // `a` im Fenster davor galt.
                 (Mon::Not(a), Mon::Stable(n, b)) if a.future() == 0 && b.future() == 0 => {
+                    oldest = Some((next_once, n));
                     let once = Mon::Once(next_once, n, a);
                     Plan::Past(Mon::Or(b, Box::new(Mon::Not(Box::new(once)))))
                 }
@@ -210,7 +230,7 @@ impl Enc<'_> {
             }
             Plan::Ring { .. } => {}
         }
-        Ok(Monitor { name: prop.name.clone(), atoms, plan, onces })
+        Ok(Monitor { name: prop.name.clone(), atoms, plan, onces, oldest })
     }
 
     fn ring(&self, formula: Mon, span: Span) -> R<Plan> {

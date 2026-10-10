@@ -306,6 +306,13 @@ fn cone<'a>(
             break;
         }
     }
+    // Was ein Gegenbeispiel nennt (`Model::observed`), kommt mit, wenn es nur
+    // von Gerechnetem abhaengt — es vergroessert den Kegel nicht.
+    for (name, deps) in &state {
+        if model.observed.iter().any(|o| o == name) && deps.iter().all(|d| d == name || inside.contains(d)) {
+            inside.insert(name.to_string());
+        }
+    }
     let kept: Vec<&Term> = constraints
         .iter()
         .zip(&bound)

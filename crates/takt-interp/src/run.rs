@@ -208,10 +208,10 @@ impl<'p> Run<'p> {
             program.properties.iter().map(|p| Monitor::new(p, program.config.tick)).collect();
 
         // Tick 0: Stimulus, dann Anfangszustand und Anfangsausgaben (9.4)
-        // 4.5: Aufgezeichnete Fertigstellungen ersetzen das Modell `duration`;
-        // ein Job liest sie beim Start, darum stehen sie vorab im Abbild.
+        // 4.5: Aufgezeichnete Laeufe ersetzen das Modell `duration`; ein Job
+        // liest sie beim Start, darum stehen sie vorab im Abbild.
         for line in &stimulus.lines {
-            if let LineKind::Job { machine, handle } = &line.kind {
+            if let LineKind::Job { machine, handle, start, late } = &line.kind {
                 let Some(m) = program.machines.iter().position(|m| m.name == *machine) else {
                     return Err(Trap::Bug(format!("Stimulus: Maschine `{machine}` gibt es nicht")));
                 };
@@ -220,7 +220,12 @@ impl<'p> Run<'p> {
                 let Some(slot) = slot else {
                     return Err(Trap::Bug(format!("Stimulus: `{machine}` hat kein Job-Handle `{handle}`")));
                 };
-                sim.image.job_records.push((MachineId(m as u32), slot, line.tick));
+                let key = (MachineId(m as u32), slot, *start);
+                let done = (!late).then_some(line.tick);
+                match sim.image.job_records.iter_mut().find(|r| (r.0, r.1, r.2) == key) {
+                    Some(r) => r.3 = r.3.or(done),
+                    None => sim.image.job_records.push((key.0, key.1, key.2, done)),
+                }
             }
         }
         let mut echo = Vec::new();
@@ -606,6 +611,14 @@ fn apply_stimulus(
             }
             // Aufgezeichnete Fertigstellungen stehen schon im Abbild (`job_records`).
             LineKind::Job { .. } => {}
+            // 12.5: Was der Treiber meldet, gilt statt des Modells.
+            LineKind::Tx { stream, free, idle } => {
+                let tx = channel_by_name(program, stream).and_then(|c| sim.image.tx.get_mut(&c));
+                let Some(tx) = tx else {
+                    return Err(Trap::Bug(format!("Stimulus: Ausgabestrom `{stream}` gibt es nicht")));
+                };
+                tx.report(*free, *idle);
+            }
             LineKind::Abort => {
                 for state in &mut sim.states {
                     if !state.faulted {
@@ -777,10 +790,10 @@ pub fn element_value(text: &str, elem: takt_mir::TypeId, p: &Program) -> Result<
 /// Ein Element in seiner Textform: der Wert oder `None`, wenn die Drahtform
 /// keiner ist.
 fn element_text(text: &str, elem: takt_mir::TypeId, p: &Program) -> Result<Option<Value>, String> {
-    // Records, Bytes und Text duerfen in ihrer Drahtform stehen, ein `u8`
-    // steht als Zahl (`grammar/trace.md`).
+    // Records, Captures, Bytes und Text duerfen in ihrer Drahtform stehen,
+    // ein `u8` steht als Zahl (`grammar/trace.md`).
     let ty = p.types.list.get(elem.index());
-    let wire = matches!(ty, Some(Type::Record(_) | Type::Line { .. } | Type::Bytes { .. }));
+    let wire = matches!(ty, Some(Type::Record(_) | Type::Capture { .. } | Type::Line { .. } | Type::Bytes { .. }));
     if let (true, Some(hex)) = (wire, text.trim().strip_prefix("0x")) {
         if hex.len() % 2 != 0 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(format!("Bytes `0x…` mit gerade vielen Hexziffern erwartet, `{text}` gefunden"));
@@ -788,7 +801,7 @@ fn element_text(text: &str, elem: takt_mir::TypeId, p: &Program) -> Result<Optio
         let bytes: Vec<u8> =
             (0..hex.len()).step_by(2).filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok()).collect();
         return Ok(match ty {
-            Some(Type::Record(_)) => crate::bytes::decode(p, &bytes, elem).ok(),
+            Some(Type::Record(_) | Type::Capture { .. }) => crate::bytes::decode(p, &bytes, elem).ok(),
             _ => Some(crate::image::wire_element(&bytes, elem, p)),
         });
     }
@@ -915,7 +928,16 @@ fn check_line(p: &Program, kind: &LineKind, only: Option<MachineId>) -> Result<(
             }
             parse_value(value, param.ty, p).map(drop)
         }
-        LineKind::Job { machine, handle } => {
+        LineKind::Tx { stream, .. } => match channel_by_name(p, stream) {
+            Some(c)
+                if p.channels[c.index()].dir == Direction::Output
+                    && matches!(p.types.get(p.channels[c.index()].ty), Type::Stream(_)) =>
+            {
+                Ok(())
+            }
+            _ => Err(format!("Ausgabestrom `{stream}` gibt es nicht")),
+        },
+        LineKind::Job { machine, handle, .. } => {
             let m = p
                 .machines
                 .iter()
@@ -1081,7 +1103,9 @@ fn collect(
                 }
             }
             Observation::Signal { name } => LineKind::Signal { machine, name: name.clone() },
-            Observation::Job { handle } => LineKind::Job { machine, handle: handle.clone() },
+            Observation::Job { handle, start, late } => {
+                LineKind::Job { machine, handle: handle.clone(), start: *start, late: *late }
+            }
         };
         writer.lines.push(TraceLine { tick, kind });
     }

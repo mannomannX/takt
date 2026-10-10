@@ -21,13 +21,22 @@ und eine Zusammenfassung (`<zeit>-<stand>.log`, `.txt`). Danach entfernt
 `prune-target.ps1 -Since <Beginn>` aus dem Zielverzeichnis des Laufs, was er
 nicht mehr braucht; der Abbild-Cache haelt ohnehin nur den laufenden Stand.
 
+`-AllowMissing` nennt, was an diesem Rechner fehlen darf (`TAKT_ALLOW_MISSING`);
+der Test dazu meldet sich als uebersprungen, und die Zusammenfassung sagt es.
+Vorgabe ist die Bruecke an UART0 des C6, die nicht angesteckt ist.
+
 Der Lauf belegt Speicher und Rechenzeit neben der Arbeit im Hauptbaum: die
 volle Suite dort zugleich zu fahren, kann die Zusagegrenze des Rechners
 sprengen. Exit-Code 0 heisst: jede gewaehlte Suite bestanden.
 
+`-Filter` waehlt Tests wie `nextest -E` (etwa `test(=persistence_survives_a_reset)`),
+um einzelne zu wiederholen; `TAKT_ESP32C6_ONLY` und `TAKT_F401_ONLY` der
+Umgebung beschraenken den Korpusvergleich auf ein Programm.
+
 .EXAMPLE
 pwsh -NoProfile -File tools/board-run.ps1
 pwsh -NoProfile -File tools/board-run.ps1 -Rev e6093b4 -Boards esp32c6
+pwsh -NoProfile -File tools/board-run.ps1 -Boards esp32c6 -Filter 'test(=the_board_agrees_with_the_interpreter)'
 #>
 param(
     [string]$Rev = 'HEAD',
@@ -36,7 +45,9 @@ param(
     [string]$Target = 'G:\rust\target-boards',
     [string]$Logs = 'G:\rust\board-runs',
     [string]$Esp32c6Port = 'COM4',
-    [string]$F401Port = 'COM7'
+    [string]$F401Port = 'COM7',
+    [string]$AllowMissing = 'uart-bridge',
+    [string]$Filter = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,6 +78,7 @@ try {
     $env:TEMP = 'G:\rust\tmp'
     $env:TAKT_ESP32C6_PORT = $Esp32c6Port
     $env:TAKT_F401_PORT = $F401Port
+    $env:TAKT_ALLOW_MISSING = $AllowMissing
 
     $results = [ordered]@{}
     Push-Location $Worktree
@@ -77,8 +89,9 @@ try {
         $suites = if ($Boards -eq 'both') { 'esp32c6', 'stm32f401' } else { , $Boards }
         foreach ($b in $suites) {
             if ($cli -ne 0) { $results[$b] = 'nicht gelaufen: der Bau von takt scheiterte'; continue }
+            $select = if ($Filter) { @('-E', $Filter) } else { @() }
             cargo nextest run -p takt-conformance --test "board_$b" --run-ignored ignored-only --no-fail-fast `
-                --build-jobs 2 *>> $log
+                --build-jobs 2 @select *>> $log
             $code = $LASTEXITCODE
             $summary = Select-String -Path $log -Pattern '^\s+Summary ' | Select-Object -Last 1
             $results[$b] = '{0} ({1})' -f $(if ($code -eq 0) { 'bestanden' } else { 'gescheitert' }),
@@ -91,7 +104,9 @@ try {
     $failed = Select-String -Path $log -Pattern '^\s+(FAIL|ABORT|TIMEOUT) \[' | ForEach-Object { $_.Line.Trim() } |
         Sort-Object -Unique
     $lines = @("Stand $sha", "Beginn $($since.ToString('s')), Ende $((Get-Date).ToString('s'))")
+    if ($Filter) { $lines += "nur: $Filter" }
     $lines += $results.GetEnumerator() | ForEach-Object { '{0}: {1}' -f $_.Key, $_.Value }
+    if ($AllowMissing) { $lines += "fehlen darf: $AllowMissing (die Tests dazu uebersprungen)" }
     $lines += $failed
     $lines | Set-Content -Encoding utf8 (Join-Path $Logs "$name.txt")
     $lines

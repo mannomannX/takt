@@ -1198,7 +1198,7 @@ fn every_fault_kind_of_the_corpus_arrives_at_its_tick() {
         "t=2 fault divide Arithmetic(DivZero)",
         "t=2 fault grow Arithmetic(Overflow)",
         "t=3 out planned 2\n",
-        "t=4 job restart v done\n",
+        "t=4 job restart v done start=1\n",
     ] {
         assert!(trace.contains(line), "`{line}` fehlt:\n{trace}");
     }

@@ -25,6 +25,11 @@ pub struct JobRun {
     pub done: bool,
     /// Tick der Fertigstellung, solange der Job laeuft.
     pub due: Option<u64>,
+    /// Start-Tick des Laufs; er nennt ihn in seinen Zeilen (4.5).
+    pub start: u64,
+    /// Der Tick des Modells, solange eine Aufzeichnung den Lauf verspaetet
+    /// und das noch nicht gemeldet ist.
+    pub late: Option<u64>,
     /// `Ok(wert)` nach der Fertigstellung, `Err(FAILED)`, wenn die Native
     /// kein Ergebnis hat, `Err(PENDING)` davor, `Err(CANCELLED)` nach einem
     /// Fault-Uebergang (5.3).
@@ -42,32 +47,42 @@ impl JobRun {
 
     /// Ein Slot ohne Lauf.
     pub fn idle() -> JobRun {
-        JobRun { done: false, due: None, result: JobRun::err(2), pending: None }
+        JobRun { done: false, due: None, start: 0, late: None, result: JobRun::err(2), pending: None }
     }
 
-    /// `job v = f(args)`: ein neuer Lauf ersetzt einen laufenden. `None`
+    /// `job v = f(args)` im Tick `start`: ein neuer Lauf ersetzt einen
+    /// laufenden. Er endet im Tick `due`, das Modell sagt `modelled`. `None`
     /// endet mit `Err(FAILED)`.
-    pub fn start(&mut self, value: Option<Value>, due: u64) {
+    pub fn start(&mut self, value: Option<Value>, start: u64, modelled: u64, due: u64) {
         self.done = false;
         self.due = Some(due);
+        self.start = start;
+        self.late = (due > modelled).then_some(modelled);
         self.result = JobRun::err(2);
         self.pending = Some(value);
     }
 
-    /// Faellig? Dann gilt `done`, und `result` ist `Ok`.
-    pub fn poll(&mut self, tick: u64) -> bool {
+    /// Faellig? Dann gilt `done`, und `result` ist `Ok`. Sonst meldet ein
+    /// Lauf, den eine Aufzeichnung verspaetet, im ersten Schritt ab dem
+    /// Tick des Modells `Late`.
+    pub fn poll(&mut self, tick: u64) -> Option<JobEvent> {
         match self.due {
             Some(due) if tick >= due => {
                 self.due = None;
+                self.late = None;
                 self.done = true;
                 self.result = match self.pending.take() {
                     Some(Some(v)) => Value::Result(Ok(Box::new(v))),
                     Some(None) => JobRun::err(1),
                     None => Value::Result(Ok(Box::new(Value::Handle))),
                 };
-                true
+                Some(JobEvent::Done)
             }
-            _ => false,
+            _ if self.late.is_some_and(|t| tick >= t) => {
+                self.late = None;
+                Some(JobEvent::Late)
+            }
+            _ => None,
         }
     }
 
@@ -75,6 +90,7 @@ impl JobRun {
     pub fn cancel(&mut self) {
         if self.due.is_some() {
             self.due = None;
+            self.late = None;
             self.pending = None;
             self.done = true;
             self.result = JobRun::err(0);
@@ -788,12 +804,23 @@ pub fn switch(
     exec_chain(loaded, env, &entered, Mode::Entry, tick)
 }
 
+/// Was ein Lauf in einem Schritt meldet (4.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobEvent {
+    /// Fertig.
+    Done,
+    /// Im Tick des Modells nicht fertig.
+    Late,
+}
+
 /// Faellige Jobs der Maschine abschliessen (4.5).
 fn poll_jobs(loaded: &Loaded<'_>, env: &mut MachineEnv<'_, '_>, tick: u64) {
     let m = env.machine(loaded);
     for (i, slot) in m.layout.job_slots.iter().enumerate() {
-        if env.state.jobs.get_mut(i).is_some_and(|j| j.poll(tick)) {
-            env.out.push(Observation::Job { handle: m.vars[slot.handle.index()].name.clone() });
+        let Some(job) = env.state.jobs.get_mut(i) else { continue };
+        if let Some(event) = job.poll(tick) {
+            let (handle, start) = (m.vars[slot.handle.index()].name.clone(), job.start);
+            env.out.push(Observation::Job { handle, start, late: event == JobEvent::Late });
         }
     }
 }

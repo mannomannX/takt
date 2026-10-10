@@ -12,7 +12,7 @@
 (port dev :Reg @mmio(0x40000000))
 (port bare :Reg @mmio(0x40001000))
 (output dev_r :RegModel @sim("mmio/0x40000000/r"))
-(input dev_w :stream<bytes<4>> @sim("mmio/0x40000000/w") capacity=8 max_rate=200[Hz])
+(input dev_w :stream<bytes<4>> @sim("mmio/0x40000000/w") capacity=2 max_rate=200[Hz])
 (output ready :bool @sim("ready"))
 (output count :int in 0..999 @sim("count"))
 (output plain :int in 0..999 @sim("plain"))

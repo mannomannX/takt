@@ -46,7 +46,7 @@ use crate::term::{self, Fun, Node, Op, Rounding, Sort, Term};
 mod canon;
 mod composite;
 mod fault;
-mod job;
+pub(crate) mod job;
 mod map;
 mod matrix;
 mod monitor;
@@ -105,6 +105,26 @@ pub struct Goal {
     pub assumption: bool,
     /// Die Formel.
     pub formula: Term,
+    /// Welche Position ein Tick entscheidet, in dem das Ziel faellt: Ein
+    /// Lauf meldet eine Verletzung dort (`property … violated <at>`).
+    pub position: Position,
+}
+
+/// Die Position, ueber die ein Tick entscheidet (`Monitor::observe`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Position {
+    /// So viele Ticks hinter ihm: null ohne Zeitoperator, sonst das
+    /// Fenster, das die Position abwartet.
+    Lag(u64),
+    /// Die aelteste Position der letzten `window` Ticks, an der der Zaehler
+    /// `counter` null stand: `a implies stable[d](b)` ist im Modell
+    /// `b or not once[d](a)`, verletzt aber die aelteste offene Position.
+    Oldest {
+        /// Der `once`-Zaehler von `a`, null in jedem Tick, in dem `a` galt.
+        counter: String,
+        /// Das Fenster in Ticks.
+        window: u64,
+    },
 }
 
 /// Eine Pruefstelle (`check`/`expect`) als Beweisziel (plan/m6.md 2.8, B3):
@@ -186,8 +206,8 @@ pub struct Model {
     /// Die Funktionen aus `libtaktm`, die der Solver uninterpretiert sieht
     /// (4.2): Ein Pfad ueber sie kann an ihrem wahren Wert scheitern.
     pub uninterpreted: Vec<String>,
-    /// Zustand, den ein Gegenbeispiel neben den Eingaben nennt: die
-    /// Faelligkeiten der Jobs, aus denen sein Stimulus die Aufzeichnungen
+    /// Zustand, den ein Gegenbeispiel neben den Eingaben nennt: Start und
+    /// Faelligkeit der Jobs, aus denen sein Stimulus die Aufzeichnungen
     /// baut (4.5).
     pub observed: Vec<String>,
 }
@@ -662,7 +682,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>) -> R<Model> {
         .order
         .iter()
         .flat_map(|&m| (0..p.machines[m.index()].layout.job_slots.len()).map(move |i| (m, i)))
-        .map(|(m, i)| enc.loc_job(m, i, "due"))
+        .flat_map(|(m, i)| [enc.loc_job(m, i, "start"), enc.loc_job(m, i, "due")])
         .collect();
     let mut notes = enc.notes;
     notes.sort();
@@ -959,12 +979,7 @@ impl Enc<'_> {
     /// `m.state` zum Blattcode `leaf` (`state_value`, `publish_function`):
     /// Ein Segment meldet den Zustand seiner Sequenz (FB-469).
     fn state_value(&self, m: MachineId, leaf: Term) -> Term {
-        // Ohne Konfiguration die erste Variante (`state_value`, 5.11).
-        let mut out = if self.is_scoped(m) {
-            Term::ite(Term::eq(leaf.clone(), Term::int(-1)), Term::int(0), leaf.clone())
-        } else {
-            leaf.clone()
-        };
+        let mut out = leaf.clone();
         for l in self.leaves(m) {
             let value = i64::from(self.p.state_variant(self.machine(m), l));
             let code = self.code(m, l);
@@ -976,9 +991,7 @@ impl Enc<'_> {
     }
 
     fn faulted_code(&self, m: MachineId) -> Option<i64> {
-        let machine = self.machine(m);
-        let e = self.p.enums.iter().find(|e| e.name == format!("{}.State", machine.name))?;
-        e.variants.iter().position(|v| v.name == "FAULTED").map(|i| i as i64)
+        self.state_variants(m).iter().position(|v| v.name == "FAULTED").map(|i| i as i64)
     }
 
     fn chain_to(&self, m: MachineId, s: StateId) -> Vec<StateId> {
@@ -1362,6 +1375,7 @@ impl Enc<'_> {
             return Ok(self.state_value(m, x));
         }
         let leaf = self.psi(cx, env, m, &loc, span)?;
+        let leaf = if self.is_scoped(m) { self.entry_leaf(m, leaf, cx, env, span)? } else { leaf };
         Ok(self.state_value(m, leaf))
     }
 
@@ -3018,6 +3032,7 @@ impl Enc<'_> {
                 let cx = Cx { m: Some(m), leaf: Some(leaf), mode: Mode::Entry, pre, active: actives, locals: None };
                 let mut env = base.clone();
                 env.insert(self.loc_latched(m), Term::bool(true));
+                self.fault_paths.entry(m).or_default().push(is.clone());
                 self.record_fault(m, &self.cause(FaultKind::Abort, Span::default()), &mut env)?;
                 self.clear_on_fault(m, &mut env)?;
                 let t = self.fault_target(m, leaf);
@@ -3272,6 +3287,9 @@ impl Enc<'_> {
         let raised = Term::and(vec![running, Term::or(std::mem::take(&mut self.aborts))]);
         if !raised.is_bool(false) {
             self.abort_phase(&raised, pre, &actives, &mut cur)?;
+            // 5.11: was ein Besitzer ueber den Abort verliess (FB-481).
+            let faults = self.faults_now();
+            self.scoped_lifecycle(&mut cur, &actives, &faults)?;
         }
         self.advance_streams(&mut cur)?;
         self.advance(&actives, &mut cur);
@@ -3981,7 +3999,7 @@ impl Enc<'_> {
                     m.future()
                 ));
             }
-            return Ok(Some(self.goal_after_end(prop, t, state)));
+            return Ok(Some(self.goal_after_end(prop, t, state, m.position())));
         }
         let (inner, negate) = match &prop.formula {
             TProp::Temporal { op: TemporalOp::Always, inner, .. } => (inner.as_ref(), false),
@@ -3998,17 +4016,17 @@ impl Enc<'_> {
         let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: &before, active: &actives, locals: None };
         let Some(t) = self.tprop(inner, &cx, state)? else { return Ok(None) };
         let t = if negate { t.not() } else { t };
-        Ok(Some(self.goal_after_end(prop, t, state)))
+        Ok(Some(self.goal_after_end(prop, t, state, Position::Lag(0))))
     }
 
     /// Nach dem Ende eines Laufs (12.7) gibt es keinen Tick, an dem die
     /// Eigenschaft gelten muesste; der Tick des Endes zaehlt noch.
-    fn goal_after_end(&self, prop: &Property, t: Term, state: &Env) -> Goal {
+    fn goal_after_end(&self, prop: &Property, t: Term, state: &Env, position: Position) -> Goal {
         let formula = match state.get(OVER) {
             Some(over) => Term::or(vec![over.clone(), t]),
             None => t,
         };
-        Goal { name: prop.name.clone(), assumption: prop.assumption, formula }
+        Goal { name: prop.name.clone(), assumption: prop.assumption, formula, position }
     }
 
     #[deny(clippy::wildcard_enum_match_arm)]

@@ -964,7 +964,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     // `apply_sim_bindings` im Interpreter.
     let _ = writeln!(s, "    takt_sim_streams(a, k * {}LL);", p.config.tick);
     crate::parts::steps(s, p, layout, driven, "    ", "k", x);
-    crate::parts::abort_phase(s, p, driven, "    ", "k", x);
+    crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
     crate::parts::idle_drops(s, p, driven, "    ", x);
     crate::parts::commit_sequence(s, p, driven, "    ", "k");
     for (i, _) in monitors(p) {
@@ -1701,6 +1701,11 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(t.fields, "    _Alignas(8) unsigned char edge_pool[{pool}];");
     }
     record_fields(t, p);
+    let reported = tx_slots(p, &crate::drivers::tx_read(p));
+    if let Some(n) = reported.iter().map(|(_, slot)| slot + 1).max() {
+        let _ = writeln!(t.fields, "    int tx_last_free[{n}];");
+        let _ = writeln!(t.fields, "    unsigned char tx_last_idle[{n}], tx_seen[{n}];");
+    }
     let s = &mut t.code;
     record(s, p, x);
 
@@ -1766,9 +1771,28 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     // 8.8, FB-124: `tx.idle` zu Tickbeginn — der eigene Puffer leer
     // (`tx_busy`, beim Commit gesetzt) und der Sender fertig nach seinem
     // Treiber. Wer es nicht beantworten kann (-1), haelt die Leitung.
-    for (channel, slot) in idle_slots(p) {
+    for (channel, slot) in tx_slots(p, &crate::drivers::idle_read(p)) {
         let takt_mir::program::Binding::Hw(addr) = &p.channels[channel].binding else { continue };
         let _ = writeln!(s, "    a->tx_hold[{slot}] = {x}_idle_{}(a->user, now) != 1;", addr.ident());
+    }
+    // 12.5, FB-435: Was der Treiber meldet, ist ein Input; der Lauf zeichnet
+    // es als `tx` auf, im Tick 0 und bei jeder Aenderung.
+    for (channel, slot) in &reported {
+        let _ = writeln!(s, "    {{ int free = takt_tx_cap({channel}) - a->tx_n[{slot}];");
+        let _ = writeln!(s, "      unsigned char idle = !a->tx_busy[{slot}] && !a->tx_hold[{slot}];");
+        let _ = writeln!(
+            s,
+            "      if (!a->tx_seen[{slot}] || free != a->tx_last_free[{slot}] || idle != a->tx_last_idle[{slot}]) {{"
+        );
+        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "        takt_board_trace_i64(a->tick);");
+        let _ = writeln!(s, "        takt_board_trace(\" tx {} free=\");", p.channels[*channel].name);
+        let _ = writeln!(s, "        takt_board_trace_i64(free);");
+        let _ = writeln!(s, "        takt_board_trace(idle ? \" idle=true\\n\" : \" idle=false\\n\");");
+        let _ = writeln!(s, "        a->tx_seen[{slot}] = 1;");
+        let _ = writeln!(s, "        a->tx_last_free[{slot}] = free;");
+        let _ = writeln!(s, "        a->tx_last_idle[{slot}] = idle;");
+        let _ = writeln!(s, "      }} }}");
     }
     if !p.recorded.is_empty() {
         let _ = writeln!(s, "    takt_record(a, now);");
@@ -1777,13 +1801,12 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "}}\n");
 }
 
-/// Die hw-gebundenen Ausgabestroeme, deren `idle` das Programm liest, mit
-/// ihrem Platz im Sendepuffer des Rahmens (`takt_tx_slot`: die
-/// Ausgabestroeme in der Reihenfolge der Channels, streams.rs).
-fn idle_slots(p: &Program) -> Vec<(usize, usize)> {
+/// Die hw-gebundenen Ausgabestroeme unter `read` mit ihrem Platz im
+/// Sendepuffer des Rahmens (`takt_tx_slot`: die Ausgabestroeme in der
+/// Reihenfolge der Channels, streams.rs).
+fn tx_slots(p: &Program, read: &[usize]) -> Vec<(usize, usize)> {
     use takt_mir::program::{Binding, Direction};
     use takt_mir::types::Type;
-    let read = crate::drivers::idle_read(p);
     p.channels
         .iter()
         .enumerate()
@@ -2163,7 +2186,10 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         let cap = i64::from(c.attrs.capacity.unwrap_or(256));
         // 8.8, FB-124: `idle` prueft der Rand nur, wo das Programm es liest
         // und der Treiber darum da ist; sonst unbekannt.
-        let idle = match (&c.binding, idle_slots(p).iter().any(|(ch, _)| p.channels[*ch].name == c.name)) {
+        let idle = match (
+            &c.binding,
+            tx_slots(p, &crate::drivers::idle_read(p)).iter().any(|(ch, _)| p.channels[*ch].name == c.name),
+        ) {
             (Binding::Hw(a), true) => format!("{x}_idle_{}(a->user, now)", a.ident()),
             _ => "-1".to_string(),
         };

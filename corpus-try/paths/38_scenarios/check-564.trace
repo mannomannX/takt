@@ -1,0 +1,9 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritt 28c)
+# ziel check check dut 564 596 3
+# ticks 7
+t=0 in p 3.0
+t=1 in p 2.0000001192092896
+t=2 in p 4.450147717014434e-308
+t=3 in p 56.00000000000001
+t=4 in p 5e-324
+t=5 in p 0.0 bad

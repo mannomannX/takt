@@ -210,9 +210,14 @@ struct Dynamic {
     /// Zaehlt ein abgewiesenes `send` als `overflowed`? Mit `overflow =
     /// drop` nicht, wie `System::send` im Interpreter.
     counts_overflow: bool,
-    /// Ein interner Strom mit `overflow = drop_oldest` (8.6): Was gesendet
-    /// wird, wartet in einem eigenen Ring auf die Zustellung.
+    /// Ein interner Strom oder der Schreibstrom eines Ports mit `overflow =
+    /// drop_oldest` (8.6): Was gesendet wird, wartet in einem eigenen Ring
+    /// auf die Zustellung.
     drop_oldest: bool,
+    /// Der Schreibstrom eines Registerports (12.10): Ein Schreibvorgang ist
+    /// ein `send`, das nicht faultet, und ein Verdraengen meldet keinen
+    /// Alert (`Image::queue_port_write`).
+    port: bool,
 }
 
 /// Die Ringe des Laufs: erst die internen Stroeme, dann die
@@ -235,6 +240,7 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             read_output: false,
             counts_overflow: !matches!(st.overflow, takt_mir::program::Overflow::Drop),
             drop_oldest: matches!(st.overflow, takt_mir::program::Overflow::DropOldest),
+            port: false,
         })
         .collect();
     let read = read_outputs(p);
@@ -262,10 +268,22 @@ fn dynamic_streams(p: &Program) -> Vec<Dynamic> {
             input,
             read_output: !input,
             counts_overflow: true,
-            drop_oldest: false,
+            drop_oldest: port_writes(p, id) && matches!(c.attrs.overflow, Some(Overflow::DropOldest)),
+            port: port_writes(p, id),
         });
     }
     out
+}
+
+/// Ist der Eingang `id` der Schreibstrom `mmio/ADR/w` eines Registerports
+/// (12.10)?
+fn port_writes(p: &Program, id: usize) -> bool {
+    let c = &p.channels[id];
+    c.dir == Direction::Input
+        && p.ports.iter().any(|port| {
+            let want = takt_mir::pattern::Address::simple(&format!("mmio/{:#x}/w", port.address));
+            matches!(&c.binding, takt_mir::program::Binding::Sim(a) if *a == want)
+        })
 }
 
 /// Die Maschinen, die den Strom am Kanal `channel` lesen.
@@ -289,12 +307,20 @@ fn read_outputs(p: &Program) -> Vec<usize> {
         .collect()
 }
 
-/// Hat das Programm einen internen Strom mit `overflow = drop_oldest`? Dann
-/// stellt `takt_int_deliver_sent` zu Beginn jedes Schritts zu, was der
-/// vorige Tick gesendet hat (8.6, 9.6), und `takt_int_staged` haelt den
-/// Schlaf an, solange etwas wartet (9.9).
+/// Hat das Programm einen internen Strom oder den Schreibstrom eines Ports
+/// mit `overflow = drop_oldest`? Dann stellt `takt_int_deliver_sent` zu
+/// Beginn jedes Schritts zu, was der vorige Tick gesendet hat (8.6, 9.6,
+/// 12.10), und `takt_int_staged` haelt den Schlaf an, solange etwas
+/// wartet (9.9).
 pub(crate) fn stages(p: &Program) -> bool {
-    p.streams.iter().any(|st| matches!(st.overflow, takt_mir::program::Overflow::DropOldest))
+    p.streams.iter().any(|st| matches!(st.overflow, takt_mir::program::Overflow::DropOldest)) || port_stages(p)
+}
+
+/// Hat der Schreibstrom eines Ports einen Sammelring (`drop_oldest`)? Dann
+/// stellt ihn `takt_int_deliver_sent(a, 1)` am Ende des Ticks zu.
+pub(crate) fn port_stages(p: &Program) -> bool {
+    (0..p.channels.len())
+        .any(|i| port_writes(p, i) && matches!(p.channels[i].attrs.overflow, Some(Overflow::DropOldest)))
 }
 
 /// Speist ein `sim`-Ausgabestrom den Eingabestrom `channel` (8.3)? Dann
@@ -517,6 +543,37 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &
     let _ = writeln!(s, "static _Bool takt_int_send(struct {x}_arena *a, int k, const char *b, int n) {{");
     let _ = writeln!(s, "    return takt_int_push(a, k, b, n, (long long)a->tick * {}LL, 0);", p.config.tick);
     let _ = writeln!(s, "}}");
+    if !staged.is_empty() {
+        // 8.6, `System::send`: Mit `drop_oldest` weist ein `send` nur ein
+        // Element ab, das allein die Byteschranke sprengt; alles andere
+        // wartet im Sammelring, der verdraengt, was die Zustellung ohnehin
+        // verdraengen wuerde.
+        let _ = writeln!(s, "static _Bool takt_int_stage(struct {x}_arena *a, int r, const char *b, int n) {{");
+        let _ = writeln!(s, "    int st = g_int_stage[r];");
+        let _ = writeln!(s, "    if (n > g_int_capb[r]) return 0;");
+        let _ = writeln!(
+            s,
+            "    while (a->int_n[st] > 0 && (a->int_n[st] >= g_int_cap[st] || a->int_bused[st] + n > g_int_capb[st])) {{"
+        );
+        let _ = writeln!(s, "        takt_int_pop(a, st);");
+        let _ = writeln!(s, "        a->int_staged_drop[r]++;");
+        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "    return takt_int_send(a, st, b, n);");
+        let _ = writeln!(s, "}}");
+    }
+    if dyns.iter().any(|d| d.port) {
+        // 12.10, `Image::queue_port_write`: Ein Schreibvorgang an einem Port
+        // ist ein `send` in seinen Schreibstrom, das nicht faultet; was der
+        // Strom abweist, zaehlt.
+        let _ = writeln!(s, "static void takt_int_offer(struct {x}_arena *a, int r, const char *b, int n) {{");
+        let send = if staged.is_empty() {
+            "takt_int_send(a, r, b, n)"
+        } else {
+            "(g_int_stage[r] >= 0 ? takt_int_stage(a, r, b, n) : takt_int_send(a, r, b, n))"
+        };
+        let _ = writeln!(s, "    if (!{send}) a->int_overflowed[r]++;");
+        let _ = writeln!(s, "}}");
+    }
     // 8.6, `Buffer::push`: Ein Element vom Rand ist sofort sichtbar. Passt
     // es nicht, verdraengt es mit `drop_oldest` die aeltesten (1), sonst
     // ist es ein Ueberlauf (2) — ebenso, wenn es allein die Byteschranke
@@ -571,12 +628,15 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &
     }
 }
 
-/// `deliver(D_k)` fuer die internen Stroeme mit `drop_oldest` (8.6, 9.6):
-/// Zu Beginn des Ticks gehen die Elemente des Sammelrings der Reihe nach in
-/// den Ring des Stroms, und wo er voll ist, verdraengen sie die aeltesten —
-/// wie `Buffer::push` im Interpreter. Was der Sammelring schon verdraengt
-/// hat, haette dort eine Nummer bekommen und waere sofort verdraengt worden.
-/// Jeder Leser bekommt den Alert der Zustellung als Flanke (5.6).
+/// `deliver(D_k)` fuer die Stroeme mit `drop_oldest` (8.6, 9.6): Die
+/// Elemente des Sammelrings gehen der Reihe nach in den Ring des Stroms,
+/// und wo er voll ist, verdraengen sie die aeltesten — wie `Buffer::push`
+/// im Interpreter. Was der Sammelring schon verdraengt hat, haette dort
+/// eine Nummer bekommen und waere sofort verdraengt worden. Ein interner
+/// Strom wird zu Beginn des Ticks zugestellt, und jeder Leser bekommt den
+/// Alert der Zustellung als Flanke (5.6); der Schreibstrom eines Ports am
+/// Ende des Ticks nach dem Verwerfen, vor dem, was der Rand im naechsten
+/// liefert, und ohne Alert (12.10, `Image::deliver_port_writes`).
 fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, trace: Trace, x: &Prefix) {
     let _ = writeln!(s, "static const char *const g_int_reader_name[TAKT_INT_STREAMS][{readers}] = {{");
     for d in dyns {
@@ -588,6 +648,11 @@ fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, t
         let _ = writeln!(s, "    {{ {} }},", if names.is_empty() { "0".to_string() } else { names.join(", ") });
     }
     let _ = writeln!(s, "}};");
+    let _ = writeln!(
+        s,
+        "static const _Bool g_int_port[TAKT_INT_STREAMS] = {{ {} }};",
+        dyns.iter().map(|d| if d.port { "1" } else { "0" }).collect::<Vec<_>>().join(", ")
+    );
     let _ = writeln!(s, "static _Bool takt_int_staged(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    for (int k = 0; k < TAKT_INT_STREAMS; k++)");
     let _ = writeln!(
@@ -596,9 +661,10 @@ fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, t
     );
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
-    let _ = writeln!(s, "static void takt_int_deliver_sent(struct {x}_arena *a) {{");
+    let _ = writeln!(s, "static void takt_int_deliver_sent(struct {x}_arena *a, _Bool ports) {{");
     let _ = writeln!(s, "    for (int k = 0; k < TAKT_INT_STREAMS; k++) {{");
     let _ = writeln!(s, "        int st = g_int_stage[k];");
+    let _ = writeln!(s, "        if (g_int_port[k] != ports) continue;");
     let _ = writeln!(s, "        if (st < 0 || (a->int_n[st] == 0 && a->int_staged_drop[k] == 0)) continue;");
     let _ = writeln!(s, "        unsigned dropped = a->int_staged_drop[k];");
     let _ = writeln!(s, "        a->int_seq[k] += dropped;");
@@ -633,6 +699,7 @@ fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, t
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "        a->int_new[st] = 0;");
     let _ = writeln!(s, "        a->int_dropped[k] += dropped;");
+    let _ = writeln!(s, "        if (ports) continue;");
     let _ = writeln!(s, "        for (int r = 0; r < g_int_reader_n[k]; r++) {{");
     let _ = writeln!(s, "            _Bool on = dropped > 0;");
     let _ = writeln!(s, "            if (a->int_alerted[k][r] == on) continue;");
@@ -875,21 +942,10 @@ fn stream_send(s: &mut String, rings: bool, sends: bool, staging: bool, x: &Pref
         // ein Ausgabestrom, den ein Modell liest, sendet an den Treiber.
         let _ = writeln!(s, "    int r = s < 0 ? takt_int_slot(s) : -1;");
         if staging {
-            // 8.6, `System::send`: Mit `drop_oldest` weist ein `send` nur ein
-            // Element ab, das allein die Byteschranke sprengt; alles andere
-            // wartet im Sammelring, der verdraengt, was die Zustellung ohnehin
-            // verdraengen wuerde.
             let _ = writeln!(s, "    if (r >= 0 && g_int_stage[r] >= 0) {{");
-            let _ = writeln!(s, "        int st = g_int_stage[r];");
-            let _ = writeln!(s, "        if (n > g_int_capb[r]) {{ a->int_overflowed[r]++; return 0; }}");
-            let _ = writeln!(
-                s,
-                "        while (a->int_n[st] > 0 && (a->int_n[st] >= g_int_cap[st] || a->int_bused[st] + n > g_int_capb[st])) {{"
-            );
-            let _ = writeln!(s, "            takt_int_pop(a, st);");
-            let _ = writeln!(s, "            a->int_staged_drop[r]++;");
-            let _ = writeln!(s, "        }}");
-            let _ = writeln!(s, "        return takt_int_send(a, st, b, n);");
+            let _ = writeln!(s, "        if (takt_int_stage(a, r, b, n)) return 1;");
+            let _ = writeln!(s, "        a->int_overflowed[r]++;");
+            let _ = writeln!(s, "        return 0;");
             let _ = writeln!(s, "    }}");
         }
         let _ = writeln!(s, "    if (r >= 0) {{");

@@ -294,9 +294,21 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
 /// `Program::channels`: Nur sie brauchen einen Treiber `P_idle_<adr>` — ein
 /// Treiber wird verlangt, wenn das Programm ihn nutzt (12.11).
 pub fn idle_read(p: &Program) -> Vec<usize> {
+    read_by(p, &[takt_mir::expr::Accessor::Idle])
+}
+
+/// Die Ausgabestroeme, deren `free` oder `idle` das Programm liest (8.8):
+/// Nur deren Meldung zeichnet ein Lauf auf Hardware als `tx` auf (12.5).
+pub fn tx_read(p: &Program) -> Vec<usize> {
+    read_by(p, &[takt_mir::expr::Accessor::Free, takt_mir::expr::Accessor::Idle])
+}
+
+/// Die Kanaele, an denen das Programm einen der `accessors` liest.
+fn read_by(p: &Program, accessors: &[takt_mir::expr::Accessor]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut look = |e: &Expr| {
-        if let ExprKind::Accessor { base, accessor: takt_mir::expr::Accessor::Idle, .. } = &e.kind
+        if let ExprKind::Accessor { base, accessor, .. } = &e.kind
+            && accessors.contains(accessor)
             && let ExprKind::Input { channel, .. } = base.kind
             && !out.contains(&channel.index())
         {

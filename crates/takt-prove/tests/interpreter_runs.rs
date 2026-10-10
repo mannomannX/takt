@@ -66,7 +66,7 @@ machine m:
 ";
 
 fn done_ticks(trace: &str) -> Vec<&str> {
-    trace.lines().filter(|l| l.ends_with(" job m v done")).map(|l| l.split(' ').next().unwrap_or("")).collect()
+    trace.lines().filter(|l| l.contains(" job m v done ")).map(|l| l.split(' ').next().unwrap_or("")).collect()
 }
 
 /// SEM2-005: Eine Aufzeichnung ersetzt den Tick des Modells nur, wenn der
@@ -76,18 +76,19 @@ fn done_ticks(trace: &str) -> Vec<&str> {
 #[test]
 fn a_recorded_completion_never_comes_before_the_duration() {
     let p = compile(JOBS);
-    let t = trace(&p, "t=1 job m v done\n", 10);
+    let t = trace(&p, "t=1 job m v done start=0\n", 10);
     assert_eq!(done_ticks(&t).first(), Some(&"t=3"), "{t}");
 }
 
-/// SEM2-005: Die Aufzeichnung des ersten Jobs gehoert nicht dem zweiten,
-/// der auf demselben Handle danach startet.
+/// SEM2-005, FB-476: Die Aufzeichnung des ersten Jobs gehoert nicht dem
+/// zweiten, der auf demselben Handle danach startet; sie nennt ihren Lauf
+/// am Start-Tick.
 #[test]
 fn a_second_job_does_not_take_the_record_of_the_first() {
     let p = compile(JOBS);
     // Der erste ueberschreitet seine Dauer und wird in Tick 4 fertig; der
     // zweite startet danach und haelt seine eigenen drei Ticks.
-    let t = trace(&p, "t=4 job m v done\n", 12);
+    let t = trace(&p, "t=4 job m v done start=0\n", 12);
     let done = done_ticks(&t);
     assert_eq!(done.first(), Some(&"t=4"), "{t}");
     let second: u64 = done.get(1).and_then(|d| d.strip_prefix("t=")).and_then(|d| d.parse().ok()).expect("zweiter");
@@ -521,16 +522,17 @@ fn an_invalid_stimulus_names_its_line() {
     use takt_interp::{StimulusError, read_stimulus};
     let p = compile(JOBS);
     let error = |text: &str| read_stimulus(&p, text, None).err().map(|StimulusError { line, message }| (line, message));
-    let (line, message) = error("t=1 job nope v done\n").expect("abgelehnt");
+    let (line, message) = error("t=1 job nope v done start=0\n").expect("abgelehnt");
     assert_eq!(line, 1, "{message}");
     assert!(message.contains("nope"), "{message}");
-    let (line, message) = error("# Kopf\n\nt=1 job m v done\nt=2 in gibtsnicht 3\n").expect("abgelehnt");
+    let (line, message) = error("# Kopf\n\nt=1 job m v done start=0\nt=2 in gibtsnicht 3\n").expect("abgelehnt");
     assert_eq!((line, message.contains("gibtsnicht")), (4, true), "{message}");
-    assert!(error("t=1 job m w done\n").is_some_and(|(l, m)| l == 1 && m.contains("`w`")), "fremdes Handle");
+    assert!(error("t=1 job m w done start=0\n").is_some_and(|(l, m)| l == 1 && m.contains("`w`")), "fremdes Handle");
     assert!(error("t=1 cmd los\n").is_some(), "unbekanntes Command");
     assert!(error("t=1 runtime Blitz\n").is_some(), "unbekannter Runtime-Fault");
     assert!(error("t=1 job m v\n").is_some(), "Zeile ohne `done`");
-    let ok = read_stimulus(&p, "t=1 job m v done\nt=4 abort\n", None).expect("gueltig");
+    assert!(error("t=1 job m v done\n").is_some(), "Zeile ohne `start=`");
+    let ok = read_stimulus(&p, "t=1 job m v done start=0\nt=4 abort\n", None).expect("gueltig");
     assert_eq!(ok.lines.len(), 2);
 }
 

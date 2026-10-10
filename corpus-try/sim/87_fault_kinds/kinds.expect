@@ -3,4 +3,4 @@ t=2 fault timing TimingFault "`at` fuer `timed` liegt nicht in der Zukunft" -> F
 t=2 fault crowd ScheduleOverflow "`sched` von `crowded` ist voll (4)" -> FAULTED
 t=2 fault divide Arithmetic(DivZero) "Division durch null" -> FAULTED
 t=2 fault grow Arithmetic(Overflow) "Ueberlauf in int" -> FAULTED
-t=4 job restart v done
+t=4 job restart v done start=1
