@@ -227,8 +227,9 @@ pub enum Form {
     /// Die Hauptschleife des Wirts ruft `service`, sobald die Frist
     /// erreicht ist; ihre laengste Runde nennt die Hardware-Konfiguration.
     Poll,
-    /// Takt als hoechstpriore Aufgabe unter dem RTOS des Boards, mit
-    /// Treiber-Aufgabe und Funk-ISR als Last.
+    /// Takt als hoechstpriore Aufgabe unter dem RTOS des Boards, die der
+    /// Alarm zur Frist weckt, mit Treiber-Aufgabe und Funk-ISR als Last; auf
+    /// dem F401 RTIC 2 (Merkmal `rtic`).
     Rtos,
 }
 
@@ -240,7 +241,7 @@ impl Form {
             Form::Own => None,
             Form::Interrupt => Some("interrupt"),
             Form::Poll => Some("poll"),
-            Form::Rtos => Some("rtos"),
+            Form::Rtos => Some("rtic"),
         }
     }
 }

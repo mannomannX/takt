@@ -1841,8 +1841,7 @@ takt-prove          Schrittfunktion als Transitionssystem, SMT-LIB2-Export, BMC 
 libtaktm            Mathematik für alle Targets aus derselben Quelle
 takt-rt-core        Tick-Schleife, Prozessabbild, Fault-Wald, Abort-Phase, Zähler, Jobs, Watchdog, `persist`-Journal — `no_std`, ohne Allokation
 takt-rt-linux       Profilaufsatz `linux_rt` (12.2): Echtzeituhr mit absoluten Deadlines, gemessene Zeitgarantie, Jobs in Threads, NVM als Datei, Tunables
-takt-rt-baremetal   Profilaufsatz `baremetal` (12.3): Tick per Timer, Telemetrie-Ring, logische Zeit für Konformitätsläufe, Schlaf
-takt-rt-rtos        Profilaufsatz `shared` (12.8): Takt als höchstpriore Aufgabe unter einem Planer, der nicht Takt gehört; die Aufgabe wartet auf die Benachrichtigung je Tickgrenze und arbeitet ab, was fällig ist
+takt-rt-baremetal   Profilaufsatz `baremetal` (12.3): Tick per Timer, Telemetrie-Ring, logische Zeit für Konformitätsläufe, Schlaf; die Ports unter `shared` (12.8, 12.11): Interrupt- und Pollform und die Aufgabe eines Planers, den die ISR des Alarms zur Frist weckt
 takt-hal            Treiber-Traits (Skalar, Stream, geplante Ausgabe), Rand-Selbstprüfungen (12.6), Simulationstreiber — die Sim/HW-Umschaltung (8.3) ist ein Treiberwechsel
 takt-board-support  die rechnende Hälfte der Board-Unterstützung ohne Registerzugriff: Perioden, Zyklen, FIFO, Messschleife (13.8)
 takt-board-esp32c6  Board-Unterstützung ESP32-C6: Alarm, Zyklenzähler, USB-Serial-JTAG, Treiber — TCB, eigener Workspace (9.5)

@@ -56,12 +56,11 @@ cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7", features = ["set-vtor"] }
 stm32f4 = { version = "0.16", features = ["stm32f401", "rt"] }
 
-# Profil `shared` unter RTIC 2 (12.8): Takt als hoechstpriore Aufgabe, mit
-# einer Treiber-Aufgabe und einer Funk-ISR als Last. Ohne das Feature ist
-# `takt` das Programm unter der Bare-Metal-Schleife.
+# Die Form `rtos` unter RTIC 2 (Merkmal `rtic`, 12.8, 12.11): Takt als
+# Aufgabe, die der Alarm zur Frist weckt, mit einer Treiber-Aufgabe und einer
+# Funk-ISR als Last.
 rtic = { version = "2.3", features = ["thumbv7-backend"], optional = true }
 rtic-sync = { version = "1.5", optional = true }
-takt-rt-rtos = { path = "../takt-rt-rtos", optional = true }
 
 # Ohne Panic-Handler linkt ein `no_std`-Binary nicht. `panic-halt` haelt
 # an, statt zu melden — fuer den Bring-up richtig: Eine Panik ist hier ein
@@ -70,7 +69,7 @@ takt-rt-rtos = { path = "../takt-rt-rtos", optional = true }
 panic-halt = "1.0"
 
 [features]
-rtos = ["dep:rtic", "dep:rtic-sync", "dep:takt-rt-rtos"]
+rtic = ["dep:rtic", "dep:rtic-sync"]
 # Die Interruptform (12.11): Den Schritt rechnet die ISR von TIM2 zur Frist,
 # darunter laeuft eine fremde Hauptschleife.
 interrupt = []

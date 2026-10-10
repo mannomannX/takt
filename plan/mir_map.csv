@@ -83,7 +83,7 @@ SEM-12.4,Runtime,takt-hal,
 SEM-12.5,Runtime,takt-rt-core,Recording; Logik-Hash im Lauf-Header
 SEM-12.6,Runtime,takt-hal,
 SEM-12.7,Runtime,takt-rt-boot,
-SEM-12.8,Runtime,takt-rt-rtos,
+SEM-12.8,Runtime,takt-rt-baremetal,
 SEM-12.9,Knoten,Node,Machine::node; RuntimeKind::Node
 SEM-13.1,Runtime,takt-interp,
 SEM-13.2,Runtime,takt-interp,Coverage über State/Transition/Check-Positionen
@@ -391,7 +391,7 @@ PAR-12.7-Neustart_aus_sicherem_Zustand,Runtime,takt-rt-boot,
 PAR-12.7-Tiefschlaf,Runtime,takt-rt-boot,
 PAR-12.7-Start_Channels,Runtime,takt-rt-boot,
 PAR-12.7-Irreversible_Outputs,Knoten,ChannelAttrs,irreversible; Prüfung 48
-PAR-12.8-Zielklassen,Runtime,takt-rt-rtos,
+PAR-12.8-Zielklassen,Runtime,takt-rt-baremetal,
 PAR-13.3-Sprache,Knoten,TProp,
 PAR-13.3-Semantik,Knoten,TProp::Temporal,
 PAR-13.3-Verwendung,Knoten,Property,monitor

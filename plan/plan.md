@@ -45,7 +45,7 @@ Keiner der reinen Ansätze reicht. A und C sind zu spät bei der Hardware, B bau
 | `takt-interp` | ausführbare Semantik 9.x über MIR; Const-Auswertung; Orakel-Rahmen | Simulation, Tests, Codegen-Abnahme, Importer |
 | `takt-llvm` | MIR → LLVM IR (strikte FP), Targets, Instrumentierung, Debug-Info | `takt run`, Profile |
 | `takt-rt-core` | Tick-Schleife, Prozessabbild (Doppelpuffer), Streams (Byte-Ringe), Fault-Wald, Abort-Phase, Zähler, `sched`, Jobs, Recording-Schnittstelle — `no_std`, ohne Allokation | alle Profile |
-| `takt-rt-linux`, `takt-rt-baremetal`, `takt-rt-rtos` | Profilaufsätze: Threads/ISRs, Treiberbindung, Telemetrie, NVM-Journal, Schlaf | Ziele |
+| `takt-rt-linux`, `takt-rt-baremetal` | Profilaufsätze: Threads/ISRs, Treiberbindung, Telemetrie, NVM-Journal, Schlaf | Ziele |
 | `takt-hal` | Treiber-Traits (Skalar, Stream, geplante Ausgabe, Flash-Gerät), Rand-Selbstprüfungen (12.6), Simulationstreiber | Runtime, Simulation, `driver-test` |
 | `libtaktm` + `takt-native` | korrekt gerundete Mathematik beider Breiten, `fma`, Schnellvarianten, Chunk-Natives, Jobs — ein `no_std`-Crate | Interpreter (Host) und Targets |
 | `takt-stdlib` (in Takt) | Blöcke, Funktionen, Protokollpakete, Simulationsmodelle (`flash_model`, Plant-Modelle) | jedes Programm |

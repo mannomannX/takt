@@ -844,14 +844,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "takt-rt-rtos"
-version = "0.1.0"
-dependencies = [
- "takt-rt-baremetal",
- "takt-rt-core",
-]
-
-[[package]]
 name = "takt-sema"
 version = "0.1.0"
 dependencies = [

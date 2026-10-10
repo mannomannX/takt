@@ -400,7 +400,6 @@ mod devices {
 
 /// Fuehrt einen angeforderten Pruefzugriff aus; ausserhalb des Ticks, wo
 /// kein Code der TCB den Programmzustand beschreiben darf.
-#[cfg(not(form = "rtos"))]
 fn probe() {
     let target = match PROBE.load(Ordering::Relaxed) {
         1 => Some(mpu::state_address()),
@@ -742,7 +741,7 @@ fn main() -> ! {
     }
 }
 
-#[cfg(timer = "free")]
+#[cfg(any(form = "interrupt", form = "poll"))]
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
@@ -769,6 +768,8 @@ mod host {
     pub const JOB_LINE: Interrupt = Interrupt::EXTI1;
 
     /// Die Jobs unter allen Interrupts; nur die Hauptschleife liegt darunter.
+    /// Unter RTIC setzt die App die Prioritaet der Job-Aufgabe.
+    #[cfg(any(form = "interrupt", form = "poll"))]
     pub const JOB_PRIORITY: u8 = 0xF0;
 
     /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
@@ -1107,61 +1108,115 @@ mod poll_form {
     }
 }
 
-/// Die Tickgrenze unter RTIC (12.8): Vor dem Warten gibt die Takt-Aufgabe
-/// den naechsten Job-Auftrag aus (4.5) und fuellt die Leitung nach.
+/// Die Form `rtos` unter RTIC 2 (12.8, 12.11): Den Schritt rechnet eine
+/// Aufgabe hoher Prioritaet, die die ISR des Alarms zur Frist weckt — dieselbe
+/// [`Form`](takt_rt_baremetal::interrupt::Form) wie in der Interruptform, mit
+/// dem Planer von RTIC statt der Prioritaet einer ISR. Nach jedem Auftrag
+/// weckt die Job-Aufgabe sie ebenso, und sie verteilt den naechsten (FB-512).
+/// Die Idle-Aufgabe ist die Hauptschleife des Wirts: Sie zaehlt ihre Runden,
+/// oeffnet in logischer Zeit das Tor der Frist und fuehrt am Ende den Lauf
+/// aus (12.11).
 #[cfg(form = "rtos")]
-struct TaskBoundary {
-    reached: rtic_sync::signal::SignalReader<'static, ()>,
-    work: rtic_sync::signal::SignalWriter<'static, ()>,
-}
+mod rtic_form {
+    use core::sync::atomic::{AtomicBool, Ordering};
 
-/// Die Tickgrenze mit dem Griff, der verteilt: Er entsteht mit dem Programm
-/// in der Takt-Aufgabe und bleibt dort, darum nicht in [`TaskBoundary`], das
-/// RTIC von `init` an die Aufgabe gibt.
-#[cfg(form = "rtos")]
-struct Dispatching {
-    boundary: TaskBoundary,
-    dispatch: Option<app::Dispatch<'static>>,
-}
+    use rtic_sync::signal::{SignalReader, SignalWriter};
+    use takt_board_stm32f401::alarm::Tim2Alarm;
+    use takt_rt_baremetal::interrupt::{Alarm, Form, Time, release};
 
-#[cfg(form = "rtos")]
-impl takt_rt_rtos::Boundary for Dispatching {
-    async fn reached(&mut self) {
-        if self.dispatch.as_mut().is_some_and(takt_embed::Dispatch::next) {
-            self.boundary.work.write(());
-        }
-        if let Some(u) = uart() {
-            u.flush();
-        }
-        self.boundary.reached.wait().await;
+    use super::host::{self, Work};
+    use super::{
+        Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, no_journal, program, runtime, uart,
+    };
+
+    /// Die Frist ist erreicht; die Takt-Aufgabe rechnet den Schritt.
+    pub static DUE: AtomicBool = AtomicBool::new(false);
+
+    /// Die Job-Aufgabe hat ihren Auftrag gerechnet; die Takt-Aufgabe
+    /// verteilt den naechsten.
+    pub static JOB_DONE: AtomicBool = AtomicBool::new(false);
+
+    /// In logischer Zeit das Tor der Frist; die Idle-Aufgabe oeffnet es.
+    static GATE: AtomicBool = AtomicBool::new(false);
+
+    /// Der Lauf ist zu Ende und liegt in [`ENDED_RUN`].
+    static ENDED: AtomicBool = AtomicBool::new(false);
+
+    /// Ein beendeter Lauf mit seiner Bilanz.
+    struct Ended {
+        rt: Takt<Time<Tim2Alarm>>,
+        stats: Stats,
     }
-}
 
-/// Die Takt-Aufgabe (12.8): der Lauf, die Abschlusszeile, danach die
-/// offene Leitung wie auf dem blanken Board.
-#[cfg(form = "rtos")]
-async fn conduct_rtos(timer: Tim2Tick, protection: Mpu, boundary: TaskBoundary) {
-    // SAFETY: einmal je Lauf; die Aufgabe kehrt nicht zurueck.
-    let mut program = unsafe { program() };
-    let mut boundary = Dispatching { boundary, dispatch: program.dispatch() };
-    hand_over_jobs(&mut program);
-    let mut tunes = Console::new(takt_board_stm32f401::console_byte);
-    if LOGICAL {
-        // In logischer Zeit ist jede Grenze eine Periode (13.8); die
-        // Aufgaben darunter rechnen wie im Betrieb.
-        let now = core::cell::Cell::new(0);
-        let mut rt = runtime(takt_rt_rtos::LogicalTime(&now), protection, Profile::SHARED, program);
-        let mut logical = takt_rt_rtos::Logical::new(&mut boundary, &now, TICK_NS);
-        let stats = takt_rt_rtos::run(&mut rt, no_journal(), Some(&mut tunes), &mut logical).await;
-        conclude(&rt, &stats);
-    } else {
-        let mut rt = runtime(TimerClock::new(timer, TICK_NS), protection, Profile::SHARED, program);
-        let stats = takt_rt_rtos::run(&mut rt, no_journal(), Some(&mut tunes), &mut boundary).await;
-        conclude(&rt, &stats);
+    /// Der beendete Lauf. Die Takt-Aufgabe legt ihn ab und rechnet danach
+    /// nicht mehr mit ihm; ab [`ENDED`] gehoert er der Idle-Aufgabe.
+    static mut ENDED_RUN: Option<Ended> = None;
+
+    /// Der Alarm der Takt-Aufgabe: TIM2 auf die Frist, die Jobs an die
+    /// Job-Aufgabe.
+    pub struct TaskAlarm {
+        pub tim2: Tim2Alarm,
+        pub work: SignalWriter<'static, ()>,
     }
-    loop {
-        takt_rt_rtos::Boundary::reached(&mut boundary).await;
-        Iwdg::feed();
+
+    impl Alarm for TaskAlarm {
+        fn arm(&mut self, at: i64) {
+            self.tim2.arm(at);
+        }
+
+        fn pend_jobs(&mut self) {
+            self.work.write(());
+        }
+    }
+
+    /// Die Takt-Aufgabe: an der Frist der Schritt, nach einem Auftrag der
+    /// Job-Aufgabe das Verteilen, danach die Leitung; am Ende geht der Lauf
+    /// an die Idle-Aufgabe.
+    pub async fn run(alarm: TaskAlarm, protection: Mpu, mut wake: SignalReader<'static, ()>) {
+        // SAFETY: einmal je Lauf; die Aufgabe startet einmal.
+        let mut program = unsafe { program() };
+        hand_over_jobs(&mut program);
+        let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm.tim2) };
+        let mut rt = runtime(clock, protection, Profile::SHARED, program);
+        let mut form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
+        let mut tunes = Console::new(takt_board_stm32f401::console_byte);
+        let stats = loop {
+            wake.wait().await;
+            if DUE.swap(false, Ordering::AcqRel)
+                && let Some(stats) = form.on_alarm(&mut rt, no_journal(), Some(&mut tunes))
+            {
+                break stats;
+            }
+            if JOB_DONE.swap(false, Ordering::AcqRel) {
+                form.on_job_done(&mut rt, no_journal(), Some(&mut tunes));
+            }
+            if let Some(u) = uart() {
+                u.flush();
+            }
+        };
+        // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
+        // Aufgabe nicht mehr mit dem Lauf.
+        unsafe { ENDED_RUN = Some(Ended { rt, stats }) };
+        ENDED.store(true, Ordering::Release);
+    }
+
+    /// Die Idle-Aufgabe: die Hauptschleife des Wirts. In logischer Zeit gibt
+    /// sie den Alarm frei, sobald sie laeuft, denn dann ruht jede Aufgabe
+    /// (`release`); nach dem Ende schreibt sie die Bilanz.
+    pub fn host(mut alarm: Tim2Alarm) -> ! {
+        let mut work = Work::new();
+        while !ENDED.load(Ordering::Acquire) {
+            if LOGICAL {
+                release(&GATE, &mut alarm);
+            }
+            work.round(alarm.now_ns());
+        }
+        // SAFETY: Ab `ENDED` gehoert der Lauf dieser Aufgabe.
+        if let Some(ended) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
+            work.report(None);
+            conclude(&ended.rt, &ended.stats);
+        }
+        host::park()
     }
 }
 
@@ -1228,24 +1283,32 @@ mod load {
 /// **Prioritaeten, von oben.** Die Leitung (USART1, 6): Ihr Empfangsregister
 /// fasst ein Byte, bei 921 600 Baud kommt alle 10,9 us eines, und das Wort
 /// `TAKT` des Hosts darf keines verlieren. Die Funk-ISR (TIM3, 5) steht fuer
-/// einen Funkstack, der den Rest unterbricht; der Tick (TIM2, 4); dann die
-/// Takt-Aufgabe (3), die Treiber-Aufgabe (2) und die Jobs (1).
-/// `MemoryManagement` steht ueber allen (12.3).
+/// einen Funkstack, der den Rest unterbricht; der Alarm (TIM2, 4); dann die
+/// Takt-Aufgabe (3), die Treiber-Aufgabe (2), die Jobs (1) und die
+/// Idle-Aufgabe als Hauptschleife des Wirts. `MemoryManagement` steht ueber
+/// allen (12.3).
 ///
 /// **Der kritische Abschnitt ist eine Sperre, keine Interruptsperre.** Die
-/// Treiber-Aufgabe teilt mit der Tick-ISR den Zaehler der Tickgrenzen; ihre
+/// Treiber-Aufgabe teilt mit der ISR des Alarms den Zaehler der Fristen; ihre
 /// Sperre hebt die Prioritaet bis zur Decke 4, wie ein kritischer Abschnitt
 /// eines RTOS bis zu seiner hoechsten Systemprioritaet maskiert. Sie haelt
-/// so Tick und Takt-Aufgabe auf, die Funk-ISR und die Leitung nicht. Was
+/// so Alarm und Takt-Aufgabe auf, die Funk-ISR und die Leitung nicht. Was
 /// die Takt-Aufgabe verspaetet, misst `drift` jedes Ticks.
 #[cfg(form = "rtos")]
 #[rtic::app(device = stm32f4::stm32f401, peripherals = true, dispatchers = [SPI1, SPI2, SPI3])]
 mod rtic_app {
-    use rtic_sync::signal::{Signal, SignalReader, SignalWriter};
-    use takt_board_stm32f401::{Mpu, Tim2Tick, mpu};
+    use core::sync::atomic::Ordering;
 
-    /// Die Tickgrenzen vom Timer an die Takt-Aufgabe.
-    static BOUNDARY: Signal<()> = Signal::new();
+    use rtic_sync::signal::{Signal, SignalReader, SignalWriter};
+    use takt_board_stm32f401::alarm::{self, Tim2Alarm};
+    use takt_board_stm32f401::{Mpu, mpu};
+
+    use super::rtic_form::{DUE, JOB_DONE, TaskAlarm};
+
+    /// Was die Takt-Aufgabe weckt: die Frist aus der ISR des Alarms und der
+    /// gerechnete Auftrag der Job-Aufgabe; den Grund tragen `DUE` und
+    /// `JOB_DONE`.
+    static WAKE: Signal<()> = Signal::new();
     /// Ein Auftrag fuer die Job-Aufgabe (4.5).
     static WORK: Signal<()> = Signal::new();
     /// Ein Anlass fuer die Treiber-Aufgabe, aus der Funk-ISR.
@@ -1253,15 +1316,17 @@ mod rtic_app {
 
     #[shared]
     struct Shared {
-        /// Die Tickgrenzen seit dem Start; die Tick-ISR zaehlt, die
-        /// Treiber-Aufgabe haelt ihn in ihrem kritischen Abschnitt.
+        /// Die Fristen seit dem Start; die ISR des Alarms zaehlt, die
+        /// Treiber-Aufgabe haelt den Zaehler in ihrem kritischen Abschnitt.
         boundaries: u32,
     }
 
     #[local]
     struct Local {
-        boundary: SignalWriter<'static, ()>,
-        takt: Option<(Tim2Tick, Mpu, super::TaskBoundary)>,
+        due: SignalWriter<'static, ()>,
+        done: SignalWriter<'static, ()>,
+        takt: Option<(TaskAlarm, Mpu, SignalReader<'static, ()>)>,
+        host: Tim2Alarm,
         driver_in: SignalWriter<'static, ()>,
         driver_out: SignalReader<'static, ()>,
         work: SignalReader<'static, ()>,
@@ -1271,7 +1336,7 @@ mod rtic_app {
     fn init(cx: init::Context) -> (Shared, Local) {
         let super::Setup { timer, protection } = super::setup(cx.device, cx.core);
         super::load::start();
-        let (boundary, reached) = BOUNDARY.split();
+        let (due, wake) = WAKE.split();
         let (hand_over, work) = WORK.split();
         let (driver_in, driver_out) = DRIVER.split();
         takt::spawn().expect("Takt-Aufgabe");
@@ -1280,15 +1345,26 @@ mod rtic_app {
         // Die Abschlusszeile meldet, wie tief der Stack unter den Aufgaben
         // reichte: gemalt am Ende des Aufbaus (12.3).
         takt_board_stm32f401::stack::paint();
-        let takt = Some((timer, protection, super::TaskBoundary { reached, work: hand_over }));
-        (Shared { boundaries: 0 }, Local { boundary, takt, driver_in, driver_out, work })
+        let takt = Some((TaskAlarm { tim2: timer, work: hand_over }, protection, wake));
+        let done = due.clone();
+        (Shared { boundaries: 0 }, Local { due, done, takt, host: timer, driver_in, driver_out, work })
     }
 
-    #[task(binds = TIM2, priority = 4, local = [boundary], shared = [boundaries])]
+    /// Die Hauptschleife des Wirts (`rtic_form::host`).
+    #[idle(local = [host])]
+    fn idle(cx: idle::Context) -> ! {
+        super::rtic_form::host(*cx.local.host)
+    }
+
+    /// Der Alarm: An der Frist weckt er die Takt-Aufgabe; ein Ueberlauf der
+    /// Zeitachse zaehlt nur ihre Epoche.
+    #[task(binds = TIM2, priority = 4, local = [due], shared = [boundaries])]
     fn tim2(mut cx: tim2::Context) {
-        super::on_tim2();
-        cx.shared.boundaries.lock(|b| *b = b.wrapping_add(1));
-        cx.local.boundary.write(());
+        if mpu::isr(alarm::on_interrupt) {
+            cx.shared.boundaries.lock(|b| *b = b.wrapping_add(1));
+            DUE.store(true, Ordering::Release);
+            cx.local.due.write(());
+        }
     }
 
     #[task(binds = USART1, priority = 6)]
@@ -1307,8 +1383,8 @@ mod rtic_app {
 
     #[task(priority = 3, local = [takt])]
     async fn takt(cx: takt::Context) {
-        if let Some((timer, protection, boundary)) = cx.local.takt.take() {
-            super::conduct_rtos(timer, protection, boundary).await;
+        if let Some((alarm, protection, wake)) = cx.local.takt.take() {
+            super::rtic_form::run(alarm, protection, wake).await;
         }
     }
 
@@ -1321,15 +1397,15 @@ mod rtic_app {
         }
     }
 
-    #[task(priority = 1, local = [work])]
+    /// Die Job-Aufgabe (4.5): rechnet den Auftrag und weckt die
+    /// Takt-Aufgabe, die den naechsten verteilt.
+    #[task(priority = 1, local = [work, done])]
     async fn jobs(cx: jobs::Context) {
         loop {
             cx.local.work.wait().await;
-            // SAFETY: Die Takt-Aufgabe legt den Griff ab, bevor sie verteilt;
-            // danach rechnet nur diese Aufgabe mit ihm.
-            if let Some(jobs) = unsafe { (*(&raw mut super::JOBS)).as_mut() } {
-                jobs.work();
-            }
+            super::host::work_jobs();
+            JOB_DONE.store(true, Ordering::Release);
+            cx.local.done.write(());
         }
     }
 }

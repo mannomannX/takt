@@ -29,7 +29,6 @@ members = [
     "crates/takt-rt-core",
     "crates/takt-rt-linux",
     "crates/takt-rt-baremetal",
-    "crates/takt-rt-rtos",
     "crates/takt-board-support",
     "crates/takt-driver-probe",
     "crates/takt-llvm",

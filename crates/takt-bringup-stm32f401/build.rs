@@ -146,19 +146,20 @@ fn build_takt_program(out: &Path, form: &str) {
     println!("cargo:rustc-link-arg=--icf=all");
 }
 
-/// Die Form des Ports (12.11) aus den Merkmalen: `rtos` (RTIC),
-/// `interrupt`, `poll`, ohne eines der eigene Kern. Das Binary waehlt seinen
-/// Pfad mit `cfg(form = "…")`, und mit `cfg(timer = "…")`, ob TIM2
-/// periodisch tickt (eigener Kern, RTIC) oder frei als Zeitachse laeuft
-/// (Interrupt- und Pollform).
+/// Die Form des Ports (12.11) aus den Merkmalen: `interrupt`, `poll`,
+/// `rtic` (die Form `rtos` unter RTIC 2), ohne eines der eigene Kern. Das
+/// Binary waehlt seinen Pfad mit `cfg(form = "…")`, und mit `cfg(timer =
+/// "…")`, ob TIM2 periodisch tickt (eigener Kern) oder frei als Zeitachse
+/// eines Alarms laeuft (alle anderen).
 fn form() -> &'static str {
-    let chosen: Vec<&str> = ["rtos", "interrupt", "poll"]
+    let chosen: Vec<&str> = [("interrupt", "interrupt"), ("poll", "poll"), ("rtic", "rtos")]
         .into_iter()
-        .filter(|f| env::var_os(format!("CARGO_FEATURE_{}", f.to_uppercase())).is_some())
+        .filter(|(feature, _)| env::var_os(format!("CARGO_FEATURE_{}", feature.to_uppercase())).is_some())
+        .map(|(_, form)| form)
         .collect();
     assert!(chosen.len() <= 1, "{chosen:?} sind mehrere Formen; ein Bau hat eine (12.11)");
     let form = chosen.first().copied().unwrap_or("own");
-    let timer = if matches!(form, "interrupt" | "poll") { "free" } else { "periodic" };
+    let timer = if form == "own" { "periodic" } else { "free" };
     println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\", \"poll\", \"rtos\"))");
     println!("cargo::rustc-check-cfg=cfg(timer, values(\"periodic\", \"free\"))");
     println!("cargo:rustc-cfg=form=\"{form}\"");

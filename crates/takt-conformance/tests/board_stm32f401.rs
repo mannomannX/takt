@@ -286,14 +286,14 @@ fn the_poll_form_steps_within_a_round_of_its_main_loop() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
-/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern,
-/// in der Interrupt- und in der Pollform (4.5, 12.11). Unter RTIC gibt die
-/// Takt-Aufgabe einen Job je Grenze aus (FB-512, Schritt 14c).
+/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, in jeder Form des
+/// Boards (4.5, 12.11, FB-512): Nach dem ersten Auftrag verteilt der
+/// Schrittkontext den zweiten, bevor die Grenze kommt.
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn simultaneous_jobs_finish_on_time_on_the_board() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed: Vec<String> = [Form::Own, Form::Interrupt, Form::Poll]
+    let failed: Vec<String> = [Form::Own, Form::Interrupt, Form::Poll, Form::Rtos]
         .into_iter()
         .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
         .collect();

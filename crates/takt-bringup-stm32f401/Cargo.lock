@@ -831,7 +831,6 @@ dependencies = [
  "takt-native-abi",
  "takt-rt-baremetal",
  "takt-rt-core",
- "takt-rt-rtos",
 ]
 
 [[package]]
@@ -960,14 +959,6 @@ version = "0.1.0"
 dependencies = [
  "takt-hal",
  "takt-native",
-]
-
-[[package]]
-name = "takt-rt-rtos"
-version = "0.1.0"
-dependencies = [
- "takt-rt-baremetal",
- "takt-rt-core",
 ]
 
 [[package]]

@@ -29,7 +29,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 targets=(thumbv7em-none-eabihf riscv32imac-unknown-none-elf)
-cores=(takt-rt-core takt-rt-baremetal takt-rt-rtos)
+cores=(takt-rt-core takt-rt-baremetal)
 
 for t in "${targets[@]}"; do
     if ! rustup target list --installed | grep -qx "$t"; then

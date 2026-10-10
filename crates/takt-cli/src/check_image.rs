@@ -38,10 +38,9 @@ use takt_llvm::inspect::Function;
 use takt_llvm::inspect::{CallGraph, SectionRange, Symbol, runs_without_flash};
 
 /// Die Crates, die jedes Programm teilt, mit ihrem Pfad im demangelten Namen.
-const TAKT_CRATES: [&str; 8] = [
+const TAKT_CRATES: [&str; 7] = [
     "takt_rt_core::",
     "takt_rt_baremetal::",
-    "takt_rt_rtos::",
     "takt_embed::",
     "takt_hal::",
     "libtaktm::",

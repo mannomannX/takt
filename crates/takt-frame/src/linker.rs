@@ -23,16 +23,8 @@ use takt_llvm::symbols::Prefix;
 /// Die Crates, die jedes Programm im Tick ruft, mit ihrem Namen im Symbol:
 /// Schleife und Profilaufsaetze, Huelle der Einbettung, Treiberrand,
 /// Mathematik und Natives.
-const SHARED_CRATES: [&str; 8] = [
-    "takt_rt_core",
-    "takt_rt_baremetal",
-    "takt_rt_rtos",
-    "takt_embed",
-    "takt_hal",
-    "libtaktm",
-    "takt_native",
-    "takt_native_abi",
-];
+const SHARED_CRATES: [&str; 7] =
+    ["takt_rt_core", "takt_rt_baremetal", "takt_embed", "takt_hal", "libtaktm", "takt_native", "takt_native_abi"];
 
 /// Was Mathematik und Natives aus der Kernbibliothek rufen: `core::num`
 /// (`isqrt` in `libtaktm`) und `core::str` (UTF-8 in `takt_native::bytes`);
