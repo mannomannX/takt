@@ -20,8 +20,8 @@ Plan; `plan/m11.md` bleibt die Quelle für Ziel und Abnahme je Schritt.
 
 | Ressource | Regel |
 |---|---|
-| Zielverzeichnis | A: `G:\rust\target`, B: `G:\rust\target-b`. Nie ein fremdes; ein Worktree mit dem Ziel des Hauptbaums vermischt Artefakte. |
-| Platz auf G: | Vor jedem langen Lauf `pwsh tools/prune-target.ps1 -Apply` (für B mit dem eigenen Zielverzeichnis). Unter 10 GB frei: kein neuer Bau, Koordination fragen. |
+| Zielverzeichnis | A: `G:\rust\target`, B: `D:\rust\target-b` (auf `G:` ist kein Platz für ein zweites). Nie ein fremdes; ein Worktree mit dem Ziel des Hauptbaums vermischt Artefakte. |
+| Platz | Vor jedem langen Lauf `pwsh tools/prune-target.ps1 -Apply` (für B mit dem eigenen Zielverzeichnis). Auf `G:` unter 10 GB frei: kein neuer Bau, Koordination fragen. Die Zielverzeichnisse anderer Projekte unter `G:\rust` bleiben unberührt. |
 | Schwere Läufe | Volle Suite, `the_three_executors_agree`, `solver_paths` mit `UPDATE_PATHS`, Release-Bauten, Docker/qemu, Mutationen, Board-Bauten. Vorher die Sperre `G:\rust\heavy.lock` anlegen (Inhalt: Strang, Zeit, Lauf), danach löschen. Liegt sie schon da und ist jünger als drei Stunden, warten (alle fünf Minuten nachsehen). Der Rechner hat eine Commit-Grenze: Zwei schwere Läufe zugleich haben schon `rustc` und `z3` abstürzen lassen. |
 | Kerne | Höchstens Kerne − 1; ein Kern bleibt für den Nutzer frei. |
 | Boards | ESP32-C6 (COM4) und STM32F401 (COM7) je einzeln: Sperre `G:\rust\board-c6.lock` bzw. `board-f401.lock`. Board-Läufe nur über `tools/board-run.ps1` (eigener Worktree, eigenes Ziel, abgekoppelt). |
