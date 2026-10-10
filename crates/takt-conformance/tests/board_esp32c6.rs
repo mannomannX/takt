@@ -12,11 +12,12 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    TICKS, agreement, corpus, driver_edge_agrees, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, replayed,
+    TICKS, agreement, agreement_with, corpus, driver_edge_agrees, last_output, long_job_keeps_the_tick, natives_agree,
+    overrun_reaches_every_machine, replayed, runs_shared, simultaneous_jobs_finish_on_time,
+    the_interrupt_form_keeps_its_deadline,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
-use takt_conformance::board::{self, Board, Options};
+use takt_conformance::board::{self, Board, Form, Options};
 use takt_conformance::compare;
 
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
@@ -481,6 +482,44 @@ fn the_board_agrees_with_the_interpreter() {
     // `TAKT_ESP32C6_ONLY=42_map.takt` fuer einen einzelnen Fall.
     let only = std::env::var("TAKT_ESP32C6_ONLY").ok();
     let failed = agreement(&mut board, &board::corpus(), only.as_deref());
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **In der Interruptform rechnet der Korpus wie der Interpreter** (12.11,
+/// M11 Schritt 14): Den Schritt rechnet die ISR des SYSTIMER-Vergleichers
+/// zu der Frist, die `service` nennt, Jobs ein Software-Interrupt, und
+/// darunter laeuft eine fremde Hauptschleife. In logischer Zeit gibt sie
+/// den Alarm erst frei, wenn das System ruht.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn the_board_agrees_with_the_interpreter_in_the_interrupt_form() {
+    let Some((mut board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_ESP32C6_ONLY").ok();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| runs_shared(n)).collect();
+    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Interrupt));
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **In der Interruptform beginnt der Schritt auf seiner Frist, neben einer
+/// fremden Hauptschleife** (12.11).
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = the_interrupt_form_keeps_its_deadline(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern
+/// und in der Interruptform (4.5, 12.11).
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn simultaneous_jobs_finish_on_time_on_the_board() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed: Vec<String> = [Form::Own, Form::Interrupt]
+        .into_iter()
+        .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
+        .collect();
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 

@@ -571,6 +571,59 @@ pub fn simultaneous_jobs_finish_on_time(board: &mut dyn Board, form: Form) -> Ve
     }
 }
 
+/// **In der Interruptform beginnt der Schritt auf seiner Frist, neben einer
+/// fremden Hauptschleife** (12.11): `drift` ueber 3000 Ticks bei 1 ms, und
+/// die Hauptschleife des Wirts drehte dabei ihre Runden — der Schritt
+/// rechnete in der ISR, nicht in ihr.
+pub fn the_interrupt_form_keeps_its_deadline(board: &mut dyn Board) -> Vec<String> {
+    let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
+    let options = Options::timed(3000).in_form(Form::Interrupt);
+    let text = match board.build(&program, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(t) => t,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let drift = Drift::of(&text);
+    let rounds = text.lines().find_map(|l| l.strip_prefix("takt wirt runden ")?.trim().parse::<u64>().ok());
+    eprintln!(
+        "{} interrupt: {} Ticks, Median {} ns, spaetester {} ns darueber, {rounds:?} Runden des Wirts",
+        board.name(),
+        drift.ticks,
+        drift.median,
+        drift.late
+    );
+    let mut failed = Vec::new();
+    if drift.ticks < 2000 {
+        failed.push(format!("{} Zeitzeilen", drift.ticks));
+    }
+    if drift.median >= 20_000 {
+        failed.push(format!("der Schritt beginnt im Mittel {} ns nach der Frist", drift.median));
+    }
+    if drift.late >= 50_000 {
+        failed.push(format!("ein Tick {} ns spaeter als im Mittel", drift.late));
+    }
+    match rounds {
+        Some(r) if r > 3000 => {}
+        Some(r) => failed.push(format!("die Hauptschleife drehte {r} Runden in 3000 Ticks")),
+        None => failed.push("die Bilanz nennt die Runden des Wirts nicht".to_string()),
+    }
+    if !text.contains(" out count ") {
+        failed.push("keine Ausgaben".to_string());
+    }
+    if !failed.is_empty() {
+        failed.push(text);
+    }
+    failed
+}
+
+/// Darf das Programm in einer Form unter `shared` laufen, unter RTIC oder in
+/// der Interruptform? Wer sein Profil nennt und ein anderes verlangt,
+/// bindet sich nicht in diese Formen (12.11): `07_embedded_field` nennt
+/// `baremetal`.
+pub fn runs_shared(name: &str) -> bool {
+    let p = program(&board::corpus_path(name));
+    p.config.runtime_profile().is_none_or(|profile| profile == takt_mir::program::RuntimeProfile::Shared)
+}
+
 /// Wie spaet die Ticks eines Laufs nach ihrer Grenze begannen (`drift`
 /// der Zeitzeilen, 7.3); die ersten beiden laufen noch an.
 #[derive(Clone, Copy, Debug)]

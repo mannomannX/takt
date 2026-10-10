@@ -42,7 +42,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TAKT_INSTRUMENT");
     println!("cargo:rerun-if-env-changed=TAKT_DIAGNOSTICS");
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    let built = build_takt_program(&out);
+    let built = build_takt_program(&out, form());
     let bench = bench();
     ram_resident(&out, &built, bench.as_ref());
     native_vectors(&out);
@@ -60,6 +60,15 @@ fn image_key() {
         assert!(valid(&key), "TAKT_IMAGE_KEY: 1 bis 32 Hexziffern erwartet, `{key}` gefunden");
         println!("cargo:rustc-link-arg=--defsym={SYMBOL}{key}=0");
     }
+}
+
+/// Die Form des Ports (12.11) aus den Merkmalen: `interrupt`, sonst der
+/// eigene Kern. Das Binary waehlt seinen Pfad mit `cfg(form = "…")`.
+fn form() -> &'static str {
+    let form = if env::var_os("CARGO_FEATURE_INTERRUPT").is_some() { "interrupt" } else { "own" };
+    println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\"))");
+    println!("cargo:rustc-cfg=form=\"{form}\"");
+    form
 }
 
 /// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`.
@@ -105,7 +114,7 @@ fn ram_resident(out: &Path, built: &takt_embed::build::Built, bench: Option<&tak
     println!("cargo:rustc-link-search={}", out.display());
 }
 
-fn build_takt_program(out: &Path) -> takt_embed::build::Built {
+fn build_takt_program(out: &Path, form: &str) -> takt_embed::build::Built {
     let program = program_path();
     println!("cargo:rerun-if-env-changed=TAKT_PROGRAM");
     println!("cargo:rerun-if-changed={program}");
@@ -120,7 +129,7 @@ fn build_takt_program(out: &Path) -> takt_embed::build::Built {
     let mut embed = takt_embed::build::Program::new(&program)
         .tool(bringup::takt())
         .prefix(takt_llvm::symbols::Prefix::default().as_str())
-        .form("own")
+        .form(form)
         .build_for(bringup::build_name())
         .drivers("crate::drivers::Rig")
         .hardware(hardware());
@@ -137,10 +146,14 @@ fn build_takt_program(out: &Path) -> takt_embed::build::Built {
     // ihn ueber JTAG, wenn die Konsole schweigt (`Esp32c6::tick_over_jtag`).
     println!("cargo:rustc-link-arg=--defsym=__takt_tick_at={}", built.value("tick_at"));
     // 12.3: Der Hauptstack ist der Schritt-Stack; der Linker prueft, dass er
-    // `TICK_STACK_BYTES` fasst (`takt_stack.x`).
+    // `TICK_STACK_BYTES` fasst (`takt_stack.x`). In der Interruptform rechnen
+    // die Jobs mit auf ihm, und der Schritt unterbricht sie dort (FB-459).
     println!("cargo:rerun-if-changed={}", here.join("takt_stack.x").display());
     fs::write(out.join("takt_stack.x"), include_bytes!("takt_stack.x")).expect("takt_stack.x schreiben");
-    println!("cargo:rustc-link-arg=--defsym=__takt_tick_stack_bytes={}", built.value("tick_stack_bytes"));
+    let tick: u64 = built.value("tick_stack_bytes").parse().expect("tick_stack_bytes: Zahl");
+    let job: u64 = built.value("job_stack_bytes").parse().expect("job_stack_bytes: Zahl");
+    let stack = tick + if form == "own" { 0 } else { job };
+    println!("cargo:rustc-link-arg=--defsym=__takt_tick_stack_bytes={stack}");
     println!("cargo:rustc-link-arg=-Ttakt_stack.x");
     // 13.8: Die Bilanz nennt den Anteil des Programms; `takt bench` zieht ihn
     // von der Tiefe ab.

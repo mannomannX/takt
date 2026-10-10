@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use common::board::{
     Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, last_output,
-    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, simultaneous_jobs_finish_on_time,
+    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, runs_shared,
+    simultaneous_jobs_finish_on_time, the_interrupt_form_keeps_its_deadline,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, Form, Options};
@@ -187,15 +188,6 @@ fn the_board_agrees_with_the_interpreter() {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
-/// Darf das Programm in einer Form unter `shared` laufen, unter RTIC oder in
-/// der Interruptform? Wer sein Profil nennt und ein anderes verlangt,
-/// bindet sich nicht in diese Formen (12.11): `07_embedded_field` nennt
-/// `baremetal`.
-fn runs_shared(name: &str) -> bool {
-    let p = common::board::program(&board::corpus_path(name));
-    p.config.runtime_profile().is_none_or(|profile| profile == takt_mir::program::RuntimeProfile::Shared)
-}
-
 /// **Unter RTIC rechnet der Korpus wie der Interpreter** (12.8, M10
 /// Schritt 16): Takt als hoechstpriore Aufgabe, darueber eine Funk-ISR,
 /// darunter eine Treiber-Aufgabe mit kritischen Abschnitten und die Jobs.
@@ -250,31 +242,13 @@ fn the_rtos_task_starts_within_tens_of_microseconds() {
 }
 
 /// **In der Interruptform beginnt der Schritt auf seiner Frist, neben einer
-/// fremden Hauptschleife** (12.11): `drift` ueber 3000 Ticks bei 1 ms, und
-/// die Hauptschleife des Wirts drehte dabei ihre Runden — der Schritt
-/// rechnete in der ISR, nicht in ihr.
+/// fremden Hauptschleife** (12.11).
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
-    let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
-    let options = Options::timed(3000).in_form(Form::Interrupt);
-    let text =
-        board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
-    let drift = Drift::of(&text);
-    let rounds: u64 = text
-        .lines()
-        .find_map(|l| l.strip_prefix("takt wirt runden ")?.trim().parse().ok())
-        .expect("die Bilanz nennt die Runden des Wirts");
-    eprintln!(
-        "interrupt: {} Ticks, Median {} ns, spaetester {} ns darueber, {rounds} Runden des Wirts",
-        drift.ticks, drift.median, drift.late
-    );
-    assert!(drift.ticks >= 2000, "{} Zeitzeilen", drift.ticks);
-    assert!(drift.median < 20_000, "der Schritt beginnt im Mittel {} ns nach der Frist", drift.median);
-    assert!(drift.late < 50_000, "ein Tick {} ns spaeter als im Mittel", drift.late);
-    assert!(rounds > 3000, "die Hauptschleife drehte {rounds} Runden in 3000 Ticks");
-    assert!(text.contains(" out count "), "keine Ausgaben");
+    let failed = the_interrupt_form_keeps_its_deadline(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
 /// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern

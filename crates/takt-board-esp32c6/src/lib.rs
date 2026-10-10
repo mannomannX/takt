@@ -41,6 +41,7 @@
 #![no_std]
 #![allow(unsafe_code, reason = "Registerzugriff und C-ABI; 9.5 fuehrt Treiber in der TCB")]
 
+pub mod alarm;
 pub mod button;
 pub mod cycles;
 pub mod guard;
@@ -130,6 +131,21 @@ pub fn init(systimer: SYSTIMER<'static>, tick_ns: i64) -> Result<SystimerTick, I
         ALARM.borrow_ref_mut(cs).replace(alarm);
     });
     Ok(SystimerTick::new(TIMER_HZ, counts))
+}
+
+/// Wie [`init`], fuer die Interruptform (12.11): Vergleicher 0 des
+/// SYSTIMER steht nicht periodisch, sondern auf der Frist, die `service`
+/// nennt ([`alarm::SystimerAlarm`]); sein Interrupt geht an `alarm_handler`. Jobs
+/// laufen im Software-Interrupt `jobs` an `jobs_handler`.
+pub fn init_alarm(
+    systimer: SYSTIMER<'static>,
+    alarm_handler: esp_hal::interrupt::InterruptHandler,
+    jobs: esp_hal::interrupt::software::SoftwareInterrupt<'static, 1>,
+    jobs_handler: esp_hal::interrupt::InterruptHandler,
+) -> alarm::SystimerAlarm {
+    cycles::enable();
+    alarm::start(systimer, alarm_handler, jobs, jobs_handler);
+    alarm::SystimerAlarm
 }
 
 /// Die Alarm-ISR: misst die Periode in SYSTIMER-Schritten, quittiert den

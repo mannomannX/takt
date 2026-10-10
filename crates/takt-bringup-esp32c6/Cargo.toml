@@ -43,6 +43,9 @@ critical-section = "1.2"
 
 [features]
 bench = []
+# Die Interruptform (12.11): Den Schritt rechnet die ISR des SYSTIMER zur
+# Frist, darunter laeuft eine fremde Hauptschleife.
+interrupt = []
 
 # Das Messprogramm von `takt bench` (13.8): `bench` bindet die Bibliothek aus
 # `takt bench --emit embed`, die nur dieser Bau braucht.

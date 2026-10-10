@@ -16,8 +16,12 @@ use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
-use takt_board_esp32c6::{Button, CORE_HZ, FlashNvm, JobContext, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0};
-use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, JournalStats, LogicalClock, Sleep, TimerClock, Trace};
+use takt_board_esp32c6::{Button, CORE_HZ, FlashNvm, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0};
+#[cfg(form = "own")]
+use takt_board_esp32c6::{JobContext, SystimerTick};
+use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, JournalStats, Stats, Trace};
+#[cfg(form = "own")]
+use takt_rt_baremetal::{LogicalClock, Sleep, TimerClock};
 use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
 
 esp_bootloader_esp_idf::esp_app_desc!();
@@ -331,22 +335,44 @@ mod devices {
     }
 }
 
-/// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
-fn conduct(program: app::Program<'static>, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
+/// Die Leitung als Senke des Kerns (12.5).
+type Line = Trace<fn() -> Option<&'static mut Telemetry>, Telemetry>;
+
+/// Die Schleife ueber dem Programm, der Watchdog im Betrieb.
+type Takt<C> = Runtime<app::Program<'static>, C, Option<Mwdt>, Line>;
+
+/// Nach so vielen Ticks endet ein Konformitaetslauf; 0 im Betrieb.
+fn limit() -> u64 {
+    TICKS.and_then(|t| t.parse().ok()).unwrap_or(0)
+}
+
+/// Baut die Schleife ueber `program` unter `clock` im Profil `profile` (12.8).
+fn runtime<C: Clock>(clock: C, profile: Profile, program: app::Program<'static>) -> Takt<C> {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
-    let limit = TICKS.and_then(|t| t.parse().ok()).unwrap_or(0);
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
     // auf die Leitung und ist kein Betrieb.
-    let watchdog = (limit == 0).then(|| Mwdt::arm(WATCHDOG_NS));
-    let trace = Trace::new(Cadence::of(limit, TRACE_EVERY), TICK_NS, uart);
-    let mut rt = Runtime::new(program, clock, watchdog, trace, Profile::BAREMETAL, TICK_NS, policy);
+    let watchdog = (limit() == 0).then(|| Mwdt::arm(WATCHDOG_NS));
+    let trace: Line = Trace::new(Cadence::of(limit(), TRACE_EVERY), TICK_NS, uart);
+    Runtime::new(program, clock, watchdog, trace, profile, TICK_NS, policy)
+}
+
+/// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
+#[cfg(form = "own")]
+fn conduct(program: app::Program<'static>, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
+    let mut rt = runtime(clock, Profile::BAREMETAL, program);
     // 8.4: Tunes vom Host kommen ueber die Gegenrichtung der Konsole.
     let mut tunes = Console::new(takt_board_esp32c6::console_byte);
     let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Some(&mut tunes));
+    conclude(&rt, &stats, persist.as_ref());
+}
+
+/// Nach dem Lauf: die Abschlusszeile, im Betrieb das Kommando an die
+/// Plattform.
+fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats, persist: Option<&Persist<'_, FlashNvm>>) {
     if rt.watchdog.is_some() {
         Mwdt::arm(END_OF_RUN_NS);
     }
-    let journal = persist.as_ref().map_or(JournalStats::default(), |p| {
+    let journal = persist.map_or(JournalStats::default(), |p| {
         let (erase_ns, program_ns) = p.journal().device().measured_ns();
         JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
     });
@@ -359,14 +385,19 @@ fn conduct(program: app::Program<'static>, clock: impl Clock, persist: &mut Opti
         }
         let stacks = takt_rt_baremetal::Stacks {
             tick: Some(takt_board_esp32c6::stack::high_water()),
-            tick_bound: u32::try_from(app::TICK_STACK_BYTES).ok(),
+            // In der Interruptform rechnen die Jobs mit auf dem Hauptstack
+            // (FB-459).
+            tick_bound: u32::try_from(
+                app::TICK_STACK_BYTES + if cfg!(form = "own") { 0 } else { app::JOB_STACK_BYTES },
+            )
+            .ok(),
             tick_program: env!("TAKT_TICK_STACK_PROGRAM").parse().ok(),
             job: takt_board_esp32c6::jobs::high_water(),
             job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),
         };
-        takt_rt_baremetal::report(u, rt.overrun(), &stats, &journal, &stacks);
+        takt_rt_baremetal::report(u, rt.overrun(), stats, &journal, &stacks);
     }
-    if limit == 0 {
+    if limit() == 0 {
         platform(stats.next_run);
     }
 }
@@ -395,6 +426,7 @@ fn main() -> ! {
     takt_board_esp32c6::reenumerate_if_requested();
     PREVIOUS_RUN.store(platform::previous_run(), Ordering::Relaxed);
     let mut telemetry = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
+    #[cfg(form = "own")]
     let Ok(timer) = takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) else {
         telemetry.write("takt: Periode nicht einrichtbar");
         telemetry.newline();
@@ -403,8 +435,14 @@ fn main() -> ! {
             core::hint::spin_loop();
         }
     };
+    #[cfg(form = "own")]
+    let nominal = timer.nominal_ns();
+    // Der Alarm steht auf jeder Frist: Seine Periode ist die nominale.
+    #[cfg(form = "interrupt")]
+    let (alarm, nominal) =
+        (interrupt_form::alarm(peripherals.SYSTIMER, peripherals.FROM_CPU_INTR1, peripherals.FROM_CPU_INTR2), TICK_NS);
     telemetry.write("takt esp32c6: tick ");
-    telemetry.write_i64(timer.nominal_ns());
+    telemetry.write_i64(nominal);
     telemetry.write(" ns");
     telemetry.newline();
     telemetry.mark();
@@ -452,7 +490,20 @@ fn main() -> ! {
         }
         u.flush();
     }
+    #[cfg(form = "own")]
+    own_core(program, persist, timer);
+    #[cfg(form = "interrupt")]
+    interrupt_form::run(program, persist, alarm);
+}
 
+/// Der eigene Kern (12.3): Die Schleife wartet selbst auf die Frist, Jobs
+/// rechnen in ihrer Wartezeit im eigenen Faden.
+#[cfg(form = "own")]
+fn own_core(
+    mut program: app::Program<'static>,
+    mut persist: Option<Persist<'static, FlashNvm>>,
+    timer: SystimerTick,
+) -> ! {
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
     // der Tick holt den Kern zurueck.
     let dispatch = program.dispatch();
@@ -506,5 +557,228 @@ fn report(text: &str) {
         u.write(text);
         u.newline();
         u.flush();
+    }
+}
+
+/// Die Interruptform (12.11, `plan/m11.md` 2.4): Den Schritt rechnet die ISR
+/// des SYSTIMER-Vergleichers zu der Frist, die `service` nennt, Jobs rechnen
+/// im Software-Interrupt `FROM_CPU_INTR1`. Darunter laeuft die Hauptschleife
+/// des Wirts: Sie zaehlt ihre Runden, fuellt die Leitung nach und laesst die
+/// LED blinken, wenn das Programm sie nicht selbst fuehrt. Das Ende des Laufs
+/// gehoert in dieser Form dem Wirt (12.11): Die Hauptschleife schreibt die
+/// Bilanz und fuehrt `next_run` aus.
+///
+/// **Der Schrittkontext ist eine Prioritaet, nicht eine ISR.** In Stufe 2
+/// liegen die ISR des Vergleichers und `FROM_CPU_INTR2`, ueber das der
+/// Job-Interrupt nach seinem Auftrag den naechsten verteilen laesst — den
+/// Interrupt des SYSTIMER kann Software nicht anstossen. Gleiche Stufen
+/// unterbrechen einander nicht; darunter in Stufe 1 die Jobs und das Wecken
+/// der Leitung.
+///
+/// **Die Leitung fragt ihre Flags selbst ab** und nimmt ein Paket von 63 Byte
+/// je Abholen. Der Schritt fuellt sie nach seinem Tick, die Hauptschleife
+/// sooft sie dreht, in einem kritischen Abschnitt: Beide schreiben in
+/// denselben Ring.
+#[cfg(form = "interrupt")]
+mod interrupt_form {
+    use core::cell::RefCell;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use critical_section::Mutex;
+    use esp_hal::interrupt::Priority;
+    use esp_hal::interrupt::software::SoftwareInterrupt;
+    use esp_hal::peripherals::{FROM_CPU_INTR1, FROM_CPU_INTR2, SYSTIMER};
+    use takt_board_esp32c6::alarm::{self, SystimerAlarm};
+    use takt_board_esp32c6::{FlashNvm, WfiSleep};
+    use takt_rt_baremetal::Sleep;
+    use takt_rt_baremetal::interrupt::{Form, Time, release};
+    use takt_rt_core::Persist;
+
+    use super::{
+        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, LED, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude, probe,
+        runtime, uart,
+    };
+
+    /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
+    const BLINK_NS: i64 = 500_000_000;
+
+    /// Was der Schrittkontext haelt.
+    struct Stepping {
+        rt: Takt<Time<SystimerAlarm>>,
+        form: Form<SystimerAlarm>,
+        /// 5.9: das Journal, das `service` schreibt.
+        persist: Option<Persist<'static, FlashNvm>>,
+        /// 8.4: Tunes vom Host ueber die Gegenrichtung der Konsole.
+        tunes: Console<fn() -> Option<u8>>,
+        /// Die Bilanz, sobald der Lauf endet.
+        ended: Option<Stats>,
+    }
+
+    /// Der Lauf. Bis zu seinem Ende rechnet nur der Schrittkontext mit ihm;
+    /// danach ([`ENDED`]) gehoert er der Hauptschleife.
+    static mut STEPPING: Option<Stepping> = None;
+
+    /// Der Lauf ist zu Ende, seine Bilanz steht in [`STEPPING`].
+    static ENDED: AtomicBool = AtomicBool::new(false);
+
+    /// In logischer Zeit das Tor, hinter dem der Alarm wartet.
+    static GATE: AtomicBool = AtomicBool::new(false);
+
+    /// Der Software-Interrupt, ueber den der Job-Interrupt den naechsten
+    /// Job verteilen laesst.
+    static DISPATCH: Mutex<RefCell<Option<SoftwareInterrupt<'static, 2>>>> = Mutex::new(RefCell::new(None));
+
+    /// Der Alarm des Boards, mit den ISRs des Schritts, der Jobs (`jobs`) und
+    /// des Verteilens (`redispatch`).
+    pub fn alarm(
+        systimer: SYSTIMER<'static>,
+        jobs: FROM_CPU_INTR1<'static>,
+        redispatch: FROM_CPU_INTR2<'static>,
+    ) -> SystimerAlarm {
+        let mut redispatch = SoftwareInterrupt::new(redispatch);
+        critical_section::with(|cs| {
+            redispatch.set_interrupt_handler(dispatch);
+            DISPATCH.borrow_ref_mut(cs).replace(redispatch);
+        });
+        takt_board_esp32c6::init_alarm(systimer, step, SoftwareInterrupt::new(jobs), job_work)
+    }
+
+    /// Fuehrt `f` mit dem Lauf aus, solange er nicht zu Ende ist; danach
+    /// nimmt die Leitung, was sie nimmt.
+    #[esp_hal::ram]
+    fn stepping(f: impl FnOnce(&mut Stepping)) {
+        if ENDED.load(Ordering::Acquire) {
+            return;
+        }
+        // SAFETY: Bis zum Ende gehoert der Lauf dem Schrittkontext, und
+        // seine ISRs unterbrechen einander nicht (`STEPPING`).
+        if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::as_mut) } {
+            f(s);
+        }
+        if let Some(u) = uart() {
+            u.flush();
+        }
+    }
+
+    /// Der Vergleicher: An der Frist rechnet der Schritt.
+    #[esp_hal::ram]
+    #[esp_hal::handler(priority = Priority::Priority2)]
+    fn step() {
+        if !alarm::on_interrupt() {
+            return;
+        }
+        stepping(|s| {
+            if let Some(stats) = s.form.on_alarm(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes)) {
+                s.ended = Some(stats);
+                ENDED.store(true, Ordering::Release);
+            }
+        });
+    }
+
+    /// Nach einem Auftrag des Job-Interrupts: den naechsten verteilen.
+    #[esp_hal::ram]
+    #[esp_hal::handler(priority = Priority::Priority2)]
+    fn dispatch() {
+        critical_section::with(|cs| {
+            if let Some(sw) = DISPATCH.borrow_ref(cs).as_ref() {
+                sw.reset();
+            }
+        });
+        stepping(|s| s.form.on_job_done(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes)));
+    }
+
+    /// Der Job-Interrupt (4.5): rechnet den Auftrag, den der Schritt gab,
+    /// und laesst den Schrittkontext den naechsten verteilen.
+    #[esp_hal::ram]
+    #[esp_hal::handler(priority = Priority::Priority1)]
+    fn job_work() {
+        alarm::jobs_taken();
+        // SAFETY: `run` legt den Griff vor dem ersten Schritt ab; danach
+        // rechnet nur dieser Interrupt mit ihm.
+        if let Some(handle) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
+            handle.work();
+        }
+        critical_section::with(|cs| {
+            if let Some(sw) = DISPATCH.borrow_ref(cs).as_ref() {
+                sw.raise();
+            }
+        });
+    }
+
+    /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
+    pub fn run(
+        mut program: app::Program<'static>,
+        persist: Option<Persist<'static, FlashNvm>>,
+        alarm: SystimerAlarm,
+    ) -> ! {
+        // SAFETY: einmal je Lauf, bevor der erste Schritt rechnet; danach
+        // rechnet nur der Job-Interrupt mit dem Griff.
+        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { (&raw mut JOBS).as_mut() }) {
+            *slot = Some(j);
+        }
+        let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
+        let mut rt = runtime(clock, Profile::SHARED, program);
+        let tunes = Console::new(takt_board_esp32c6::console_byte as fn() -> Option<u8>);
+        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
+        // Schritt reichte: gemalt erst hier, der Aufbau zaehlt nicht (12.3).
+        takt_board_esp32c6::stack::paint();
+        // Der Lauf liegt im Static, bevor der erste Alarm ihn sucht.
+        critical_section::with(|_| {
+            let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
+            // SAFETY: Im kritischen Abschnitt laeuft keine ISR; danach
+            // gehoert der Lauf dem Schrittkontext.
+            unsafe { STEPPING = Some(Stepping { rt, form, persist, tunes, ended: None }) };
+        });
+        host(alarm)
+    }
+
+    /// Die Hauptschleife des Wirts: fremde Arbeit, die jede ISR
+    /// unterbricht. In logischer Zeit gibt sie den Alarm frei, sobald sie
+    /// laeuft, denn dann ruht das System (`release`). Nach dem Ende schreibt
+    /// sie die Bilanz und fuehrt im Betrieb `next_run` aus.
+    fn host(mut alarm: SystimerAlarm) -> ! {
+        let blink = !HW_ADDRESSES.contains(&"ui/led");
+        let mut lit = false;
+        let mut rounds: u64 = 0;
+        while !ENDED.load(Ordering::Acquire) {
+            rounds = rounds.wrapping_add(1);
+            if LOGICAL {
+                release(&GATE, &mut alarm);
+            }
+            critical_section::with(|_| {
+                if let Some(u) = uart() {
+                    u.flush();
+                }
+            });
+            let on = alarm.now_ns() / BLINK_NS % 2 == 0;
+            if blink && on != lit {
+                lit = on;
+                // SAFETY: Das Programm bindet die LED nicht; nur diese
+                // Schleife schaltet sie.
+                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
+                    if on { led.on() } else { led.off() }
+                }
+            }
+            probe();
+        }
+        // SAFETY: Nach dem Ende rechnet der Schrittkontext nicht mehr mit dem
+        // Lauf; er gehoert jetzt dieser Schleife.
+        if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
+            // Die Runden des Wirts zeigen, dass er neben dem Schritt lief.
+            if let Some(u) = uart() {
+                u.drain(DRAIN_ROUNDS);
+                u.write("takt wirt runden ");
+                u.write_u64(rounds);
+                u.newline();
+            }
+            conclude(&s.rt, &s.ended.unwrap_or_default(), s.persist.as_ref());
+        }
+        // Der Watchdog laeuft nach einem Lauf im Betrieb weiter; das Board
+        // haelt an, statt neu zu starten.
+        let mut sleep = WfiSleep;
+        loop {
+            sleep.sleep_until_event();
+            Mwdt::feed();
+        }
     }
 }

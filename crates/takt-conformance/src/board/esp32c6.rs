@@ -16,7 +16,7 @@ use std::time::Duration;
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::{Board, Bringup, Builder, ConsoleLine, Failure, Options, capture, port_listed, run_bounded};
+use super::{Board, Bringup, Builder, ConsoleLine, Failure, Form, Options, capture, port_listed, run_bounded};
 
 const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-esp32c6",
@@ -284,6 +284,11 @@ impl Board for Esp32c6 {
 
     fn builder(&self, slot: usize) -> Builder {
         Box::new(move |program, options| BRINGUP.build(program, options, slot))
+    }
+
+    /// Die Interruptform auf dem SYSTIMER (12.11).
+    fn forms(&self) -> &'static [Form] {
+        &[Form::Own, Form::Interrupt]
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
