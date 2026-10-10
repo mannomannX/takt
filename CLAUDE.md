@@ -39,7 +39,7 @@ Testdateien heissen nach dem, was sie pruefen: `examples.rs`,
   Zielverzeichnis (alte Testfassungen, Caches); vor langen Laeufen
 - `pwsh tools/board-run.ps1 [-Rev <stand>] [-Boards esp32c6|stm32f401]` —
   die Board-Suiten in einem eigenen Worktree und Zielverzeichnis, ohne den
-  Hauptbaum zu blockieren; Protokolle unter `G:ustoard-runs`
+  Hauptbaum zu blockieren; Protokolle unter `G:\rust\board-runs`
 - `cargo run -p takt-cli -- fmt <datei>` — Korpusdateien kanonisch
   formatieren; ein Test prueft das
 
