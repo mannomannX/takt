@@ -83,7 +83,7 @@ pub fn series(runs: u32, now: impl Fn() -> u32, mut f: impl FnMut()) -> Series {
 }
 
 /// Eine Reihe als Zeile: `bench <label> min … mean … max … n … digest …`.
-pub fn write_series<P: Port, const N: usize>(t: &mut Telemetry<P, N>, label: &str, s: &Series, digest: u64) {
+pub fn write_series<P: Port>(t: &mut Telemetry<P>, label: &str, s: &Series, digest: u64) {
     t.write("bench ");
     t.write(label);
     for (key, v) in [(" min ", s.min), (" mean ", s.mean()), (" max ", s.max), (" n ", s.n)] {
@@ -97,7 +97,7 @@ pub fn write_series<P: Port, const N: usize>(t: &mut Telemetry<P, N>, label: &st
 }
 
 /// Eine Zahl als Zeile: `bench <label> <wert>`.
-pub fn write_value<P: Port, const N: usize>(t: &mut Telemetry<P, N>, label: &str, value: u64) {
+pub fn write_value<P: Port>(t: &mut Telemetry<P>, label: &str, value: u64) {
     t.write("bench ");
     t.write(label);
     t.write(" ");
@@ -110,13 +110,7 @@ pub fn write_value<P: Port, const N: usize>(t: &mut Telemetry<P, N>, label: &str
 /// (13.8): das Ergebnis eines Vektors Byte fuer Byte in Hex, der
 /// Stack-Bedarf seines Einstiegs und der weiteren Einstiege, die er ruft.
 /// `takt_conformance::natives` liest sie und vergleicht mit dem Wirt.
-pub fn write_native<P: Port, const N: usize>(
-    t: &mut Telemetry<P, N>,
-    index: usize,
-    result: &[u8],
-    stack: u32,
-    others: &[(&str, u32)],
-) {
+pub fn write_native<P: Port>(t: &mut Telemetry<P>, index: usize, result: &[u8], stack: u32, others: &[(&str, u32)]) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     t.write("native ");
     t.write_u64(index as u64);
@@ -145,13 +139,7 @@ pub fn write_native<P: Port, const N: usize>(
 /// 13.8): das Ergebnis eines Vektors der Mathematik als Bitmuster in Hex,
 /// der Stack-Bedarf des Einstiegs `takt_m_*` und die Zyklen eines Aufrufs.
 /// `takt_conformance::math` liest sie und vergleicht mit der Norm.
-pub fn write_math<P: Port, const N: usize>(
-    t: &mut Telemetry<P, N>,
-    index: usize,
-    result: u64,
-    stack: u32,
-    cycles: u32,
-) {
+pub fn write_math<P: Port>(t: &mut Telemetry<P>, index: usize, result: u64, stack: u32, cycles: u32) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     t.write("math ");
     t.write_u64(index as u64);

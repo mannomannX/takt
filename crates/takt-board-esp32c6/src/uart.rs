@@ -25,6 +25,8 @@
 //! setzt sich der Chip zurueck (FB-266). Jedes Byte geht ausserdem in ein
 //! FIFO, aus dem die Schleife Tunes liest ([`console_byte`], 8.4).
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use esp_hal::Blocking;
 use esp_hal::interrupt::Priority;
 use esp_hal::peripherals::USB_DEVICE;
@@ -47,6 +49,24 @@ pub fn console_byte() -> Option<u8> {
 /// Der Ring vor der Leitung: 2 KiB fangen einen Host ab, der 20 ms
 /// lang nicht liest, bei 500 us Tick und einer Zeitzeile je Tick.
 const RING: usize = 2048;
+
+/// Der Ring selbst, eine Statik: Als Wert in der Telemetrie laege er auf dem
+/// Stack von `main`, unter jedem Tick (FB-458).
+static mut RING_BYTES: [u8; RING] = [0; RING];
+
+/// Ob der Ring vergeben ist; es gibt ihn einmal.
+static RING_TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// Der Ring fuer die erste Telemetrie des Laufs; jede weitere bekommt einen
+/// leeren und verwirft, was sie schreibt, sichtbar in `verworfen`.
+fn ring() -> &'static mut [u8] {
+    if RING_TAKEN.swap(true, Ordering::AcqRel) {
+        return &mut [];
+    }
+    // SAFETY: Nur der erste Aufruf erreicht die Statik; danach haelt die
+    // Telemetrie sie allein.
+    unsafe { (&raw mut RING_BYTES).as_mut() }.map_or(&mut [], |r| &mut r[..])
+}
 
 /// Bytes je Paket, unter der Puffergroesse von 64.
 const PACKET: u8 = 63;
@@ -169,9 +189,9 @@ impl Port for UsbJtag {
 }
 
 /// Die Telemetrie des Boards.
-pub type Telemetry = takt_rt_baremetal::Telemetry<UsbJtag, RING>;
+pub type Telemetry = takt_rt_baremetal::Telemetry<UsbJtag>;
 
 /// Die Telemetrie ueber USB-Serial-JTAG.
 pub fn telemetry(usb: USB_DEVICE<'static>) -> Telemetry {
-    Telemetry::new(UsbJtag::new(usb))
+    Telemetry::new(UsbJtag::new(usb), ring())
 }

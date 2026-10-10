@@ -34,9 +34,9 @@ pub trait Port {
 }
 
 /// Der Ring vor der Leitung.
-pub struct Telemetry<P: Port, const N: usize> {
+pub struct Telemetry<P: Port> {
     port: P,
-    ring: [u8; N],
+    ring: &'static mut [u8],
     head: usize,
     len: usize,
     dropped: u32,
@@ -44,10 +44,12 @@ pub struct Telemetry<P: Port, const N: usize> {
     lossless: bool,
 }
 
-impl<P: Port, const N: usize> Telemetry<P, N> {
-    /// Ueber einer Leitung.
-    pub fn new(port: P) -> Self {
-        Telemetry { port, ring: [0; N], head: 0, len: 0, dropped: 0, sent: 0, lossless: false }
+impl<P: Port> Telemetry<P> {
+    /// Ueber einer Leitung, mit dem Ring, den der Wirt stellt: Die Puffer
+    /// der Telemetrie liegen nicht in der Arena (12.11), und als Wert
+    /// laege der Ring auf dem Stack, unter jedem Tick (FB-458).
+    pub fn new(port: P, ring: &'static mut [u8]) -> Self {
+        Telemetry { port, ring, head: 0, len: 0, dropped: 0, sent: 0, lossless: false }
     }
 
     /// Verlustfrei: Ist der Ring voll, wartet [`Telemetry::write_byte`], bis
@@ -63,18 +65,22 @@ impl<P: Port, const N: usize> Telemetry<P, N> {
     /// Ein Byte in den Ring; ist er voll, geht erst die Leitung, dann
     /// faellt es weg.
     pub fn write_byte(&mut self, b: u8) {
-        if self.len == N {
+        let cap = self.ring.len();
+        if self.len == cap {
             if self.lossless {
                 self.drain(DRAIN_ROUNDS);
             } else {
                 self.flush();
             }
-            if self.len == N {
+            if self.len == cap {
                 self.dropped = self.dropped.saturating_add(1);
                 return;
             }
         }
-        self.ring[(self.head + self.len) % N] = b;
+        // `head` und `len` liegen unter `cap`: Ein Abzug genuegt, und eine
+        // Division mit veraenderlichem Teiler waere auf RV32 ein Aufruf.
+        let at = self.head + self.len;
+        self.ring[if at >= cap { at - cap } else { at }] = b;
         self.len += 1;
         self.sent = self.sent.saturating_add(1);
     }
@@ -82,7 +88,10 @@ impl<P: Port, const N: usize> Telemetry<P, N> {
     /// Gibt an die Leitung, was sie nimmt, und schliesst das Paket ab.
     pub fn flush(&mut self) {
         while self.len > 0 && self.port.try_write(self.ring[self.head]) {
-            self.head = (self.head + 1) % N;
+            self.head += 1;
+            if self.head == self.ring.len() {
+                self.head = 0;
+            }
             self.len -= 1;
         }
         self.port.flush();
@@ -204,7 +213,7 @@ impl<P: Port, const N: usize> Telemetry<P, N> {
 
 /// Fuer `write!`: Fliesskommazahlen kommen aus `core::fmt`, das die
 /// kuerzeste Ziffernfolge druckt, die den Wert eindeutig zurueckgibt (4.2).
-impl<P: Port, const N: usize> core::fmt::Write for Telemetry<P, N> {
+impl<P: Port> core::fmt::Write for Telemetry<P> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.write(s);
         Ok(())
@@ -257,13 +266,18 @@ mod tests {
         Line { cap, room: cap, sent: Vec::new(), packets: 0, lag: 0, busy: 0 }
     }
 
-    fn text<const N: usize>(t: &Telemetry<Line, N>) -> String {
+    fn text(t: &Telemetry<Line>) -> String {
         String::from_utf8(t.port.sent.clone()).unwrap()
+    }
+
+    /// Ein Ring von `n` Byte, der den Test ueberlebt.
+    fn ring(n: usize) -> &'static mut [u8] {
+        std::vec![0; n].leak()
     }
 
     #[test]
     fn numbers_print_without_core_fmt() {
-        let mut t = Telemetry::<_, 64>::new(line(64));
+        let mut t = Telemetry::new(line(64), ring(64));
         for (i, n) in [0, 4_294_967_295, 4_294_967_296, u64::MAX].into_iter().enumerate() {
             if i > 0 {
                 t.write(" ");
@@ -282,7 +296,7 @@ mod tests {
 
     #[test]
     fn a_full_ring_drops_and_counts() {
-        let mut t = Telemetry::<_, 8>::new(line(0));
+        let mut t = Telemetry::new(line(0), ring(8));
         for b in b"0123456789" {
             t.write_byte(*b);
         }
@@ -294,18 +308,18 @@ mod tests {
     /// nimmt sie gar nichts, zaehlt er nach der Schranke doch.
     #[test]
     fn a_lossless_ring_waits_for_the_line() {
-        let mut t = Telemetry::<_, 8>::new(line(3)).lossless();
+        let mut t = Telemetry::new(line(3), ring(8)).lossless();
         t.write("0123456789abcdefghij");
         assert!(t.drain(10));
         assert_eq!((text(&t).as_str(), t.dropped()), ("0123456789abcdefghij", 0));
-        let mut stuck = Telemetry::<_, 4>::new(line(0)).lossless();
+        let mut stuck = Telemetry::new(line(0), ring(4)).lossless();
         stuck.write("0123456");
         assert_eq!(stuck.dropped(), 3);
     }
 
     #[test]
     fn flush_sends_one_packet_in_order_and_wraps() {
-        let mut t = Telemetry::<_, 16>::new(line(4));
+        let mut t = Telemetry::new(line(4), ring(16));
         t.write("abcdefghij");
         t.flush();
         assert_eq!((text(&t).as_str(), t.port.packets, t.pending()), ("abcd", 1, 6));
@@ -322,11 +336,11 @@ mod tests {
     /// auch auf den Puffer der Leitung, begrenzt wie `drain`.
     #[test]
     fn finish_waits_until_the_line_is_idle() {
-        let mut t = Telemetry::<_, 16>::new(Line { lag: 3, ..line(4) });
+        let mut t = Telemetry::new(Line { lag: 3, ..line(4) }, ring(16));
         t.write("abcdefghij");
         assert!(t.drain(10) && !t.port.idle());
         assert!(t.finish(10) && t.port.idle());
-        let mut stuck = Telemetry::<_, 16>::new(Line { lag: 100, ..line(4) });
+        let mut stuck = Telemetry::new(Line { lag: 100, ..line(4) }, ring(16));
         stuck.write("abc");
         assert!(!stuck.finish(10));
     }
@@ -335,12 +349,12 @@ mod tests {
     /// nicht, denn das kommt nie an.
     #[test]
     fn the_count_starts_at_the_mark_and_skips_dropped_bytes() {
-        let mut t = Telemetry::<_, 64>::new(line(64));
+        let mut t = Telemetry::new(line(64), ring(64));
         t.write("Kopf\r\n");
         t.mark();
         t.write("t=1 out a 1\r\n");
         assert_eq!(t.sent(), 13);
-        let mut full = Telemetry::<_, 16>::new(line(0));
+        let mut full = Telemetry::new(line(0), ring(16));
         full.mark();
         full.write("0123456789");
         assert_eq!((full.sent(), full.dropped()), (4, 6));
@@ -348,7 +362,7 @@ mod tests {
 
     #[test]
     fn the_time_line_follows_the_trace_grammar() {
-        let mut t = Telemetry::<_, 128>::new(line(128));
+        let mut t = Telemetry::new(line(128), ring(128));
         t.write_time(&Tick { k: 7, now: 0, took: 22_000, drift: -125, overrun: false, slept: 3 });
         t.flush();
         assert_eq!(text(&t), "t=7 time took=22000 drift=-125 slept=3\r\n");

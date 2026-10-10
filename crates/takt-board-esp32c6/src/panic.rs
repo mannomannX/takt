@@ -11,13 +11,20 @@ use esp_hal::peripherals::USB_DEVICE;
 
 use takt_rt_baremetal::DRAIN_ROUNDS;
 
-use crate::uart::telemetry;
+use crate::uart::{Telemetry, UsbJtag};
+
+/// Der Ring der Meldung: Den des Laufs haelt noch dessen Telemetrie.
+static mut RING: [u8; 128] = [0; 128];
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     // SAFETY: Nach dem Panic laeuft nichts mehr, das die Schnittstelle
     // haelt; der Treiber richtet sie nur ein, ohne sie zurueckzusetzen.
-    let mut uart = telemetry(unsafe { USB_DEVICE::steal() });
+    // SAFETY: Nach dem Panic rechnet niemand mehr mit dem Ring; er wird
+    // einmal genommen, denn der Handler kehrt nicht zurueck.
+    let ring = unsafe { (&raw mut RING).as_mut() }.map_or(&mut [][..], |r| &mut r[..]);
+    // Verlustfrei: Die Meldung wartet auf die Leitung, statt zu verwerfen.
+    let mut uart = Telemetry::new(UsbJtag::new(unsafe { USB_DEVICE::steal() }), ring).lossless();
     let _ = write!(uart, "\r\ntakt panic: {info}\r\n");
     uart.drain(DRAIN_ROUNDS);
     loop {

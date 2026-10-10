@@ -1011,7 +1011,7 @@ mod tests {
     #[test]
     fn the_balance_line_of_a_board_reads_back_on_the_host() {
         let line = std::cell::RefCell::new(Vec::new());
-        let mut t = takt_rt_baremetal::Telemetry::<_, 4096>::new(Memory(&line));
+        let mut t = takt_rt_baremetal::Telemetry::new(Memory(&line), vec![0; 4096].leak());
         t.write("takt auf wirt\r\n");
         t.mark();
         for k in 0..4 {

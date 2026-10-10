@@ -85,13 +85,13 @@ pub struct Trace<F, L> {
     line: PhantomData<L>,
 }
 
-impl<F, P, const R: usize> Trace<F, Telemetry<P, R>>
+impl<F, P> Trace<F, Telemetry<P>>
 where
-    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    F: FnMut() -> Option<&'static mut Telemetry<P>>,
     P: Port + 'static,
 {
     /// Eine Senke im Takt `cadence` fuer Ticks von `tick_ns`.
-    pub fn new(cadence: Cadence, tick_ns: i64, telemetry: F) -> Trace<F, Telemetry<P, R>> {
+    pub fn new(cadence: Cadence, tick_ns: i64, telemetry: F) -> Trace<F, Telemetry<P>> {
         // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
         // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
         let time_every = (1_000_000 / tick_ns.max(1)).max(1) as u64;
@@ -104,9 +104,9 @@ where
     }
 }
 
-impl<F, P, const R: usize> Sink for Trace<F, Telemetry<P, R>>
+impl<F, P> Sink for Trace<F, Telemetry<P>>
 where
-    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    F: FnMut() -> Option<&'static mut Telemetry<P>>,
     P: Port + 'static,
 {
     fn outputs(&mut self, tick: Option<&Tick>) -> Outputs {
@@ -139,8 +139,8 @@ where
 /// ist oder das Programm seinen Lauf beendet (`next_run`, 12.7). An der
 /// Grenze schreibt das Journal synchron. Die Tunables (8.4) gehen vor dem
 /// Schritt ihrer Grenze in das Programm, im Schlaf wecken sie (9.9).
-pub fn run<G, C, W, F, N, P, const R: usize>(
-    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+pub fn run<G, C, W, F, N, P>(
+    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
     mut persist: Option<&mut Persist<'_, N>>,
     mut tunables: Option<&mut dyn Tunables>,
 ) -> Stats
@@ -148,7 +148,7 @@ where
     G: Program,
     C: Clock,
     W: Watchdog,
-    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    F: FnMut() -> Option<&'static mut Telemetry<P>>,
     N: Nvm,
     P: Port + 'static,
 {
@@ -168,15 +168,15 @@ where
 
 /// Die Bilanz am Ende eines Laufs; das Journal schreibt dabei synchron, wenn
 /// der Kern es nicht schon am Ende des Programms getan hat.
-pub fn stats<G, C, W, F, N, P, const R: usize>(
-    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+pub fn stats<G, C, W, F, N, P>(
+    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
     persist: Option<&mut Persist<'_, N>>,
 ) -> Stats
 where
     G: Program,
     C: Clock,
     W: Watchdog,
-    F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+    F: FnMut() -> Option<&'static mut Telemetry<P>>,
     N: Nvm,
     P: Port + 'static,
 {
@@ -208,8 +208,8 @@ pub struct Stacks {
 ///
 /// Die Stacks stehen mit ihren Schranken darin (`stack N schranke M
 /// programm P jobstack J jobschranke K`): Der Host prueft jeden Lauf dagegen.
-pub fn report<P: Port, const R: usize>(
-    t: &mut Telemetry<P, R>,
+pub fn report<P: Port>(
+    t: &mut Telemetry<P>,
     overrun: &Overrun,
     stats: &Stats,
     journal: &JournalStats,
@@ -268,6 +268,8 @@ pub fn report<P: Port, const R: usize>(
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
     use core::cell::Cell;
     use takt_rt_core::{FakeNvm, Policy, Profile};
@@ -333,7 +335,7 @@ mod tests {
             full_dumps: Cell::new(0),
         };
         let clock = LogicalClock::new(|| {});
-        let trace = Trace::new(cadence, 1_000_000, || None::<&'static mut Telemetry<NoLine, 8>>);
+        let trace = Trace::new(cadence, 1_000_000, || None::<&'static mut Telemetry<NoLine>>);
         let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Fault);
         let stats = run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, None);
         (stats, rt.program)
@@ -447,7 +449,7 @@ mod tests {
         let (mut current, mut stored) = ([0u8; 256], [0u8; 256]);
         let device = Stalling { nvm: FakeNvm::new(), clock: &now };
         let mut persist = Persist::new(takt_rt_core::Journal::new(device, 7, 0), &mut current, &mut stored);
-        let trace = Trace::new(Cadence::of(20, 1), 1_000_000, || None::<&'static mut Telemetry<NoLine, 8>>);
+        let trace = Trace::new(Cadence::of(20, 1), 1_000_000, || None::<&'static mut Telemetry<NoLine>>);
         let mut rt =
             Runtime::new(Counting(0), Shared(&now), NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Alert);
         persist.load(&mut rt.program);
@@ -476,7 +478,7 @@ mod tests {
     #[test]
     fn the_balance_line_names_every_counter() {
         let line = core::cell::RefCell::new(([0u8; 512], 0));
-        let mut t = Telemetry::<_, 512>::new(Memory(&line));
+        let mut t = Telemetry::new(Memory(&line), std::vec![0; 512].leak());
         t.write("boot\n");
         t.mark();
         t.write("t=0 out x 1\n");

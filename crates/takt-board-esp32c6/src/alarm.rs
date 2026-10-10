@@ -21,7 +21,6 @@ use takt_board_support::clock::Scale;
 
 use crate::TIMER_HZ;
 
-
 /// Nanosekunden je Schritt der Einheit.
 const SCALE: Scale = Scale::of(TIMER_HZ);
 

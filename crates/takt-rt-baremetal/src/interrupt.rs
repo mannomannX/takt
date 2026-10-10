@@ -80,8 +80,8 @@ impl<A: Alarm> Form<A> {
     /// Ticks, und der Alarm steht auf der Frist von Tick 0. Mit `gate`
     /// zaehlt die Zeit logisch: Statt den Zeitgeber zu stellen, schliesst
     /// der Alarm das Tor, und [`release`] gibt ihn frei.
-    pub fn start<G, C, W, F, P, const R: usize>(
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+    pub fn start<G, C, W, F, P>(
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
         alarm: A,
         gate: Option<&'static AtomicBool>,
     ) -> Form<A>
@@ -89,7 +89,7 @@ impl<A: Alarm> Form<A> {
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+        F: FnMut() -> Option<&'static mut Telemetry<P>>,
         P: Port + 'static,
     {
         let limit = rt.sink.limit();
@@ -106,9 +106,9 @@ impl<A: Alarm> Form<A> {
     /// auf die naechste Frist. Am Ende des Laufs — nach `cadence.limit`
     /// Ticks oder durch `next_run` (12.7) — schreibt das Journal synchron,
     /// kein Alarm steht mehr, und die Bilanz kommt zurueck.
-    pub fn on_alarm<G, C, W, F, N, P, const R: usize>(
+    pub fn on_alarm<G, C, W, F, N, P>(
         &mut self,
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
         mut persist: Option<&mut Persist<'_, N>>,
         tunables: Option<&mut dyn Tunables>,
     ) -> Option<Stats>
@@ -116,7 +116,7 @@ impl<A: Alarm> Form<A> {
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+        F: FnMut() -> Option<&'static mut Telemetry<P>>,
         N: Nvm,
         P: Port + 'static,
     {
@@ -142,16 +142,16 @@ impl<A: Alarm> Form<A> {
     /// wartenden Job vor der naechsten Grenze, wie der Job-Faden des eigenen
     /// Kerns. Der Alarm bleibt auf seiner Frist; ist sie inzwischen erreicht,
     /// rechnet [`Form::on_alarm`] dort nichts mehr nach, was hier schon lief.
-    pub fn on_job_done<G, C, W, F, N, P, const R: usize>(
+    pub fn on_job_done<G, C, W, F, N, P>(
         &mut self,
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
         persist: Option<&mut Persist<'_, N>>,
         tunables: Option<&mut dyn Tunables>,
     ) where
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+        F: FnMut() -> Option<&'static mut Telemetry<P>>,
         N: Nvm,
         P: Port + 'static,
     {
@@ -167,9 +167,9 @@ impl<A: Alarm> Form<A> {
     /// ist ([`Form::on_alarm`]). In logischer Zeit ist sie in jeder Runde
     /// erreicht, in der das Tor offen ist: Die Hauptschleife laeuft erst,
     /// wenn der Job-Interrupt ruht. Am Ende des Laufs die Bilanz.
-    pub fn poll<G, C, W, F, N, P, const R: usize>(
+    pub fn poll<G, C, W, F, N, P>(
         &mut self,
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P, R>>>,
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
         persist: Option<&mut Persist<'_, N>>,
         tunables: Option<&mut dyn Tunables>,
         job_done: bool,
@@ -178,7 +178,7 @@ impl<A: Alarm> Form<A> {
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P, R>>,
+        F: FnMut() -> Option<&'static mut Telemetry<P>>,
         N: Nvm,
         P: Port + 'static,
     {
@@ -326,9 +326,9 @@ mod tests {
 
     const T0: i64 = 1_000_000;
 
-    type Line = Trace<fn() -> Option<&'static mut Telemetry<NoLine, 8>>, Telemetry<NoLine, 8>>;
+    type Line = Trace<fn() -> Option<&'static mut Telemetry<NoLine>>, Telemetry<NoLine>>;
 
-    fn no_line() -> Option<&'static mut Telemetry<NoLine, 8>> {
+    fn no_line() -> Option<&'static mut Telemetry<NoLine>> {
         None
     }
 

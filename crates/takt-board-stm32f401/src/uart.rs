@@ -53,6 +53,24 @@ pub const BAUD: u32 = 921_600;
 /// Leitung erst zwischen den Ticks abnimmt.
 const RING: usize = 1024;
 
+/// Der Ring selbst, eine Statik: Als Wert in der Telemetrie laege er auf dem
+/// Stack von `main`, unter jedem Tick (FB-458).
+static mut RING_BYTES: [u8; RING] = [0; RING];
+
+/// Ob der Ring vergeben ist; es gibt ihn einmal.
+static RING_TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// Der Ring fuer die erste Telemetrie des Laufs; jede weitere bekommt einen
+/// leeren und verwirft, was sie schreibt, sichtbar in `verworfen`.
+fn ring() -> &'static mut [u8] {
+    if RING_TAKEN.swap(true, Ordering::AcqRel) {
+        return &mut [];
+    }
+    // SAFETY: Nur der erste Aufruf erreicht die Statik; danach haelt die
+    // Telemetrie sie allein.
+    unsafe { (&raw mut RING_BYTES).as_mut() }.map_or(&mut [], |r| &mut r[..])
+}
+
 /// Was die Leitung ohne Warten annimmt: gut fuenf Millisekunden bei
 /// 921600 Baud, mehr als ein Konformitaetslauf je Tick schreibt.
 static TX: ByteFifo<512> = ByteFifo::new();
@@ -201,7 +219,7 @@ impl Port for Usart1 {
 }
 
 /// Die Telemetrie des Boards.
-pub type Telemetry = takt_rt_baremetal::Telemetry<Usart1, RING>;
+pub type Telemetry = takt_rt_baremetal::Telemetry<Usart1>;
 
 /// Die Telemetrie ueber USART1 auf PA9, mit der Gegenrichtung auf PA10.
 ///
@@ -215,5 +233,5 @@ pub fn telemetry(
     pclk_hz: u32,
     baud: u32,
 ) -> Result<Telemetry, takt_board_support::uart::BaudError> {
-    Ok(Telemetry::new(Usart1::new(usart, gpioa, rcc, pclk_hz, baud)?))
+    Ok(Telemetry::new(Usart1::new(usart, gpioa, rcc, pclk_hz, baud)?, ring()))
 }

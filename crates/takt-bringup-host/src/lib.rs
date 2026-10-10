@@ -47,7 +47,7 @@ impl Port for Console {
 }
 
 /// Der Ring vor der Konsole; verlustfrei, denn auf dem Wirt zaehlt die Zeit nicht.
-type Line = Telemetry<Console, 4096>;
+type Line = Telemetry<Console>;
 
 /// Die Leitung, statisch: Der Rahmen ruft `takt_board_trace` als C-Symbol,
 /// und eine Funktion ohne Empfaenger kommt an nichts heran, was in [`run`]
@@ -156,7 +156,8 @@ pub fn run<P: takt_embed::Program>(mut program: P, tick_ns: i64, alert: bool) ->
         return ExitCode::FAILURE;
     };
     // SAFETY: vor dem ersten Aufruf des Rahmens, in einem Faden.
-    unsafe { LINE = Some(Telemetry::new(Console(BufWriter::new(std::io::stdout()))).lossless()) };
+    let ring = vec![0; 4096].leak();
+    unsafe { LINE = Some(Telemetry::new(Console(BufWriter::new(std::io::stdout())), ring).lossless()) };
     let Some(head) = line() else { return ExitCode::FAILURE };
     head.write("takt auf dem wirt");
     head.newline();
