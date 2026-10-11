@@ -36,8 +36,9 @@ const TICKS: u64 = 60;
 /// Zahl gesenkt. Was bleibt, liegt jenseits der Tiefe oder Frist des Solvers
 /// ([`takt_conformance::paths`]), jenseits von
 /// [`takt_conformance::cases::MAX_TICKS`] (`after 3 s` bei 50 us in
-/// `11_foc_drive`, `after 7 d` in `sim/14_7`) oder in einem Programm, das
-/// das Modell nicht kodiert.
+/// `11_foc_drive`, `after 7 d` in `sim/14_7`), in einem Programm, das
+/// das Modell nicht kodiert, oder in einem, dessen Maschinen kein Teilmodell
+/// haben und dessen Gesamtmodell der Solver nicht entscheidet (FB-604).
 const UNREACHED: &[(&str, usize, usize, usize)] = &[
     ("01_minimal.takt", 0, 0, 1),
     ("02_units_and_data.takt", 0, 3, 6),
@@ -66,7 +67,7 @@ const UNREACHED: &[(&str, usize, usize, usize)] = &[
     ("42_map.takt", 0, 0, 3),
     ("43_sent.takt", 0, 0, 1),
     ("44_campaign.takt", 0, 0, 1),
-    ("45_journal_cut.takt", 14, 2, 26),
+    ("45_journal_cut.takt", 14, 2, 26), // FB-604: ohne Teilmodell keine Pfade des Solvers
     ("46_matrices.takt", 0, 0, 31),
     ("47_monitors.takt", 0, 0, 1),
     ("49_record_streams.takt", 0, 0, 2),
@@ -123,7 +124,7 @@ const UNREACHED: &[(&str, usize, usize, usize)] = &[
     ("107_cancel_and_pulse.takt", 0, 0, 2),
     ("108_singular_solve.takt", 0, 0, 3),
     ("109_narrow_bounds.takt", 0, 0, 3),
-    ("110_journal_log.takt", 17, 3, 45),
+    ("110_journal_log.takt", 17, 3, 45), // FB-604: ohne Teilmodell keine Pfade des Solvers
     ("111_assign_mul.takt", 0, 0, 1),
     ("112_assign_div.takt", 0, 0, 1),
     ("113_case_ranges.takt", 0, 0, 1),

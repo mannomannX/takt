@@ -84,6 +84,15 @@ pub const LIMITS: &[Limit] = &[
         wann: "M11 Schritt 29, Nachtrag: induktive Invarianten je Stelle (Spacer) und tiefere Pfade.",
         row: "FB-511",
     },
+    Limit {
+        was: "Pfade und Beweise des Solvers fuer `45_journal_cut` und `110_journal_log`",
+        warum: "Keine Maschine der beiden laesst sich allein kodieren (ein gekoppelter `sim`-Strom, ein \
+                zusammengesetzter fremder Output), also fragt der Solver jede Stelle am Gesamtmodell: 112 MB je \
+                Anfrage in Tiefe 5, und z3 entscheidet eine solche auch in 300 s nicht. Ihre Stellen haelt \
+                `UNREACHED`.",
+        wann: "M11 Strang B2: Teilmodelle mit gekoppeltem Strom und zusammengesetztem fremdem Output.",
+        row: "FB-604",
+    },
 ];
 
 /// Die Grenzen als Text, fuer die Ausgabe eines Testlaufs.
