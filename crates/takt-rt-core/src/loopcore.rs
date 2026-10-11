@@ -8,6 +8,7 @@
 //! (12.3): Er wartet selbst auf die Frist und bestaetigt dabei den
 //! Watchdog an jeder Tickgrenze, auch im Schlaf.
 
+use crate::journal::{Fits, Memory, NoJournal, Store};
 use crate::overrun::{Overrun, Policy};
 use crate::profile::Profile;
 
@@ -303,6 +304,12 @@ impl NextRun {
 /// `Value`, der erzeugte Code ueber getypte Strukturen (11.2). Der Kern
 /// kennt nur „ein Tick ist vergangen".
 pub trait Program {
+    /// Was das Programm ueber einen Lauf hinaus braucht (5.9, FB-385):
+    /// [`Volatile`](crate::Volatile) ohne `persist`,
+    /// [`Persisting`](crate::Persisting) mit. Die Runtime haelt danach das
+    /// Journal oder keines ([`Runtime::journaled`]).
+    type Memory: Memory;
+
     /// Fuehrt die Schritte 2 bis 10 aus 12.1 aus — vom Abbild bis zum
     /// Commit. `now` ist die logische Zeit des Tickendes.
     fn tick(&mut self, k: u64, now: i64);
@@ -452,8 +459,10 @@ struct Asleep {
     from: u64,
 }
 
-/// Die Schleife.
-pub struct Runtime<P, C, W, S> {
+/// Die Schleife. `J` ist das Journal, das sie fuer das Programm haelt
+/// ([`Store`]): [`NoJournal`] fuer ein Programm ohne `persist`, sonst
+/// [`Persist`](crate::Persist).
+pub struct Runtime<P, C, W, S, J = NoJournal> {
     /// Das Programm.
     pub program: P,
     /// Die Zeitquelle.
@@ -507,14 +516,40 @@ pub struct Runtime<P, C, W, S> {
     end_budget: Option<i64>,
     /// Die Zahl der Ticks eines Laufs mit Ende ([`Runtime::end_at`]).
     horizon: Option<u64>,
+    /// Das Journal des Programms (5.9).
+    journal: J,
 }
 
-impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
-    /// Baut die Schleife.
+impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S>
+where
+    NoJournal: Fits<P::Memory>,
+{
+    /// Baut die Schleife fuer ein Programm ohne `persist`.
     ///
     /// `tick_ns` ist T0 aus dem `system:`-Block, `policy` die Reaktion auf
     /// eine Ueberschreitung (7.3, Default `fault`).
     pub fn new(program: P, clock: C, watchdog: W, sink: S, profile: Profile, tick_ns: i64, policy: Policy) -> Self {
+        Runtime::journaled(program, NoJournal::default(), clock, watchdog, sink, profile, tick_ns, policy)
+    }
+}
+
+impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store + Fits<P::Memory>> Runtime<P, C, W, S, J> {
+    /// Baut die Schleife mit dem Journal des Programms (5.9): fuer ein
+    /// Programm mit `persist` ein [`Persist`](crate::Persist), das es nur
+    /// geladen gibt ([`Unloaded::load`](crate::Unloaded::load), vor `init`);
+    /// fuer einen Wirt, der jedes Programm traegt, was [`Memory::store`]
+    /// liefert.
+    #[allow(clippy::too_many_arguments, reason = "die Teile der Schleife; jedes ist ein eigener Vertrag (12.11)")]
+    pub fn journaled(
+        program: P,
+        journal: J,
+        clock: C,
+        watchdog: W,
+        sink: S,
+        profile: Profile,
+        tick_ns: i64,
+        policy: Policy,
+    ) -> Self {
         let start = clock.origin();
         Runtime {
             program,
@@ -540,9 +575,12 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
             flushed: None,
             end_budget: None,
             horizon: None,
+            journal,
         }
     }
+}
 
+impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J> {
     /// Ein Lauf ueber `ticks` Ticks (13.8: ein Konformitaetslauf endet nach
     /// Tick `ticks - 1`). Ein Schlaf reicht dann hoechstens bis zum letzten
     /// Tick: Jede Grenze davor wird abgetastet, und ein Weckereignis vor dem
@@ -566,14 +604,11 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// Frist (12.11). Wartet nie; ist nichts faellig, rechnet sie nichts.
     /// „Jetzt“ ist die Zeit beim Eintritt: Ein Tick, der laenger dauert als
     /// die Periode, laesst die naechste Grenze fuer den naechsten Aufruf.
+    ///
+    /// Das Journal (5.9) schreibt nach jedem Tick in der Wartezeit bis zur
+    /// naechsten Frist, am Ende des Laufs synchron.
     pub fn service(&mut self) -> Next {
-        self.service_with(None::<&mut crate::journal::Persist<'_, crate::journal::FakeNvm<0>>>, None)
-    }
-
-    /// Wie [`Runtime::service`], mit Journal (5.9): nach jedem Tick in der
-    /// Wartezeit bis zur naechsten Frist, am Ende des Laufs synchron.
-    pub fn service_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Next {
-        self.service_with(Some(persist), None)
+        self.service_with(None)
     }
 
     /// Die Form „eigener Kern“ (12.11, 12.3): wartet auf die Frist, rechnet
@@ -584,27 +619,17 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// bestaetigte er einen Tick, der noch nicht durchgelaufen ist, und
     /// haette seinen Zweck verloren (12.4).
     pub fn step(&mut self) -> Tick {
-        self.step_with(None::<&mut crate::journal::Persist<'_, crate::journal::FakeNvm<0>>>, None)
+        self.step_with(None)
     }
 
-    /// Wie [`Runtime::step`], mit Journal.
-    pub fn step_persisting<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) -> Tick {
-        self.step_with(Some(persist), None)
-    }
-
-    /// Der eigene Kern mit Journal und Tunables (8.4): ein Tick je Aufruf,
-    /// an seiner Frist. Die Aenderungen einer Grenze gehen vor ihrem Schritt
-    /// in das Programm; im Schlaf beendet eine Aenderung ihn an ihrer
-    /// Grenze (9.9).
-    pub fn step_with<N: Nvm>(
-        &mut self,
-        mut persist: Option<&mut crate::journal::Persist<'_, N>>,
-        mut tunables: Option<&mut dyn Tunables>,
-    ) -> Tick {
-        self.begin(persist.as_deref_mut());
+    /// Der eigene Kern mit Tunables (8.4): ein Tick je Aufruf, an seiner
+    /// Frist. Die Aenderungen einer Grenze gehen vor ihrem Schritt in das
+    /// Programm; im Schlaf beendet eine Aenderung ihn an ihrer Grenze (9.9).
+    pub fn step_with(&mut self, mut tunables: Option<&mut dyn Tunables>) -> Tick {
+        self.begin();
         if self.ended.is_none() {
             self.wait(reborrow(&mut tunables));
-            self.tick_now(persist, tunables);
+            self.tick_now(tunables);
         }
         self.last
     }
@@ -641,7 +666,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// vielen Ticks eines Konformitaetslaufs: Das Journal schreibt synchron
     /// (5.9). Hat das Programm den Lauf selbst beendet, ist das schon
     /// geschehen; die Rueckgabe sagt, ob geschrieben wurde.
-    pub fn finish<N: Nvm>(&mut self, persist: Option<&mut crate::journal::Persist<'_, N>>) -> bool {
+    pub fn finish(&mut self) -> bool {
         if let Some(flushed) = self.flushed {
             return flushed;
         }
@@ -649,23 +674,19 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         self.end_sleep();
         let limit = self.end_budget.map(|ns| self.clock.now().saturating_add(ns));
         let clock = &self.clock;
-        let flushed = persist.is_some_and(|p| p.flush(&mut self.program, || limit.is_none_or(|l| clock.now() < l)));
+        let flushed = self.journal.flush(&mut self.program, || limit.is_none_or(|l| clock.now() < l));
         self.flushed = Some(flushed);
         flushed
     }
 
-    /// [`Runtime::service`] mit Journal und Tunables (8.4): Die Aenderungen
+    /// [`Runtime::service`] mit Tunables (8.4): Die Aenderungen
     /// einer Grenze gehen vor ihrem Schritt in das Programm. Im Schlaf
     /// fragt der Kern die Grenzen bis jetzt in Reihenfolge ab, je Grenze
     /// Tunables und Wake-Quellen ([`Program::woken`]), und die erste mit
     /// einer Aenderung beendet ihn (9.9); ebenso ein Weckereignis der Uhr
     /// ([`Clock::woken`]) an der Grenze nach dem Aufruf.
-    pub fn service_with<N: Nvm>(
-        &mut self,
-        mut persist: Option<&mut crate::journal::Persist<'_, N>>,
-        mut tunables: Option<&mut dyn Tunables>,
-    ) -> Next {
-        self.begin(persist.as_deref_mut());
+    pub fn service_with(&mut self, mut tunables: Option<&mut dyn Tunables>) -> Next {
+        self.begin();
         let now = self.clock.now();
         if self.asleep.is_some() {
             self.wake_asleep(reborrow(&mut tunables), now);
@@ -685,7 +706,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         // Grenze: Dort waechst sie nicht mehr, und die Schleife kaeme nie zurueck.
         while self.ended.is_none() && self.deadline <= now && self.deadline < i64::MAX {
             self.end_sleep();
-            self.tick_now(persist.as_deref_mut(), reborrow(&mut tunables));
+            self.tick_now(reborrow(&mut tunables));
             self.wake_asleep(reborrow(&mut tunables), now);
         }
         let polling = self.asleep.is_some() && self.program.wake_sources();
@@ -811,7 +832,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
 
     /// Vor dem ersten Tick: der Anfangszustand (Tick 0, 9.4) in den Trace;
     /// setzt schon er `next_run`, endet der Lauf ohne Tick.
-    fn begin<N: Nvm>(&mut self, persist: Option<&mut crate::journal::Persist<'_, N>>) {
+    fn begin(&mut self) {
         if core::mem::replace(&mut self.begun, true) {
             return;
         }
@@ -821,16 +842,16 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         let shown = self.sink.outputs(None);
         self.program.trace(shown);
         if let Some(next) = self.program.next_run() {
-            self.end_run(next, shown, persist);
+            self.end_run(next, shown);
         }
     }
 
     /// Das geordnete Ende (12.7): das Journal synchron, dann der Tick, der
     /// das Ende verlangt, falls der Trace ihn noch nicht zeigt, dann `end`,
     /// die `safe`-Werte an die Treiber und in den Trace.
-    fn end_run<N: Nvm>(&mut self, next: NextRun, shown: Outputs, persist: Option<&mut crate::journal::Persist<'_, N>>) {
+    fn end_run(&mut self, next: NextRun, shown: Outputs) {
         self.ended = Some(next);
-        self.finish(persist);
+        self.finish();
         if shown == Outputs::None {
             self.program.trace(Outputs::All);
         }
@@ -840,11 +861,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     }
 
     /// Der Tick an der Frist: ab `sample_inputs()` wie in 12.1.
-    fn tick_now<N: Nvm>(
-        &mut self,
-        persist: Option<&mut crate::journal::Persist<'_, N>>,
-        tunables: Option<&mut dyn Tunables>,
-    ) {
+    fn tick_now(&mut self, tunables: Option<&mut dyn Tunables>) {
         let began = self.clock.now();
         self.release();
         // Was vor dem Abtasten geschah, sieht der Schritt selbst (9.9).
@@ -913,12 +930,8 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         self.deadline = self.boundary(self.k);
 
         match ending {
-            Some(next) => self.end_run(next, shown, persist),
-            None => {
-                if let Some(p) = persist {
-                    self.journal(p);
-                }
-            }
+            Some(next) => self.end_run(next, shown),
+            None => self.write_journal(),
         }
     }
 
@@ -930,7 +943,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// Ein Ergebnis, das `buf` uebersteigt, wird verweigert und kommt als
     /// `Err(FAILED)` an: Gekuerzt waere es gueltig und falsch. Nach dem Ende
     /// des Laufs (12.7) erreicht kein Ergebnis das Programm mehr.
-    pub fn step_with_jobs<J: Jobs>(&mut self, jobs: &mut J, buf: &mut [u8]) -> Tick {
+    pub fn step_with_jobs<B: Jobs>(&mut self, jobs: &mut B, buf: &mut [u8]) -> Tick {
         let open = if self.ended.is_none() { jobs.slots() } else { 0 };
         for slot in 0..open {
             match jobs.poll(slot) {
@@ -961,9 +974,8 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// den Vorgang deckt — nach einem Schlaf ist sie lang, sonst ein Tick
     /// abzueglich des Schritts — oder wenn das Programm Ueberlaeufe annimmt
     /// (`overrun = alert`, 7.3).
-    fn journal<N: Nvm>(&mut self, persist: &mut crate::journal::Persist<'_, N>) {
-        if self.journal_may_run(persist.blocking_ns()) {
-            persist.poll(self.last.now, &mut self.program);
+    fn write_journal(&mut self) {
+        if self.journal_may_run(self.journal.blocking_ns()) && self.journal.advance(self.last.now, &mut self.program) {
             // Ein Vorgang ueber die Frist hinaus ist ein Ueberlauf (7.3),
             // auch wenn der Schritt selbst gepasst hat.
             let late = self.clock.now().saturating_sub(self.deadline);
@@ -977,13 +989,6 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
         match blocking_ns {
             None => true,
             Some(cost) => self.overrun.policy() == Policy::Alert || self.deadline - self.clock.now() >= cost,
-        }
-    }
-
-    /// `n` Ticks mit Journal.
-    pub fn run_persisting<N: Nvm>(&mut self, n: u64, persist: &mut crate::journal::Persist<'_, N>) {
-        for _ in 0..n {
-            self.step_persisting(persist);
         }
     }
 
@@ -1020,6 +1025,22 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink> Runtime<P, C, W, S> {
     /// Das Programm, das die Schleife treibt.
     pub fn program(&self) -> &P {
         &self.program
+    }
+
+    /// Das Journal des Programms (5.9): Zaehler und Geraet fuer die Bilanz.
+    pub fn journal(&self) -> &J {
+        &self.journal
+    }
+
+    /// Das Journal, veraenderlich (Tests, Diagnose: ein Geraet ohne Strom).
+    pub fn journal_mut(&mut self) -> &mut J {
+        &mut self.journal
+    }
+
+    /// Programm und Journal nach dem Lauf, etwa fuer einen Neustart auf
+    /// demselben Geraet.
+    pub fn into_parts(self) -> (P, J) {
+        (self.program, self.journal)
     }
 
     /// `maybe_sleep()` nach 9.9: Wie viele Ticks werden uebersprungen?

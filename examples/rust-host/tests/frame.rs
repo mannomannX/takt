@@ -184,21 +184,39 @@ fn nan_and_infinity_in_a_stream_element_are_malformed() {
 #[test]
 fn the_hull_runs_jobs_sleep_and_the_end_of_a_run_like_the_interpreter() {
     let mut arena = lifecycle::Arena::new();
-    let trace = takt_embed::testing::run(lifecycle::Program::init(&mut arena), lifecycle::TICK_NS, 60);
+    let mut program = lifecycle::Program::new(&mut arena);
+    let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
+    let journal = lifecycle_journal(&mut program, &mut current, &mut stored);
+    let trace = takt_embed::testing::run_journaled(program, journal, lifecycle::TICK_NS, 60);
     assert!(trace.contains("t=3 out word 38858"), "der Job rechnete:\n{trace}");
     assert!(trace.contains("t=34 end after"), "next_run beendet den Lauf:\n{trace}");
     assert!(trace.lines().any(|l| l.contains(" time ") && !l.ends_with("slept=0")) || !trace.contains(" time "));
     agrees("lifecycle", &trace, 60);
 }
 
+/// Das Journal von `lifecycle` (5.9) in einem Geraet im Speicher, vor `init`
+/// geladen: ohne es baut ein Lauf eines Programms mit `persist` nicht
+/// (12.11, FB-385).
+fn lifecycle_journal<'a>(
+    program: &mut lifecycle::Program<'_>,
+    current: &'a mut [u8],
+    stored: &'a mut [u8],
+) -> takt_embed::rt::Persist<'a, takt_embed::rt::FakeNvm<256>> {
+    let device = takt_embed::rt::FakeNvm::<256>::new();
+    let journal = takt_embed::rt::Journal::new(device, lifecycle::LOGIC_HASH, lifecycle::PERSIST_MIN_INTERVAL_NS);
+    takt_embed::rt::Unloaded::new(journal, current, stored).load(program).0
+}
+
 /// **`persist` durch die Huelle** (5.9, 12.11, GEN-028): Der Stand nach dem
 /// Start (`persist_snapshot`) laedt in eine neue Arena vor Tick 0
-/// (`persist_restore` vor `init`), und der zweite Lauf zaehlt weiter.
+/// (`persist_restore` vor `init`), und der zweite Lauf zaehlt weiter. Sein
+/// Journal ist leer und aendert daran nichts.
 #[test]
 fn the_hull_restores_persist_before_tick_zero() {
     use takt_embed::rt::Program as _;
     let mut first = lifecycle::Arena::new();
-    let mut started = lifecycle::Program::init(&mut first);
+    let mut started = lifecycle::Program::new(&mut first);
+    started.ensure_init();
     let mut payload = [0u8; 64];
     let n = started.persist_snapshot(&mut payload);
     assert!(n > 0, "der Start schreibt `starts`");
@@ -206,7 +224,9 @@ fn the_hull_restores_persist_before_tick_zero() {
     let mut second = lifecycle::Arena::new();
     let mut restored = lifecycle::Program::new(&mut second);
     assert_eq!(restored.persist_restore(&payload[..n]), 1, "ein Eintrag uebernommen");
-    let trace = takt_embed::testing::run(restored, lifecycle::TICK_NS, 2);
+    let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
+    let journal = lifecycle_journal(&mut restored, &mut current, &mut stored);
+    let trace = takt_embed::testing::run_journaled(restored, journal, lifecycle::TICK_NS, 2);
     assert!(trace.contains("t=0 out boots 2"), "der zweite Start zaehlt weiter:\n{trace}");
 }
 

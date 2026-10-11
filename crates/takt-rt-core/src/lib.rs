@@ -32,7 +32,9 @@ pub mod overrun;
 pub mod profile;
 pub mod stream;
 
-pub use journal::{FakeNvm, Journal, Loaded, Persist};
+pub use journal::{
+    FakeNvm, Fits, Journal, Loaded, Memory, NoDevice, NoJournal, Persist, Persisting, Store, Unloaded, Volatile,
+};
 pub use loopcore::{
     Clock, JobState, Jobs, Next, NextRun, Nvm, NvmState, Outputs, Program, Runtime, Sink, Tick, Tolerance, Tunables,
     Watchdog, tick_end,

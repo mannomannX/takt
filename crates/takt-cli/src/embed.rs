@@ -151,6 +151,7 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         logic: &logic,
         drivers: &drivers,
         drivers_type: e.drivers_type,
+        persists: takt_mir::persist::max_payload(e.program).is_some_and(|n| n > 0),
     };
     write(&e.out.join(format!("{x}.rs")), &takt_frame::embed::rust_module(&module))?;
     // 12.3: Unter `xip_flash` gehoert der Tick-Pfad in den RAM; die

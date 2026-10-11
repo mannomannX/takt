@@ -4,7 +4,7 @@
 //! Journal, ein Neustart liest sie zurueck. Dazu die Zusage, die FB-149
 //! gebraucht haette: Ein langsames Geraet haelt den Tick nicht auf.
 
-use takt_rt_core::journal::{FakeNvm, Journal, Loaded, Persist};
+use takt_rt_core::journal::{FakeNvm, Journal, Loaded, Persist, Unloaded};
 use takt_rt_core::{Clock, NextRun, Nvm, NvmState, Policy, Profile, Program, Runtime, Sink, Tick, Watchdog};
 
 const SLOT: usize = 256;
@@ -42,6 +42,8 @@ struct Counter {
 }
 
 impl Program for Counter {
+    type Memory = takt_rt_core::Persisting;
+
     fn tick(&mut self, _k: u64, _now: i64) {
         self.value += 1;
     }
@@ -61,30 +63,43 @@ impl Program for Counter {
     }
 }
 
-fn runtime(program: Counter) -> Runtime<Counter, Instant, Quiet, Quiet> {
-    Runtime::new(program, Instant::default(), Quiet, Quiet, Profile::LINUX_RT, T0, Policy::Fault)
+/// Die Schleife mit dem Journal, das die Runtime haelt (FB-385). Es laedt
+/// vor dem ersten Tick; was es fand, kommt mit zurueck.
+fn runtime<'a, N: Nvm>(
+    mut program: Counter,
+    persist: Unloaded<'a, N>,
+) -> (Runtime<Counter, Instant, Quiet, Quiet, Persist<'a, N>>, Loaded) {
+    let (persist, loaded, _) = persist.load(&mut program);
+    let rt =
+        Runtime::journaled(program, persist, Instant::default(), Quiet, Quiet, Profile::LINUX_RT, T0, Policy::Fault);
+    (rt, loaded)
+}
+
+/// Ein Zaehler ab null.
+fn counter() -> Counter {
+    Counter { value: 0, restored: None }
 }
 
 #[test]
 fn the_loop_writes_the_journal_and_a_restart_reads_it_back() {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, 0), &mut current, &mut stored);
-    let mut rt = runtime(Counter { value: 0, restored: None });
-    assert_eq!(persist.load(&mut rt.program).0, Loaded::Empty);
-    rt.run_persisting(50, &mut persist);
-    assert!(persist.journal().writes() > 0, "die Schleife hat nie geschrieben");
-    assert!(persist.flush(&mut rt.program, || true), "flush scheiterte");
+    let persist = Unloaded::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, 0), &mut current, &mut stored);
+    let (mut rt, loaded) = runtime(counter(), persist);
+    assert_eq!(loaded, Loaded::Empty);
+    rt.run(50);
+    assert!(rt.journal().journal().writes() > 0, "die Schleife hat nie geschrieben");
+    assert!(rt.finish(), "flush scheiterte");
     let value = rt.program.value;
 
     // Neustart mit demselben Geraet.
-    let nvm = persist.into_journal().into_inner();
+    let nvm = rt.into_parts().1.into_journal().into_inner();
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(nvm, HASH, 0), &mut current, &mut stored);
-    let mut rt = runtime(Counter { value: 0, restored: None });
-    let (found, applied) = persist.load(&mut rt.program);
+    let persist = Unloaded::new(Journal::new(nvm, HASH, 0), &mut current, &mut stored);
+    let mut program = counter();
+    let (_, found, applied) = persist.load(&mut program);
     assert!(matches!(found, Loaded::Found { .. }), "nichts gefunden");
     assert_eq!(applied, 1);
-    assert_eq!(rt.program.restored, Some(value), "der Zaehler kam nicht zurueck");
+    assert_eq!(program.restored, Some(value), "der Zaehler kam nicht zurueck");
 }
 
 #[test]
@@ -93,11 +108,10 @@ fn min_interval_holds_in_the_loop() {
     // hoechstens ein Schreibvorgang je 10 000 Ticks.
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
     let ten_s = 10_000 * T0;
-    let mut persist = Persist::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, ten_s), &mut current, &mut stored);
-    let mut rt = runtime(Counter { value: 0, restored: None });
-    persist.load(&mut rt.program);
-    rt.run_persisting(25_000, &mut persist);
-    let writes = persist.journal().writes();
+    let persist = Unloaded::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, ten_s), &mut current, &mut stored);
+    let (mut rt, _) = runtime(counter(), persist);
+    rt.run(25_000);
+    let writes = rt.journal().journal().writes();
     assert!(writes <= 3, "{writes} Schreibvorgaenge in 25 s bei 10 s Abstand");
     assert!(writes >= 2, "{writes} Schreibvorgaenge: das Journal schreibt nicht mehr");
 }
@@ -108,14 +122,13 @@ fn a_slow_device_costs_the_tick_nothing() {
     // in logischer Zeit weiter, kein Tick wartet auf das Journal.
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
     let slow = FakeNvm::<SLOT>::new().with_latency(200);
-    let mut persist = Persist::new(Journal::new(slow, HASH, 0), &mut current, &mut stored);
-    let mut rt = runtime(Counter { value: 0, restored: None });
-    persist.load(&mut rt.program);
+    let persist = Unloaded::new(Journal::new(slow, HASH, 0), &mut current, &mut stored);
+    let (mut rt, _) = runtime(counter(), persist);
     for _ in 0..1000 {
-        let tick = rt.step_persisting(&mut persist);
+        let tick = rt.step();
         assert!(!tick.overrun, "Tick {} lief ueber", tick.k);
     }
-    assert!(persist.journal().writes() >= 1);
+    assert!(rt.journal().journal().writes() >= 1);
 }
 
 /// Zaehlt Ticks, persistiert den Zaehler und schlaeft nach jedem Schritt
@@ -128,6 +141,8 @@ struct Sleeper {
 }
 
 impl Program for Sleeper {
+    type Memory = takt_rt_core::Persisting;
+
     fn tick(&mut self, _k: u64, now: i64) {
         self.value += 1;
         self.now = now;
@@ -151,9 +166,14 @@ impl Program for Sleeper {
     }
 }
 
-fn sleeping_runtime(window: i64, policy: Policy) -> Runtime<Sleeper, Instant, Quiet, Quiet> {
-    let program = Sleeper { value: 0, now: 0, window, overruns: 0 };
-    Runtime::new(program, Instant::default(), Quiet, Quiet, Profile::BAREMETAL, T0, policy)
+fn sleeping_runtime<'a>(
+    window: i64,
+    policy: Policy,
+    persist: Unloaded<'a, FakeNvm<SLOT>>,
+) -> Runtime<Sleeper, Instant, Quiet, Quiet, Persist<'a, FakeNvm<SLOT>>> {
+    let mut program = Sleeper { value: 0, now: 0, window, overruns: 0 };
+    let (persist, ..) = persist.load(&mut program);
+    Runtime::journaled(program, persist, Instant::default(), Quiet, Quiet, Profile::BAREMETAL, T0, policy)
 }
 
 /// Ein Geraet, das den Kern fuenf Ticks lang anhaelt (12.3).
@@ -168,11 +188,10 @@ fn blocking() -> FakeNvm<SLOT> {
 fn a_blocking_device_writes_only_in_a_sleep_window() {
     for (window, expect_writes) in [(10, true), (2, false)] {
         let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-        let mut persist = Persist::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
-        let mut rt = sleeping_runtime(window, Policy::Fault);
-        persist.load(&mut rt.program);
-        rt.run_persisting(100, &mut persist);
-        assert_eq!(persist.journal().writes() > 0, expect_writes, "Fenster von {window} Ticks");
+        let persist = Unloaded::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
+        let mut rt = sleeping_runtime(window, Policy::Fault, persist);
+        rt.run(100);
+        assert_eq!(rt.journal().journal().writes() > 0, expect_writes, "Fenster von {window} Ticks");
     }
 }
 
@@ -181,11 +200,10 @@ fn a_blocking_device_writes_only_in_a_sleep_window() {
 #[test]
 fn under_alert_a_blocking_device_writes_at_once() {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
-    let mut rt = sleeping_runtime(0, Policy::Alert);
-    persist.load(&mut rt.program);
-    rt.run_persisting(20, &mut persist);
-    assert!(persist.journal().writes() > 0);
+    let persist = Unloaded::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
+    let mut rt = sleeping_runtime(0, Policy::Alert, persist);
+    rt.run(20);
+    assert!(rt.journal().journal().writes() > 0);
 }
 
 /// Ohne Fenster und unter `fault` schreibt nur der Flush (5.9: vor dem
@@ -193,13 +211,12 @@ fn under_alert_a_blocking_device_writes_at_once() {
 #[test]
 fn without_a_window_only_the_flush_writes() {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
-    let mut rt = sleeping_runtime(0, Policy::Fault);
-    persist.load(&mut rt.program);
-    rt.run_persisting(100, &mut persist);
-    assert_eq!(persist.journal().writes(), 0);
-    assert!(persist.flush(&mut rt.program, || true));
-    assert_eq!(persist.journal().writes(), 1);
+    let persist = Unloaded::new(Journal::new(blocking(), HASH, 0), &mut current, &mut stored);
+    let mut rt = sleeping_runtime(0, Policy::Fault, persist);
+    rt.run(100);
+    assert_eq!(rt.journal().journal().writes(), 0);
+    assert!(rt.finish());
+    assert_eq!(rt.journal().journal().writes(), 1);
 }
 
 // --- Ende des Laufs mit Journal (12.7, 5.9) -----------------------------
@@ -213,6 +230,8 @@ struct Finishing {
 }
 
 impl Program for Finishing {
+    type Memory = takt_rt_core::Persisting;
+
     fn tick(&mut self, _k: u64, _now: i64) {
         self.value += 1;
         self.log.push("tick");
@@ -244,24 +263,24 @@ impl Program for Finishing {
 fn the_end_of_a_run_flushes_before_it_goes_safe() {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
     let journal = Journal::new(FakeNvm::<SLOT>::new(), HASH, 10_000 * T0);
-    let mut persist = Persist::new(journal, &mut current, &mut stored);
-    let program = Finishing { value: 0, ends: 3, log: Vec::new() };
-    let mut rt = Runtime::new(program, Instant::default(), Quiet, Quiet, Profile::BAREMETAL, T0, Policy::Fault);
-    persist.load(&mut rt.program);
+    let mut program = Finishing { value: 0, ends: 3, log: Vec::new() };
+    let (persist, ..) = Unloaded::new(journal, &mut current, &mut stored).load(&mut program);
+    let (clock, profile) = (Instant::default(), Profile::BAREMETAL);
+    let mut rt = Runtime::journaled(program, persist, clock, Quiet, Quiet, profile, T0, Policy::Fault);
     while rt.ended().is_none() {
         rt.clock.0 += T0;
-        rt.service_persisting(&mut persist);
+        rt.service();
     }
     let tail = &rt.program.log[rt.program.log.len() - 5..];
     assert_eq!(tail, ["tick", "commit", "snapshot", "end", "commit"], "{:?}", rt.program.log);
-    assert!(rt.finish(Some(&mut persist)), "geschrieben");
-    assert_eq!(persist.journal().writes(), 2, "Tick 0 sofort, das Ende trotz Intervall");
+    assert!(rt.finish(), "geschrieben");
+    assert_eq!(rt.journal().journal().writes(), 2, "Tick 0 sofort, das Ende trotz Intervall");
 
-    let nvm = persist.into_journal().into_inner();
+    let nvm = rt.into_parts().1.into_journal().into_inner();
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(nvm, HASH, 0), &mut current, &mut stored);
-    let mut restarted = Counter { value: 0, restored: None };
-    assert!(matches!(persist.load(&mut restarted).0, Loaded::Found { .. }));
+    let persist = Unloaded::new(Journal::new(nvm, HASH, 0), &mut current, &mut stored);
+    let mut restarted = counter();
+    assert!(matches!(persist.load(&mut restarted).1, Loaded::Found { .. }));
     assert_eq!(restarted.restored, Some(3), "der Stand des letzten Ticks");
 }
 
@@ -288,19 +307,18 @@ impl Clock for Running {
 fn a_hanging_device_does_not_stop_the_end_of_a_run() {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
     let journal = Journal::new(FakeNvm::<SLOT>::new(), HASH, 0);
-    let mut persist = Persist::new(journal, &mut current, &mut stored);
-    let program = Finishing { value: 0, ends: 3, log: Vec::new() };
+    let mut program = Finishing { value: 0, ends: 3, log: Vec::new() };
+    let (persist, ..) = Unloaded::new(journal, &mut current, &mut stored).load(&mut program);
     let clock = Running(core::cell::Cell::new(0));
-    let mut rt =
-        Runtime::new(program, clock, Quiet, Quiet, Profile::BAREMETAL, T0, Policy::Alert).with_end_budget(50 * T0);
-    persist.load(&mut rt.program);
-    rt.step_persisting(&mut persist);
-    persist_device(&mut persist).cut_at(0);
+    let mut rt = Runtime::journaled(program, persist, clock, Quiet, Quiet, Profile::BAREMETAL, T0, Policy::Alert)
+        .with_end_budget(50 * T0);
+    rt.step();
+    persist_device(rt.journal_mut()).cut_at(0);
     while rt.ended().is_none() {
-        rt.step_persisting(&mut persist);
+        rt.step();
     }
-    assert!(!rt.finish(Some(&mut persist)), "nichts geschrieben");
-    assert!(persist.journal().failures() > 0);
+    assert!(!rt.finish(), "nichts geschrieben");
+    assert!(rt.journal().journal().failures() > 0);
     let tail = &rt.program.log[rt.program.log.len() - 2..];
     assert_eq!(tail, ["end", "commit"], "das Ende lief trotzdem: {:?}", rt.program.log);
 }
@@ -377,15 +395,15 @@ fn under_alert_a_journal_over_the_deadline_counts_as_an_overrun() {
     let now = core::cell::Cell::new(0);
     let device = Stalling { nvm: FakeNvm::new(), clock: &now, cost: 5 * T0, declared: 5 * T0 };
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(device, HASH, 0), &mut current, &mut stored);
-    let program = Sleeper { value: 0, now: 0, window: 0, overruns: 0 };
-    let mut rt = Runtime::new(program, Shared(&now), Quiet, Quiet, Profile::BAREMETAL, T0, Policy::Alert);
-    persist.load(&mut rt.program);
+    let mut program = Sleeper { value: 0, now: 0, window: 0, overruns: 0 };
+    let (persist, ..) = Unloaded::new(Journal::new(device, HASH, 0), &mut current, &mut stored).load(&mut program);
+    let mut rt =
+        Runtime::journaled(program, persist, Shared(&now), Quiet, Quiet, Profile::BAREMETAL, T0, Policy::Alert);
     let mut over = 0;
     for _ in 0..20 {
-        over += u64::from(rt.step_persisting(&mut persist).overrun);
+        over += u64::from(rt.step().overrun);
     }
-    assert!(persist.journal().writes() > 0);
+    assert!(rt.journal().journal().writes() > 0);
     assert!(rt.overrun().count > over, "die Journal-Vorgaenge zaehlen neben den spaeten Ticks: {over}");
     assert_eq!(rt.program.overruns, 0, "unter `alert` kein Fault");
 }
@@ -398,13 +416,13 @@ fn under_fault_a_journal_over_the_deadline_faults_the_next_tick() {
     let now = core::cell::Cell::new(0);
     let device = Stalling { nvm: FakeNvm::new(), clock: &now, cost: 12 * T0, declared: 5 * T0 };
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(device, HASH, 0), &mut current, &mut stored);
-    let program = Sleeper { value: 0, now: 0, window: 10, overruns: 0 };
-    let mut rt = Runtime::new(program, Shared(&now), Quiet, Quiet, Profile::BAREMETAL, T0, Policy::Fault);
-    persist.load(&mut rt.program);
-    rt.step_persisting(&mut persist);
+    let mut program = Sleeper { value: 0, now: 0, window: 10, overruns: 0 };
+    let (persist, ..) = Unloaded::new(Journal::new(device, HASH, 0), &mut current, &mut stored).load(&mut program);
+    let mut rt =
+        Runtime::journaled(program, persist, Shared(&now), Quiet, Quiet, Profile::BAREMETAL, T0, Policy::Fault);
+    rt.step();
     assert_eq!((rt.overrun().count, rt.program.overruns), (1, 0), "der Vorgang lief ueber die Frist");
-    rt.step_persisting(&mut persist);
+    rt.step();
     assert_eq!(rt.program.overruns, 1, "im naechsten Tick");
 }
 
@@ -429,9 +447,8 @@ fn copy_of(nvm: &FakeNvm<SLOT>) -> FakeNvm<SLOT> {
 /// Was ein Neustart auf `nvm` mit dem Typ-Hash `hash` in den Zaehler laedt.
 fn restart(nvm: FakeNvm<SLOT>, hash: u64) -> Option<u32> {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(nvm, hash, 0), &mut current, &mut stored);
-    let mut program = Counter { value: 0, restored: None };
-    persist.load(&mut program);
+    let mut program = counter();
+    Unloaded::new(Journal::new(nvm, hash, 0), &mut current, &mut stored).load(&mut program);
     program.restored
 }
 
@@ -453,15 +470,14 @@ fn a_power_cut_in_the_loop_restores_the_old_or_the_new_count() {
     let mut reference = vec![(0u32, None)];
     {
         let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-        let mut persist = Persist::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, 0), &mut current, &mut stored);
-        let mut rt = runtime(Counter { value: 0, restored: None });
-        persist.load(&mut rt.program);
+        let persist = Unloaded::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, 0), &mut current, &mut stored);
+        let (mut rt, _) = runtime(counter(), persist);
         for _ in 0..CUT_TICKS {
-            rt.step_persisting(&mut persist);
-            let nvm = persist.journal().device();
+            rt.step();
+            let nvm = rt.journal().journal().device();
             reference.push((nvm.bytes_written(), restart(copy_of(nvm), HASH)));
         }
-        let (e, w) = (persist.journal().device().erases(), persist.journal().writes());
+        let (e, w) = (rt.journal().journal().device().erases(), rt.journal().journal().writes());
         assert!(e >= 3, "der Lauf wechselt die Slots: {e} Loeschungen, {w} Eintraege");
     }
     let total = reference.last().map_or(0, |(bytes, _)| *bytes);
@@ -469,12 +485,12 @@ fn a_power_cut_in_the_loop_restores_the_old_or_the_new_count() {
         let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
         let mut nvm = FakeNvm::<SLOT>::new();
         nvm.cut_at(cut);
-        let mut persist = Persist::new(Journal::new(nvm, HASH, 0), &mut current, &mut stored);
-        let mut rt = runtime(Counter { value: 0, restored: None });
-        persist.load(&mut rt.program);
-        rt.run_persisting(CUT_TICKS, &mut persist);
+        let persist = Unloaded::new(Journal::new(nvm, HASH, 0), &mut current, &mut stored);
+        let (mut rt, _) = runtime(counter(), persist);
+        rt.run(CUT_TICKS);
+        let (mut program, mut persist) = rt.into_parts();
         let mut patience = 8;
-        let flushed = persist.flush(&mut rt.program, || {
+        let flushed = persist.flush(&mut program, || {
             patience -= 1;
             patience > 0
         });
@@ -497,14 +513,14 @@ fn a_power_cut_in_the_loop_restores_the_old_or_the_new_count() {
 #[test]
 fn foreign_hash_broken_crc_and_erased_flash_reach_the_program_as_specified() {
     let (mut current, mut stored) = ([0u8; SLOT], [0u8; SLOT]);
-    let mut persist = Persist::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, 0), &mut current, &mut stored);
-    let mut rt = runtime(Counter { value: 0, restored: None });
-    assert_eq!(persist.load(&mut rt.program).0, Loaded::Empty, "geloeschtes Flash: leer, kein Fehler");
+    let persist = Unloaded::new(Journal::new(FakeNvm::<SLOT>::new(), HASH, 0), &mut current, &mut stored);
+    let (mut rt, loaded) = runtime(counter(), persist);
+    assert_eq!(loaded, Loaded::Empty, "geloeschtes Flash: leer, kein Fehler");
     assert_eq!(rt.program.restored, None);
-    rt.run_persisting(3, &mut persist);
-    assert!(persist.flush(&mut rt.program, || true));
+    rt.run(3);
+    assert!(rt.finish());
     let newest = rt.program.value;
-    let nvm = persist.into_journal().into_inner();
+    let nvm = rt.into_parts().1.into_journal().into_inner();
     assert_eq!(restart(copy_of(&nvm), HASH), Some(newest));
     assert_eq!(restart(copy_of(&nvm), HASH ^ 1), None, "fremder Typ-Hash: nichts geladen");
 

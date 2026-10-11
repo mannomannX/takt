@@ -60,7 +60,7 @@ use takt_rt_baremetal::TimerClock;
 use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, Trace};
 #[cfg(form = "own")]
 use takt_rt_baremetal::{LogicalClock, Sleep};
-use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
+use takt_rt_core::{Clock, Journal, Loaded, NextRun, Policy, Profile, Runtime, Store as _, Unloaded};
 
 /// Das Programm als Lieferform (12.11): Konstanten, Arena, Treiber-Traits,
 /// Kleber und Huelle, erzeugt von `takt build --emit embed` (`build.rs`).
@@ -229,8 +229,12 @@ static mut JOBS: Option<app::Jobs<'static>> = None;
 static mut PERSIST_CURRENT: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
 static mut PERSIST_STORED: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
 
-/// Das Journal eines Programms mit `persist` im Flash (5.9, FB-385).
-type Journaled = Option<Persist<'static, FlashNvm>>;
+/// Was das Programm ueber einen Lauf hinaus braucht (5.9, FB-385).
+type Needs = <app::Program<'static> as takt_rt_core::Program>::Memory;
+
+/// Das Journal im Flash, das die Runtime fuer das Programm haelt: fuer ein
+/// Programm ohne `persist` keines.
+type Journaled = <Needs as takt_rt_core::Memory>::Store<'static, FlashNvm>;
 
 /// Das Programm auf seiner Arena (12.11) und sein Journal (5.9). `s0` kommt
 /// aus dem Journal, darum geladen vor dem ersten Eintritt; ohne `persist`
@@ -244,23 +248,27 @@ unsafe fn program(flash: FLASH) -> (app::Program<'static>, Journaled) {
     // SAFETY: siehe oben.
     let (arena, rig) = unsafe { (&mut *(&raw mut ARENA), (*(&raw mut RIG)).insert(drivers::Rig::default())) };
     let mut program = app::Program::new(arena, rig);
-    let mut persist = (PERSIST_BOUND != 0).then(|| {
+    let mut loaded = None;
+    let journal = <Needs as takt_rt_core::Memory>::store(|| {
         let mut nvm = FlashNvm::new(flash).with_blocking_ns(NVM_BLOCKING_NS);
         if FRESH_JOURNAL && !nvm.wipe() {
             say(format_args!("journal: loeschen scheiterte"));
         }
         // SAFETY: siehe oben.
         let (current, stored) = unsafe { (&mut *(&raw mut PERSIST_CURRENT), &mut *(&raw mut PERSIST_STORED)) };
-        Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), current, stored)
+        let unloaded = Unloaded::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), current, stored);
+        let (journal, found, applied) = unloaded.load(&mut program);
+        loaded = Some((found, applied));
+        journal
     });
-    match persist.as_mut().map(|p| p.load(&mut program)) {
+    match loaded {
         Some((Loaded::Found { length, sequence }, applied)) => {
             say(format_args!("journal: Eintrag {sequence}, {length} Byte, {applied} Werte geladen"));
         }
         Some((Loaded::Empty, _)) => say(format_args!("journal: leer")),
         None => say(format_args!("journal: keins")),
     }
-    (program, persist)
+    (program, journal)
 }
 
 /// Eine Zeile auf die Leitung, vor dem Lauf.
@@ -508,15 +516,22 @@ type Line = Trace<fn() -> Option<&'static mut Telemetry>, Telemetry>;
 
 /// Die Schleife ueber dem Programm: das Programm hinter dem
 /// Speicherschutz (12.3), der Watchdog im Betrieb.
-type Takt<C> = Runtime<Guarded<app::Program<'static>, Mpu>, C, Option<Iwdg>, Line>;
+type Takt<C> = Runtime<Guarded<app::Program<'static>, Mpu>, C, Option<Iwdg>, Line, Journaled>;
 
 /// Nach so vielen Ticks endet ein Konformitaetslauf; 0 im Betrieb.
 fn limit() -> u64 {
     TICKS.and_then(|t| t.parse().ok()).unwrap_or(0)
 }
 
-/// Baut die Schleife ueber `program` unter `clock` im Profil `profile` (12.8).
-fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, mut program: app::Program<'static>) -> Takt<C> {
+/// Baut die Schleife ueber `program` und sein Journal unter `clock` im
+/// Profil `profile` (12.8).
+fn runtime<C: Clock>(
+    clock: C,
+    protection: Mpu,
+    profile: Profile,
+    mut program: app::Program<'static>,
+    journal: Journaled,
+) -> Takt<C> {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
     // auf die Leitung und ist kein Betrieb.
@@ -525,26 +540,26 @@ fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, mut program: a
     program.ensure_init();
     let program = Guarded::new(program, protection);
     let line: Line = Trace::new(Cadence::of(limit(), TRACE_EVERY), TICK_NS, uart);
-    Runtime::new(program, clock, watchdog, line, profile, TICK_NS, policy)
+    Runtime::journaled(program, journal, clock, watchdog, line, profile, TICK_NS, policy)
 }
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 #[cfg(form = "own")]
-fn conduct(clock: impl Clock, protection: Mpu, program: app::Program<'static>, mut persist: Journaled) {
-    let mut rt = runtime(clock, protection, Profile::BAREMETAL, program);
+fn conduct(clock: impl Clock, protection: Mpu, program: app::Program<'static>, journal: Journaled) {
+    let mut rt = runtime(clock, protection, Profile::BAREMETAL, program, journal);
     // 8.4: Tunes vom Host kommen ueber die Gegenrichtung der Konsole.
     let mut tunes = Console::new(takt_board_stm32f401::console_byte);
-    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Some(&mut tunes));
-    conclude(&rt, &stats, persist.as_ref());
+    let stats = takt_rt_baremetal::run(&mut rt, Some(&mut tunes));
+    conclude(&rt, &stats);
 }
 
 /// Nach dem Lauf: die Abschlusszeile, im Betrieb das Kommando an die
 /// Plattform.
-fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats, persist: Option<&Persist<'_, FlashNvm>>) {
+fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
     if rt.watchdog.is_some() {
         Iwdg::arm(END_OF_RUN_NS);
     }
-    let journal = persist.map_or(JournalStats::default(), |p| {
+    let journal = rt.journal().persist().map_or(JournalStats::default(), |p| {
         let (erase_ns, program_ns) = p.journal().device().measured_ns();
         JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
     });
@@ -732,7 +747,7 @@ fn main() -> ! {
     }
 
     // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck.
-    let (mut program, persist) = unsafe { program(flash) };
+    let (mut program, journal) = unsafe { program(flash) };
     let dispatch = program.dispatch();
     let mut jobs = JobContext::start(job_stack, dispatch, hand_over_jobs(&mut program));
     // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
@@ -754,7 +769,7 @@ fn main() -> ! {
             }),
             protection,
             program,
-            persist,
+            journal,
         );
     } else {
         // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
@@ -771,7 +786,7 @@ fn main() -> ! {
             }),
             protection,
             program,
-            persist,
+            journal,
         );
     }
     // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
@@ -911,9 +926,7 @@ mod interrupt_form {
     use takt_rt_baremetal::interrupt::{Form, Time, release};
 
     use super::host::{self, JOB_LINE, JOB_PRIORITY, Work};
-    use super::{
-        Console, Journaled, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, program, runtime, uart,
-    };
+    use super::{Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, program, runtime, uart};
 
     /// Der Schritt unter Leitung und Pruef-ISR.
     const STEP_PRIORITY: u8 = 0x20;
@@ -922,8 +935,6 @@ mod interrupt_form {
     struct Stepping {
         rt: Takt<Time<Tim2Alarm>>,
         form: Form<Tim2Alarm>,
-        /// 5.9: das Journal, das `service` schreibt.
-        persist: Journaled,
         /// 8.4: Tunes vom Host ueber die Gegenrichtung der Konsole.
         tunes: Console<fn() -> Option<u8>>,
         /// Die Bilanz, sobald der Lauf endet.
@@ -960,12 +971,12 @@ mod interrupt_form {
             // SAFETY: Bis zum Ende gehoert der Lauf dieser ISR (`STEPPING`).
             let Some(s) = (unsafe { (&raw mut STEPPING).as_mut().and_then(Option::as_mut) }) else { return };
             if due {
-                if let Some(stats) = s.form.on_alarm(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes)) {
+                if let Some(stats) = s.form.on_alarm(&mut s.rt, Some(&mut s.tunes)) {
                     s.ended = Some(stats);
                     ENDED.store(true, Ordering::Release);
                 }
             } else if job_done {
-                s.form.on_job_done(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes));
+                s.form.on_job_done(&mut s.rt, Some(&mut s.tunes));
             } else {
                 return;
             }
@@ -989,7 +1000,7 @@ mod interrupt_form {
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
     pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
-        let (mut program, persist) = unsafe { program(flash) };
+        let (mut program, journal) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
         // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
         // Schritt reichte: gemalt nach `init`, der Aufbau zaehlt nicht (12.3),
@@ -997,12 +1008,12 @@ mod interrupt_form {
         // ersten Fristen kaemen sonst um so viel zu spaet.
         takt_board_stm32f401::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
-        let mut rt = runtime(clock, protection, Profile::SHARED, program);
+        let mut rt = runtime(clock, protection, Profile::SHARED, program, journal);
         let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
         let tunes = Console::new(takt_board_stm32f401::console_byte as fn() -> Option<u8>);
         // SAFETY: TIM2 ist noch maskiert; ab seiner Freigabe gehoert der Lauf
         // seiner ISR.
-        unsafe { STEPPING = Some(Stepping { rt, form, persist, tunes, ended: None }) };
+        unsafe { STEPPING = Some(Stepping { rt, form, tunes, ended: None }) };
         // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
         // oben sind bereit.
         unsafe {
@@ -1035,7 +1046,7 @@ mod interrupt_form {
         // dieser Schleife.
         if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
             work.report(None);
-            conclude(&s.rt, &s.ended.unwrap_or_default(), s.persist.as_ref());
+            conclude(&s.rt, &s.ended.unwrap_or_default());
         }
         host::park()
     }
@@ -1113,7 +1124,7 @@ mod poll_form {
     /// Der Lauf in der Hauptschleife des Wirts, danach die Bilanz.
     pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
-        let (mut program, mut persist) = unsafe { program(flash) };
+        let (mut program, journal) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
         // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
         // Schritt reichte: gemalt nach `init`, der Aufbau zaehlt nicht (12.3),
@@ -1121,7 +1132,7 @@ mod poll_form {
         // ersten Fristen kaemen sonst um so viel zu spaet.
         takt_board_stm32f401::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
-        let mut rt = runtime(clock, protection, Profile::SHARED, program);
+        let mut rt = runtime(clock, protection, Profile::SHARED, program, journal);
         let mut form = Form::start(&mut rt, Polled(pend_jobs), LOGICAL.then_some(&GATE));
         let mut tunes = Console::new(takt_board_stm32f401::console_byte);
         // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
@@ -1141,7 +1152,7 @@ mod poll_form {
         let mut longest: u32 = 0;
         let stats = loop {
             let job_done = JOB_DONE.swap(false, Ordering::AcqRel);
-            if let Some(stats) = form.poll(&mut rt, persist.as_mut(), Some(&mut tunes), job_done) {
+            if let Some(stats) = form.poll(&mut rt, Some(&mut tunes), job_done) {
                 break stats;
             }
             // Eine Runde des Wirts, vom Ende eines Aufrufs bis zum naechsten.
@@ -1154,7 +1165,7 @@ mod poll_form {
             longest = longest.max(cycles::now().wrapping_sub(started));
         };
         work.report(Some(u64::from(longest) * 1_000_000_000 / u64::from(CORE_HZ)));
-        conclude(&rt, &stats, persist.as_ref());
+        conclude(&rt, &stats);
         host::park()
     }
 }
@@ -1177,9 +1188,7 @@ mod rtic_form {
     use takt_rt_baremetal::interrupt::{Alarm, Form, Time, release};
 
     use super::host::{self, Work};
-    use super::{
-        Console, Journaled, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, program, runtime, uart,
-    };
+    use super::{Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, program, runtime, uart};
 
     /// Die Frist ist erreicht; die Takt-Aufgabe rechnet den Schritt.
     pub static DUE: AtomicBool = AtomicBool::new(false);
@@ -1198,7 +1207,6 @@ mod rtic_form {
     struct Ended {
         rt: Takt<Time<Tim2Alarm>>,
         stats: Stats,
-        persist: Journaled,
     }
 
     /// Der beendete Lauf. Die Takt-Aufgabe legt ihn ab und rechnet danach
@@ -1227,21 +1235,21 @@ mod rtic_form {
     /// an die Idle-Aufgabe.
     pub async fn run(alarm: TaskAlarm, protection: Mpu, mut wake: SignalReader<'static, ()>, flash: FLASH) {
         // SAFETY: einmal je Lauf; die Aufgabe startet einmal.
-        let (mut program, mut persist) = unsafe { program(flash) };
+        let (mut program, journal) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm.tim2) };
-        let mut rt = runtime(clock, protection, Profile::SHARED, program);
+        let mut rt = runtime(clock, protection, Profile::SHARED, program, journal);
         let mut form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
         let mut tunes = Console::new(takt_board_stm32f401::console_byte);
         let stats = loop {
             wake.wait().await;
             if DUE.swap(false, Ordering::AcqRel)
-                && let Some(stats) = form.on_alarm(&mut rt, persist.as_mut(), Some(&mut tunes))
+                && let Some(stats) = form.on_alarm(&mut rt, Some(&mut tunes))
             {
                 break stats;
             }
             if JOB_DONE.swap(false, Ordering::AcqRel) {
-                form.on_job_done(&mut rt, persist.as_mut(), Some(&mut tunes));
+                form.on_job_done(&mut rt, Some(&mut tunes));
             }
             if let Some(u) = uart() {
                 u.flush();
@@ -1249,7 +1257,7 @@ mod rtic_form {
         };
         // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
         // Aufgabe nicht mehr mit dem Lauf.
-        unsafe { ENDED_RUN = Some(Ended { rt, stats, persist }) };
+        unsafe { ENDED_RUN = Some(Ended { rt, stats }) };
         ENDED.store(true, Ordering::Release);
     }
 
@@ -1267,7 +1275,7 @@ mod rtic_form {
         // SAFETY: Ab `ENDED` gehoert der Lauf dieser Aufgabe.
         if let Some(ended) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
             work.report(None);
-            conclude(&ended.rt, &ended.stats, ended.persist.as_ref());
+            conclude(&ended.rt, &ended.stats);
         }
         host::park()
     }

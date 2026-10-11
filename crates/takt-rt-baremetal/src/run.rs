@@ -6,7 +6,7 @@
 
 use core::marker::PhantomData;
 
-use takt_rt_core::{Clock, NextRun, Nvm, Outputs, Overrun, Persist, Program, Runtime, Sink, Tick, Tunables, Watchdog};
+use takt_rt_core::{Clock, NextRun, Outputs, Overrun, Program, Runtime, Sink, Store, Tick, Tunables, Watchdog};
 
 use crate::telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 
@@ -139,9 +139,8 @@ where
 /// ist oder das Programm seinen Lauf beendet (`next_run`, 12.7). An der
 /// Grenze schreibt das Journal synchron. Die Tunables (8.4) gehen vor dem
 /// Schritt ihrer Grenze in das Programm, im Schlaf wecken sie (9.9).
-pub fn run<G, C, W, F, N, P>(
-    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
-    mut persist: Option<&mut Persist<'_, N>>,
+pub fn run<G, C, W, F, J, P>(
+    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>, J>,
     mut tunables: Option<&mut dyn Tunables>,
 ) -> Stats
 where
@@ -149,7 +148,7 @@ where
     C: Clock,
     W: Watchdog,
     F: FnMut() -> Option<&'static mut Telemetry<P>>,
-    N: Nvm,
+    J: Store,
     P: Port + 'static,
 {
     let limit = rt.sink.limit();
@@ -161,26 +160,23 @@ where
             Some(t) => Some(&mut **t),
             None => None,
         };
-        rt.step_with(persist.as_deref_mut(), source);
+        rt.step_with(source);
     }
-    stats(rt, persist)
+    stats(rt)
 }
 
 /// Die Bilanz am Ende eines Laufs; das Journal schreibt dabei synchron, wenn
 /// der Kern es nicht schon am Ende des Programms getan hat.
-pub fn stats<G, C, W, F, N, P>(
-    rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
-    persist: Option<&mut Persist<'_, N>>,
-) -> Stats
+pub fn stats<G, C, W, F, J, P>(rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>, J>) -> Stats
 where
     G: Program,
     C: Clock,
     W: Watchdog,
     F: FnMut() -> Option<&'static mut Telemetry<P>>,
-    N: Nvm,
+    J: Store,
     P: Port + 'static,
 {
-    let flushed = rt.finish(persist);
+    let flushed = rt.finish();
     // Der Kern zaehlt jeden Ueberlauf, auch den eines Journal-Vorgangs, der
     // in keiner Zeitzeile steht (7.3).
     Stats { slept: rt.sink.slept, overruns: rt.overrun().count, flushed, next_run: rt.ended() }
@@ -272,7 +268,7 @@ mod tests {
 
     use super::*;
     use core::cell::Cell;
-    use takt_rt_core::{FakeNvm, Policy, Profile};
+    use takt_rt_core::{FakeNvm, Nvm, Policy, Profile, Unloaded};
 
     use crate::LogicalClock;
 
@@ -289,6 +285,8 @@ mod tests {
     }
 
     impl Program for Ending {
+        type Memory = takt_rt_core::Volatile;
+
         fn tick(&mut self, k: u64, _now: i64) {
             self.ticks = k + 1;
         }
@@ -337,7 +335,7 @@ mod tests {
         let clock = LogicalClock::new(|| {});
         let trace = Trace::new(cadence, 1_000_000, || None::<&'static mut Telemetry<NoLine>>);
         let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Fault);
-        let stats = run(&mut rt, None::<&mut Persist<'_, FakeNvm<0>>>, None);
+        let stats = run(&mut rt, None);
         (stats, rt.program)
     }
 
@@ -430,6 +428,8 @@ mod tests {
     struct Counting(u32);
 
     impl Program for Counting {
+        type Memory = takt_rt_core::Persisting;
+
         fn tick(&mut self, _k: u64, _now: i64) {
             self.0 += 1;
         }
@@ -448,13 +448,14 @@ mod tests {
         let now = Cell::new(0);
         let (mut current, mut stored) = ([0u8; 256], [0u8; 256]);
         let device = Stalling { nvm: FakeNvm::new(), clock: &now };
-        let mut persist = Persist::new(takt_rt_core::Journal::new(device, 7, 0), &mut current, &mut stored);
+        let journal = takt_rt_core::Journal::new(device, 7, 0);
+        let mut program = Counting(0);
+        let (persist, ..) = Unloaded::new(journal, &mut current, &mut stored).load(&mut program);
         let trace = Trace::new(Cadence::of(20, 1), 1_000_000, || None::<&'static mut Telemetry<NoLine>>);
-        let mut rt =
-            Runtime::new(Counting(0), Shared(&now), NoWatchdog, trace, Profile::BAREMETAL, 1_000_000, Policy::Alert);
-        persist.load(&mut rt.program);
-        let stats = run(&mut rt, Some(&mut persist), None);
-        assert!(persist.journal().writes() > 0);
+        let (clock, profile) = (Shared(&now), Profile::BAREMETAL);
+        let mut rt = Runtime::journaled(program, persist, clock, NoWatchdog, trace, profile, 1_000_000, Policy::Alert);
+        let stats = run(&mut rt, None);
+        assert!(rt.journal().journal().writes() > 0);
         assert!(rt.overrun().count > 0);
         assert_eq!(stats.overruns, rt.overrun().count, "jeder Ueberlauf steht in der Bilanz");
     }

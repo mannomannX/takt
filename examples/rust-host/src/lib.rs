@@ -69,6 +69,48 @@
 //!     }
 //! }
 //! ```
+//!
+//! **Ein Programm mit `persist` laeuft nur mit seinem Journal** (5.9, 12.11,
+//! FB-385). Das Journal laedt vor dem ersten Tick, dann rechnet der Lauf:
+//!
+//! ```
+//! use rust_host::lifecycle;
+//! let mut arena = lifecycle::Arena::new();
+//! let mut program = lifecycle::Program::new(&mut arena);
+//! let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
+//! let device = takt_embed::rt::FakeNvm::<256>::new();
+//! let journal = takt_embed::rt::Journal::new(device, lifecycle::LOGIC_HASH, lifecycle::PERSIST_MIN_INTERVAL_NS);
+//! let (journal, ..) = takt_embed::rt::Unloaded::new(journal, &mut current, &mut stored).load(&mut program);
+//! let trace = takt_embed::testing::run_journaled(program, journal, lifecycle::TICK_NS, 4);
+//! assert!(trace.contains("t=0 out boots 1"));
+//! ```
+//!
+//! Ohne Journal baut der Lauf nicht:
+//!
+//! ```compile_fail,E0271
+//! let mut arena = rust_host::lifecycle::Arena::new();
+//! let program = rust_host::lifecycle::Program::new(&mut arena);
+//! takt_embed::testing::run(program, rust_host::lifecycle::TICK_NS, 4);
+//! ```
+//!
+//! mit einem, das nicht geladen hat, ebenso nicht:
+//!
+//! ```compile_fail,E0277
+//! use rust_host::lifecycle;
+//! let mut arena = lifecycle::Arena::new();
+//! let program = lifecycle::Program::new(&mut arena);
+//! let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
+//! let journal = takt_embed::rt::Journal::new(takt_embed::rt::FakeNvm::<256>::new(), lifecycle::LOGIC_HASH, 0);
+//! let unloaded = takt_embed::rt::Unloaded::new(journal, &mut current, &mut stored);
+//! takt_embed::testing::run_journaled(program, unloaded, lifecycle::TICK_NS, 4);
+//! ```
+//!
+//! und einen Start ohne Journal bietet die Huelle gar nicht an:
+//!
+//! ```compile_fail,E0599
+//! let mut arena = rust_host::lifecycle::Arena::new();
+//! let program = rust_host::lifecycle::Program::init(&mut arena);
+//! ```
 
 /// Das Programm (erzeugt): `Arena`, `TICK_NS`, `Drivers`, `Program`.
 #[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]

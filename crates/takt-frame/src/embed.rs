@@ -43,6 +43,9 @@ pub struct Module<'a> {
     /// Der Rust-Typ, der `Drivers` erfuellt; ohne ihn stellt der Wirt die
     /// Treiber in C, und die Huelle reicht keinen Zeiger.
     pub drivers_type: Option<&'a str>,
+    /// Hat das Programm `persist` (5.9)? Dann laesst sich die Runtime ueber
+    /// ihm nur mit einem Journal bauen (12.11, FB-385).
+    pub persists: bool,
 }
 
 /// Das Modul `P.rs`.
@@ -73,7 +76,7 @@ pub fn rust_module(m: &Module<'_>) -> String {
         let _ = writeln!(s);
         s.push_str(&crate::drivers::rust_glue(m.drivers, x, ty));
     }
-    s.push_str(&hull(x, m.drivers_type, m.logic));
+    s.push_str(&hull(x, m.drivers_type, m.logic, m.persists));
     s
 }
 
@@ -119,7 +122,9 @@ fn ffi(x: &Prefix, logic: &str) -> String {
 }
 
 /// Die sichere Huelle `Program` und der Griff `Jobs`.
-fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str) -> String {
+fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str, persists: bool) -> String {
+    let memory = if persists { "Persisting" } else { "Volatile" };
+    let args = if drivers_type.is_some() { ", drivers" } else { "" };
     let (param, user, borrow) = match drivers_type {
         Some(ty) => (
             format!(", drivers: &'a mut {ty}"),
@@ -129,6 +134,23 @@ fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str) -> String {
         None => {
             (String::new(), "core::ptr::null_mut()".to_string(), "core::marker::PhantomData<&'a mut Arena>".to_string())
         }
+    };
+    // FB-385: Ein Programm mit `persist` beginnt ueber sein Journal; einen
+    // Start ohne es bietet die Huelle dann nicht an.
+    let init = if persists {
+        "    // Ohne `init`: Das Programm beginnt ueber sein Journal (5.9, FB-385).
+"
+        .to_string()
+    } else {
+        format!(
+            "    /// Das Programm nach Tick 0 (9.4).
+    pub fn init(arena: &'a mut Arena{param}) -> Program<'a> {{
+                     let mut p = Program::new(arena{args});
+        p.ensure_init();
+        p
+    }}
+"
+        )
     };
     format!(
         r#"
@@ -146,7 +168,7 @@ pub struct Program<'a> {{
 
 impl<'a> Program<'a> {{
     /// Das Programm vor Tick 0: Das Journal darf noch laden
-    /// (`takt_embed::rt::Persist::load`), sonst beginnt `ensure_init`.
+    /// (`takt_embed::rt::Unloaded::load`), sonst beginnt `ensure_init`.
     pub fn new(arena: &'a mut Arena{param}) -> Program<'a> {{
         // Bibliothek und Huelle muessen dieselbe Schnittstelle sprechen und
         // dasselbe Programm meinen; ohne `{x}_abi_{ABI}` und
@@ -164,13 +186,7 @@ impl<'a> Program<'a> {{
         }}
     }}
 
-    /// Das Programm nach Tick 0, ohne Journal (9.4).
-    pub fn init(arena: &'a mut Arena{param}) -> Program<'a> {{
-        let mut p = Program::new(arena{args});
-        p.ensure_init();
-        p
-    }}
-
+{init}
     /// Tick 0 ohne geladene Werte, wenn das Journal keine hatte.
     pub fn ensure_init(&mut self) {{
         if !self.initialized {{
@@ -275,6 +291,8 @@ impl takt_embed::Jobs for Jobs<'_> {{
 }}
 
 impl takt_embed::rt::Program for Program<'_> {{
+    type Memory = takt_embed::rt::{memory};
+
     fn tick(&mut self, k: u64, _now: i64) {{
         self.ensure_init();
         // Der Kern zaehlt ab 0; der Rahmen nennt den ersten Tick nach dem
@@ -417,6 +435,5 @@ impl takt_embed::rt::Program for Program<'_> {{
     }}
 }}
 "#,
-        args = if drivers_type.is_some() { ", drivers" } else { "" },
     )
 }

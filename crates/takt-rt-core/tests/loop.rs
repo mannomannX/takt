@@ -63,6 +63,8 @@ struct Counted<'a> {
 }
 
 impl Program for Counted<'_> {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, k: u64, now: i64) {
         self.ticks.push((k, now));
         let mut f = self.clock.borrow_mut();
@@ -443,6 +445,8 @@ struct Ordered {
 }
 
 impl Program for Ordered {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, _k: u64, _now: i64) {
         self.ticks += 1;
         self.log.push("tick");
@@ -651,6 +655,8 @@ struct Ending<'a> {
 }
 
 impl Program for Ending<'_> {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, k: u64, _now: i64) {
         self.ticks += 1;
         let mut f = self.clock.borrow_mut();
@@ -722,6 +728,8 @@ struct Logged<'a> {
 }
 
 impl Program for Logged<'_> {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, _k: u64, _now: i64) {
         self.ticks += 1;
         self.log.borrow_mut().push("tick");
@@ -841,6 +849,8 @@ fn a_long_sleep_advances_exactly() {
 fn without_a_deadline_the_core_does_not_sleep() {
     struct Deadlineless;
     impl Program for Deadlineless {
+        type Memory = takt_rt_core::Volatile;
+
         fn tick(&mut self, _k: u64, _now: i64) {}
         fn sleep_allowed(&self) -> bool {
             true
@@ -857,6 +867,8 @@ fn without_a_deadline_the_core_does_not_sleep() {
 struct Plain(u64);
 
 impl Program for Plain {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, _k: u64, _now: i64) {
         self.0 += 1;
     }
@@ -941,6 +953,8 @@ struct Waiting {
 }
 
 impl Program for Waiting {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, _k: u64, _now: i64) {
         self.ticks += 1;
     }
@@ -1082,6 +1096,8 @@ struct Latched {
 }
 
 impl Program for Latched {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, k: u64, _now: i64) {
         self.latch = k + 1;
     }

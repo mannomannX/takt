@@ -148,6 +148,8 @@ fn the_period_counts_only_under_the_guarantee() {
 struct Counter(u32);
 
 impl Program for Counter {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, _k: u64, _now: i64) {
         self.0 += 1;
     }

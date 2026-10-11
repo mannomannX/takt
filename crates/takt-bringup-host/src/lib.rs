@@ -31,7 +31,7 @@ use std::process::ExitCode;
 
 use takt_embed::{Dispatch as _, Input, Jobs as _, Sample};
 use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWatchdog, Port, Telemetry, Trace};
-use takt_rt_core::{FakeNvm, Persist, Policy, Profile, Runtime};
+use takt_rt_core::{FakeNvm, Fits, Journal, Memory, Policy, Profile, Runtime, Store, Unloaded};
 
 /// Die Standardausgabe als Leitung: Sie nimmt jedes Byte.
 struct Console(BufWriter<Stdout>);
@@ -142,15 +142,35 @@ impl Input<i64> for WallClock {
     }
 }
 
-/// Kein Journal: Ein Lauf auf dem Wirt beginnt wie der Interpreter ohne
-/// Speicher (5.9).
-fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
-    None
+/// Das Geraet des Journals auf dem Wirt: Speicher, der wie das Journal eines
+/// Boards im Konformitaetslauf leer beginnt (5.9, 13.8).
+pub type Device = FakeNvm<4096>;
+
+/// Das Journal von `program` (5.9), vor `init` geladen; fuer ein Programm
+/// ohne `persist` keines. `logic_hash` und `min_interval_ns` sind
+/// `LOGIC_HASH` und `PERSIST_MIN_INTERVAL_NS` seines Moduls, die Puffer so
+/// gross wie `PERSIST_BOUND`.
+pub fn journal<'a, P: takt_rt_core::Program>(
+    program: &mut P,
+    current: &'a mut [u8],
+    stored: &'a mut [u8],
+    logic_hash: u64,
+    min_interval_ns: i64,
+) -> <P::Memory as Memory>::Store<'a, Device> {
+    <P::Memory as Memory>::store(|| {
+        let journal = Journal::new(Device::new(), logic_hash, min_interval_ns);
+        Unloaded::new(journal, current, stored).load(program).0
+    })
 }
 
-/// Fuehrt `program` aus, so viele Ticks, wie das erste Argument nennt;
-/// `tick_ns` und `alert` sind `TICK_NS` und `OVERRUN_ALERT` seines Moduls.
-pub fn run<P: takt_embed::Program>(mut program: P, tick_ns: i64, alert: bool) -> ExitCode {
+/// Fuehrt `program` mit seinem Journal ([`journal`]) aus, so viele Ticks,
+/// wie das erste Argument nennt; `tick_ns` und `alert` sind `TICK_NS` und
+/// `OVERRUN_ALERT` seines Moduls.
+pub fn run<P, J>(mut program: P, journal: J, tick_ns: i64, alert: bool) -> ExitCode
+where
+    P: takt_embed::Program,
+    J: Store + Fits<P::Memory>,
+{
     let Some(ticks) = std::env::args().nth(1).and_then(|a| a.parse::<u64>().ok()) else {
         eprintln!("Aufruf: <binary> TICKS");
         return ExitCode::FAILURE;
@@ -178,10 +198,15 @@ pub fn run<P: takt_embed::Program>(mut program: P, tick_ns: i64, alert: bool) ->
         }
     });
     let trace = Trace::new(Cadence::of(ticks, 1), tick_ns, line);
-    let mut rt = Runtime::new(program, clock, NoWatchdog, trace, Profile::BAREMETAL, tick_ns, policy);
-    let stats = takt_rt_baremetal::run(&mut rt, no_journal(), None);
+    let mut rt = Runtime::journaled(program, journal, clock, NoWatchdog, trace, Profile::BAREMETAL, tick_ns, policy);
+    let stats = takt_rt_baremetal::run(&mut rt, None);
+    let counted = rt.journal().persist().map_or_else(JournalStats::default, |p| JournalStats {
+        writes: p.journal().writes(),
+        failures: p.journal().failures(),
+        ..JournalStats::default()
+    });
     if let Some(line) = line() {
-        takt_rt_baremetal::report(line, rt.overrun(), &stats, &JournalStats::default(), &Default::default());
+        takt_rt_baremetal::report(line, rt.overrun(), &stats, &counted, &Default::default());
         line.drain(DRAIN_ROUNDS);
     }
     ExitCode::SUCCESS

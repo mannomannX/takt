@@ -23,7 +23,7 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use takt_rt_core::{Clock, Nvm, Persist, Program, Runtime, Tunables, Watchdog};
+use takt_rt_core::{Clock, Program, Runtime, Store, Tunables, Watchdog};
 
 use crate::run::{Stats, Trace, stats};
 use crate::telemetry::{Port, Telemetry};
@@ -80,8 +80,8 @@ impl<A: Alarm> Form<A> {
     /// Ticks, und der Alarm steht auf der Frist von Tick 0. Mit `gate`
     /// zaehlt die Zeit logisch: Statt den Zeitgeber zu stellen, schliesst
     /// der Alarm das Tor, und [`release`] gibt ihn frei.
-    pub fn start<G, C, W, F, P>(
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
+    pub fn start<G, C, W, F, J, P>(
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>, J>,
         alarm: A,
         gate: Option<&'static AtomicBool>,
     ) -> Form<A>
@@ -90,6 +90,7 @@ impl<A: Alarm> Form<A> {
         C: Clock,
         W: Watchdog,
         F: FnMut() -> Option<&'static mut Telemetry<P>>,
+        J: Store,
         P: Port + 'static,
     {
         let limit = rt.sink.limit();
@@ -106,10 +107,9 @@ impl<A: Alarm> Form<A> {
     /// auf die naechste Frist. Am Ende des Laufs — nach `cadence.limit`
     /// Ticks oder durch `next_run` (12.7) — schreibt das Journal synchron,
     /// kein Alarm steht mehr, und die Bilanz kommt zurueck.
-    pub fn on_alarm<G, C, W, F, N, P>(
+    pub fn on_alarm<G, C, W, F, J, P>(
         &mut self,
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
-        mut persist: Option<&mut Persist<'_, N>>,
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>, J>,
         tunables: Option<&mut dyn Tunables>,
     ) -> Option<Stats>
     where
@@ -117,19 +117,19 @@ impl<A: Alarm> Form<A> {
         C: Clock,
         W: Watchdog,
         F: FnMut() -> Option<&'static mut Telemetry<P>>,
-        N: Nvm,
+        J: Store,
         P: Port + 'static,
     {
         // Der Alarm feuert nie vor seiner Frist; eine logische Uhr steht
         // erst jetzt auf ihr.
         rt.clock.wait_until(self.at);
-        let next = rt.service_with(persist.as_deref_mut(), tunables);
+        let next = rt.service_with(tunables);
         if next.jobs {
             self.alarm.pend_jobs();
         }
         let limit = rt.sink.limit();
         if rt.ended().is_some() || (limit != 0 && rt.tick_number() >= limit) {
-            return Some(stats(rt, persist));
+            return Some(stats(rt));
         }
         self.arm(next.deadline);
         None
@@ -142,20 +142,19 @@ impl<A: Alarm> Form<A> {
     /// wartenden Job vor der naechsten Grenze, wie der Job-Faden des eigenen
     /// Kerns. Der Alarm bleibt auf seiner Frist; ist sie inzwischen erreicht,
     /// rechnet [`Form::on_alarm`] dort nichts mehr nach, was hier schon lief.
-    pub fn on_job_done<G, C, W, F, N, P>(
+    pub fn on_job_done<G, C, W, F, J, P>(
         &mut self,
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
-        persist: Option<&mut Persist<'_, N>>,
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>, J>,
         tunables: Option<&mut dyn Tunables>,
     ) where
         G: Program,
         C: Clock,
         W: Watchdog,
         F: FnMut() -> Option<&'static mut Telemetry<P>>,
-        N: Nvm,
+        J: Store,
         P: Port + 'static,
     {
-        if rt.service_with(persist, tunables).jobs {
+        if rt.service_with(tunables).jobs {
             self.alarm.pend_jobs();
         }
     }
@@ -167,10 +166,9 @@ impl<A: Alarm> Form<A> {
     /// ist ([`Form::on_alarm`]). In logischer Zeit ist sie in jeder Runde
     /// erreicht, in der das Tor offen ist: Die Hauptschleife laeuft erst,
     /// wenn der Job-Interrupt ruht. Am Ende des Laufs die Bilanz.
-    pub fn poll<G, C, W, F, N, P>(
+    pub fn poll<G, C, W, F, J, P>(
         &mut self,
-        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>>,
-        persist: Option<&mut Persist<'_, N>>,
+        rt: &mut Runtime<G, C, W, Trace<F, Telemetry<P>>, J>,
         tunables: Option<&mut dyn Tunables>,
         job_done: bool,
     ) -> Option<Stats>
@@ -179,18 +177,18 @@ impl<A: Alarm> Form<A> {
         C: Clock,
         W: Watchdog,
         F: FnMut() -> Option<&'static mut Telemetry<P>>,
-        N: Nvm,
+        J: Store,
         P: Port + 'static,
     {
         if job_done {
-            self.on_job_done(rt, persist, tunables);
+            self.on_job_done(rt, tunables);
             return None;
         }
         let due = match self.gate {
             Some(gate) => gate.swap(false, Ordering::AcqRel),
             None => rt.clock.now() >= self.at,
         };
-        if due { self.on_alarm(rt, persist, tunables) } else { None }
+        if due { self.on_alarm(rt, tunables) } else { None }
     }
 
     fn arm(&mut self, at: i64) {
@@ -230,7 +228,7 @@ pub fn release(gate: &AtomicBool, alarm: &mut impl Alarm) {
 mod tests {
     use super::*;
     use core::cell::Cell;
-    use takt_rt_core::{FakeNvm, NextRun, Outputs, Policy, Profile};
+    use takt_rt_core::{NextRun, Outputs, Policy, Profile};
 
     use crate::run::{Cadence, NoWatchdog};
 
@@ -260,6 +258,8 @@ mod tests {
     }
 
     impl Program for Counting {
+        type Memory = takt_rt_core::Volatile;
+
         fn tick(&mut self, k: u64, now: i64) {
             self.ticks = k + 1;
             self.times.push(now);
@@ -332,10 +332,6 @@ mod tests {
         None
     }
 
-    fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
-        None
-    }
-
     /// Faehrt die Interruptform: Die ISR feuert zur gestellten Frist, um
     /// `late` verspaetet, bis der Lauf endet. Steht der Job-Interrupt an,
     /// rechnet er seinen Auftrag sofort und laesst neu verteilen.
@@ -347,11 +343,11 @@ mod tests {
         let stats = loop {
             let at = form.alarm.armed.take().expect("ein Alarm steht");
             now.set(now.get().max(at) + late);
-            if let Some(stats) = form.on_alarm(&mut rt, no_journal(), None) {
+            if let Some(stats) = form.on_alarm(&mut rt, None) {
                 break stats;
             }
             while core::mem::take(&mut form.alarm.pending) {
-                form.on_job_done(&mut rt, no_journal(), None);
+                form.on_job_done(&mut rt, None);
             }
         };
         (stats, rt.program, form)
@@ -414,7 +410,7 @@ mod tests {
             // Der Job-Interrupt rechnet, sobald er ansteht, und meldet es der naechsten Runde.
             let job_done = pended.get() > done;
             done = pended.get();
-            if let Some(stats) = form.poll(&mut rt, no_journal(), None, job_done) {
+            if let Some(stats) = form.poll(&mut rt, None, job_done) {
                 break stats;
             }
             now.set(now.get() + round);
@@ -441,7 +437,7 @@ mod tests {
             assert_eq!(form.alarm.armed, None, "der Zeitgeber bleibt in logischer Zeit unberuehrt");
             release(&GATE, &mut board);
             assert_eq!(board.armed.take(), Some(0), "das Tor war zu");
-            if let Some(stats) = form.on_alarm(&mut rt, no_journal(), None) {
+            if let Some(stats) = form.on_alarm(&mut rt, None) {
                 break stats;
             }
         };

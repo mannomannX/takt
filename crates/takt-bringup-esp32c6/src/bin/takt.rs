@@ -22,7 +22,7 @@ use takt_board_esp32c6::{JobContext, SystimerTick};
 use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, JournalStats, Stats, Trace};
 #[cfg(form = "own")]
 use takt_rt_baremetal::{LogicalClock, Sleep, TimerClock};
-use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
+use takt_rt_core::{Clock, Journal, Loaded, NextRun, Policy, Profile, Runtime, Store as _, Unloaded};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -338,41 +338,50 @@ mod devices {
 /// Die Leitung als Senke des Kerns (12.5).
 type Line = Trace<fn() -> Option<&'static mut Telemetry>, Telemetry>;
 
-/// Die Schleife ueber dem Programm, der Watchdog im Betrieb.
-type Takt<C> = Runtime<app::Program<'static>, C, Option<Mwdt>, Line>;
+/// Was das Programm ueber einen Lauf hinaus braucht (5.9, FB-385).
+type Needs = <app::Program<'static> as takt_rt_core::Program>::Memory;
+
+/// Das Journal im Flash, das die Runtime fuer das Programm haelt: fuer ein
+/// Programm ohne `persist` keines.
+type Journaled = <Needs as takt_rt_core::Memory>::Store<'static, FlashNvm>;
+
+/// Die Schleife ueber dem Programm und seinem Journal, der Watchdog im
+/// Betrieb.
+type Takt<C> = Runtime<app::Program<'static>, C, Option<Mwdt>, Line, Journaled>;
 
 /// Nach so vielen Ticks endet ein Konformitaetslauf; 0 im Betrieb.
 fn limit() -> u64 {
     TICKS.and_then(|t| t.parse().ok()).unwrap_or(0)
 }
 
-/// Baut die Schleife ueber `program` unter `clock` im Profil `profile` (12.8).
-fn runtime<C: Clock>(clock: C, profile: Profile, program: app::Program<'static>) -> Takt<C> {
+/// Baut die Schleife ueber `program` und sein Journal unter `clock` im
+/// Profil `profile` (12.8).
+fn runtime<C: Clock>(clock: C, profile: Profile, program: app::Program<'static>, journal: Journaled) -> Takt<C> {
     let policy = if OVERRUN_ALERT { Policy::Alert } else { Policy::Fault };
     // Der Watchdog wacht im Betrieb (12.3); ein Konformitaetslauf wartet
     // auf die Leitung und ist kein Betrieb.
     let watchdog = (limit() == 0).then(|| Mwdt::arm(WATCHDOG_NS));
     let trace: Line = Trace::new(Cadence::of(limit(), TRACE_EVERY), TICK_NS, uart);
-    Runtime::new(program, clock, watchdog, trace, profile, TICK_NS, policy)
+    Runtime::journaled(program, journal, clock, watchdog, trace, profile, TICK_NS, policy)
 }
 
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 #[cfg(form = "own")]
-fn conduct(program: app::Program<'static>, clock: impl Clock, persist: &mut Option<Persist<'_, FlashNvm>>) {
-    let mut rt = runtime(clock, Profile::BAREMETAL, program);
+fn conduct(program: app::Program<'static>, clock: impl Clock, journal: Journaled) {
+    let mut rt = runtime(clock, Profile::BAREMETAL, program, journal);
     // 8.4: Tunes vom Host kommen ueber die Gegenrichtung der Konsole.
     let mut tunes = Console::new(takt_board_esp32c6::console_byte);
-    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Some(&mut tunes));
-    conclude(&rt, &stats, persist.as_ref());
+    let stats = takt_rt_baremetal::run(&mut rt, Some(&mut tunes));
+    conclude(&rt, &stats);
 }
 
 /// Nach dem Lauf: die Abschlusszeile, im Betrieb das Kommando an die
 /// Plattform.
-fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats, persist: Option<&Persist<'_, FlashNvm>>) {
+fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
     if rt.watchdog.is_some() {
         Mwdt::arm(END_OF_RUN_NS);
     }
-    let journal = persist.map_or(JournalStats::default(), |p| {
+    let journal = rt.journal().persist().map_or(JournalStats::default(), |p| {
         let (erase_ns, program_ns) = p.journal().device().measured_ns();
         JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
     });
@@ -471,19 +480,22 @@ fn main() -> ! {
     // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck, und nur das
     // Journal haelt die Puffer.
     let (current, stored) = unsafe { (&mut *(&raw mut PERSIST_CURRENT), &mut *(&raw mut PERSIST_STORED)) };
-    let mut persist = None;
-    if PERSIST_BOUND != 0 {
-        let mut nvm = FlashNvm::new(peripherals.FLASH, JOURNAL_AT).with_blocking_ns(NVM_BLOCKING_NS);
-        if FRESH_JOURNAL && !nvm.wipe() {
-            report("journal: loeschen scheiterte");
-        }
-        persist = Some(Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), current, stored));
-    }
     // SAFETY: Arena und Pruefstand gehoeren nur diesem Programm; `main`
     // kehrt nicht zurueck, und ausser ihm greift niemand auf sie zu.
     let (arena, rig) = unsafe { (&mut *(&raw mut ARENA), (*(&raw mut RIG)).insert(drivers::Rig::default())) };
     let mut program = app::Program::new(arena, rig);
-    let loaded = persist.as_mut().map(|p| p.load(&mut program));
+    let flash = peripherals.FLASH;
+    let mut loaded = None;
+    let journal = <Needs as takt_rt_core::Memory>::store(|| {
+        let mut nvm = FlashNvm::new(flash, JOURNAL_AT).with_blocking_ns(NVM_BLOCKING_NS);
+        if FRESH_JOURNAL && !nvm.wipe() {
+            report("journal: loeschen scheiterte");
+        }
+        let unloaded = Unloaded::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), current, stored);
+        let (journal, found, applied) = unloaded.load(&mut program);
+        loaded = Some((found, applied));
+        journal
+    });
     program.ensure_init();
     if let Some(u) = uart() {
         match loaded {
@@ -496,19 +508,15 @@ fn main() -> ! {
         u.flush();
     }
     #[cfg(form = "own")]
-    own_core(program, persist, timer);
+    own_core(program, journal, timer);
     #[cfg(form = "interrupt")]
-    interrupt_form::run(program, persist, alarm);
+    interrupt_form::run(program, journal, alarm);
 }
 
 /// Der eigene Kern (12.3): Die Schleife wartet selbst auf die Frist, Jobs
 /// rechnen in ihrer Wartezeit im eigenen Faden.
 #[cfg(form = "own")]
-fn own_core(
-    mut program: app::Program<'static>,
-    mut persist: Option<Persist<'static, FlashNvm>>,
-    timer: SystimerTick,
-) -> ! {
+fn own_core(mut program: app::Program<'static>, journal: Journaled, timer: SystimerTick) -> ! {
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
     // der Tick holt den Kern zurueck.
     let dispatch = program.dispatch();
@@ -534,7 +542,7 @@ fn own_core(
                 context.finish();
             }
         });
-        conduct(program, clock, &mut persist);
+        conduct(program, clock, journal);
     } else {
         let clock = TimerClock::new(timer, TICK_NS).with_idle(|| {
             probe();
@@ -545,7 +553,7 @@ fn own_core(
                 context.run();
             }
         });
-        conduct(program, clock, &mut persist);
+        conduct(program, clock, journal);
     }
     // Der Watchdog laeuft nach einem Lauf im Betrieb weiter; das Board
     // haelt an, statt neu zu starten.
@@ -593,15 +601,14 @@ mod interrupt_form {
     use esp_hal::interrupt::Priority;
     use esp_hal::interrupt::software::SoftwareInterrupt;
     use esp_hal::peripherals::{FROM_CPU_INTR1, FROM_CPU_INTR2, SYSTIMER};
+    use takt_board_esp32c6::WfiSleep;
     use takt_board_esp32c6::alarm::{self, SystimerAlarm};
-    use takt_board_esp32c6::{FlashNvm, WfiSleep};
     use takt_rt_baremetal::Sleep;
     use takt_rt_baremetal::interrupt::{Form, Time, release};
-    use takt_rt_core::Persist;
 
     use super::{
-        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, LED, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude, probe,
-        runtime, uart,
+        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, Journaled, LED, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude,
+        probe, runtime, uart,
     };
 
     /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
@@ -611,8 +618,6 @@ mod interrupt_form {
     struct Stepping {
         rt: Takt<Time<SystimerAlarm>>,
         form: Form<SystimerAlarm>,
-        /// 5.9: das Journal, das `service` schreibt.
-        persist: Option<Persist<'static, FlashNvm>>,
         /// 8.4: Tunes vom Host ueber die Gegenrichtung der Konsole.
         tunes: Console<fn() -> Option<u8>>,
         /// Die Bilanz, sobald der Lauf endet.
@@ -673,7 +678,7 @@ mod interrupt_form {
             return;
         }
         stepping(|s| {
-            if let Some(stats) = s.form.on_alarm(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes)) {
+            if let Some(stats) = s.form.on_alarm(&mut s.rt, Some(&mut s.tunes)) {
                 s.ended = Some(stats);
                 ENDED.store(true, Ordering::Release);
             }
@@ -689,7 +694,7 @@ mod interrupt_form {
                 sw.reset();
             }
         });
-        stepping(|s| s.form.on_job_done(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes)));
+        stepping(|s| s.form.on_job_done(&mut s.rt, Some(&mut s.tunes)));
     }
 
     /// Der Job-Interrupt (4.5): rechnet den Auftrag, den der Schritt gab,
@@ -711,11 +716,7 @@ mod interrupt_form {
     }
 
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
-    pub fn run(
-        mut program: app::Program<'static>,
-        persist: Option<Persist<'static, FlashNvm>>,
-        alarm: SystimerAlarm,
-    ) -> ! {
+    pub fn run(mut program: app::Program<'static>, journal: Journaled, alarm: SystimerAlarm) -> ! {
         // SAFETY: einmal je Lauf, bevor der erste Schritt rechnet; danach
         // rechnet nur der Job-Interrupt mit dem Griff.
         if let (Some(j), Some(slot)) = (program.jobs(), unsafe { (&raw mut JOBS).as_mut() }) {
@@ -727,14 +728,14 @@ mod interrupt_form {
         // kaemen sonst um so viel zu spaet.
         takt_board_esp32c6::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
-        let mut rt = runtime(clock, Profile::SHARED, program);
+        let mut rt = runtime(clock, Profile::SHARED, program, journal);
         let tunes = Console::new(takt_board_esp32c6::console_byte as fn() -> Option<u8>);
         // Der Lauf liegt im Static, bevor der erste Alarm ihn sucht.
         critical_section::with(|_| {
             let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
             // SAFETY: Im kritischen Abschnitt laeuft keine ISR; danach
             // gehoert der Lauf dem Schrittkontext.
-            unsafe { STEPPING = Some(Stepping { rt, form, persist, tunes, ended: None }) };
+            unsafe { STEPPING = Some(Stepping { rt, form, tunes, ended: None }) };
         });
         host(alarm)
     }
@@ -778,7 +779,7 @@ mod interrupt_form {
                 u.write_u64(rounds);
                 u.newline();
             }
-            conclude(&s.rt, &s.ended.unwrap_or_default(), s.persist.as_ref());
+            conclude(&s.rt, &s.ended.unwrap_or_default());
         }
         // Der Watchdog laeuft nach einem Lauf im Betrieb weiter; das Board
         // haelt an, statt neu zu starten.

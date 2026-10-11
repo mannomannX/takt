@@ -14,6 +14,8 @@ use takt_rt_linux::RealtimeClock;
 struct Empty;
 
 impl Program for Empty {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, _k: u64, _now: i64) {}
 }
 

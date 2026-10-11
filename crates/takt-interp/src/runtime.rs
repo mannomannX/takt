@@ -115,6 +115,9 @@ impl Run<'_> {
 }
 
 impl takt_rt_core::Program for Run<'_> {
+    /// Der Interpreter haelt `persist` selbst; von der Runtime braucht er kein Journal.
+    type Memory = takt_rt_core::Volatile;
+
     /// Tick `k` der Schleife ist Tick `k + 1` des Laufs: Tick 0 hat `new`
     /// ausgefuehrt (9.4). `now` rechnet der Lauf selbst aus dem Tick.
     fn tick(&mut self, k: u64, _now: i64) {

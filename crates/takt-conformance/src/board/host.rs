@@ -160,8 +160,12 @@ impl Host {
                     // SAFETY: `Arena` traegt nur `MaybeUninit`; jedes Bitmuster ist eine Arena vor `init`.\n    \
                     let mut arena = unsafe { Box::<app::Arena>::new_uninit().assume_init() };\n    \
                     // `new`, nicht `init`: Tick 0 zeichnet auf, und erst `run` legt die Leitung an.\n    \
-                    let program = app::Program::new(&mut arena, &mut rig);\n    \
-                    takt_bringup_host::run(program, app::TICK_NS, app::OVERRUN_ALERT)\n}\n";
+                    let mut program = app::Program::new(&mut arena, &mut rig);\n    \
+                    // 5.9: das Journal vor `init`, fuer ein Programm mit `persist`.\n    \
+                    let (mut current, mut stored) = (vec![0; app::PERSIST_BOUND], vec![0; app::PERSIST_BOUND]);\n    \
+                    let journal = takt_bringup_host::journal(\n        &mut program,\n        &mut current,\n        \
+                    &mut stored,\n        app::LOGIC_HASH,\n        app::PERSIST_MIN_INTERVAL_NS,\n    );\n    \
+                    takt_bringup_host::run(program, journal, app::TICK_NS, app::OVERRUN_ALERT)\n}\n";
         write_if_changed(&dir.join("Cargo.toml"), &manifest)?;
         write_if_changed(&dir.join("build.rs"), &build)?;
         write_if_changed(&dir.join("src/main.rs"), main)?;

@@ -70,6 +70,8 @@ impl<P, M: Protection> Guarded<P, M> {
 }
 
 impl<P: Program, M: Protection> Program for Guarded<P, M> {
+    type Memory = P::Memory;
+
     fn tick(&mut self, k: u64, now: i64) {
         if let Some(v) = self.held.take().or_else(|| self.protection.take_violation()) {
             self.violations = self.violations.saturating_add(1);
@@ -211,6 +213,8 @@ mod tests {
     }
 
     impl Program for Recorder<'_> {
+        type Memory = takt_rt_core::Volatile;
+
         fn tick(&mut self, _k: u64, _now: i64) {
             self.mark(b't');
         }

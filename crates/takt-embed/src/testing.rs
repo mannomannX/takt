@@ -28,7 +28,7 @@ use std::vec::Vec;
 use std::{format, thread_local, vec};
 
 use crate::Jobs as _;
-use takt_rt_core::{Clock, Outputs, Policy, Profile, Runtime, Sink, Tick, Tunables, Watchdog};
+use takt_rt_core::{Clock, Fits, NoJournal, Outputs, Policy, Profile, Runtime, Sink, Store, Tick, Tunables, Watchdog};
 
 thread_local! {
     static LINE: RefCell<String> = const { RefCell::new(String::new()) };
@@ -123,9 +123,28 @@ impl Sink for Conformance {
 /// # Panics
 ///
 /// Wenn der Griff des Job-Kontexts schon vergeben ist (`Program::jobs`).
-pub fn run<P: crate::Program>(program: P, tick_ns: i64, ticks: u64) -> String {
+pub fn run<P: crate::Program>(program: P, tick_ns: i64, ticks: u64) -> String
+where
+    NoJournal: Fits<P::Memory>,
+{
+    run_journaled(program, NoJournal::default(), tick_ns, ticks)
+}
+
+/// Wie [`run`], fuer ein Programm mit `persist`, mit seinem Journal (5.9):
+/// geladen vor `init` ([`takt_rt_core::Unloaded::load`]); ein Test nimmt
+/// dafuer ein Geraet im Speicher ([`takt_rt_core::FakeNvm`]). Ohne Journal
+/// baut ein solcher Lauf nicht (12.11, FB-385).
+///
+/// # Panics
+///
+/// Wie [`run`].
+pub fn run_journaled<P, J>(program: P, journal: J, tick_ns: i64, ticks: u64) -> String
+where
+    P: crate::Program,
+    J: Store + Fits<P::Memory>,
+{
     take();
-    let mut stepper = Stepper::new(program, tick_ns, ticks);
+    let mut stepper = Stepper::journaled(program, journal, tick_ns, ticks);
     let mut trace = String::new();
     while let Some(part) = stepper.step() {
         trace.push_str(&part);
@@ -141,7 +160,10 @@ pub fn run<P: crate::Program>(program: P, tick_ns: i64, ticks: u64) -> String {
 /// # Panics
 ///
 /// Wie [`run`].
-pub fn run_tuned<P: crate::Program>(program: P, tick_ns: i64, ticks: u64, tunables: &mut dyn Tunables) -> String {
+pub fn run_tuned<P: crate::Program>(program: P, tick_ns: i64, ticks: u64, tunables: &mut dyn Tunables) -> String
+where
+    NoJournal: Fits<P::Memory>,
+{
     take();
     let mut stepper = Stepper::new(program, tick_ns, ticks);
     let mut trace = String::new();
@@ -154,9 +176,10 @@ pub fn run_tuned<P: crate::Program>(program: P, tick_ns: i64, ticks: u64, tunabl
 /// Ein Programm in logischer Zeit, Frist fuer Frist (12.11, Form
 /// `logical`): Wer mehrere Programme im selben Faden abwechselnd faehrt,
 /// bekommt je Schritt den Trace genau dieses Programms. [`run`] ist dieser
-/// Schritt bis zum Ende.
-pub struct Stepper<P: crate::Program> {
-    rt: Runtime<P, Logical, Quiet, Conformance>,
+/// Schritt bis zum Ende. `J` ist das Journal des Programms
+/// ([`Stepper::journaled`]).
+pub struct Stepper<P: crate::Program, J = NoJournal> {
+    rt: Runtime<P, Logical, Quiet, Conformance, J>,
     jobs: P::Jobs,
     /// Die Frist des letzten Ticks ist `(ticks - 1) * tick_ns`; ein Schlaf
     /// (9.9) ueber sie hinaus endet den Lauf, statt Ticks hinter dem
@@ -165,16 +188,30 @@ pub struct Stepper<P: crate::Program> {
     done: bool,
 }
 
-impl<P: crate::Program> Stepper<P> {
+impl<P: crate::Program> Stepper<P>
+where
+    NoJournal: Fits<P::Memory>,
+{
     /// Faehrt `program` ueber `ticks` Ticks von `tick_ns`.
     ///
     /// # Panics
     ///
     /// Wenn der Griff des Job-Kontexts schon vergeben ist (`Program::jobs`).
-    pub fn new(mut program: P, tick_ns: i64, ticks: u64) -> Stepper<P> {
+    pub fn new(program: P, tick_ns: i64, ticks: u64) -> Stepper<P> {
+        Stepper::journaled(program, NoJournal::default(), tick_ns, ticks)
+    }
+}
+
+impl<P: crate::Program, J: Store + Fits<P::Memory>> Stepper<P, J> {
+    /// Wie [`Stepper::new`], mit dem Journal des Programms ([`run_journaled`]).
+    ///
+    /// # Panics
+    ///
+    /// Wie [`Stepper::new`].
+    pub fn journaled(mut program: P, journal: J, tick_ns: i64, ticks: u64) -> Stepper<P, J> {
         let jobs = program.jobs().expect("der Job-Kontext gehoert der Testhilfe");
-        let rt =
-            Runtime::new(program, Logical::default(), Quiet, Conformance, Profile::BAREMETAL, tick_ns, Policy::Fault);
+        let (clock, profile) = (Logical::default(), Profile::BAREMETAL);
+        let rt = Runtime::journaled(program, journal, clock, Quiet, Conformance, profile, tick_ns, Policy::Fault);
         let end = i64::try_from(ticks).unwrap_or(i64::MAX).saturating_mul(tick_ns);
         Stepper { rt, jobs, end, done: false }
     }
@@ -194,9 +231,7 @@ impl<P: crate::Program> Stepper<P> {
         let before = take();
         debug_assert!(before.is_empty(), "fremder Trace in diesem Faden: {before}");
         loop {
-            let next = self
-                .rt
-                .service_with(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>, again(&mut tunables));
+            let next = self.rt.service_with(again(&mut tunables));
             if next.jobs {
                 self.jobs.work();
                 continue;
@@ -204,7 +239,7 @@ impl<P: crate::Program> Stepper<P> {
             if next.ended.is_some() || next.deadline >= self.end {
                 // Ein Schlaf ueber das Ende hinaus gibt die Zeile des Ticks
                 // davor erst hier frei (9.9).
-                self.rt.finish(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>);
+                self.rt.finish();
                 self.done = true;
                 // Wie weit der Lauf reicht, wie auf den Boards (KON1-010):
                 // Schleifentick `k` ist Tick `k + 1` des Traces, die Zahl des

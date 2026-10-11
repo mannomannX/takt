@@ -58,6 +58,8 @@ impl<'a> Idle<'a> {
 }
 
 impl Program for Idle<'_> {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, k: u64, _now: i64) {
         if !self.idle {
             return;
@@ -121,6 +123,8 @@ impl Level {
 }
 
 impl Program for Level {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, k: u64, _now: i64) {
         if !self.idle {
             return;
@@ -198,7 +202,7 @@ fn own_core(events: &[i64], changes: &[(u64, u8)], may_sleep: bool, ticks: u64) 
     let mut rt = Runtime::new(Idle::new(&clock), Shared(&clock), Quiet, Slept::default(), profile, T0, Policy::Fault);
     let mut tunables = Changes(changes.to_vec());
     while rt.tick_number() < ticks {
-        rt.step_with(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>, Some(&mut tunables));
+        rt.step_with(Some(&mut tunables));
     }
     let slept = rt.sink.0;
     (rt.program.log.clone(), slept)
@@ -267,10 +271,10 @@ fn a_late_service_finds_the_boundary_of_the_change() {
     let mut rt =
         Runtime::new(Idle::new(&clock), Shared(&clock), Quiet, Slept::default(), Profile::BAREMETAL, T0, Policy::Fault);
     let mut tunables = Changes(vec![(20, 7)]);
-    let next = rt.service_with(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>, Some(&mut tunables));
+    let next = rt.service_with(Some(&mut tunables));
     assert_eq!(next.deadline, 49 * T0);
     clock.borrow_mut().now = 49 * T0;
-    rt.service_with(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>, Some(&mut tunables));
+    rt.service_with(Some(&mut tunables));
     assert_eq!(rt.program.log, ["t=20 GAIN"]);
     assert_eq!(rt.sink.0, 19, "geschlafen bis vor die Aenderung");
 }
@@ -350,9 +354,9 @@ fn a_late_service_takes_the_first_change_in_boundary_order() {
             Policy::Fault,
         );
         let mut tunables = Changes(changes);
-        rt.service_with(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>, Some(&mut tunables));
+        rt.service_with(Some(&mut tunables));
         clock.borrow_mut().now = 49 * T0;
-        rt.service_with(None::<&mut takt_rt_core::Persist<'_, takt_rt_core::FakeNvm<0>>>, Some(&mut tunables));
+        rt.service_with(Some(&mut tunables));
         (rt.program.log.clone(), rt.program.polls.clone())
     };
     let (log, polls) = run(vec![(20, 7)]);

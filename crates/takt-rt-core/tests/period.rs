@@ -43,6 +43,8 @@ struct Watched {
 }
 
 impl Program for Watched {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, k: u64, _now: i64) {
         self.k = k;
     }

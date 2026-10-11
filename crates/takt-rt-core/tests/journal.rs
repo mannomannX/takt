@@ -6,7 +6,7 @@
 //! 8.11 mit `CUT_AT_BYTE` prueft.
 
 use takt_native::crc::{crc32_final, crc32_start, crc32_update};
-use takt_rt_core::journal::{FakeNvm, HEADER, Journal, Loaded, MAGIC, Persist};
+use takt_rt_core::journal::{FakeNvm, HEADER, Journal, Loaded, MAGIC, Unloaded};
 use takt_rt_core::loopcore::{Nvm, NvmState};
 
 /// Slotgroesse der Tests; gross genug fuer Kopf und Nutzlast.
@@ -759,7 +759,7 @@ fn a_state_larger_than_the_stored_buffer_is_refused_not_cut() {
     assert_eq!(reopen(j.into_inner(), HASH, &mut buf).1, Loaded::Empty);
 }
 
-/// **`Persist::load` mit zu kurzem Vergleichspuffer bricht nicht ab**: Ein
+/// **`Unloaded::load` mit zu kurzem Vergleichspuffer bricht nicht ab**: Ein
 /// Eintrag, der nicht hineinpasst, gilt nicht.
 #[test]
 fn loading_into_a_short_stored_buffer_does_not_panic() {
@@ -767,13 +767,15 @@ fn loading_into_a_short_stored_buffer_does_not_panic() {
     let (mut stored, mut len) = ([0u8; SLOT], 0);
     write(&mut j, 0, b"sechzehn-zeichen", &mut stored, &mut len);
     let (mut current, mut short) = ([0u8; SLOT], [0u8; 8]);
-    let mut p = Persist::new(Journal::new(j.into_inner(), HASH, 0), &mut current, &mut short);
-    assert_eq!(p.load(&mut Nothing).0, Loaded::Empty);
+    let p = Unloaded::new(Journal::new(j.into_inner(), HASH, 0), &mut current, &mut short);
+    assert_eq!(p.load(&mut Nothing).1, Loaded::Empty);
 }
 
 /// Ein Programm ohne `persist`.
 struct Nothing;
 
 impl takt_rt_core::Program for Nothing {
+    type Memory = takt_rt_core::Volatile;
+
     fn tick(&mut self, _k: u64, _now: i64) {}
 }

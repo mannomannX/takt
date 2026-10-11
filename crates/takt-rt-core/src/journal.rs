@@ -24,9 +24,11 @@
 //! Fremdbytes waere verfaelscht. Der naechste Vorgang wechselt dann den
 //! Slot.
 
+use core::marker::PhantomData;
+
 use takt_native::crc::{crc32_final, crc32_start, crc32_update};
 
-use crate::loopcore::{Nvm, NvmState};
+use crate::loopcore::{Nvm, NvmState, Program};
 
 /// Kennung eines beschriebenen Eintrags: `TKPJ`.
 pub const MAGIC: u32 = 0x4A50_4B54;
@@ -489,9 +491,222 @@ impl<N: Nvm> Journal<N> {
     }
 }
 
-/// Journal plus die zwei Puffer, die es braucht: der aktuelle Stand und
-/// der zuletzt geschriebene (5.9: „geaenderte Werte"). Beide kommen vom
-/// Aufrufer — `takt size` kennt ihre Groesse, der Kern allokiert nicht.
+/// Was ein Programm von der Runtime ueber einen Lauf hinaus braucht (5.9,
+/// 12.11, FB-385): nichts, oder ein Journal fuer seine `persist`-Variablen.
+///
+/// Die Huelle nennt es ([`Program::Memory`]), und die Runtime laesst sich
+/// fuer ein Programm mit `persist` nur mit einem Journal bauen
+/// ([`Fits`]): Was fehlt, scheitert beim Uebersetzen. Ein stilles „kein
+/// Journal" gibt es nicht, und ein Programm ohne `persist` bekommt keines.
+pub trait Memory {
+    /// Was die Runtime fuer ein solches Programm haelt, ueber dem Geraet `N`.
+    type Store<'a, N: Nvm + 'a>: Store<Device = N> + Fits<Self>;
+
+    /// Das Journal fuer ein solches Programm, fuer Wirte, die jedes Programm
+    /// tragen: `journal` baut und laedt es ([`Unloaded::load`]), und nur fuer
+    /// ein Programm mit `persist` wird es gerufen — ohne gibt es kein Journal
+    /// und keinen Zugriff auf das Geraet.
+    fn store<'a, N: Nvm + 'a>(journal: impl FnOnce() -> Persist<'a, N>) -> Self::Store<'a, N>;
+}
+
+/// Ein Programm ohne `persist`.
+#[derive(Debug)]
+pub enum Volatile {}
+
+/// Ein Programm mit `persist` (5.9).
+#[derive(Debug)]
+pub enum Persisting {}
+
+impl Memory for Volatile {
+    type Store<'a, N: Nvm + 'a> = NoJournal<N>;
+
+    fn store<'a, N: Nvm + 'a>(_: impl FnOnce() -> Persist<'a, N>) -> NoJournal<N> {
+        NoJournal(PhantomData)
+    }
+}
+
+impl Memory for Persisting {
+    type Store<'a, N: Nvm + 'a> = Persist<'a, N>;
+
+    fn store<'a, N: Nvm + 'a>(journal: impl FnOnce() -> Persist<'a, N>) -> Persist<'a, N> {
+        journal()
+    }
+}
+
+/// Passt das Journal zu einem Programm, das `M` braucht?
+///
+/// Ein Programm mit `persist` laesst sich ohne Journal nicht bauen, auch
+/// nicht ueber [`Runtime::new`](crate::Runtime::new):
+///
+/// ```compile_fail,E0271
+/// # use takt_rt_core::{Clock, Persisting, Policy, Profile, Program, Runtime, Sink, Tick, Watchdog};
+/// # struct Now;
+/// # impl Clock for Now { fn now(&self) -> i64 { 0 } fn wait_until(&mut self, _: i64) {} }
+/// # struct Quiet;
+/// # impl Sink for Quiet { fn record(&mut self, _: &Tick) {} }
+/// # impl Watchdog for Quiet { fn kick(&mut self) {} }
+/// struct Counter;
+/// impl Program for Counter {
+///     type Memory = Persisting;
+///     fn tick(&mut self, _: u64, _: i64) {}
+/// }
+/// let rt = Runtime::new(Counter, Now, Quiet, Quiet, Profile::BAREMETAL, 1_000_000, Policy::Fault);
+/// ```
+///
+/// und ein Journal, das nicht geladen hat, ist keines ([`Unloaded::load`]):
+///
+/// ```compile_fail,E0277
+/// # use takt_rt_core::{Clock, FakeNvm, Journal, Persisting, Policy, Profile, Program, Runtime, Sink, Tick, Unloaded, Watchdog};
+/// # struct Now;
+/// # impl Clock for Now { fn now(&self) -> i64 { 0 } fn wait_until(&mut self, _: i64) {} }
+/// # struct Quiet;
+/// # impl Sink for Quiet { fn record(&mut self, _: &Tick) {} }
+/// # impl Watchdog for Quiet { fn kick(&mut self) {} }
+/// # struct Counter;
+/// # impl Program for Counter { type Memory = Persisting; fn tick(&mut self, _: u64, _: i64) {} }
+/// let (mut current, mut stored) = ([0u8; 16], [0u8; 16]);
+/// let unloaded = Unloaded::new(Journal::new(FakeNvm::<64>::new(), 1, 0), &mut current, &mut stored);
+/// let rt = Runtime::journaled(Counter, unloaded, Now, Quiet, Quiet, Profile::BAREMETAL, 1_000_000, Policy::Fault);
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` passt nicht zu einem Programm mit `{M}`",
+    label = "ein Programm mit `persist` braucht ein Journal (`Persist`), eines ohne `persist` keines (5.9, 12.11)"
+)]
+pub trait Fits<M: ?Sized> {}
+
+impl<N: Nvm> Fits<Volatile> for NoJournal<N> {}
+
+impl<N: Nvm> Fits<Persisting> for Persist<'_, N> {}
+
+/// Das Journal, wie die Runtime es haelt: [`Persist`] oder [`NoJournal`].
+pub trait Store {
+    /// Das Geraet darunter.
+    type Device: Nvm;
+
+    /// Das Journal mit Geraet und Zaehlern; `None` ohne Journal.
+    fn persist(&self) -> Option<&Persist<'_, Self::Device>>;
+
+    /// So lange haelt ein Vorgang des Geraets den Kern hoechstens (12.3).
+    fn blocking_ns(&self) -> Option<i64>;
+
+    /// Ein Schritt des Journals nach dem Tick ([`Persist::poll`]); falsch
+    /// ohne Journal.
+    fn advance(&mut self, now: i64, program: &mut impl Program) -> bool;
+
+    /// Schreibt synchron ([`Persist::flush`]); falsch ohne Journal.
+    fn flush(&mut self, program: &mut impl Program, more: impl FnMut() -> bool) -> bool;
+}
+
+/// Kein Journal: was die Runtime fuer ein Programm ohne `persist` haelt.
+/// `N` ist das Geraet, das ein Wirt fuer jedes Programm nennt; dieses
+/// beruehrt es nie.
+#[derive(Debug)]
+pub struct NoJournal<N = NoDevice>(PhantomData<N>);
+
+impl<N> Default for NoJournal<N> {
+    fn default() -> Self {
+        NoJournal(PhantomData)
+    }
+}
+
+impl<N: Nvm> Store for NoJournal<N> {
+    type Device = N;
+
+    fn persist(&self) -> Option<&Persist<'_, N>> {
+        None
+    }
+
+    fn blocking_ns(&self) -> Option<i64> {
+        None
+    }
+
+    fn advance(&mut self, _: i64, _: &mut impl Program) -> bool {
+        false
+    }
+
+    fn flush(&mut self, _: &mut impl Program, _: impl FnMut() -> bool) -> bool {
+        false
+    }
+}
+
+impl<N: Nvm> Store for Persist<'_, N> {
+    type Device = N;
+
+    fn persist(&self) -> Option<&Persist<'_, N>> {
+        Some(self)
+    }
+
+    fn blocking_ns(&self) -> Option<i64> {
+        self.journal.nvm.blocking_ns()
+    }
+
+    fn advance(&mut self, now: i64, program: &mut impl Program) -> bool {
+        self.poll(now, program);
+        true
+    }
+
+    fn flush(&mut self, program: &mut impl Program, more: impl FnMut() -> bool) -> bool {
+        Persist::flush(self, program, more)
+    }
+}
+
+/// Kein Geraet: das von [`NoJournal`], wo kein Wirt eines nennt.
+#[derive(Debug)]
+pub enum NoDevice {}
+
+impl Nvm for NoDevice {
+    fn slot_size(&self) -> u32 {
+        match *self {}
+    }
+
+    fn begin_erase(&mut self, _: u8) -> bool {
+        match *self {}
+    }
+
+    fn begin_write(&mut self, _: u8, _: u32, _: &[u8]) -> bool {
+        match *self {}
+    }
+
+    fn poll(&mut self) -> NvmState {
+        match *self {}
+    }
+
+    fn read(&mut self, _: u8, _: u32, _: &mut [u8]) -> bool {
+        match *self {}
+    }
+}
+
+/// Ein Journal mit seinen Puffern, das noch nicht geladen hat. Erst
+/// [`Unloaded::load`] macht daraus ein [`Persist`]: Die Runtime nimmt nur ein
+/// geladenes, denn ein ungeladenes schriebe nie (5.9, FB-385).
+pub struct Unloaded<'a, N: Nvm>(Persist<'a, N>);
+
+impl<'a, N: Nvm> Unloaded<'a, N> {
+    /// Buendelt Journal und Puffer: der aktuelle Stand und der zuletzt
+    /// geschriebene (5.9: „geaenderte Werte"). Beide kommen vom Aufrufer —
+    /// `takt size` kennt ihre Groesse, der Kern allokiert nicht.
+    pub fn new(journal: Journal<N>, current: &'a mut [u8], stored: &'a mut [u8]) -> Unloaded<'a, N> {
+        Unloaded(Persist { journal, current, stored, stored_len: 0 })
+    }
+
+    /// Laedt den gueltigen Eintrag und reicht ihn ans Programm (5.9).
+    ///
+    /// Vor dem ersten Tick: nach den Defaults, vor `enter:` — fuer die
+    /// erzeugte Huelle also vor `init`. Liefert das geladene Journal, was es
+    /// fand und wie viele Eintraege das Programm annahm.
+    pub fn load(mut self, program: &mut impl Program) -> (Persist<'a, N>, Loaded, usize) {
+        let (found, applied) = self.0.load(program);
+        (self.0, found, applied)
+    }
+
+    /// Das Journal darunter, veraenderlich (Tests: ein Geraet vor dem Laden).
+    pub fn journal_mut(&mut self) -> &mut Journal<N> {
+        &mut self.0.journal
+    }
+}
+
+/// Ein geladenes Journal plus die zwei Puffer, die es braucht; das, was die
+/// Runtime fuer ein Programm mit `persist` haelt.
 pub struct Persist<'a, N: Nvm> {
     journal: Journal<N>,
     current: &'a mut [u8],
@@ -499,18 +714,10 @@ pub struct Persist<'a, N: Nvm> {
     stored_len: usize,
 }
 
-impl<'a, N: Nvm> Persist<'a, N> {
-    /// Buendelt Journal und Puffer.
-    pub fn new(journal: Journal<N>, current: &'a mut [u8], stored: &'a mut [u8]) -> Persist<'a, N> {
-        Persist { journal, current, stored, stored_len: 0 }
-    }
-
-    /// Laedt den gueltigen Eintrag und reicht ihn ans Programm (5.9).
-    ///
-    /// Vor dem ersten Tick: nach den Defaults, vor `enter:`. Liefert, was
-    /// das Journal fand; wie viele Eintraege das Programm annahm, sagt
-    /// `applied`.
-    pub fn load(&mut self, program: &mut impl crate::loopcore::Program) -> (Loaded, usize) {
+impl<N: Nvm> Persist<'_, N> {
+    /// Laedt den gueltigen Eintrag und reicht ihn ans Programm
+    /// ([`Unloaded::load`]).
+    fn load(&mut self, program: &mut impl Program) -> (Loaded, usize) {
         // Ein Eintrag, der nicht in beide Puffer passt, gilt nicht.
         let room = self.current.len().min(self.stored.len());
         let found = self.journal.load(&mut self.current[..room]);
@@ -527,7 +734,7 @@ impl<'a, N: Nvm> Persist<'a, N> {
     }
 
     /// Ein Schritt des Journals; nie blockierend.
-    pub fn poll(&mut self, now: i64, program: &mut impl crate::loopcore::Program) {
+    pub fn poll(&mut self, now: i64, program: &mut impl Program) {
         let n = program.persist_snapshot(self.current);
         let (current, stored) = (&*self.current, &mut *self.stored);
         self.journal.poll(now, &current[..n], stored, &mut self.stored_len);
@@ -536,7 +743,7 @@ impl<'a, N: Nvm> Persist<'a, N> {
     /// Schreibt ausstehende Aenderungen synchron (5.9: vor `reboot`,
     /// `boot_jump` und Deep Sleep), solange `more` wahr ist
     /// ([`Journal::flush`]).
-    pub fn flush(&mut self, program: &mut impl crate::loopcore::Program, more: impl FnMut() -> bool) -> bool {
+    pub fn flush(&mut self, program: &mut impl Program, more: impl FnMut() -> bool) -> bool {
         let n = program.persist_snapshot(self.current);
         let (current, stored) = (&*self.current, &mut *self.stored);
         self.journal.flush(&current[..n], stored, &mut self.stored_len, more)

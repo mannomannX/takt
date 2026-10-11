@@ -295,6 +295,15 @@ So arbeitet jeder Strang, als wäre er allein:
       `takt bench` passt mit 432 Byte Luft in die 192 KiB (`plan/f401.md`).
       Unterwegs FB-514: Der Stand der Board-Abbilder kannte die
       Hardware-Konfiguration nicht.
+    - **Teil 1 umgesetzt 2026-10-11** (Boardlauf steht aus): `Program::Memory`
+      (`Volatile` oder `Persisting`, die Hülle setzt es), die Runtime hält das
+      Journal als Typparameter; `Runtime::new` nur ohne `persist`,
+      `Runtime::journaled` mit einem Journal, das es nur geladen gibt
+      (`Unloaded::load`: ein ungeladenes schrieb still nie). Die Ports
+      (`run`, `stats`, Interrupt- und Pollform) verlieren `persist`; Wirte
+      für jedes Programm nehmen `Memory::store`. `compile_fail`-Doctests in
+      `takt-rt-core` und im Beispiel `rust-host`. Offen: dasselbe Muster für
+      den Griff der Jobs (`JobContext::start` mit drei `Option`).
 
 ### 17 — Wirt mit Instanzen in Fäden, `linux_rt`
 
