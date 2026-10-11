@@ -6,6 +6,21 @@
 //! folgende Lieferungen zunaechst `Suspect`, wobei **der letzte gute Wert
 //! gehalten wird**.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        reason = "Stufe 2 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 /// Qualitaet einer Abtastung (3.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
@@ -51,8 +66,8 @@ pub trait Scalar {
 /// von 2^53 nicht an der Umrechnung nach `f64` scheitert; nur wenn die
 /// Grenzen selbst ganzzahlig sind, ist dieser Vergleich der genauere.
 pub fn within<S: Scalar>(v: &S, lo: f64, hi: f64) -> bool {
-    if let (Some(x), true) = (v.as_i64(), integral(lo) && integral(hi)) {
-        return lo as i64 <= x && x <= hi as i64;
+    if let (Some(x), Some(low), Some(high)) = (v.as_i64(), integral(lo), integral(hi)) {
+        return low <= x && x <= high;
     }
     match v.as_f64() {
         Some(x) => x >= lo && x <= hi,
@@ -60,11 +75,25 @@ pub fn within<S: Scalar>(v: &S, lo: f64, hi: f64) -> bool {
     }
 }
 
-/// Ist `x` eine ganze Zahl im Bereich von `i64`? Wie `x.fract() == 0.0`,
-/// das `core` nicht hat; NaN, die Unendlichen und Grenzen jenseits von
-/// `i64` sind es nicht.
-fn integral(x: f64) -> bool {
-    x == (x as i64) as f64
+/// `x` als `i64`, wenn es eine ganze Zahl im Bereich von `i64` ist. Wie
+/// `x.fract() == 0.0`, das `core` nicht hat; NaN, die Unendlichen und
+/// Grenzen jenseits von `i64` sind es nicht.
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: `as` saettigt nach i64 und rundet zurueck; nur was dabei gleich bleibt, gilt"
+)]
+fn integral(x: f64) -> Option<i64> {
+    let n = x as i64;
+    (x == n as f64).then_some(n)
+}
+
+/// Eine Zeitspanne in Nanosekunden als Sekunden.
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: die Rate rechnet in f64 (3.5), und nur `as` wandelt i64 nach f64"
+)]
+fn seconds(ns: i64) -> f64 {
+    ns as f64 / 1e9
 }
 
 shared_with_c! {
@@ -185,7 +214,7 @@ impl Gate {
             return None;
         }
         let step = if x < prev { prev - x } else { x - prev };
-        let per_second = step / (dt as f64 / 1e9);
+        let per_second = step / seconds(dt);
         (per_second > slew).then_some(Reason::Implausible)
     }
 }

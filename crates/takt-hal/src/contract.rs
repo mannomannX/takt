@@ -13,26 +13,41 @@
 //! verlangt die Erholung, „sobald der Treiber wieder vertragsgemaess
 //! liefert" (plan/m10.md 2.3, Entwurf Schritt 29).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        reason = "Stufe 2 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 /// Kein Wert: vor der ersten Lieferung eines Kanals.
 pub const NONE: i64 = i64::MIN;
 
 /// Welcher Teil des Treibervertrags verletzt wurde (12.6, Zeile 2).
 ///
-/// Die Zahl ist die Form in den C-Einstiegen; null heisst keine Verletzung.
-#[repr(u8)]
+/// [`Contract::code`] ist die Form in den C-Einstiegen; null heisst keine
+/// Verletzung.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Contract {
     /// Zeitstempel fallend.
-    Timestamp = 1,
+    Timestamp,
     /// `seq` nicht streng steigend oder mit Luecke.
-    Sequence = 2,
+    Sequence,
     /// Mehr Elemente als `MAXPT` in einem Tick (8.6).
-    TooMany = 3,
+    TooMany,
     /// Qualitaetsflags widerspruechlich: `Bad` mit Wert, oder der
     /// Messzeitpunkt `t - age` faellt (Alter nicht monoton).
-    Flags = 4,
+    Flags,
     /// Zeitstempel jenseits der Klemmtoleranz (Zeile 1, zweiter Fall).
-    TimeWindow = 5,
+    TimeWindow,
 }
 
 const CONTRACTS: [Contract; 5] =
@@ -41,7 +56,13 @@ const CONTRACTS: [Contract; 5] =
 impl Contract {
     /// Die Verletzung als Zahl.
     pub fn code(self) -> u8 {
-        self as u8
+        match self {
+            Contract::Timestamp => 1,
+            Contract::Sequence => 2,
+            Contract::TooMany => 3,
+            Contract::Flags => 4,
+            Contract::TimeWindow => 5,
+        }
     }
 
     /// Die Verletzung zu ihrer Zahl; `None` fuer null und Unbekanntes.
@@ -317,9 +338,9 @@ pub fn settle(
     };
     for x in deliveries.iter_mut() {
         x.at = NONE;
-        let c = x.channel as usize;
+        let c = index(x.channel);
         let (Some(track), Some(d)) = (tracks.get_mut(c), device_of.get(c)) else { continue };
-        let Some(device) = devices.get_mut(*d as usize) else { continue };
+        let Some(device) = devices.get_mut(index(*d)) else { continue };
         device.delivered = true;
         let checked =
             if x.element { track.element(x.t, x.seq, w) } else { track.reading(x.t, x.age, x.inconsistent, w) };
@@ -329,31 +350,44 @@ pub fn settle(
         }
     }
     for x in deliveries.iter().filter(|x| x.element) {
-        let c = x.channel as usize;
+        let c = index(x.channel);
         let (Some(track), Some(d)) = (tracks.get_mut(c), device_of.get(c)) else { continue };
         if track.count > 0
             && let Err(broken) = track.finish()
-            && let Some(device) = devices.get_mut(*d as usize)
+            && let Some(device) = devices.get_mut(index(*d))
         {
             note(device, broken);
         }
     }
     for (i, d) in devices.iter_mut().enumerate() {
         match d.settle(d.delivered, Contract::of_code(d.broken)) {
-            Turn::Degraded(c) => event(Event { kind: DEGRADED, what: c.code(), index: i as u32 }),
-            Turn::Recovered => event(Event { kind: RECOVERED, what: 0, index: i as u32 }),
+            Turn::Degraded(c) => event(Event { kind: DEGRADED, what: c.code(), index: number(i) }),
+            Turn::Recovered => event(Event { kind: RECOVERED, what: 0, index: number(i) }),
             Turn::Steady => {}
         }
     }
     for (i, x) in deliveries.iter_mut().enumerate() {
-        let down = device_of.get(x.channel as usize).and_then(|d| devices.get(*d as usize)).is_none_or(|d| d.degraded);
+        let down = device_of.get(index(x.channel)).and_then(|d| devices.get(index(*d))).is_none_or(|d| d.degraded);
         if down {
             x.at = NONE;
-        } else if x.at != x.t {
-            // Nur Zeile 1 aendert den Zeitpunkt, und nur auf einen anderen.
-            event(Event { kind: WARPED, what: 0, index: i as u32 });
+            continue;
+        }
+        // Nur Zeile 1 aendert den Zeitpunkt, und nur auf einen anderen.
+        if x.at != x.t {
+            event(Event { kind: WARPED, what: 0, index: number(i) });
         }
     }
+}
+
+/// Ein Index aus dem C-Rahmen; die Ziele haben mindestens 32 Bit.
+fn index(n: u32) -> usize {
+    usize::try_from(n).unwrap_or(usize::MAX)
+}
+
+/// Die Stelle eines Treibers oder einer Lieferung in einer Meldung; mehr
+/// als `u32::MAX` gibt es nicht.
+fn number(i: usize) -> u32 {
+    u32::try_from(i).unwrap_or(u32::MAX)
 }
 
 /// Die Tick-Periode (12.6 Zeile 7, 7.1): Erst nach `runs`
