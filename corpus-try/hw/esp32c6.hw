@@ -67,9 +67,11 @@ tick_jitter_ns = 0
 # ab der Tickschleife, ohne seinen Programmanteil. Aus den Protokollen des
 # Bench vom 2026-10-11 je Form zugeordnet; der naechste Bench schreibt sie
 # selbst. Seit FB-458 liegt der Ring der Telemetrie nicht mehr im Rahmen von
-# `main`.
+# `main`. Die Form `rtos` ist Embassy (M11 Schritt 14d), gemessen am
+# 2026-10-11 mit dem Lastkern allein: 3716 Byte tief, davon 96 Programm.
 stack_reserve = 3124
 stack_reserve_interrupt = 3684
+stack_reserve_rtos = 3620
 # Interrupts laufen auf dem Stack des unterbrochenen Fadens, also auch auf
 # dem des Jobs; Trap-Rahmen, Verteiler und die Handler einer
 # Prioritaetsstufe brauchen unter 1 KiB, die Reserve verdoppelt das (4.5).
