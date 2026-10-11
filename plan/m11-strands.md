@@ -228,6 +228,9 @@ So arbeitet jeder Strang, als wäre er allein:
 
 ### 14 — Rust ohne RTOS und mit Frameworks
 
+- **Stand 2026-10-11: umgesetzt.** 14a bis 14d auf beiden Boards bestanden
+  (letzte Läufe 3d1caad, 1a9f995, ecb56b8, 2e3d5bb); die Einzelheiten stehen in
+  der Zeile von Schritt 14 in `plan/m11.md`.
 - **Ziel und Abnahme:** wie `plan/m11.md`: Interruptform auf beiden Boards,
   Pollform auf dem F401, Embassy auf beiden, RTIC; je eine Korpusauswahl
   neben einer fremden Hauptschleife bzw. Aufgabe, Traces gleich dem
@@ -262,8 +265,11 @@ So arbeitet jeder Strang, als wäre er allein:
   - **14c RTIC** als Interruptform mit dem Planer von RTIC: die Grenze aus
     `deadline`; die Umbenennung von Feature `rtos`, `Options::rtos` und
     `takt-rt-rtos`.
-  - **14d Embassy** auf beiden Boards: eine Aufgabe auf einem
-    `InterruptExecutor`, die Zeit aus `embassy-time`.
+  - **14d Embassy** auf beiden Boards: eine Aufgabe auf einem Executor, den
+    ein freier Interrupt treibt, die Zeit aus `embassy-time` über einen
+    Zeittreiber der Board-Crates. Umgesetzt mit dem rohen Executor: Der
+    `InterruptExecutor` nimmt nur `Send`-Aufgaben, und für RISC-V gibt es
+    ihn nicht; `embassy-stm32` und die Anbindung des C6 brauchte es nicht.
   - Unterwegs: FB-385 (der Port verlangt das Journal) und FB-458 (der
     Stack von `main` auf dem C6; behoben 2026-10-11).
   - FB-513: die Stack-Reserve je Form statt je Ziel (der Bench misst sie
