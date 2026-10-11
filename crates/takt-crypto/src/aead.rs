@@ -14,7 +14,7 @@ use aes_gcm::{Aes128Gcm, Aes256Gcm, KeyInit, Nonce, Tag};
 /// `out` den Klartext nicht fasst — nie ein Panic (13.8). Vor dem
 /// Vergleich des Tags steht in `out` nichts, was der Aufrufer sehen soll:
 /// Ein falscher Tag hinterlaesst Nullen.
-pub fn decrypt(key: &[u8], nonce: &[u8], aad: &[u8], data: &[u8], tag: &[u8], out: &mut [u8]) -> Option<usize> {
+pub(crate) fn decrypt(key: &[u8], nonce: &[u8], aad: &[u8], data: &[u8], tag: &[u8], out: &mut [u8]) -> Option<usize> {
     let nonce = Nonce::<U12>::from(<[u8; 12]>::try_from(nonce).ok()?);
     let tag = Tag::from(<[u8; 16]>::try_from(tag).ok()?);
     // Erst der Schluessel, dann die Kopie: Ein Abbruch danach liesse das

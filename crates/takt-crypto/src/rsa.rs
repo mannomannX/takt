@@ -26,13 +26,14 @@ const DB_LEN: usize = K - H_LEN - 1;
 /// Prueft eine Signatur. `false` fuer jeden Schluessel, der kein Modulus
 /// von genau 3072 Bit ist, fuer jede Signatur ab dem Modulus und fuer
 /// jede, deren Kodierung nicht stimmt — nie ein Panic (13.8).
-pub fn verify(key: &[u8], digest: &[u8], sig: &[u8]) -> bool {
+pub(crate) fn verify(key: &[u8], digest: &[u8], sig: &[u8]) -> bool {
     if key.len() != K || digest.len() != H_LEN || sig.len() != K {
         return false;
     }
     // 3072 Bit heisst: das oberste Bit gesetzt; ungerade, sonst gibt es
     // keine Montgomery-Form.
-    if key[0] & 0x80 == 0 || key[K - 1] & 1 == 0 {
+    let (Some(first), Some(last)) = (key.first(), key.last()) else { return false };
+    if first & 0x80 == 0 || last & 1 == 0 {
         return false;
     }
     let n = U3072::from_be_slice(key);
@@ -55,7 +56,8 @@ fn public_power(s: &U3072, n: &U3072) -> U3072 {
         r2 = r2.add_mod(&r2, n);
     }
     let low = Uint::<1>::from_words([n.as_words()[0]]);
-    let inv = Limb(Word::MIN.wrapping_sub(low.inv_mod2k_vartime(Word::BITS as usize).as_words()[0]));
+    let bits = usize::try_from(Word::BITS).unwrap_or(0);
+    let inv = Limb(Word::MIN.wrapping_sub(low.inv_mod2k_vartime(bits).as_words()[0]));
     let base = montgomery_reduction(&s.mul_wide(&r2), n, inv);
     let mut m = base;
     for _ in 0..16 {
@@ -67,10 +69,11 @@ fn public_power(s: &U3072, n: &U3072) -> U3072 {
 
 /// EMSA-PSS-VERIFY (RFC 8017 9.1.2) fuer `emBits = 3071`.
 fn emsa_pss_verify(m_hash: &[u8], em: &[u8; K]) -> bool {
-    if em[K - 1] != 0xbc {
+    let Some((masked_db, rest)) = em.split_first_chunk::<DB_LEN>() else { return false };
+    let Some((h, trailer)) = rest.split_first_chunk::<H_LEN>() else { return false };
+    if trailer != [0xbc] {
         return false;
     }
-    let (masked_db, h) = (&em[..DB_LEN], &em[DB_LEN..K - 1]);
     // `8 * emLen - emBits` = 1: Das oberste Bit muss null sein.
     if masked_db[0] & 0x80 != 0 {
         return false;
@@ -81,14 +84,15 @@ fn emsa_pss_verify(m_hash: &[u8], em: &[u8; K]) -> bool {
         *d ^= m;
     }
     db[0] &= 0x7f;
-    let pad = DB_LEN - H_LEN - 1;
-    if db[..pad].iter().any(|b| *b != 0) || db[pad] != 0x01 {
+    // Vor dem Salt: Nullen bis auf `DB_LEN - H_LEN - 1`, dann `0x01`.
+    let Some((zeros, [0x01, salt @ ..])) = db.split_first_chunk::<{ DB_LEN - H_LEN - 1 }>() else { return false };
+    if zeros.iter().any(|b| *b != 0) {
         return false;
     }
     let mut m_prime = sha256::Ctx::new();
     m_prime.update(&[0u8; 8]);
     m_prime.update(m_hash);
-    m_prime.update(&db[pad + 1..]);
+    m_prime.update(salt);
     m_prime.finish() == *h
 }
 
@@ -99,6 +103,8 @@ fn mgf1(seed: &[u8], out: &mut [u8]) {
         ctx.update(seed);
         ctx.update(&counter.to_be_bytes());
         let block = ctx.finish();
-        chunk.copy_from_slice(&block[..chunk.len()]);
+        if let Some(part) = block.get(..chunk.len()) {
+            chunk.copy_from_slice(part);
+        }
     }
 }

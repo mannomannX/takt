@@ -146,7 +146,6 @@ const PENDING: &[&str] = &[
     "takt-bringup-esp32c6",
     "takt-bringup-host",
     "takt-bringup-stm32f401",
-    "takt-crypto",
     "takt-embed",
     "takt-embed-c",
     "takt-native-abi",

@@ -8,6 +8,20 @@
 //! TCB-Manifest des Lauf-Headers nennt sie beim Namen (12.5).
 
 #![no_std]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        reason = "Stufe 2 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 #[cfg(feature = "aes-gcm")]
 mod aead;
