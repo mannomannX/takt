@@ -17,7 +17,7 @@ fn compile(src: &str) -> Program {
 }
 
 fn solver() -> Option<Solver> {
-    let found = Some(find()).filter(|s| !matches!(s, Solver::Missing));
+    let found = Some(find()).filter(|s| !s.is_missing());
     takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren").map(cached)
 }
 

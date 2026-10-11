@@ -31,7 +31,7 @@ fn corpus_with(name: &str, properties: &str) -> Program {
 /// Der Solver; fehlt er, scheitert der Test, es sei denn,
 /// `TAKT_ALLOW_MISSING` erlaubt das Fehlen (FB-392).
 fn solver() -> Option<Solver> {
-    let found = Some(find()).filter(|s| !matches!(s, Solver::Missing));
+    let found = Some(find()).filter(|s| !s.is_missing());
     takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren").map(cached)
 }
 
@@ -429,7 +429,7 @@ machine consumer:
 /// nextest sie zugleich faehrt (B2 Schritt 0).
 fn solvers_agree_on(name: &str) -> Option<usize> {
     let need = |name: &str| {
-        let found = Some(takt_prove::named(name)).filter(|s| !matches!(s, Solver::Missing));
+        let found = Some(takt_prove::named(name)).filter(|s| !s.is_missing());
         takt_testkit::require(name, found, "nach `~/.takt/bin` legen (z3 4.13.4, cvc5 1.2.0)").map(cached)
     };
     let (Some(z3), Some(cvc5)) = (need("z3"), need("cvc5")) else { return None };
@@ -771,12 +771,13 @@ fn answering(word: &str) -> Solver {
         }
         p
     };
-    Solver::At(path)
+    Solver::at(path)
 }
 
 /// Ein Solver, der jedes `(check-sat)` mit `word` beantwortet und jede
 /// Anfrage (nicht `--version`) in `asked.txt` neben sich zaehlt; sein
-/// Verzeichnis beginnt leer.
+/// Verzeichnis beginnt leer. Die Anfrage ist das letzte Argument, hinter
+/// den Optionen.
 fn counting(word: &str) -> (Solver, std::path::PathBuf) {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-prove-counting-{word}"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -787,7 +788,8 @@ fn counting(word: &str) -> (Solver, std::path::PathBuf) {
         let (count, hits) = (count.display(), dir.join("hits.txt").display().to_string());
         let script = format!(
             "@echo off\r\nif not \"%1\"==\"-smt2\" (\r\necho {word}\r\nexit /b 0\r\n)\r\necho x>>\"{count}\"\r\n\
-             findstr /b /c:\"(check-sat)\" \"%~3\" > \"{hits}\"\r\n\
+             for %%a in (%*) do set \"last=%%~a\"\r\n\
+             findstr /b /c:\"(check-sat)\" \"%last%\" > \"{hits}\"\r\n\
              for /f \"usebackq delims=\" %%l in (\"{hits}\") do echo {word}\r\n"
         );
         std::fs::write(&p, script).expect("Skript");
@@ -796,7 +798,8 @@ fn counting(word: &str) -> (Solver, std::path::PathBuf) {
         let p = dir.join("solver.sh");
         let script = format!(
             "#!/bin/sh\n[ \"$1\" = \"-smt2\" ] || {{ echo {word}; exit 0; }}\necho x >> '{}'\n\
-             grep -x '(check-sat)' \"$3\" | while read -r l; do echo {word}; done\n",
+             for last; do :; done\n\
+             grep -x '(check-sat)' \"$last\" | while read -r l; do echo {word}; done\n",
             count.display()
         );
         std::fs::write(&p, script).expect("Skript");
@@ -807,7 +810,7 @@ fn counting(word: &str) -> (Solver, std::path::PathBuf) {
         }
         p
     };
-    (Solver::At(path).cached(dir.join("cache")), count)
+    (Solver::at(path).cached(dir.join("cache")), count)
 }
 
 /// **Eine entschiedene Antwort fragt der Solver einmal** (M11 B2 Schritt 0):
@@ -830,6 +833,26 @@ fn a_decided_answer_is_asked_once() {
     let n = asked(&count);
     classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
     assert_eq!(asked(&count), 2 * n, "ein Zeitlimit fragt jedes Mal");
+}
+
+/// **Ueber der Speichergrenze bleibt die Stelle offen** (FB-607): z3 meldet
+/// `(error "out of memory")`, das Urteil ist unentschieden mit diesem
+/// Grund, kein Fehler und kein Haengen. Ohne Cache, damit keine fruehere
+/// Antwort einspringt; cvc5 kennt keine Speichergrenze.
+#[test]
+fn a_solver_out_of_memory_leaves_the_sites_open() {
+    let found = Some(takt_prove::named("z3")).filter(|s| !s.is_missing());
+    let Some(z3) = takt_testkit::require("z3", found, "nach `~/.takt/bin` legen (z3 4.13.4)") else { return };
+    let p = corpus_with("19_faults.takt", "");
+    let model = encode(&p).expect("kodierbar");
+    // Ein Cache behaelt die Antwort nicht: Sie haengt an der Grenze.
+    let cache = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-prove-out-of-memory");
+    let _ = std::fs::remove_dir_all(&cache);
+    let sites = classify(&model, &p, 3, &z3.with_memory(1).cached(&cache), 60).expect("das Urteil kommt");
+    assert!(!sites.is_empty(), "19_faults hat Pruefstellen");
+    let open = |s: &takt_prove::CheckReport| matches!(&s.verdict, CheckVerdict::Undecided { reason } if reason.contains("out of memory"));
+    assert!(sites.iter().all(open), "{sites:?}");
+    assert_eq!(std::fs::read_dir(&cache).map_or(0, |d| d.count()), 0, "keine Antwort im Cache");
 }
 
 /// INT-020: Was der Solver nicht entscheidet, bleibt offen — eine

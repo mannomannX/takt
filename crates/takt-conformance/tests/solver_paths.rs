@@ -177,7 +177,7 @@ fn reaches(p: &Program, path: &Path) -> Result<(), String> {
 /// Erzeugt Pfade und Beweisdateien neu: `1` fuer alle Programme, sonst die
 /// genannten.
 fn update(which: &str) {
-    let found = Some(takt_prove::find()).filter(|s| !matches!(s, Solver::Missing));
+    let found = Some(takt_prove::find()).filter(|s| !s.is_missing());
     let Some(solver) = takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren") else {
         return;
     };
@@ -284,8 +284,8 @@ fn never_failed(name: &str, p: &Program) -> Open {
 
 /// Die Gruppe eines Urteils (FB-511 Schritt 1): erreichbar (auch tiefer,
 /// als Spacer zeigt), bewiesen, nicht k-induktiv, ausserhalb des Fragments
-/// der Invariantensuche, Frist, oder ein Pfad, den der Interpreter nicht
-/// bestaetigt.
+/// der Invariantensuche, Frist, Speichergrenze (FB-607), oder ein Pfad, den
+/// der Interpreter nicht bestaetigt.
 fn group(verdict: &CheckVerdict) -> &'static str {
     match verdict {
         CheckVerdict::Reachable { .. } => "erreichbar",
@@ -294,6 +294,7 @@ fn group(verdict: &CheckVerdict) -> &'static str {
         CheckVerdict::Undecided { reason } if reason.contains("findet einen Pfad") => "erreichbar, tiefer",
         CheckVerdict::Undecided { reason } if reason.contains("ausserhalb ihres Fragments") => "Fragment",
         CheckVerdict::Undecided { reason } if reason.contains("Induktionsschritt offen") => "nicht k-induktiv",
+        CheckVerdict::Undecided { reason } if reason.contains("out of memory") => "Speicher",
         CheckVerdict::Undecided { reason } if reason.contains("Solver sagt") => "Frist",
         CheckVerdict::Undecided { .. } => "unbestaetigt",
     }
@@ -362,7 +363,7 @@ impl Row {
 /// gezaehlt im Protokoll. Eine entschiedene Antwort nimmt der Cache. Im
 /// Release-Bau, wie `UPDATE_PATHS`.
 fn classify_unreached(depths: &str) {
-    let found = Some(takt_prove::find()).filter(|s| !matches!(s, Solver::Missing));
+    let found = Some(takt_prove::find()).filter(|s| !s.is_missing());
     let Some(solver) = takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren") else {
         return;
     };

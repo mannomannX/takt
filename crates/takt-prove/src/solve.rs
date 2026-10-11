@@ -21,32 +21,34 @@ use crate::eval::Val;
 use crate::smt::{Query, Target, assumptions_of, at, contract_query, horn, houdini, query};
 use crate::term::Term;
 
-/// Der gefundene Solver.
+/// Der gefundene Solver: sein Pfad, der Cache seiner entschiedenen
+/// Antworten ([`Solver::cached`]) und die Speichergrenze je Anfrage.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Solver {
-    /// Sein Pfad.
-    At(PathBuf),
-    /// Wie `At`, mit einem Verzeichnis fuer entschiedene Antworten
-    /// ([`Solver::cached`]).
-    Cached {
-        /// Sein Pfad.
-        path: PathBuf,
-        /// Das Verzeichnis der Antworten.
-        dir: PathBuf,
-        /// Name und Version ([`Solver::identity`]), Teil jedes Schluessels.
-        identity: String,
-    },
-    /// Keiner gefunden.
-    Missing,
+pub struct Solver {
+    /// Der Pfad; keiner, wenn kein Solver gefunden ist.
+    path: Option<PathBuf>,
+    /// Das Verzeichnis der Antworten, dazu Name und Version
+    /// ([`Solver::identity`]), Teil jedes Schluessels.
+    cache: Option<(PathBuf, String)>,
+    /// Die Speichergrenze je Anfrage in MB ([`MEMORY_MB`]).
+    memory_mb: u64,
 }
+
+/// Wie viel Speicher z3 je Anfrage hoechstens nimmt, in MB. Die langen
+/// Laeufe (`solver_paths`) fragen in zwei Faeden; zweimal 4 GB und der
+/// Testprozess bleiben unter der Commit-Grenze des Rechners (31 GB, im
+/// Leerlauf 14 GB belegt). Ohne Grenze nahm ein z3 6 GB, und der Rechner
+/// fror ein (FB-607). Darueber antwortet z3 `(error "out of memory")`, und
+/// das Urteil bleibt offen.
+pub const MEMORY_MB: u64 = 4096;
 
 /// Sucht `TAKT_SOLVER`, dann `z3` und `cvc5`, je auf dem PATH oder unter
 /// `~/.takt/bin`.
 pub fn find() -> Solver {
     let given = std::env::var("TAKT_SOLVER").ok().map(PathBuf::from).filter(|p| answers(p));
     match given {
-        Some(p) => Solver::At(p),
-        None => ["z3", "cvc5"].into_iter().map(named).find(Solver::works).unwrap_or(Solver::Missing),
+        Some(p) => Solver::at(p),
+        None => ["z3", "cvc5"].into_iter().map(named).find(Solver::works).unwrap_or_else(Solver::missing),
     }
 }
 
@@ -57,7 +59,7 @@ pub fn named(name: &str) -> Solver {
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         candidates.push(PathBuf::from(home).join(".takt").join("bin").join(name));
     }
-    candidates.into_iter().find(|p| answers(p)).map_or(Solver::Missing, Solver::At)
+    candidates.into_iter().find(|p| answers(p)).map_or_else(Solver::missing, Solver::at)
 }
 
 /// Antwortet das Werkzeug unter `path` auf `--version`?
@@ -66,28 +68,43 @@ fn answers(path: &Path) -> bool {
 }
 
 impl Solver {
+    /// Der Solver unter `path`, ohne Cache, mit [`MEMORY_MB`].
+    pub fn at(path: impl Into<PathBuf>) -> Solver {
+        Solver { path: Some(path.into()), cache: None, memory_mb: MEMORY_MB }
+    }
+
+    /// Kein Solver.
+    pub fn missing() -> Solver {
+        Solver { path: None, cache: None, memory_mb: MEMORY_MB }
+    }
+
+    /// Fehlt der Solver?
+    pub fn is_missing(&self) -> bool {
+        self.path.is_none()
+    }
+
+    /// Derselbe Solver mit einer anderen Speichergrenze je Anfrage, in MB.
+    pub fn with_memory(self, memory_mb: u64) -> Solver {
+        Solver { memory_mb, ..self }
+    }
+
     /// Der Pfad, wenn gefunden.
     pub fn path(&self) -> Option<&Path> {
-        match self {
-            Solver::At(p) | Solver::Cached { path: p, .. } => Some(p),
-            Solver::Missing => None,
-        }
+        self.path.as_deref()
     }
 
     /// Derselbe Solver, der entschiedene Antworten in `dir` ablegt und dort
     /// wiederfindet (M11 B2 Schritt 0): Schluessel ist der SHA-256 aus Name
     /// und Version des Solvers, Zeitlimit und Anfrage. Nur eine Ausgabe, in
     /// der jede Anfrage `sat` oder `unsat` bekam, kommt hinein; ein
-    /// Zeitlimit oder `unknown` haengt an der Last des Rechners und wird neu
-    /// gefragt.
+    /// Zeitlimit, `unknown` oder die Speichergrenze haengt an der Last des
+    /// Rechners und wird neu gefragt.
     pub fn cached(self, dir: impl Into<PathBuf>) -> Solver {
-        match self {
-            Solver::At(path) => {
-                let identity = Solver::At(path.clone()).identity().unwrap_or_default();
-                Solver::Cached { path, dir: dir.into(), identity }
-            }
-            other => other,
+        if self.is_missing() {
+            return self;
         }
+        let identity = self.identity().unwrap_or_default();
+        Solver { cache: Some((dir.into(), identity)), ..self }
     }
 
     /// Antwortet der Solver auf `--version`?
@@ -98,7 +115,7 @@ impl Solver {
     /// Name und Version, wie Bericht und Beweisdatei sie fuehren (FB-380):
     /// `z3 4.13.4`, `cvc5 1.2.0`. Eine andere Version kann anders urteilen.
     pub fn identity(&self) -> Option<String> {
-        if let Solver::Cached { identity, .. } = self {
+        if let Some((_, identity)) = &self.cache {
             return Some(identity.clone());
         }
         let path = self.path()?;
@@ -121,10 +138,7 @@ impl Solver {
         // Eindeutig je Aufruf: Tests laufen nebenlaeufig im selben Prozess.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let cache = match self {
-            Solver::Cached { dir, identity, .. } => Some((dir, cache_key(identity, timeout_s, script))),
-            _ => None,
-        };
+        let cache = self.cache.as_ref().map(|(dir, identity)| (dir, cache_key(identity, timeout_s, script)));
         if let Some((dir, key)) = &cache
             && let Ok(text) = std::fs::read_to_string(dir.join(format!("{key}.out")))
         {
@@ -162,12 +176,18 @@ impl Solver {
             let limit = format!("--tlimit={}", timeout_s * 1000);
             cmd.args(["--lang=smt2", "--incremental", "--produce-models", &limit]);
         } else {
-            cmd.args(["-smt2", &format!("-T:{timeout_s}")]);
+            // Ueber der Grenze antwortet z3 `(error "out of memory")` (FB-607).
+            cmd.args(["-smt2", &format!("-T:{timeout_s}"), &format!("-memory:{}", self.memory_mb)]);
         }
         let out = cmd.arg(&file).output().map_err(|e| format!("{}: {e}", path.display()))?;
         let _ = std::fs::remove_file(&file);
         // Leer erst nach dem letzten nebenlaeufigen Aufruf; bis dahin scheitert es still.
         let _ = std::fs::remove_dir(&dir);
+        // Die Speichergrenze meldet z3 auf stderr (FB-607). Was er davor auf
+        // stdout schrieb, gilt nicht: Ein `sat` haette keine Belegung.
+        if String::from_utf8_lossy(&out.stderr).contains("out of memory") {
+            return Ok("(error \"out of memory\")\n".to_string());
+        }
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         if text.trim().is_empty() {
             return Err(format!("{}: keine Ausgabe\n{}", path.display(), String::from_utf8_lossy(&out.stderr)));
@@ -187,11 +207,13 @@ fn cache_key(identity: &str, timeout_s: u64, script: &str) -> String {
 
 /// Hat der Solver entschieden? Jedes `(check-sat)` des Skripts bekam `sat`
 /// oder `unsat`. Ein Fehler zaehlt nicht dagegen: `get-value` nach `unsat`
-/// ist einer, und ein Abbruch laesst Antworten fehlen.
+/// ist einer, und ein Abbruch laesst Antworten fehlen. Die Speichergrenze
+/// aber schon: Traf sie erst das `get-value` nach `sat`, fehlte dem Pfad
+/// seine Belegung (FB-607).
 fn decided(script: &str, text: &str) -> bool {
     let asked = script.matches("(check-sat)").count();
     let answered = text.lines().map(str::trim).filter(|l| *l == "sat" || *l == "unsat").count();
-    asked > 0 && answered == asked
+    asked > 0 && answered == asked && !text.contains("out of memory")
 }
 
 /// Das Urteil ueber eine Eigenschaft.
