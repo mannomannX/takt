@@ -23,6 +23,20 @@
 //! Signaturen ([`Native::external`]).
 
 #![no_std]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        reason = "Stufe 2 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 pub mod bytes;
 pub mod cost;
@@ -134,7 +148,7 @@ impl Output {
         match self {
             Output::Scalar(v) => Ok(*v),
             Output::Digest(d) => Err(*d),
-            Output::Floats { bytes, len } => Err(sha256::sha256(&bytes[..*len])),
+            Output::Floats { bytes, len } => Err(sha256::sha256(bytes.get(..*len).unwrap_or(&[]))),
         }
     }
 }
@@ -227,6 +241,16 @@ impl Native {
             other => other.name(),
         }
     }
+}
+
+/// `x` in `f32` gerundet: zum naechsten Wert, bei Gleichstand zur geraden
+/// Mantisse (IEEE 754), jenseits des Bereichs unendlich.
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: die Referenz verlangt die Rundung nach f32 (3.4), und nur `as` rundet f64 nach f32"
+)]
+pub(crate) fn round_f32(x: f64) -> f32 {
+    x as f32
 }
 
 /// Rechnet eine Funktion der Menge ueber Byteblocks: ein Block fuer die

@@ -16,6 +16,8 @@
 //! Leser des Interpreters — `canonical_shape.rs` in `takt-sema` haelt beide
 //! gleich.
 
+use crate::round_f32;
+
 /// Der Puffer ist voll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Overflow;
@@ -35,7 +37,7 @@ impl<'a> Encoder<'a> {
 
     /// Die bisher geschriebenen Bytes.
     pub fn written(&self) -> &[u8] {
-        &self.buf[..self.at]
+        self.buf.get(..self.at).unwrap_or(&[])
     }
 
     fn put(&mut self, bytes: &[u8]) -> Result<(), Overflow> {
@@ -52,7 +54,8 @@ impl<'a> Encoder<'a> {
 
     /// Eine Ganzzahl in `width` Byte (1, 2, 4 oder 8).
     pub fn int(&mut self, v: i64, width: usize) -> Result<(), Overflow> {
-        self.put(&v.to_le_bytes()[..width.min(8)])
+        let bytes = v.to_le_bytes();
+        self.put(bytes.get(..width).unwrap_or(&bytes))
     }
 
     /// Das Bitmuster einer `f32`.
@@ -158,7 +161,7 @@ impl<'a> Cursor<'a> {
     }
 
     fn u8(&mut self) -> Option<u8> {
-        Some(self.take(1)?[0])
+        self.take(1)?.first().copied()
     }
 
     fn u16(&mut self) -> Option<u16> {
@@ -191,14 +194,16 @@ fn finite(bytes: &[u8], mask: u64) -> Option<()> {
     (bits & mask != mask).then_some(())
 }
 
-/// Eine Ganzzahl in `width` Byte, little-endian, mit oder ohne Vorzeichen.
+/// Eine Ganzzahl in `width` Byte, little-endian, mit oder ohne Vorzeichen:
+/// auf acht Byte erweitert, mit dem Vorzeichen oder mit Nullen.
 fn int_value(raw: &[u8], signed: bool) -> Option<i128> {
-    if raw.is_empty() || raw.len() > 8 {
+    if raw.is_empty() {
         return None;
     }
-    let value = i128::from(raw.iter().rev().fold(0u64, |acc, b| (acc << 8) | u64::from(*b)));
     let negative = signed && raw.last().is_some_and(|b| b & 0x80 != 0);
-    Some(if negative { value - (1i128 << (8 * raw.len())) } else { value })
+    let mut wide = [if negative { 0xFF } else { 0 }; 8];
+    wide.get_mut(..raw.len())?.copy_from_slice(raw);
+    Some(if signed { i128::from(i64::from_le_bytes(wide)) } else { i128::from(u64::from_le_bytes(wide)) })
 }
 
 /// Liest einen Wert der Gestalt unter `s` aus `d`; `None`, wenn es keiner
@@ -228,7 +233,7 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
             let raw = d.take(4)?;
             finite(raw, 0x7F80_0000)?;
             let x = f64::from(f32::from_le_bytes(raw.try_into().ok()?));
-            (x >= f64::from(lo as f32) && x <= f64::from(hi as f32)).then_some(())
+            (x >= f64::from(round_f32(lo)) && x <= f64::from(round_f32(hi))).then_some(())
         }
         shape::F64_IN => {
             let (lo, hi) = (s.f64()?, s.f64()?);
@@ -250,9 +255,9 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
                 let hit = s.i64()? == disc && !found;
                 for _ in 0..s.u16()? {
                     if hit {
-                        check(s, d, depth + 1)?;
+                        check(s, d, depth.saturating_add(1))?;
                     } else {
-                        skip(s, depth + 1)?;
+                        skip(s, depth.saturating_add(1))?;
                     }
                 }
                 found |= hit;
@@ -261,7 +266,7 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
         }
         shape::RECORD => {
             for _ in 0..s.u16()? {
-                check(s, d, depth + 1)?;
+                check(s, d, depth.saturating_add(1))?;
             }
             Some(())
         }
@@ -289,11 +294,11 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
             repeat(s, d, u32::try_from(n).ok()?, depth)
         }
         shape::MAP => {
-            let (cap, klen, vlen) = (s.u32()?, s.u32()? as usize, s.u32()? as usize);
+            let (cap, klen, vlen) = (s.u32()?, usize::try_from(s.u32()?).ok()?, usize::try_from(s.u32()?).ok()?);
             let key = s.at;
-            skip(s, depth + 1)?;
+            skip(s, depth.saturating_add(1))?;
             let value = s.at;
-            skip(s, depth + 1)?;
+            skip(s, depth.saturating_add(1))?;
             let end = s.at;
             for _ in 0..cap {
                 match d.u8()? {
@@ -304,8 +309,8 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
                         for (at, width) in [(key, klen), (value, vlen)] {
                             let from = d.at;
                             s.at = at;
-                            check(s, d, depth + 1)?;
-                            d.take(width.saturating_sub(d.at - from))?;
+                            check(s, d, depth.saturating_add(1))?;
+                            d.take(width.saturating_sub(d.at.saturating_sub(from)))?;
                         }
                     }
                     _ => return None,
@@ -322,11 +327,11 @@ fn check(s: &mut Cursor<'_>, d: &mut Cursor<'_>, depth: u32) -> Option<()> {
 fn repeat(s: &mut Cursor<'_>, d: &mut Cursor<'_>, n: u32, depth: u32) -> Option<()> {
     let at = s.at;
     if n == 0 {
-        return skip(s, depth + 1);
+        return skip(s, depth.saturating_add(1));
     }
     for _ in 0..n {
         s.at = at;
-        check(s, d, depth + 1)?;
+        check(s, d, depth.saturating_add(1))?;
     }
     Some(())
 }
@@ -346,25 +351,25 @@ fn skip(s: &mut Cursor<'_>, depth: u32) -> Option<()> {
             for _ in 0..s.u16()? {
                 s.i64()?;
                 for _ in 0..s.u16()? {
-                    skip(s, depth + 1)?;
+                    skip(s, depth.saturating_add(1))?;
                 }
             }
             Some(())
         }
         shape::RECORD => {
             for _ in 0..s.u16()? {
-                skip(s, depth + 1)?;
+                skip(s, depth.saturating_add(1))?;
             }
             Some(())
         }
         shape::ARRAY | shape::CAPTURE | shape::VEC => {
             s.u32()?;
-            skip(s, depth + 1)
+            skip(s, depth.saturating_add(1))
         }
         shape::MAP => {
             s.take(12)?;
-            skip(s, depth + 1)?;
-            skip(s, depth + 1)
+            skip(s, depth.saturating_add(1))?;
+            skip(s, depth.saturating_add(1))
         }
         _ => None,
     }

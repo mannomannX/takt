@@ -11,6 +11,8 @@
 //! Schluessel. Der Interpreter haelt Werte in seinen Slots und liefert die
 //! Bytes je Vergleich; die Sondierung ist dieselbe.
 
+use core::ops::Range;
+
 /// FNV-1a, 32 Bit (3.9).
 pub fn fnv1a(bytes: &[u8]) -> u32 {
     let mut h = 0x811c_9dc5u32;
@@ -38,13 +40,20 @@ pub trait Slots {
     fn clear(&mut self, i: usize);
 }
 
+/// Die Hash-Position in `cap` Slots; `None` ohne Slot.
+fn home(hash: u32, cap: usize) -> Option<usize> {
+    usize::try_from(hash).ok()?.checked_rem(cap)
+}
+
+/// Der Slot nach `i`, zyklisch; null ohne Slot.
+fn next(i: usize, cap: usize) -> usize {
+    i.saturating_add(1).checked_rem(cap).unwrap_or(0)
+}
+
 /// Der Slot des Schluessels, wenn er in der Map steht.
 pub fn find(s: &impl Slots, hash: u32, key: &[u8]) -> Option<usize> {
     let cap = s.cap();
-    if cap == 0 {
-        return None;
-    }
-    let mut i = (hash as usize) % cap;
+    let mut i = home(hash, cap)?;
     for _ in 0..cap {
         if !s.occupied(i) {
             return None;
@@ -52,7 +61,7 @@ pub fn find(s: &impl Slots, hash: u32, key: &[u8]) -> Option<usize> {
         if s.hash_at(i) == hash && s.matches(i, key) {
             return Some(i);
         }
-        i = (i + 1) % cap;
+        i = next(i, cap);
     }
     None
 }
@@ -60,15 +69,12 @@ pub fn find(s: &impl Slots, hash: u32, key: &[u8]) -> Option<usize> {
 /// Der erste freie Slot ab der Hash-Position; `None`, wenn die Map voll ist.
 pub fn free_slot(s: &impl Slots, hash: u32) -> Option<usize> {
     let cap = s.cap();
-    if cap == 0 {
-        return None;
-    }
-    let mut i = (hash as usize) % cap;
+    let mut i = home(hash, cap)?;
     for _ in 0..cap {
         if !s.occupied(i) {
             return Some(i);
         }
-        i = (i + 1) % cap;
+        i = next(i, cap);
     }
     None
 }
@@ -86,13 +92,13 @@ pub fn remove_at(s: &mut impl Slots, i: usize) {
     let mut hole = i;
     let mut j = i;
     for _ in 0..cap {
-        j = (j + 1) % cap;
+        j = next(j, cap);
         if !s.occupied(j) {
             return;
         }
-        let home = (s.hash_at(j) as usize) % cap;
-        // `home` liegt zyklisch in (hole, j]: der Eintrag bleibt.
-        let stays = if hole <= j { home > hole && home <= j } else { home > hole || home <= j };
+        let Some(at) = home(s.hash_at(j), cap) else { return };
+        // `at` liegt zyklisch in (hole, j]: der Eintrag bleibt.
+        let stays = if hole <= j { at > hole && at <= j } else { at > hole || at <= j };
         if stays {
             continue;
         }
@@ -112,36 +118,42 @@ pub struct ByteMap<'a> {
 impl<'a> ByteMap<'a> {
     /// Legt die Sicht ueber `data` an; `data` traegt mindestens `cap * (1 + klen + vlen)` Byte.
     pub fn new(data: &'a mut [u8], cap: usize, klen: usize, vlen: usize) -> ByteMap<'a> {
-        let cap = cap.min(data.len() / (1 + klen + vlen).max(1));
+        let cap = cap.min(data.len().checked_div(slot_size(klen, vlen)).unwrap_or(0));
         ByteMap { data, cap, klen, vlen }
     }
 
-    fn slot(&self, i: usize) -> usize {
-        i * (1 + self.klen + self.vlen)
+    /// Wo Slot `i` in `data` liegt; `None`, wenn er nicht ganz hineinpasst.
+    fn span(&self, i: usize) -> Option<Range<usize>> {
+        let size = slot_size(self.klen, self.vlen);
+        let at = i.checked_mul(size)?;
+        let end = at.checked_add(size)?;
+        (end <= self.data.len()).then_some(at..end)
     }
 
-    fn key_at(&self, i: usize) -> &[u8] {
-        let at = self.slot(i) + 1;
-        &self.data[at..at + self.klen]
+    /// Schluessel und Wert in Slot `i`.
+    fn parts(&self, i: usize) -> Option<(&[u8], &[u8])> {
+        let (_, rest) = self.data.get(self.span(i)?)?.split_first()?;
+        rest.split_at_checked(self.klen)
     }
 
-    fn value_at(&self, i: usize) -> &[u8] {
-        let at = self.slot(i) + 1 + self.klen;
-        &self.data[at..at + self.vlen]
+    fn key_at(&self, i: usize) -> Option<&[u8]> {
+        self.parts(i).map(|(k, _)| k)
     }
 
-    fn write(&mut self, i: usize, key: &[u8], value: &[u8]) {
-        let at = self.slot(i);
-        self.data[at] = 1;
-        let k = &mut self.data[at + 1..at + 1 + self.klen];
-        k.fill(0);
-        let n = key.len().min(k.len());
-        k[..n].copy_from_slice(&key[..n]);
-        let at = at + 1 + self.klen;
-        let v = &mut self.data[at..at + self.vlen];
-        v.fill(0);
-        let n = value.len().min(v.len());
-        v[..n].copy_from_slice(&value[..n]);
+    fn value_at(&self, i: usize) -> Option<&[u8]> {
+        self.parts(i).map(|(_, v)| v)
+    }
+
+    /// Belegt Slot `i`; `false`, wenn es ihn nicht gibt.
+    fn write(&mut self, i: usize, key: &[u8], value: &[u8]) -> bool {
+        let klen = self.klen;
+        let Some(slot) = self.span(i).and_then(|at| self.data.get_mut(at)) else { return false };
+        let Some((occupied, rest)) = slot.split_first_mut() else { return false };
+        let Some((k, v)) = rest.split_at_mut_checked(klen) else { return false };
+        *occupied = 1;
+        pad(k, key);
+        pad(v, value);
+        true
     }
 
     /// Der Hash eines Schluessels, wie ihn diese Map rechnet: ueber die auf
@@ -166,14 +178,13 @@ impl<'a> ByteMap<'a> {
                 None => return false,
             },
         };
-        self.write(i, key, value);
-        true
+        self.write(i, key, value)
     }
 
     /// `get(k) -> V?`: der Wert in seiner aufgefuellten Form.
     pub fn get(&self, key: &[u8]) -> Option<&[u8]> {
         let i = find(self, self.hash(key), key)?;
-        Some(self.value_at(i))
+        self.value_at(i)
     }
 
     /// `remove(k) -> bool`.
@@ -196,7 +207,10 @@ impl<'a> ByteMap<'a> {
     /// Schluessel und Wert in Slot `i`, wenn er belegt ist — die
     /// Iterationsreihenfolge von `for (k, v) in m` (3.9).
     pub fn entry(&self, i: usize) -> Option<(&[u8], &[u8])> {
-        (i < self.cap && self.occupied(i)).then(|| (self.key_at(i), self.value_at(i)))
+        if i >= self.cap || !self.occupied(i) {
+            return None;
+        }
+        self.parts(i)
     }
 }
 
@@ -206,27 +220,44 @@ impl Slots for ByteMap<'_> {
     }
 
     fn occupied(&self, i: usize) -> bool {
-        self.data.get(self.slot(i)).is_some_and(|b| *b != 0)
+        self.span(i).and_then(|at| self.data.get(at.start)).is_some_and(|b| *b != 0)
     }
 
     fn hash_at(&self, i: usize) -> u32 {
-        fnv1a(self.key_at(i))
+        fnv1a(self.key_at(i).unwrap_or_default())
     }
 
     fn matches(&self, i: usize, key: &[u8]) -> bool {
-        let stored = self.key_at(i);
-        stored.iter().enumerate().all(|(n, b)| *b == key.get(n).copied().unwrap_or(0))
+        self.key_at(i)
+            .is_some_and(|stored| stored.iter().enumerate().all(|(n, b)| *b == key.get(n).copied().unwrap_or(0)))
     }
 
     fn move_slot(&mut self, from: usize, to: usize) {
-        let size = 1 + self.klen + self.vlen;
-        let (a, b) = (self.slot(from), self.slot(to));
-        self.data.copy_within(a..a + size, b);
-        self.data[a] = 0;
+        let (Some(src), Some(dst)) = (self.span(from), self.span(to)) else { return };
+        let at = src.start;
+        self.data.copy_within(src, dst.start);
+        if let Some(b) = self.data.get_mut(at) {
+            *b = 0;
+        }
     }
 
     fn clear(&mut self, i: usize) {
-        let at = self.slot(i);
-        self.data[at] = 0;
+        if let Some(b) = self.span(i).and_then(|at| self.data.get_mut(at.start)) {
+            *b = 0;
+        }
+    }
+}
+
+/// Die Groesse eines Slots: das Byte fuer belegt, Schluessel und Wert.
+fn slot_size(klen: usize, vlen: usize) -> usize {
+    klen.saturating_add(vlen).saturating_add(1)
+}
+
+/// Schreibt `src` an den Anfang von `dst` und fuellt mit Nullen auf; was
+/// nicht passt, faellt weg.
+fn pad(dst: &mut [u8], src: &[u8]) {
+    dst.fill(0);
+    for (d, s) in dst.iter_mut().zip(src) {
+        *d = *s;
     }
 }

@@ -29,6 +29,11 @@ pub const BYTES_F32: usize = N * 4;
 /// Siehe [`BYTES_F32`].
 pub const BYTES_F64: usize = N * 8;
 
+/// Die Stufen der komplexen FFT: die Groesse einer Gruppe und der Schritt
+/// durch die Twiddle-Tabelle, `N / size` — w = e^(-2 pi i k / size) =
+/// W256^(k * N / size).
+const STAGES: [(usize, usize); 7] = [(2, 128), (4, 64), (8, 32), (16, 16), (32, 8), (64, 4), (128, 2)];
+
 macro_rules! width {
     ($name:ident, $t:ty, $bytes:expr, $cos:ident, $sin:ident) => {
         /// Die Transformation in einer Breite, von der kanonischen Form in
@@ -36,57 +41,67 @@ macro_rules! width {
         /// Imaginaerteil der 128 Paare (2 KiB in `f64`).
         fn $name(input: &[u8], out: &mut [u8]) {
             const W: usize = $bytes / N;
-            let read = |n: usize| {
-                let mut b = [0u8; W];
-                b.copy_from_slice(&input[n * W..(n + 1) * W]);
-                <$t>::from_le_bytes(b)
-            };
-            let c = |k: usize| <$t>::from_bits($cos[k]);
-            let s = |k: usize| <$t>::from_bits($sin[k]);
             // z_n = x_2n + i x_2n+1, in Bitumkehr-Reihenfolge abgelegt.
-            let mut re = [0.0 as $t; N / 2];
-            let mut im = [0.0 as $t; N / 2];
-            for n in 0..N / 2 {
-                let r = (n as u8).reverse_bits() as usize >> 1;
-                re[r] = read(2 * n);
-                im[r] = read(2 * n + 1);
+            let mut re: [$t; N / 2] = [0.0; N / 2];
+            let mut im: [$t; N / 2] = [0.0; N / 2];
+            for (n, pair) in (0..=u8::MAX).zip(input.chunks_exact(2 * W)) {
+                let r = usize::from(n.reverse_bits() >> 1);
+                if let (Some(x), Some(y), Some(zr), Some(zi)) =
+                    (pair.first_chunk::<W>(), pair.last_chunk::<W>(), re.get_mut(r), im.get_mut(r))
+                {
+                    *zr = <$t>::from_le_bytes(*x);
+                    *zi = <$t>::from_le_bytes(*y);
+                }
             }
-            // Radix 2, Stufe fuer Stufe: w = e^(-2 pi i k / size) = W256^(k * 256 / size).
-            let mut size = 2;
-            while size <= N / 2 {
-                let half = size / 2;
-                let step = N / size;
-                for start in (0..N / 2).step_by(size) {
-                    for k in 0..half {
-                        let (wc, ws) = (c(k * step), s(k * step));
-                        let (a, b) = (start + k, start + k + half);
+            // Radix 2, Stufe fuer Stufe: je Gruppe die untere Haelfte `a`
+            // gegen die obere `b`.
+            for (size, step) in STAGES {
+                for (re_group, im_group) in re.chunks_exact_mut(size).zip(im.chunks_exact_mut(size)) {
+                    let (Some((re_a, re_b)), Some((im_a, im_b))) =
+                        (re_group.split_at_mut_checked(size / 2), im_group.split_at_mut_checked(size / 2))
+                    else {
+                        continue;
+                    };
+                    let a = re_a.iter_mut().zip(im_a.iter_mut());
+                    let b = re_b.iter_mut().zip(im_b.iter_mut());
+                    let w = $cos.iter().zip($sin.iter()).step_by(step);
+                    for (((ar, ai), (br, bi)), (c, s)) in a.zip(b).zip(w) {
+                        let (wc, ws) = (<$t>::from_bits(*c), <$t>::from_bits(*s));
                         // t = z_b * (wc - i ws)
-                        let tr = re[b] * wc + im[b] * ws;
-                        let ti = im[b] * wc - re[b] * ws;
-                        re[b] = re[a] - tr;
-                        im[b] = im[a] - ti;
-                        re[a] += tr;
-                        im[a] += ti;
+                        let tr = *br * wc + *bi * ws;
+                        let ti = *bi * wc - *br * ws;
+                        *br = *ar - tr;
+                        *bi = *ai - ti;
+                        *ar += tr;
+                        *ai += ti;
                     }
                 }
-                size *= 2;
             }
-            let mut write = |i: usize, v: $t| out[i * W..(i + 1) * W].copy_from_slice(&v.to_le_bytes());
+            let mut slots = out.chunks_exact_mut(W).filter_map(|slot| slot.first_chunk_mut::<W>());
+            let mut write = |v: $t| {
+                if let Some(slot) = slots.next() {
+                    *slot = v.to_le_bytes();
+                }
+            };
             // X0 und X128 aus Z0: die Summe und die Differenz von Real- und
             // Imaginaerteil.
-            write(0, re[0] + im[0]);
-            write(1, re[0] - im[0]);
-            for k in 1..N / 2 {
-                let (zr, zi, yr, yi) = (re[k], im[k], re[N / 2 - k], im[N / 2 - k]);
+            write(re[0] + im[0]);
+            write(re[0] - im[0]);
+            // Ab k = 1: Zk vorwaerts, Z(128-k) rueckwaerts.
+            let z = re.iter().zip(im.iter()).skip(1);
+            let y = re.iter().zip(im.iter()).rev();
+            let w = $cos.iter().zip($sin.iter()).skip(1);
+            for (((zr, zi), (yr, yi)), (c, s)) in z.zip(y).zip(w) {
+                let (zr, zi, yr, yi) = (*zr, *zi, *yr, *yi);
                 // E = (Zk + conj Z(128-k)) / 2, O = (Zk - conj Z(128-k)) / 2i
                 let er = (zr + yr) * 0.5;
                 let ei = (zi - yi) * 0.5;
                 let or = (zi + yi) * 0.5;
                 let oi = (yr - zr) * 0.5;
                 // Xk = E + O * (c - i s) mit c, s von 2 pi k / 256
-                let (wc, ws) = (c(k), s(k));
-                write(2 * k, er + (or * wc + oi * ws));
-                write(2 * k + 1, ei + (oi * wc - or * ws));
+                let (wc, ws) = (<$t>::from_bits(*c), <$t>::from_bits(*s));
+                write(er + (or * wc + oi * ws));
+                write(ei + (oi * wc - or * ws));
             }
         }
     };
@@ -125,6 +140,10 @@ pub fn generated(token: &str, out: &mut [u8; BYTES_F64]) -> Option<usize> {
 /// kanonischen Form der Breite. Auf jedem Ziel dieselben Bits: Der Wert
 /// entsteht aus 53 beziehungsweise 24 Bit des Generators durch eine exakte
 /// Skalierung.
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: 53 und 24 Bit des Generators und die Zweierpotenzen sind in f64 und f32 exakt; aus u64 wandelt nur `as`"
+)]
 pub fn signal(seed: u64, wide: bool, out: &mut [u8; BYTES_F64]) -> usize {
     let mut state = seed | 1;
     let mut next = || {
