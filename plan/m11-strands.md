@@ -86,7 +86,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
 | 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | frei |
-| 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | frei; Stufe 1 in P nach dem Merge von B |
+| 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | Strang A, in Arbeit; Stufe 1 in P nach dem Merge von B |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
 | 24 | Vorlagen, `takt doctor`, Anleitung, Inventur, Abschluss | W | beide | alle | zuletzt |
 
