@@ -445,6 +445,11 @@ fn main() -> ! {
     telemetry.write_i64(nominal);
     telemetry.write(" ns");
     telemetry.newline();
+    // 12.11: Die Form steht im Kopf des Laufs; `takt bench` ordnet danach
+    // die Stack-Reserve zu (FB-513).
+    telemetry.write("  Form ");
+    telemetry.write(env!("TAKT_FORM"));
+    telemetry.newline();
     telemetry.mark();
     let telemetry = if LOGICAL { telemetry.lossless() } else { telemetry };
     unsafe { UART = Some(telemetry) };

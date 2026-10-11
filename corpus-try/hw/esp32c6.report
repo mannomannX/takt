@@ -1,4 +1,4 @@
-# takt-conformance 2
+# takt-conformance 3
 # Konformitaetsbericht (13.8): das Protokoll der Messung. Zeiten in Pikosekunden,
 # Streuungen als `min mean max` in Zyklen.
 
@@ -16,7 +16,8 @@ placements = 0
 [calibration]
 t_io_ps = 3818750
 stretch = 1/1
-stack_reserve = 3684
+stack_reserve = 3124
+stack_reserve_interrupt = 3684
 subnormal_failures = 0
 overhead = 15
 

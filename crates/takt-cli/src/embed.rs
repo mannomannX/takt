@@ -54,6 +54,20 @@ impl Form {
     }
 
     /// Das Profil der Form (12.8, 12.11); die logische Zeit hat keines.
+    /// Die Form, deren Stack-Reserve die Hardware-Konfiguration fuehrt
+    /// (FB-513): ein Wirt unter Linux wie der eigene Kern; in logischer Zeit
+    /// bemisst niemand einen Stack.
+    pub(crate) fn reserve_form(self) -> Option<takt_mir::hardware::Form> {
+        use takt_mir::hardware::Form as Reserve;
+        match self {
+            Form::Own | Form::Linux => Some(Reserve::Own),
+            Form::Interrupt => Some(Reserve::Interrupt),
+            Form::Poll => Some(Reserve::Poll),
+            Form::Rtos => Some(Reserve::Rtos),
+            Form::Logical => None,
+        }
+    }
+
     pub(crate) fn profile(self) -> Option<RuntimeProfile> {
         match self {
             Form::Own => Some(RuntimeProfile::Baremetal),
@@ -220,13 +234,19 @@ fn tick_stack(e: &Embed<'_>, obj: &Path, memory: &takt_mir::hardware::Memory) ->
             obj.display()
         ));
     };
-    let stack =
-        TickStack { program: depth.bytes, reserve: memory.stack_reserve, margin: memory.stack_margin.unwrap_or(0) };
-    if stack.reserve.is_none() && e.form != Form::Logical {
+    // FB-513: die Reserve der eigenen Form; die einer anderen traegt andere
+    // Rahmen und tritt nicht an ihre Stelle.
+    let form = e.form.reserve_form();
+    let reserve = form.and_then(|f| memory.stack_reserve.get(f));
+    let stack = TickStack { program: depth.bytes, reserve, margin: memory.stack_margin.unwrap_or(0) };
+    if let Some(form) = form
+        && stack.reserve.is_none()
+    {
         eprintln!(
-            "{}: keine `stack_reserve` fuer {} in der Hardware-Konfiguration; `TICK_STACK_BYTES` ist nur der \
-             Anteil des Programms ({} Byte), ohne Runtime, Treiber und ISRs (12.3, 13.8)",
+            "{}: keine `{}` fuer {} in der Hardware-Konfiguration; `TICK_STACK_BYTES` ist nur der Anteil des \
+             Programms ({} Byte), ohne Runtime, Treiber, ISRs und Port (12.3, 13.8)",
             e.out.display(),
+            form.reserve_key(),
             e.target.name,
             stack.program
         );
@@ -248,7 +268,7 @@ struct Placement {
 /// ist ein Fehler mit beiden Namen. Die Pollform prueft dazu die
 /// Hauptschleife des Wirts ([`check_poll`]) im Ziel `name` der
 /// Hardware-Konfiguration.
-fn check_form(
+pub(crate) fn check_form(
     p: &takt_mir::Program,
     form: Form,
     target: Option<&takt_mir::hardware::Target>,

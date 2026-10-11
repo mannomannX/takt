@@ -21,7 +21,7 @@
 use takt_diag::{Diagnostic, Severity, Span};
 use takt_mir::analysis::schedulability::{self, Load};
 use takt_mir::expr::{Expr, ExprKind};
-use takt_mir::hardware::{Hardware, HwChannel, Target};
+use takt_mir::hardware::{Form, Hardware, HwChannel, Target};
 use takt_mir::machine::MachineKind;
 use takt_mir::program::{Binding, Direction, OverrunPolicy, Program, Sweep};
 use takt_mir::review::Review;
@@ -30,11 +30,18 @@ use takt_mir::types::{Const, Type};
 
 use crate::checks::{SC12, SC28, SC29, SC31, SC32, SC39, SC59, SC60};
 
-/// Prüft Kostenbudget und Schedulability gegen eine Kalibrierung.
+/// Prüft Kostenbudget und Schedulability gegen eine Kalibrierung, für ein
+/// Programm im eigenen Kern; [`check_in`] für eine andere Form.
 ///
 /// `span` ist die Stelle, an der ein Fehler angezeigt wird — sinnvoll ist
 /// der `system:`-Block, weil `tick` und `tick_source` dort stehen.
 pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
+    check_in(p, target, span, Form::Own)
+}
+
+/// Wie [`check`], für ein Programm in der Form `form` (12.11): Prüfung 39
+/// rechnet mit der Stack-Reserve dieser Form (FB-513).
+pub fn check_in(p: &Program, target: &Target, span: Span, form: Form) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     let load = schedulability::load(p);
 
@@ -57,7 +64,7 @@ pub fn check(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
 
     out.extend(journal_blocking(p, target, span));
     // Pruefung 39 haengt nicht an den Gewichten.
-    out.extend(memory_budget(p, target, span));
+    out.extend(memory_budget(p, target, span, form));
 
     if !target.fits_cost_model() {
         let gemessen =
@@ -203,9 +210,9 @@ fn journal_blocking(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic>
 /// Verglichen wird nur Belastbares; ein offener Posten macht die Summe zur
 /// Untergrenze, und das sagt die Meldung. Ein Ziel ohne Speicherangaben
 /// bekommt kein Urteil.
-fn memory_budget(p: &Program, target: &Target, span: Span) -> Vec<Diagnostic> {
+fn memory_budget(p: &Program, target: &Target, span: Span, form: Form) -> Vec<Diagnostic> {
     let mut out = Vec::new();
-    let size = takt_mir::analysis::size::size(p).with_hardware(target);
+    let size = takt_mir::analysis::size::size(p).with_hardware_in(target, form);
     let note = if size.has_open() { " (offene Posten nicht gezählt, die Summe ist eine Untergrenze)" } else { "" };
     // Pruefung 12: Die Stack-Schranke ist ein Posten dieser Summe, kein
     // eigenes Budget; die Meldung nennt ihren Anteil.

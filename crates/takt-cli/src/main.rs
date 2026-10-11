@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! takt check DATEI… [--warnings-as-errors] [--certification] [--format text|line]
-//!                   [--hardware DATEI.hw --target NAME] [--hw-export DATEI.hw]
+//!                   [--hardware DATEI.hw --target NAME [--form FORM]] [--hw-export DATEI.hw]
 //!                   [--build sim|hw] [--params-profile P]
 //! takt sim   DATEI --ticks N [--stim S.trace] [--golden G.trace] [--trace OUT.trace]
 //!                   [--params-profile P] [--order random:SEED] [--steps OUT.steps]
@@ -662,11 +662,31 @@ fn check(args: &Args) -> bool {
         // Pruefung 12, 32 und 39 brauchen das Ziel, 28, 59 und 60 die Kanaele
         // der Konfiguration (8.10); ohne sie bleibt es beim Hinweis.
         let mut gated = Vec::new();
+        // 12.11: Mit `--form` prueft `check`, was der Bau der Lieferform
+        // prueft — Profil und Pollform —, und Pruefung 39 rechnet mit der
+        // Stack-Reserve dieser Form (FB-513).
+        let form = match args.value("--form").map(embed::Form::parse).transpose() {
+            Ok(form) => form,
+            Err(e) => {
+                eprintln!("{e}");
+                return false;
+            }
+        };
         if let Some(program) = &checked.program {
             let span = takt_diag::Span::new(0, 0);
             let mut diags = Vec::new();
+            if let Some(form) = form {
+                let name = resolve_target(args.value("--target").unwrap_or("x86_64")).map_or("x86_64", |t| t.name);
+                if let Err(e) = embed::check_form(program, form, kalibriert.as_ref(), name) {
+                    eprintln!("{path}: {e}");
+                    ok = false;
+                }
+            }
             if let Some(target) = &kalibriert {
-                diags.extend(takt_sema::calibrated::check(program, target, span));
+                let reserve = form.map_or(Some(takt_mir::hardware::Form::Own), embed::Form::reserve_form);
+                if let Some(reserve) = reserve {
+                    diags.extend(takt_sema::calibrated::check_in(program, target, span, reserve));
+                }
             }
             if let Some(hw) = hardware(args) {
                 diags.extend(takt_sema::calibrated::check_bindings(program, &hw));

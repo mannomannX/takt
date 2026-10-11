@@ -404,6 +404,45 @@ fn every_target_class_gets_a_library_with_its_entries_and_arena() {
     }
 }
 
+/// **Jede Form bekommt ihre eigene Stack-Reserve** (8.10, 12.11, FB-513):
+/// Die Interruptform rechnet `TICK_STACK_BYTES` mit `stack_reserve_interrupt`;
+/// die Pollform, fuer die die Konfiguration keine nennt, borgt nicht die
+/// des eigenen Kerns, und der Bau sagt, welcher Schluessel fehlt.
+#[test]
+fn every_form_takes_its_own_stack_reserve() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    let dir = scratch("takt-embed-reserve");
+    let hw = dir.join("board.hw");
+    std::fs::write(
+        &hw,
+        "# takt-hw 17
+[target.thumbv7em]
+stack_reserve = 900
+stack_reserve_interrupt = 1700
+main_loop_ns = 1000
+",
+    )
+    .expect("hw");
+    let build = |form: &str| {
+        let out = dir.join(form);
+        let args = ["build", VALVE, "--emit", "embed", "--target", "thumbv7em-none-eabihf", "--form", form];
+        let mut args: Vec<&str> = args.to_vec();
+        args.extend(["--hardware", hw.to_str().expect("Pfad"), "--out", out.to_str().expect("Pfad")]);
+        let run = takt(&args);
+        assert!(run.status.success(), "{form}: {}", String::from_utf8_lossy(&run.stderr));
+        (out, String::from_utf8_lossy(&run.stderr).into_owned())
+    };
+    let (own, _) = build("own");
+    let (interrupt, _) = build("interrupt");
+    let (poll, warned) = build("poll");
+    assert_eq!(manifest_value(&own, "tick_stack_reserve"), "900");
+    assert_eq!(manifest_value(&interrupt, "tick_stack_reserve"), "1700");
+    assert_eq!(manifest_value(&poll, "tick_stack_reserve"), "none", "keine geborgte Reserve");
+    assert!(warned.contains("`stack_reserve_poll`"), "{warned}");
+}
+
 /// 12.11: Jede Form baut und traegt ihr Profil ins Manifest; zwei Laeufe in
 /// verschiedene Verzeichnisse liefern bitgleiche Bibliotheken (11.3), der
 /// Pfad der Ausgabe steht nicht im Objekt.

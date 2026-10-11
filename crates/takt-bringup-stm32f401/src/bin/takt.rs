@@ -1426,6 +1426,11 @@ fn banner(nominal_ns: i64) {
     uart.write_i64(nominal_ns);
     uart.write(" ns");
     uart.newline();
+    // 12.11: Die Form steht im Kopf des Laufs; `takt bench` ordnet danach
+    // die Stack-Reserve zu (FB-513).
+    uart.write("  Form ");
+    uart.write(env!("TAKT_FORM"));
+    uart.newline();
     uart.write("  DWT ");
     uart.write(if cycles::running() { "laeuft" } else { "STEHT" });
     uart.newline();

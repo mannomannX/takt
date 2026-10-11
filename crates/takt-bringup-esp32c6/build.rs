@@ -68,6 +68,7 @@ fn form() -> &'static str {
     let form = if env::var_os("CARGO_FEATURE_INTERRUPT").is_some() { "interrupt" } else { "own" };
     println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\"))");
     println!("cargo:rustc-cfg=form=\"{form}\"");
+    println!("cargo:rustc-env=TAKT_FORM={form}");
     form
 }
 

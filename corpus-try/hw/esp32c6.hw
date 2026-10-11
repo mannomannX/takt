@@ -1,4 +1,4 @@
-# takt-hw 16 edition 1 compiler 0.1.0
+# takt-hw 17 edition 1 compiler 0.1.0
 # ESP32-C6-DevKitM-1-N4 (ESP32-C6-MINI-1, RV32IMAC, 160 MHz, ohne FPU):
 # Speicher und Journal fuer die Profilfamilie `xip_flash` (12.3,
 # plan/esp32c6.md).
@@ -62,11 +62,14 @@ f32_sqrt = 458417
 f64_sqrt = 1286836
 t_io = 3818750
 tick_jitter_ns = 0
-# Stack-Reserve (12.3, 13.8): die tiefste Hochwassermarke des Lastkerns
-# (`bench/load.takt`) in Echtzeit und logischer Zeit im eigenen Kern und in
-# der Interruptform, gemalt ab der Tickschleife, ohne seinen Programmanteil.
-# Seit FB-458 liegt der Ring der Telemetrie nicht mehr im Rahmen von `main`.
-stack_reserve = 3684
+# Stack-Reserve je Form (12.3, 13.8, FB-513): die tiefste Hochwassermarke
+# des Lastkerns (`bench/load.takt`) in Echtzeit und logischer Zeit, gemalt
+# ab der Tickschleife, ohne seinen Programmanteil. Aus den Protokollen des
+# Bench vom 2026-10-11 je Form zugeordnet; der naechste Bench schreibt sie
+# selbst. Seit FB-458 liegt der Ring der Telemetrie nicht mehr im Rahmen von
+# `main`.
+stack_reserve = 3124
+stack_reserve_interrupt = 3684
 # Interrupts laufen auf dem Stack des unterbrochenen Fadens, also auch auf
 # dem des Jobs; Trap-Rahmen, Verteiler und die Handler einer
 # Prioritaetsstufe brauchen unter 1 KiB, die Reserve verdoppelt das (4.5).

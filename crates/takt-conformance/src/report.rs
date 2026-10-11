@@ -19,8 +19,9 @@ use std::fmt::Write as _;
 ///
 /// 2: das Messprogramm als Baustein (M11 Schritt 12) — `suite` und
 /// `placements` im Lauf, `overhead` in der Kalibrierung, `function` und
-/// `placements` je Probe; die Kerne heissen wie im Protokoll.
-pub const FORMAT_VERSION: u32 = 2;
+/// `placements` je Probe; die Kerne heissen wie im Protokoll. 3: die
+/// Stack-Reserve je Form (`stack_reserve_<form>`, FB-513).
+pub const FORMAT_VERSION: u32 = 3;
 
 const MAGIC: &str = "takt-conformance";
 
@@ -76,8 +77,9 @@ pub struct Calibration {
     pub t_io_ps: u64,
     /// Die Streckung der Tabelle als Bruch; `(1, 1)` ohne.
     pub stretch: (u64, u64),
-    /// Stack-Reserve von Runtime, Treibern und ISRs in Byte (12.3).
-    pub stack_reserve: Option<u64>,
+    /// Stack-Reserve von Runtime, Treibern, ISRs und Port in Byte, je Form
+    /// (12.3, FB-513).
+    pub stack_reserve: takt_mir::hardware::Reserves,
     /// Faelle des Subnormal-Vektors mit falschem Ergebnis (4.2).
     pub subnormal_failures: u64,
     /// Was die Messung selbst kostet, in Zyklen; von jeder Reihe abgezogen.
@@ -202,8 +204,8 @@ pub fn render(r: &Report) -> String {
     );
     if let Some(c) = &r.calibration {
         let _ = write!(s, "\n[calibration]\nt_io_ps = {}\nstretch = {}/{}\n", c.t_io_ps, c.stretch.0, c.stretch.1);
-        if let Some(bytes) = c.stack_reserve {
-            let _ = writeln!(s, "stack_reserve = {bytes}");
+        for (form, bytes) in c.stack_reserve.iter() {
+            let _ = writeln!(s, "{} = {bytes}", form.reserve_key());
         }
         let _ = writeln!(s, "subnormal_failures = {}\noverhead = {}", c.subnormal_failures, c.overhead);
     }
@@ -367,7 +369,13 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                             |t: &str| t.trim().parse::<u64>().map_err(|_| err(format!("`{value}` ist kein Bruch")));
                         c.stretch = (parse(n)?, parse(d)?);
                     }
-                    "stack_reserve" => c.stack_reserve = Some(number()?),
+                    key if takt_mir::hardware::Form::ALL.iter().any(|f| f.reserve_key() == key) => {
+                        let form = takt_mir::hardware::Form::ALL
+                            .into_iter()
+                            .find(|f| f.reserve_key() == key)
+                            .unwrap_or(takt_mir::hardware::Form::Own);
+                        c.stack_reserve.set(form, Some(number()?));
+                    }
                     "subnormal_failures" => c.subnormal_failures = number()?,
                     "overhead" => c.overhead = number()?,
                     _ => return Err(unknown()),
@@ -491,7 +499,12 @@ mod tests {
             calibration: Some(Calibration {
                 t_io_ps: 5_000,
                 stretch: (21, 20),
-                stack_reserve: Some(1_432),
+                stack_reserve: {
+                    let mut r = takt_mir::hardware::Reserves::default();
+                    r.set(takt_mir::hardware::Form::Own, Some(1_432));
+                    r.set(takt_mir::hardware::Form::Rtos, Some(2_048));
+                    r
+                },
                 subnormal_failures: 0,
                 overhead: 6,
             }),
@@ -538,7 +551,8 @@ mod tests {
     fn a_report_round_trips() {
         let r = sample();
         let text = render(&r);
-        assert!(text.starts_with("# takt-conformance 2\n"), "{text}");
+        assert!(text.starts_with("# takt-conformance 3\n"), "{text}");
+        assert!(text.contains("stack_reserve = 1432\nstack_reserve_rtos = 2048\n"), "Reserve je Form: {text}");
         assert!(text.contains("[probe f64_math]\nfunction = \"acos\"\nps = "), "{text}");
         assert!(text.contains("placements = 0 8 24\n") && text.contains("placements = 11905 11905 11905\n"), "{text}");
         assert_eq!(parse(&text), Ok(r));

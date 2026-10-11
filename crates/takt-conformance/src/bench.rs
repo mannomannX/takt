@@ -722,13 +722,30 @@ fn load_runs(forms: &[Form]) -> Vec<Options> {
     forms.iter().flat_map(|&form| runs.clone().map(|o| o.in_form(form))).collect()
 }
 
-/// Die Stack-Reserve (12.3) aus Laeufen in der Tickschleife: je Lauf die
-/// Tiefe ohne den Anteil des Programms, den die Bilanz nennt; die tiefste.
-fn stack_reserve<'a>(runs: impl IntoIterator<Item = &'a str>) -> Option<u64> {
+/// Die Stack-Reserve (12.3) aus Laeufen in der Tickschleife, je Form
+/// (FB-513): je Lauf die Tiefe ohne den Anteil des Programms, den die Bilanz
+/// nennt; je Form die tiefste. Die Form nennt der Kopf des Laufs
+/// ([`form_of`]).
+fn stack_reserves<'a>(runs: impl IntoIterator<Item = &'a str>) -> takt_mir::hardware::Reserves {
     let counter = crate::board::counter;
-    runs.into_iter()
-        .filter_map(|t| Some(counter(t, "stack")?.saturating_sub(counter(t, "programm").unwrap_or(0))))
-        .max()
+    let mut reserves = takt_mir::hardware::Reserves::default();
+    for t in runs {
+        let Some(depth) = counter(t, "stack").map(|s| s.saturating_sub(counter(t, "programm").unwrap_or(0))) else {
+            continue;
+        };
+        let form = form_of(t);
+        reserves.set(form, Some(reserves.get(form).map_or(depth, |d| d.max(depth))));
+    }
+    reserves
+}
+
+/// Die Form eines Laufs aus seinem Kopf (`  Form interrupt`, 12.11); ein
+/// Kopf ohne Form ist der eigene Kern.
+fn form_of(text: &str) -> takt_mir::hardware::Form {
+    text.lines()
+        .find_map(|l| l.trim().strip_prefix("Form "))
+        .and_then(|name| takt_mir::hardware::Form::by_name(name.trim()))
+        .unwrap_or(takt_mir::hardware::Form::Own)
 }
 
 /// Was `takt bench` auf einem Board ergibt.
@@ -754,10 +771,10 @@ pub struct Outcome {
     pub runs: u64,
     /// Faelle des Subnormal-Vektors mit falschem Ergebnis (4.2).
     pub subnormal: u64,
-    /// Die Reserve fuer Runtime, Treiber und ISRs (12.3): die tiefste
-    /// Stack-Tiefe in der Tickschleife ohne den Anteil des Programms, aus dem
-    /// leeren Kern und dem Lastkern.
-    pub stack_reserve: Option<u64>,
+    /// Die Reserve fuer Runtime, Treiber, ISRs und Port (12.3) je Form: die
+    /// tiefste Stack-Tiefe in der Tickschleife ohne den Anteil des
+    /// Programms, aus dem leeren Kern und dem Lastkern (FB-513).
+    pub stack_reserve: takt_mir::hardware::Reserves,
     /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
     /// ueberschreitet (7.3).
     pub tick_jitter_ns: Option<i64>,
@@ -876,7 +893,7 @@ pub fn import(logs: &Logs) -> Result<Outcome, String> {
         overhead: runs.iter().map(|r| r.overhead.min).max().unwrap_or(0),
         runs: merged.takt.get("frame").map_or(0, |s| s.n / runs.len() as u64),
         subnormal: merged.subnormal,
-        stack_reserve: stack_reserve(looped.into_iter().chain(logs.loads.iter().map(String::as_str))),
+        stack_reserve: stack_reserves(looped.into_iter().chain(logs.loads.iter().map(String::as_str))),
         tick_jitter_ns: looped.and_then(tick_jitter),
     })
 }
@@ -1342,7 +1359,7 @@ mod tests {
             overhead: 0,
             runs: 10,
             subnormal: 0,
-            stack_reserve: None,
+            stack_reserve: takt_mir::hardware::Reserves::default(),
             tick_jitter_ns: None,
         };
         let line = outcome.kernel_lines().join("\n");
@@ -1488,20 +1505,29 @@ mod tests {
         s
     }
 
-    /// **Die Reserve ist die tiefste Last ohne ihr Programm** (12.3): Der
-    /// Lastkern reicht tiefer als der leere Kern, aber ein Teil davon ist
-    /// sein eigener Rahmen, den die Bilanz nennt. Ein Protokoll ohne
-    /// `programm` zaehlt ganz.
+    /// **Die Reserve ist die tiefste Last ohne ihr Programm, je Form** (12.3,
+    /// FB-513): Der Lastkern reicht tiefer als der leere Kern, aber ein Teil
+    /// davon ist sein eigener Rahmen, den die Bilanz nennt. Ein Protokoll
+    /// ohne `programm` zaehlt ganz, eines ohne Form im Kopf zum eigenen Kern,
+    /// und die tiefste Form setzt die anderen nicht.
     #[test]
-    fn the_reserve_is_the_deepest_load_without_its_program() {
-        let summary = |tail: &str| format!("takt schlief 0 ueberlaeufe 0 {tail}\ntakt end\n");
-        let looped = summary("stack 1000 schranke 4096 programm 16");
-        let loads = [summary("stack 3000 schranke 4096 programm 200"), summary("stack 2500 schranke 4096")];
-        assert_eq!(stack_reserve([looped.as_str()]), Some(984));
-        assert_eq!(stack_reserve(loads.iter().map(String::as_str).chain([looped.as_str()])), Some(2800));
-        assert_eq!(stack_reserve(["takt schlief 0\n"]), None);
+    fn the_reserve_is_the_deepest_load_without_its_program_per_form() {
+        use takt_mir::hardware::Form;
+        let run =
+            |form: &str, tail: &str| format!("takt auf board\n{form}takt schlief 0 ueberlaeufe 0 {tail}\ntakt end\n");
+        let looped = run("", "stack 1000 schranke 4096 programm 16");
+        let loads = [
+            run("  Form own\n", "stack 3000 schranke 4096 programm 200"),
+            run("", "stack 2500 schranke 4096"),
+            run("  Form rtos\n", "stack 3700 schranke 4096 programm 52"),
+        ];
+        let own = stack_reserves([looped.as_str()]);
+        assert_eq!((own.get(Form::Own), own.get(Form::Rtos)), (Some(984), None));
+        let all = stack_reserves(loads.iter().map(String::as_str).chain([looped.as_str()]));
+        assert_eq!((all.get(Form::Own), all.get(Form::Rtos), all.get(Form::Interrupt)), (Some(2800), Some(3648), None));
+        assert_eq!(stack_reserves(["takt schlief 0\n"]), takt_mir::hardware::Reserves::default());
         let logs = Logs { bench: vec![synthetic(0, 6)], looped: Some(looped), loads: loads.to_vec(), natives: None };
-        assert_eq!(import(&logs).unwrap_or_else(|e| panic!("{e}")).stack_reserve, Some(2800));
+        assert_eq!(import(&logs).unwrap_or_else(|e| panic!("{e}")).stack_reserve, all);
     }
 
     /// **Der Import findet die Tabelle wieder**, aus der das Protokoll

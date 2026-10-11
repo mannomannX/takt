@@ -164,6 +164,7 @@ fn form() -> &'static str {
     println!("cargo::rustc-check-cfg=cfg(timer, values(\"periodic\", \"free\"))");
     println!("cargo:rustc-cfg=form=\"{form}\"");
     println!("cargo:rustc-cfg=timer=\"{timer}\"");
+    println!("cargo:rustc-env=TAKT_FORM={form}");
     form
 }
 

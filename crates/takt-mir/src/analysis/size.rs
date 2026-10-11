@@ -380,14 +380,23 @@ impl Size {
         self
     }
 
-    /// Fuellt die Posten, die an der Hardware-Konfiguration haengen (8.10).
+    /// Fuellt die Posten, die an der Hardware-Konfiguration haengen (8.10),
+    /// fuer ein Programm im eigenen Kern; [`Size::with_hardware_in`] fuer
+    /// eine andere Form.
+    pub fn with_hardware(self, t: &crate::hardware::Target) -> Size {
+        self.with_hardware_in(t, crate::hardware::Form::Own)
+    }
+
+    /// Fuellt die Posten, die an der Hardware-Konfiguration haengen (8.10),
+    /// fuer ein Programm in der Form `form` (12.11).
     ///
-    /// Heute ist das der Flash-Anteil des `persist`-Journals: Zwei Slots
-    /// belegen ganze Sektoren, und wie gross die sind, weiss nur das Ziel.
-    pub fn with_hardware(mut self, t: &crate::hardware::Target) -> Size {
+    /// Heute sind das die Stack-Reserve der Form (FB-513) und der
+    /// Flash-Anteil des `persist`-Journals: Zwei Slots belegen ganze
+    /// Sektoren, und wie gross die sind, weiss nur das Ziel.
+    pub fn with_hardware_in(mut self, t: &crate::hardware::Target, form: crate::hardware::Form) -> Size {
         // 12.3: Die Reserven kommen aus der Messung (13.8) in die
         // Konfiguration; die Marge waehlt das Projekt.
-        if let Some(reserve) = t.memory.stack_reserve {
+        if let Some(reserve) = t.memory.stack_reserve.get(form) {
             for item in &mut self.items {
                 if item.name == "Runtime-Reserven je Profil" {
                     item.bytes = reserve.saturating_add(t.memory.stack_margin.unwrap_or(0));

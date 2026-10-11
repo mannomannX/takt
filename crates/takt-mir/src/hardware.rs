@@ -99,7 +99,10 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// FB-441); eine Datei von Hand traegt keine. 16: `main_loop_ns` und
 /// `job_interrupt`, die Hauptschleife des Wirts in der Pollform (8.10,
 /// 12.11); eine aeltere Datei kennt beide nicht und baut keine Pollform.
-pub const FORMAT_VERSION: u32 = 16;
+/// 17: die Stack-Reserve je Form (`stack_reserve_interrupt`,
+/// `stack_reserve_poll`, `stack_reserve_rtos`; FB-513); `stack_reserve`
+/// gilt dem eigenen Kern.
+pub const FORMAT_VERSION: u32 = 17;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -305,8 +308,9 @@ pub struct Memory {
     pub flash: Option<u64>,
     /// Instruktions-RAM auf XIP-Zielen (12.3).
     pub iram: Option<u64>,
-    /// Stack-Reserven fuer Runtime, Treiber, ISRs und RTOS (12.3).
-    pub stack_reserve: Option<u64>,
+    /// Stack-Reserven fuer Runtime, Treiber, ISRs und Port, je Form
+    /// (12.3, 12.11).
+    pub stack_reserve: Reserves,
     /// Marge auf den gerechneten Stack (12.3).
     pub stack_margin: Option<u64>,
     /// Was der Job-Kontext ueber den groessten `stack`-Vertrag der Jobs
@@ -316,6 +320,74 @@ pub struct Memory {
     /// Die Schutzeinheit, deren Region den Programmbereich der Arena deckt
     /// (12.3, 12.11); ohne sie ist die Arena keine Schutzregion.
     pub protect: Option<Protect>,
+}
+
+/// Wer den Kern ruft (12.11), soweit die Konfiguration davon abhaengt:
+/// Unter jeder Form liegen andere Rahmen unter dem Schritt — die ISR eines
+/// Alarms, die Hauptschleife des Wirts, die Aufgaben eines Planers —, und
+/// jede hat ihre eigene Stack-Reserve (FB-513).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Form {
+    /// Die Runtime wartet selbst (12.3); auch ein Wirt ohne Form.
+    Own,
+    /// Die ISR eines Alarms rechnet den Schritt.
+    Interrupt,
+    /// Die Hauptschleife des Wirts rechnet ihn.
+    Poll,
+    /// Eine Aufgabe unter einem Planer rechnet ihn.
+    Rtos,
+}
+
+impl Form {
+    /// Alle Formen mit eigener Reserve.
+    pub const ALL: [Form; 4] = [Form::Own, Form::Interrupt, Form::Poll, Form::Rtos];
+
+    /// Der Name, wie `--form` ihn nennt.
+    pub fn name(self) -> &'static str {
+        match self {
+            Form::Own => "own",
+            Form::Interrupt => "interrupt",
+            Form::Poll => "poll",
+            Form::Rtos => "rtos",
+        }
+    }
+
+    /// Die Form zu ihrem Namen.
+    pub fn by_name(name: &str) -> Option<Form> {
+        Form::ALL.into_iter().find(|f| f.name() == name)
+    }
+
+    /// Der Schluessel ihrer Reserve in der Konfiguration.
+    pub fn reserve_key(self) -> &'static str {
+        match self {
+            Form::Own => "stack_reserve",
+            Form::Interrupt => "stack_reserve_interrupt",
+            Form::Poll => "stack_reserve_poll",
+            Form::Rtos => "stack_reserve_rtos",
+        }
+    }
+}
+
+/// Die Stack-Reserve je Form in Byte (8.10, 12.3). Eine Form ohne Reserve
+/// hat keine: Die Reserve einer anderen traegt andere Rahmen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Reserves([Option<u64>; 4]);
+
+impl Reserves {
+    /// Die Reserve der Form `form`.
+    pub fn get(self, form: Form) -> Option<u64> {
+        self.0[form as usize]
+    }
+
+    /// Setzt die Reserve der Form `form`.
+    pub fn set(&mut self, form: Form, bytes: Option<u64>) {
+        self.0[form as usize] = bytes;
+    }
+
+    /// Jede Form mit Reserve, in der Reihenfolge von [`Form::ALL`].
+    pub fn iter(self) -> impl Iterator<Item = (Form, u64)> {
+        Form::ALL.into_iter().filter_map(move |f| Some((f, self.get(f)?)))
+    }
 }
 
 /// Eine Schutzeinheit (8.10 `protect`, 12.3): wie ihre Region den
@@ -744,7 +816,10 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
         "ram" => target.memory.ram = Some(number(value, line)?),
         "flash" => target.memory.flash = Some(number(value, line)?),
         "iram" => target.memory.iram = Some(number(value, line)?),
-        "stack_reserve" => target.memory.stack_reserve = Some(number(value, line)?),
+        key if Form::ALL.iter().any(|f| f.reserve_key() == key) => {
+            let form = Form::ALL.into_iter().find(|f| f.reserve_key() == key).unwrap_or(Form::Own);
+            target.memory.stack_reserve.set(form, Some(number(value, line)?));
+        }
         "stack_margin" => target.memory.stack_margin = Some(number(value, line)?),
         "job_stack_reserve" => target.memory.job_stack_reserve = Some(number(value, line)?),
         "protect" => {
@@ -768,7 +843,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: cost_model, core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
-                     stack_reserve, stack_margin, job_stack_reserve, protect, main_loop_ns, job_interrupt, nvm_sector_bytes, \
+                     stack_reserve, stack_reserve_interrupt, stack_reserve_poll, stack_reserve_rtos, stack_margin, \
+                     job_stack_reserve, protect, main_loop_ns, job_interrupt, nvm_sector_bytes, \
                      nvm_sectors, nvm_min_interval, nvm_erase_ns, \
                      nvm_program_ns, nvm_blocking, die Klassen {} und die eigenen Gewichte {}",
                     CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "),
@@ -1010,8 +1086,8 @@ pub fn measured_values(t: &Target) -> Vec<(String, String)> {
     if let Some(j) = t.tick_jitter_ns {
         v.push(("tick_jitter_ns".to_string(), j.to_string()));
     }
-    if let Some(r) = t.memory.stack_reserve {
-        v.push(("stack_reserve".to_string(), r.to_string()));
+    for (form, bytes) in t.memory.stack_reserve.iter() {
+        v.push((form.reserve_key().to_string(), bytes.to_string()));
     }
     v
 }
@@ -1059,14 +1135,15 @@ pub fn render(hw: &Hardware) -> String {
             }
         }
         let m = target.memory;
-        for (key, value) in [
-            ("ram", m.ram),
-            ("flash", m.flash),
-            ("iram", m.iram),
-            ("stack_reserve", m.stack_reserve),
-            ("stack_margin", m.stack_margin),
-            ("job_stack_reserve", m.job_stack_reserve),
-        ] {
+        for (key, value) in [("ram", m.ram), ("flash", m.flash), ("iram", m.iram)] {
+            if let Some(v) = value {
+                s.push_str(&format!("{key} = {v}\n"));
+            }
+        }
+        for (form, bytes) in m.stack_reserve.iter() {
+            s.push_str(&format!("{} = {bytes}\n", form.reserve_key()));
+        }
+        for (key, value) in [("stack_margin", m.stack_margin), ("job_stack_reserve", m.job_stack_reserve)] {
             if let Some(v) = value {
                 s.push_str(&format!("{key} = {v}\n"));
             }
@@ -1197,6 +1274,22 @@ t_io = 120000
         assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
         let e = parse(&text.replace("armv7m_mpu", "pmp")).expect_err("unbekannt");
         assert!(e.message.contains("armv7m_mpu"), "{}", e.message);
+    }
+
+    /// **Die Stack-Reserve je Form** (8.10, 12.11, Version 17, FB-513):
+    /// gelesen, geschrieben und wieder gelesen; eine Form ohne Schluessel hat
+    /// keine Reserve, auch wenn eine andere eine hat.
+    #[test]
+    fn the_stack_reserve_is_kept_per_form() {
+        let text = format!("# {MAGIC} 17\n[target.thumbv7em]\nstack_reserve = 2628\nstack_reserve_rtos = 3648\n");
+        let hw = parse(&text).expect("lesbar");
+        let r = hw.target("thumbv7em").expect("Ziel").memory.stack_reserve;
+        assert_eq!((r.get(Form::Own), r.get(Form::Rtos), r.get(Form::Interrupt)), (Some(2628), Some(3648), None));
+        assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
+        assert!(render(&hw).contains("stack_reserve_rtos = 3648\n"));
+        for form in Form::ALL {
+            assert_eq!(Form::by_name(form.name()), Some(form));
+        }
     }
 
     /// **Die Hauptschleife der Pollform** (8.10, 12.11, Version 16): Runde
