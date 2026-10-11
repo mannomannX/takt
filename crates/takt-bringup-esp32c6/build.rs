@@ -65,11 +65,19 @@ fn image_key() {
 /// Die Form des Ports (12.11) aus den Merkmalen: `interrupt`, sonst der
 /// eigene Kern. Das Binary waehlt seinen Pfad mit `cfg(form = "…")`.
 fn form() -> &'static str {
-    let form = if env::var_os("CARGO_FEATURE_INTERRUPT").is_some() { "interrupt" } else { "own" };
-    println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\"))");
+    let chosen: Vec<&str> = ["interrupt", "embassy"]
+        .into_iter()
+        .filter(|feature| env::var_os(format!("CARGO_FEATURE_{}", feature.to_uppercase())).is_some())
+        .collect();
+    assert!(chosen.len() <= 1, "{chosen:?} sind mehrere Formen; ein Bau hat eine (12.11)");
+    let form = chosen.first().copied().unwrap_or("own");
+    println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\", \"embassy\"))");
     println!("cargo:rustc-cfg=form=\"{form}\"");
-    println!("cargo:rustc-env=TAKT_FORM={form}");
-    form
+    // 12.11: Embassy ist die Form `rtos` mit dem Planer von Embassy; so heisst
+    // sie im Kopf des Laufs und fuer die Lieferform.
+    let named = if form == "embassy" { "rtos" } else { form };
+    println!("cargo:rustc-env=TAKT_FORM={named}");
+    named
 }
 
 /// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`.

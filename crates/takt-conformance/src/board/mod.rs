@@ -231,6 +231,10 @@ pub enum Form {
     /// Alarm zur Frist weckt, mit Treiber-Aufgabe und Funk-ISR als Last; auf
     /// dem F401 RTIC 2 (Merkmal `rtic`).
     Rtos,
+    /// Die Form `rtos` unter Embassy (M11 Schritt 14d): Takt als Aufgabe
+    /// eines Executors hoher Prioritaet, die mit `embassy-time` auf die Frist
+    /// wartet; darunter eine fremde Hauptschleife (Merkmal `embassy`).
+    Embassy,
 }
 
 impl Form {
@@ -242,6 +246,7 @@ impl Form {
             Form::Interrupt => Some("interrupt"),
             Form::Poll => Some("poll"),
             Form::Rtos => Some("rtic"),
+            Form::Embassy => Some("embassy"),
         }
     }
 }

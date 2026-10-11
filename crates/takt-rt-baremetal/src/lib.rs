@@ -36,6 +36,8 @@ pub mod bench;
 pub mod board;
 pub mod clock;
 pub mod console;
+#[cfg(feature = "embassy")]
+pub mod embassy;
 pub mod interrupt;
 pub mod protect;
 pub mod run;

@@ -44,7 +44,11 @@ for t in "${targets[@]}"; do
         echo "-- $c fuer $t"
         cargo build -p "$c" --target "$t" "$@"
     done
+    # Die Form `rtos` unter Embassy (M11 Schritt 14d), ohne Board.
+    cargo build -p takt-rt-baremetal --features embassy --target "$t" "$@"
 done
+# Ihre Takt-Aufgabe auf dem Wirt, mit der Uhr von `embassy-time` im Test.
+cargo test -p takt-rt-baremetal --features embassy "$@"
 
 echo
 echo "== 2. Das Board-Crate (eigener Workspace, thumbv7em)"
@@ -57,6 +61,8 @@ echo "== 2. Das Board-Crate (eigener Workspace, thumbv7em)"
     cd crates/takt-board-stm32f401
     cargo build --target thumbv7em-none-eabihf "$@"
     cargo clippy --target thumbv7em-none-eabihf "$@" -- -D warnings
+    # Der Zeittreiber von `embassy-time` (M11 Schritt 14d).
+    cargo clippy --target thumbv7em-none-eabihf --features embassy "$@" -- -D warnings
 )
 
 echo
@@ -69,6 +75,12 @@ echo "== 3. Die Bring-up-Programme, von aussen gebaut"
 # `bench` baut auch das Messprogramm von `takt bench` (13.8).
 cargo build --release --target thumbv7em-none-eabihf --features bench \
     --manifest-path crates/takt-bringup-stm32f401/Cargo.toml "$@"
+# Jede Form des Bring-ups (12.11) uebersetzt; sonst faellt ein Bruch erst auf
+# dem Board auf.
+for form in interrupt poll rtic embassy; do
+    cargo check --release --target thumbv7em-none-eabihf --bin takt --features "$form" \
+        --manifest-path crates/takt-bringup-stm32f401/Cargo.toml "$@"
+done
 
 # Das Zielverzeichnis kann umgelenkt sein (`CARGO_TARGET_DIR`, oder in
 # `.cargo/config.toml` des Nutzers); `cargo metadata` weiss, wohin.
@@ -166,6 +178,7 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
     cd crates/takt-board-esp32c6
     cargo build --target riscv32imac-unknown-none-elf "$@"
     cargo clippy --target riscv32imac-unknown-none-elf "$@" -- -D warnings
+    cargo clippy --target riscv32imac-unknown-none-elf --features embassy "$@" -- -D warnings
 )
 # Die Einstiege der Natives fuer beide Ziele und als Bibliothek des Wirts,
 # mit jedem Job; ihre Puffervertraege mit Tests auf dem Wirt (FB-397) —
@@ -184,6 +197,11 @@ echo "== 4. Board 2: ESP32-C6 (eigener Workspace, riscv32imac; plan/esp32c6.md)"
 ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK=true ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM=false \
     cargo build --release --target riscv32imac-unknown-none-elf --features bench \
     --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
+for form in interrupt embassy; do
+    ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK=true ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM=false \
+        cargo check --release --target riscv32imac-unknown-none-elf --bin takt --features "$form" \
+        --manifest-path crates/takt-bringup-esp32c6/Cargo.toml "$@"
+done
 program_in_binary crates/takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
 image_checked riscv32imac-unknown-none-elf takt-bringup-esp32c6 "$(binary_of riscv32imac-unknown-none-elf)"
 # Das Messprogramm misst aus dem RAM wie die Programme, deren Kosten es misst.

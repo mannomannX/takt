@@ -12,6 +12,20 @@ rust-version.workspace = true
 # mechanisch — dieses Crate baut fuer beide Targets ohne Board.
 [dependencies]
 takt-rt-core = { path = "../takt-rt-core" }
+# Die Form `rtos` unter Embassy (Merkmal `embassy`, M11 Schritt 14d): die
+# Takt-Aufgabe wartet mit `embassy-time`; den Zeittreiber stellt das Board.
+embassy-futures = { version = "0.1", optional = true }
+embassy-sync = { version = "0.8", optional = true }
+embassy-time = { version = "0.5", optional = true }
+
+[features]
+embassy = ["dep:embassy-futures", "dep:embassy-sync", "dep:embassy-time"]
+
+# Fuer die Tests der Form `embassy` auf dem Wirt: eine Uhr, die der Test
+# stellt, und ein kritischer Abschnitt aus `std`.
+[dev-dependencies]
+critical-section = { version = "1", features = ["std"] }
+embassy-time = { version = "0.5", features = ["mock-driver", "generic-queue-8"] }
 
 [lints]
 workspace = true

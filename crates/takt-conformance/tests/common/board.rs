@@ -636,12 +636,12 @@ impl HostRun {
     }
 }
 
-/// **In der Interruptform beginnt der Schritt auf seiner Frist, neben einer
-/// fremden Hauptschleife** (12.11): Im Mittel binnen 20 us, kein Tick mehr
-/// als 50 us spaeter; der Schritt rechnete in der ISR, nicht in der
-/// Hauptschleife.
-pub fn the_interrupt_form_keeps_its_deadline(board: &mut dyn Board) -> Vec<String> {
-    let run = match host_run(board, Form::Interrupt) {
+/// **In der Interruptform und unter Embassy beginnt der Schritt auf seiner
+/// Frist, neben einer fremden Hauptschleife** (12.11): Im Mittel binnen
+/// 20 us, kein Tick mehr als 50 us spaeter; der Schritt rechnete in der ISR
+/// oder der Aufgabe, nicht in der Hauptschleife.
+pub fn the_form_keeps_its_deadline(board: &mut dyn Board, form: Form) -> Vec<String> {
+    let run = match host_run(board, form) {
         Ok(run) => run,
         Err(e) => return vec![format!("kein Lauf: {e}")],
     };

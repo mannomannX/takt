@@ -15,7 +15,7 @@ use common::board::{
     TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
     journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
     overrun_reaches_every_machine, persistence_survives, replayed, runs_shared, simultaneous_jobs_finish_on_time,
-    the_interrupt_form_keeps_its_deadline,
+    the_form_keeps_its_deadline,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Board, Form, Options};
@@ -450,17 +450,41 @@ fn the_board_agrees_with_the_interpreter_in_the_interrupt_form() {
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed = the_interrupt_form_keeps_its_deadline(&mut board);
+    let failed = the_form_keeps_its_deadline(&mut board, Form::Interrupt);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
-/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern
-/// und in der Interruptform (4.5, 12.11).
+/// **Unter Embassy rechnet der Korpus wie der Interpreter** (12.11, M11
+/// Schritt 14d): Takt als Aufgabe eines Executors hoher Prioritaet, die mit
+/// `embassy-time` auf die Frist wartet; Jobs im Software-Interrupt, darunter
+/// eine fremde Hauptschleife.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn the_board_agrees_with_the_interpreter_under_embassy() {
+    let Some((mut board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_ESP32C6_ONLY").ok();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| runs_shared(n)).collect();
+    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Embassy));
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **Unter Embassy beginnt der Schritt auf seiner Frist, neben einer fremden
+/// Hauptschleife** (12.11, M11 Schritt 14d).
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn the_embassy_task_steps_on_its_deadline_beside_a_foreign_main_loop() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = the_form_keeps_its_deadline(&mut board, Form::Embassy);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern,
+/// in der Interruptform und unter Embassy (4.5, 12.11).
 #[test]
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn simultaneous_jobs_finish_on_time_on_the_board() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed: Vec<String> = [Form::Own, Form::Interrupt]
+    let failed: Vec<String> = [Form::Own, Form::Interrupt, Form::Embassy]
         .into_iter()
         .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
         .collect();

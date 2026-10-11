@@ -53,6 +53,8 @@ pub mod pins;
 pub mod platform;
 pub mod stack;
 pub mod tick;
+#[cfg(feature = "embassy")]
+pub mod time_driver;
 pub mod uart;
 pub mod usb;
 pub mod watchdog;

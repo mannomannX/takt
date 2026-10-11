@@ -935,6 +935,7 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
                 Form::Interrupt => " in der Interruptform",
                 Form::Poll => " in der Pollform",
                 Form::Rtos => " unter RTOS",
+                Form::Embassy => " unter Embassy",
             },
             if options.timed { " in Echtzeit" } else { " in logischer Zeit" },
             crate::board::counter(&text, "stack"),

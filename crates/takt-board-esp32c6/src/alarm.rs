@@ -63,7 +63,7 @@ pub(crate) fn start(
 
 /// Der Stand der Zeitachse.
 #[esp_hal::ram]
-fn now_counts() -> u64 {
+pub(crate) fn now_counts() -> u64 {
     let origin = critical_section::with(|cs| ORIGIN.borrow(cs).get());
     SystemTimer::unit_value(Unit::Unit0).wrapping_sub(origin)
 }
@@ -85,6 +85,18 @@ fn aim(target: u64) {
             return;
         }
     }
+}
+
+/// Stellt den Alarm auf `target` auf der Zeitachse, oder nimmt ihn zurueck;
+/// ohne Ziel meldet ein Vergleich, der noch kommt, nichts.
+#[esp_hal::ram]
+pub(crate) fn set_target(target: Option<u64>) {
+    critical_section::with(|cs| {
+        TARGET.borrow(cs).set(target);
+        if let Some(target) = target {
+            aim(target);
+        }
+    });
 }
 
 /// Aus der ISR des Vergleichers: quittiert und sagt, ob die Frist erreicht
@@ -136,11 +148,7 @@ impl SystimerAlarm {
 impl takt_rt_baremetal::interrupt::Alarm for SystimerAlarm {
     #[esp_hal::ram]
     fn arm(&mut self, at: i64) {
-        let target = SCALE.counts_at(at);
-        critical_section::with(|cs| {
-            TARGET.borrow(cs).set(Some(target));
-            aim(target);
-        });
+        set_target(Some(SCALE.counts_at(at)));
     }
 
     #[esp_hal::ram]

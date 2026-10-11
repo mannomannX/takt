@@ -152,7 +152,7 @@ fn build_takt_program(out: &Path, form: &str) {
 /// "…")`, ob TIM2 periodisch tickt (eigener Kern) oder frei als Zeitachse
 /// eines Alarms laeuft (alle anderen).
 fn form() -> &'static str {
-    let chosen: Vec<&str> = [("interrupt", "interrupt"), ("poll", "poll"), ("rtic", "rtos")]
+    let chosen: Vec<&str> = [("interrupt", "interrupt"), ("poll", "poll"), ("rtic", "rtos"), ("embassy", "embassy")]
         .into_iter()
         .filter(|(feature, _)| env::var_os(format!("CARGO_FEATURE_{}", feature.to_uppercase())).is_some())
         .map(|(_, form)| form)
@@ -160,12 +160,15 @@ fn form() -> &'static str {
     assert!(chosen.len() <= 1, "{chosen:?} sind mehrere Formen; ein Bau hat eine (12.11)");
     let form = chosen.first().copied().unwrap_or("own");
     let timer = if form == "own" { "periodic" } else { "free" };
-    println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\", \"poll\", \"rtos\"))");
+    println!("cargo::rustc-check-cfg=cfg(form, values(\"own\", \"interrupt\", \"poll\", \"rtos\", \"embassy\"))");
     println!("cargo::rustc-check-cfg=cfg(timer, values(\"periodic\", \"free\"))");
     println!("cargo:rustc-cfg=form=\"{form}\"");
     println!("cargo:rustc-cfg=timer=\"{timer}\"");
-    println!("cargo:rustc-env=TAKT_FORM={form}");
-    form
+    // 12.11: Embassy ist die Form `rtos` mit dem Planer von Embassy; so heisst
+    // sie im Kopf des Laufs und fuer die Lieferform.
+    let named = if form == "embassy" { "rtos" } else { form };
+    println!("cargo:rustc-env=TAKT_FORM={named}");
+    named
 }
 
 /// Die Hardware-Konfiguration des Boards (8.10): Kalibrierung, Speicher,

@@ -82,6 +82,17 @@ fn aim(target: u64) {
     }
 }
 
+/// Stellt den Alarm auf `target` auf der Zeitachse, oder nimmt ihn zurueck.
+pub(crate) fn set_target(target: Option<u64>) {
+    cortex_m::interrupt::free(|cs| TARGET.borrow(cs).set(target));
+    match target {
+        Some(target) => aim(target),
+        None => {
+            tim2().dier().modify(|_, w| w.cc1ie().clear_bit());
+        }
+    }
+}
+
 /// Aus der ISR von TIM2: zaehlt einen Ueberlauf, loescht den Vergleich und
 /// sagt, ob die Frist erreicht ist. Ist sie es, steht danach kein Alarm
 /// mehr; der Schritt stellt den naechsten.
@@ -135,9 +146,7 @@ impl Tim2Alarm {
 
 impl takt_rt_baremetal::interrupt::Alarm for Tim2Alarm {
     fn arm(&mut self, at: i64) {
-        let target = self.scale.counts_at(at);
-        cortex_m::interrupt::free(|cs| TARGET.borrow(cs).set(Some(target)));
-        aim(target);
+        set_target(Some(self.scale.counts_at(at)));
     }
 
     fn pend_jobs(&mut self) {

@@ -213,7 +213,7 @@ impl Board for Stm32f401 {
     /// Interrupt- und Pollform auf TIM2 und RTIC (12.8): Takt als Aufgabe,
     /// darueber Funk-ISR und Treiber-Aufgabe.
     fn forms(&self) -> &'static [Form] {
-        &[Form::Own, Form::Interrupt, Form::Poll, Form::Rtos]
+        &[Form::Own, Form::Interrupt, Form::Poll, Form::Rtos, Form::Embassy]
     }
 }
 

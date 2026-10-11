@@ -815,7 +815,7 @@ fn main() -> ! {
     }
 }
 
-#[cfg(any(form = "interrupt", form = "poll"))]
+#[cfg(any(form = "interrupt", form = "poll", form = "embassy"))]
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
@@ -825,6 +825,8 @@ fn main() -> ! {
     interrupt_form::run(timer, protection, nvic, flash);
     #[cfg(form = "poll")]
     poll_form::run(timer, protection, nvic, flash);
+    #[cfg(form = "embassy")]
+    embassy_form::run(timer, protection, nvic, flash);
 }
 
 /// Was Interrupt- und Pollform teilen (12.11): den Job-Interrupt, die
@@ -843,7 +845,7 @@ mod host {
 
     /// Die Jobs unter allen Interrupts; nur die Hauptschleife liegt darunter.
     /// Unter RTIC setzt die App die Prioritaet der Job-Aufgabe.
-    #[cfg(any(form = "interrupt", form = "poll"))]
+    #[cfg(any(form = "interrupt", form = "poll", form = "embassy"))]
     pub const JOB_PRIORITY: u8 = 0xF0;
 
     /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
@@ -1059,6 +1061,180 @@ mod interrupt_form {
         if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
             work.report(None);
             conclude(&s.rt, &s.ended.unwrap_or_default());
+        }
+        host::park()
+    }
+}
+
+/// Die Form `rtos` unter Embassy (12.8, 12.11; M11 Schritt 14d): Takt als
+/// Aufgabe eines rohen Executors, den der Interrupt SPI1 treibt; sie wartet
+/// mit `embassy-time` auf die Frist, deren Zeittreiber auf TIM2 liegt
+/// (`takt_board_stm32f401::time_driver`). Jobs rechnen im Job-Interrupt
+/// (EXTI1) wie in der Interruptform und wecken die Aufgabe danach. Die
+/// Hauptschleife des Wirts laeuft darunter, und das Ende des Laufs gehoert
+/// ihr (12.11).
+///
+/// **Warum ein roher Executor.** Der `InterruptExecutor` von Embassy nimmt
+/// nur Aufgaben, die `Send` sind; die Takt-Aufgabe haelt die Arena und das
+/// Journal, und beide sind es nicht. Der rohe Executor ist derselbe
+/// Mechanismus — `__pender` laesst den Interrupt anstehen, die ISR fragt den
+/// Executor ab —, und seine Aufgaben spawnt die Hauptschleife, bevor der
+/// Interrupt freigegeben ist.
+///
+/// **Prioritaeten, von oben.** Leitung und Pruef-ISR wie in der
+/// Interruptform, dann TIM2 (der Zeittreiber), darunter SPI1 (der Executor
+/// mit dem Schritt), ganz unten die Jobs.
+#[cfg(form = "embassy")]
+mod embassy_form {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use embassy_executor::raw::Executor;
+    use stm32f4::stm32f401::{FLASH, Interrupt, NVIC, interrupt};
+    use takt_board_stm32f401::alarm::Tim2Alarm;
+    use takt_board_stm32f401::time_driver;
+    use takt_rt_baremetal::embassy::{TaskAlarm, Wake};
+    use takt_rt_baremetal::interrupt::{Form, Time, release};
+
+    use super::host::{self, JOB_LINE, JOB_PRIORITY, Work};
+    use super::{Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, program, runtime, uart};
+
+    /// Der Zeittreiber unter Leitung und Pruef-ISR.
+    const TIMER_PRIORITY: u8 = 0x20;
+    /// Der Executor mit dem Schritt, unter dem Zeittreiber.
+    const STEP_PRIORITY: u8 = 0x30;
+    /// Der Interrupt des Executors: eine Leitung, die kein Treiber benutzt.
+    const STEP_LINE: Interrupt = Interrupt::SPI1;
+
+    /// Was die Takt-Aufgabe weckt.
+    static WAKE: Wake = Wake::new();
+
+    /// In logischer Zeit das Tor der Frist; die Hauptschleife oeffnet es.
+    static GATE: AtomicBool = AtomicBool::new(false);
+
+    /// Der Lauf ist zu Ende und liegt in [`ENDED_RUN`].
+    static ENDED: AtomicBool = AtomicBool::new(false);
+
+    /// Der beendete Lauf mit seiner Bilanz; ab [`ENDED`] gehoert er der
+    /// Hauptschleife.
+    static mut ENDED_RUN: Option<(Takt<Time<Tim2Alarm>>, Stats)> = None;
+
+    /// Der Executor des Schritts; die Hauptschleife legt ihn an, bevor SPI1
+    /// freigegeben ist.
+    static mut EXECUTOR: Option<Executor> = None;
+
+    /// Der Executor, sobald er angelegt ist.
+    fn executor() -> Option<&'static Executor> {
+        // SAFETY: Angelegt einmal vor der Freigabe von SPI1, danach nur
+        // gelesen.
+        unsafe { (*(&raw const EXECUTOR)).as_ref() }
+    }
+
+    /// Embassy ruft es, wenn eine Aufgabe des Executors bereit ist.
+    #[unsafe(export_name = "__pender")]
+    fn pender(_context: *mut ()) {
+        NVIC::pend(STEP_LINE);
+    }
+
+    /// Der Zeittreiber von `embassy-time`.
+    #[interrupt]
+    fn TIM2() {
+        mpu::isr(time_driver::on_interrupt);
+    }
+
+    /// Der Executor des Schritts.
+    #[interrupt]
+    fn SPI1() {
+        mpu::isr(|| {
+            if let Some(executor) = executor() {
+                // SAFETY: Nur diese ISR fragt den Executor ab.
+                unsafe { executor.poll() };
+            }
+        });
+    }
+
+    /// Der Job-Interrupt (4.5): rechnet den Auftrag und weckt die
+    /// Takt-Aufgabe, die den naechsten verteilt.
+    #[interrupt]
+    fn EXTI1() {
+        mpu::isr(|| {
+            host::work_jobs();
+            WAKE.job_done();
+        });
+    }
+
+    /// Laesst den Job-Interrupt anstehen.
+    fn pend_jobs() {
+        NVIC::pend(JOB_LINE);
+    }
+
+    /// Die Takt-Aufgabe: der Kern unter dem Planer von Embassy, danach geht
+    /// der Lauf an die Hauptschleife.
+    #[embassy_executor::task]
+    async fn takt(mut rt: Takt<Time<Tim2Alarm>>) {
+        let alarm = TaskAlarm::new(&WAKE, pend_jobs as fn());
+        let mut form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
+        let mut tunes = Console::new(takt_board_stm32f401::console_byte as fn() -> Option<u8>);
+        let flush = || {
+            if let Some(u) = uart() {
+                u.flush();
+            }
+        };
+        let stats = takt_rt_baremetal::embassy::run(&mut rt, &mut form, &WAKE, Some(&mut tunes), flush).await;
+        // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
+        // Aufgabe nicht mehr.
+        unsafe { ENDED_RUN = Some((rt, stats)) };
+        ENDED.store(true, Ordering::Release);
+    }
+
+    /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
+    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
+        // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
+        let (mut program, journal) = unsafe { program(flash) };
+        hand_over_jobs(&mut program);
+        // Gemalt nach `init` und vor der Uhr des Laufs, wie in der
+        // Interruptform (12.3).
+        takt_board_stm32f401::stack::paint();
+        let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
+        let rt = runtime(clock, protection, Profile::SHARED, program, journal);
+        // SAFETY: einmal, bevor SPI1 freigegeben ist; danach liest nur die
+        // ISR.
+        let executor = unsafe { (*(&raw mut EXECUTOR)).insert(Executor::new(core::ptr::null_mut())) };
+        executor.spawner().spawn(takt(rt).expect("die Takt-Aufgabe gibt es einmal"));
+        // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
+        // oben sind bereit.
+        unsafe {
+            for (line, priority) in [
+                (Interrupt::USART1, mpu::ISR_PRIORITY),
+                (Interrupt::EXTI0, mpu::ISR_PRIORITY),
+                (Interrupt::TIM2, TIMER_PRIORITY),
+                (STEP_LINE, STEP_PRIORITY),
+                (JOB_LINE, JOB_PRIORITY),
+            ] {
+                nvic.set_priority(line, priority);
+                NVIC::unmask(line);
+            }
+        }
+        // Die Aufgabe steht bereit; ihr erster Lauf stellt die erste Frist.
+        NVIC::pend(STEP_LINE);
+        host(alarm)
+    }
+
+    /// Die Hauptschleife des Wirts: fremde Arbeit unter jeder ISR. In
+    /// logischer Zeit gibt sie die Frist frei, sobald sie laeuft, denn dann
+    /// ruht das System (`release`). Nach dem Ende schreibt sie die Bilanz.
+    fn host(alarm: Tim2Alarm) -> ! {
+        let mut work = Work::new();
+        let mut gate = TaskAlarm::new(&WAKE, pend_jobs as fn());
+        while !ENDED.load(Ordering::Acquire) {
+            if LOGICAL {
+                release(&GATE, &mut gate);
+            }
+            work.round(alarm.now_ns());
+        }
+        // SAFETY: Ab `ENDED` gehoert der Lauf dieser Schleife.
+        if let Some((rt, stats)) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
+            work.report(None);
+            conclude(&rt, &stats);
         }
         host::park()
     }

@@ -14,7 +14,7 @@ use common::board::{
     Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
     natives_agree, overrun_reaches_every_machine, persistence_survives, runs_shared, simultaneous_jobs_finish_on_time,
-    the_interrupt_form_keeps_its_deadline, the_poll_form_keeps_its_round,
+    the_form_keeps_its_deadline, the_poll_form_keeps_its_round,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, Form, Options};
@@ -252,6 +252,30 @@ fn the_board_agrees_with_the_interpreter_in_the_interrupt_form() {
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
+/// **Unter Embassy rechnet der Korpus wie der Interpreter** (12.11, M11
+/// Schritt 14d): Takt als Aufgabe eines Executors hoher Prioritaet, die mit
+/// `embassy-time` auf die Frist wartet; Jobs im Job-Interrupt, darunter eine
+/// fremde Hauptschleife.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_board_agrees_with_the_interpreter_under_embassy() {
+    let Some((mut board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_F401_ONLY").ok();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
+    let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Embassy));
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **Unter Embassy beginnt der Schritt auf seiner Frist, neben einer fremden
+/// Hauptschleife** (12.11, M11 Schritt 14d).
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_embassy_task_steps_on_its_deadline_beside_a_foreign_main_loop() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = the_form_keeps_its_deadline(&mut board, Form::Embassy);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
 /// **Die Takt-Aufgabe beginnt zweistellige Mikrosekunden nach der Grenze**
 /// (12.8): `drift` ueber 3000 Ticks bei 1 ms, unter der Funk-ISR (alle
 /// 577 us, je 20 us) und der Treiber-Aufgabe (jeder dritte Aufruf, je 30 us
@@ -281,7 +305,7 @@ fn the_rtos_task_starts_within_tens_of_microseconds() {
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed = the_interrupt_form_keeps_its_deadline(&mut board);
+    let failed = the_form_keeps_its_deadline(&mut board, Form::Interrupt);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
@@ -327,7 +351,7 @@ fn the_poll_form_steps_within_a_round_of_its_main_loop() {
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn simultaneous_jobs_finish_on_time_on_the_board() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed: Vec<String> = [Form::Own, Form::Interrupt, Form::Poll, Form::Rtos]
+    let failed: Vec<String> = [Form::Own, Form::Interrupt, Form::Poll, Form::Rtos, Form::Embassy]
         .into_iter()
         .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
         .collect();

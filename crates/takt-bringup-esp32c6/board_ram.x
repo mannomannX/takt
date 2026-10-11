@@ -18,6 +18,15 @@
 *(.text.*18takt_board_support[0-9A-Z_]* .rodata.*18takt_board_support[0-9A-Z_]* .srodata.*18takt_board_support[0-9A-Z_]*)
 *(.text.*4core3fmt[0-9A-Z_]* .rodata.*4core3fmt[0-9A-Z_]* .srodata.*4core3fmt[0-9A-Z_]*)
 
+/* Die Form `rtos` unter Embassy (M11 Schritt 14d): Zeittreiber, Executor und
+ * Takt-Aufgabe laufen in Interrupts, die auch waehrend eines Flash-Vorgangs
+ * kommen. Alles, was `embassy` im Namen traegt — die Crates von Embassy und
+ * das Modul `embassy_form` des Bring-ups —, und die Warteschlange der
+ * Weckzeitpunkte (`heapless`) liegen darum im RAM.
+ */
+*(.text.*embassy* .rodata.*embassy* .srodata.*embassy*)
+*(.text.*8heapless[0-9A-Z_]* .rodata.*8heapless[0-9A-Z_]* .srodata.*8heapless[0-9A-Z_]*)
+
 /* Das Pruefgeraet des Treiberrands, ein Treiber dieses Pruefstands (12.6). */
 *(.text.*17takt_driver_probe[0-9A-Z_]* .rodata.*17takt_driver_probe[0-9A-Z_]* .srodata.*17takt_driver_probe[0-9A-Z_]*)
 

@@ -68,8 +68,16 @@ rtic-sync = { version = "1.5", optional = true }
 # stehen bleibt.
 panic-halt = "1.0"
 
+# Die Form `rtos` unter Embassy (Merkmal `embassy`, M11 Schritt 14d): der
+# rohe Executor, den ein freier Interrupt treibt; den Zeittreiber stellt das
+# Board-Crate, die Takt-Aufgabe `takt-rt-baremetal`.
+embassy-executor = { version = "0.10", optional = true }
+
 [features]
 rtic = ["dep:rtic", "dep:rtic-sync"]
+# Die Form `rtos` unter Embassy (12.11): Takt als Aufgabe eines Executors
+# hoher Prioritaet, die mit `embassy-time` auf die Frist wartet.
+embassy = ["dep:embassy-executor", "takt-rt-baremetal/embassy", "takt-board-stm32f401/embassy"]
 # Die Interruptform (12.11): Den Schritt rechnet die ISR von TIM2 zur Frist,
 # darunter laeuft eine fremde Hauptschleife.
 interrupt = []

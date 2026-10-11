@@ -456,6 +456,9 @@ fn main() -> ! {
     #[cfg(form = "interrupt")]
     let (alarm, nominal) =
         (interrupt_form::alarm(peripherals.SYSTIMER, peripherals.FROM_CPU_INTR1, peripherals.FROM_CPU_INTR2), TICK_NS);
+    #[cfg(form = "embassy")]
+    let (alarm, nominal) =
+        (embassy_form::alarm(peripherals.SYSTIMER, peripherals.FROM_CPU_INTR1, peripherals.FROM_CPU_INTR2), TICK_NS);
     telemetry.write("takt esp32c6: tick ");
     telemetry.write_i64(nominal);
     telemetry.write(" ns");
@@ -517,6 +520,8 @@ fn main() -> ! {
     own_core(program, journal, timer);
     #[cfg(form = "interrupt")]
     interrupt_form::run(program, journal, alarm);
+    #[cfg(form = "embassy")]
+    embassy_form::run(program, journal, alarm);
 }
 
 /// Der eigene Kern (12.3): Die Schleife wartet selbst auf die Frist, Jobs
@@ -577,6 +582,234 @@ fn report(text: &str) {
         u.write(text);
         u.newline();
         u.flush();
+    }
+}
+
+/// Die Form `rtos` unter Embassy (12.8, 12.11; M11 Schritt 14d): Takt als
+/// Aufgabe eines rohen Executors, den der Software-Interrupt `FROM_CPU_INTR2`
+/// treibt; sie wartet mit `embassy-time` auf die Frist, deren Zeittreiber auf
+/// dem SYSTIMER-Vergleicher liegt (`takt_board_esp32c6::time_driver`). Jobs
+/// rechnen in `FROM_CPU_INTR1` wie in der Interruptform und wecken die
+/// Aufgabe danach. Die Hauptschleife des Wirts laeuft darunter, und das Ende
+/// des Laufs gehoert ihr (12.11).
+///
+/// **Warum ein roher Executor.** `embassy-executor` hat fuer RISC-V keinen
+/// `InterruptExecutor`, und der fuer Cortex-M naehme nur Aufgaben, die `Send`
+/// sind; die Takt-Aufgabe haelt die Arena und das Journal. Der rohe Executor
+/// ist derselbe Mechanismus: `__pender` loest den Software-Interrupt aus, und
+/// seine ISR fragt den Executor ab.
+///
+/// **Stufen.** Der Zeittreiber in Stufe 3, der Executor mit dem Schritt in
+/// Stufe 2, die Jobs in Stufe 1, darunter die Hauptschleife.
+#[cfg(form = "embassy")]
+mod embassy_form {
+    use core::cell::RefCell;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use critical_section::Mutex;
+    use embassy_executor::raw::Executor;
+    use esp_hal::interrupt::Priority;
+    use esp_hal::interrupt::software::SoftwareInterrupt;
+    use esp_hal::peripherals::{FROM_CPU_INTR1, FROM_CPU_INTR2, SYSTIMER};
+    use takt_board_esp32c6::WfiSleep;
+    use takt_board_esp32c6::alarm::{self, SystimerAlarm};
+    use takt_board_esp32c6::time_driver;
+    use takt_rt_baremetal::Sleep;
+    use takt_rt_baremetal::embassy::{TaskAlarm, Wake};
+    use takt_rt_baremetal::interrupt::{Alarm as _, Form, Time, release};
+
+    use super::{
+        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, Journaled, LED, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude,
+        probe, runtime, uart,
+    };
+
+    /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
+    const BLINK_NS: i64 = 500_000_000;
+
+    /// Was die Takt-Aufgabe weckt.
+    static WAKE: Wake = Wake::new();
+
+    /// In logischer Zeit das Tor der Frist; die Hauptschleife oeffnet es.
+    static GATE: AtomicBool = AtomicBool::new(false);
+
+    /// Der Lauf ist zu Ende und liegt in [`ENDED_RUN`].
+    static ENDED: AtomicBool = AtomicBool::new(false);
+
+    /// Der beendete Lauf mit seiner Bilanz; ab [`ENDED`] gehoert er der
+    /// Hauptschleife.
+    static mut ENDED_RUN: Option<(Takt<Time<SystimerAlarm>>, Stats)> = None;
+
+    /// Der Executor des Schritts; die Hauptschleife legt ihn an, bevor sie
+    /// ihn zum ersten Mal anstossen laesst.
+    static mut EXECUTOR: Option<Executor> = None;
+
+    /// Der Software-Interrupt, der den Executor abfragt.
+    static STEP: Mutex<RefCell<Option<SoftwareInterrupt<'static, 2>>>> = Mutex::new(RefCell::new(None));
+
+    /// Der Executor, sobald er angelegt ist.
+    #[esp_hal::ram]
+    fn executor() -> Option<&'static Executor> {
+        // SAFETY: Angelegt einmal, bevor der Software-Interrupt zum ersten
+        // Mal ansteht; danach nur gelesen.
+        unsafe { (*(&raw const EXECUTOR)).as_ref() }
+    }
+
+    /// Embassy ruft es, wenn eine Aufgabe des Executors bereit ist.
+    #[unsafe(export_name = "__pender")]
+    #[esp_hal::ram]
+    fn pender(_context: *mut ()) {
+        critical_section::with(|cs| {
+            if let Some(sw) = STEP.borrow_ref(cs).as_ref() {
+                sw.raise();
+            }
+        });
+    }
+
+    /// Der Alarm des Boards: der Vergleicher fuer den Zeittreiber, die Jobs
+    /// (`jobs`) und der Executor (`step`).
+    pub fn alarm(
+        systimer: SYSTIMER<'static>,
+        jobs: FROM_CPU_INTR1<'static>,
+        step: FROM_CPU_INTR2<'static>,
+    ) -> SystimerAlarm {
+        let mut step = SoftwareInterrupt::new(step);
+        critical_section::with(|cs| {
+            step.set_interrupt_handler(poll);
+            STEP.borrow_ref_mut(cs).replace(step);
+        });
+        takt_board_esp32c6::init_alarm(systimer, timer, SoftwareInterrupt::new(jobs), job_work)
+    }
+
+    /// Der Vergleicher: der Zeittreiber von `embassy-time`.
+    #[esp_hal::ram]
+    #[esp_hal::handler(priority = Priority::Priority3)]
+    fn timer() {
+        time_driver::on_interrupt();
+    }
+
+    /// Der Executor des Schritts.
+    #[esp_hal::ram]
+    #[esp_hal::handler(priority = Priority::Priority2)]
+    fn poll() {
+        critical_section::with(|cs| {
+            if let Some(sw) = STEP.borrow_ref(cs).as_ref() {
+                sw.reset();
+            }
+        });
+        if let Some(executor) = executor() {
+            // SAFETY: Nur diese ISR fragt den Executor ab.
+            unsafe { executor.poll() };
+        }
+    }
+
+    /// Der Job-Interrupt (4.5): rechnet den Auftrag und weckt die
+    /// Takt-Aufgabe, die den naechsten verteilt.
+    #[esp_hal::ram]
+    #[esp_hal::handler(priority = Priority::Priority1)]
+    fn job_work() {
+        alarm::jobs_taken();
+        // SAFETY: `run` legt den Griff vor dem ersten Schritt ab; danach
+        // rechnet nur dieser Interrupt mit ihm.
+        if let Some(handle) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
+            handle.work();
+        }
+        WAKE.job_done();
+    }
+
+    /// Laesst den Job-Interrupt anstehen.
+    #[esp_hal::ram]
+    fn pend_jobs() {
+        SystimerAlarm.pend_jobs();
+    }
+
+    /// Die Takt-Aufgabe: der Kern unter dem Planer von Embassy, danach geht
+    /// der Lauf an die Hauptschleife.
+    #[embassy_executor::task]
+    async fn takt(mut rt: Takt<Time<SystimerAlarm>>) {
+        let alarm = TaskAlarm::new(&WAKE, pend_jobs as fn());
+        let mut form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
+        let mut tunes = Console::new(takt_board_esp32c6::console_byte as fn() -> Option<u8>);
+        let flush = || {
+            if let Some(u) = uart() {
+                u.flush();
+            }
+        };
+        let stats = takt_rt_baremetal::embassy::run(&mut rt, &mut form, &WAKE, Some(&mut tunes), flush).await;
+        // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
+        // Aufgabe nicht mehr.
+        unsafe { ENDED_RUN = Some((rt, stats)) };
+        ENDED.store(true, Ordering::Release);
+    }
+
+    /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
+    pub fn run(mut program: app::Program<'static>, journal: Journaled, alarm: SystimerAlarm) -> ! {
+        // SAFETY: einmal je Lauf, bevor der erste Schritt rechnet; danach
+        // rechnet nur der Job-Interrupt mit dem Griff.
+        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { (&raw mut JOBS).as_mut() }) {
+            *slot = Some(j);
+        }
+        // Gemalt nach `init` und vor der Uhr des Laufs, wie in der
+        // Interruptform (12.3).
+        takt_board_esp32c6::stack::paint();
+        let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
+        let rt = runtime(clock, Profile::SHARED, program, journal);
+        // SAFETY: einmal, bevor der Software-Interrupt zum ersten Mal ansteht;
+        // danach liest nur seine ISR.
+        let executor = unsafe { (*(&raw mut EXECUTOR)).insert(Executor::new(core::ptr::null_mut())) };
+        executor.spawner().spawn(takt(rt).expect("die Takt-Aufgabe gibt es einmal"));
+        // Die Aufgabe steht bereit; ihr erster Lauf stellt die erste Frist.
+        pender(core::ptr::null_mut());
+        host(alarm)
+    }
+
+    /// Die Hauptschleife des Wirts: fremde Arbeit, die jede ISR
+    /// unterbricht. In logischer Zeit gibt sie die Frist frei, sobald sie
+    /// laeuft, denn dann ruht das System (`release`). Nach dem Ende schreibt
+    /// sie die Bilanz und fuehrt im Betrieb `next_run` aus.
+    fn host(alarm: SystimerAlarm) -> ! {
+        let blink = !HW_ADDRESSES.contains(&"ui/led");
+        let mut lit = false;
+        let mut rounds: u64 = 0;
+        let mut gate = TaskAlarm::new(&WAKE, pend_jobs as fn());
+        while !ENDED.load(Ordering::Acquire) {
+            rounds = rounds.wrapping_add(1);
+            if LOGICAL {
+                release(&GATE, &mut gate);
+            }
+            critical_section::with(|_| {
+                if let Some(u) = uart() {
+                    u.flush();
+                }
+            });
+            let on = alarm.now_ns() / BLINK_NS % 2 == 0;
+            if blink && on != lit {
+                lit = on;
+                // SAFETY: Das Programm bindet die LED nicht; nur diese
+                // Schleife schaltet sie.
+                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
+                    if on { led.on() } else { led.off() }
+                }
+            }
+            probe();
+        }
+        // SAFETY: Ab `ENDED` gehoert der Lauf dieser Schleife.
+        if let Some((rt, stats)) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
+            // Die Runden des Wirts zeigen, dass er neben dem Schritt lief.
+            if let Some(u) = uart() {
+                u.drain(DRAIN_ROUNDS);
+                u.write("takt wirt runden ");
+                u.write_u64(rounds);
+                u.newline();
+            }
+            conclude(&rt, &stats);
+        }
+        // Der Watchdog laeuft nach einem Lauf im Betrieb weiter; das Board
+        // haelt an, statt neu zu starten.
+        let mut sleep = WfiSleep;
+        loop {
+            sleep.sleep_until_event();
+            Mwdt::feed();
+        }
     }
 }
 

@@ -288,7 +288,7 @@ impl Board for Esp32c6 {
 
     /// Die Interruptform auf dem SYSTIMER (12.11).
     fn forms(&self) -> &'static [Form] {
-        &[Form::Own, Form::Interrupt]
+        &[Form::Own, Form::Interrupt, Form::Embassy]
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
