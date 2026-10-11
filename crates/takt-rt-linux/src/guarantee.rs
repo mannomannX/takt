@@ -143,7 +143,7 @@ pub fn prepare(cpu: Option<usize>) -> Guarantee {
         set.set(n);
         let _ = rustix::thread::sched_setaffinity(None, &set);
     }
-    let cpus = rustix::thread::sched_getaffinity(None).map_or(0, |s| s.count() as usize);
+    let cpus = rustix::thread::sched_getaffinity(None).map_or(0, |s| usize::try_from(s.count()).unwrap_or(0));
 
     Guarantee { scheduling: scheduling(), locked, cpus }
 }
@@ -173,7 +173,7 @@ fn scheduling() -> Scheduling {
 pub fn scheduling_of(stat: &str) -> Scheduling {
     // Der Prozessname steht in Klammern und darf Leerzeichen enthalten;
     // gezaehlt wird darum ab der schliessenden Klammer.
-    let Some(rest) = stat.rfind(')').map(|i| &stat[i + 1..]) else {
+    let Some(rest) = stat.rfind(')').and_then(|i| stat.get(i.saturating_add(1)..)) else {
         return Scheduling::Unknown;
     };
     let fields: Vec<&str> = rest.split_whitespace().collect();

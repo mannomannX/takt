@@ -57,7 +57,7 @@ impl FileTunables {
 
     /// Wie viele Aenderungen noch ausstehen.
     pub fn pending(&self) -> usize {
-        self.changes.len() - self.next
+        self.changes.len().saturating_sub(self.next)
     }
 }
 
@@ -70,7 +70,7 @@ impl Tunables for FileTunables {
                 break;
             }
             apply(c.param, &c.value);
-            self.next += 1;
+            self.next = self.next.saturating_add(1);
         }
     }
 }

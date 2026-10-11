@@ -150,7 +150,6 @@ const PENDING: &[&str] = &[
     "takt-embed",
     "takt-embed-c",
     "takt-native-abi",
-    "takt-rt-linux",
     "takt-trampoline-stm32f401",
 ];
 

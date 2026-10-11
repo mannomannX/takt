@@ -35,7 +35,7 @@ pub struct ThreadJobs {
 impl ThreadJobs {
     /// `slots` Arbeiter, jeder mit `stack` Byte Stack (4.5: `stack` der Native).
     pub fn new(slots: u32, stack: usize) -> std::io::Result<ThreadJobs> {
-        let mut out = Vec::with_capacity(slots as usize);
+        let mut out = Vec::with_capacity(usize::try_from(slots).unwrap_or(0));
         for _ in 0..slots {
             let slot = Slot {
                 state: Arc::new(AtomicU8::new(IDLE)),
@@ -46,6 +46,10 @@ impl ThreadJobs {
             out.push(slot);
         }
         Ok(ThreadJobs { slots: out })
+    }
+
+    fn slot(&self, slot: u32) -> Option<&Slot> {
+        self.slots.get(usize::try_from(slot).ok()?)
     }
 }
 
@@ -76,8 +80,8 @@ fn spawn_worker(
             let next = if outcome.is_some() { DONE } else { FAILED };
             // Ein verworfener Lauf endet still: `cancel` hat den Slot
             // markiert, das Ergebnis erreicht das Programm nicht (5.3).
-            if state.compare_exchange(REQUESTED, next, Ordering::AcqRel, Ordering::Acquire).is_err() {
-                state.store(IDLE, Ordering::Release);
+            if state.compare_exchange(REQUESTED, next, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+                state.store(IDLE, Ordering::SeqCst);
             }
         }
     })?;
@@ -87,12 +91,15 @@ fn spawn_worker(
 /// Zerlegt die Argumente: je Block `u32` Laenge, dann die Bytes (5.9).
 fn blocks(args: &[u8]) -> Vec<&[u8]> {
     let mut out = Vec::new();
-    let mut at = 0usize;
-    while at + 4 <= args.len() {
-        let n = u32::from_le_bytes([args[at], args[at + 1], args[at + 2], args[at + 3]]) as usize;
-        let Some(block) = args.get(at + 4..at + 4 + n) else { break };
+    let mut rest = args;
+    while let Some((len, tail)) = rest.split_first_chunk::<4>() {
+        let Some((block, after)) =
+            usize::try_from(u32::from_le_bytes(*len)).ok().and_then(|n| tail.split_at_checked(n))
+        else {
+            break;
+        };
         out.push(block);
-        at += 4 + n;
+        rest = after;
     }
     out
 }
@@ -103,8 +110,8 @@ fn blocks(args: &[u8]) -> Vec<&[u8]> {
 fn payload(kind: Kind, block: &[u8]) -> &[u8] {
     match kind {
         Kind::Bytes | Kind::Digest | Kind::Fixed(_) => {
-            let n = block.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as usize).unwrap_or(0);
-            block.get(4..4 + n).unwrap_or(&[])
+            let Some((len, tail)) = block.split_first_chunk::<4>() else { return &[] };
+            usize::try_from(u32::from_le_bytes(*len)).ok().and_then(|n| tail.get(..n)).unwrap_or(&[])
         }
         _ => block,
     }
@@ -114,16 +121,16 @@ fn payload(kind: Kind, block: &[u8]) -> &[u8] {
 /// Form, `None` bei einer Signatur, die nicht passt.
 fn run(native: Native, args: &[u8]) -> Option<Vec<u8>> {
     use takt_native::sha256::{CTX_MAX_BYTES, Ctx};
-    let sig = native.signature();
+    let signature = native.signature();
     let raw = blocks(args);
-    if raw.len() != sig.params.len() {
+    if raw.len() != signature.params.len() {
         return None;
     }
-    let inputs: Vec<&[u8]> = raw.iter().zip(sig.params).map(|(b, k)| payload(*k, b)).collect();
+    let inputs: Vec<&[u8]> = raw.iter().zip(signature.params).map(|(b, k)| payload(*k, b)).collect();
     let ctx_bytes = |ctx: &Ctx| {
         let mut buf = [0u8; CTX_MAX_BYTES];
         let n = ctx.to_bytes(&mut buf).ok()?;
-        Some(buf[..n].to_vec())
+        buf.get(..n).map(<[u8]>::to_vec)
     };
     match native {
         Native::Sha256Init => ctx_bytes(&Ctx::new()),
@@ -151,36 +158,40 @@ fn run(native: Native, args: &[u8]) -> Option<Vec<u8>> {
             let [key, nonce, aad, data, tag] = inputs.as_slice() else { return None };
             let mut out = vec![0u8; data.len()];
             let len = takt_crypto::aes_gcm_decrypt(key, nonce, aad, data, tag, &mut out).ok()??;
-            Some(digest(&out[..len]))
+            Some(digest(out.get(..len)?))
         }
         _ => match takt_native::call(native, &inputs)? {
             Output::Digest(d) => Some(digest(&d)),
-            Output::Floats { bytes, len } => Some(bytes[..len].to_vec()),
-            Output::Scalar(v) => Some(match sig.ret {
-                Kind::U8 => vec![v as u8],
-                Kind::U16 => (v as u16).to_le_bytes().to_vec(),
-                _ => (v as u32).to_le_bytes().to_vec(),
-            }),
+            Output::Floats { bytes, len } => bytes.get(..len).map(<[u8]>::to_vec),
+            // Die Breite der Rueckgabe: die unteren Bytes des Werts.
+            Output::Scalar(v) => {
+                let width = match signature.ret {
+                    Kind::U8 => 1,
+                    Kind::U16 => 2,
+                    _ => 4,
+                };
+                v.to_le_bytes().get(..width).map(<[u8]>::to_vec)
+            }
         },
     }
 }
 
 /// `bytes<N>` in kanonischer Form: Laenge, dann die Bytes.
 fn digest(d: &[u8]) -> Vec<u8> {
-    let mut out = (d.len() as u32).to_le_bytes().to_vec();
+    let mut out = u32::try_from(d.len()).unwrap_or(u32::MAX).to_le_bytes().to_vec();
     out.extend_from_slice(d);
     out
 }
 
 impl Jobs for ThreadJobs {
     fn slots(&self) -> u32 {
-        self.slots.len() as u32
+        u32::try_from(self.slots.len()).unwrap_or(u32::MAX)
     }
 
     fn begin(&mut self, slot: u32, native: &str, args: &[u8]) -> bool {
-        let Some(s) = self.slots.get(slot as usize) else { return false };
+        let Some(s) = self.slot(slot) else { return false };
         let Some(f) = Native::by_name(native) else { return false };
-        if s.state.compare_exchange(IDLE, REQUESTED, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        if s.state.compare_exchange(IDLE, REQUESTED, Ordering::SeqCst, Ordering::SeqCst).is_err() {
             return false;
         }
         let (lock, ready) = &*s.request;
@@ -191,7 +202,7 @@ impl Jobs for ThreadJobs {
     }
 
     fn poll(&mut self, slot: u32) -> JobState {
-        match self.slots.get(slot as usize).map(|s| s.state.load(Ordering::Acquire)) {
+        match self.slot(slot).map(|s| s.state.load(Ordering::SeqCst)) {
             Some(REQUESTED) | Some(CANCELLED) => JobState::Running,
             Some(DONE) => JobState::Done,
             Some(FAILED) => JobState::Failed,
@@ -200,8 +211,8 @@ impl Jobs for ThreadJobs {
     }
 
     fn take(&mut self, slot: u32, into: &mut [u8]) -> usize {
-        let Some(s) = self.slots.get(slot as usize) else { return 0 };
-        let state = s.state.load(Ordering::Acquire);
+        let Some(s) = self.slot(slot) else { return 0 };
+        let state = s.state.load(Ordering::SeqCst);
         if state != DONE && state != FAILED {
             return 0;
         }
@@ -218,18 +229,18 @@ impl Jobs for ThreadJobs {
             }
             _ => 0,
         };
-        s.state.store(IDLE, Ordering::Release);
+        s.state.store(IDLE, Ordering::SeqCst);
         n
     }
 
     fn cancel(&mut self, slot: u32) {
-        let Some(s) = self.slots.get(slot as usize) else { return };
+        let Some(s) = self.slot(slot) else { return };
         // Laeuft er noch, raeumt der Arbeiter; liegt ein Ergebnis bereit,
         // verfaellt es hier.
-        if s.state.compare_exchange(REQUESTED, CANCELLED, Ordering::AcqRel, Ordering::Acquire).is_err() {
-            let state = s.state.load(Ordering::Acquire);
+        if s.state.compare_exchange(REQUESTED, CANCELLED, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+            let state = s.state.load(Ordering::SeqCst);
             if state == DONE || state == FAILED {
-                s.state.store(IDLE, Ordering::Release);
+                s.state.store(IDLE, Ordering::SeqCst);
             }
         }
     }

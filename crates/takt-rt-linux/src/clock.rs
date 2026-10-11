@@ -66,7 +66,7 @@ impl RealtimeClock {
     /// der die Tickquelle diesen Tick gebracht hat (7.1, 12.6 Zeile 7).
     fn note_wake(&mut self) {
         let now = self.now();
-        self.period = self.woke.map(|w| now - w);
+        self.period = self.woke.map(|w| now.saturating_sub(w));
         self.woke = Some(now);
     }
 }
@@ -89,7 +89,7 @@ impl Clock for RealtimeClock {
 impl RealtimeClock {
     #[cfg(target_os = "linux")]
     fn sleep_until(&mut self, deadline: i64) {
-        let verbleibend = deadline - self.now();
+        let verbleibend = deadline.saturating_sub(self.now());
         if verbleibend <= 0 {
             // Schon vorbei: Der Tick ist ueberfaellig (7.3). Nicht
             // schlafen und nicht aufholen — der Tick wird nie
@@ -102,10 +102,13 @@ impl RealtimeClock {
         // Umgerechnet wird ueber die verbleibende Dauer, nicht ueber
         // einen gemeinsamen Nullpunkt — den gibt es nicht.
         let jetzt = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
-        let ziel_ns = i128::from(jetzt.tv_sec) * 1_000_000_000 + i128::from(jetzt.tv_nsec) + i128::from(verbleibend);
+        let ziel_ns = i128::from(jetzt.tv_sec)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(i128::from(jetzt.tv_nsec))
+            .saturating_add(i128::from(verbleibend));
         let spec = rustix::thread::Timespec {
-            tv_sec: (ziel_ns / 1_000_000_000) as _,
-            tv_nsec: (ziel_ns % 1_000_000_000) as _,
+            tv_sec: i64::try_from(ziel_ns / 1_000_000_000).unwrap_or(i64::MAX),
+            tv_nsec: (ziel_ns % 1_000_000_000).try_into().unwrap_or(0),
         };
         // `TIMER_ABSTIME`: Ein zu spaeter Tick verschiebt die folgenden
         // nicht (12.2).
@@ -126,13 +129,13 @@ impl RealtimeClock {
             self.late = self.late.saturating_add(1);
             return;
         }
-        let rest = (deadline - jetzt) as u64;
+        let rest = u64::try_from(deadline.saturating_sub(jetzt)).unwrap_or(0);
         // Grob schlafen, fein warten: Der Schlaf trifft die Frist nicht
         // genau, das Warten schon. Die Schwelle ist grosszuegig, weil ein
         // zu frueher Schlaf besser ist als ein zu langer.
         const GROB: u64 = 2_000_000;
         if rest > GROB {
-            std::thread::sleep(std::time::Duration::from_nanos(rest - GROB));
+            std::thread::sleep(std::time::Duration::from_nanos(rest.saturating_sub(GROB)));
         }
         while self.now() < deadline {
             std::hint::spin_loop();

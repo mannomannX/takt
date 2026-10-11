@@ -46,7 +46,7 @@ impl FileNvm {
         let have = file.metadata()?.len();
         if have < want {
             file.seek(SeekFrom::Start(have))?;
-            file.write_all(&vec![0xFFu8; usize::try_from(want - have).unwrap_or(0)])?;
+            file.write_all(&vec![0xFFu8; usize::try_from(want.saturating_sub(have)).unwrap_or(0)])?;
             file.sync_all()?;
         }
         let state = Arc::new(AtomicU8::new(IDLE));
@@ -59,7 +59,7 @@ impl FileNvm {
     /// Nimmt einen Auftrag nur an, wenn der vorige abgefragt ist: Ein
     /// ungelesenes `Failed` ginge sonst still verloren.
     fn submit(&mut self, job: Job) -> bool {
-        if self.state.load(Ordering::Acquire) != IDLE {
+        if self.state.load(Ordering::SeqCst) != IDLE {
             return false;
         }
         if let Ok(mut slot) = self.job.lock() {
@@ -67,7 +67,7 @@ impl FileNvm {
         } else {
             return false;
         }
-        self.state.store(REQUESTED, Ordering::Release);
+        self.state.store(REQUESTED, Ordering::SeqCst);
         true
     }
 }
@@ -80,7 +80,7 @@ fn spawn_worker(mut file: File, slot_size: u32, state: Arc<AtomicU8>, job: Arc<M
             if Arc::strong_count(&state) == 1 {
                 return;
             }
-            if state.load(Ordering::Acquire) != REQUESTED {
+            if state.load(Ordering::SeqCst) != REQUESTED {
                 thread::sleep(Duration::from_millis(1));
                 continue;
             }
@@ -90,17 +90,23 @@ fn spawn_worker(mut file: File, slot_size: u32, state: Arc<AtomicU8>, job: Arc<M
             };
             let ok = match taken {
                 Job::None => true,
-                Job::Erase(slot) => {
-                    let blank = vec![0xFFu8; slot_size as usize];
-                    write_at(&mut file, u64::from(slot) * u64::from(slot_size), &blank)
-                }
-                Job::Write { slot, offset, bytes } => {
-                    write_at(&mut file, u64::from(slot) * u64::from(slot_size) + u64::from(offset), &bytes)
-                }
+                Job::Erase(slot) => usize::try_from(slot_size)
+                    .is_ok_and(|n| write_at(&mut file, position(slot, slot_size, 0), &vec![0xFFu8; n])),
+                Job::Write { slot, offset, bytes } => write_at(&mut file, position(slot, slot_size, offset), &bytes),
             };
-            state.store(if ok { DONE } else { FAILED }, Ordering::Release);
+            state.store(if ok { DONE } else { FAILED }, Ordering::SeqCst);
         }
     });
+}
+
+/// Die Stelle von `offset` in Slot `slot` in der Datei.
+fn position(slot: u8, slot_size: u32, offset: u32) -> u64 {
+    u64::from(slot).saturating_mul(u64::from(slot_size)).saturating_add(u64::from(offset))
+}
+
+/// Passen `len` Byte ab `offset` in einen Slot von `slot_size` Byte?
+fn fits(offset: u32, len: usize, slot_size: u32) -> bool {
+    u32::try_from(len).ok().and_then(|n| offset.checked_add(n)).is_some_and(|end| end <= slot_size)
 }
 
 fn write_at(file: &mut File, at: u64, bytes: &[u8]) -> bool {
@@ -117,21 +123,21 @@ impl Nvm for FileNvm {
     }
 
     fn begin_write(&mut self, slot: u8, offset: u32, bytes: &[u8]) -> bool {
-        if slot > 1 || offset.saturating_add(bytes.len() as u32) > self.slot_size {
+        if slot > 1 || !fits(offset, bytes.len(), self.slot_size) {
             return false;
         }
         self.submit(Job::Write { slot, offset, bytes: bytes.to_vec() })
     }
 
     fn poll(&mut self) -> NvmState {
-        match self.state.load(Ordering::Acquire) {
+        match self.state.load(Ordering::SeqCst) {
             REQUESTED => NvmState::Busy,
             DONE => {
-                self.state.store(IDLE, Ordering::Release);
+                self.state.store(IDLE, Ordering::SeqCst);
                 NvmState::Done
             }
             FAILED => {
-                self.state.store(IDLE, Ordering::Release);
+                self.state.store(IDLE, Ordering::SeqCst);
                 NvmState::Failed
             }
             _ => NvmState::Idle,
@@ -139,10 +145,10 @@ impl Nvm for FileNvm {
     }
 
     fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool {
-        if slot > 1 || offset.saturating_add(into.len() as u32) > self.slot_size {
+        if slot > 1 || !fits(offset, into.len(), self.slot_size) {
             return false;
         }
-        let at = u64::from(slot) * u64::from(self.slot_size) + u64::from(offset);
+        let at = position(slot, self.slot_size, offset);
         self.file.seek(SeekFrom::Start(at)).is_ok() && self.file.read_exact(into).is_ok()
     }
 }
