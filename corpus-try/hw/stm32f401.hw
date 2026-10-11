@@ -2,13 +2,13 @@
 # WeAct Black Pill (STM32F401CCU6, Cortex-M4F): Kalibrierung, Speicher,
 # Geraete und Kanaele fuer 29_heartbeat.takt (8.10).
 #
-# **Gemessen mit `takt bench` auf Board 1** (2026-10-06, zum Kostenmodell
+# **Gemessen mit `takt bench` auf Board 1** (2026-10-11, zum Kostenmodell
 # 2, mit dem Messprogramm als Baustein; 200 Wiederholungen je Kern, 84 MHz,
 # Flash ueber den ART-Beschleuniger). Der Bericht daneben
 # (`stm32f401.report`) nennt Streuung, Umstaende und das Gewicht je Lage:
 # Aus dem Flash haengt eine Messung an der Lage des Codes, gemessen wurde
 # darum in drei Lagen und jedes Gewicht nimmt die schlechtere (FB-367). Die
-# Tabelle ist um 40238095/38479771 gestreckt, getrieben vom kleinen Kern der
+# Tabelle ist um 43059523/38784594 gestreckt, getrieben vom kleinen Kern der
 # Probe `call`, dessen Zeit selbst an der Lage haengt. `T_IO` enthaelt den
 # Commit (FB-450). Der Hook der Runtime hat sein eigenes Gewicht
 # (`call_hook`, FB-295). `guard` und `jitter` je Kanal misst `takt
@@ -19,18 +19,19 @@
 # beiden Breiten); `libtaktm` rechnet hier mit `opt-level = 3`.
 #
 # `ram` und `flash` stehen im Datenblatt; die ersten 16 KiB Flash gehoeren
-# dem HID-Bootloader, das Journal liegt in zwei 16-KiB-Sektoren dahinter.
+# dem HID-Bootloader; das Journal soll in den zwei 16-KiB-Sektoren dahinter
+# liegen, die heute noch die Anwendung belegt (FB-385).
 # `protect`: Die MPU des Cortex-M4 schuetzt den Programmbereich der Arena
 # ausserhalb des Ticks (12.3).
 [target.thumbv7em]
 cost_model = 2
 core_hz = 84000000
-i32 = 12294
-i64 = 21932
-f32 = 95351
-f64 = 1973879
-mem = 37853
-call = 212875
+i32 = 13052
+i64 = 22769
+f32 = 97379
+f64 = 2097887
+mem = 40188
+call = 235262
 native = 0
 t_io = 8345239
 ram = 65536
@@ -39,27 +40,29 @@ protect = armv7m_mpu
 nvm_sector_bytes = 16384
 nvm_sectors = 2
 nvm_min_interval = 10000000000
-i32_div = 110289
-i64_div = 2066648
-f32_div = 491296
-f64_div = 3384594
+i32_div = 116062
+i64_div = 2206371
+f32_div = 526227
+f64_div = 3565914
 tick_jitter_ns = 0
 # Stack-Reserve (12.3, 13.8): die tiefste Hochwassermarke des Lastkerns
-# (`bench/load.takt`) in Echtzeit und logischer Zeit, auch unter RTIC,
-# gemalt ab der Tickschleife, ohne seinen Programmanteil.
-stack_reserve = 2920
+# (`bench/load.takt`) in Echtzeit und logischer Zeit in jeder Form des
+# Bring-ups, gemalt ab der Tickschleife, ohne seinen Programmanteil. Die
+# tiefste ist RTIC (3648), der eigene Kern braucht 2628; eine Reserve je
+# Form folgt mit FB-513.
+stack_reserve = 3648
 # Die Hauptschleife des Bring-ups in der Pollform (12.11): je Runde 10 us
 # fremde Arbeit, dazu Leitung, LED und Pruefzugriffe; die Bilanz nennt die
 # gemessene laengste Runde. EXTI1 ist der Job-Interrupt.
 main_loop_ns = 50000
 job_interrupt = true
-f32_fma = 268349
-f64_fma = 6517037
-f32_sqrt = 456284
-f64_sqrt = 4020583
-call_hook = 1598459
-f32_math = 478418814
-f64_math = 1066784861
+f32_fma = 284082
+f64_fma = 6935297
+f32_sqrt = 495869
+f64_sqrt = 4264829
+call_hook = 1657239
+f32_math = 504299201
+f64_math = 1120696050
 
 [device.gpio]
 driver = "stm32f4-gpio"
