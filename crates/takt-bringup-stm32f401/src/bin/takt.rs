@@ -942,6 +942,11 @@ mod interrupt_form {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
         let mut program = unsafe { program() };
         hand_over_jobs(&mut program);
+        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
+        // Schritt reichte: gemalt nach `init`, der Aufbau zaehlt nicht (12.3),
+        // und vor der Uhr des Laufs — das Malen dauert Millisekunden, und die
+        // ersten Fristen kaemen sonst um so viel zu spaet.
+        takt_board_stm32f401::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let mut rt = runtime(clock, protection, Profile::SHARED, program);
         let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
@@ -949,9 +954,6 @@ mod interrupt_form {
         // SAFETY: TIM2 ist noch maskiert; ab seiner Freigabe gehoert der Lauf
         // seiner ISR.
         unsafe { STEPPING = Some(Stepping { rt, form, tunes, ended: None }) };
-        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
-        // Schritt reichte: gemalt erst hier, der Aufbau zaehlt nicht (12.3).
-        takt_board_stm32f401::stack::paint();
         // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
         // oben sind bereit.
         unsafe {
@@ -1066,13 +1068,15 @@ mod poll_form {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
         let mut program = unsafe { program() };
         hand_over_jobs(&mut program);
+        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
+        // Schritt reichte: gemalt nach `init`, der Aufbau zaehlt nicht (12.3),
+        // und vor der Uhr des Laufs — das Malen dauert Millisekunden, und die
+        // ersten Fristen kaemen sonst um so viel zu spaet.
+        takt_board_stm32f401::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let mut rt = runtime(clock, protection, Profile::SHARED, program);
         let mut form = Form::start(&mut rt, Polled(pend_jobs), LOGICAL.then_some(&GATE));
         let mut tunes = Console::new(takt_board_stm32f401::console_byte);
-        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Schritt
-        // und Jobs reichte: gemalt erst hier, der Aufbau zaehlt nicht (12.3).
-        takt_board_stm32f401::stack::paint();
         // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
         // oben sind bereit.
         unsafe {

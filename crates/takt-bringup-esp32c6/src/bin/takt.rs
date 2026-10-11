@@ -716,12 +716,14 @@ mod interrupt_form {
         if let (Some(j), Some(slot)) = (program.jobs(), unsafe { (&raw mut JOBS).as_mut() }) {
             *slot = Some(j);
         }
+        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
+        // Schritt reichte: gemalt nach `init`, der Aufbau zaehlt nicht (12.3),
+        // und vor der Uhr des Laufs — das Malen dauert, und die ersten Fristen
+        // kaemen sonst um so viel zu spaet.
+        takt_board_esp32c6::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let mut rt = runtime(clock, Profile::SHARED, program);
         let tunes = Console::new(takt_board_esp32c6::console_byte as fn() -> Option<u8>);
-        // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
-        // Schritt reichte: gemalt erst hier, der Aufbau zaehlt nicht (12.3).
-        takt_board_esp32c6::stack::paint();
         // Der Lauf liegt im Static, bevor der erste Alarm ihn sucht.
         critical_section::with(|_| {
             let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
