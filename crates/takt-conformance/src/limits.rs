@@ -78,9 +78,10 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Pruefstellen und Uebergaenge, die weder ein Lauf erreicht noch der Solver ausschliesst",
-        warum: "`UNREACHED` (`differential.rs`) haelt 94 Uebergaenge, 72 nie bestandene und 522 nie verletzte \
+        warum: "`UNREACHED` (`differential.rs`) haelt 94 Uebergaenge, 72 nie bestandene und 342 nie verletzte \
                 Pruefstellen in 98 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
-                bis Tiefe 5 in 10 s keinen Pfad, und k-Induktion beweist sie nicht unerreichbar.",
+                bis Tiefe 5 in 10 s keinen Pfad, und k-Induktion beweist sie nicht unerreichbar. Dazu 180 \
+                Stellen, die nie faulten koennen (13.2: 161 `proven`, 10 `message`, 9 `observe`).",
         wann: "M11 Schritt 29, Nachtrag: induktive Invarianten je Stelle (Spacer) und tiefere Pfade.",
         row: "FB-511",
     },

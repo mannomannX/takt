@@ -39,106 +39,110 @@ const TICKS: u64 = 60;
 /// `11_foc_drive`, `after 7 d` in `sim/14_7`), in einem Programm, das
 /// das Modell nicht kodiert, oder in einem, dessen Maschinen kein Teilmodell
 /// haben und dessen Gesamtmodell der Solver nicht entscheidet (FB-604).
-const UNREACHED: &[(&str, usize, usize, usize)] = &[
-    ("01_minimal.takt", 0, 0, 1),
-    ("02_units_and_data.takt", 0, 3, 6),
-    ("03_sequences_and_faults.takt", 10, 3, 5),
-    ("04_blocks_and_multirate.takt", 2, 1, 8),
-    ("05_streams_and_protocol.takt", 3, 0, 7),
-    ("06_test_harness.takt", 2, 0, 4),
-    ("07_embedded_field.takt", 13, 3, 9),
-    ("11_foc_drive.takt", 4, 33, 57),
-    ("12_bitfields.takt", 1, 0, 3),
-    ("13_framing.takt", 0, 0, 2),
-    ("13_protocol_analysis.takt", 0, 0, 9),
-    ("14_latency.takt", 1, 0, 0),
-    ("17_nested.takt", 2, 0, 1),
-    ("18_blocks.takt", 0, 0, 1),
-    ("23_patterns.takt", 0, 0, 3),
-    ("24_send_has.takt", 0, 0, 1),
-    ("26_samples.takt", 0, 0, 2),
-    ("27_every.takt", 0, 0, 2),
-    ("28_scheduled.takt", 0, 0, 1),
-    ("35_persist.takt", 0, 0, 1),
-    ("36_int_units.takt", 0, 0, 6),
-    ("37_follows.takt", 0, 0, 2),
-    ("40_jobs.takt", 1, 0, 0),
-    ("41_tunables.takt", 0, 0, 2),
-    ("42_map.takt", 0, 0, 3),
-    ("43_sent.takt", 0, 0, 1),
-    ("44_campaign.takt", 0, 0, 1),
-    ("45_journal_cut.takt", 14, 2, 26), // FB-604: ohne Teilmodell keine Pfade des Solvers
-    ("46_matrices.takt", 0, 0, 31),
-    ("47_monitors.takt", 0, 0, 1),
-    ("49_record_streams.takt", 0, 0, 2),
-    ("50_clause_words.takt", 0, 0, 1),
-    ("51_text_into_bytes.takt", 0, 0, 3),
-    ("52_padding_fields.takt", 0, 0, 4),
-    ("53_stream_kinds.takt", 1, 0, 6),
-    ("54_inout.takt", 0, 0, 1),
-    ("55_frames_with_bytes.takt", 0, 0, 5),
-    ("57_persist_often.takt", 0, 0, 2),
-    ("58_persist_alert.takt", 0, 0, 2),
-    ("59_persist_idle.takt", 0, 0, 1),
-    ("61_requirements.takt", 1, 3, 2),
-    ("62_type_generics.takt", 0, 0, 2),
-    ("63_scoped_instances.takt", 3, 0, 0),
-    ("68_uart_port.takt", 0, 0, 1),
-    ("69_qp_box.takt", 0, 0, 1),
-    ("70_padded_record.takt", 0, 0, 1),
-    ("71_places.takt", 0, 0, 9),
-    ("72_handler_levels.takt", 0, 0, 6),
-    ("73_after_levels.takt", 0, 0, 4),
-    ("74_instance_index.takt", 0, 0, 2),
-    ("75_implicit_checks.takt", 0, 0, 6),
-    ("76_stream_views.takt", 0, 0, 13),
-    ("77_float_faults.takt", 0, 0, 2),
-    ("78_length_guards.takt", 0, 0, 7),
-    ("79_byte_literals.takt", 0, 0, 1),
-    ("80_payload_variants.takt", 0, 0, 6),
-    ("81_persist_variants.takt", 0, 0, 2),
-    ("83_durations.takt", 0, 0, 1),
-    ("84_defaults.takt", 0, 0, 1),
-    ("85_observe_invalid.takt", 0, 0, 5),
-    ("86_units.takt", 0, 0, 11),
-    ("87_fault_kinds.takt", 1, 1, 12),
-    ("88_capture_segments.takt", 3, 0, 9),
-    ("89_fault_paths.takt", 0, 0, 2),
-    ("90_abort.takt", 0, 0, 5),
-    ("91_subnormals.takt", 0, 0, 4),
-    ("92_idle_streams.takt", 1, 0, 4),
-    ("93_confirmations.takt", 0, 0, 3),
-    ("94_float_ranges.takt", 0, 0, 1),
-    ("95_boundary_ranges.takt", 0, 0, 3),
-    ("96_record_outputs.takt", 0, 0, 1),
-    ("97_fast_math.takt", 0, 0, 6),
-    ("98_last_fault.takt", 0, 5, 4),
-    ("99_exit_fault.takt", 0, 0, 1),
-    ("100_dispatch.takt", 0, 0, 8),
-    ("101_correct_math.takt", 0, 0, 5),
-    ("102_correct_math_f32.takt", 0, 0, 5),
-    ("103_math_domains.takt", 0, 0, 1),
-    ("104_linear_has.takt", 0, 0, 5),
-    ("105_subnormals_f32.takt", 0, 0, 5),
-    ("106_machine_handler.takt", 0, 0, 2),
-    ("107_cancel_and_pulse.takt", 0, 0, 2),
-    ("108_singular_solve.takt", 0, 0, 3),
-    ("109_narrow_bounds.takt", 0, 0, 3),
-    ("110_journal_log.takt", 17, 3, 45), // FB-604: ohne Teilmodell keine Pfade des Solvers
-    ("111_assign_mul.takt", 0, 0, 1),
-    ("112_assign_div.takt", 0, 0, 1),
-    ("113_case_ranges.takt", 0, 0, 1),
-    ("114_for_pairs.takt", 0, 0, 4),
-    ("115_affine_unit.takt", 0, 0, 2),
-    ("116_sequence_timeout.takt", 0, 0, 1),
-    ("117_many_text_handlers.takt", 0, 2, 3),
-    ("118_tx_idle.takt", 0, 0, 1),
-    ("120_port_writes.takt", 0, 0, 6),
-    ("122_owner_reads_instance.takt", 0, 0, 1),
-    ("123_fifo_port.takt", 0, 0, 9),
-    ("124_port_test.takt", 8, 0, 16),
-    ("sim/12_7/program.takt", 4, 6, 7),
-    ("sim/14_7/program.takt", 10, 7, 40),
+/// Die Spalten vier bis sechs zaehlen die Pruefstellen, die nie faulten
+/// koennen, je Grund (13.2, `takt_interp::coverage::Silent`): `proven`,
+/// `message`, `observe`. Sie stehen nicht in Spalte drei, und die Ratsche
+/// haelt sie ebenso genau.
+const UNREACHED: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
+    ("01_minimal.takt", 0, 0, 0, 0, 1, 0),
+    ("02_units_and_data.takt", 0, 3, 5, 0, 1, 0),
+    ("03_sequences_and_faults.takt", 10, 3, 3, 0, 1, 1),
+    ("04_blocks_and_multirate.takt", 2, 1, 6, 2, 0, 0),
+    ("05_streams_and_protocol.takt", 3, 0, 7, 0, 0, 0),
+    ("06_test_harness.takt", 2, 0, 1, 0, 0, 3),
+    ("07_embedded_field.takt", 13, 3, 8, 0, 1, 0),
+    ("11_foc_drive.takt", 4, 33, 52, 3, 0, 2),
+    ("12_bitfields.takt", 1, 0, 2, 1, 0, 0),
+    ("13_framing.takt", 0, 0, 0, 2, 0, 0),
+    ("13_protocol_analysis.takt", 0, 0, 6, 3, 0, 0),
+    ("14_latency.takt", 1, 0, 0, 0, 0, 0),
+    ("17_nested.takt", 2, 0, 0, 0, 1, 0),
+    ("18_blocks.takt", 0, 0, 0, 1, 0, 0),
+    ("23_patterns.takt", 0, 0, 3, 0, 0, 0),
+    ("24_send_has.takt", 0, 0, 1, 0, 0, 0),
+    ("26_samples.takt", 0, 0, 1, 1, 0, 0),
+    ("27_every.takt", 0, 0, 2, 0, 0, 0),
+    ("28_scheduled.takt", 0, 0, 1, 0, 0, 0),
+    ("35_persist.takt", 0, 0, 0, 1, 0, 0),
+    ("36_int_units.takt", 0, 0, 5, 1, 0, 0),
+    ("37_follows.takt", 0, 0, 2, 0, 0, 0),
+    ("40_jobs.takt", 1, 0, 0, 0, 0, 0),
+    ("41_tunables.takt", 0, 0, 1, 1, 0, 0),
+    ("42_map.takt", 0, 0, 2, 1, 0, 0),
+    ("43_sent.takt", 0, 0, 0, 1, 0, 0),
+    ("44_campaign.takt", 0, 0, 0, 1, 0, 0),
+    ("45_journal_cut.takt", 14, 2, 26, 0, 0, 0), // FB-604: ohne Teilmodell keine Pfade des Solvers
+    ("46_matrices.takt", 0, 0, 31, 0, 0, 0),
+    ("47_monitors.takt", 0, 0, 1, 0, 0, 0),
+    ("49_record_streams.takt", 0, 0, 2, 0, 0, 0),
+    ("50_clause_words.takt", 0, 0, 1, 0, 0, 0),
+    ("51_text_into_bytes.takt", 0, 0, 1, 2, 0, 0),
+    ("52_padding_fields.takt", 0, 0, 1, 3, 0, 0),
+    ("53_stream_kinds.takt", 1, 0, 4, 2, 0, 0),
+    ("54_inout.takt", 0, 0, 0, 1, 0, 0),
+    ("55_frames_with_bytes.takt", 0, 0, 2, 3, 0, 0),
+    ("57_persist_often.takt", 0, 0, 0, 2, 0, 0),
+    ("58_persist_alert.takt", 0, 0, 0, 2, 0, 0),
+    ("59_persist_idle.takt", 0, 0, 0, 1, 0, 0),
+    ("61_requirements.takt", 1, 3, 2, 0, 0, 0),
+    ("62_type_generics.takt", 0, 0, 0, 2, 0, 0),
+    ("63_scoped_instances.takt", 3, 0, 0, 0, 0, 0),
+    ("68_uart_port.takt", 0, 0, 1, 0, 0, 0),
+    ("69_qp_box.takt", 0, 0, 1, 0, 0, 0),
+    ("70_padded_record.takt", 0, 0, 0, 1, 0, 0),
+    ("71_places.takt", 0, 0, 8, 1, 0, 0),
+    ("72_handler_levels.takt", 0, 0, 0, 6, 0, 0),
+    ("73_after_levels.takt", 0, 0, 4, 0, 0, 0),
+    ("74_instance_index.takt", 0, 0, 0, 2, 0, 0),
+    ("75_implicit_checks.takt", 0, 0, 0, 6, 0, 0),
+    ("76_stream_views.takt", 0, 0, 4, 9, 0, 0),
+    ("77_float_faults.takt", 0, 0, 2, 0, 0, 0),
+    ("78_length_guards.takt", 0, 0, 0, 7, 0, 0),
+    ("79_byte_literals.takt", 0, 0, 0, 1, 0, 0),
+    ("80_payload_variants.takt", 0, 0, 3, 3, 0, 0),
+    ("81_persist_variants.takt", 0, 0, 0, 2, 0, 0),
+    ("83_durations.takt", 0, 0, 0, 1, 0, 0),
+    ("84_defaults.takt", 0, 0, 0, 1, 0, 0),
+    ("85_observe_invalid.takt", 0, 0, 0, 1, 1, 3),
+    ("86_units.takt", 0, 0, 9, 2, 0, 0),
+    ("87_fault_kinds.takt", 1, 1, 8, 4, 0, 0),
+    ("88_capture_segments.takt", 3, 0, 2, 7, 0, 0),
+    ("89_fault_paths.takt", 0, 0, 0, 2, 0, 0),
+    ("90_abort.takt", 0, 0, 0, 5, 0, 0),
+    ("91_subnormals.takt", 0, 0, 4, 0, 0, 0),
+    ("92_idle_streams.takt", 1, 0, 1, 3, 0, 0),
+    ("93_confirmations.takt", 0, 0, 0, 3, 0, 0),
+    ("94_float_ranges.takt", 0, 0, 0, 1, 0, 0),
+    ("95_boundary_ranges.takt", 0, 0, 0, 3, 0, 0),
+    ("96_record_outputs.takt", 0, 0, 0, 1, 0, 0),
+    ("97_fast_math.takt", 0, 0, 3, 3, 0, 0),
+    ("98_last_fault.takt", 0, 5, 2, 2, 0, 0),
+    ("99_exit_fault.takt", 0, 0, 1, 0, 0, 0),
+    ("100_dispatch.takt", 0, 0, 1, 7, 0, 0),
+    ("101_correct_math.takt", 0, 0, 2, 3, 0, 0),
+    ("102_correct_math_f32.takt", 0, 0, 2, 3, 0, 0),
+    ("103_math_domains.takt", 0, 0, 1, 0, 0, 0),
+    ("104_linear_has.takt", 0, 0, 0, 5, 0, 0),
+    ("105_subnormals_f32.takt", 0, 0, 5, 0, 0, 0),
+    ("106_machine_handler.takt", 0, 0, 0, 2, 0, 0),
+    ("107_cancel_and_pulse.takt", 0, 0, 1, 1, 0, 0),
+    ("108_singular_solve.takt", 0, 0, 3, 0, 0, 0),
+    ("109_narrow_bounds.takt", 0, 0, 0, 3, 0, 0),
+    ("110_journal_log.takt", 17, 3, 44, 1, 0, 0), // FB-604: ohne Teilmodell keine Pfade des Solvers
+    ("111_assign_mul.takt", 0, 0, 0, 1, 0, 0),
+    ("112_assign_div.takt", 0, 0, 0, 1, 0, 0),
+    ("113_case_ranges.takt", 0, 0, 0, 1, 0, 0),
+    ("114_for_pairs.takt", 0, 0, 4, 0, 0, 0),
+    ("115_affine_unit.takt", 0, 0, 2, 0, 0, 0),
+    ("116_sequence_timeout.takt", 0, 0, 0, 1, 0, 0),
+    ("117_many_text_handlers.takt", 0, 2, 1, 2, 0, 0),
+    ("118_tx_idle.takt", 0, 0, 0, 1, 0, 0),
+    ("120_port_writes.takt", 0, 0, 2, 4, 0, 0),
+    ("122_owner_reads_instance.takt", 0, 0, 0, 1, 0, 0),
+    ("123_fifo_port.takt", 0, 0, 0, 9, 0, 0),
+    ("124_port_test.takt", 8, 0, 16, 0, 0, 0),
+    ("sim/12_7/program.takt", 4, 6, 6, 1, 0, 0),
+    ("sim/14_7/program.takt", 10, 7, 36, 0, 4, 0),
 ];
 
 fn corpus(name: &str) -> Program {
@@ -447,17 +451,27 @@ fn compare_program(clang: &takt_llvm::toolchain::Clang, name: &'static str, mode
         }
     }
     let open = unreached(name, &p, &coverage);
-    let counts = (open[0].len(), open[1].len(), open[2].len());
-    let allowed = UNREACHED.iter().find(|(n, ..)| *n == name).map_or((0, 0, 0), |&(_, t, ps, f)| (t, ps, f));
+    let counts = open.each_ref().map(Vec::len);
+    let allowed = UNREACHED
+        .iter()
+        .find(|(n, ..)| *n == name)
+        .map_or([0; 6], |&(_, t, ps, f, proven, message, observe)| [t, ps, f, proven, message, observe]);
     if counts != allowed {
-        let list: Vec<String> = ["Uebergang", "besteht nie", "faultet nie"]
-            .iter()
-            .zip(&open)
-            .flat_map(|(what, keys)| keys.iter().map(move |k| format!("  {what}: {k}")))
-            .collect();
+        let list: Vec<String> = [
+            "Uebergang",
+            "besteht nie",
+            "faultet nie",
+            "ohne Fault (proven)",
+            "ohne Fault (message)",
+            "ohne Fault (observe)",
+        ]
+        .iter()
+        .zip(&open)
+        .flat_map(|(what, keys)| keys.iter().map(move |k| format!("  {what}: {k}")))
+        .collect();
         out.failed.push(format!(
-            "{name}: unerreicht {counts:?} (Uebergaenge, bestandene, verletzte Pruefstellen), `UNREACHED` erwartet \
-             {allowed:?}:\n{}",
+            "{name}: unerreicht {counts:?} (Uebergaenge, bestandene, verletzte Pruefstellen; Pruefstellen ohne Fault \
+             je Grund proven, message, observe), `UNREACHED` erwartet {allowed:?}:\n{}",
             list.join("\n")
         ));
     }
@@ -467,12 +481,14 @@ fn compare_program(clang: &takt_llvm::toolchain::Clang, name: &'static str, mode
 /// Was die Laeufe nicht erreichen: Uebergaenge ohne Beweis, dass sie nie
 /// genommen werden; Pruefstellen, die nie bestehen; Pruefstellen ohne Fault,
 /// die die Beweisdatei nicht fuehrt. `verify` urteilt ueber ein Szenario und
-/// hat keinen Fault.
-fn unreached(name: &str, p: &Program, coverage: &takt_interp::Coverage) -> [Vec<String>; 3] {
+/// hat keinen Fault. Eine Pruefstelle, die nie faulten kann, steht statt in
+/// Spalte drei in der Spalte ihres Grundes (13.2).
+fn unreached(name: &str, p: &Program, coverage: &takt_interp::Coverage) -> [Vec<String>; 6] {
     use takt_interp::CoverKind;
+    use takt_interp::coverage::Silent;
     let proven = takt_conformance::paths::proof(name).map(|pr| pr.tags()).unwrap_or_default();
     let unfired = takt_conformance::paths::unfired(name).map(|u| u.transitions).unwrap_or_default();
-    let mut out: [Vec<String>; 3] = Default::default();
+    let mut out: [Vec<String>; 6] = Default::default();
     for item in takt_interp::coverage::items(p) {
         let label = || format!("{} {}", item.machine, item.key).trim().to_string();
         match item.kind {
@@ -496,9 +512,16 @@ fn unreached(name: &str, p: &Program, coverage: &takt_interp::Coverage) -> [Vec<
                 }
                 let tag = item.key.split(' ').next().and_then(takt_mir::analysis::walk::tag_of_name);
                 let ruled_out = tag.is_some_and(|t| proven.contains(&(item.span.start, item.span.end, t)));
-                if !coverage.has(CoverKind::SiteFailed, &item) && !ruled_out {
-                    out[2].push(label());
+                if coverage.has(CoverKind::SiteFailed, &item) || ruled_out {
+                    continue;
                 }
+                let column = match item.silent {
+                    None => 2,
+                    Some(Silent::Proven) => 3,
+                    Some(Silent::Message) => 4,
+                    Some(Silent::Observe) => 5,
+                };
+                out[column].push(label());
             }
             _ => {}
         }

@@ -40,6 +40,8 @@ pub struct Item {
     pub key: String,
     /// Position in der Quelle.
     pub span: Span,
+    /// Bei einer Pruefstelle, die nie faultet, der Grund (13.2).
+    pub silent: Option<Silent>,
 }
 
 impl Coverage {
@@ -87,10 +89,17 @@ impl Coverage {
         let (sites, n_sites) = count(CoverKind::Site, CoverKind::Site);
         let (sites_failed, _) = count(CoverKind::Site, CoverKind::SiteFailed);
         let (handlers, n_handlers) = count(CoverKind::Handler, CoverKind::Handler);
+        // Was nie faultet, steht mit seinem Grund daneben (13.2).
+        let mut quiet: BTreeMap<Silent, usize> = BTreeMap::new();
+        for why in items.iter().filter_map(|i| i.silent) {
+            *quiet.entry(why).or_default() += 1;
+        }
+        let quiet: Vec<String> = quiet.iter().map(|(why, n)| format!("{} {n}", why.name())).collect();
+        let quiet = if quiet.is_empty() { String::new() } else { format!(", ohne Fault: {}", quiet.join(", ")) };
         format!(
             "Zustaende {states}/{n_states}, Transitionen {transitions}/{n_transitions}, \
              Checks {checks}/{n_checks} ({failed} verletzt), \
-             Pruefstellen {sites}/{n_sites} ({sites_failed} verletzt), Handler {handlers}/{n_handlers}"
+             Pruefstellen {sites}/{n_sites} ({sites_failed} verletzt{quiet}), Handler {handlers}/{n_handlers}"
         )
     }
 
@@ -140,13 +149,40 @@ pub struct Site {
     /// Die Folge im Durchlauf: Ein innerer Knoten derselben Stelle kommt
     /// nach dem aeusseren.
     order: usize,
+    /// Warum die Stelle nie faultet; sie zaehlt dann nur mit dem ersten
+    /// Ausgang (13.2).
+    pub silent: Option<Silent>,
+}
+
+/// Warum eine implizite Pruefstelle nie faultet (13.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Silent {
+    /// Eine bewiesene Range (`RangeOrigin::Proven`, 3.4, 11.3): Ein Verstoss
+    /// ist ein Fehler des Compilers, kein Fault.
+    Proven,
+    /// Ein Teil einer Meldung oder eines Texts (`format::render`, 3.9): Ein
+    /// Fault darin wird `<invalid>`.
+    Message,
+    /// Bedingung oder Wert einer Beobachtung (5.6): Sie faultet nie.
+    Observe,
+}
+
+impl Silent {
+    /// Der Name in Bericht und Ratsche.
+    pub fn name(self) -> &'static str {
+        match self {
+            Silent::Proven => "proven",
+            Silent::Message => "message",
+            Silent::Observe => "observe",
+        }
+    }
 }
 
 impl Site {
     /// Die Stelle `tag` an `start..end`; `operand`, wenn der Knoten am
     /// Operanden sitzt (Division, Definitionsbereich).
     pub fn at(start: u32, end: u32, tag: u8, operand: bool) -> Site {
-        Site { start, end, tag, operand, order: 0 }
+        Site { start, end, tag, operand, order: 0, silent: None }
     }
 
     /// Der Schluessel in Coverage und Ratsche: `<art> @<anfang>-<ende>`.
@@ -191,6 +227,7 @@ pub fn fault_of(tag: u8) -> Option<FaultKind> {
 /// Die impliziten Pruefstellen der Quelle in den laufenden Maschinen, ihren
 /// Funktionen und Bloecken; das Prelude zaehlt nicht.
 pub fn sites(p: &Program) -> Vec<Site> {
+    let quiet = silent_sites(p);
     let mut out: Vec<Site> = Vec::new();
     let mut look = |e: &takt_mir::expr::Expr| {
         let ExprKind::Checked { expr, kind } = &e.kind else { return };
@@ -206,10 +243,73 @@ pub fn sites(p: &Program) -> Vec<Site> {
             CheckedKind::Index { .. } => !matches!(expr.kind, ExprKind::Index { .. }),
             _ => false,
         };
+        let silent = match kind {
+            CheckedKind::Range(r) if r.origin == takt_mir::types::RangeOrigin::Proven => Some(Silent::Proven),
+            _ => quiet.get(&(e.span.start, e.span.end, tag)).copied(),
+        };
         let order = out.len();
-        out.push(Site { start: e.span.start, end: e.span.end, tag, operand, order });
+        out.push(Site { start: e.span.start, end: e.span.end, tag, operand, order, silent });
     };
     let counted = |m: &&Machine| !matches!(m.kind, MachineKind::Template | MachineKind::Scenario);
+    for m in p.machines.iter().filter(counted) {
+        takt_mir::visit::for_each_expr_machine(m, &mut look);
+    }
+    for f in &p.fns {
+        takt_mir::visit::for_each_expr_block(&f.body, &mut look);
+    }
+    for b in &p.blocks {
+        for v in &b.state_vars {
+            if let Some(init) = &v.init {
+                takt_mir::visit::walk_expr(init, &mut look);
+            }
+        }
+    }
+    out
+}
+
+/// Die Stellen in Meldungen und Beobachtungen, mit ihrem Grund: jede
+/// Pruefung im Text einer Meldung oder eines Werts (`ExprKind::Format`) und
+/// in Bedingung oder Wert einer Beobachtung (5.6).
+fn silent_sites(p: &Program) -> HashMap<(u32, u32, u8), Silent> {
+    use takt_mir::expr::Expr;
+    use takt_mir::pattern::{Format, FormatPiece};
+    fn mark(e: &Expr, why: Silent, out: &mut HashMap<(u32, u32, u8), Silent>) {
+        takt_mir::visit::walk_expr(e, &mut |x| {
+            if let ExprKind::Checked { kind, .. } = &x.kind {
+                out.entry((x.span.start, x.span.end, takt_mir::analysis::walk::tag(kind))).or_insert(why);
+            }
+        });
+    }
+    fn text(f: &Format, out: &mut HashMap<(u32, u32, u8), Silent>) {
+        for piece in &f.pieces {
+            if let FormatPiece::Expr { expr, .. } = piece {
+                mark(expr, Silent::Message, out);
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    let mut stmt = |s: &takt_mir::stmt::Stmt| match &s.kind {
+        StmtKind::Check { message: Some(m), .. } | StmtKind::Abort { message: Some(m) } => text(m, &mut out),
+        StmtKind::Observe(Observe::Alert { cond, message, .. } | Observe::Verify { cond, message, .. }) => {
+            text(message, &mut out);
+            mark(cond, Silent::Observe, &mut out);
+        }
+        StmtKind::Observe(Observe::Log(m) | Observe::Verdict { message: Some(m), .. }) => text(m, &mut out),
+        StmtKind::Observe(Observe::Measure { value, .. }) => mark(value, Silent::Observe, &mut out),
+        _ => {}
+    };
+    let counted = |m: &&Machine| !matches!(m.kind, MachineKind::Template | MachineKind::Scenario);
+    for m in p.machines.iter().filter(counted) {
+        takt_mir::visit::for_each_stmt(m, &mut stmt);
+    }
+    for f in &p.fns {
+        takt_mir::visit::for_each_stmt_block(&f.body, &mut stmt);
+    }
+    let mut look = |e: &Expr| {
+        if let ExprKind::Format(f) = &e.kind {
+            text(f, &mut out);
+        }
+    };
     for m in p.machines.iter().filter(counted) {
         takt_mir::visit::for_each_expr_machine(m, &mut look);
     }
@@ -247,7 +347,7 @@ pub fn items(p: &Program) -> Vec<Item> {
     let counted =
         |m: &&Machine| !matches!(m.kind, MachineKind::Template | MachineKind::Scenario) && !m.states.is_empty();
     for m in p.machines.iter().filter(counted) {
-        let mut push = |kind, key, span| out.push(Item { kind, machine: m.name.clone(), key, span });
+        let mut push = |kind, key, span| out.push(Item { kind, machine: m.name.clone(), key, span, silent: None });
         for s in &m.states {
             push(CoverKind::State, s.name.clone(), s.span);
             for t in &s.transitions {
@@ -275,7 +375,7 @@ pub fn items(p: &Program) -> Vec<Item> {
     }
     for s in sites(p) {
         let span = Span { file: takt_diag::FileId(takt_mir::analysis::proof::SOURCE), start: s.start, end: s.end };
-        out.push(Item { kind: CoverKind::Site, machine: String::new(), key: s.key(), span });
+        out.push(Item { kind: CoverKind::Site, machine: String::new(), key: s.key(), span, silent: s.silent });
     }
     out
 }

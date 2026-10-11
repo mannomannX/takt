@@ -1007,6 +1007,38 @@ fn an_error_inside_a_format_string_points_at_the_placeholder() {
     assert_eq!(at, "zaehlr", "der Span zeigt genau auf den Namen im Platzhalter");
 }
 
+/// FB-605: Auch die Knoten eines Platzhalters tragen ihre Stelle in der
+/// Datei, nicht im Platzhaltertext. Sonst teilten sich die Divisionen
+/// zweier Platzhalter einen Schluessel in Coverage und Beweisdatei, und die
+/// Stelle laege irgendwo im Kopf der Datei.
+#[test]
+fn the_checks_inside_placeholders_keep_their_place_in_the_source() {
+    let src = format!(
+        "{HEAD}{OUT}{}",
+        "input  a : int in 0..9 @ hw(\"i/a\")
+input  b : int in 0..9 @ hw(\"i/b\")
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            n = a.or(0)
+            log \"q {a.or(0) / b.or(1)} r {a.or(0) % b.or(2)}\"
+"
+    );
+    let options = Options { policy: Policy::default(), build: Build::Sim, profile: None, ..Default::default() };
+    let out = takt_sema::compile(&src, &options);
+    assert!(!out.has_errors(), "{:?}", out.diagnostics);
+    let p = out.program.expect("Programm");
+    let div = takt_mir::analysis::walk::tag_of_name("div").expect("Art");
+    let texts: Vec<String> = takt_interp::coverage::sites(&p)
+        .iter()
+        .filter(|s| s.tag == div)
+        .map(|s| src[s.start as usize..s.end as usize].to_string())
+        .collect();
+    assert_eq!(texts, ["b.or(1)", "b.or(2)"], "je Platzhalter eine Stelle, an ihrem Divisor");
+}
+
 #[test]
 fn append_costs_the_capacity_of_its_source() {
     // 9.4.3: `append` kopiert, die obere Schranke ist die Kapazitaet der

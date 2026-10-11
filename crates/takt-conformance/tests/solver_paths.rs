@@ -270,7 +270,7 @@ fn never_failed(name: &str, p: &Program) -> Open {
                 let start = item.key.rsplit_once('@').and_then(|(_, s)| s.parse().ok()).expect("check @<anfang>");
                 out.0.push((item.machine.clone(), kind, start));
             }
-            CoverKind::Site if !coverage.has(CoverKind::SiteFailed, &item) => {
+            CoverKind::Site if item.silent.is_none() && !coverage.has(CoverKind::SiteFailed, &item) => {
                 let tag = takt_mir::analysis::walk::tag_of_name(&kind);
                 if !tag.is_some_and(|t| proven.contains(&(item.span.start, item.span.end, t))) {
                     out.1.push((item.span.start, item.span.end, kind));
@@ -297,6 +297,13 @@ fn group(verdict: &CheckVerdict) -> &'static str {
         CheckVerdict::Undecided { reason } if reason.contains("Solver sagt") => "Frist",
         CheckVerdict::Undecided { .. } => "unbestaetigt",
     }
+}
+
+/// Eine Zeile des Protokolls: Programm, Maschine, Art, Spanne, Gruppe, Urteil.
+fn row_line(name: &str, r: &CheckReport) -> String {
+    let why = r.text();
+    let why = why.lines().next().unwrap_or_default();
+    format!("{name}\t{}\t{}\t{}-{}\t{}\t{why}\n", r.machine, r.kind, r.span.start, r.span.end, group(&r.verdict))
 }
 
 /// **FB-511 Schritt 1: die unerreichten Stellen einordnen.** Je Tiefe aus
@@ -327,8 +334,10 @@ fn classify_unreached(depths: &str) {
             open.insert(name, sites);
         }
     }
+    let tmp = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     for depth in depths.split(',').map(|d| d.trim().parse::<u32>().expect("Tiefe")) {
         let started = std::time::Instant::now();
+        let _ = std::fs::remove_file(tmp.join(format!("fb511-{depth}.laufend.tsv")));
         let queue = std::sync::Mutex::new(open.keys().copied().collect::<Vec<_>>());
         let rows = std::sync::Mutex::new(Vec::<(String, CheckReport)>::new());
         let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
@@ -376,8 +385,20 @@ fn classify_unreached(depths: &str) {
                                         })
                                         .map(|(a, b, k)| none(k, "", *a, *b)),
                                 );
+                                // Je Programm gleich ins Protokoll: Ein abgebrochener Lauf
+                                // verliert so nur das laufende.
+                                let mine: Vec<CheckReport> = reports.into_iter().chain(missing).collect();
+                                let lines: String = mine.iter().map(|r| row_line(name, r)).collect();
                                 let mut rows = rows.lock().expect("Zeilen");
-                                rows.extend(reports.into_iter().chain(missing).map(|r| (name.to_string(), r)));
+                                let progress = tmp.join(format!("fb511-{depth}.laufend.tsv"));
+                                let appended = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(&progress)
+                                    .and_then(|mut f| std::io::Write::write_all(&mut f, lines.as_bytes()));
+                                appended.unwrap_or_else(|e| panic!("{}: {e}", progress.display()));
+                                eprintln!("{name}: {} Stellen nach {:.0?}", mine.len(), started.elapsed());
+                                rows.extend(mine.into_iter().map(|r| (name.to_string(), r)));
                             }
                             Err(e) => eprintln!("{name}: {e}"),
                         }
@@ -391,13 +412,10 @@ fn classify_unreached(depths: &str) {
         let mut text = String::new();
         let mut tally: BTreeMap<(&str, String), usize> = BTreeMap::new();
         for (name, r) in &rows {
-            let g = group(&r.verdict);
-            *tally.entry((g, r.kind.clone())).or_default() += 1;
-            let why = r.text();
-            let why = why.lines().next().unwrap_or_default();
-            text.push_str(&format!("{name}\t{}\t{}\t{}-{}\t{g}\t{why}\n", r.machine, r.kind, r.span.start, r.span.end));
+            *tally.entry((group(&r.verdict), r.kind.clone())).or_default() += 1;
+            text.push_str(&row_line(name, r));
         }
-        let file = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fb511-{depth}.tsv"));
+        let file = tmp.join(format!("fb511-{depth}.tsv"));
         std::fs::write(&file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
         eprintln!("Tiefe {depth}: {} Stellen in {:.0?}, {}", rows.len(), started.elapsed(), file.display());
         let mut by_group: BTreeMap<&str, usize> = BTreeMap::new();
