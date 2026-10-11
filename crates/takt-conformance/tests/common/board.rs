@@ -864,6 +864,10 @@ pub fn journal_costs_time_but_not_semantics(board: &mut dyn Board) -> Vec<String
 /// Schleife verpasst keine Periode; der Trace ist der ohne Schlaf (Satz
 /// 9.9.1). Braucht `nvm_blocking` und die Zeiten in der
 /// Hardware-Konfiguration, sonst gilt das Geraet als asynchron.
+///
+/// Zwei Schreibvorgaenge: einer im Schlaf und einer am Ende des Laufs, denn
+/// danach zaehlt `RUN` wieder. Einer allein waere nur das Ende; der Schlaf
+/// haette dann nichts geschrieben.
 pub fn journal_writes_in_sleep_windows(board: &mut dyn Board) -> Vec<String> {
     let name = "59_persist_idle.takt";
     let text = match run_corpus(board, name, true) {
@@ -872,8 +876,8 @@ pub fn journal_writes_in_sleep_windows(board: &mut dyn Board) -> Vec<String> {
     };
     let mut failed = Vec::new();
     match board::counter(&text, "journal geschrieben") {
-        Some(writes) if writes >= 1 => {}
-        Some(_) => failed.push(format!("das Journal schrieb nie im Schlaf:\n{text}")),
+        Some(writes) if writes >= 2 => {}
+        Some(writes) => failed.push(format!("das Journal schrieb nie im Schlaf, nur {writes}-mal:\n{text}")),
         None => failed.push(format!("keine Journalzeile:\n{text}")),
     }
     if board::counter(&text, "verloren") != Some(0) {

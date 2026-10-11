@@ -289,13 +289,13 @@ So arbeitet jeder Strang, als wäre er allein:
       ausschließt); `persist`-Programme auf dem F401 auslassen (zehn
       Korpusprogramme weniger auf dem M4); eine eigene Startstufe in Sektor
       0 (gewinnt nur 16 KiB, braucht einen Eingriff in Sektor 0).
-    - **Teil 2 umgesetzt 2026-10-11** (Boardlauf steht aus): `FlashNvm`,
+    - **Teil 2 umgesetzt 2026-10-11**: `FlashNvm`,
       Sprungbrett, Anwendung ab 0x0801_0000, Journal in allen vier Formen
       des F401, Journal-Tests auf beiden Boards. Das Messprogramm von
       `takt bench` passt mit 432 Byte Luft in die 192 KiB (`plan/f401.md`).
       Unterwegs FB-514: Der Stand der Board-Abbilder kannte die
       Hardware-Konfiguration nicht.
-    - **Teil 1 umgesetzt 2026-10-11** (Boardlauf steht aus): `Program::Memory`
+    - **Teil 1 umgesetzt 2026-10-11**: `Program::Memory`
       (`Volatile` oder `Persisting`, die Hülle setzt es), die Runtime hält das
       Journal als Typparameter; `Runtime::new` nur ohne `persist`,
       `Runtime::journaled` mit einem Journal, das es nur geladen gibt
@@ -303,13 +303,21 @@ So arbeitet jeder Strang, als wäre er allein:
       (`run`, `stats`, Interrupt- und Pollform) verlieren `persist`; Wirte
       für jedes Programm nehmen `Memory::store`. `compile_fail`-Doctests in
       `takt-rt-core` und im Beispiel `rust-host`.
-    - **Griff der Jobs umgesetzt 2026-10-11** (Boardlauf steht aus): Die
+    - **Griff der Jobs umgesetzt 2026-10-11**: Die
       Hülle nennt `takt_embed::Program::Work` (`NoJobs` oder `WithJobs`);
       `JobContext::start` beider Boards nimmt Stack, Verteiler und Griff ohne
       `Option` — drei Wege, den Job-Faden still abzuschalten, sind fort. Wirte
       für jedes Programm wählen über `Work::context`; `JobStack::bytes` ist
       ohne Jobs leer statt `None`. Die Runtime hält den Job-Kontext nicht:
       Er läuft in einem anderen Kontext als der Schritt (12.11).
+    - **Boardlauf 2026-10-11, FB-385 behoben:** auf 3d1caad C6 26 von 26,
+      F401 25 von 26. Der Watchdog-Test scheiterte, weil `NVM_BLOCKING_NS`
+      auch ohne `persist` galt (Frist 522 statt 20 ms); behoben in 1a9f995,
+      danach Watchdog, Pollform-Runde und Journal-Tests auf dem F401
+      bestanden. Gemessen: Löschen 197 ms, Programmieren 0,14 ms; in
+      `stm32f401.hw` mit Reserve 300 ms und 0,2 ms. Der Schlaffenster-Test
+      verlangt jetzt zwei Schreibvorgänge, einen im Schlaf. KON1-022 ist
+      geschlossen.
 
 ### 17 — Wirt mit Instanzen in Fäden, `linux_rt`
 

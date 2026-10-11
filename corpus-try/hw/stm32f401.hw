@@ -43,10 +43,13 @@ protect = armv7m_mpu
 nvm_sector_bytes = 16384
 nvm_sectors = 2
 nvm_min_interval = 10000000000
-# TODO(FB-385): Datenblatt (x32, hoechstens), bis der Journal-Test auf dem
-# Board die Zeiten misst.
-nvm_erase_ns = 500000000
-nvm_program_ns = 1000000
+# Gemessen am 11.10.2026 mit `58_persist_alert` ueber 21 Schreibvorgaenge
+# (`the_journal_costs_time_but_not_semantics`): Loeschen eines Sektors
+# hoechstens 197 ms, Programmieren hoechstens 0,14 ms; hier mit Reserve, wie
+# beim C6. Das Datenblatt nennt fuer 16 KiB bei x32 typisch 250 und
+# hoechstens 500 ms; altert das Flash dorthin, ist hier nachzumessen.
+nvm_erase_ns = 300000000
+nvm_program_ns = 200000
 nvm_blocking = true
 i32_div = 116062
 i64_div = 2206371

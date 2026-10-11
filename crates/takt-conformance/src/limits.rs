@@ -47,14 +47,6 @@ pub const LIMITS: &[Limit] = &[
         row: "FB-391",
     },
     Limit {
-        was: "Das Journal auf dem STM32F401",
-        warum: "Das Bring-up des F401 hat keinen Nvm-Treiber: Die `persist`-Programme seines \
-                Korpus laufen dort ohne Journal.",
-        wann: "M11 Schritt 15: Die Portpruefung faehrt `persist` auf jedem Port; der Port des F401 \
-               braucht dafuer den Nvm-Treiber.",
-        row: "KON1-022",
-    },
-    Limit {
         was: "Das Profil `shared` auf dem ESP32-C6",
         warum: "`shared` wird nur auf dem F401 unter RTIC mit nachgebildeter Funk-ISR geprueft; \
                 auf dem C6, dem Board mit Funk, laeuft es nicht.",
