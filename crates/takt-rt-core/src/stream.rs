@@ -35,9 +35,9 @@ pub struct Desc {
     /// Zeitstempel in Nanosekunden (Hardware-Aufloesung, 7.5).
     pub t: i64,
     /// Versatz des Inhalts im Byte- oder Slot-Ring.
-    pub offset: u32,
+    pub offset: usize,
     /// Laenge des Inhalts in Byte.
-    pub len: u32,
+    pub len: usize,
 }
 
 /// Was beim Einlagern geschah (9.6, `deliver`).
@@ -140,20 +140,20 @@ impl<'a> Ring<'a> {
         // Verwerfen — sonst raeumte der Ring sich leer und naehme es
         // trotzdem nicht.
         if n > self.bytes.len() || self.descs.is_empty() {
-            self.overflowed += 1;
+            self.overflowed = self.overflowed.saturating_add(1);
             return Delivery::Overflow;
         }
         if !self.fits(n) {
             if !drop_oldest {
-                self.overflowed += 1;
+                self.overflowed = self.overflowed.saturating_add(1);
                 return Delivery::Overflow;
             }
-            let mut weg = 0;
+            let mut weg: u32 = 0;
             while !self.fits(n) && self.len > 0 {
                 self.pop_front();
-                weg += 1;
+                weg = weg.saturating_add(1);
             }
-            self.dropped += weg;
+            self.dropped = self.dropped.saturating_add(weg);
             self.append(t, value);
             return Delivery::Dropped(weg);
         }
@@ -163,33 +163,40 @@ impl<'a> Ring<'a> {
 
     /// Passt ein Element dieser Laenge noch hinein?
     fn fits(&self, n: usize) -> bool {
-        self.len < self.descs.len() && self.byte_len + n <= self.bytes.len()
+        self.len < self.descs.len() && self.byte_len.saturating_add(n) <= self.bytes.len()
     }
 
     /// Haengt ein Element an; der Aufrufer hat den Platz geprueft.
     fn append(&mut self, t: i64, value: &[u8]) {
-        let offset = (self.byte_head + self.byte_len) % self.bytes.len().max(1);
+        let offset = ring(self.byte_head, self.byte_len, self.bytes.len());
         for (i, b) in value.iter().enumerate() {
-            let at = (offset + i) % self.bytes.len().max(1);
-            self.bytes[at] = *b;
+            if let Some(slot) = self.bytes.get_mut(ring(offset, i, self.bytes.len())) {
+                *slot = *b;
+            }
         }
-        let slot = (self.head + self.len) % self.descs.len();
-        self.descs[slot] = Desc { seq: self.next_seq, t, offset: offset as u32, len: value.len() as u32 };
-        self.next_seq += 1;
-        self.len += 1;
-        self.byte_len += value.len();
+        if let Some(slot) = self.descs.get_mut(ring(self.head, self.len, self.descs.len())) {
+            *slot = Desc { seq: self.next_seq, t, offset, len: value.len() };
+        }
+        self.next_seq = self.next_seq.saturating_add(1);
+        self.len = self.len.saturating_add(1);
+        self.byte_len = self.byte_len.saturating_add(value.len());
     }
 
     /// Entfernt das aelteste Element.
     fn pop_front(&mut self) {
+        let Some(d) = self.oldest() else { return };
+        self.head = ring(self.head, 1, self.descs.len());
+        self.len = self.len.saturating_sub(1);
+        self.byte_head = ring(self.byte_head, d.len, self.bytes.len());
+        self.byte_len = self.byte_len.saturating_sub(d.len);
+    }
+
+    /// Der aelteste Deskriptor, wenn der Puffer nicht leer ist.
+    fn oldest(&self) -> Option<Desc> {
         if self.len == 0 {
-            return;
+            return None;
         }
-        let d = self.descs[self.head];
-        self.head = (self.head + 1) % self.descs.len();
-        self.len -= 1;
-        self.byte_head = (self.byte_head + d.len as usize) % self.bytes.len().max(1);
-        self.byte_len -= d.len as usize;
+        self.descs.get(self.head).copied()
     }
 
     /// Der Deskriptor an Position `i` des Fensters eines Konsumenten.
@@ -197,18 +204,15 @@ impl<'a> Ring<'a> {
     /// Das Fenster sind die Elemente ab `cursor` (9.6); `i` zaehlt darin
     /// ab null. `None` heisst: so weit reicht es nicht.
     pub fn at(&self, cursor: i64, i: usize) -> Option<Desc> {
-        let ab = self.ab(cursor)?;
-        if ab + i >= self.len {
-            return None;
-        }
-        Some(self.descs[(self.head + ab + i) % self.descs.len()])
+        let pos = self.ab(cursor)?.checked_add(i).filter(|&p| p < self.len)?;
+        self.descs.get(ring(self.head, pos, self.descs.len())).copied()
     }
 
     /// Zahl der Elemente im Fenster (`s.count`, 8.6).
     ///
     /// Liest ohne zu untersuchen und konsumiert darum nichts.
     pub fn count(&self, cursor: i64) -> usize {
-        self.ab(cursor).map_or(0, |ab| self.len - ab)
+        self.ab(cursor).map_or(0, |ab| self.len.saturating_sub(ab))
     }
 
     /// Der Inhalt eines Elements in den Puffer des Aufrufers.
@@ -217,9 +221,11 @@ impl<'a> Ring<'a> {
     /// umbrechen, darum wird er kopiert und nicht geliehen — ein Slice
     /// ueber die Naht hinweg gibt es nicht.
     pub fn read(&self, d: Desc, out: &mut [u8]) -> usize {
-        let n = (d.len as usize).min(out.len());
+        let n = d.len.min(out.len());
         for (i, slot) in out.iter_mut().enumerate().take(n) {
-            *slot = self.bytes[(d.offset as usize + i) % self.bytes.len().max(1)];
+            if let Some(b) = self.bytes.get(ring(d.offset, i, self.bytes.len())) {
+                *slot = *b;
+            }
         }
         n
     }
@@ -227,15 +233,12 @@ impl<'a> Ring<'a> {
     /// Position des Cursors im Puffer, oder `None`, wenn er dahinter
     /// liegt (das Fenster ist dann leer).
     fn ab(&self, cursor: i64) -> Option<usize> {
-        if self.len == 0 {
-            return None;
-        }
-        let erste = self.descs[self.head].seq;
+        let erste = self.oldest()?.seq;
         if cursor <= erste {
             return Some(0);
         }
-        let ab = (cursor - erste) as usize;
-        if ab >= self.len { None } else { Some(ab) }
+        let ab = usize::try_from(cursor.saturating_sub(erste)).ok()?;
+        (ab < self.len).then_some(ab)
     }
 
     /// Gibt frei, was kein Konsument mehr sehen kann (9.6, Eviction).
@@ -245,8 +248,15 @@ impl<'a> Ring<'a> {
     /// der Grund, warum mehrere Maschinen denselben Strom verschieden
     /// auslegen koennen, ohne einen Verteiler (8.6).
     pub fn evict(&mut self, min_cursor: i64) {
-        while self.len > 0 && self.descs[self.head].seq < min_cursor {
+        while self.oldest().is_some_and(|d| d.seq < min_cursor) {
             self.pop_front();
         }
     }
+}
+
+/// Die Position `a + b` in einem Ring der Laenge `m`; ein leerer Ring hat
+/// nur die Position null. Die Summe laeuft nicht ueber: Beide Summanden
+/// liegen unter der Laenge eines Slice.
+fn ring(a: usize, b: usize, m: usize) -> usize {
+    a.saturating_add(b).checked_rem(m).unwrap_or(0)
 }

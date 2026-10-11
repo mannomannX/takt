@@ -173,7 +173,7 @@ als `#![deny(…)]` am Kopf jedes Crates ihrer Liste.
 | Stufe | Crates | dazu |
 |---|---|---|
 | 1 | jedes eigene Crate | rustc `deprecated`, `unreachable_code`, `unused_must_use`, `unused_assignments`, `unused_mut`, `unfulfilled_lint_expectations`; Clippy `unwrap_used`, `panic`, `todo`, `unimplemented`, `dbg_macro`, `exit`, `let_underscore_must_use` (außerhalb von Tests) |
-| 2 | was auf dem Ziel läuft oder ins Abbild gelinkt wird: `takt-rt-core`, `takt-rt-baremetal`, `takt-rt-linux`, `takt-native`, `takt-hal` (der Kern ohne `mir`), `takt-crypto`, `libtaktm`, `takt-board-*`, `takt-bringup-*`, `takt-trampoline-stm32f401`, `takt-native-abi`, `takt-embed`, `takt-embed-c` | Clippy `expect_used`, `arithmetic_side_effects`, `indexing_slicing`, `as_conversions`, `fn_to_numeric_cast_any`, `shadow_unrelated`, `else_if_without_else`, `partial_pub_fields`; rustc `unreachable_pub`; nur `Ordering::SeqCst` |
+| 2 | was auf dem Ziel läuft oder ins Abbild gelinkt wird: `takt-rt-core`, `takt-rt-baremetal`, `takt-rt-linux`, `takt-native`, `takt-hal` (der Kern ohne `mir`), `takt-crypto`, `libtaktm`, `takt-board-*`, `takt-bringup-*`, `takt-trampoline-stm32f401`, `takt-native-abi`, `takt-embed`, `takt-embed-c` | Clippy `expect_used`, `arithmetic_side_effects`, `indexing_slicing`, `as_conversions`, `fn_to_numeric_cast_any`, `shadow_unrelated`, `else_if_without_else`; rustc `unreachable_pub`; nur `Ordering::SeqCst` |
 | 2 mit `unsafe` | die Crates aus Abschnitt 2 | Clippy `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`; rustc `unsafe_op_in_unsafe_fn` |
 
 **Abweichungen** stehen am Ort als
@@ -280,7 +280,7 @@ im Katalog:
 | 9.4.1 | C6 | R.15.7 |
 | 12.3.1 | C5 | R.19.2 |
 | 13.3.3 | C6 | rustc: Parameter tragen Namen |
-| 14.1.1 | C6 | Stufe 2: `partial_pub_fields` |
+| 14.1.1 | C6 | Review: ein öffentliches Feld trägt keine Invariante; MISRA C kennt die Regel nicht, `partial_pub_fields` hiesse Zugriffsmethoden in jedem Port ohne Gewinn |
 | 15.0.1 | C5 | Sprache: `Copy`, `Clone`, `Drop` |
 | 18.5.1 | C5 | D.4.7 |
 | 18.5.2 | C6 | D.4.1, R.21.8 |

@@ -52,8 +52,8 @@ fn same(b: &Buffer, r: &Ring<'_>, cursor: i64, step_of: &str) {
         let d = r.at(cursor, i).unwrap_or_else(|| panic!("{step_of}: Element {i} fehlt im Ring"));
         assert_eq!(e.seq, d.seq, "{step_of}: `seq` von Element {i}");
         assert_eq!(e.t, d.t, "{step_of}: `.t` von Element {i}");
-        assert_eq!(e.bytes, d.len, "{step_of}: Laenge von Element {i}");
-        let mut out = vec![0u8; d.len as usize];
+        assert_eq!(usize::try_from(e.bytes).ok(), Some(d.len), "{step_of}: Laenge von Element {i}");
+        let mut out = vec![0u8; d.len];
         assert_eq!(r.read(d, &mut out), out.len(), "{step_of}: Element {i} liest sich nicht ganz");
         assert_eq!(out, content(&e.value), "{step_of}: Inhalt von Element {i}");
     }

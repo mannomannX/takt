@@ -77,7 +77,7 @@ fn same(r: &Ring<'_>, m: &Model, cursor: i64, at_label: &str) {
     for (i, (seq, content)) in window.iter().enumerate() {
         let d = r.at(cursor, i).unwrap_or_else(|| panic!("{at_label}: Element {i} fehlt"));
         assert_eq!(d.seq, *seq, "{at_label}: `seq` von Element {i}");
-        assert_eq!(d.len as usize, content.len(), "{at_label}: die Laenge von Element {i}");
+        assert_eq!(d.len, content.len(), "{at_label}: die Laenge von Element {i}");
         let mut buf = [0u8; CAPB];
         let n = r.read(d, &mut buf);
         assert_eq!(&buf[..n], &content[..], "{at_label}: der Inhalt von Element {i}");

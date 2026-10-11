@@ -39,6 +39,7 @@ pub const EXPECTED: (u32, u32) = {
 };
 
 /// Dreht `(x, y)` [`STEPS`] Mal.
+#[expect(clippy::arithmetic_side_effects, reason = "MISRA C:2025 D.4.1: i < STEPS, der Zaehler laeuft nicht ueber")]
 const fn rotate(mut x: f32, mut y: f32) -> (f32, f32) {
     let mut i = 0;
     while i < STEPS {

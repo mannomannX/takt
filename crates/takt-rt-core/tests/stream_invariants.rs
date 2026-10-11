@@ -45,9 +45,9 @@ fn invariants(r: &Ring<'_>, cursor: i64, at_label: &str) {
         vorige = Some(d.seq);
         let mut buf = [0u8; 8];
         let n = r.read(d, &mut buf);
-        let want: Vec<u8> = (0..d.len as usize).map(|i| content_of(d.seq, i)).collect();
+        let want: Vec<u8> = (0..d.len).map(|i| content_of(d.seq, i)).collect();
         assert_eq!(&buf[..n], &want[..], "{at_label}: Inhalt von Element {}", d.seq);
-        bytes += d.len as usize;
+        bytes += d.len;
     }
     assert!(bytes <= r.capacity_bytes(), "{at_label}: {bytes} Byte, mehr als CAPB");
     // Die nächste Nummer liegt hinter der letzten vergebenen.
@@ -136,10 +136,10 @@ fn content_survives_the_ring_boundary() {
         while let Some(e) = r.at(cursor, i) {
             let mut buf = [0u8; 4];
             let gelesen = r.read(e, &mut buf);
-            assert_eq!(gelesen, e.len as usize, "Schritt {step_of}: verschieden viele Bytes");
+            assert_eq!(gelesen, e.len, "Schritt {step_of}: verschieden viele Bytes");
             let want: Vec<u8> = (0..gelesen).map(|j| content_of(e.seq, j)).collect();
             assert_eq!(&buf[..gelesen], &want[..], "Schritt {step_of}: Inhalt von Element {}", e.seq);
-            wrapped += usize::from(e.offset as usize + gelesen > 11);
+            wrapped += usize::from(e.offset + gelesen > 11);
             i += 1;
         }
         if let Some(e) = r.at(cursor, 0) {

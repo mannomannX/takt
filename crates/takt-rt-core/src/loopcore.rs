@@ -751,7 +751,8 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
     /// Der erste Tick, der nicht vor `t` beginnt.
     fn boundary_at(&self, t: i64) -> u64 {
         let since = t.saturating_sub(self.start).max(0);
-        u64::try_from(since.div_euclid(self.tick_ns) + i64::from(since.rem_euclid(self.tick_ns) != 0)).unwrap_or(0)
+        u64::try_from(since.div_euclid(self.tick_ns).saturating_add(i64::from(since.rem_euclid(self.tick_ns) != 0)))
+            .unwrap_or(0)
     }
 
     /// Beendet den laufenden Schlaf vorzeitig an Grenze `j`: Dort rechnet
@@ -883,7 +884,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
         self.release();
         // Was vor dem Abtasten geschah, sieht der Schritt selbst (9.9).
         self.clock.woken();
-        let drift = began - self.deadline;
+        let drift = began.saturating_sub(self.deadline);
         self.overrun.observe_drift(drift, self.tick_ns);
 
         // 7.3: Der Overrun des vorigen Ticks wirkt jetzt. Er kommt vor dem
@@ -908,7 +909,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
         let now = tick_end(self.k, self.tick_ns);
         self.program.tick(self.k, now);
         self.commit_or_hold();
-        let took = self.clock.now() - began;
+        let took = self.clock.now().saturating_sub(began);
 
         // 7.3: am Raster gemessen — der Schritt endet `drift + took` nach
         // dem nominalen Beginn dieses Ticks, und eine Periode danach beginnt
@@ -1005,7 +1006,9 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
     fn journal_may_run(&self, blocking_ns: Option<i64>) -> bool {
         match blocking_ns {
             None => true,
-            Some(cost) => self.overrun.policy() == Policy::Alert || self.deadline - self.clock.now() >= cost,
+            Some(cost) => {
+                self.overrun.policy() == Policy::Alert || self.deadline.saturating_sub(self.clock.now()) >= cost
+            }
         }
     }
 
@@ -1075,7 +1078,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
             return 0;
         }
         // n = d / T0, und der Tick an der Frist selbst wird ausgefuehrt.
-        let n = u64::try_from(d / self.tick_ns).unwrap_or(0).saturating_sub(1);
+        let n = u64::try_from(d.checked_div(self.tick_ns).unwrap_or(0)).unwrap_or(0).saturating_sub(1);
         // Mit Ende rechnet der letzte Tick `horizon - 1` an der Frist.
         self.horizon.map_or(n, |h| n.min(h.saturating_sub(self.k.saturating_add(2))))
     }

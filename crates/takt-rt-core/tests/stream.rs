@@ -200,8 +200,8 @@ fn the_bounds_hold_under_pressure() {
         r.push(0, &[(k % 7) as u8, 0, 0][..(k % 3 + 1) as usize], true);
         assert!(r.len() <= r.capacity(), "die Elementschranke haelt");
         assert!(r.count(0) <= r.capacity(), "das Fenster ist durch CAP beschraenkt");
-        let bytes: u32 = (0..r.len()).filter_map(|i| r.at(i64::MIN, i)).map(|d| d.len).sum();
-        assert!(bytes as usize <= r.capacity_bytes(), "die Byteschranke haelt: {bytes}");
+        let bytes: usize = (0..r.len()).filter_map(|i| r.at(i64::MIN, i)).map(|d| d.len).sum();
+        assert!(bytes <= r.capacity_bytes(), "die Byteschranke haelt: {bytes}");
     }
 }
 

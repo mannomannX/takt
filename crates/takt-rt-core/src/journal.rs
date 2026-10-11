@@ -42,10 +42,30 @@ pub const VERSION: u16 = 2;
 /// Laenge des Eintragskopfes in Byte.
 pub const HEADER: usize = 32;
 
+/// [`HEADER`] als Versatz im Slot.
+const HEADER32: u32 = 32;
+
+const _: () = assert!(HEADER == 32 && HEADER32 == 32, "HEADER und HEADER32 sind dieselbe Laenge");
+
 /// Laenge eines Eintrags im Slot: Kopf und Nutzlast, auf vier Byte
-/// ausgerichtet, weil das Flash wortweise programmiert.
+/// ausgerichtet, weil das Flash wortweise programmiert. Was nicht in
+/// `u32` passt, passt in keinen Slot und ergibt `u32::MAX`.
 fn entry_len(payload: usize) -> u32 {
-    ((HEADER + payload + 3) & !3) as u32
+    u32::try_from(payload)
+        .ok()
+        .and_then(|p| p.checked_add(HEADER32))
+        .and_then(|n| n.checked_add(3))
+        .map_or(u32::MAX, |n| n & !3)
+}
+
+/// Ein Versatz im Slot als Index; die Ziele haben mindestens 32 Bit.
+fn to_usize(n: u32) -> usize {
+    usize::try_from(n).unwrap_or(usize::MAX)
+}
+
+/// Der andere der beiden Slots.
+fn other(slot: u8) -> u8 {
+    if slot == 0 { 1 } else { 0 }
 }
 
 /// Der Kopf eines Slots.
@@ -74,9 +94,7 @@ impl Header {
 
     /// Liest den Kopf; `None` bei falschem Magic oder unbekannter Version.
     fn read(from: &[u8]) -> Option<Header> {
-        if from.len() < HEADER {
-            return None;
-        }
+        let from: &[u8; HEADER] = from.first_chunk()?;
         let magic = u32::from_le_bytes(from[0..4].try_into().ok()?);
         if magic != MAGIC {
             return None;
@@ -239,14 +257,14 @@ impl<N: Nvm> Journal<N> {
     pub fn load(&mut self, into: &mut [u8]) -> Loaded {
         let mut best: Option<(u64, u8, u32, u32)> = None;
         let mut free = [None; 2];
-        for slot in 0..2u8 {
+        for (slot, free_of) in (0..2u8).zip(free.iter_mut()) {
             let scan = self.scan_slot(slot, into);
             if let Some((sequence, offset, length)) = scan.best
                 && best.is_none_or(|(s, _, _, _)| sequence > s)
             {
                 best = Some((sequence, slot, offset, length));
             }
-            free[slot as usize] = scan.free;
+            *free_of = scan.free;
         }
         self.loaded = true;
         let Some((sequence, slot, offset, length)) = best else {
@@ -261,7 +279,7 @@ impl<N: Nvm> Journal<N> {
         // unterlaege beim naechsten Start einem aelteren Eintrag.
         self.sequence = sequence;
         self.slot = slot;
-        self.free = free[slot as usize];
+        self.free = free.get(usize::from(slot)).copied().flatten();
         self.ever_written = true;
         // Der Puffer traegt jetzt vielleicht einen anderen Eintrag; noch
         // einmal den Gewinner lesen.
@@ -281,15 +299,18 @@ impl<N: Nvm> Journal<N> {
             if best.is_none_or(|(s, _, _)| header.sequence > s) {
                 best = Some((header.sequence, end, length));
             }
-            end = end.saturating_add(entry_len(length as usize));
+            end = end.saturating_add(entry_len(to_usize(length)));
         }
         let mut at = end;
         let mut clean = true;
         while clean && at < size {
             let mut chunk = [0u8; HEADER];
-            let n = (size - at).min(HEADER as u32) as usize;
-            clean = self.nvm.read(slot, at, &mut chunk[..n]) && chunk[..n].iter().all(|b| *b == 0xFF);
-            at += n as u32;
+            let n = size.saturating_sub(at).min(HEADER32);
+            clean = match chunk.get_mut(..to_usize(n)) {
+                Some(part) => self.nvm.read(slot, at, part) && part.iter().all(|b| *b == 0xFF),
+                None => false,
+            };
+            at = at.saturating_add(n);
         }
         Scan { best, free: clean.then_some(end) }
     }
@@ -298,7 +319,7 @@ impl<N: Nvm> Journal<N> {
     /// die Nutzlast. `None` fuer Geloeschtes, Fremdes und Verfaelschtes.
     fn read_entry(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> Option<(Header, u32)> {
         let size = self.nvm.slot_size();
-        if offset.saturating_add(HEADER as u32) > size {
+        if offset.saturating_add(HEADER32) > size {
             return None;
         }
         let mut head = [0u8; HEADER];
@@ -309,12 +330,12 @@ impl<N: Nvm> Journal<N> {
         if header.logic_hash != self.logic_hash {
             return None;
         }
-        let length = header.length as usize;
+        let length = to_usize(header.length);
         if length > into.len() || offset.saturating_add(entry_len(length)) > size {
             return None;
         }
         let payload = into.get_mut(..length)?;
-        if !self.nvm.read(slot, offset + HEADER as u32, payload) {
+        if !self.nvm.read(slot, offset.saturating_add(HEADER32), payload) {
             return None;
         }
         if checksum(&head, payload) != header.crc32 {
@@ -335,7 +356,7 @@ impl<N: Nvm> Journal<N> {
         }
         if self.phase == Phase::Idle {
             if self.differs(current, stored, *stored_len)
-                && (!self.ever_written || now - self.last_write_ns >= self.min_interval_ns)
+                && (!self.ever_written || now.saturating_sub(self.last_write_ns) >= self.min_interval_ns)
             {
                 self.last_write_ns = now;
                 self.begin(current, stored, stored_len);
@@ -391,7 +412,8 @@ impl<N: Nvm> Journal<N> {
         match (self.phase, self.nvm.poll()) {
             (_, NvmState::Failed) => self.give_up(stored_len),
             (Phase::Erasing, NvmState::Done) => {
-                if self.nvm.begin_write(slot, at + HEADER as u32, &stored[..self.pending_len]) {
+                let payload = stored.get(..self.pending_len);
+                if payload.is_some_and(|p| self.nvm.begin_write(slot, at.saturating_add(HEADER32), p)) {
                     self.phase = Phase::Payload;
                 } else {
                     self.give_up(stored_len);
@@ -411,7 +433,7 @@ impl<N: Nvm> Journal<N> {
     }
 
     fn differs(&self, current: &[u8], stored: &[u8], stored_len: usize) -> bool {
-        current.len() != stored_len || current != &stored[..stored_len.min(stored.len())]
+        current.len() != stored_len || stored.get(..stored_len) != Some(current)
     }
 
     /// Beginnt einen Vorgang: den Stand nach `stored` kopieren, Kopf
@@ -428,23 +450,29 @@ impl<N: Nvm> Journal<N> {
     /// je `min_interval` umsonst geloescht.
     fn begin(&mut self, current: &[u8], stored: &mut [u8], stored_len: &mut usize) {
         let n = current.len();
-        if n > stored.len() || entry_len(n) > self.nvm.slot_size() {
-            self.target = (1 - self.slot, 0);
+        let (Some(payload), Ok(length)) = (stored.get_mut(..n), u32::try_from(n)) else {
+            self.target = (other(self.slot), 0);
+            self.give_up(stored_len);
+            return;
+        };
+        if entry_len(n) > self.nvm.slot_size() {
+            self.target = (other(self.slot), 0);
             self.give_up(stored_len);
             return;
         }
-        stored[..n].copy_from_slice(&current[..n]);
+        payload.copy_from_slice(current);
+        let payload: &[u8] = payload;
         *stored_len = n;
         let header = Header {
             version: VERSION,
             sequence: self.sequence.wrapping_add(1),
             logic_hash: self.logic_hash,
-            length: n as u32,
+            length,
             crc32: 0,
         };
         let mut head = [0u8; HEADER];
         header.write(&mut head);
-        let crc = checksum(&head, &stored[..n]);
+        let crc = checksum(&head, payload);
         Header { crc32: crc, ..header }.write(&mut head);
         self.head = head;
         self.pending_len = n;
@@ -454,10 +482,10 @@ impl<N: Nvm> Journal<N> {
             Some(at) if at.saturating_add(entry) <= self.nvm.slot_size() => {
                 self.target = (self.slot, at);
                 self.phase = Phase::Payload;
-                self.nvm.begin_write(self.slot, at + HEADER as u32, &stored[..n])
+                self.nvm.begin_write(self.slot, at.saturating_add(HEADER32), payload)
             }
             _ => {
-                self.target = (1 - self.slot, 0);
+                self.target = (other(self.slot), 0);
                 self.phase = Phase::Erasing;
                 self.nvm.begin_erase(self.target.0)
             }
@@ -471,7 +499,7 @@ impl<N: Nvm> Journal<N> {
         let (slot, at) = self.target;
         self.sequence = self.sequence.wrapping_add(1);
         self.slot = slot;
-        self.free = Some(at + entry_len(self.pending_len));
+        self.free = Some(at.saturating_add(entry_len(self.pending_len)));
         self.ever_written = true;
         self.writes = self.writes.saturating_add(1);
         self.phase = Phase::Idle;
@@ -720,13 +748,18 @@ impl<N: Nvm> Persist<'_, N> {
     fn load(&mut self, program: &mut impl Program) -> (Loaded, usize) {
         // Ein Eintrag, der nicht in beide Puffer passt, gilt nicht.
         let room = self.current.len().min(self.stored.len());
-        let found = self.journal.load(&mut self.current[..room]);
+        let found = self.current.get_mut(..room).map_or(Loaded::Empty, |into| self.journal.load(into));
         let applied = match found {
             Loaded::Found { length, .. } => {
-                let n = length as usize;
-                self.stored[..n].copy_from_slice(&self.current[..n]);
-                self.stored_len = n;
-                program.persist_restore(&self.current[..n])
+                let n = to_usize(length);
+                match (self.stored.get_mut(..n), self.current.get(..n)) {
+                    (Some(stored), Some(current)) => {
+                        stored.copy_from_slice(current);
+                        self.stored_len = n;
+                        program.persist_restore(current)
+                    }
+                    _ => 0,
+                }
             }
             Loaded::Empty => 0,
         };
@@ -736,8 +769,9 @@ impl<N: Nvm> Persist<'_, N> {
     /// Ein Schritt des Journals; nie blockierend.
     pub fn poll(&mut self, now: i64, program: &mut impl Program) {
         let n = program.persist_snapshot(self.current);
-        let (current, stored) = (&*self.current, &mut *self.stored);
-        self.journal.poll(now, &current[..n], stored, &mut self.stored_len);
+        if let Some(current) = self.current.get(..n) {
+            self.journal.poll(now, current, self.stored, &mut self.stored_len);
+        }
     }
 
     /// Schreibt ausstehende Aenderungen synchron (5.9: vor `reboot`,
@@ -745,8 +779,8 @@ impl<N: Nvm> Persist<'_, N> {
     /// ([`Journal::flush`]).
     pub fn flush(&mut self, program: &mut impl Program, more: impl FnMut() -> bool) -> bool {
         let n = program.persist_snapshot(self.current);
-        let (current, stored) = (&*self.current, &mut *self.stored);
-        self.journal.flush(&current[..n], stored, &mut self.stored_len, more)
+        let Some(current) = self.current.get(..n) else { return false };
+        self.journal.flush(current, self.stored, &mut self.stored_len, more)
     }
 
     /// Das Journal darunter.
@@ -907,11 +941,12 @@ impl<const N: usize> FakeNvm<N> {
     /// Das naechste Zufallsbyte (xorshift32).
     fn noise(&mut self) -> u8 {
         let mut x = self.garbage.unwrap_or(1);
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
+        x ^= x.wrapping_shl(13);
+        x ^= x.wrapping_shr(17);
+        x ^= x.wrapping_shl(5);
         self.garbage = Some(x);
-        x as u8
+        let [low, ..] = x.to_le_bytes();
+        low
     }
 
     /// Wie viele Bytes seit dem letzten [`FakeNvm::cut_at`] geschrieben wurden.
@@ -926,7 +961,13 @@ impl<const N: usize> FakeNvm<N> {
 
     /// Der rohe Inhalt eines Slots.
     pub fn slot(&self, slot: u8) -> &[u8; N] {
-        &self.slots[slot as usize]
+        let [first, second] = &self.slots;
+        if slot == 0 { first } else { second }
+    }
+
+    fn slot_mut(&mut self, slot: u8) -> &mut [u8; N] {
+        let [first, second] = &mut self.slots;
+        if slot == 0 { first } else { second }
     }
 
     /// Schreibt ein Byte, sofern der Strom noch da ist. Programmieren
@@ -939,14 +980,14 @@ impl<const N: usize> FakeNvm<N> {
         if self.cut {
             if self.garbage.is_some() {
                 let noise = self.noise();
-                if let Some(cell) = self.slots[slot as usize].get_mut(at) {
+                if let Some(cell) = self.slot_mut(slot).get_mut(at) {
                     *cell = if erase { *cell | noise } else { *cell & noise };
                 }
             }
             return;
         }
         self.written = self.written.saturating_add(1);
-        if let Some(cell) = self.slots[slot as usize].get_mut(at) {
+        if let Some(cell) = self.slot_mut(slot).get_mut(at) {
             *cell = if erase { byte } else { *cell & byte };
         }
     }
@@ -960,7 +1001,7 @@ impl<const N: usize> Default for FakeNvm<N> {
 
 impl<const N: usize> Nvm for FakeNvm<N> {
     fn slot_size(&self) -> u32 {
-        N as u32
+        u32::try_from(N).unwrap_or(u32::MAX)
     }
 
     fn begin_erase(&mut self, slot: u8) -> bool {
@@ -970,7 +1011,7 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         self.count_operation();
         self.job = Job::Erase(slot);
         self.busy = self.latency;
-        self.erases += 1;
+        self.erases = self.erases.saturating_add(1);
         true
     }
 
@@ -980,7 +1021,9 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         }
         self.count_operation();
         let mut buf = [0u8; N];
-        buf[..bytes.len()].copy_from_slice(bytes);
+        if let Some(head) = buf.get_mut(..bytes.len()) {
+            head.copy_from_slice(bytes);
+        }
         self.job = Job::Write { slot, offset, len: bytes.len(), bytes: buf };
         self.busy = self.latency;
         true
@@ -995,7 +1038,7 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         if self.busy == 0 {
             return NvmState::Idle;
         }
-        self.busy -= 1;
+        self.busy = self.busy.saturating_sub(1);
         if self.busy > 0 {
             return NvmState::Busy;
         }
@@ -1012,7 +1055,7 @@ impl<const N: usize> Nvm for FakeNvm<N> {
             }
             Job::Write { slot, offset, len, bytes } => {
                 for (i, b) in bytes.iter().enumerate().take(len) {
-                    self.put(slot, offset as usize + i, *b, false);
+                    self.put(slot, to_usize(offset).saturating_add(i), *b, false);
                 }
             }
         }
@@ -1026,9 +1069,9 @@ impl<const N: usize> Nvm for FakeNvm<N> {
         if failing {
             return false;
         }
-        let Some(src) = self.slots.get(slot as usize) else { return false };
-        let at = offset as usize;
-        let Some(slice) = src.get(at..at + into.len()) else { return false };
+        let Some(src) = self.slots.get(usize::from(slot)) else { return false };
+        let at = to_usize(offset);
+        let Some(slice) = at.checked_add(into.len()).and_then(|end| src.get(at..end)) else { return false };
         into.copy_from_slice(slice);
         true
     }

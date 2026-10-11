@@ -69,11 +69,11 @@ impl Overrun {
             self.late = self.late.saturating_add(1);
         }
         self.worst_drift = self.worst_drift.max(drift);
-        if tick_ns > 0 {
-            let (now, before) = (drift / tick_ns, self.last_drift / tick_ns);
-            if now > before {
-                self.lost = self.lost.saturating_add(u64::try_from(now - before).unwrap_or(0));
-            }
+        if tick_ns > 0
+            && let (Some(now), Some(before)) = (drift.checked_div(tick_ns), self.last_drift.checked_div(tick_ns))
+            && now > before
+        {
+            self.lost = self.lost.saturating_add(u64::try_from(now.saturating_sub(before)).unwrap_or(0));
         }
         self.last_drift = drift;
     }
@@ -91,7 +91,7 @@ impl Overrun {
             return Seen { over: false, fault: false };
         }
         self.count = self.count.saturating_add(1);
-        self.worst = self.worst.max(elapsed - tick_ns);
+        self.worst = self.worst.max(elapsed.saturating_sub(tick_ns));
         Seen { over: true, fault: self.policy == Policy::Fault }
     }
 }
