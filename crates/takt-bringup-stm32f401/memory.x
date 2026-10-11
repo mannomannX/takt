@@ -1,13 +1,15 @@
 /* Speicherkarte der WeAct Black Pill (STM32F401CCU6).
  *
  * **Der Versatz ist nicht Zierde.** Das Board wird mit einem
- * HID-Bootloader ausgeliefert, der die ersten Flash-Seiten belegt und
- * die Anwendung dahinter erwartet. Wer an 0x0800_0000 linkt,
- * ueberschreibt ihn beim ersten Flashen — und danach geht nur noch SWD.
+ * HID-Bootloader ausgeliefert, der Sektor 0 belegt und nach 0x0800_4000
+ * springt. Wer an 0x0800_0000 linkt, ueberschreibt ihn beim ersten
+ * Flashen — und danach geht nur noch SWD.
  *
- * Der WeAct-Bootloader belegt 16 KiB. Wird spaeter ueber SWD geflasht
- * (mit `probe-rs`), kann der Versatz entfallen; dann steht hier
- * 0x0800_0000 und die vollen 256 KiB.
+ * Die Sektoren dahinter (FB-385): In Sektor 1 liegt das Sprungbrett
+ * (`takt-trampoline-stm32f401`), das die Anwendung startet; Sektor 2 und 3
+ * halten das `persist`-Journal (`takt_board_stm32f401::nvm`). Die
+ * Anwendung beginnt darum in Sektor 4 und hat dessen 64 KiB und die
+ * 128 KiB von Sektor 5.
  *
  * Die Zahlen gehen in `takt size` (11.5) ein: Fuer `baremetal`-Profile
  * ist die Summe gegen `ram` und `flash` der Hardware-Konfiguration zu
@@ -15,8 +17,8 @@
  */
 MEMORY
 {
-  /* 256 KiB gesamt, davon 16 KiB fuer den Bootloader. */
-  FLASH : ORIGIN = 0x08004000, LENGTH = 240K
+  /* 256 KiB gesamt; davor Bootloader, Sprungbrett und Journal. */
+  FLASH : ORIGIN = 0x08010000, LENGTH = 192K
   RAM   : ORIGIN = 0x20000000, LENGTH = 64K
 }
 
@@ -34,7 +36,7 @@ INCLUDE takt_shift.x
 
 /* `.text` beginnt auf der naechsten 8-Byte-Grenze hinter der
  * Vektortabelle. `cortex-m-rt` legt es direkt dahinter (404 Byte, also
- * bei 0x08004194), aber die f64-Routinen aus `compiler_builtins`
+ * bei 0x08010194), aber die f64-Routinen aus `compiler_builtins`
  * (`__adddf3`, `__muldf3`, `__divdf3`) verlangen 8 Byte Ausrichtung —
  * jedes Programm mit f64 auf diesem Kern ohne f64-FPU zieht sie herein.
  * Der Linker richtete die Routinen selbst richtig aus und warnte nur

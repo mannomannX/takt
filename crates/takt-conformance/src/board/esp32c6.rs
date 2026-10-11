@@ -18,10 +18,10 @@ use takt_llvm::target::Target;
 
 use super::{Board, Bringup, Builder, ConsoleLine, Failure, Form, Options, capture, port_listed, run_bounded};
 
-const BRINGUP: Bringup = Bringup {
+pub(super) const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-esp32c6",
     triple: "riscv32imac-unknown-none-elf",
-    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "board_ram.x", "millicode.S"],
+    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "board_ram.x", "millicode.S", "../../corpus-try/hw/esp32c6.hw"],
     // 12.3: RAM-Residenz des Takt-Programms.
     env: &[("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true"), ("ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM", "false")],
 };

@@ -443,7 +443,9 @@ pub(crate) struct Bringup {
     pub dir: &'static str,
     /// Das Zieltripel.
     pub triple: &'static str,
-    /// Dateien neben dem Manifest, die der Bau liest.
+    /// Dateien, die der Bau liest, relativ zum Manifest: auch die
+    /// Hardware-Konfiguration des Boards, die `build.rs` ohne
+    /// `TAKT_HARDWARE` nimmt (FB-514).
     pub inputs: &'static [&'static str],
     /// Umgebung des Baus, die `.cargo/config.toml` des Bring-ups sonst
     /// setzt: Von aussen gebaut greift jene Datei nicht.
@@ -611,22 +613,28 @@ impl Bringup {
             Bin::Bench { shift } => cargo.args(["--features", "bench"]).env("TAKT_BENCH_SHIFT", shift.to_string()),
             _ => cargo.env_remove("TAKT_BENCH_SHIFT"),
         };
-        let out = cargo.output().map_err(|e| format!("cargo: {e}"))?;
-        if !out.status.success() {
-            return Err(String::from_utf8_lossy(&out.stderr).into_owned());
-        }
-        // Die JSON-Meldungen nennen das Binary; ein Parser fuer eine
-        // Zeichenkette in einer Zeile ist kuerzer als eine Abhaengigkeit.
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|l| {
-                let rest = &l[l.find("\"executable\":\"")? + "\"executable\":\"".len()..];
-                Some(rest[..rest.find('"')?].replace("\\\\", "\\"))
-            })
-            .next_back()
-            .map(PathBuf::from)
-            .ok_or_else(|| "cargo meldete kein Binary".to_string())
+        built_executable(&mut cargo)
     }
+}
+
+/// Fuehrt `cargo build --message-format=json-render-diagnostics` aus und
+/// nennt das gebaute Binary.
+pub(crate) fn built_executable(cargo: &mut Command) -> Result<PathBuf, String> {
+    let out = cargo.output().map_err(|e| format!("cargo: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    // Die JSON-Meldungen nennen das Binary; ein Parser fuer eine
+    // Zeichenkette in einer Zeile ist kuerzer als eine Abhaengigkeit.
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| {
+            let rest = &l[l.find("\"executable\":\"")? + "\"executable\":\"".len()..];
+            Some(rest[..rest.find('"')?].replace("\\\\", "\\"))
+        })
+        .next_back()
+        .map(PathBuf::from)
+        .ok_or_else(|| "cargo meldete kein Binary".to_string())
 }
 
 /// Ein Programm und die Konfigurationen, die es per `import channels`
@@ -924,6 +932,19 @@ pub(crate) fn port_listed(port: &str, present: bool, within: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Jede Eingabe eines Bring-up-Baus gibt es**, auch die
+    /// Hardware-Konfiguration des Boards: Sie geht so in den Stand jedes
+    /// Abbilds ein, und eine neue Kalibrierung baut neu (FB-514).
+    #[test]
+    fn every_input_of_a_bringup_build_exists() {
+        for bringup in [&super::stm32f401::BRINGUP, &super::esp32c6::BRINGUP] {
+            for name in bringup.inputs {
+                assert!(super::root().join(bringup.dir).join(name).is_file(), "{}: {name}", bringup.dir);
+            }
+            assert!(bringup.inputs.iter().any(|n| n.ends_with(".hw")), "{}: ohne Hardware-Konfiguration", bringup.dir);
+        }
+    }
 
     /// Ein Lauf des Boards: Kopf, Marke, `body`, Bilanz mit `sent` — in der
     /// Form, die `takt_rt_baremetal::run::report` schreibt (dessen Test

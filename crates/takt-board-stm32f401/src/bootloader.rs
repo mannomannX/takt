@@ -54,8 +54,9 @@ pub fn enter_if_requested() {
     }
 }
 
-/// Gibt das Board an den DFU-Bootloader des ROM; kehrt nicht zurueck.
-fn enter() -> ! {
+/// Gibt das Board an den DFU-Bootloader des ROM; kehrt nicht zurueck. Das
+/// Sprungbrett ruft es, wenn keine Anwendung da ist (FB-385).
+pub fn enter() -> ! {
     cortex_m::interrupt::disable();
     // SAFETY: Ab hier laeuft nichts mehr von der Anwendung: Interrupts sind
     // aus, und jedes Register, das die folgenden Zeilen anfassen, geht

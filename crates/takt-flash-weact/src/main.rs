@@ -4,6 +4,12 @@
 //! takt-flash-weact <abbild.bin> [--dry-run] [--no-reboot]
 //! ```
 //!
+//! Der Bootloader schreibt nach Sektor 1, und dort liegt seit FB-385 das
+//! Sprungbrett (`takt-trampoline-stm32f401`). Die Anwendung beginnt in
+//! Sektor 4, hinter dem Journal; sie schreibt der DFU-Bootloader des ROM
+//! (`takt_conformance::board::dfuse`), den das Sprungbrett ohne Anwendung
+//! selbst betritt.
+//!
 //! **Der Name nennt das Protokoll, nicht die Aufgabe.** Flashen ist
 //! nichts Allgemeines: Ein ST-Link spricht SWD, ein nRF52 mit
 //! Adafruit-Bootloader UF2, ein ESP32 sein eigenes Protokoll ueber UART,

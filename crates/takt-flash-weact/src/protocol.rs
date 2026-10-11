@@ -49,19 +49,21 @@ pub const SECTOR: usize = 1024;
 /// Berichte je Sektor.
 pub const REPORTS_PER_SECTOR: usize = SECTOR / PAYLOAD;
 
-/// Wohin die Anwendung geschrieben wird.
+/// Wohin der Bootloader schreibt und springt: Sektor 1.
 ///
 /// Der Bootloader belegt die ersten 16 KiB — auf dem F4 ist der erste
-/// Flash-Sektor ohnehin so gross. **Das Protokoll kennt kein Adressfeld:**
+/// Flash-Sektor ohnehin so gross. Seit FB-385 liegt in Sektor 1 das
+/// Sprungbrett (`takt-trampoline-stm32f401`); die Anwendung in Sektor 4
+/// schreibt der DFU-Bootloader des ROM. **Das Protokoll kennt kein Adressfeld:**
 /// Der Bootloader fuehrt seinen eigenen Seitenzaehler, den
 /// [`Command::ResetPage`] zurueckstellt, und legt den Versatz selbst
 /// darauf. Die Adresse steht hier nur, weil das Abbild dafuer gelinkt
 /// sein muss — siehe [`check`].
 pub const APP_ORIGIN: u32 = 0x0800_4000;
 
-/// Das Ende des Flash: 256 KiB des STM32F401CC, wie `memory.x` des
-/// Bring-ups (`LENGTH = 240K` ab [`APP_ORIGIN`]).
-pub const APP_END: u32 = 0x0804_0000;
+/// Das Ende von Sektor 1: Dahinter liegt das `persist`-Journal, das ein
+/// Abbild ueber diesen Bootloader nicht beruehren darf (FB-385).
+pub const APP_END: u32 = 0x0800_8000;
 
 /// Die Kennung, mit der jeder Befehl beginnt.
 pub const MAGIC: [u8; 6] = *b"WeAct:";
@@ -202,7 +204,7 @@ impl core::fmt::Display for ImageError {
             }
             ImageError::TooLarge(n) => write!(
                 f,
-                "Abbild mit {n} Byte passt nicht in den Anwendungsbereich ({} Byte ab {APP_ORIGIN:#010x})",
+                "Abbild mit {n} Byte passt nicht in Sektor 1 ({} Byte ab {APP_ORIGIN:#010x}); dahinter liegt das                  Journal",
                 APP_END - APP_ORIGIN
             ),
         }

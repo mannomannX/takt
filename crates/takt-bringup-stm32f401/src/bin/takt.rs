@@ -17,7 +17,8 @@
 //! 3. **Dieses Programm** — es setzt das Board auf, liefert die
 //!    Telemetriefunktionen und laesst die Schleife laufen.
 //!
-//! `tools/takt-on-board.sh` macht alle drei Schritte.
+//! `build.rs` macht die ersten beiden Schritte; geschrieben und gelesen wird
+//! das Abbild von den Board-Tests (`takt_conformance::board`).
 //!
 //! ## Was man sieht
 //!
@@ -46,12 +47,12 @@ use panic_halt as _;
 use stm32f4::stm32f401::Interrupt;
 #[cfg(not(form = "rtos"))]
 use stm32f4::stm32f401::NVIC;
-use stm32f4::stm32f401::{Peripherals, interrupt};
+use stm32f4::stm32f401::{FLASH, Peripherals, interrupt};
 #[cfg(form = "own")]
 use takt_board_stm32f401::JobContext;
 #[cfg(timer = "free")]
 use takt_board_stm32f401::alarm::Tim2Alarm;
-use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Iwdg, Led, Mpu, Telemetry, Wire, cycles, mpu, platform};
+use takt_board_stm32f401::{BAUD, Board, CORE_HZ, FlashNvm, Iwdg, Led, Mpu, Telemetry, Wire, cycles, mpu, platform};
 #[cfg(timer = "periodic")]
 use takt_board_stm32f401::{Tim2Tick, tick};
 #[cfg(timer = "periodic")]
@@ -59,7 +60,7 @@ use takt_rt_baremetal::TimerClock;
 use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, Trace};
 #[cfg(form = "own")]
 use takt_rt_baremetal::{LogicalClock, Sleep};
-use takt_rt_core::{Clock, FakeNvm, NextRun, Persist, Policy, Profile, Runtime};
+use takt_rt_core::{Clock, Journal, Loaded, NextRun, Persist, Policy, Profile, Runtime};
 
 /// Das Programm als Lieferform (12.11): Konstanten, Arena, Treiber-Traits,
 /// Kleber und Huelle, erzeugt von `takt build --emit embed` (`build.rs`).
@@ -67,7 +68,7 @@ mod app {
     #![allow(dead_code)]
     include!(env!("TAKT_APP_RS"));
 }
-use app::{HW_ADDRESSES, NVM_BLOCKING_NS, OVERRUN_ALERT, TICK_NS};
+use app::{HW_ADDRESSES, LOGIC_HASH, NVM_BLOCKING_NS, OVERRUN_ALERT, PERSIST_BOUND, PERSIST_MIN_INTERVAL_NS, TICK_NS};
 
 /// Die Frist des Watchdogs im Betrieb (12.3): zwei Perioden und ein
 /// blockierender NVM-Vorgang (8.10). Ein Tick, der darueber hinaus
@@ -96,6 +97,10 @@ const TICKS: Option<&str> = option_env!("TAKT_TICKS");
 /// dauert (FB-292). `TAKT_TIMED` beim Bau laesst die Uhr laufen, fuer den
 /// Tick-Jitter von `takt bench`.
 const LOGICAL: bool = TICKS.is_some() && option_env!("TAKT_TIMED").is_none();
+
+/// `TAKT_FRESH_JOURNAL` beim Bau gesetzt: das Journal vor dem Lauf
+/// loeschen, damit der Lauf wie der Interpreter ohne Speicher beginnt.
+const FRESH_JOURNAL: bool = option_env!("TAKT_FRESH_JOURNAL").is_some();
 
 /// `TAKT_HOSTILE_FPU` beim Bau: FPSCR und FPDSCR vor dem Lauf auf
 /// Flush-to-Zero, Default-NaN und Rundung gegen null, wie ein Wirt sie fuer
@@ -218,15 +223,53 @@ static mut JOB_STACK: app::JobStack = app::JobStack::new();
 /// statisch, weil sie ihn ueber den Aufbau hinaus halten.
 static mut JOBS: Option<app::Jobs<'static>> = None;
 
-/// Das Programm auf seiner Arena (12.11).
+/// Die Puffer des Journals (5.9): der Stand des Programms und der zuletzt
+/// geschriebene. Statisch wie die Arena: Auf dem Hauptstack laegen sie unter
+/// jedem Tick (12.3).
+static mut PERSIST_CURRENT: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
+static mut PERSIST_STORED: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
+
+/// Das Journal eines Programms mit `persist` im Flash (5.9, FB-385).
+type Journaled = Option<Persist<'static, FlashNvm>>;
+
+/// Das Programm auf seiner Arena (12.11) und sein Journal (5.9). `s0` kommt
+/// aus dem Journal, darum geladen vor dem ersten Eintritt; ohne `persist`
+/// im Programm gibt es kein Journal und keinen Flash-Zugriff.
 ///
 /// # Safety
 ///
-/// Einmal je Lauf: Arena und Pruefstand gehoeren danach dem Programm.
-unsafe fn program() -> app::Program<'static> {
+/// Einmal je Lauf: Arena, Pruefstand und die Puffer des Journals gehoeren
+/// danach dem Programm.
+unsafe fn program(flash: FLASH) -> (app::Program<'static>, Journaled) {
     // SAFETY: siehe oben.
     let (arena, rig) = unsafe { (&mut *(&raw mut ARENA), (*(&raw mut RIG)).insert(drivers::Rig::default())) };
-    app::Program::new(arena, rig)
+    let mut program = app::Program::new(arena, rig);
+    let mut persist = (PERSIST_BOUND != 0).then(|| {
+        let mut nvm = FlashNvm::new(flash).with_blocking_ns(NVM_BLOCKING_NS);
+        if FRESH_JOURNAL && !nvm.wipe() {
+            say(format_args!("journal: loeschen scheiterte"));
+        }
+        // SAFETY: siehe oben.
+        let (current, stored) = unsafe { (&mut *(&raw mut PERSIST_CURRENT), &mut *(&raw mut PERSIST_STORED)) };
+        Persist::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), current, stored)
+    });
+    match persist.as_mut().map(|p| p.load(&mut program)) {
+        Some((Loaded::Found { length, sequence }, applied)) => {
+            say(format_args!("journal: Eintrag {sequence}, {length} Byte, {applied} Werte geladen"));
+        }
+        Some((Loaded::Empty, _)) => say(format_args!("journal: leer")),
+        None => say(format_args!("journal: keins")),
+    }
+    (program, persist)
+}
+
+/// Eine Zeile auf die Leitung, vor dem Lauf.
+fn say(text: core::fmt::Arguments) {
+    if let Some(u) = uart() {
+        let _ = u.write_fmt(text);
+        u.newline();
+        u.flush();
+    }
 }
 
 /// Legt den Griff der Jobs ab, mit dem der Job-Faden oder die Job-Aufgabe
@@ -485,27 +528,26 @@ fn runtime<C: Clock>(clock: C, protection: Mpu, profile: Profile, mut program: a
     Runtime::new(program, clock, watchdog, line, profile, TICK_NS, policy)
 }
 
-/// Kein Journal: Das Board hat noch keinen `Nvm`-Treiber (5.9).
-fn no_journal<'a>() -> Option<&'a mut Persist<'a, FakeNvm<0>>> {
-    None
-}
-
 /// Fuehrt das Programm unter `clock` aus und schreibt die Abschlusszeile.
 #[cfg(form = "own")]
-fn conduct(clock: impl Clock, protection: Mpu, program: app::Program<'static>) {
+fn conduct(clock: impl Clock, protection: Mpu, program: app::Program<'static>, mut persist: Journaled) {
     let mut rt = runtime(clock, protection, Profile::BAREMETAL, program);
     // 8.4: Tunes vom Host kommen ueber die Gegenrichtung der Konsole.
     let mut tunes = Console::new(takt_board_stm32f401::console_byte);
-    let stats = takt_rt_baremetal::run(&mut rt, no_journal(), Some(&mut tunes));
-    conclude(&rt, &stats);
+    let stats = takt_rt_baremetal::run(&mut rt, persist.as_mut(), Some(&mut tunes));
+    conclude(&rt, &stats, persist.as_ref());
 }
 
 /// Nach dem Lauf: die Abschlusszeile, im Betrieb das Kommando an die
 /// Plattform.
-fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
+fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats, persist: Option<&Persist<'_, FlashNvm>>) {
     if rt.watchdog.is_some() {
         Iwdg::arm(END_OF_RUN_NS);
     }
+    let journal = persist.map_or(JournalStats::default(), |p| {
+        let (erase_ns, program_ns) = p.journal().device().measured_ns();
+        JournalStats { writes: p.journal().writes(), failures: p.journal().failures(), erase_ns, program_ns }
+    });
     if let Some(u) = uart() {
         // Die Messschleife vor der Bilanz: Nach `takt end` liest der Host nicht mehr.
         if let Some(w) = wire() {
@@ -540,7 +582,7 @@ fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
             job: takt_board_stm32f401::jobs::high_water(),
             job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),
         };
-        takt_rt_baremetal::report(u, rt.overrun(), stats, &JournalStats::default(), &stacks);
+        takt_rt_baremetal::report(u, rt.overrun(), stats, &journal, &stacks);
     }
     if limit() == 0 {
         platform(stats.next_run);
@@ -593,6 +635,8 @@ struct Setup {
     /// Unter RTIC richtet die App die Interrupts nach ihren Prioritaeten ein.
     #[cfg(not(form = "rtos"))]
     nvic: NVIC,
+    /// Das Flash fuer das Journal (5.9).
+    flash: FLASH,
 }
 
 /// Richtet das Board ein: Takt, Leitung, Messschleife, Zyklenzaehler,
@@ -668,6 +712,7 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
         job_stack,
         #[cfg(not(form = "rtos"))]
         nvic,
+        flash: dp.FLASH,
     }
 }
 
@@ -676,7 +721,7 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
-    let Setup { timer, protection, job_stack, mut nvic } = setup(dp, cp);
+    let Setup { timer, protection, job_stack, mut nvic, flash } = setup(dp, cp);
     // SAFETY: Prioritaeten und Freigabe vor dem ersten Tick; die Handler
     // oben sind bereit.
     unsafe {
@@ -687,7 +732,7 @@ fn main() -> ! {
     }
 
     // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck.
-    let mut program = unsafe { program() };
+    let (mut program, persist) = unsafe { program(flash) };
     let dispatch = program.dispatch();
     let mut jobs = JobContext::start(job_stack, dispatch, hand_over_jobs(&mut program));
     // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
@@ -709,6 +754,7 @@ fn main() -> ! {
             }),
             protection,
             program,
+            persist,
         );
     } else {
         // Zwischen den Ticks fuellt die Schleife die Leitung nach, sooft ein
@@ -725,6 +771,7 @@ fn main() -> ! {
             }),
             protection,
             program,
+            persist,
         );
     }
     // Nach dem Lauf bleibt die Leitung offen: Der Host holt das Board mit
@@ -746,11 +793,11 @@ fn main() -> ! {
 fn main() -> ! {
     let dp = Peripherals::take().expect("Peripherie");
     let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
-    let Setup { timer, protection, nvic } = setup(dp, cp);
+    let Setup { timer, protection, nvic, flash } = setup(dp, cp);
     #[cfg(form = "interrupt")]
-    interrupt_form::run(timer, protection, nvic);
+    interrupt_form::run(timer, protection, nvic, flash);
     #[cfg(form = "poll")]
-    poll_form::run(timer, protection, nvic);
+    poll_form::run(timer, protection, nvic, flash);
 }
 
 /// Was Interrupt- und Pollform teilen (12.11): den Job-Interrupt, die
@@ -859,13 +906,13 @@ mod host {
 mod interrupt_form {
     use core::sync::atomic::{AtomicBool, Ordering};
 
-    use stm32f4::stm32f401::{Interrupt, NVIC, interrupt};
+    use stm32f4::stm32f401::{FLASH, Interrupt, NVIC, interrupt};
     use takt_board_stm32f401::alarm::{self, Tim2Alarm};
     use takt_rt_baremetal::interrupt::{Form, Time, release};
 
     use super::host::{self, JOB_LINE, JOB_PRIORITY, Work};
     use super::{
-        Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, no_journal, program, runtime, uart,
+        Console, Journaled, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, program, runtime, uart,
     };
 
     /// Der Schritt unter Leitung und Pruef-ISR.
@@ -875,6 +922,8 @@ mod interrupt_form {
     struct Stepping {
         rt: Takt<Time<Tim2Alarm>>,
         form: Form<Tim2Alarm>,
+        /// 5.9: das Journal, das `service` schreibt.
+        persist: Journaled,
         /// 8.4: Tunes vom Host ueber die Gegenrichtung der Konsole.
         tunes: Console<fn() -> Option<u8>>,
         /// Die Bilanz, sobald der Lauf endet.
@@ -911,12 +960,12 @@ mod interrupt_form {
             // SAFETY: Bis zum Ende gehoert der Lauf dieser ISR (`STEPPING`).
             let Some(s) = (unsafe { (&raw mut STEPPING).as_mut().and_then(Option::as_mut) }) else { return };
             if due {
-                if let Some(stats) = s.form.on_alarm(&mut s.rt, no_journal(), Some(&mut s.tunes)) {
+                if let Some(stats) = s.form.on_alarm(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes)) {
                     s.ended = Some(stats);
                     ENDED.store(true, Ordering::Release);
                 }
             } else if job_done {
-                s.form.on_job_done(&mut s.rt, no_journal(), Some(&mut s.tunes));
+                s.form.on_job_done(&mut s.rt, s.persist.as_mut(), Some(&mut s.tunes));
             } else {
                 return;
             }
@@ -938,9 +987,9 @@ mod interrupt_form {
     }
 
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
-    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC) -> ! {
+    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
-        let mut program = unsafe { program() };
+        let (mut program, persist) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
         // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
         // Schritt reichte: gemalt nach `init`, der Aufbau zaehlt nicht (12.3),
@@ -953,7 +1002,7 @@ mod interrupt_form {
         let tunes = Console::new(takt_board_stm32f401::console_byte as fn() -> Option<u8>);
         // SAFETY: TIM2 ist noch maskiert; ab seiner Freigabe gehoert der Lauf
         // seiner ISR.
-        unsafe { STEPPING = Some(Stepping { rt, form, tunes, ended: None }) };
+        unsafe { STEPPING = Some(Stepping { rt, form, persist, tunes, ended: None }) };
         // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
         // oben sind bereit.
         unsafe {
@@ -986,7 +1035,7 @@ mod interrupt_form {
         // dieser Schleife.
         if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
             work.report(None);
-            conclude(&s.rt, &s.ended.unwrap_or_default());
+            conclude(&s.rt, &s.ended.unwrap_or_default(), s.persist.as_ref());
         }
         host::park()
     }
@@ -1009,15 +1058,13 @@ mod interrupt_form {
 mod poll_form {
     use core::sync::atomic::{AtomicBool, Ordering};
 
-    use stm32f4::stm32f401::{Interrupt, NVIC, interrupt};
+    use stm32f4::stm32f401::{FLASH, Interrupt, NVIC, interrupt};
     use takt_board_stm32f401::alarm::{self, Tim2Alarm};
     use takt_board_stm32f401::cycles;
     use takt_rt_baremetal::interrupt::{Form, Polled, Time};
 
     use super::host::{self, JOB_LINE, JOB_PRIORITY, Work};
-    use super::{
-        CORE_HZ, Console, LOGICAL, Mpu, Profile, conclude, hand_over_jobs, mpu, no_journal, program, runtime, uart,
-    };
+    use super::{CORE_HZ, Console, LOGICAL, Mpu, Profile, conclude, hand_over_jobs, mpu, program, runtime, uart};
 
     /// Die fremde Arbeit je Runde der Hauptschleife, in Mikrosekunden.
     pub const HOST_WORK_US: u32 = 10;
@@ -1064,9 +1111,9 @@ mod poll_form {
     }
 
     /// Der Lauf in der Hauptschleife des Wirts, danach die Bilanz.
-    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC) -> ! {
+    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
-        let mut program = unsafe { program() };
+        let (mut program, mut persist) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
         // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
         // Schritt reichte: gemalt nach `init`, der Aufbau zaehlt nicht (12.3),
@@ -1094,7 +1141,7 @@ mod poll_form {
         let mut longest: u32 = 0;
         let stats = loop {
             let job_done = JOB_DONE.swap(false, Ordering::AcqRel);
-            if let Some(stats) = form.poll(&mut rt, no_journal(), Some(&mut tunes), job_done) {
+            if let Some(stats) = form.poll(&mut rt, persist.as_mut(), Some(&mut tunes), job_done) {
                 break stats;
             }
             // Eine Runde des Wirts, vom Ende eines Aufrufs bis zum naechsten.
@@ -1107,7 +1154,7 @@ mod poll_form {
             longest = longest.max(cycles::now().wrapping_sub(started));
         };
         work.report(Some(u64::from(longest) * 1_000_000_000 / u64::from(CORE_HZ)));
-        conclude(&rt, &stats);
+        conclude(&rt, &stats, persist.as_ref());
         host::park()
     }
 }
@@ -1125,12 +1172,13 @@ mod rtic_form {
     use core::sync::atomic::{AtomicBool, Ordering};
 
     use rtic_sync::signal::{SignalReader, SignalWriter};
+    use stm32f4::stm32f401::FLASH;
     use takt_board_stm32f401::alarm::Tim2Alarm;
     use takt_rt_baremetal::interrupt::{Alarm, Form, Time, release};
 
     use super::host::{self, Work};
     use super::{
-        Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, no_journal, program, runtime, uart,
+        Console, Journaled, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, program, runtime, uart,
     };
 
     /// Die Frist ist erreicht; die Takt-Aufgabe rechnet den Schritt.
@@ -1150,6 +1198,7 @@ mod rtic_form {
     struct Ended {
         rt: Takt<Time<Tim2Alarm>>,
         stats: Stats,
+        persist: Journaled,
     }
 
     /// Der beendete Lauf. Die Takt-Aufgabe legt ihn ab und rechnet danach
@@ -1176,9 +1225,9 @@ mod rtic_form {
     /// Die Takt-Aufgabe: an der Frist der Schritt, nach einem Auftrag der
     /// Job-Aufgabe das Verteilen, danach die Leitung; am Ende geht der Lauf
     /// an die Idle-Aufgabe.
-    pub async fn run(alarm: TaskAlarm, protection: Mpu, mut wake: SignalReader<'static, ()>) {
+    pub async fn run(alarm: TaskAlarm, protection: Mpu, mut wake: SignalReader<'static, ()>, flash: FLASH) {
         // SAFETY: einmal je Lauf; die Aufgabe startet einmal.
-        let mut program = unsafe { program() };
+        let (mut program, mut persist) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm.tim2) };
         let mut rt = runtime(clock, protection, Profile::SHARED, program);
@@ -1187,12 +1236,12 @@ mod rtic_form {
         let stats = loop {
             wake.wait().await;
             if DUE.swap(false, Ordering::AcqRel)
-                && let Some(stats) = form.on_alarm(&mut rt, no_journal(), Some(&mut tunes))
+                && let Some(stats) = form.on_alarm(&mut rt, persist.as_mut(), Some(&mut tunes))
             {
                 break stats;
             }
             if JOB_DONE.swap(false, Ordering::AcqRel) {
-                form.on_job_done(&mut rt, no_journal(), Some(&mut tunes));
+                form.on_job_done(&mut rt, persist.as_mut(), Some(&mut tunes));
             }
             if let Some(u) = uart() {
                 u.flush();
@@ -1200,7 +1249,7 @@ mod rtic_form {
         };
         // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
         // Aufgabe nicht mehr mit dem Lauf.
-        unsafe { ENDED_RUN = Some(Ended { rt, stats }) };
+        unsafe { ENDED_RUN = Some(Ended { rt, stats, persist }) };
         ENDED.store(true, Ordering::Release);
     }
 
@@ -1218,7 +1267,7 @@ mod rtic_form {
         // SAFETY: Ab `ENDED` gehoert der Lauf dieser Aufgabe.
         if let Some(ended) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
             work.report(None);
-            conclude(&ended.rt, &ended.stats);
+            conclude(&ended.rt, &ended.stats, ended.persist.as_ref());
         }
         host::park()
     }
@@ -1329,7 +1378,7 @@ mod rtic_app {
     struct Local {
         due: SignalWriter<'static, ()>,
         done: SignalWriter<'static, ()>,
-        takt: Option<(TaskAlarm, Mpu, SignalReader<'static, ()>)>,
+        takt: Option<(TaskAlarm, Mpu, SignalReader<'static, ()>, stm32f4::stm32f401::FLASH)>,
         host: Tim2Alarm,
         driver_in: SignalWriter<'static, ()>,
         driver_out: SignalReader<'static, ()>,
@@ -1338,7 +1387,7 @@ mod rtic_app {
 
     #[init]
     fn init(cx: init::Context) -> (Shared, Local) {
-        let super::Setup { timer, protection } = super::setup(cx.device, cx.core);
+        let super::Setup { timer, protection, flash } = super::setup(cx.device, cx.core);
         super::load::start();
         let (due, wake) = WAKE.split();
         let (hand_over, work) = WORK.split();
@@ -1349,7 +1398,7 @@ mod rtic_app {
         // Die Abschlusszeile meldet, wie tief der Stack unter den Aufgaben
         // reichte: gemalt am Ende des Aufbaus (12.3).
         takt_board_stm32f401::stack::paint();
-        let takt = Some((TaskAlarm { tim2: timer, work: hand_over }, protection, wake));
+        let takt = Some((TaskAlarm { tim2: timer, work: hand_over }, protection, wake, flash));
         let done = due.clone();
         (Shared { boundaries: 0 }, Local { due, done, takt, host: timer, driver_in, driver_out, work })
     }
@@ -1387,8 +1436,8 @@ mod rtic_app {
 
     #[task(priority = 3, local = [takt])]
     async fn takt(cx: takt::Context) {
-        if let Some((alarm, protection, wake)) = cx.local.takt.take() {
-            super::rtic_form::run(alarm, protection, wake).await;
+        if let Some((alarm, protection, wake, flash)) = cx.local.takt.take() {
+            super::rtic_form::run(alarm, protection, wake, flash).await;
         }
     }
 

@@ -1845,12 +1845,13 @@ takt-rt-baremetal   Profilaufsatz `baremetal` (12.3): Tick per Timer, Telemetrie
 takt-hal            Treiber-Traits (Skalar, Stream, geplante Ausgabe), Rand-Selbstprüfungen (12.6), Simulationstreiber — die Sim/HW-Umschaltung (8.3) ist ein Treiberwechsel
 takt-board-support  die rechnende Hälfte der Board-Unterstützung ohne Registerzugriff: Perioden, Zyklen, FIFO, Messschleife (13.8)
 takt-board-esp32c6  Board-Unterstützung ESP32-C6: Alarm, Zyklenzähler, USB-Serial-JTAG, Treiber — TCB, eigener Workspace (9.5)
-takt-board-stm32f401  Board-Unterstützung STM32F401 (Black Pill): TIM2, DWT, USART1, IWDG, Treiber — TCB, eigener Workspace (9.5)
+takt-board-stm32f401  Board-Unterstützung STM32F401 (Black Pill): TIM2, DWT, USART1, IWDG, Flash-Journal, Treiber — TCB, eigener Workspace (9.5)
 takt-frame          der C-Rahmen um den erzeugten Code: Prozessabbild, Ringe, Treiberrand, Tickschritt (12.1, 12.11)
 takt-embed          Einbettung in Rust (M11, im Aufbau): die Geräte-Traits der Treiber (12.6), der Bauhelfer für `build.rs` und die Testhilfe gegen den Interpreter (12.11); die Bring-ups binden ihr Programm darüber; Ports und Adapter folgen — TCB, eigener Workspace
 takt-embed-c        (geplant, M11) Einbettung in C: SDK-Archiv je Ziel mit den C-Ports und dem CMake-Paket (12.11) — TCB, eigener Workspace
 takt-bringup-esp32c6  Bring-up-Programme des ESP32-C6: Takt-Programm, Messkerne, Natives — TCB, eigener Workspace
 takt-bringup-stm32f401  Bring-up-Programme der Black Pill — TCB, eigener Workspace
+takt-trampoline-stm32f401  Sprungbrett der Black Pill in Sektor 1: startet die Anwendung in Sektor 4, ohne sie den DFU-Bootloader des ROM — TCB, eigener Workspace
 takt-bringup-host   die Schleife auf dem Wirt, in logischer Zeit, für `driver-test --crate` (13.8) — TCB, eigener Workspace
 takt-driver-probe   das Prüfgerät des Treiberrands als Treiber-Crate: Geräte über die Traits aus `takt-embed` (12.6)
 takt-native         kuratierte native Funktionen (4.5): Prüfsummen, Hashes, MACs; Konformitätstests
@@ -1859,7 +1860,7 @@ takt-crypto         Kryptographie mit geprüfter Abhängigkeit (4.5): ECDSA P-25
 takt-conformance    Testkorpus, Golden-Traces, Wirtsrahmen des Differentials, Boards am Host, Kalibrierung (`c_target`, `guard`, `jitter`), `takt bench` (13.8)
 takt-testkit        was die Tests aller Crates teilen: die Werkzeug-Schranke (ein fehlendes Werkzeug ist ein Fehler, `TAKT_ALLOW_MISSING`) (13.8)
 takt-trace-serial   Trace von einer seriellen Schnittstelle lesen und gegen den Interpreter halten
-takt-flash-weact    Flash-Werkzeug für den WeAct-HID-Bootloader (STM32)
+takt-flash-weact    Flash-Werkzeug für den WeAct-HID-Bootloader (STM32); schreibt das Sprungbrett in Sektor 1
 takt-import-c       (geplant, M7) C-Frontend mit Klassifikation, Abbildungsregeln und Orakel-Modus (13.9; v1.1)
 takt-cli            check | build | sim | run | replay | verify-trace | timing | test | campaign | driver-test | prove | fmt | size | cost | latency | graph | bench | tune | tcb | mir | parse | tokens | check-image; geplant: migrate | import-c (M7) | new | doctor | port-test (M11)
 takt-lsp            (geplant, M7) Editor-Integration, Live-Zustandsanzeige über Telemetrie

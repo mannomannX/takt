@@ -18,9 +18,12 @@
 # auf dem teuersten Einstieg ueber alle Funktionen und Vektoren (`acos` in
 # beiden Breiten); `libtaktm` rechnet hier mit `opt-level = 3`.
 #
-# `ram` und `flash` stehen im Datenblatt; die ersten 16 KiB Flash gehoeren
-# dem HID-Bootloader; das Journal soll in den zwei 16-KiB-Sektoren dahinter
-# liegen, die heute noch die Anwendung belegt (FB-385).
+# `ram` steht im Datenblatt. Vom Flash gehoeren Sektor 0 dem
+# HID-Bootloader, Sektor 1 dem Sprungbrett und Sektor 2 und 3 dem Journal
+# (FB-385); `flash` ist, was ab Sektor 4 der Anwendung bleibt.
+#
+# Das Journal haelt den Kern an (12.3): Der F401 hat eine Bank, und jeder
+# Befehlsabruf wartet, solange das Flash loescht oder programmiert.
 # `protect`: Die MPU des Cortex-M4 schuetzt den Programmbereich der Arena
 # ausserhalb des Ticks (12.3).
 [target.thumbv7em]
@@ -35,11 +38,16 @@ call = 235262
 native = 0
 t_io = 8345239
 ram = 65536
-flash = 245760
+flash = 196608
 protect = armv7m_mpu
 nvm_sector_bytes = 16384
 nvm_sectors = 2
 nvm_min_interval = 10000000000
+# TODO(FB-385): Datenblatt (x32, hoechstens), bis der Journal-Test auf dem
+# Board die Zeiten misst.
+nvm_erase_ns = 500000000
+nvm_program_ns = 1000000
+nvm_blocking = true
 i32_div = 116062
 i64_div = 2206371
 f32_div = 526227

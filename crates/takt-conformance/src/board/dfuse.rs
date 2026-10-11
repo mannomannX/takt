@@ -114,21 +114,34 @@ impl Dfuse {
         }
     }
 
+    /// Steht `image` schon ab `address`? Liest zurueck, ohne zu schreiben.
+    pub fn holds(&self, address: u32, image: &[u8]) -> Result<bool, String> {
+        Ok(self.first_difference(address, image)?.is_none())
+    }
+
     /// Liest `image.len()` Byte ab `address` und vergleicht.
     fn verify(&self, address: u32, image: &[u8]) -> Result<(), String> {
+        match self.first_difference(address, image)? {
+            None => Ok(()),
+            Some(at) => Err(format!("DfuSe: zurueckgelesen weicht ab bei {at:#010x}")),
+        }
+    }
+
+    /// Die erste Adresse ab `address`, an der das Flash von `image` abweicht.
+    fn first_difference(&self, address: u32, image: &[u8]) -> Result<Option<u64>, String> {
         self.command(SET_ADDRESS, address)?;
         self.control_out(ABORT, 0, &[])?;
+        let mut differs = None;
         for (i, block) in image.chunks(self.transfer).enumerate() {
             let read = self.control_in(UPLOAD, block_number(i)?, block.len())?;
             if read != block {
                 let at = read.iter().zip(block).position(|(a, b)| a != b).unwrap_or(read.len().min(block.len()));
-                return Err(format!(
-                    "DfuSe: zurueckgelesen weicht ab bei {:#010x}",
-                    u64::from(address) + (i * self.transfer + at) as u64
-                ));
+                differs = Some(u64::from(address) + (i * self.transfer + at) as u64);
+                break;
             }
         }
-        self.control_out(ABORT, 0, &[])
+        self.control_out(ABORT, 0, &[])?;
+        Ok(differs)
     }
 
     /// Ein Befehl im Block 0 mit einer Adresse, ausgefuehrt.

@@ -11,9 +11,10 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, last_output,
-    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, runs_shared,
-    simultaneous_jobs_finish_on_time, the_interrupt_form_keeps_its_deadline, the_poll_form_keeps_its_round,
+    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, runs_shared, simultaneous_jobs_finish_on_time,
+    the_interrupt_form_keeps_its_deadline, the_poll_form_keeps_its_round,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, Form, Options};
@@ -75,6 +76,39 @@ fn a_run_ended_now_begins_the_next_at_once() {
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
     assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
     assert!(second.contains("out previous ENDED"), "{second}");
+}
+
+/// **`persist` ueberlebt einen Reset und ein neues Abbild** (5.9, 12.3,
+/// FB-385): Der zweite Lauf geht ueber den DFU-Bootloader, also ueber einen
+/// Reset, und schreibt dasselbe Abbild noch einmal nach Sektor 4; das
+/// Journal in Sektor 2 und 3 bleibt stehen.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn persistence_survives_a_reset_and_a_new_image() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = persistence_survives(&mut board, |board, elf, options| board.run(elf, options));
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Unter `overrun = alert` kostet das Journal Zeit, aber keine
+/// Semantik** (7.3, 12.3, FB-385): Eine Sektorloeschung haelt den Kern
+/// Hunderte Millisekunden an; die Tickzahl kommt aus TIM2.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_journal_costs_time_but_not_semantics() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = journal_costs_time_but_not_semantics(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3,
+/// FB-385), mit den Zeiten aus `corpus-try/hw/stm32f401.hw`.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_journal_writes_in_sleep_windows() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = journal_writes_in_sleep_windows(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
 /// **Ein Job, der laenger rechnet als ein Tick, verspaetet keinen** (4.5,

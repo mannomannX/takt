@@ -12,8 +12,9 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    TICKS, agreement, agreement_with, corpus, driver_edge_agrees, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, replayed, runs_shared, simultaneous_jobs_finish_on_time,
+    TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
+    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
+    overrun_reaches_every_machine, persistence_survives, replayed, runs_shared, simultaneous_jobs_finish_on_time,
     the_interrupt_form_keeps_its_deadline,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
@@ -36,14 +37,9 @@ fn bringup_program(name: &str) -> std::path::PathBuf {
     board::root().join("crates/takt-bringup-esp32c6/programs").join(name)
 }
 
-/// Baut ein Korpusprogramm, schreibt es und liest seinen Trace — in
-/// Echtzeit: Die Tests damit pruefen Schlaf und Journal an der Uhr.
+/// Baut ein Korpusprogramm, schreibt es und liest seinen Trace in Echtzeit.
 fn run_corpus(board: &mut Esp32c6, name: &str, fresh: bool) -> String {
-    let options = Options { fresh, ..Options::timed(TICKS) };
-    board
-        .build(&board::corpus_path(name), &options)
-        .and_then(|elf| board.run(&elf, &options))
-        .unwrap_or_else(|e| panic!("{name}: {e}"))
+    common::board::run_corpus(board, name, fresh).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 /// Die Zahl hinter `takt schlief`.
@@ -280,30 +276,14 @@ fn a_board_input_reaches_the_process_image() {
     assert_eq!(last_output(&text, "shaky").as_deref(), Some("0"), "{text}");
 }
 
-/// **`persist` ueberlebt einen Reset** (5.9, 12.3; plan/esp32c6.md 6).
-///
-/// `35_persist` zaehlt `cycles` hoch; der Lauf schreibt das Journal am
-/// Ende (`flush`). Ein zweiter Lauf desselben Abbilds nach einem Reset —
-/// ohne frisches Journal — muss mit dem letzten Stand des ersten beginnen.
+/// **`persist` ueberlebt einen Reset** (5.9, 12.3; plan/esp32c6.md 6): Der
+/// zweite Lauf ist derselbe Chip nach einem Reset, ohne neues Abbild.
 #[test]
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn persistence_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
-    let name = "35_persist.takt";
-    let options = Options { fresh: false, ..Options::fresh(TICKS) };
-    let elf = board.build(&board::corpus_path(name), &options).unwrap_or_else(|e| panic!("{name}: {e}"));
-    let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
-    let end = last_output(&first, "count").unwrap_or_else(|| panic!("kein `count` im ersten Lauf:\n{first}"));
-    assert!(first.contains("flush 1"), "das Journal wurde am Ende nicht geschrieben:\n{first}");
-    // Der zweite Lauf: derselbe Chip, ein Reset, das Journal bleibt.
-    let second = board.capture(&elf, &options).unwrap_or_else(|e| panic!("{name}, zweiter Lauf: {e}"));
-    let start = second
-        .lines()
-        .find_map(|l| l.strip_prefix("t=0 out count "))
-        .map(str::trim)
-        .unwrap_or_else(|| panic!("kein `count` bei t=0 im zweiten Lauf:\n{second}"));
-    assert_eq!(start, end.trim(), "der zweite Lauf beginnt nicht mit dem Stand des ersten:\n{second}");
-    assert!(second.contains("journal: Eintrag"), "das Journal wurde nicht geladen:\n{second}");
+    let failed = persistence_survives(&mut board, |board, elf, options| board.capture(elf, options));
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
 /// **`idle` schlaeft** (9.9, Satz 9.9.1; plan/esp32c6.md 6):
@@ -384,60 +364,24 @@ fn tail(text: &str) -> String {
 }
 
 /// **Unter `overrun = alert` kostet das Journal Zeit, aber keine
-/// Semantik** (7.3, 12.3; plan/nvm.md 2.2, FB-197).
-///
-/// `58_persist_alert` schreibt in jedem Tick (`min_interval = 0`) und
-/// nimmt die Ueberlaeufe an. Ein Schreibvorgang haelt den Kern
-/// zweistellige Perioden lang an; die logische Zeit beruehrt das nicht —
-/// der Trace bleibt der des Interpreters (Satz 9.4.4), und die Tickzahl
-/// kommt aus dem SYSTIMER (FB-198). Der Test zaehlt die Perioden und
-/// druckt die gemessenen Lösch- und Programmierzeiten: die Zahlen fuer
-/// `nvm_erase_ns` und `nvm_program_ns` in `corpus-try/hw/esp32c6.hw`.
+/// Semantik** (7.3, 12.3): Ein Schreibvorgang haelt den Kern zweistellige
+/// Perioden lang an; die Tickzahl kommt aus dem SYSTIMER (FB-198).
 #[test]
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_journal_costs_time_but_not_semantics() {
     let Some((mut board, _guard)) = board() else { return };
-    let name = "58_persist_alert.takt";
-    let text = run_corpus(&mut board, name, true);
-    let writes = board::counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
-    assert!(writes > 1, "das Journal schrieb nur {writes}-mal; der Fall aus 12.3 trat nicht ein:\n{text}");
-    assert_eq!(board::counter(&text, "fehlgeschlagen"), Some(0), "ein Schreibvorgang scheiterte:\n{text}");
-    eprintln!(
-        "{name}: {writes} Journal-Schreibvorgaenge, {} verlorene Perioden, Rueckstand {} ns; \
-         loeschen {} ns, programmieren {} ns",
-        board::counter(&text, "verloren").unwrap_or(0),
-        board::counter(&text, "rueckstand").unwrap_or(0),
-        board::counter(&text, "nvm loeschen").unwrap_or(0),
-        board::counter(&text, "programmieren").unwrap_or(0)
-    );
-    let times = text.lines().filter(|l| l.contains(" time took=")).count();
-    assert!(times as u64 >= TICKS, "die Zeitzeilen fehlen ({times} von {TICKS}):\n{text}");
-    let diffs = compare(&replayed(&corpus(name), &text), &text);
-    assert!(diffs.is_empty(), "{diffs:?}");
+    let failed = journal_costs_time_but_not_semantics(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
-/// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3;
-/// plan/nvm.md 2.3): `59_persist_idle` gibt der Runtime je Runde 500 ms
-/// `idle`, mehr als ein Schreibvorgang braucht. Sie schreibt dort, und
-/// die Schleife verpasst keine Periode; der Trace ist der ohne Schlaf
-/// (Satz 9.9.1). Braucht `nvm_blocking` und die Zeiten in
-/// `corpus-try/hw/esp32c6.hw`, sonst gilt das Geraet als asynchron.
+/// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3),
+/// mit den Zeiten aus `corpus-try/hw/esp32c6.hw`.
 #[test]
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn the_journal_writes_in_sleep_windows() {
     let Some((mut board, _guard)) = board() else { return };
-    let name = "59_persist_idle.takt";
-    let text = run_corpus(&mut board, name, true);
-    let writes = board::counter(&text, "journal geschrieben").unwrap_or_else(|| panic!("keine Journalzeile:\n{text}"));
-    assert!(writes >= 1, "das Journal schrieb nie im Schlaf:\n{text}");
-    assert_eq!(
-        board::counter(&text, "verloren"),
-        Some(0),
-        "ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}"
-    );
-    assert_eq!(board::counter(&text, "ueberlaeufe"), Some(0), "{text}");
-    let diffs = compare(&replayed(&corpus(name), &text), &text);
-    assert!(diffs.is_empty(), "{diffs:?}");
+    let failed = journal_writes_in_sleep_windows(&mut board);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
 /// **Der Wunsch ueber die Konsole setzt den Chip zurueck** (FB-264):

@@ -289,6 +289,12 @@ So arbeitet jeder Strang, als wäre er allein:
       ausschließt); `persist`-Programme auf dem F401 auslassen (zehn
       Korpusprogramme weniger auf dem M4); eine eigene Startstufe in Sektor
       0 (gewinnt nur 16 KiB, braucht einen Eingriff in Sektor 0).
+    - **Teil 2 umgesetzt 2026-10-11** (Boardlauf steht aus): `FlashNvm`,
+      Sprungbrett, Anwendung ab 0x0801_0000, Journal in allen vier Formen
+      des F401, Journal-Tests auf beiden Boards. Das Messprogramm von
+      `takt bench` passt mit 432 Byte Luft in die 192 KiB (`plan/f401.md`).
+      Unterwegs FB-514: Der Stand der Board-Abbilder kannte die
+      Hardware-Konfiguration nicht.
 
 ### 17 — Wirt mit Instanzen in Fäden, `linux_rt`
 

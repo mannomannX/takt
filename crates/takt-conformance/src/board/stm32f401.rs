@@ -3,8 +3,15 @@
 //! Geschrieben wird ueber den DFU-Bootloader im ROM, und die Hand braucht
 //! es dafuer nicht: `TAKT` auf der Trace-Leitung laesst die laufende
 //! Anwendung in den Bootloader springen (FB-275), [`super::dfuse`] schreibt
-//! das Abbild hinter den HID-Bootloader von WeAct, liest es zurueck und
-//! startet es. Der Trace kommt ueber USART1 an den Adapter.
+//! das Abbild nach Sektor 4, liest es zurueck und startet es. Der Trace
+//! kommt ueber USART1 an den Adapter.
+//!
+//! **Das Flash** (FB-385): Sektor 0 haelt der HID-Bootloader von WeAct und
+//! wird nie geschrieben. Er springt nach Sektor 1, ins Sprungbrett
+//! (`takt-trampoline-stm32f401`), das die Anwendung in Sektor 4 startet
+//! oder ohne sie in den DFU-Bootloader geht. Sektor 2 und 3 haelt das
+//! `persist`-Journal; kein Abbild beruehrt sie. Das Sprungbrett schreibt der
+//! Lauf nur, wenn es fehlt oder abweicht.
 //!
 //! Antwortet das Board nicht — ein Programm ohne Leitung, ein Absturz —,
 //! bleibt die Hand: BOOT0 halten, NRST druecken und loslassen, BOOT0
@@ -14,6 +21,8 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use takt_llvm::inspect::Binutils;
@@ -22,10 +31,10 @@ use takt_llvm::target::Target;
 use super::dfuse::Dfuse;
 use super::{Board, Bringup, Builder, ConsoleLine, Form, Options, capture};
 
-const BRINGUP: Bringup = Bringup {
+pub(super) const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-stm32f401",
     triple: "thumbv7em-none-eabihf",
-    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "memory.x", "takt_state.x"],
+    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "memory.x", "takt_state.x", "../../corpus-try/hw/stm32f401.hw"],
     env: &[],
 };
 
@@ -33,8 +42,15 @@ const BRINGUP: Bringup = Bringup {
 /// jedes Programm, damit der Host das laufende erreicht, ohne es zu kennen.
 pub const BAUD: u32 = 921_600;
 
-/// Wo die Anwendung beginnt: hinter dem HID-Bootloader in Sektor 0.
-const APP: u32 = 0x0800_4000;
+/// Wo die Anwendung beginnt: Sektor 4, hinter HID-Bootloader, Sprungbrett
+/// und Journal.
+const APP: u32 = 0x0801_0000;
+
+/// Wo das Sprungbrett liegt: Sektor 1, wohin der HID-Bootloader springt.
+const TRAMPOLINE: u32 = 0x0800_4000;
+
+/// Das Crate des Sprungbretts, relativ zur Wurzel.
+const TRAMPOLINE_CRATE: &str = "crates/takt-trampoline-stm32f401";
 
 /// Wo sie endet: 256 KB Flash der Variante CC.
 const APP_END: u32 = 0x0804_0000;
@@ -88,11 +104,15 @@ impl Stm32f401 {
     fn run_with(&mut self, elf: &Path, within: Duration, console: &[ConsoleLine]) -> Result<String, String> {
         let bin = self.image(elf)?;
         let bytes = std::fs::read(&bin).map_err(|e| format!("{}: {e}", bin.display()))?;
+        let trampoline = trampoline()?;
         self.to_bootloader()?;
         // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
         // Wirt nicht abholt (FB-306).
         capture(&self.port, BAUD, serialport::FlowControl::Software, within, true, console, || {
             let dfu = Dfuse::open(DFU.0, DFU.1)?;
+            if !dfu.holds(TRAMPOLINE, trampoline)? {
+                dfu.write(TRAMPOLINE, trampoline)?;
+            }
             dfu.write(APP, &bytes)?;
             dfu.leave(APP)
         })
@@ -197,13 +217,44 @@ impl Board for Stm32f401 {
     }
 }
 
+/// Das Sprungbrett als Rohabbild: einmal je Prozess gebaut, im eigenen
+/// Zielverzeichnis, und geprueft wie ein Abbild der Anwendung.
+fn trampoline() -> Result<&'static [u8], String> {
+    static IMAGE: OnceLock<Result<Vec<u8>, String>> = OnceLock::new();
+    IMAGE.get_or_init(build_trampoline).as_deref().map_err(Clone::clone)
+}
+
+fn build_trampoline() -> Result<Vec<u8>, String> {
+    let mut cargo = Command::new("cargo");
+    cargo
+        .args(["build", "--release", "--target", BRINGUP.triple])
+        .arg("--message-format=json-render-diagnostics")
+        .arg("--manifest-path")
+        .arg(super::root().join(TRAMPOLINE_CRATE).join("Cargo.toml"))
+        .env("CARGO_TARGET_DIR", crate::target_dir().join("takt-trampoline"));
+    let elf = super::built_executable(&mut cargo).map_err(|e| format!("Sprungbrett: {e}"))?;
+    // Je Prozess ein eigenes Rohabbild: Ein anderer Lauf liest womoeglich gerade.
+    let bin = elf.with_extension(format!("{}.bin", std::process::id()));
+    if !Binutils::best_for(Target::THUMBV7EM).raw_image(&elf, &bin) {
+        return Err(format!("{}: kein Rohabbild (objcopy fehlt?)", elf.display()));
+    }
+    let bytes = std::fs::read(&bin).map_err(|e| format!("{}: {e}", bin.display()));
+    let _ = std::fs::remove_file(&bin);
+    let bytes = bytes?;
+    check_table(&bytes, TRAMPOLINE..APP).map_err(|e| format!("Sprungbrett: {e}"))?;
+    Ok(bytes)
+}
+
 /// Ob ein Rohabbild in den Anwendungsbereich gehoert.
-///
-/// Die ersten acht Byte sind die Vektortabelle: Stackzeiger im RAM,
-/// Resetvektor im Anwendungsbereich und ungerade (Thumb). Ein ELF statt
-/// eines Rohabbilds oder ein Abbild fuer `0x0800_0000` faellt hier auf,
-/// bevor es geschrieben wird.
 fn check_image(image: &[u8]) -> Result<(), String> {
+    check_table(image, APP..APP_END)
+}
+
+/// Die ersten acht Byte eines Rohabbilds sind die Vektortabelle:
+/// Stackzeiger im RAM, Resetvektor in `area` und ungerade (Thumb). Ein ELF
+/// statt eines Rohabbilds oder ein Abbild fuer eine andere Lage faellt hier
+/// auf, bevor es geschrieben wird.
+fn check_table(image: &[u8], area: std::ops::Range<u32>) -> Result<(), String> {
     let word = |at: usize| image.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
     let (Some(sp), Some(reset)) = (word(0), word(4)) else {
         return Err("kuerzer als eine Vektortabelle".to_string());
@@ -211,8 +262,11 @@ fn check_image(image: &[u8]) -> Result<(), String> {
     if !RAM.contains(&sp) {
         return Err(format!("Stackzeiger {sp:#010x} zeigt nicht ins RAM"));
     }
-    if !(APP..APP_END).contains(&reset) || reset % 2 == 0 {
-        return Err(format!("Resetvektor {reset:#010x} liegt nicht im Anwendungsbereich oder ist nicht Thumb"));
+    if !area.contains(&reset) || reset % 2 == 0 {
+        return Err(format!(
+            "Resetvektor {reset:#010x} liegt nicht in {:#010x}..{:#010x} oder ist nicht Thumb",
+            area.start, area.end
+        ));
     }
     Ok(())
 }
@@ -227,18 +281,24 @@ mod tests {
 
     #[test]
     fn an_application_image_passes() {
-        assert_eq!(check_image(&table(0x2001_0000, 0x0800_4195)), Ok(()));
+        assert_eq!(check_image(&table(0x2001_0000, 0x0801_0195)), Ok(()));
     }
 
+    /// Sektor 0 haelt der HID-Bootloader, Sektor 1 das Sprungbrett, 2 und 3
+    /// das Journal (FB-385): Ein Abbild, das dorthin gelinkt ist, gehoert
+    /// nicht in den Bereich der Anwendung.
     #[test]
-    fn an_image_for_the_bootloader_sector_is_refused() {
-        assert!(check_image(&table(0x2001_0000, 0x0800_01ad)).is_err());
+    fn an_image_for_the_sectors_before_the_application_is_refused() {
+        for reset in [0x0800_01ad, 0x0800_4195, 0x0800_8001, 0x0800_c001] {
+            assert!(check_image(&table(0x2001_0000, reset)).is_err(), "{reset:#010x}");
+        }
+        assert_eq!(check_table(&table(0x2001_0000, 0x0800_4195), TRAMPOLINE..APP), Ok(()));
     }
 
     #[test]
     fn an_elf_is_not_a_raw_image() {
         assert!(check_image(b"\x7fELF\x01\x01\x01\x00").is_err());
-        assert!(check_image(&table(0x2001_0000, 0x0800_4194)).is_err(), "gerade: kein Thumb");
+        assert!(check_image(&table(0x2001_0000, 0x0801_0194)).is_err(), "gerade: kein Thumb");
         assert!(check_image(&[0; 4]).is_err());
     }
 }

@@ -766,6 +766,129 @@ pub fn overrun_reaches_every_machine(board: &mut dyn Board) -> Vec<String> {
     failed
 }
 
+/// Baut ein Korpusprogramm, schreibt es und liest seinen Trace — in
+/// Echtzeit: Die Tests damit pruefen Schlaf und Journal an der Uhr.
+pub fn run_corpus(board: &mut dyn Board, name: &str, fresh: bool) -> Result<String, String> {
+    let options = Options { fresh, ..Options::timed(TICKS) };
+    board.build(&board::corpus_path(name), &options).and_then(|elf| board.run(&elf, &options))
+}
+
+/// **`persist` ueberlebt einen neuen Start** (5.9, 12.3): `35_persist`
+/// zaehlt `cycles` hoch, der Lauf schreibt das Journal am Ende (`flush`).
+/// `again` startet dasselbe Abbild noch einmal, ohne frisches Journal; der
+/// zweite Lauf beginnt mit dem letzten Stand des ersten.
+pub fn persistence_survives<B: Board>(
+    board: &mut B,
+    again: impl FnOnce(&mut B, &std::path::Path, &Options) -> Result<String, String>,
+) -> Vec<String> {
+    let name = "35_persist.takt";
+    let options = Options { fresh: false, ..Options::fresh(TICKS) };
+    let elf = match board.build(&board::corpus_path(name), &options) {
+        Ok(elf) => elf,
+        Err(e) => return vec![format!("{name}: {e}")],
+    };
+    let first = match board.run(&elf, &options) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("{name}: {e}")],
+    };
+    let Some(end) = last_output(&first, "count") else { return vec![format!("kein `count` im ersten Lauf:\n{first}")] };
+    if !first.contains("flush 1") {
+        return vec![format!("das Journal wurde am Ende nicht geschrieben:\n{first}")];
+    }
+    let second = match again(board, &elf, &options) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("{name}, zweiter Lauf: {e}")],
+    };
+    let mut failed = Vec::new();
+    match second.lines().find_map(|l| l.strip_prefix("t=0 out count ")).map(str::trim) {
+        Some(start) if start == end.trim() => {}
+        Some(start) => failed
+            .push(format!("der zweite Lauf beginnt mit {start}, nicht mit dem Stand des ersten ({end}):\n{second}")),
+        None => failed.push(format!("kein `count` bei t=0 im zweiten Lauf:\n{second}")),
+    }
+    if !second.contains("journal: Eintrag") {
+        failed.push(format!("das Journal wurde nicht geladen:\n{second}"));
+    }
+    failed
+}
+
+/// **Unter `overrun = alert` kostet das Journal Zeit, aber keine
+/// Semantik** (7.3, 12.3; plan/nvm.md 2.2, FB-197).
+///
+/// `58_persist_alert` schreibt in jedem Tick (`min_interval = 0`) und
+/// nimmt die Ueberlaeufe an. Ein Schreibvorgang haelt den Kern Perioden
+/// lang an; die logische Zeit beruehrt das nicht — der Trace bleibt der des
+/// Interpreters (Satz 9.4.4), und die Tickzahl kommt vom Zeitgeber, nicht
+/// aus der ISR (FB-198). Der Lauf druckt die gemessenen Loesch- und
+/// Programmierzeiten: die Zahlen fuer `nvm_erase_ns` und `nvm_program_ns`
+/// in der Hardware-Konfiguration des Boards.
+pub fn journal_costs_time_but_not_semantics(board: &mut dyn Board) -> Vec<String> {
+    let name = "58_persist_alert.takt";
+    let text = match run_corpus(board, name, true) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("{name}: {e}")],
+    };
+    let Some(writes) = board::counter(&text, "journal geschrieben") else {
+        return vec![format!("keine Journalzeile:\n{text}")];
+    };
+    eprintln!(
+        "{} {name}: {writes} Journal-Schreibvorgaenge, {} verlorene Perioden, Rueckstand {} ns; \
+         loeschen {} ns, programmieren {} ns",
+        board.name(),
+        board::counter(&text, "verloren").unwrap_or(0),
+        board::counter(&text, "rueckstand").unwrap_or(0),
+        board::counter(&text, "nvm loeschen").unwrap_or(0),
+        board::counter(&text, "programmieren").unwrap_or(0)
+    );
+    let mut failed = Vec::new();
+    if writes <= 1 {
+        failed.push(format!("das Journal schrieb nur {writes}-mal; der Fall aus 12.3 trat nicht ein:\n{text}"));
+    }
+    if board::counter(&text, "fehlgeschlagen") != Some(0) {
+        failed.push(format!("ein Schreibvorgang scheiterte:\n{text}"));
+    }
+    let times = text.lines().filter(|l| l.contains(" time took=")).count();
+    if (times as u64) < TICKS {
+        failed.push(format!("die Zeitzeilen fehlen ({times} von {TICKS}):\n{text}"));
+    }
+    let diffs = compare(&replayed(&corpus(name), &text), &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{diffs:?}"));
+    }
+    failed
+}
+
+/// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3;
+/// plan/nvm.md 2.3): `59_persist_idle` gibt der Runtime je Runde 500 ms
+/// `idle`, mehr als ein Schreibvorgang braucht. Sie schreibt dort, und die
+/// Schleife verpasst keine Periode; der Trace ist der ohne Schlaf (Satz
+/// 9.9.1). Braucht `nvm_blocking` und die Zeiten in der
+/// Hardware-Konfiguration, sonst gilt das Geraet als asynchron.
+pub fn journal_writes_in_sleep_windows(board: &mut dyn Board) -> Vec<String> {
+    let name = "59_persist_idle.takt";
+    let text = match run_corpus(board, name, true) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("{name}: {e}")],
+    };
+    let mut failed = Vec::new();
+    match board::counter(&text, "journal geschrieben") {
+        Some(writes) if writes >= 1 => {}
+        Some(_) => failed.push(format!("das Journal schrieb nie im Schlaf:\n{text}")),
+        None => failed.push(format!("keine Journalzeile:\n{text}")),
+    }
+    if board::counter(&text, "verloren") != Some(0) {
+        failed.push(format!("ein Schreibvorgang im Schlaf hat Perioden gekostet:\n{text}"));
+    }
+    if board::counter(&text, "ueberlaeufe") != Some(0) {
+        failed.push(format!("Ueberlaeufe:\n{text}"));
+    }
+    let diffs = compare(&replayed(&corpus(name), &text), &text);
+    if !diffs.is_empty() {
+        failed.push(format!("{diffs:?}"));
+    }
+    failed
+}
+
 /// Der Soll-Trace ueber [`TICKS`] Ticks.
 pub fn run_interpreted(p: &Program) -> String {
     replayed(p, "")

@@ -35,17 +35,14 @@
 //!
 //! ## Flashen
 //!
-//! Ueber den HID-Bootloader des Boards (kein Debugger noetig):
+//! Ueber den DFU-Bootloader des ROM nach Sektor 4, hinter Sprungbrett und
+//! Journal (`memory.x`; kein Debugger noetig):
 //!
 //! ```text
-//! cargo build --release
-//! llvm-objcopy -O binary target/thumbv7em-none-eabihf/release/takt-bringup-stm32f401 app.bin
-//! hid-flash app.bin
+//! cargo build --release --bin tick
+//! llvm-objcopy -O binary target/thumbv7em-none-eabihf/release/tick app.bin
+//! dfu-util -a 0 -s 0x08010000:leave -D app.bin
 //! ```
-//!
-//! Mit SWD-Probe stattdessen `probe-rs run --chip STM32F401CCUx`; dann
-//! ist auch `memory.x` auf `0x0800_0000` zu setzen, weil der Bootloader
-//! nicht mehr im Weg steht.
 
 #![no_std]
 #![no_main]

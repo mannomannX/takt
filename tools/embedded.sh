@@ -144,14 +144,19 @@ image_checked() {
     "${target_dir:-target}/release/takt" check-image "$bin" --manifest "$manifest"
 }
 
-# Die Probe: Liegt die Vektortabelle dort, wo der Bootloader sie erwartet?
-# `takt-flash-weact --dry-run` prueft Stackzeiger, Resetvektor und Groesse,
-# ohne ein Board anzufassen.
-bin="$(binary_of thumbv7em-none-eabihf)"
-tmp="$(mktemp -t takt-bringup-XXXXXX)"
-"$objcopy" -O binary "$bin" "$tmp"
+# Das Sprungbrett in Sektor 1 (FB-385), von aussen gebaut wie das Bring-up.
+# Die Probe: Liegt seine Vektortabelle dort, wo der HID-Bootloader sie
+# erwartet, und bleibt es in Sektor 1? `takt-flash-weact --dry-run` prueft
+# Stackzeiger, Resetvektor und Groesse, ohne ein Board anzufassen. Die
+# Vektortabelle der Anwendung in Sektor 4 prueft der Schreiber der
+# Board-Tests vor jedem Abbild.
+cargo build --release --target thumbv7em-none-eabihf     --manifest-path crates/takt-trampoline-stm32f401/Cargo.toml "$@"
+cargo clippy --release --target thumbv7em-none-eabihf     --manifest-path crates/takt-trampoline-stm32f401/Cargo.toml "$@" -- -D warnings
+tmp="$(mktemp -t takt-trampoline-XXXXXX)"
+"$objcopy" -O binary "${target_dir:-target}/thumbv7em-none-eabihf/release/takt-trampoline-stm32f401" "$tmp"
 cargo run -q -p takt-flash-weact --bin takt-flash-weact -- "$tmp" --dry-run
 rm -f "$tmp"
+bin="$(binary_of thumbv7em-none-eabihf)"
 program_in_binary crates/takt-bringup-stm32f401 "$bin"
 image_checked thumbv7em-none-eabihf takt-bringup-stm32f401 "$bin"
 

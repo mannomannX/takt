@@ -41,6 +41,7 @@
 //! |---|---|
 //! | Kern | Cortex-M4F, bis 84 MHz, f32 in Hardware (12.8: „32-Bit mit f32-FPU") |
 //! | Flash | 256 KB (Variante CC), intern — **kein XIP**, also keine `xip_flash`-Regeln |
+//! | Journal | Sektor 2 und 3 des Flash, blockierend ([`nvm`]) |
 //! | RAM | 64 KB |
 //! | Tick | TIM2, 32-bittig, vier Compare-Kanaele |
 //! | Telemetrie | USART1 auf PA9/PA10 |
@@ -55,6 +56,7 @@ pub mod guard;
 pub mod jobs;
 pub mod led;
 pub mod mpu;
+pub mod nvm;
 pub mod platform;
 pub mod stack;
 pub mod tick;
@@ -65,6 +67,7 @@ pub use guard::{Iwdg, WfiSleep};
 pub use jobs::JobContext;
 pub use led::Led;
 pub use mpu::Mpu;
+pub use nvm::FlashNvm;
 pub use tick::{Tim2Tick, on_timer_interrupt};
 pub use uart::{BAUD, Telemetry, Usart1, console_byte, telemetry};
 pub use wire::Wire;
