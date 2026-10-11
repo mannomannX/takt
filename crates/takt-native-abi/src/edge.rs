@@ -18,11 +18,12 @@ use takt_hal::quality::{Bounds, Gate, Quality, Reason, Scalar, Verdict};
 /// Ist `n` positiv und `p` nicht null, zeigt `p` auf `n` Eintraege, die
 /// waehrend des Aufrufs niemand sonst liest oder schreibt.
 unsafe fn items<'a, T>(p: *mut T, n: u32) -> &'a mut [T] {
-    if p.is_null() || n == 0 {
+    let Ok(len) = usize::try_from(n) else { return &mut [] };
+    if p.is_null() || len == 0 {
         return &mut [];
     }
     // SAFETY: vom Aufrufer zugesagt.
-    unsafe { slice::from_raw_parts_mut(p, n as usize) }
+    unsafe { slice::from_raw_parts_mut(p, len) }
 }
 
 /// Die Zeilen 1 und 2 fuer die Lieferungen eines Ticks
@@ -48,24 +49,24 @@ pub unsafe extern "C" fn takt_edge_settle(
     events: *mut Event,
     max_events: u32,
 ) -> u32 {
-    // SAFETY: vom Aufrufer zugesagt; `device_of` wird nur gelesen.
-    let (tracks, devices, device_of, deliveries, events) = unsafe {
-        (
-            items(tracks, channels),
-            items(devices, n_devices),
-            items(device_of.cast_mut(), channels),
-            items(deliveries, n),
-            items(events, max_events),
-        )
-    };
-    let mut k = 0;
+    // SAFETY: `channels` Eintraege, vom Aufrufer zugesagt.
+    let tracks = unsafe { items(tracks, channels) };
+    // SAFETY: `n_devices` Eintraege, vom Aufrufer zugesagt.
+    let devices = unsafe { items(devices, n_devices) };
+    // SAFETY: `channels` Eintraege, vom Aufrufer zugesagt; nur gelesen.
+    let device_of = unsafe { items(device_of.cast_mut(), channels) };
+    // SAFETY: `n` Eintraege, vom Aufrufer zugesagt.
+    let deliveries = unsafe { items(deliveries, n) };
+    // SAFETY: `max_events` Eintraege, vom Aufrufer zugesagt.
+    let events = unsafe { items(events, max_events) };
+    let mut k = 0usize;
     contract::settle(tracks, devices, device_of, deliveries, &window, |e| {
         if let Some(slot) = events.get_mut(k) {
             *slot = e;
-            k += 1;
+            k = k.saturating_add(1);
         }
     });
-    k as u32
+    u32::try_from(k).unwrap_or(u32::MAX)
 }
 
 /// Ein Wert des Rahmens: eine Ganzzahl oder eine Fliesskommazahl, so wie
@@ -77,6 +78,10 @@ struct Number {
 }
 
 impl Scalar for Number {
+    #[expect(
+        clippy::as_conversions,
+        reason = "MISRA C:2025 R.10.5: eine Ganzzahl als f64 wie `Value` im Interpreter; nur `as` wandelt i64 nach f64 (zum Naechsten gerundet)"
+    )]
     fn as_f64(&self) -> Option<f64> {
         Some(if self.int { self.i as f64 } else { self.f })
     }
@@ -170,7 +175,9 @@ pub unsafe extern "C" fn takt_edge_decodes(
     len: u32,
     exact: bool,
 ) -> bool {
-    // SAFETY: vom Aufrufer zugesagt; beide werden nur gelesen.
-    let (shape, bytes) = unsafe { (items(shape.cast_mut(), shape_len), items(bytes.cast_mut(), len)) };
+    // SAFETY: `shape_len` Byte, vom Aufrufer zugesagt; nur gelesen.
+    let shape = unsafe { items(shape.cast_mut(), shape_len) };
+    // SAFETY: `len` Byte, vom Aufrufer zugesagt; nur gelesen.
+    let bytes = unsafe { items(bytes.cast_mut(), len) };
     takt_native::bytes::decodes(shape, bytes, exact)
 }

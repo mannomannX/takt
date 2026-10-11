@@ -19,6 +19,23 @@
 
 #![no_std]
 #![allow(unsafe_code, reason = "C-ABI der Natives fuer den erzeugten Code; 9.5 fuehrt sie in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use core::slice;
 
@@ -142,8 +159,10 @@ pub unsafe extern "C" fn takt_native_sum8(b: *const u8, n: i32) -> u8 {
 /// `b` zeigt auf `n` lesbare Bytes, `out` auf [`DIGEST_BYTES`] schreibbare.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_native_sha256(b: *const u8, n: i32, out: *mut u8) {
-    // SAFETY: vom Aufrufer zugesagt.
-    unsafe { put_digest(out, &sha256::sha256(input(b, n))) }
+    // SAFETY: `b` zeigt auf `n` lesbare Bytes.
+    let data = unsafe { input(b, n) };
+    // SAFETY: `out` fasst den Digest.
+    unsafe { put_digest(out, &sha256::sha256(data)) }
 }
 
 /// `hmac_sha256(key, msg)`.
@@ -154,8 +173,12 @@ pub unsafe extern "C" fn takt_native_sha256(b: *const u8, n: i32, out: *mut u8) 
 /// [`DIGEST_BYTES`] schreibbare.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_native_hmac_sha256(key: *const u8, kn: i32, msg: *const u8, mn: i32, out: *mut u8) {
-    // SAFETY: vom Aufrufer zugesagt.
-    unsafe { put_digest(out, &sha256::hmac_sha256(input(key, kn), input(msg, mn))) }
+    // SAFETY: `key` zeigt auf `kn` lesbare Bytes.
+    let key = unsafe { input(key, kn) };
+    // SAFETY: `msg` zeigt auf `mn` lesbare Bytes.
+    let msg = unsafe { input(msg, mn) };
+    // SAFETY: `out` fasst den Digest.
+    unsafe { put_digest(out, &sha256::hmac_sha256(key, msg)) }
 }
 
 /// `sha256_init()`.
@@ -177,12 +200,12 @@ pub unsafe extern "C" fn takt_native_sha256_init(out: *mut u8) {
 /// [`CTX_MAX_BYTES`] schreibbare, die keinen der Eingaenge ueberlappen.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_native_sha256_update(c: *const u8, cn: i32, d: *const u8, n: i32, out: *mut u8) {
-    // SAFETY: vom Aufrufer zugesagt.
-    unsafe {
-        let mut state = ctx(c, cn);
-        state.update(input(d, n));
-        put_ctx(out, &state);
-    }
+    // SAFETY: `c` zeigt auf `cn` lesbare Bytes.
+    let mut state = unsafe { ctx(c, cn) };
+    // SAFETY: `d` zeigt auf `n` lesbare Bytes.
+    state.update(unsafe { input(d, n) });
+    // SAFETY: `out` fasst den Kontext und ueberlappt keinen Eingang.
+    unsafe { put_ctx(out, &state) };
 }
 
 /// `sha256_final(ctx)`.
@@ -192,8 +215,10 @@ pub unsafe extern "C" fn takt_native_sha256_update(c: *const u8, cn: i32, d: *co
 /// `c` zeigt auf `cn` lesbare Bytes, `out` auf [`DIGEST_BYTES`] schreibbare.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_native_sha256_final(c: *const u8, cn: i32, out: *mut u8) {
-    // SAFETY: vom Aufrufer zugesagt.
-    unsafe { put_digest(out, &ctx(c, cn).finish()) }
+    // SAFETY: `c` zeigt auf `cn` lesbare Bytes.
+    let state = unsafe { ctx(c, cn) };
+    // SAFETY: `out` fasst den Digest.
+    unsafe { put_digest(out, &state.finish()) }
 }
 
 /// `ecdsa_p256_verify(key, digest, sig)` (4.5, ein Job); falsche Laengen
@@ -212,8 +237,12 @@ pub unsafe extern "C" fn takt_native_ecdsa_p256_verify(
     sig: *const u8,
     sn: i32,
 ) -> bool {
-    // SAFETY: vom Aufrufer zugesagt.
-    let (key, digest, sig) = unsafe { (input(key, kn), input(digest, dn), input(sig, sn)) };
+    // SAFETY: `key` zeigt auf `kn` lesbare Bytes.
+    let key = unsafe { input(key, kn) };
+    // SAFETY: `digest` zeigt auf `dn` lesbare Bytes.
+    let digest = unsafe { input(digest, dn) };
+    // SAFETY: `sig` zeigt auf `sn` lesbare Bytes.
+    let sig = unsafe { input(sig, sn) };
     match (key.try_into(), digest.try_into(), sig.try_into()) {
         (Ok(key), Ok(digest), Ok(sig)) => takt_crypto::ecdsa_p256_verify(key, digest, sig).unwrap_or(false),
         _ => false,
@@ -254,8 +283,12 @@ pub unsafe extern "C" fn takt_native_rsa3072_verify(
     sig: *const u8,
     sn: i32,
 ) -> bool {
-    // SAFETY: vom Aufrufer zugesagt.
-    let (key, digest, sig) = unsafe { (input(key, kn), input(digest, dn), input(sig, sn)) };
+    // SAFETY: `key` zeigt auf `kn` lesbare Bytes.
+    let key = unsafe { input(key, kn) };
+    // SAFETY: `digest` zeigt auf `dn` lesbare Bytes.
+    let digest = unsafe { input(digest, dn) };
+    // SAFETY: `sig` zeigt auf `sn` lesbare Bytes.
+    let sig = unsafe { input(sig, sn) };
     takt_crypto::rsa3072_verify(key, digest, sig).unwrap_or(false)
 }
 
@@ -286,9 +319,16 @@ pub unsafe extern "C" fn takt_native_aes_gcm_decrypt(
     if out.is_null() && dn > 0 {
         return -1;
     }
-    // SAFETY: vom Aufrufer zugesagt.
-    let (key, nonce, aad, data, tag) =
-        unsafe { (input(key, kn), input(nonce, nn), input(aad, an), input(data, dn), input(tag, tn)) };
+    // SAFETY: `key` zeigt auf `kn` lesbare Bytes.
+    let key = unsafe { input(key, kn) };
+    // SAFETY: `nonce` zeigt auf `nn` lesbare Bytes.
+    let nonce = unsafe { input(nonce, nn) };
+    // SAFETY: `aad` zeigt auf `an` lesbare Bytes.
+    let aad = unsafe { input(aad, an) };
+    // SAFETY: `data` zeigt auf `dn` lesbare Bytes.
+    let data = unsafe { input(data, dn) };
+    // SAFETY: `tag` zeigt auf `tn` lesbare Bytes.
+    let tag = unsafe { input(tag, tn) };
     let out: &mut [u8] = if data.is_empty() {
         &mut []
     } else {
@@ -339,8 +379,12 @@ pub unsafe extern "C" fn takt_native_map_insert(
     key: *const u8,
     val: *const u8,
 ) -> bool {
-    // SAFETY: vom Aufrufer zugesagt.
-    let (map, key, val) = unsafe { (slots(s, size(cap), size(klen), size(vlen)), input(key, klen), input(val, vlen)) };
+    // SAFETY: die Slots nach [`slots`], vom Aufrufer zugesagt.
+    let map = unsafe { slots(s, size(cap), size(klen), size(vlen)) };
+    // SAFETY: `key` zeigt auf `klen` lesbare Bytes ausserhalb der Slots.
+    let key = unsafe { input(key, klen) };
+    // SAFETY: `val` zeigt auf `vlen` lesbare Bytes ausserhalb der Slots.
+    let val = unsafe { input(val, vlen) };
     map.is_some_and(|mut m| m.insert(key, val))
 }
 
@@ -359,8 +403,10 @@ pub unsafe extern "C" fn takt_native_map_get(
     key: *const u8,
     out: *mut u8,
 ) -> bool {
-    // SAFETY: vom Aufrufer zugesagt.
-    let (map, key) = unsafe { (slots(s, size(cap), size(klen), size(vlen)), input(key, klen)) };
+    // SAFETY: die Slots nach [`slots`], vom Aufrufer zugesagt.
+    let map = unsafe { slots(s, size(cap), size(klen), size(vlen)) };
+    // SAFETY: `key` zeigt auf `klen` lesbare Bytes ausserhalb der Slots.
+    let key = unsafe { input(key, klen) };
     let Some(value) = map.as_ref().and_then(|m| m.get(key)) else { return false };
     if !out.is_null() {
         // SAFETY: vom Aufrufer zugesagt; `value` ist `vlen` Byte lang.
@@ -376,8 +422,10 @@ pub unsafe extern "C" fn takt_native_map_get(
 /// Wie [`slots`]; `key` zeigt auf `klen` lesbare Bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_native_map_remove(s: *mut u8, cap: i32, klen: i32, vlen: i32, key: *const u8) -> bool {
-    // SAFETY: vom Aufrufer zugesagt.
-    let (map, key) = unsafe { (slots(s, size(cap), size(klen), size(vlen)), input(key, klen)) };
+    // SAFETY: die Slots nach [`slots`], vom Aufrufer zugesagt.
+    let map = unsafe { slots(s, size(cap), size(klen), size(vlen)) };
+    // SAFETY: `key` zeigt auf `klen` lesbare Bytes ausserhalb der Slots.
+    let key = unsafe { input(key, klen) };
     map.is_some_and(|mut m| m.remove(key))
 }
 
@@ -408,13 +456,13 @@ pub mod measure {
         /// Das Ergebnis: eine Pruefsumme als acht Byte, hoechstwertiges
         /// zuerst, ein Digest Byte fuer Byte.
         pub fn result(&self) -> &[u8] {
-            &self.bytes[..self.len]
+            self.bytes.get(..self.len).unwrap_or(&[])
         }
 
         /// Die weiteren Einstiege der Zeile mit ihrem Stack-Bedarf: Anfang
         /// und Ende einer Kette `sha256_init`, `sha256_update`, `sha256_final`.
         pub fn others(&self) -> &[(&'static str, u32)] {
-            &self.others[..self.count]
+            self.others.get(..self.count).unwrap_or(&[])
         }
 
         fn scalar(v: u64, stack: u32) -> Run {
@@ -471,7 +519,7 @@ pub mod measure {
             Native::Crc16 => scalar(super::takt_native_crc16, one()?, measure),
             Native::Sum8 => scalar(super::takt_native_sum8, one()?, measure),
             Native::Sha256 => {
-                let (b, entry) = (one()?, black_box(super::takt_native_sha256 as unsafe extern "C" fn(_, _, _)));
+                let (b, entry) = (one()?, black_box::<unsafe extern "C" fn(_, _, _)>(super::takt_native_sha256));
                 let mut out = [0u8; DIGEST_BYTES];
                 // SAFETY: `b` ist ein Slice seiner Laenge, `out` fasst den Digest.
                 let stack = measure(&mut || unsafe { entry(b.as_ptr(), len(b), out.as_mut_ptr()) });
@@ -479,7 +527,7 @@ pub mod measure {
             }
             Native::HmacSha256 => {
                 let [key, msg] = inputs else { return None };
-                let entry = black_box(super::takt_native_hmac_sha256 as unsafe extern "C" fn(_, _, _, _, _));
+                let entry = black_box::<unsafe extern "C" fn(_, _, _, _, _)>(super::takt_native_hmac_sha256);
                 let mut out = [0u8; DIGEST_BYTES];
                 // SAFETY: wie oben, fuer beide Eingaben.
                 let stack =
@@ -488,21 +536,21 @@ pub mod measure {
             }
             Native::Sha256Init | Native::Sha256Update | Native::Sha256Final => chain(inputs, measure),
             Native::Fft256 => {
-                let (x, entry) = (one()?, black_box(super::takt_native_fft256 as unsafe extern "C" fn(_, _, _)));
+                let (x, entry) = (one()?, black_box::<unsafe extern "C" fn(_, _, _)>(super::takt_native_fft256));
                 let mut out = [0u8; takt_native::fft::BYTES_F64];
                 // SAFETY: `x` ist ein Slice seiner Laenge, `out` fasst die
                 // groesste kanonische Form.
                 let stack = measure(&mut || unsafe { entry(x.as_ptr(), len(x), out.as_mut_ptr()) });
-                Run::block(&out[..x.len().min(out.len())], stack)
+                Run::block(out.get(..x.len().min(out.len())).unwrap_or(&[]), stack)
             }
             #[cfg(feature = "ecdsa")]
             Native::EcdsaP256Verify => {
                 let [key, digest, sig] = inputs else { return None };
                 let entry =
-                    black_box(super::takt_native_ecdsa_p256_verify as unsafe extern "C" fn(_, _, _, _, _, _) -> _);
+                    black_box::<unsafe extern "C" fn(_, _, _, _, _, _) -> _>(super::takt_native_ecdsa_p256_verify);
                 let mut ok = false;
-                // SAFETY: drei Slices ihrer Laenge.
                 let stack = measure(&mut || {
+                    // SAFETY: drei Slices ihrer Laenge.
                     ok = unsafe { entry(key.as_ptr(), len(key), digest.as_ptr(), len(digest), sig.as_ptr(), len(sig)) }
                 });
                 Run::scalar(u64::from(ok), stack)
@@ -510,10 +558,10 @@ pub mod measure {
             #[cfg(feature = "rsa")]
             Native::Rsa3072Verify => {
                 let [key, digest, sig] = inputs else { return None };
-                let entry = black_box(super::takt_native_rsa3072_verify as unsafe extern "C" fn(_, _, _, _, _, _) -> _);
+                let entry = black_box::<unsafe extern "C" fn(_, _, _, _, _, _) -> _>(super::takt_native_rsa3072_verify);
                 let mut ok = false;
-                // SAFETY: drei Slices ihrer Laenge.
                 let stack = measure(&mut || {
+                    // SAFETY: drei Slices ihrer Laenge.
                     ok = unsafe { entry(key.as_ptr(), len(key), digest.as_ptr(), len(digest), sig.as_ptr(), len(sig)) }
                 });
                 Run::scalar(u64::from(ok), stack)
@@ -521,16 +569,16 @@ pub mod measure {
             #[cfg(feature = "aes-gcm")]
             Native::AesGcmDecrypt => {
                 let [key, nonce, aad, data, tag] = inputs else { return None };
-                let entry = black_box(
-                    super::takt_native_aes_gcm_decrypt as unsafe extern "C" fn(_, _, _, _, _, _, _, _, _, _, _) -> _,
+                let entry = black_box::<unsafe extern "C" fn(_, _, _, _, _, _, _, _, _, _, _) -> _>(
+                    super::takt_native_aes_gcm_decrypt,
                 );
                 let mut out = [0u8; PLAIN_MAX];
                 if data.len() > PLAIN_MAX {
                     return None;
                 }
                 let mut got = -1;
-                // SAFETY: fuenf Slices ihrer Laenge, `out` fasst `data`.
                 let stack = measure(&mut || {
+                    // SAFETY: fuenf Slices ihrer Laenge, `out` fasst `data`.
                     got = unsafe {
                         entry(
                             key.as_ptr(),
@@ -547,9 +595,9 @@ pub mod measure {
                         )
                     }
                 });
-                match usize::try_from(got) {
-                    Ok(n) => Run::block(&out[..n], stack),
-                    Err(_) => Run::none(stack),
+                match usize::try_from(got).ok().and_then(|n| out.get(..n)) {
+                    Some(plain) => Run::block(plain, stack),
+                    None => Run::none(stack),
                 }
             }
             // Ohne ihr Feature kommt eine Funktion aus `takt-crypto` nicht
@@ -566,12 +614,12 @@ pub mod measure {
     /// `sha256_init`, ein `sha256_update` je Chunk und `sha256_final`, jeder
     /// Aufruf einzeln gemessen.
     fn chain(chunks: &[&[u8]], measure: &mut dyn FnMut(&mut dyn FnMut()) -> u32) -> Run {
-        let init = black_box(super::takt_native_sha256_init as unsafe extern "C" fn(_));
-        let update = black_box(super::takt_native_sha256_update as unsafe extern "C" fn(_, _, _, _, _));
-        let finish = black_box(super::takt_native_sha256_final as unsafe extern "C" fn(_, _, _));
+        let init = black_box::<unsafe extern "C" fn(_)>(super::takt_native_sha256_init);
+        let update = black_box::<unsafe extern "C" fn(_, _, _, _, _)>(super::takt_native_sha256_update);
+        let finish = black_box::<unsafe extern "C" fn(_, _, _)>(super::takt_native_sha256_final);
         let size = |c: &[u8; CTX_MAX_BYTES]| {
-            let filled = u32::from_le_bytes([c[32], c[33], c[34], c[35]]) as usize;
-            i32::try_from(CTX_MAX_BYTES.min(44 + filled)).unwrap_or(0)
+            let filled = usize::try_from(u32::from_le_bytes([c[32], c[33], c[34], c[35]])).unwrap_or(CTX_MAX_BYTES);
+            i32::try_from(CTX_MAX_BYTES.min(filled.saturating_add(44))).unwrap_or(0)
         };
         let mut ctx = [0u8; CTX_MAX_BYTES];
         // SAFETY: `ctx` fasst die kanonische Form.

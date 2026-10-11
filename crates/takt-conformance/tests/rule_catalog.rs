@@ -170,7 +170,6 @@ const PENDING: &[&str] = &[
     "takt-bringup-host",
     "takt-bringup-stm32f401",
     "takt-embed",
-    "takt-native-abi",
     "takt-trampoline-stm32f401",
 ];
 
@@ -183,7 +182,6 @@ const PENDING_UNSAFE: &[&str] = &[
     "takt-bringup-host",
     "takt-bringup-stm32f401",
     "takt-embed",
-    "takt-native-abi",
     "takt-trampoline-stm32f401",
 ];
 
@@ -327,6 +325,7 @@ const DEVIATIONS: &[(&str, &str, usize)] = &[
     ("takt-hal", "R.10.5", 2),
     ("takt-native", "D.4.1", 1),
     ("takt-native", "R.10.5", 2),
+    ("takt-native-abi", "R.10.5", 1),
     ("takt-rt-core", "D.4.1", 1),
 ];
 

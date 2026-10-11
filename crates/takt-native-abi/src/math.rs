@@ -89,7 +89,11 @@ pub enum Entry {
 impl Entry {
     /// Ruft den Einstieg mit Bitmustern; das Ergebnis als Bitmuster.
     pub fn call(self, x: u64, y: u64) -> u64 {
-        let narrow = |b: u64| f32::from_bits(b as u32);
+        // Ein f32 steht in den unteren vier Byte des Bitmusters.
+        let narrow = |b: u64| {
+            let [b0, b1, b2, b3, ..] = b.to_le_bytes();
+            f32::from_bits(u32::from_le_bytes([b0, b1, b2, b3]))
+        };
         match self {
             Entry::F64(f) => f(f64::from_bits(x)).to_bits(),
             Entry::F64Pair(f) => f(f64::from_bits(x), f64::from_bits(y)).to_bits(),
