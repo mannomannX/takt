@@ -265,7 +265,28 @@ So arbeitet jeder Strang, als wäre er allein:
   - **14d Embassy** auf beiden Boards: eine Aufgabe auf einem
     `InterruptExecutor`, die Zeit aus `embassy-time`.
   - Unterwegs: FB-385 (der Port verlangt das Journal) und FB-458 (der
-    Stack von `main` auf dem C6).
+    Stack von `main` auf dem C6; behoben 2026-10-11).
+  - **FB-385, entschieden 2026-10-11:**
+    - **Die Regel im Typ:** `takt_rt_core::Program` nennt, was das
+      Programm braucht (`Volatile` oder `Persisting`; die Hülle setzt es,
+      `Guarded` reicht es durch). Die `Runtime` hält das Journal selbst und
+      lässt sich für ein Programm mit `persist` nur mit einem Journal bauen;
+      ohne es kompiliert der Wirt nicht. Die Ports verlieren ihren Parameter
+      `persist` und damit das stille `None`. Ein Programm ohne `persist` hat
+      kein solches Argument. Dasselbe Muster für den Griff der Jobs.
+    - **Das Journal des F401 im Flash:** Sektor 2 und 3 (je 16 KiB). In
+      Sektor 1 (0x0800_4000, wohin der HID-Bootloader springt) liegt ein
+      Sprungbrett: Es prüft die Anwendung ab Sektor 4 (0x0801_0000, 192
+      KiB) und startet sie; bei leerer Anwendung geht es in den ROM-DFU.
+      Sektor 0 bleibt unberührt. Der DfuSe-Schreiber schreibt das
+      Sprungbrett nur, wenn es fehlt oder abweicht. `FlashNvm` für den
+      F401 (blockierend, 12.3), Zeiten aus `takt bench`, und die
+      Persistenz-Tests des C6 auch auf dem F401.
+    - **Verworfen:** eine Laufzeitprüfung (Fehler erst am Board); ein
+      flüchtiges RAM-Journal (die stille Ersatzlösung, die 12.11
+      ausschließt); `persist`-Programme auf dem F401 auslassen (zehn
+      Korpusprogramme weniger auf dem M4); eine eigene Startstufe in Sektor
+      0 (gewinnt nur 16 KiB, braucht einen Eingriff in Sektor 0).
 
 ### 17 — Wirt mit Instanzen in Fäden, `linux_rt`
 
