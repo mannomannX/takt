@@ -230,7 +230,7 @@ Lint noch Test, nur das Review.
 | R.14.4 (R) | alle | eine Bedingung ist boolesch | rustc | — |
 | R.15.4 (A) | alle | höchstens ein `break` je Schleife | Review (Lücke) | — |
 | R.15.7 (A) | alle | `if … else if` endet mit `else` | Stufe 2: `else_if_without_else` | `tests/rule_catalog.rs` |
-| R.17.2 (R) | alle | keine Rekursion | Lücke: kein Lint über Crate-Grenzen. Für die Runtime begrenzt die gemessene Stackschranke je Board den Schaden (M11 Schritt 13) | `tests/board_*.rs` (Stacks) |
+| R.17.2 (R) | alle | keine Rekursion | Lücke: kein Lint über Crate-Grenzen. Für die Runtime begrenzt die gemessene Stackschranke je Board den Schaden (M11 Schritt 13). Abweichung: `takt_native::bytes` (`check`, `skip`, `repeat`) steigt rekursiv über die Gestalt eines Werts, höchstens `DEPTH` = 32 Ebenen; den Stack je Native misst `takt bench` auf beiden Boards | `tests/board_*.rs` (Stacks), `.hw` je Board (`native`-Zeilen) |
 | R.17.11 (A) | alle | eine Funktion, die nie zurückkehrt, ist als `-> !` deklariert | Review (Lücke) | — |
 | R.18.3 (R), R.18.5 (A) | alle | Zeigervergleiche nur im selben Objekt; höchstens zwei Ebenen Zeiger | Review; im Workspace Referenzen statt Zeiger | — |
 | R.19.2 (A), R.19.3 (R) | alle | keine `union`; kein Lesen eines ungesetzten Glieds | Sprache: eine `union` liest nur `unsafe`; Prüfung: kein `union` in einem eigenen Crate | `tests/rule_catalog.rs` |
