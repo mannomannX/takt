@@ -140,7 +140,7 @@ const UNREACHED: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("120_port_writes.takt", 0, 0, 2, 4, 0, 0),
     ("122_owner_reads_instance.takt", 0, 0, 0, 1, 0, 0),
     ("123_fifo_port.takt", 0, 0, 0, 9, 0, 0),
-    ("124_port_test.takt", 8, 0, 16, 0, 0, 0),
+    ("124_port_test.takt", 8, 0, 10, 6, 0, 0),
     ("sim/12_7/program.takt", 4, 6, 6, 1, 0, 0),
     ("sim/14_7/program.takt", 10, 7, 36, 0, 4, 0),
 ];
