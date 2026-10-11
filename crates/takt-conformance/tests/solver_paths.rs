@@ -367,7 +367,11 @@ fn classify_unreached(depths: &str) {
     let Some(solver) = takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren") else {
         return;
     };
-    let solver = solver.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache"));
+    // 2 GB je Anfrage statt `MEMORY_MB`: Neben den zwei Faeden laufen
+    // WSL, Editoren und Sprachserver, und frei sind oft nur 9 GB Commit
+    // (FB-607). Was mehr braucht, entscheidet in der Frist ohnehin kaum.
+    let solver =
+        solver.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache")).with_memory(2048);
     let mut names = takt_conformance::suites::programs("vergleich");
     names.extend(takt_conformance::suites::EXAMPLES);
     names.retain(|n| !WITHOUT_PARTS.contains(n));
