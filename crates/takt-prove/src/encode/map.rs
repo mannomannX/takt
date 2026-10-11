@@ -205,12 +205,10 @@ impl Keyed {
     }
 }
 
-/// Die Sorte der Elemente eines Arrays.
+/// Die Sorte der Elemente eines Arrays, bei einem Array aus Arrays ein Array.
 fn element_sort(a: &Term) -> Sort {
-    match a.sort() {
-        Sort::Array(e) => e.sort(),
-        other => other,
-    }
+    let sort = a.sort();
+    sort.element().unwrap_or(sort)
 }
 
 impl Enc<'_> {

@@ -705,6 +705,11 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
         .iter()
         .map(|(name, i)| StateVar { name: name.clone(), sort: i.sort(), init: i.clone(), next: next[name].clone() })
         .collect();
+    // Ein Ort, dessen Folgewert eine andere Sorte hat, waere kein
+    // Transitionssystem mehr; lieber laut als ein Solver, der ablehnt.
+    if let Some(v) = state.iter().find(|v| v.next.sort() != v.sort) {
+        return no(format!("der Folgewert von `{}` hat eine andere Sorte", v.name), Span::default());
+    }
     let mut leaves = BTreeMap::new();
     let mut paths = BTreeMap::new();
     for &id in &enc.order {

@@ -2137,6 +2137,8 @@ machine m:
             ok = chunks.insert(t % 5, chunk)
             if t % 4 == 0:
                 r = chunks.remove(2)
+            if t == 9:
+                chunks.clear()
             var c : bytes<300> = chunks.get(t % 3).or(default)
             blen = -1
             if chunks.get(t % 3).valid:
@@ -2161,6 +2163,11 @@ fn large_maps_agree() {
     let nested = model.state.iter().find(|v| v.name == "s.m.v.chunks[*].value[*]").expect("Chunks je Schluessel");
     assert_eq!(nested.sort, takt_prove::term::Sort::Array2(takt_prove::term::Elem::Int));
     assert!(has("s.m.v.walked[0].has") && !has("s.m.v.walked[*].has"), "`walked` bleibt aus Slots");
+    // Jeder Folgezustand hat die Sorte seines Orts, auch nach `clear` einer
+    // map aus Puffern.
+    for v in &model.state {
+        assert_eq!(v.next.sort(), v.sort, "`{}`", v.name);
+    }
     agree_program("LARGE_MAPS", &p, "", 12);
 }
 

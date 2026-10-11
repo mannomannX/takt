@@ -626,7 +626,7 @@ impl Enc<'_> {
                 if self.mat_dims(e.ty).is_some() {
                     let rows = parts.into_iter().map(|row| match row {
                         V::Node(items) => items,
-                        leaf => vec![leaf],
+                        leaf @ (V::Leaf(_) | V::Seq(..)) => vec![leaf],
                     });
                     return Ok(V::Node(rows.flatten().collect()));
                 }

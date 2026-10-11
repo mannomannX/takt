@@ -51,13 +51,14 @@ pub fn leaves_at(p: &Program, ty: TypeId, v: &Value, base: &str) -> Option<Vec<(
 /// Die Gestalt ohne Arrays: jede Folge `[*]` als ihre Plaetze `[k]`. Mit
 /// den Werten aus `env` schreibt sie die Blaetter dieser Plaetze nach
 /// `out`; fehlt ein Wert, nur die Gestalt. `None` fuer eine map nach
-/// Schluesseln.
+/// Schluesseln und fuer Arrays aus Arrays.
 fn unfold(shape: &Shape, base: &str, env: &Env, out: &mut Env) -> Option<Shape> {
     match shape {
         Shape::Node(parts) => {
             let mut flat = Vec::with_capacity(parts.len());
             for (path, p) in parts {
                 match p {
+                    Shape::Seq(Some(_), elem) if elem.has_seq() => return None,
                     Shape::Seq(Some(n), elem) => {
                         for k in 0..*n {
                             let item = format!("{base}[{k}]");
