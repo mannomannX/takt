@@ -26,6 +26,16 @@ use crate::term::Term;
 pub enum Solver {
     /// Sein Pfad.
     At(PathBuf),
+    /// Wie `At`, mit einem Verzeichnis fuer entschiedene Antworten
+    /// ([`Solver::cached`]).
+    Cached {
+        /// Sein Pfad.
+        path: PathBuf,
+        /// Das Verzeichnis der Antworten.
+        dir: PathBuf,
+        /// Name und Version ([`Solver::identity`]), Teil jedes Schluessels.
+        identity: String,
+    },
     /// Keiner gefunden.
     Missing,
 }
@@ -59,8 +69,24 @@ impl Solver {
     /// Der Pfad, wenn gefunden.
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Solver::At(p) => Some(p),
+            Solver::At(p) | Solver::Cached { path: p, .. } => Some(p),
             Solver::Missing => None,
+        }
+    }
+
+    /// Derselbe Solver, der entschiedene Antworten in `dir` ablegt und dort
+    /// wiederfindet (M11 B2 Schritt 0): Schluessel ist der SHA-256 aus Name
+    /// und Version des Solvers, Zeitlimit und Anfrage. Nur eine Ausgabe, in
+    /// der jede Anfrage `sat` oder `unsat` bekam, kommt hinein; ein
+    /// Zeitlimit oder `unknown` haengt an der Last des Rechners und wird neu
+    /// gefragt.
+    pub fn cached(self, dir: impl Into<PathBuf>) -> Solver {
+        match self {
+            Solver::At(path) => {
+                let identity = Solver::At(path.clone()).identity().unwrap_or_default();
+                Solver::Cached { path, dir: dir.into(), identity }
+            }
+            other => other,
         }
     }
 
@@ -72,6 +98,9 @@ impl Solver {
     /// Name und Version, wie Bericht und Beweisdatei sie fuehren (FB-380):
     /// `z3 4.13.4`, `cvc5 1.2.0`. Eine andere Version kann anders urteilen.
     pub fn identity(&self) -> Option<String> {
+        if let Solver::Cached { identity, .. } = self {
+            return Some(identity.clone());
+        }
         let path = self.path()?;
         let out = Command::new(path).arg("--version").output().ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
@@ -86,14 +115,44 @@ impl Solver {
         self.path().and_then(|p| p.file_stem()).and_then(|s| s.to_str()).is_some_and(|s| s.starts_with("cvc5"))
     }
 
-    /// Fuehrt ein Skript aus und liefert die Ausgabe.
+    /// Fuehrt ein Skript aus und liefert die Ausgabe; mit Cache eine
+    /// entschiedene Antwort von frueher, ohne den Solver zu fragen.
     fn run(&self, script: &str, timeout_s: u64, tag: &str) -> Result<String, String> {
-        let path = self.path().ok_or("kein Solver")?;
-        let dir = std::env::temp_dir().join(format!("takt-prove-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         // Eindeutig je Aufruf: Tests laufen nebenlaeufig im selben Prozess.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let cache = match self {
+            Solver::Cached { dir, identity, .. } => Some((dir, cache_key(identity, timeout_s, script))),
+            _ => None,
+        };
+        if let Some((dir, key)) = &cache
+            && let Ok(text) = std::fs::read_to_string(dir.join(format!("{key}.out")))
+        {
+            return Ok(text);
+        }
+        let text = self.ask(script, timeout_s, tag, n)?;
+        if let Some((dir, key)) = cache
+            && decided(script, &text)
+        {
+            // Erst ganz geschrieben, dann unter dem Schluessel: Ein Leser
+            // nebenan sieht nie eine halbe Antwort. Scheitert es, fragt der
+            // naechste Lauf den Solver wieder.
+            let part = dir.join(format!("{key}.{}.{n}.part", std::process::id()));
+            if std::fs::create_dir_all(dir).is_ok()
+                && std::fs::write(&part, &text).is_ok()
+                && std::fs::rename(&part, dir.join(format!("{key}.out"))).is_err()
+            {
+                let _ = std::fs::remove_file(&part);
+            }
+        }
+        Ok(text)
+    }
+
+    /// Fragt den Solver: das Skript als Datei, die Ausgabe als Text.
+    fn ask(&self, script: &str, timeout_s: u64, tag: &str, n: usize) -> Result<String, String> {
+        let path = self.path().ok_or("kein Solver")?;
+        let dir = std::env::temp_dir().join(format!("takt-prove-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let file = dir.join(format!("{tag}-{n}.smt2"));
         std::fs::write(&file, script).map_err(|e| e.to_string())?;
         let mut cmd = Command::new(path);
@@ -115,6 +174,24 @@ impl Solver {
         }
         Ok(text)
     }
+}
+
+/// Der Schluessel einer Antwort im Cache: SHA-256 ueber Solver mit Version,
+/// Zeitlimit und Anfrage, hexadezimal.
+fn cache_key(identity: &str, timeout_s: u64, script: &str) -> String {
+    let mut ctx = takt_native::sha256::Ctx::new();
+    ctx.update(format!("{identity}\n{timeout_s}\n").as_bytes());
+    ctx.update(script.as_bytes());
+    ctx.finish().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Hat der Solver entschieden? Jedes `(check-sat)` des Skripts bekam `sat`
+/// oder `unsat`. Ein Fehler zaehlt nicht dagegen: `get-value` nach `unsat`
+/// ist einer, und ein Abbruch laesst Antworten fehlen.
+fn decided(script: &str, text: &str) -> bool {
+    let asked = script.matches("(check-sat)").count();
+    let answered = text.lines().map(str::trim).filter(|l| *l == "sat" || *l == "unsat").count();
+    asked > 0 && answered == asked
 }
 
 /// Das Urteil ueber eine Eigenschaft.

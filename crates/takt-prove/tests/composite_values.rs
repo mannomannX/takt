@@ -17,7 +17,13 @@ fn compile(src: &str) -> Program {
 
 fn solver() -> Option<Solver> {
     let found = Some(find()).filter(|s| !matches!(s, Solver::Missing));
-    takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren")
+    takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren").map(cached)
+}
+
+/// Der Solver mit dem Cache seiner entschiedenen Antworten im
+/// Zielverzeichnis (M11 B2 Schritt 0).
+fn cached(s: Solver) -> Solver {
+    s.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache"))
 }
 
 /// Eine Maschine mit einem Array und einem Optional, die je Tick

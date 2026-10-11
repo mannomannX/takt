@@ -181,6 +181,9 @@ fn update(which: &str) {
     let Some(solver) = takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren") else {
         return;
     };
+    // Eine unveraenderte Anfrage beantwortet der Cache; neu gefragt wird nur,
+    // was sich geaendert hat (M11 B2 Schritt 0).
+    let solver = solver.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache"));
     let identity = solver.identity().unwrap_or_default();
     // Ein grosses Programm braucht den Solver eine Viertelstunde; die
     // Programme verteilen sich darum auf Faeden, je einer neben seinem

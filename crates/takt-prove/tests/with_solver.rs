@@ -32,7 +32,13 @@ fn corpus_with(name: &str, properties: &str) -> Program {
 /// `TAKT_ALLOW_MISSING` erlaubt das Fehlen (FB-392).
 fn solver() -> Option<Solver> {
     let found = Some(find()).filter(|s| !matches!(s, Solver::Missing));
-    takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren")
+    takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren").map(cached)
+}
+
+/// Der Solver mit dem Cache seiner entschiedenen Antworten im
+/// Zielverzeichnis (M11 B2 Schritt 0).
+fn cached(s: Solver) -> Solver {
+    s.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache"))
 }
 
 /// Ein Programm, das `n` Durchlaeufe einer Schleife in `outer` Durchlaeufen ausrollt.
@@ -414,53 +420,76 @@ machine consumer:
     assert!(site.machine == "consumer" && matches!(site.verdict, CheckVerdict::Unreachable { .. }), "{site:?}");
 }
 
-/// **z3 und cvc5 widersprechen sich nicht** (M11 Schritt 28c, 2.13 h): An
-/// denselben Programmen beweist keiner eine Pruefstelle unerreichbar, die
-/// der andere mit bestaetigtem Pfad erreicht, und keiner eine Eigenschaft,
-/// die der andere widerlegt. Unentschieden darf jeder bleiben — cvc5 sucht
-/// keine Invariante nach Horn-Klauseln —, aber beide entscheiden etwas.
-#[test]
-fn z3_and_cvc5_do_not_contradict_each_other() {
+/// **z3 und cvc5 widersprechen sich nicht** (M11 Schritt 28c, 2.13 h): Am
+/// Programm `name` beweist keiner eine Pruefstelle unerreichbar, die der
+/// andere mit bestaetigtem Pfad erreicht, und keiner eine Eigenschaft, die
+/// der andere widerlegt. Unentschieden darf jeder bleiben — cvc5 sucht keine
+/// Invariante nach Horn-Klauseln. Ergebnis: wie viele Stellen beide
+/// entschieden; `None` ohne beide Solver. Je Programm ein Test, damit
+/// nextest sie zugleich faehrt (B2 Schritt 0).
+fn solvers_agree_on(name: &str) -> Option<usize> {
     let need = |name: &str| {
         let found = Some(takt_prove::named(name)).filter(|s| !matches!(s, Solver::Missing));
-        takt_testkit::require(name, found, "nach `~/.takt/bin` legen (z3 4.13.4, cvc5 1.2.0)")
+        takt_testkit::require(name, found, "nach `~/.takt/bin` legen (z3 4.13.4, cvc5 1.2.0)").map(cached)
     };
-    let (Some(z3), Some(cvc5)) = (need("z3"), need("cvc5")) else { return };
+    let (Some(z3), Some(cvc5)) = (need("z3"), need("cvc5")) else { return None };
     let mut decided = 0;
-    for name in ["01_minimal.takt", "03_sequences_and_faults.takt", "19_faults.takt", "47_monitors.takt"] {
-        let p = corpus_with(name, "");
-        let whole = encode(&p).ok();
-        let judge = |solver: &Solver| {
-            let checks = classify_compositional(&p, whole.as_ref(), 3, solver, 30).expect("Solver laeuft").0;
-            let props = whole.as_ref().map(|m| prove(m, &p, 3, solver, 30).expect("Solver laeuft")).unwrap_or_default();
-            (checks, props)
+    let p = corpus_with(name, "");
+    let whole = encode(&p).ok();
+    let judge = |solver: &Solver| {
+        let checks = classify_compositional(&p, whole.as_ref(), 3, solver, 30).expect("Solver laeuft").0;
+        let props = whole.as_ref().map(|m| prove(m, &p, 3, solver, 30).expect("Solver laeuft")).unwrap_or_default();
+        (checks, props)
+    };
+    let ((zc, zp), (cc, cp)) = (judge(&z3), judge(&cvc5));
+    for z in &zc {
+        let Some(c) = cc.iter().find(|c| c.start == z.start && c.kind == z.kind && c.machine == z.machine) else {
+            panic!("{name}: cvc5 kennt `{} {}` nicht", z.kind, z.start)
         };
-        let ((zc, zp), (cc, cp)) = (judge(&z3), judge(&cvc5));
-        for z in &zc {
-            let Some(c) = cc.iter().find(|c| c.start == z.start && c.kind == z.kind && c.machine == z.machine) else {
-                panic!("{name}: cvc5 kennt `{} {}` nicht", z.kind, z.start)
-            };
-            let contradiction = matches!(
-                (&z.verdict, &c.verdict),
-                (CheckVerdict::Unreachable { .. }, CheckVerdict::Reachable { .. })
-                    | (CheckVerdict::Reachable { .. }, CheckVerdict::Unreachable { .. })
-            );
-            assert!(!contradiction, "{name} {} {}: z3 {:?}, cvc5 {:?}", z.kind, z.start, z.verdict, c.verdict);
-            decided += usize::from(
-                !matches!(z.verdict, CheckVerdict::Undecided { .. })
-                    && !matches!(c.verdict, CheckVerdict::Undecided { .. }),
-            );
-        }
-        for z in &zp {
-            let c = cp.iter().find(|c| c.name == z.name).expect("dieselbe Eigenschaft");
-            let contradiction = matches!(
-                (&z.verdict, &c.verdict),
-                (Verdict::Proven { .. }, Verdict::Violated { .. }) | (Verdict::Violated { .. }, Verdict::Proven { .. })
-            );
-            assert!(!contradiction, "{name} `{}`: z3 {:?}, cvc5 {:?}", z.name, z.verdict, c.verdict);
-        }
+        let contradiction = matches!(
+            (&z.verdict, &c.verdict),
+            (CheckVerdict::Unreachable { .. }, CheckVerdict::Reachable { .. })
+                | (CheckVerdict::Reachable { .. }, CheckVerdict::Unreachable { .. })
+        );
+        assert!(!contradiction, "{name} {} {}: z3 {:?}, cvc5 {:?}", z.kind, z.start, z.verdict, c.verdict);
+        decided += usize::from(
+            !matches!(z.verdict, CheckVerdict::Undecided { .. })
+                && !matches!(c.verdict, CheckVerdict::Undecided { .. }),
+        );
     }
-    assert!(decided > 0, "keine Pruefstelle haben beide entschieden");
+    for z in &zp {
+        let c = cp.iter().find(|c| c.name == z.name).expect("dieselbe Eigenschaft");
+        let contradiction = matches!(
+            (&z.verdict, &c.verdict),
+            (Verdict::Proven { .. }, Verdict::Violated { .. }) | (Verdict::Violated { .. }, Verdict::Proven { .. })
+        );
+        assert!(!contradiction, "{name} `{}`: z3 {:?}, cvc5 {:?}", z.name, z.verdict, c.verdict);
+    }
+    Some(decided)
+}
+
+/// Beide entscheiden auch etwas: In `01_minimal` urteilen sie ueber
+/// dieselben Stellen.
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_01() {
+    if let Some(decided) = solvers_agree_on("01_minimal.takt") {
+        assert!(decided > 0, "keine Pruefstelle haben beide entschieden");
+    }
+}
+
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_03() {
+    solvers_agree_on("03_sequences_and_faults.takt");
+}
+
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_19() {
+    solvers_agree_on("19_faults.takt");
+}
+
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_47() {
+    solvers_agree_on("47_monitors.takt");
 }
 
 /// **Eine Vorlage wird nicht fuer sich klassifiziert** (FB-491): Ihre
@@ -510,13 +539,13 @@ fn a_path_found_alone_is_confirmed_on_the_whole() {
 /// der letzten guten Lieferung beschraenkt, wie der Rand sie erzwingt (12.6),
 /// genau bis auf die Rundung des Randes. Ein Tick ohne Lieferung haelt die
 /// vorige Abtastung (3.5); danach springt `x` um die Rate beider Ticks, und
-/// der Interpreter bestaetigt den Pfad.
-#[test]
-fn max_slew_bounds_the_change_since_the_last_good_delivery() {
-    let Some(solver) = solver() else { return };
-    let body = |attr: &str, bound: &str| {
-        format!(
-            "system:
+/// der Interpreter bestaetigt den Pfad. Drei Tests, damit nextest sie
+/// zugleich faehrt (B2 Schritt 0): Das Programm mit dem Attribut `attr` und
+/// der Schranke `bound`, und das Urteil ueber seine `check`-Stelle.
+fn slewed(attr: &str, bound: &str) -> Option<(takt_prove::Model, CheckVerdict)> {
+    let solver = solver()?;
+    let p = compile(&format!(
+        "system:
     language = 1
     tick     = 1 ms
 
@@ -535,30 +564,32 @@ machine m:
             armed = true
             y = last
 "
-        )
-    };
-    let check = |sites: Vec<takt_prove::CheckReport>| sites.into_iter().find(|s| s.kind == "check").expect("Stelle");
-    let p = compile(&body(" with max_slew = 10.0", "0.02"));
+    ));
     let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let site = sites.into_iter().find(|s| s.kind == "check").expect("Stelle");
+    Some((model, site.verdict))
+}
+
+#[test]
+fn max_slew_bounds_the_change_since_the_last_good_delivery() {
+    let Some((model, verdict)) = slewed(" with max_slew = 10.0", "0.02") else { return };
     assert!(model.state.iter().any(|v| v.name == "s.q.x.good.prev"), "der letzte gute Wert liegt im Zustand");
-    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
-    let CheckVerdict::Undecided { reason } = &site.verdict else { panic!("{site:?}") };
+    let CheckVerdict::Undecided { reason } = &verdict else { panic!("{verdict:?}") };
     assert!(reason.contains("kein Pfad bis Tiefe 2"), "{reason}");
+}
 
-    let p = compile(&body(" with max_slew = 10.0", "0.015"));
-    let model = encode(&p).expect("kodierbar");
-    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
-    let CheckVerdict::Reachable { stimulus, .. } = &site.verdict else { panic!("{site:?}") };
-    assert!(
-        stimulus.lines().filter(|l| l.contains(" in x ")).count() < 3,
-        "ein Tick ohne Lieferung:
-{stimulus}"
-    );
+#[test]
+fn max_slew_allows_the_rate_of_both_ticks_after_a_tick_without_delivery() {
+    let Some((_, verdict)) = slewed(" with max_slew = 10.0", "0.015") else { return };
+    let CheckVerdict::Reachable { stimulus, .. } = &verdict else { panic!("{verdict:?}") };
+    assert!(stimulus.lines().filter(|l| l.contains(" in x ")).count() < 3, "ein Tick ohne Lieferung:\n{stimulus}");
+}
 
-    let p = compile(&body("", "0.02"));
-    let model = encode(&p).expect("kodierbar");
-    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
-    assert!(matches!(site.verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {site:?}");
+#[test]
+fn without_max_slew_the_input_jumps() {
+    let Some((_, verdict)) = slewed("", "0.02") else { return };
+    assert!(matches!(verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {verdict:?}");
 }
 
 /// Ein Eingang bis 100, eine Variable bis 60, die ihn uebernimmt; die
@@ -727,6 +758,64 @@ fn answering(word: &str) -> Solver {
         p
     };
     Solver::At(path)
+}
+
+/// Ein Solver, der jedes `(check-sat)` mit `word` beantwortet und jede
+/// Anfrage (nicht `--version`) in `asked.txt` neben sich zaehlt; sein
+/// Verzeichnis beginnt leer.
+fn counting(word: &str) -> (Solver, std::path::PathBuf) {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-prove-counting-{word}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let count = dir.join("asked.txt");
+    let path = if cfg!(windows) {
+        let p = dir.join("solver.cmd");
+        let (count, hits) = (count.display(), dir.join("hits.txt").display().to_string());
+        let script = format!(
+            "@echo off\r\nif not \"%1\"==\"-smt2\" (\r\necho {word}\r\nexit /b 0\r\n)\r\necho x>>\"{count}\"\r\n\
+             findstr /b /c:\"(check-sat)\" \"%~3\" > \"{hits}\"\r\n\
+             for /f \"usebackq delims=\" %%l in (\"{hits}\") do echo {word}\r\n"
+        );
+        std::fs::write(&p, script).expect("Skript");
+        p
+    } else {
+        let p = dir.join("solver.sh");
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = \"-smt2\" ] || {{ echo {word}; exit 0; }}\necho x >> '{}'\n\
+             grep -x '(check-sat)' \"$3\" | while read -r l; do echo {word}; done\n",
+            count.display()
+        );
+        std::fs::write(&p, script).expect("Skript");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("ausfuehrbar");
+        }
+        p
+    };
+    (Solver::At(path).cached(dir.join("cache")), count)
+}
+
+/// **Eine entschiedene Antwort fragt der Solver einmal** (M11 B2 Schritt 0):
+/// Derselbe Lauf noch einmal nimmt sie aus dem Cache; ein Zeitlimit kommt
+/// nie hinein und wird neu gefragt.
+#[test]
+fn a_decided_answer_is_asked_once() {
+    let p = corpus_with("01_minimal.takt", "");
+    let model = encode(&p).expect("kodierbar");
+    let asked = |count: &std::path::Path| std::fs::read_to_string(count).map_or(0, |t| t.lines().count());
+    let (solver, count) = counting("unsat");
+    let first = classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    let n = asked(&count);
+    assert!(n > 0, "der erste Lauf fragt");
+    let second = classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    assert_eq!(asked(&count), n, "der zweite Lauf fragt nicht");
+    assert_eq!(first, second, "dieselben Urteile");
+    let (solver, count) = counting("timeout");
+    classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    let n = asked(&count);
+    classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    assert_eq!(asked(&count), 2 * n, "ein Zeitlimit fragt jedes Mal");
 }
 
 /// INT-020: Was der Solver nicht entscheidet, bleibt offen — eine
