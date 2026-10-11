@@ -185,7 +185,7 @@ impl<A: Alarm> Form<A> {
             return None;
         }
         let due = match self.gate {
-            Some(gate) => gate.swap(false, Ordering::AcqRel),
+            Some(gate) => gate.swap(false, Ordering::SeqCst),
             None => rt.clock.now() >= self.at,
         };
         if due { self.on_alarm(rt, tunables) } else { None }
@@ -194,7 +194,7 @@ impl<A: Alarm> Form<A> {
     fn arm(&mut self, at: i64) {
         self.at = at;
         match self.gate {
-            Some(gate) => gate.store(true, Ordering::Release),
+            Some(gate) => gate.store(true, Ordering::SeqCst),
             None => self.alarm.arm(at),
         }
     }
@@ -219,7 +219,7 @@ impl<F: FnMut()> Alarm for Polled<F> {
 /// keine ISR mehr aktiv ist und der Job-Interrupt seinen Auftrag gerechnet
 /// hat; so haelt jeder Job seine Dauer (4.5).
 pub fn release(gate: &AtomicBool, alarm: &mut impl Alarm) {
-    if gate.swap(false, Ordering::AcqRel) {
+    if gate.swap(false, Ordering::SeqCst) {
         alarm.arm(0);
     }
 }

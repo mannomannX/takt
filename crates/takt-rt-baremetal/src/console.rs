@@ -40,7 +40,7 @@ pub struct Tune {
 impl Tune {
     /// Der Wert in kanonischer Byteform.
     pub fn value(&self) -> &[u8] {
-        &self.value[..usize::from(self.len)]
+        self.value.get(..usize::from(self.len)).unwrap_or(&[])
     }
 }
 
@@ -59,21 +59,17 @@ pub fn parse(line: &[u8]) -> Option<Tune> {
     }
     let mut tune = Tune { param, value: [0; VALUE_BYTES], len: 0 };
     for pair in hex.chunks_exact(2) {
+        let [high, low] = pair else { return None };
         let slot = tune.value.get_mut(usize::from(tune.len))?;
-        *slot = nibble(pair[0])? << 4 | nibble(pair[1])?;
-        tune.len += 1;
+        *slot = nibble(*high)? << 4 | nibble(*low)?;
+        tune.len = tune.len.saturating_add(1);
     }
     Some(tune)
 }
 
 /// Der Wert einer Hexziffer; Gross- und Kleinbuchstaben gelten.
 fn nibble(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
+    char::from(b).to_digit(16).and_then(|d| u8::try_from(d).ok())
 }
 
 /// Die Konsole als Quelle von Tunables: setzt die Bytes der Gegenrichtung zu
@@ -100,18 +96,19 @@ impl<F: FnMut() -> Option<u8>> Console<F> {
     pub fn feed(&mut self, b: u8) -> Option<Tune> {
         match b {
             b'\n' | b'\r' => {
-                let tune = if self.overlong { None } else { parse(&self.line[..self.len]) };
+                let tune = if self.overlong { None } else { self.line.get(..self.len).and_then(parse) };
                 self.len = 0;
                 self.overlong = false;
                 tune
             }
-            _ if self.len < LINE => {
-                self.line[self.len] = b;
-                self.len += 1;
-                None
-            }
             _ => {
-                self.overlong = true;
+                match self.line.get_mut(self.len) {
+                    Some(slot) => {
+                        *slot = b;
+                        self.len = self.len.saturating_add(1);
+                    }
+                    None => self.overlong = true,
+                }
                 None
             }
         }

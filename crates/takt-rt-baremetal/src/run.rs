@@ -94,7 +94,8 @@ where
     pub fn new(cadence: Cadence, tick_ns: i64, telemetry: F) -> Trace<F, Telemetry<P>> {
         // Unter einer Millisekunde Tick traegt die Leitung keine Zeile je
         // Tick (FB-271); die Zeitzeile ist Statistik und darf duenner werden.
-        let time_every = (1_000_000 / tick_ns.max(1)).max(1) as u64;
+        let per_ms = 1_000_000_i64.checked_div(tick_ns.max(1)).unwrap_or(1);
+        let time_every = u64::try_from(per_ms.max(1)).unwrap_or(1);
         Trace { cadence, next: cadence.every.max(1), time_every, telemetry, slept: 0, line: PhantomData }
     }
 
@@ -112,18 +113,18 @@ where
     fn outputs(&mut self, tick: Option<&Tick>) -> Outputs {
         let conformance = self.cadence.conformance();
         let Some(tick) = tick else { return if conformance { Outputs::All } else { Outputs::None } };
-        self.slept += tick.slept;
+        self.slept = self.slept.saturating_add(tick.slept);
         if conformance
-            && tick.k % self.time_every == 0
+            && tick.k.checked_rem(self.time_every) == Some(0)
             && let Some(t) = (self.telemetry)()
         {
             t.write_time(tick);
         }
-        let k = tick.k + 1 + tick.slept;
+        let k = tick.k.saturating_add(1).saturating_add(tick.slept);
         if k < self.next {
             return Outputs::None;
         }
-        self.next = k + self.cadence.every.max(1);
+        self.next = k.saturating_add(self.cadence.every.max(1));
         if conformance { Outputs::Changed } else { Outputs::All }
     }
 
@@ -255,9 +256,9 @@ pub fn report<P: Port>(
         let Some(bytes) = depth else { continue };
         t.write(label);
         t.write_u64(u64::from(bytes));
-        for (label, n) in parts {
+        for (part, n) in parts {
             if let Some(n) = n {
-                t.write(label);
+                t.write(part);
                 t.write_u64(u64::from(n));
             }
         }

@@ -25,7 +25,7 @@
 
 use core::hint::black_box;
 
-use crate::telemetry::{Port, Telemetry};
+use crate::telemetry::{Port, Telemetry, hex_digit};
 
 /// Eine Messreihe in Zyklen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +56,7 @@ impl Series {
 
     /// Der Mittelwert, abgerundet; null ohne Messung.
     pub fn mean(&self) -> u32 {
-        if self.n == 0 { 0 } else { (self.total / u64::from(self.n)) as u32 }
+        self.total.checked_div(u64::from(self.n)).map_or(0, |m| u32::try_from(m).unwrap_or(u32::MAX))
     }
 }
 
@@ -111,17 +111,16 @@ pub fn write_value<P: Port>(t: &mut Telemetry<P>, label: &str, value: u64) {
 /// Stack-Bedarf seines Einstiegs und der weiteren Einstiege, die er ruft.
 /// `takt_conformance::natives` liest sie und vergleicht mit dem Wirt.
 pub fn write_native<P: Port>(t: &mut Telemetry<P>, index: usize, result: &[u8], stack: u32, others: &[(&str, u32)]) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     t.write("native ");
-    t.write_u64(index as u64);
+    t.write_u64(u64::try_from(index).unwrap_or(u64::MAX));
     t.write(" ");
     // Ein Lauf ohne Ergebnis (`aes_gcm_decrypt` mit falschem Tag).
     if result.is_empty() {
         t.write("-");
     }
     for b in result {
-        t.write_byte(HEX[usize::from(b >> 4)]);
-        t.write_byte(HEX[usize::from(b & 15)]);
+        t.write_byte(hex_digit(b >> 4));
+        t.write_byte(hex_digit(b & 15));
     }
     t.write(" stack ");
     t.write_u64(u64::from(stack));
@@ -140,12 +139,12 @@ pub fn write_native<P: Port>(t: &mut Telemetry<P>, index: usize, result: &[u8], 
 /// der Stack-Bedarf des Einstiegs `takt_m_*` und die Zyklen eines Aufrufs.
 /// `takt_conformance::math` liest sie und vergleicht mit der Norm.
 pub fn write_math<P: Port>(t: &mut Telemetry<P>, index: usize, result: u64, stack: u32, cycles: u32) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     t.write("math ");
-    t.write_u64(index as u64);
+    t.write_u64(u64::try_from(index).unwrap_or(u64::MAX));
     t.write(" ");
-    for shift in (0..16).rev() {
-        t.write_byte(HEX[((result >> (4 * shift)) & 15) as usize]);
+    for b in result.to_be_bytes() {
+        t.write_byte(hex_digit(b >> 4));
+        t.write_byte(hex_digit(b & 15));
     }
     t.write(" stack ");
     t.write_u64(u64::from(stack));
@@ -187,11 +186,11 @@ pub fn subnormal_failures() -> u32 {
     let mut failures = 0;
     for (a, b, want, op) in f32_cases {
         let got = black_box(op)(black_box(f32::from_bits(a)), black_box(f32::from_bits(b)));
-        failures += u32::from(got.to_bits() != want);
+        failures = u32::from(got.to_bits() != want).saturating_add(failures);
     }
     for (a, b, want, op) in f64_cases {
         let got = black_box(op)(black_box(f64::from_bits(a)), black_box(f64::from_bits(b)));
-        failures += u32::from(got.to_bits() != want);
+        failures = u32::from(got.to_bits() != want).saturating_add(failures);
     }
     failures
 }

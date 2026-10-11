@@ -79,20 +79,25 @@ impl<P: Port> Telemetry<P> {
         }
         // `head` und `len` liegen unter `cap`: Ein Abzug genuegt, und eine
         // Division mit veraenderlichem Teiler waere auf RV32 ein Aufruf.
-        let at = self.head + self.len;
-        self.ring[if at >= cap { at - cap } else { at }] = b;
-        self.len += 1;
-        self.sent = self.sent.saturating_add(1);
+        let at = self.head.saturating_add(self.len);
+        match self.ring.get_mut(if at >= cap { at.saturating_sub(cap) } else { at }) {
+            Some(slot) => {
+                *slot = b;
+                self.len = self.len.saturating_add(1);
+                self.sent = self.sent.saturating_add(1);
+            }
+            None => self.dropped = self.dropped.saturating_add(1),
+        }
     }
 
     /// Gibt an die Leitung, was sie nimmt, und schliesst das Paket ab.
     pub fn flush(&mut self) {
-        while self.len > 0 && self.port.try_write(self.ring[self.head]) {
-            self.head += 1;
+        while self.len > 0 && self.ring.get(self.head).is_some_and(|b| self.port.try_write(*b)) {
+            self.head = self.head.saturating_add(1);
             if self.head == self.ring.len() {
                 self.head = 0;
             }
-            self.len -= 1;
+            self.len = self.len.saturating_sub(1);
         }
         self.port.flush();
     }
@@ -159,24 +164,33 @@ impl<P: Port> Telemetry<P> {
     }
 
     /// Eine Zahl, dezimal.
-    pub fn write_u64(&mut self, mut n: u64) {
+    pub fn write_u64(&mut self, n: u64) {
+        // Von hinten; die Ziffern einer u64 passen in 20 Byte.
         let mut buf = [0u8; 20];
-        let mut i = buf.len();
-        while n > u64::from(u32::MAX) {
-            i -= 1;
-            buf[i] = b'0' + (n % 10) as u8;
-            n /= 10;
+        let mut used = 0usize;
+        let mut slots = buf.iter_mut().rev();
+        let mut put = |d: u8| {
+            if let Some(slot) = slots.next() {
+                *slot = d;
+                used = used.saturating_add(1);
+            }
+        };
+        // In u64 nur, bis der Rest in u32 passt: Auf RV32 ist die Division
+        // in u64 ein Aufruf, die in u32 ein Befehl.
+        let mut wide = n;
+        while wide > u64::from(u32::MAX) {
+            put(decimal_digit(wide % 10));
+            wide /= 10;
         }
-        let mut n = n as u32;
+        let mut narrow = u32::try_from(wide).unwrap_or(u32::MAX);
         loop {
-            i -= 1;
-            buf[i] = b'0' + (n % 10) as u8;
-            n /= 10;
-            if n == 0 {
+            put(decimal_digit(u64::from(narrow % 10)));
+            narrow /= 10;
+            if narrow == 0 {
                 break;
             }
         }
-        for b in &buf[i..] {
+        for b in buf.get(buf.len().saturating_sub(used)..).unwrap_or(&[]) {
             self.write_byte(*b);
         }
     }
@@ -191,10 +205,9 @@ impl<P: Port> Telemetry<P> {
 
     /// Ein Byte als `0x..`, wie der Interpreter Stromelemente schreibt.
     pub fn write_hex8(&mut self, b: u8) {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
         self.write("0x");
-        self.write_byte(HEX[usize::from(b >> 4)]);
-        self.write_byte(HEX[usize::from(b & 15)]);
+        self.write_byte(hex_digit(b >> 4));
+        self.write_byte(hex_digit(b & 15));
     }
 
     /// Die Metazeile eines Ticks (grammar/trace.md, `time`).
@@ -218,6 +231,16 @@ impl<P: Port> core::fmt::Write for Telemetry<P> {
         self.write(s);
         Ok(())
     }
+}
+
+/// Die Hexziffer der unteren vier Bit von `n`, klein geschrieben.
+pub(crate) fn hex_digit(n: u8) -> u8 {
+    b"0123456789abcdef".get(usize::from(n & 15)).copied().unwrap_or(b'?')
+}
+
+/// Die Dezimalziffer von `d`; der Aufrufer gibt `d < 10`.
+fn decimal_digit(d: u64) -> u8 {
+    usize::try_from(d).ok().and_then(|i| b"0123456789".get(i)).copied().unwrap_or(b'?')
 }
 
 #[cfg(test)]
