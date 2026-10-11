@@ -297,11 +297,10 @@ fn cone<'a>(
     invariants: &[&'a Term],
 ) -> (BTreeSet<String>, Vec<&'a Term>, Vec<&'a Term>) {
     let mut inside: BTreeSet<String> = roots.iter().flat_map(|t| vars(t)).collect();
-    let state: Vec<(&str, BTreeSet<String>)> = model
-        .state
-        .iter()
-        .map(|v| (v.name.as_str(), vars(&v.init).into_iter().chain(vars(&v.next)).collect()))
-        .collect();
+    let deps = model.deps.get_or_init(|| {
+        std::rc::Rc::new(model.state.iter().map(|v| vars(&v.init).into_iter().chain(vars(&v.next)).collect()).collect())
+    });
+    let state: Vec<(&str, &BTreeSet<String>)> = model.state.iter().map(|v| v.name.as_str()).zip(deps.iter()).collect();
     let bound: Vec<BTreeSet<String>> = constraints.iter().map(|t| vars(t)).collect();
     loop {
         let before = inside.len();

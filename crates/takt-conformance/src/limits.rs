@@ -84,15 +84,6 @@ pub const LIMITS: &[Limit] = &[
         wann: "M11 Schritt 29, Nachtrag: induktive Invarianten je Stelle (Spacer) und tiefere Pfade.",
         row: "FB-511",
     },
-    Limit {
-        was: "Das Flash-Modell aus 14.8 im Modell des Beweisers",
-        warum: "Interpreter und erzeugter Code rechnen jedes Szenario aus Kapitel 14, das Modell \
-                alle bis auf die von 14.8: Der Zustand des Flash-Modells liegt ueber `STATE_LIMIT`, \
-                und in `fallback` und `no_image` ordnet der Kodierer seinen Sendestrom keiner \
-                kodierten Maschine zu (`MODEL_GAPS` in `examples.rs`).",
-        wann: "M11 Schritt 29, Nachtrag: Maps und Puffer als Arrays der SMT-Theorie.",
-        row: "FB-497",
-    },
 ];
 
 /// Die Grenzen als Text, fuer die Ausgabe eines Testlaufs.

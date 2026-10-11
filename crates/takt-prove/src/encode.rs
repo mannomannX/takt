@@ -218,6 +218,10 @@ pub struct Model {
     /// Das Szenario, das mitlaeuft (13.6): seine Maschine und die Codes der
     /// Blaetter, deren Kette keinen Uebergang hat — dort endet der Lauf.
     pub scenario: Option<(String, Vec<i64>)>,
+    /// Je Zustandsort die Variablen seines Anfangs- und Folgewerts, fuer den
+    /// Kegel einer Anfrage (`smt::cone`): beim ersten Kegel einmal ueber den
+    /// geteilten Graphen gesammelt statt je Anfrage (FB-603).
+    pub(crate) deps: std::cell::OnceCell<std::rc::Rc<Vec<std::collections::BTreeSet<String>>>>,
 }
 
 impl Model {
@@ -290,10 +294,38 @@ enum ExitKind {
     Goto(Target),
 }
 
+impl ExitKind {
+    /// Wirken beide gleich: dasselbe Ziel, dieselbe Ursache?
+    fn same(&self, other: &ExitKind) -> bool {
+        match (self, other) {
+            (ExitKind::Fault(a, x), ExitKind::Fault(b, y)) => a == b && x.same(y),
+            (ExitKind::Abort(x), ExitKind::Abort(y)) => x.same(y),
+            (ExitKind::Goto(a), ExitKind::Goto(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Exit {
     cond: Term,
     kind: ExitKind,
+}
+
+/// Die Ausgaenge eines Zweigs, die gleich wirken, als einer unter dem Oder
+/// ihrer Bedingungen (FB-603): Sie sind paarweise exklusiv, und was ein
+/// Ausgang anrichtet, haengt nur an Art, Ziel und Ursache. Die Range-Pruefung
+/// in einer Schleife ueber einen Puffer loest so einmal auf statt je
+/// Durchlauf.
+fn by_effect(exits: &[Exit]) -> Vec<Exit> {
+    let mut out: Vec<(ExitKind, Vec<Term>)> = Vec::new();
+    for e in exits.iter().filter(|e| !e.cond.is_bool(false)) {
+        match out.iter_mut().find(|(k, _)| k.same(&e.kind)) {
+            Some((_, conds)) => conds.push(e.cond.clone()),
+            None => out.push((e.kind.clone(), vec![e.cond.clone()])),
+        }
+    }
+    out.into_iter().map(|(kind, conds)| Exit { cond: Term::or(conds), kind }).collect()
 }
 
 /// Von wo ein Ausgang wechselt.
@@ -343,6 +375,18 @@ struct Cx<'a> {
     active: &'a BTreeMap<MachineId, Term>,
     /// Lokale einer eingebetteten Funktion.
     locals: Option<BTreeMap<VarId, V>>,
+}
+
+/// Was alle Zweige eines Maschinenschritts teilen (`step_machine`).
+struct Branch<'a> {
+    m: MachineId,
+    machine: &'a Machine,
+    /// Das Blatt am Tick-Anfang.
+    leaf_now: &'a Term,
+    /// Die Maschine schreitet und steht nicht in `FAULTED`.
+    alive0: &'a Term,
+    pre: &'a Env,
+    actives: &'a BTreeMap<MachineId, Term>,
 }
 
 impl Cx<'_> {
@@ -772,6 +816,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
         uninterpreted: enc.uninterpreted.into_iter().collect(),
         observed,
         scenario,
+        deps: Default::default(),
     })
 }
 
@@ -1103,6 +1148,21 @@ impl Enc<'_> {
         out
     }
 
+    /// Die Ticks im aktuellen Blatt (`time_in_state` im Interpreter): der
+    /// Timer des Blatts, dessen Zweig entsteht, oder ohne ein solches der
+    /// des Blatts, in dem die Maschine steht. Ohne Blatt (eine inaktive
+    /// gescopte Instanz) null.
+    fn leaf_ticks(&self, m: MachineId, cx: &Cx<'_>, env: &Env) -> Term {
+        if let Some(leaf) = cx.leaf {
+            return env.get(&self.loc_timer(m, leaf)).cloned().expect("Timer");
+        }
+        let now = env.get(&self.loc_leaf(m)).cloned().expect("leaf");
+        self.leaves(m).into_iter().fold(Term::int(0), |out, l| {
+            let timer = env.get(&self.loc_timer(m, l)).cloned().expect("Timer");
+            Term::ite(Term::eq(now.clone(), Term::int(self.code(m, l))), timer, out)
+        })
+    }
+
     fn leaves(&self, m: MachineId) -> Vec<StateId> {
         self.machine(m)
             .states
@@ -1282,10 +1342,9 @@ impl Enc<'_> {
                 Builtin::Tick => Term::int(self.p.config.tick),
                 Builtin::Now => self.now.clone(),
                 Builtin::TimeInState => {
-                    let (Some(m), Some(leaf)) = (cx.m, cx.leaf) else { return no("`time_in_state`", span) };
+                    let Some(m) = cx.m else { return no("`time_in_state`", span) };
                     let period = i64::from(self.machine(m).period.max(1)).saturating_mul(self.p.config.tick);
-                    let timer = env.get(&self.loc_timer(m, leaf)).cloned().expect("Timer");
-                    Term::bin(Op::Mul, timer, Term::int(period))
+                    Term::bin(Op::Mul, self.leaf_ticks(m, cx, env), Term::int(period))
                 }
                 other @ (Builtin::LastFault | Builtin::Event) => return no(format!("`{other:?}`"), span),
             },
@@ -2401,13 +2460,12 @@ impl Enc<'_> {
                 StmtKind::Every { period, counter, body } => {
                     let d = self.const_int(cx.m, period)?;
                     let site = self.machine(m).layout.every_counters[counter.index()];
-                    let clock = match (site.state, cx.leaf) {
-                        (Some(_), Some(leaf)) => {
+                    let clock = match site.state {
+                        Some(_) => {
                             let ticks = i64::from(machine_period(self.machine(m))).saturating_mul(self.p.config.tick);
-                            Term::bin(Op::Mul, env[&self.loc_timer(m, leaf)].clone(), Term::int(ticks))
+                            Term::bin(Op::Mul, self.leaf_ticks(m, cx, env), Term::int(ticks))
                         }
-                        (Some(_), None) => return no("`every` ohne Zustand", span),
-                        (None, _) => self.now.clone(),
+                        None => self.now.clone(),
                     };
                     let loc = self.loc_every(m, counter.index(), &self.loop_path.clone());
                     let stored = env[&loc].clone();
@@ -3110,7 +3168,10 @@ impl Enc<'_> {
         self.clear_schedules(m, env)
     }
 
-    /// Ein Tick einer Maschine (`step_m`), je Blatt ein Zweig.
+    /// Ein Tick einer Maschine (`step_m`), je Blatt ein Zweig. Das `loop:`
+    /// einer Ebene samt Handlern kodiert er einmal fuer alle Blaetter
+    /// darunter (FB-603): Die Maschinenebene des Flash-Modells lief vorher je
+    /// Blatt neu, siebenmal.
     fn step_machine(
         &mut self,
         m: MachineId,
@@ -3125,87 +3186,137 @@ impl Enc<'_> {
         let faulted = base.get(&self.loc_faulted(m)).cloned().expect("faulted");
         let leaf_now = base.get(&self.loc_leaf(m)).cloned().expect("leaf");
         let alive0 = Term::and(vec![active.clone(), faulted.not()]);
-        let mut merged = base.clone();
-        let period = i64::from(machine.period.max(1)).saturating_mul(self.p.config.tick);
-        for leaf in self.leaves(m) {
-            let is = Term::and(vec![alive0.clone(), Term::eq(leaf_now.clone(), Term::int(self.code(m, leaf)))]);
-            let cx = Cx { m: Some(m), leaf: Some(leaf), mode: Mode::Run, pre, active: actives, locals: None };
-            self.unrolled = 0;
-            let mut env = base.clone();
-            let mut flow = Flow::new(is.clone());
-            // Ein vorgemerkter Fault kommt vor allem anderen: ein
-            // `StreamOverflow` (9.6) ohne Stelle (5.3) oder einer der
-            // Trigger-Phase (7.5).
-            if self.has_pending(m) {
-                let at = self.loc_pending(m);
-                let pending = env[&at].clone();
-                for (code, cause) in self.pending_causes(m) {
-                    // Ein vorgemerkter Abort beachtet den Latch (5.4, `deliverable`).
-                    let kind =
-                        if Enc::is_abort(&cause) { ExitKind::Abort(cause) } else { ExitKind::Fault(None, cause) };
-                    flow.exits.push(Exit {
-                        cond: Term::and(vec![is.clone(), Term::eq(pending.clone(), Term::int(code))]),
-                        kind,
-                    });
-                }
-                flow.alive = Term::and(vec![is.clone(), Term::eq(pending, Term::int(0))]);
-                env.insert(at, Term::int(0));
+        // Die Maschine steht in einem ihrer Blaetter; eine inaktive gescopte
+        // Instanz (−1) steht in keinem und schreitet nicht.
+        let in_leaf = self.leaves(m).into_iter().map(|l| Term::eq(leaf_now.clone(), Term::int(self.code(m, l))));
+        let running = Term::and(vec![alive0.clone(), Term::or(in_leaf.collect())]);
+        let cx = Cx { m: Some(m), leaf: None, mode: Mode::Run, pre, active: actives, locals: None };
+        self.unrolled = 0;
+        let mut env = base.clone();
+        let mut flow = Flow::new(running.clone());
+        // Ein vorgemerkter Fault kommt vor allem anderen: ein
+        // `StreamOverflow` (9.6) ohne Stelle (5.3) oder einer der
+        // Trigger-Phase (7.5).
+        if self.has_pending(m) {
+            let at = self.loc_pending(m);
+            let pending = env[&at].clone();
+            for (code, cause) in self.pending_causes(m) {
+                // Ein vorgemerkter Abort beachtet den Latch (5.4, `deliverable`).
+                let kind = if Enc::is_abort(&cause) { ExitKind::Abort(cause) } else { ExitKind::Fault(None, cause) };
+                flow.exits.push(Exit {
+                    cond: Term::and(vec![running.clone(), Term::eq(pending.clone(), Term::int(code))]),
+                    kind,
+                });
             }
-            // Handler laufen unmittelbar nach dem `loop:` ihrer Ebene (8.7).
-            self.block(&machine.loop_block, &cx, &mut env, &mut flow)?;
-            self.dispatch(&machine.handlers, &cx, &mut env, &mut flow)?;
-            let chain = self.chain_to(m, leaf);
-            for s in &chain {
-                self.block(&machine.states[s.index()].loop_block, &cx, &mut env, &mut flow)?;
-                self.dispatch(&machine.states[s.index()].handlers, &cx, &mut env, &mut flow)?;
-            }
-            for s in &chain {
-                for t in &machine.states[s.index()].transitions {
-                    let mut stream_hit = None;
-                    let fired = match &t.trigger {
-                        TransTrigger::When(takt_mir::machine::Guard::Expr(e)) => self.expr(e, &cx, &env, &mut flow)?,
-                        TransTrigger::When(g) => {
-                            let hit = self.stream_guard(g, &cx, &env, &mut flow)?;
-                            let fired = hit.fired.clone();
-                            stream_hit = Some(hit);
-                            fired
-                        }
-                        TransTrigger::After(d) => {
-                            let ns = self.const_int(Some(m), d)?;
-                            let needed = ((ns + period - 1) / period).max(1);
-                            let timer = env.get(&self.loc_timer(m, *s)).cloned().expect("Timer");
-                            Term::bin(Op::Ge, timer, Term::int(needed))
-                        }
-                    };
-                    self.flush_binds(&mut env)?;
-                    let take = Term::and(vec![flow.alive.clone(), fired]);
-                    if let Some(hit) = stream_hit {
-                        self.take_guard(hit, m, &take, &mut env)?;
-                    }
-                    let entry = cx.entry();
-                    let mut sub = Flow::new(take.clone());
-                    self.block(&t.actions, &entry, &mut env, &mut sub)?;
-                    // Genommen ist der Uebergang, wenn seine Aktionen ohne
-                    // Fault enden — dann zaehlt ihn die Coverage (13.2).
-                    let key = takt_interp::coverage::transition_key(&machine, &machine.states[s.index()].name, t);
-                    let entry = self.transitions.entry((machine.name.clone(), key)).or_insert((t.span, Vec::new()));
-                    entry.1.push(sub.alive.clone());
-                    flow.exits.extend(sub.exits);
-                    flow.exits.push(Exit { cond: sub.alive, kind: ExitKind::Goto(t.target) });
-                    flow.alive = Term::and(vec![flow.alive.clone(), take.not()]);
-                }
-            }
-            let mut out = env.clone();
-            for exit in &flow.exits {
-                if exit.cond.is_bool(false) {
-                    continue;
-                }
-                let applied = self.resolve(&cx, Origin::State(leaf), exit, &env, 0)?;
-                out = ite_env(&exit.cond, &applied, &out);
-            }
-            merged = ite_env(&is, &out, &merged);
+            flow.alive = Term::and(vec![running.clone(), Term::eq(pending, Term::int(0))]);
+            env.insert(at, Term::int(0));
         }
+        // Handler laufen unmittelbar nach dem `loop:` ihrer Ebene (8.7).
+        self.block(&machine.loop_block, &cx, &mut env, &mut flow)?;
+        self.dispatch(&machine.handlers, &cx, &mut env, &mut flow)?;
+        let tops: Vec<StateId> = (0..machine.states.len() as u32)
+            .map(StateId)
+            .filter(|s| machine.states[s.index()].parent.is_none())
+            .collect();
+        let mut merged = base.clone();
+        let branch = Branch { m, machine: &machine, leaf_now: &leaf_now, alive0: &alive0, pre, actives };
+        self.step_states(&branch, &tops, &env, &flow, &mut merged)?;
         *cur = merged;
+        Ok(())
+    }
+
+    /// Die Zustaende `states` einer Ebene unter dem gemeinsamen Zweig
+    /// `env`/`flow` darueber: je Zustand sein `loop:` und seine Handler
+    /// einmal, dann seine Kinder; an einem Blatt die Uebergaenge der Kette
+    /// und die Ausgaenge, gemischt in `merged`. Ein Ausgang von oben gilt
+    /// in einem Zustand nur, wenn die Maschine darin steht: Der Fault-Pfad
+    /// und die exit-Bloecke haengen am Blatt.
+    fn step_states(&mut self, b: &Branch<'_>, states: &[StateId], env: &Env, flow: &Flow, merged: &mut Env) -> R<()> {
+        let m = b.m;
+        let unrolled = self.unrolled;
+        for &s in states {
+            let state = &b.machine.states[s.index()];
+            let inside = Term::or(
+                self.leaves(m)
+                    .into_iter()
+                    .filter(|l| self.chain_to(m, *l).contains(&s))
+                    .map(|l| Term::eq(b.leaf_now.clone(), Term::int(self.code(m, l))))
+                    .collect(),
+            );
+            let leaf = state.children.is_empty().then_some(s);
+            let cx = Cx { m: Some(m), leaf, mode: Mode::Run, pre: b.pre, active: b.actives, locals: None };
+            self.unrolled = unrolled;
+            let mut env = env.clone();
+            let exits =
+                flow.exits.iter().map(|e| Exit { cond: Term::and(vec![inside.clone(), e.cond.clone()]), ..e.clone() });
+            let mut flow = Flow { alive: Term::and(vec![flow.alive.clone(), inside.clone()]), exits: exits.collect() };
+            self.block(&state.loop_block, &cx, &mut env, &mut flow)?;
+            self.dispatch(&state.handlers, &cx, &mut env, &mut flow)?;
+            match leaf {
+                None => self.step_states(b, &state.children.clone(), &env, &flow, merged)?,
+                Some(leaf) => self.step_leaf(b, leaf, &cx, env, flow, merged)?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Ein Blatt nach den `loop:`-Bloecken seiner Kette: ihre Uebergaenge,
+    /// dann die Ausgaenge, gemischt in `merged`.
+    fn step_leaf(
+        &mut self,
+        b: &Branch<'_>,
+        leaf: StateId,
+        cx: &Cx<'_>,
+        mut env: Env,
+        mut flow: Flow,
+        merged: &mut Env,
+    ) -> R<()> {
+        let (m, machine) = (b.m, b.machine);
+        let period = i64::from(machine.period.max(1)).saturating_mul(self.p.config.tick);
+        let is = Term::and(vec![b.alive0.clone(), Term::eq(b.leaf_now.clone(), Term::int(self.code(m, leaf)))]);
+        let chain = self.chain_to(m, leaf);
+        for s in &chain {
+            for t in &machine.states[s.index()].transitions {
+                let mut stream_hit = None;
+                let fired = match &t.trigger {
+                    TransTrigger::When(takt_mir::machine::Guard::Expr(e)) => self.expr(e, cx, &env, &mut flow)?,
+                    TransTrigger::When(g) => {
+                        let hit = self.stream_guard(g, cx, &env, &mut flow)?;
+                        let fired = hit.fired.clone();
+                        stream_hit = Some(hit);
+                        fired
+                    }
+                    TransTrigger::After(d) => {
+                        let ns = self.const_int(Some(m), d)?;
+                        let needed = ((ns + period - 1) / period).max(1);
+                        let timer = env.get(&self.loc_timer(m, *s)).cloned().expect("Timer");
+                        Term::bin(Op::Ge, timer, Term::int(needed))
+                    }
+                };
+                self.flush_binds(&mut env)?;
+                let take = Term::and(vec![flow.alive.clone(), fired]);
+                if let Some(hit) = stream_hit {
+                    self.take_guard(hit, m, &take, &mut env)?;
+                }
+                let entry = cx.entry();
+                let mut sub = Flow::new(take.clone());
+                self.block(&t.actions, &entry, &mut env, &mut sub)?;
+                // Genommen ist der Uebergang, wenn seine Aktionen ohne
+                // Fault enden — dann zaehlt ihn die Coverage (13.2).
+                let key = takt_interp::coverage::transition_key(machine, &machine.states[s.index()].name, t);
+                let entry = self.transitions.entry((machine.name.clone(), key)).or_insert((t.span, Vec::new()));
+                entry.1.push(sub.alive.clone());
+                flow.exits.extend(sub.exits);
+                flow.exits.push(Exit { cond: sub.alive, kind: ExitKind::Goto(t.target) });
+                flow.alive = Term::and(vec![flow.alive.clone(), take.not()]);
+            }
+        }
+        let mut out = env.clone();
+        for exit in &by_effect(&flow.exits) {
+            let applied = self.resolve(cx, Origin::State(leaf), exit, &env, 0)?;
+            out = ite_env(&exit.cond, &applied, &out);
+        }
+        *merged = ite_env(&is, &out, merged);
         Ok(())
     }
 
