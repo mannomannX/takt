@@ -2634,15 +2634,16 @@ fn timing(args: &Args) -> bool {
         if drift + took > period {
             overruns += 1;
         }
-        if drift > last_drift {
-            lost += drift - last_drift;
+        // FB-519: ganze Perioden des Rueckstands, nicht die Summe seiner
+        // Zuwaechse; Jitter unter einer Periode verliert keine.
+        if period > 0 && drift / period > last_drift / period {
+            lost += drift / period - last_drift / period;
         }
         last_drift = drift;
         worst_drift = worst_drift.max(drift);
         worst_took = worst_took.max(*took);
         slept += n;
     }
-    let lost = if period > 0 { lost / period } else { 0 };
     println!("{path}: {} Ticks mit Zeit", times.len());
     println!("  verspaetete Ticks   {late}");
     println!("  verlorene Perioden  {lost}");

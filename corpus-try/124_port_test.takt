@@ -4,12 +4,12 @@
 # seine Ausgabe annimmt. Jede Maschine prueft eine Pflicht des Ports, nach
 # einem Muster des Korpus:
 #
-# - `hasher` (40, `long_job`): eine Kette von 40 Jobs, deren jeder auf
+# - `hasher` (40, `long_job`): eine Kette von 20 Jobs, deren jeder auf
 #   beiden Boards laenger rechnet als ein Tick. `duration` nennt einen Tick:
 #   Der Trace zeigt dann, wann jeder Lauf wirklich fertig war (4.5), und ein
 #   Port, der den Schritt nicht unterbrechen laesst, verspaetet den Tick.
-#   Eine laengere Kette schriebe mehr Trace, als die Leitung des F401 in
-#   Echtzeit traegt.
+#   Zwischen zwei Jobs liegen 10 ms: Dichter schriebe die Kette mehr Trace,
+#   als die Leitung des C6 neben den Zeitzeilen in Echtzeit traegt.
 # - `kernel`: rechnet in jedem Schritt lange mit `f32`, waehrend der Wirt in
 #   seiner Hauptschleife dasselbe tut (`takt_embed::port_test`). Sichert der
 #   Port die FPU-Register nicht, rechnet einer von beiden falsch (12.11).
@@ -27,7 +27,7 @@ system:
 native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 640, duration = 1 ms, total
 
 output digest   : u32           @ sim("o/digest")
-output hashes   : int in 0..40  @ sim("o/hashes")
+output hashes   : int in 0..20  @ sim("o/hashes")
 output energy   : float         @ sim("o/energy")
 output beat     : int in 0..9   @ sim("o/beat")
 output received : int in 0..999 @ sim("o/received")
@@ -46,7 +46,7 @@ fn chain(d: bytes<32>, inout msg: bytes<4096>):
 machine hasher:
     var msg   : bytes<4096> = default
     var d     : bytes<32> = default
-    var count : int in 0..40 = 0
+    var count : int in 0..20 = 0
     initial LOAD
 
     state LOAD:
@@ -61,14 +61,15 @@ machine hasher:
 
         state HASH:
             sequence:
-                repeat 40:
+                repeat 20:
                     job v = sha256(msg)
                     until v.done timeout 100 ms -> FAILED
                     d = v.result.or(default)
                     chain(d, msg)
-                    count = min(count + 1, 40)
+                    count = min(count + 1, 20)
                     digest = first(d)
                     hashes = count
+                    wait 10 ms
 
     state FAILED idle:
         after 10 s: -> LOAD

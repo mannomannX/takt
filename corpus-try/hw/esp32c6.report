@@ -1,4 +1,4 @@
-# takt-conformance 3
+# takt-conformance 4
 # Konformitaetsbericht (13.8): das Protokoll der Messung. Zeiten in Pikosekunden,
 # Streuungen als `min mean max` in Zyklen.
 
@@ -399,3 +399,31 @@ vectors = 9
 same_result = true
 stack = 2072
 contract = 2752
+
+[port interrupt]
+date = "2026-10-11"
+passed = true
+ticks = 999
+drift_median_ns = 6938
+drift_late_ns = 401062
+jitter_ns = 401062
+foreign_rounds = 12341
+foreign_errors = 0
+longest_job_ticks = 4
+stack = 3684 6532
+job_stack_shared = true
+journal_writes = 1
+
+[port embassy]
+date = "2026-10-11"
+passed = true
+ticks = 999
+drift_median_ns = 13875
+drift_late_ns = 433375
+jitter_ns = 433375
+foreign_rounds = 12132
+foreign_errors = 0
+longest_job_ticks = 5
+stack = 3700 6468
+job_stack_shared = true
+journal_writes = 1

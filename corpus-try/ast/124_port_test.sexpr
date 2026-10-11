@@ -4,7 +4,7 @@
   (float f32))
 (native-job sha256 (b:bytes<4096>) -> bytes<32> cost=60000 stack=640 duration=1ms)
 (output digest :u32 @sim("o/digest"))
-(output hashes :int in 0..40 @sim("o/hashes"))
+(output hashes :int in 0..20 @sim("o/hashes"))
 (output energy :float @sim("o/energy"))
 (output beat :int in 0..9 @sim("o/beat"))
 (output received :int in 0..999 @sim("o/received"))
@@ -18,7 +18,7 @@
 (machine hasher
   (var msg :bytes<4096> default)
   (var d :bytes<32> default)
-  (var count :int in 0..40 0)
+  (var count :int in 0..20 0)
   (initial LOAD)
   (state LOAD
     (initial FILL)
@@ -30,14 +30,15 @@
       (when (>= (.len msg) 4096) -> HASH))
     (state HASH
       (sequence
-        (repeat 40
+        (repeat 20
           (job v sha256 msg)
           (until (.done v) timeout=100ms -> FAILED)
           (= d (.or (.result v) default))
           (call chain d msg)
-          (= count (call min (+ count 1) 40))
+          (= count (call min (+ count 1) 20))
           (= digest (call first d))
-          (= hashes count)))))
+          (= hashes count)
+          (wait 10ms)))))
   (state FAILED idle
     (after 10s -> LOAD))
   (state REST idle

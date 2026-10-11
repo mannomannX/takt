@@ -170,7 +170,7 @@ andere folgt daraus:
 |---|---|---|
 | verspätete Ticks | Zahl der Ticks mit `drift ≥ T₀` | Ticks, die mindestens eine Periode zu spät begannen |
 | Rückstand | `max drift` | wie weit die Schleife höchstens hinterherlief |
-| verlorene Perioden | `Σ max(0, drift_k − drift_{k−1}) / T₀` | Zeit, in der kein Tick begonnen werden konnte — der Zuwachs des Rückstands, nie das Aufholen |
+| verlorene Perioden | `Σ max(0, ⌊drift_k / T₀⌋ − ⌊drift_{k−1} / T₀⌋)` | Perioden, in denen kein Tick begonnen werden konnte — die ganzen Perioden des Rückstands, nie das Aufholen; bis FB-519 die Summe aller Zuwächse, die auch Jitter zählte |
 | Überläufe | Ticks mit `took > T₀` | 7.3, unverändert |
 
 `Overrun` in `takt-rt-core` führt die vier Zahlen; `TimerClock::missed`

@@ -77,7 +77,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Strang B, nach B1 |
 | 14 | Rust ohne RTOS und mit Frameworks | R, E | beide | 10 | Strang A, umgesetzt 2026-10-11 |
 | 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | frei (nicht neben 14) |
-| 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A |
+| 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A, umgesetzt 2026-10-11 |
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | frei |
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | frei |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | frei |

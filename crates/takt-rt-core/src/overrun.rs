@@ -40,12 +40,12 @@ pub struct Overrun {
     pub late: u64,
     /// Der groesste Rueckstand beim Tickbeginn in Nanosekunden.
     pub worst_drift: i64,
-    /// Perioden, in denen kein Tick beginnen konnte: die Summe der Zuwaechse
-    /// des Rueckstands, einmal durch T0 geteilt, nie das Aufholen.
+    /// Perioden, in denen kein Tick beginnen konnte: je Tick die ganzen
+    /// Perioden, um die der Rueckstand gegen den vorigen gewachsen ist, nie
+    /// das Aufholen. Ein Rueckstand unter einer Periode — Jitter — verliert
+    /// keine (FB-519).
     pub lost: u64,
     last_drift: i64,
-    /// Die Summe der Zuwaechse in Nanosekunden.
-    grown: i64,
 }
 
 impl Overrun {
@@ -69,9 +69,11 @@ impl Overrun {
             self.late = self.late.saturating_add(1);
         }
         self.worst_drift = self.worst_drift.max(drift);
-        if drift > self.last_drift && tick_ns > 0 {
-            self.grown = self.grown.saturating_add(drift - self.last_drift);
-            self.lost = (self.grown / tick_ns) as u64;
+        if tick_ns > 0 {
+            let (now, before) = (drift / tick_ns, self.last_drift / tick_ns);
+            if now > before {
+                self.lost = self.lost.saturating_add(u64::try_from(now - before).unwrap_or(0));
+            }
         }
         self.last_drift = drift;
     }
@@ -124,11 +126,10 @@ mod tests {
         assert_eq!(o.worst_drift, 5 * T);
     }
 
-    /// **Verloren ist die Summe der Zuwaechse, geteilt durch T0** (7.3):
-    /// Waechst der Rueckstand je Tick um eine halbe Periode, sind nach zehn
-    /// Ticks viereinhalb Perioden verloren, abgerundet vier — wie `takt
-    /// timing` rechnet, das die Zuwaechse in Nanosekunden summiert und
-    /// einmal teilt. Ein Abrunden je Zuwachs meldete null.
+    /// **Verloren sind die ganzen Perioden des Rueckstands** (7.3): Waechst
+    /// er je Tick um eine halbe Periode, sind nach zehn Ticks viereinhalb
+    /// Perioden verloren, abgerundet vier — wie `takt timing` rechnet. Ein
+    /// Abrunden je Zuwachs meldete null.
     #[test]
     fn lost_periods_divide_the_summed_growth_once() {
         let mut o = Overrun::new(Policy::Fault);
@@ -138,6 +139,19 @@ mod tests {
         assert_eq!(o.lost, 4, "Zuwachs 9 * T/2 = 4,5 T");
         o.observe_drift(5 * T, T);
         assert_eq!(o.lost, 5, "der naechste Zuwachs um T/2 vollendet die fuenfte Periode");
+    }
+
+    /// **Jitter verliert keine Periode** (FB-519): Schwankt der Rueckstand
+    /// um wenige Mikrosekunden, ueber tausende Ticks, beginnt jeder Tick in
+    /// seiner Periode. Die Summe der Zuwaechse meldete hier Perioden, die es
+    /// nie gab.
+    #[test]
+    fn jitter_loses_no_period() {
+        let mut o = Overrun::new(Policy::Fault);
+        for k in 0..3000 {
+            o.observe_drift(if k % 2 == 0 { 3_000 } else { 9_000 }, T);
+        }
+        assert_eq!((o.lost, o.late), (0, 0));
     }
 
     /// Ein frueher Tick (negativer Rueckstand) ist kein Verlust.

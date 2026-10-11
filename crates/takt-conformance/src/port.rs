@@ -18,10 +18,9 @@
 //! | Journal | geschrieben, nie fehlgeschlagen (5.9, 12.3) |
 //!
 //! Drift und Jitter stehen gemessen im Urteil und im Konformitaetsbericht
-//! (`[port <name>]`), bewertet werden sie nicht. Ebenso `verloren`: Der
-//! Zaehler summiert jedes Wachsen des Rueckstands und damit auch Jitter von
-//! wenigen Mikrosekunden je Tick; ueber 2000 Ticks erreicht er eine Periode,
-//! ohne dass je ein Tick eine Periode zu spaet kam.
+//! (`[port <name>]`), bewertet werden sie nicht. `verloren` folgt aus
+//! `verspaetet`: Eine verlorene Periode hat einen Tick, der eine Periode zu
+//! spaet begann (FB-519).
 //!
 //! **Was der Port schreibt.** Was ein Bring-up mit
 //! `takt_rt_baremetal::run::report` schreibt: die Marke `takt trace`, den
@@ -354,18 +353,18 @@ mod tests {
     }
 
     /// Ein Lauf, wie ihn ein Port schreibt, der jede Pflicht erfuellt: der
-    /// Interpreter, dessen 40 Jobs je drei Ticks nach ihrem Start fertig
+    /// Interpreter, dessen 20 Jobs je drei Ticks nach ihrem Start fertig
     /// werden, mit einer Zeitzeile je Tick, der Zeile der fremden Last und der
-    /// Bilanz. `FILL` braucht 16 Ticks, und jeder Job startet im Tick nach der
-    /// Fertigstellung seines Vorgaengers.
+    /// Bilanz. `FILL` braucht 16 Ticks, und jeder Job startet elf Ticks nach
+    /// der Fertigstellung seines Vorgaengers (`wait 10 ms`).
     fn port_log() -> &'static str {
         static LOG: OnceLock<String> = OnceLock::new();
         LOG.get_or_init(|| {
             let mut stimulus = String::new();
             let mut start = 15;
-            for _ in 0..40 {
+            for _ in 0..20 {
                 stimulus.push_str(&format!("t={} job hasher v done start={start}\n", start + 3));
-                start += 4;
+                start += 14;
             }
             let stimulus = takt_interp::Trace::parse(&stimulus).expect("Stimulus");
             let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
@@ -446,8 +445,8 @@ mod tests {
         assert!(none.failures.iter().any(|f| f.contains("kein Job")), "{none}");
     }
 
-    /// **Jitter ist kein verlorener Tick**: `verloren` waechst mit jeder
-    /// Verlaengerung des Rueckstands; allein ist er kein Befund (7.3).
+    /// **`verloren` ist kein eigener Befund**: Er folgt aus `verspaetet`
+    /// (FB-519), und das Urteil nennt den verspaeteten Tick (7.3).
     #[test]
     fn jitter_alone_loses_no_tick() {
         let mut quiet = Vec::new();
