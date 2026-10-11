@@ -312,10 +312,28 @@ fn the_calibration_of_a_triple_is_found_under_its_target_name() {
     if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
         return;
     }
-    let dir = scratch("takt-embed-calibration");
+    let blocking = nvm_blocking_of("corpus-try/35_persist.takt", "takt-embed-calibration");
+    assert!(blocking > 0, "die NVM-Zeiten des C6 fehlen: {blocking}");
+}
+
+/// **Ohne `persist` haelt kein Journal den Kern an** (12.3): Ein Programm,
+/// das nie ins Flash schreibt, bekommt keine Sperrzeit, und die Frist des
+/// Watchdogs bleibt bei zwei Perioden. Auf dem F401 waere sie sonst um eine
+/// Sektorloeschung laenger (2026-10-11).
+#[test]
+fn a_program_without_persist_never_blocks_on_the_journal() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    assert_eq!(nvm_blocking_of("corpus-try/29_heartbeat.takt", "takt-embed-no-journal"), 0);
+}
+
+/// `NVM_BLOCKING_NS` der Lieferform von `program` fuer den C6.
+fn nvm_blocking_of(program: &str, scratch_name: &str) -> i64 {
+    let dir = scratch(scratch_name);
     let run = takt(&[
         "build",
-        "corpus-try/35_persist.takt",
+        program,
         "--emit",
         "embed",
         "--target",
@@ -333,11 +351,10 @@ fn the_calibration_of_a_triple_is_found_under_its_target_name() {
     assert!(run.status.success(), "{stderr}");
     assert!(!stderr.contains("kein Ziel"), "das Ziel des Tripels fehlt in der Konfiguration:\n{stderr}");
     let module = std::fs::read_to_string(dir.join("journal.rs")).expect("Modul");
-    let blocking: i64 = module
+    module
         .lines()
         .find_map(|l| l.strip_prefix("pub const NVM_BLOCKING_NS: i64 = ")?.strip_suffix(';')?.parse().ok())
-        .unwrap_or_else(|| panic!("NVM_BLOCKING_NS fehlt:\n{module}"));
-    assert!(blocking > 0, "die NVM-Zeiten des C6 fehlen: {blocking}");
+        .unwrap_or_else(|| panic!("NVM_BLOCKING_NS fehlt:\n{module}"))
 }
 
 fn manifest_value(dir: &Path, key: &str) -> String {

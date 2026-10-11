@@ -998,9 +998,7 @@ fn build(args: &Args) -> bool {
             let ext = if rust { "rs" } else { "h" };
             let out = args.value("--out").map_or_else(|| format!("{stem}.{ext}"), str::to_string);
             let hw = hardware(args);
-            // 12.3: So lange haelt ein Journal-Vorgang den Kern hoechstens; 0 heisst nie.
-            let nvm_blocking_ns =
-                hw.as_ref().and_then(|_| calibration(args)).and_then(|t| t.nvm?.blocking_phase_ns()).unwrap_or(0);
+            let nvm_blocking_ns = nvm_blocking_ns(&program, hw.as_ref(), args);
             let text = if rust {
                 constants_rust(&program, hw.as_ref(), nvm_blocking_ns)
             } else {
@@ -1027,8 +1025,7 @@ fn build(args: &Args) -> bool {
                 return false;
             };
             let hw = hardware(args);
-            let nvm_blocking_ns =
-                hw.as_ref().and_then(|_| calibration(args)).and_then(|t| t.nvm?.blocking_phase_ns()).unwrap_or(0);
+            let nvm_blocking_ns = nvm_blocking_ns(&program, hw.as_ref(), args);
             let e = embed::Embed {
                 program: &program,
                 ir: &lowered.ir,
@@ -1138,6 +1135,16 @@ pub(crate) fn output_names(p: &takt_mir::Program) -> Vec<String> {
         })
         .map(|(_, c)| c.name.to_uppercase().replace(|ch: char| !ch.is_ascii_alphanumeric(), "_"))
         .collect()
+}
+
+/// So lange haelt ein Journal-Vorgang den Kern hoechstens (12.3); 0 heisst
+/// nie. Ein Programm ohne `persist` schreibt kein Journal: Fuer es haelt
+/// nichts den Kern an, und die Frist des Watchdogs bleibt bei zwei Perioden.
+fn nvm_blocking_ns(program: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardware>, args: &Args) -> i64 {
+    if !takt_mir::persist::any(program) {
+        return 0;
+    }
+    hw.and_then(|_| calibration(args)).and_then(|t| t.nvm?.blocking_phase_ns()).unwrap_or(0)
 }
 
 fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardware>, nvm_blocking_ns: i64) -> String {
