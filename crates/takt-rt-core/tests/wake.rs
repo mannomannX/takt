@@ -180,6 +180,19 @@ impl Tunables for Changes {
     }
 }
 
+/// Eine Quelle, die ruht, und wie oft der Kern sie gefragt hat.
+struct Silent(u64);
+
+impl Tunables for Silent {
+    fn poll(&mut self, _k: u64, _apply: &mut dyn FnMut(u32, &[u8])) {
+        self.0 += 1;
+    }
+
+    fn idle(&mut self) -> bool {
+        true
+    }
+}
+
 struct Quiet;
 
 impl Watchdog for Quiet {
@@ -277,6 +290,26 @@ fn a_late_service_finds_the_boundary_of_the_change() {
     rt.service_with(Some(&mut tunables));
     assert_eq!(rt.program.log, ["t=20 GAIN"]);
     assert_eq!(rt.sink.0, 19, "geschlafen bis vor die Aenderung");
+}
+
+/// **Eine ruhende Quelle kostet den Schlaf nichts** (8.4, 9.9; M11 Schritt
+/// 15): Ruft der Port erst an der Frist, fragt der Kern eine Konsole, die
+/// nichts gesendet hat, nicht an jeder geschlafenen Grenze; der Tick an der
+/// Frist begaenne sonst um so viele Abfragen zu spaet. Er rechnet dasselbe.
+#[test]
+fn an_idle_source_is_not_asked_at_every_slept_boundary() {
+    let clock = RefCell::new(Fake::default());
+    let mut rt =
+        Runtime::new(Idle::new(&clock), Shared(&clock), Quiet, Slept::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    let mut tunables = Silent(0);
+    let next = rt.service_with(Some(&mut tunables));
+    assert_eq!(next.deadline, 49 * T0);
+    let before = tunables.0;
+    clock.borrow_mut().now = 49 * T0;
+    rt.service_with(Some(&mut tunables));
+    assert!(tunables.0 - before <= 1, "{} Abfragen nach dem Schlaf", tunables.0 - before);
+    assert_eq!(rt.program.log, ["t=49 after"]);
+    assert_eq!(rt.sink.0, 48);
 }
 
 /// Der eigene Kern mit [`Level`] ueber `ticks` Ticks: Trace, geschlafene

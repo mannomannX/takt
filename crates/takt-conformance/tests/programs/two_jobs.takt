@@ -2,13 +2,14 @@ system:
     language = 1
     tick     = 10 ms
 
-# 4.5, 12.11: Zwei Jobs beginnen im selben Tick und dauern je einen Tick;
-# beide sind im naechsten Tick fertig. Der Job-Kontext rechnet sie
+# 4.5, 12.11: Zwei Jobs beginnen im selben Tick und sind im naechsten fertig
+# (`duration` unter einem Tick; in der Pollform verlaengert ein Job die
+# Runde, und ein ganzer Tick passte nicht neben sie). Der Job-Kontext rechnet sie
 # nacheinander, und der Port muss ihm nach dem ersten den zweiten geben,
 # bevor die Grenze kommt — verteilt er einen Job je Grenze, kommt der
 # zweite einen Tick zu spaet (`late`).
 
-native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 10 ms, total
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 5 ms, total
 
 output left_word  : u32 @ hw("o/left")  with safe = 0
 output right_word : u32 @ hw("o/right") with safe = 0

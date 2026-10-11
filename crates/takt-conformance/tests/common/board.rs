@@ -3,8 +3,10 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use takt_conformance::board::{self, Board, Form, Options};
+pub use takt_conformance::board::Drift;
+use takt_conformance::board::{self, Board, Flaw, Form, Options};
 use takt_conformance::compare;
+use takt_conformance::port;
 use takt_mir::program::Program;
 
 /// Ticks eines Konformitaetslaufs auf dem Board.
@@ -636,6 +638,50 @@ impl HostRun {
     }
 }
 
+/// Faehrt das Pruefprogramm der Portpruefung in der Form `form`, mit dem
+/// falschen Port `flaw`, und urteilt (12.11, 13.8; M11 Schritt 15). Die
+/// Ausgabe liegt danach unter `port-test/` im Zielverzeichnis: `takt
+/// port-test --judge` traegt das Urteil daraus in den Konformitaetsbericht
+/// ein.
+pub fn port_test(board: &mut dyn Board, form: Form, flaw: Option<Flaw>) -> Result<port::Verdict, String> {
+    let path = board::corpus_path(port::CORPUS_NAME);
+    let mut options = Options::timed(port::TICKS).in_form(form).judged();
+    if let Some(flaw) = flaw {
+        options = options.with_flaw(flaw);
+    }
+    let text = board.build(&path, &options).and_then(|elf| board.run(&elf, &options))?;
+    let name = format!("{}-{form:?}{}", board.name(), flaw.map_or_else(String::new, |f| format!("-{}", f.name())));
+    let dir = takt_conformance::target_dir().join("port-test");
+    let log = dir.join(format!("{}.log", name.to_lowercase()));
+    std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&log, &text)).map_err(|e| e.to_string())?;
+    let verdict = port::judge(&text);
+    eprintln!("{name}: {}{verdict}", log.display());
+    Ok(verdict)
+}
+
+/// **Der Port besteht die Portpruefung** (12.11, 13.8): Trace gleich dem
+/// Interpreter, FPU-Kontext gesichert, Jobs unterbrechbar, Stacks unter der
+/// Schranke, kein Tick zu spaet, das Journal geschrieben.
+pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
+    match port_test(board, form, None) {
+        Ok(v) if v.passed() => Vec::new(),
+        Ok(v) => vec![format!("{form:?}: {v}")],
+        Err(e) => vec![format!("{form:?}: kein Lauf: {e}")],
+    }
+}
+
+/// **Ein absichtlich falscher Port faellt durch, und zwar an der Pflicht,
+/// die er verletzt** (M11 Schritt 15): Das Urteil verwirft ihn, und jeder
+/// seiner Gruende nennt `reason`.
+pub fn the_flawed_port_fails(board: &mut dyn Board, flaw: Flaw, reason: &[&str]) -> Vec<String> {
+    match port_test(board, Form::Interrupt, Some(flaw)) {
+        Ok(v) if v.passed() => vec![format!("{flaw:?}: der falsche Port bestand\n{v}")],
+        Ok(v) if v.failures.iter().all(|f| reason.iter().any(|r| f.contains(r))) => Vec::new(),
+        Ok(v) => vec![format!("{flaw:?}: durchgefallen, aber nicht nur an {reason:?}\n{v}")],
+        Err(e) => vec![format!("{flaw:?}: kein Lauf: {e}")],
+    }
+}
+
 /// **In der Interruptform und unter Embassy beginnt der Schritt auf seiner
 /// Frist, neben einer fremden Hauptschleife** (12.11): Im Mittel binnen
 /// 20 us, kein Tick mehr als 50 us spaeter; der Schritt rechnete in der ISR
@@ -678,6 +724,15 @@ pub fn the_poll_form_keeps_its_round(board: &mut dyn Board, main_loop_ns: u64, s
     run.with_trace(failed)
 }
 
+/// Baut das Programm in der Pollform neben einer Runde von `main_loop_ns`?
+/// Dort verlaengert jeder Job die Runde um seine `duration` (12.11), und ein
+/// Programm, dessen laengster Job mit der Runde ueber den Tick reicht, weist
+/// sie beim Bau ab.
+pub fn fits_the_poll_form(name: &str, main_loop_ns: i64) -> bool {
+    let p = program(&board::corpus_path(name));
+    takt_frame::parts::longest_job(&p).is_none_or(|(job, _)| p.config.tick >= main_loop_ns.saturating_add(job))
+}
+
 /// Darf das Programm in einer Form unter `shared` laufen, unter RTIC oder in
 /// der Interruptform? Wer sein Profil nennt und ein anderes verlangt,
 /// bindet sich nicht in diese Formen (12.11): `07_embedded_field` nennt
@@ -685,40 +740,6 @@ pub fn the_poll_form_keeps_its_round(board: &mut dyn Board, main_loop_ns: u64, s
 pub fn runs_shared(name: &str) -> bool {
     let p = program(&board::corpus_path(name));
     p.config.runtime_profile().is_none_or(|profile| profile == takt_mir::program::RuntimeProfile::Shared)
-}
-
-/// Wie spaet die Ticks eines Laufs nach ihrer Grenze begannen (`drift`
-/// der Zeitzeilen, 7.3); die ersten beiden laufen noch an.
-#[derive(Clone, Debug)]
-pub struct Drift {
-    /// Zeitzeilen.
-    pub ticks: usize,
-    /// Median in ns.
-    pub median: i64,
-    /// Der spaeteste Tick, in ns ueber dem Median.
-    pub late: i64,
-    /// Die fuenf spaetesten Ticks mit ihrer Nummer und Drift: Ihr Abstand
-    /// verraet, was sie aufhielt.
-    pub latest: Vec<(u64, i64)>,
-}
-
-impl Drift {
-    /// Aus dem Trace eines Laufs in Echtzeit.
-    pub fn of(text: &str) -> Drift {
-        let mut drifts: Vec<(u64, i64)> = text
-            .lines()
-            .filter_map(|l| {
-                let tick = l.strip_prefix("t=")?.split_whitespace().next()?.parse().ok()?;
-                Some((tick, l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok()?))
-            })
-            .skip(2)
-            .collect();
-        drifts.sort_unstable_by_key(|&(_, d)| d);
-        let median = drifts.get(drifts.len() / 2).map_or(0, |&(_, d)| d);
-        let late = drifts.last().map_or(0, |&(_, d)| d - median);
-        let latest = drifts.iter().rev().take(5).copied().collect();
-        Drift { ticks: drifts.len(), median, late, latest }
-    }
 }
 
 /// **Ein Tick ueber seiner Periode faultet im naechsten jede Maschine**

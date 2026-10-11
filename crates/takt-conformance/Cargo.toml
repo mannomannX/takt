@@ -17,6 +17,9 @@ takt-llvm = { path = "../takt-llvm" }
 takt-native = { path = "../takt-native" }
 takt-crypto = { path = "../takt-crypto", features = ["ecdsa", "rsa", "aes-gcm"] }
 takt-mir = { path = "../takt-mir" }
+# Das Journal mit Stromausfall (`FakeNvm`) gegen den erzeugten Restore
+# (KON2-022) und die Zeile der fremden Last der Portpruefung (`port_test`).
+takt-rt-core = { path = "../takt-rt-core" }
 takt-sema = { path = "../takt-sema" }
 # Die Boards am Host (`board`): der Trace kommt ueber USB-Serial-JTAG
 # (ESP32-C6) oder einen Adapter an USART1 (STM32F401).
@@ -33,8 +36,6 @@ takt-testkit = { path = "../takt-testkit" }
 takt-prove = { path = "../takt-prove" }
 # Die Folge des Pruefgeraets, das der Bring-up fuer den Treiberrand stellt.
 takt-board-support = { path = "../takt-board-support" }
-# Das Journal mit Stromausfall (`FakeNvm`) gegen den erzeugten Restore (KON2-022).
-takt-rt-core = { path = "../takt-rt-core" }
 # Die Bilanzzeile der Bring-ups (`report`) gegen den Leser des Wirts (RT-035).
 takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 

@@ -1,0 +1,105 @@
+(system
+  (language 1)
+  (tick 1ms)
+  (float f32))
+(native-job sha256 (b:bytes<4096>) -> bytes<32> cost=60000 stack=640 duration=1ms)
+(output digest :u32 @sim("o/digest"))
+(output hashes :int in 0..40 @sim("o/hashes"))
+(output energy :float @sim("o/energy"))
+(output beat :int in 0..9 @sim("o/beat"))
+(output received :int in 0..999 @sim("o/received"))
+(output kept :int in 0..999 @sim("o/kept"))
+(stream q :u8 capacity=16)
+(fn first (d:bytes<32>) -> u32
+  (return (| (| (| (paren (as (index d 0) u32)) (paren (<< (paren (as (index d 1) u32)) 8))) (paren (<< (paren (as (index d 2) u32)) 16))) (paren (<< (paren (as (index d 3) u32)) 24)))))
+(fn chain (d:bytes<32> inout msg:bytes<4096>)
+  (if (and (>= (.len d) 1) (>= (.len msg) 1))
+    (= (index msg 0) (index d 0))))
+(machine hasher
+  (var msg :bytes<4096> default)
+  (var d :bytes<32> default)
+  (var count :int in 0..40 0)
+  (initial LOAD)
+  (state LOAD
+    (initial FILL)
+    (after 1s -> REST)
+    (state FILL
+      (loop
+        (for i in (range 256)
+          (.push msg (as i u8))))
+      (when (>= (.len msg) 4096) -> HASH))
+    (state HASH
+      (sequence
+        (repeat 40
+          (job v sha256 msg)
+          (until (.done v) timeout=100ms -> FAILED)
+          (= d (.or (.result v) default))
+          (call chain d msg)
+          (= count (call min (+ count 1) 40))
+          (= digest (call first d))
+          (= hashes count)))))
+  (state FAILED idle
+    (after 10s -> LOAD))
+  (state REST idle
+    (after 10s -> LOAD)))
+(machine kernel
+  (var x :float 1.0)
+  (var v :float 0.0)
+  (var n :int in 0..15 0)
+  (initial RUN)
+  (state RUN
+    (loop
+      (for i in (range 64)
+        (= v (- v (* (paren (+ (* x 0.25) (* v 0.002))) 0.01)))
+        (= x (+ x (* v 0.01))))
+      (= n (% (paren (+ n 1)) 16))
+      (if (== n 0)
+        (= energy (+ (* x x) (* (* v v) 4.0)))))
+    (after 1s -> REST))
+  (state REST idle
+    (after 10s -> RUN)))
+(machine pulses
+  (var k :int in 0..9 0)
+  (initial LOAD)
+  (state LOAD
+    (initial BEAT)
+    (after 1s -> REST)
+    (state BEAT
+      (enter
+        (= k (% (paren (+ k 1)) 10))
+        (at (+ now 7ms)
+          (= beat k)))
+      (after 50ms -> BEAT)))
+  (state REST idle
+    (after 10s -> LOAD)))
+(machine producer
+  (var k :int in 0..255 0)
+  (initial LOAD)
+  (state LOAD
+    (loop
+      (= k (% (paren (+ k 1)) 256))
+      (send q (as k u8)))
+    (after 1s -> REST))
+  (state REST idle
+    (after 10s -> LOAD)))
+(machine consumer
+  (var seen :int in 0..999 0)
+  (initial LOAD)
+  (on q as e
+    (= seen (% (paren (+ seen 1)) 1000))
+    (if (== (% seen 32) 0)
+      (= received seen)))
+  (state LOAD
+    (after 1s -> REST))
+  (state REST idle
+    (after 10s -> LOAD)))
+(machine keeper
+  (persist runs :int in 0..999 0 min_interval=0s)
+  (initial COUNT)
+  (state COUNT
+    (enter
+      (= runs (call min (+ runs 1) 999))
+      (= kept runs))
+    (after 1s -> REST))
+  (state REST idle
+    (after 10s -> COUNT)))

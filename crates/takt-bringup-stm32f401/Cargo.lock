@@ -1039,6 +1039,7 @@ dependencies = [
  "takt-llvm",
  "takt-mir",
  "takt-native",
+ "takt-rt-core",
  "takt-sema",
 ]
 

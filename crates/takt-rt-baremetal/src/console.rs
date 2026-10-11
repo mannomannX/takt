@@ -81,6 +81,8 @@ fn nibble(b: u8) -> Option<u8> {
 /// die der Kern abfragt.
 pub struct Console<F> {
     read: F,
+    /// Ein Byte, das [`Tunables::idle`] schon gelesen hat.
+    ahead: Option<u8>,
     line: [u8; LINE],
     len: usize,
     /// Die laufende Zeile ist zu lang und wird bis zu ihrem Ende verworfen.
@@ -91,7 +93,7 @@ impl<F: FnMut() -> Option<u8>> Console<F> {
     /// Liest mit `read` je Aufruf ein Byte der Gegenrichtung, `None`, wenn
     /// keines wartet.
     pub const fn new(read: F) -> Console<F> {
-        Console { read, line: [0; LINE], len: 0, overlong: false }
+        Console { read, ahead: None, line: [0; LINE], len: 0, overlong: false }
     }
 
     /// Nimmt ein Byte; liefert den Tune der Zeile, die es abschliesst.
@@ -119,11 +121,19 @@ impl<F: FnMut() -> Option<u8>> Console<F> {
 impl<F: FnMut() -> Option<u8>> Tunables for Console<F> {
     fn poll(&mut self, _k: u64, apply: &mut dyn FnMut(u32, &[u8])) {
         for _ in 0..BYTES_PER_POLL {
-            let Some(b) = (self.read)() else { return };
+            let Some(b) = self.ahead.take().or_else(|| (self.read)()) else { return };
             if let Some(t) = self.feed(b) {
                 apply(t.param, t.value());
             }
         }
+    }
+
+    /// Ruht, solange kein Byte wartet; ein gelesenes behaelt sie fuer `poll`.
+    fn idle(&mut self) -> bool {
+        if self.ahead.is_none() {
+            self.ahead = (self.read)();
+        }
+        self.ahead.is_none()
     }
 }
 
@@ -195,5 +205,19 @@ mod tests {
         });
         console.poll(0, &mut |_, _| {});
         assert_eq!(left, 10_000 - BYTES_PER_POLL);
+    }
+
+    /// **Wer fragt, ob die Konsole ruht, verliert kein Byte** (9.9): `idle`
+    /// liest voraus, und `poll` beginnt mit dem gelesenen Byte.
+    #[test]
+    fn asking_whether_it_is_idle_keeps_the_byte() {
+        let mut bytes = b"tune 3 0a\n".iter().copied();
+        let mut console = Console::new(move || bytes.next());
+        assert!(!console.idle());
+        assert!(!console.idle(), "dasselbe Byte, kein zweites");
+        let mut got = Vec::new();
+        console.poll(0, &mut |p, v| got.push((p, v.to_vec())));
+        assert_eq!(got, [(3, std::vec![0x0a])]);
+        assert!(console.idle());
     }
 }

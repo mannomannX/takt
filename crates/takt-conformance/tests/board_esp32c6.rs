@@ -15,7 +15,7 @@ use common::board::{
     TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
     journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
     overrun_reaches_every_machine, persistence_survives, replayed, runs_shared, simultaneous_jobs_finish_on_time,
-    the_form_keeps_its_deadline,
+    the_form_keeps_its_deadline, the_port_passes,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Board, Form, Options};
@@ -476,6 +476,18 @@ fn the_embassy_task_steps_on_its_deadline_beside_a_foreign_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = the_form_keeps_its_deadline(&mut board, Form::Embassy);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Jeder Port des C6 besteht die Portpruefung** (12.11, 13.8; M11
+/// Schritt 15): Interruptform und Embassy. Ohne FPU rechnet die fremde Last
+/// in Software; die FPU-Pflicht belegt hier nur, dass sie lief.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn every_port_passes_the_port_test() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed: Vec<String> =
+        [Form::Interrupt, Form::Embassy].into_iter().flat_map(|f| the_port_passes(&mut board, f)).collect();
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
 /// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern,

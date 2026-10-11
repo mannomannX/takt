@@ -1194,6 +1194,19 @@ pub fn next_run_slot<'a>(p: &Program, layout: &'a Layout) -> Option<NextRunSlot<
     Some(NextRunSlot { slot, ct, ends })
 }
 
+/// Der Job mit der laengsten `duration` (4.5): Dauer in Nanosekunden und
+/// Name der Native. In der Pollform verlaengert er die Runde der
+/// Hauptschleife (12.11).
+pub fn longest_job(p: &Program) -> Option<(i64, &str)> {
+    job_slots(p)
+        .iter()
+        .filter_map(|(_, _, n)| {
+            let native = &p.natives[n.index()];
+            Some((native.duration?, native.name.as_str()))
+        })
+        .max()
+}
+
 /// Die Job-Slots eines Programms, flach ueber die Maschinen wie im Abbild:
 /// Maschine, Slot in ihr, native Funktion.
 pub fn job_slots(p: &Program) -> Vec<(usize, usize, takt_mir::NativeId)> {

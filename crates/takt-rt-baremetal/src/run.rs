@@ -198,12 +198,18 @@ pub struct Stacks {
     pub job: Option<u32>,
     /// `JOB_STACK_BYTES` des Programms.
     pub job_bound: Option<u32>,
+    /// Die Jobs rechnen auf dem Schritt-Stack, in einer ISR oder Aufgabe
+    /// ueber ihm (Interrupt- und Pollform, RTIC, Embassy; FB-459): Tiefe und
+    /// Schranke des Schritt-Stacks decken sie, und die Bilanz sagt
+    /// `jobstack geteilt` statt eigener Zahlen.
+    pub job_shared: bool,
 }
 
 /// Die Bilanz als letzte Zeile, dann `takt end`; leert den Ring.
 ///
 /// Die Stacks stehen mit ihren Schranken darin (`stack N schranke M
-/// programm P jobstack J jobschranke K`): Der Host prueft jeden Lauf dagegen.
+/// programm P jobstack J jobschranke K`, mit Jobs auf dem Schritt-Stack
+/// `jobstack geteilt`): Der Host prueft jeden Lauf dagegen.
 pub fn report<P: Port>(
     t: &mut Telemetry<P>,
     overrun: &Overrun,
@@ -244,7 +250,7 @@ pub fn report<P: Port>(
     t.write(" ns");
     for (depth, label, parts) in [
         (stacks.tick, " stack ", [(" schranke ", stacks.tick_bound), (" programm ", stacks.tick_program)]),
-        (stacks.job, " jobstack ", [(" jobschranke ", stacks.job_bound), ("", None)]),
+        (stacks.job.filter(|_| !stacks.job_shared), " jobstack ", [(" jobschranke ", stacks.job_bound), ("", None)]),
     ] {
         let Some(bytes) = depth else { continue };
         t.write(label);
@@ -255,6 +261,9 @@ pub fn report<P: Port>(
                 t.write_u64(u64::from(n));
             }
         }
+    }
+    if stacks.job_shared {
+        t.write(" jobstack geteilt");
     }
     t.newline();
     t.write("takt end");
@@ -494,6 +503,7 @@ mod tests {
             tick_program: Some(120),
             job: Some(300),
             job_bound: None,
+            job_shared: false,
         };
         report(&mut t, &overrun, &stats, &journal, &stacks);
         let (sent, len) = *line.borrow();
@@ -505,5 +515,19 @@ mod tests {
              journal geschrieben 4 fehlgeschlagen 1 flush 1 nvm loeschen 12 ns programmieren 5 ns stack 2048 \
              schranke 4096 programm 120 jobstack 300\r\ntakt end\r\n"
         );
+    }
+
+    /// Rechnen die Jobs auf dem Schritt-Stack, sagt die Bilanz es, statt
+    /// einen eigenen Job-Stack zu nennen (FB-459).
+    #[test]
+    fn a_shared_job_stack_is_named() {
+        let line = core::cell::RefCell::new(([0u8; 512], 0));
+        let mut t = Telemetry::new(Memory(&line), std::vec![0; 512].leak());
+        t.mark();
+        let stacks = Stacks { tick: Some(2048), tick_bound: Some(4096), job_shared: true, ..Stacks::default() };
+        report(&mut t, &Overrun::new(Policy::Fault), &Stats::default(), &JournalStats::default(), &stacks);
+        let (sent, len) = *line.borrow();
+        let text = core::str::from_utf8(&sent[..len]).expect("ASCII");
+        assert!(text.contains(" stack 2048 schranke 4096 jobstack geteilt\r\n"), "{text}");
     }
 }

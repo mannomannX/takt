@@ -20,8 +20,9 @@ use std::fmt::Write as _;
 /// 2: das Messprogramm als Baustein (M11 Schritt 12) — `suite` und
 /// `placements` im Lauf, `overhead` in der Kalibrierung, `function` und
 /// `placements` je Probe; die Kerne heissen wie im Protokoll. 3: die
-/// Stack-Reserve je Form (`stack_reserve_<form>`, FB-513).
-pub const FORMAT_VERSION: u32 = 3;
+/// Stack-Reserve je Form (`stack_reserve_<form>`, FB-513). 4: das Urteil der
+/// Portpruefung je Port (`[port <name>]`, M11 Schritt 15).
+pub const FORMAT_VERSION: u32 = 4;
 
 const MAGIC: &str = "takt-conformance";
 
@@ -45,6 +46,9 @@ pub struct Report {
     pub natives: Vec<NativeEntry>,
     /// Der Korpus auf dem Board gegen den Interpreter.
     pub corpus: Option<Corpus>,
+    /// Die Portpruefung je Port (12.11): das Urteil von `takt port-test
+    /// --judge` mit dem, was es gemessen hat.
+    pub ports: Vec<PortEntry>,
 }
 
 /// Die Umstaende eines Laufs.
@@ -167,6 +171,43 @@ pub struct Corpus {
     pub deviations: u32,
 }
 
+/// Das Urteil der Portpruefung ueber einen Port (12.11, 13.8). Was die
+/// Ausgabe nicht nannte, fehlt auch hier.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PortEntry {
+    /// Der Port: seine Form, wo es mehrere gibt mit dem Rahmen (`interrupt`,
+    /// `rtic`, `embassy`).
+    pub name: String,
+    /// Datum des Urteils, `JJJJ-MM-TT`.
+    pub date: String,
+    /// Hat `takt port-test --judge` die Ausgabe angenommen?
+    pub passed: bool,
+    /// Zeitzeilen des Laufs.
+    pub ticks: u64,
+    /// Median der `drift` in ns (7.3).
+    pub drift_median_ns: i64,
+    /// Der spaeteste Tick in ns ueber dem Median.
+    pub drift_late_ns: i64,
+    /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
+    /// ueberschritt, in ns.
+    pub jitter_ns: Option<i64>,
+    /// Runden der fremden FPU-Last neben dem Lauf.
+    pub foreign_rounds: Option<u64>,
+    /// Davon falsch gerechnet.
+    pub foreign_errors: Option<u64>,
+    /// Der laengste Job in Ticks vom Start bis zur Fertigstellung.
+    pub longest_job_ticks: Option<u64>,
+    /// Tiefe und Schranke des Schritt-Stacks in Byte.
+    pub stack: Option<(u64, u64)>,
+    /// Tiefe und Schranke des Job-Stacks in Byte.
+    pub job_stack: Option<(u64, u64)>,
+    /// Die Jobs rechnen auf dem Schritt-Stack, dessen Schranke sie deckt
+    /// (FB-459); dann fehlt `job_stack`.
+    pub job_stack_shared: bool,
+    /// Schreibvorgaenge des Journals.
+    pub journal_writes: Option<u64>,
+}
+
 /// Was beim Lesen schiefgehen kann; jeder Fall nennt die Zeile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseError {
@@ -244,6 +285,28 @@ pub fn render(r: &Report) -> String {
     if let Some(c) = &r.corpus {
         let _ = write!(s, "\n[corpus]\nprograms = {}\ndeviations = {}\n", c.programs, c.deviations);
     }
+    for p in &r.ports {
+        let _ = write!(
+            s,
+            "\n[port {}]\ndate = \"{}\"\npassed = {}\nticks = {}\ndrift_median_ns = {}\ndrift_late_ns = {}\n",
+            p.name, p.date, p.passed, p.ticks, p.drift_median_ns, p.drift_late_ns
+        );
+        let numbers = [
+            ("jitter_ns", p.jitter_ns.map(|j| j.to_string())),
+            ("foreign_rounds", p.foreign_rounds.map(|n| n.to_string())),
+            ("foreign_errors", p.foreign_errors.map(|n| n.to_string())),
+            ("longest_job_ticks", p.longest_job_ticks.map(|n| n.to_string())),
+            ("stack", p.stack.map(|(d, b)| format!("{d} {b}"))),
+            ("job_stack", p.job_stack.map(|(d, b)| format!("{d} {b}"))),
+            ("job_stack_shared", p.job_stack_shared.then(|| "true".to_string())),
+            ("journal_writes", p.journal_writes.map(|n| n.to_string())),
+        ];
+        for (key, value) in numbers {
+            if let Some(value) = value {
+                let _ = writeln!(s, "{key} = {value}");
+            }
+        }
+    }
     s
 }
 
@@ -270,6 +333,7 @@ enum Section {
     Kernel,
     Native,
     Corpus,
+    Port,
 }
 
 /// Liest einen Bericht.
@@ -328,6 +392,10 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                     r.corpus = Some(Corpus::default());
                     Section::Corpus
                 }
+                ("port", false) => {
+                    r.ports.push(PortEntry { name: name.to_string(), ..PortEntry::default() });
+                    Section::Port
+                }
                 _ => return Err(err(format!("unbekannter Abschnitt `[{head}]`"))),
             });
             continue;
@@ -337,6 +405,11 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
         let (key, value) = (key.trim(), value.trim());
         let text = || value.strip_prefix('"').and_then(|v| v.strip_suffix('"')).unwrap_or(value).to_string();
         let number = || value.parse::<u64>().map_err(|_| err(format!("`{value}` ist keine ganze Zahl")));
+        let signed = || value.parse::<i64>().map_err(|_| err(format!("`{value}` ist keine ganze Zahl")));
+        let depth_and_bound = || match parse_numbers::<u64>(value).as_deref() {
+            Some([depth, bound]) => Ok((*depth, *bound)),
+            _ => Err(err(format!("`{value}` sind nicht Tiefe und Schranke"))),
+        };
         let flag = || match value {
             "true" => Ok(true),
             "false" => Ok(false),
@@ -435,6 +508,25 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                 match key {
                     "programs" => c.programs = number()? as u32,
                     "deviations" => c.deviations = number()? as u32,
+                    _ => return Err(unknown()),
+                }
+            }
+            Some(Section::Port) => {
+                let p = r.ports.last_mut().expect("Abschnitt angelegt");
+                match key {
+                    "date" => p.date = text(),
+                    "passed" => p.passed = flag()?,
+                    "ticks" => p.ticks = number()?,
+                    "drift_median_ns" => p.drift_median_ns = signed()?,
+                    "drift_late_ns" => p.drift_late_ns = signed()?,
+                    "jitter_ns" => p.jitter_ns = Some(signed()?),
+                    "foreign_rounds" => p.foreign_rounds = Some(number()?),
+                    "foreign_errors" => p.foreign_errors = Some(number()?),
+                    "longest_job_ticks" => p.longest_job_ticks = Some(number()?),
+                    "stack" => p.stack = Some(depth_and_bound()?),
+                    "job_stack" => p.job_stack = Some(depth_and_bound()?),
+                    "job_stack_shared" => p.job_stack_shared = flag()?,
+                    "journal_writes" => p.journal_writes = Some(number()?),
                     _ => return Err(unknown()),
                 }
             }
@@ -544,6 +636,22 @@ mod tests {
                 contract: 512,
             }],
             corpus: Some(Corpus { programs: 44, deviations: 0 }),
+            ports: vec![PortEntry {
+                name: "interrupt".into(),
+                date: "2026-10-11".into(),
+                passed: true,
+                ticks: 2998,
+                drift_median_ns: 3_100,
+                drift_late_ns: 2_400,
+                jitter_ns: Some(2_200),
+                foreign_rounds: Some(41_000),
+                foreign_errors: Some(0),
+                longest_job_ticks: Some(4),
+                stack: Some((3_900, 4_500)),
+                job_stack: Some((1_100, 2_700)),
+                job_stack_shared: false,
+                journal_writes: None,
+            }],
         }
     }
 
@@ -551,7 +659,10 @@ mod tests {
     fn a_report_round_trips() {
         let r = sample();
         let text = render(&r);
-        assert!(text.starts_with("# takt-conformance 3\n"), "{text}");
+        assert!(text.starts_with("# takt-conformance 4\n"), "{text}");
+        assert!(text.contains("[port interrupt]\ndate = \"2026-10-11\"\npassed = true\n"), "{text}");
+        assert!(text.contains("stack = 3900 4500\njob_stack = 1100 2700\n"), "{text}");
+        assert!(!text.contains("journal_writes"), "was die Ausgabe nicht nannte, fehlt: {text}");
         assert!(text.contains("stack_reserve = 1432\nstack_reserve_rtos = 2048\n"), "Reserve je Form: {text}");
         assert!(text.contains("[probe f64_math]\nfunction = \"acos\"\nps = "), "{text}");
         assert!(text.contains("placements = 0 8 24\n") && text.contains("placements = 11905 11905 11905\n"), "{text}");
@@ -568,6 +679,22 @@ mod tests {
         let e = parse(&text).expect_err("abgelehnt");
         assert!(e.message.contains("operations"), "{e}");
         assert!(e.line > 1);
+    }
+
+    /// Der Vektor der Spezifikation (R4) ist ein Bericht dieser Version.
+    #[test]
+    fn the_vector_of_the_format_reads() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../grammar/conformance-report.md");
+        let spec = std::fs::read_to_string(path).expect("Spezifikation");
+        let vector = spec
+            .split("## R4")
+            .nth(1)
+            .and_then(|r| r.split("```text\n").nth(1))
+            .and_then(|r| r.split("```").next())
+            .expect("Vektor in R4");
+        let r = parse(vector).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(r.format_version, FORMAT_VERSION);
+        assert!(r.ports.iter().any(|p| p.passed && p.stack.is_some()), "{r:?}");
     }
 
     #[test]

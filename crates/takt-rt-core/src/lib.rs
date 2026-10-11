@@ -29,6 +29,7 @@
 pub mod journal;
 pub mod loopcore;
 pub mod overrun;
+pub mod port_test;
 pub mod profile;
 pub mod stream;
 

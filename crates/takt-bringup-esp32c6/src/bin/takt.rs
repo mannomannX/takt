@@ -407,6 +407,7 @@ fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
             )
             .ok(),
             tick_program: env!("TAKT_TICK_STACK_PROGRAM").parse().ok(),
+            job_shared: !cfg!(form = "own"),
             job: takt_board_esp32c6::jobs::high_water(),
             job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),
         };
@@ -770,9 +771,13 @@ mod embassy_form {
         let blink = !HW_ADDRESSES.contains(&"ui/led");
         let mut lit = false;
         let mut rounds: u64 = 0;
+        // Die Last der Portpruefung (12.11): Ohne FPU rechnet sie in
+        // Software, und es gibt keine Register zu sichern.
+        let mut load = takt_rt_core::port_test::ForeignLoad::new();
         let mut gate = TaskAlarm::new(&WAKE, pend_jobs as fn());
         while !ENDED.load(Ordering::Acquire) {
             rounds = rounds.wrapping_add(1);
+            load.round();
             if LOGICAL {
                 release(&GATE, &mut gate);
             }
@@ -799,6 +804,11 @@ mod embassy_form {
                 u.drain(DRAIN_ROUNDS);
                 u.write("takt wirt runden ");
                 u.write_u64(rounds);
+                u.newline();
+                u.write(takt_rt_core::port_test::LINE);
+                u.write_u64(load.rounds());
+                u.write(takt_rt_core::port_test::ERRORS);
+                u.write_u64(load.errors());
                 u.newline();
             }
             conclude(&rt, &stats);
@@ -988,8 +998,12 @@ mod interrupt_form {
         let blink = !HW_ADDRESSES.contains(&"ui/led");
         let mut lit = false;
         let mut rounds: u64 = 0;
+        // Die Last der Portpruefung (12.11): Ohne FPU rechnet sie in
+        // Software, und es gibt keine Register zu sichern.
+        let mut load = takt_rt_core::port_test::ForeignLoad::new();
         while !ENDED.load(Ordering::Acquire) {
             rounds = rounds.wrapping_add(1);
+            load.round();
             if LOGICAL {
                 release(&GATE, &mut alarm);
             }
@@ -1017,6 +1031,11 @@ mod interrupt_form {
                 u.drain(DRAIN_ROUNDS);
                 u.write("takt wirt runden ");
                 u.write_u64(rounds);
+                u.newline();
+                u.write(takt_rt_core::port_test::LINE);
+                u.write_u64(load.rounds());
+                u.write(takt_rt_core::port_test::ERRORS);
+                u.write_u64(load.errors());
                 u.newline();
             }
             conclude(&s.rt, &s.ended.unwrap_or_default());

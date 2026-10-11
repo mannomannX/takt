@@ -104,7 +104,7 @@ fn ffi(x: &Prefix, logic: &str) -> String {
         format!("pub fn {x}_persist_snapshot(a: *mut c_void, out: *mut c_void, cap: i32) -> i32;"),
         format!("pub fn {x}_persist_restore(a: *mut c_void, bytes: *const c_void, len: i32) -> i32;"),
         format!("pub fn {x}_dump(a: *mut c_void, all: i32);"),
-        format!("pub fn {x}_pc(a: *mut c_void);"),
+        format!("pub fn {x}_pc(a: *mut c_void, all: i32);"),
         format!("pub fn {x}_next_run(a: *mut c_void, delay: *mut i64) -> i32;"),
         format!("pub fn {x}_end(a: *mut c_void);"),
         format!("pub fn {x}_overrun(a: *mut c_void);"),
@@ -423,7 +423,7 @@ impl takt_embed::rt::Program for Program<'_> {{
         // SAFETY: liest die Arena und schreibt den Trace ueber die Leitung des Wirts.
         unsafe {{
             ffi::{x}_dump(self.arena, all);
-            ffi::{x}_pc(self.arena);
+            ffi::{x}_pc(self.arena, all);
         }}
     }}
 

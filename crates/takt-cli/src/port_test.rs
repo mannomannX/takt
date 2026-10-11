@@ -1,0 +1,99 @@
+//! `takt port-test` (12.11, 13.8; M11 Schritt 15): die Portpruefung.
+//!
+//! ```text
+//! takt port-test --emit embed --form FORM [--target ZIEL] [--hardware DATEI.hw] [--drivers TYP] --out VERZEICHNIS
+//! takt port-test --judge LOG [--port NAME --conformance DATEI]
+//! ```
+//!
+//! `--emit embed` liefert das Pruefprogramm, wie `takt build --emit embed`
+//! jedes Programm liefert: mit dem Praefix `port_test` und im Sim-Build, weil
+//! seine Ausgaenge ohne Treiber in den Trace gehen; die Quelle liegt daneben.
+//! Der Port faehrt es `takt_conformance::port::TICKS` Ticks in Echtzeit,
+//! rechnet in seiner fremden Aufgabe die Last aus `takt_rt_core::port_test`
+//! und schreibt alles in seine Senke. `--judge` urteilt ueber diese Ausgabe
+//! und traegt das Urteil mit `--conformance` als `[port NAME]` in den
+//! Konformitaetsbericht ein; ein Urteil desselben Ports ersetzt es.
+
+use std::path::Path;
+
+use takt_conformance::port;
+use takt_conformance::report::{self, Report};
+
+use crate::Args;
+
+pub(crate) fn port_test(args: &Args) -> bool {
+    match (args.value("--emit"), args.value("--judge")) {
+        (Some("embed"), None) => emit_embed(args),
+        (None, Some(log)) => judge(args, log),
+        (Some(other), None) => {
+            eprintln!("takt port-test --emit: nur `embed` (war: {other})");
+            false
+        }
+        _ => {
+            eprintln!("takt port-test: entweder `--emit embed` oder `--judge LOG`");
+            false
+        }
+    }
+}
+
+/// `--emit embed`: das Pruefprogramm als Baustein.
+fn emit_embed(args: &Args) -> bool {
+    let Some(out) = args.value("--out") else {
+        eprintln!("takt port-test --emit embed schreibt in ein Verzeichnis; `--out VERZEICHNIS` fehlt");
+        return false;
+    };
+    let source = Path::new(out).join(format!("{}.takt", port::PREFIX));
+    if let Err(e) = std::fs::create_dir_all(out).and_then(|()| std::fs::write(&source, port::PROGRAM)) {
+        eprintln!("{}: {e}", source.display());
+        return false;
+    }
+    let mut values = args.values.clone();
+    values.push(("--prefix".to_string(), port::PREFIX.to_string()));
+    values.push(("--build".to_string(), "sim".to_string()));
+    crate::build(&Args { flags: args.flags.clone(), files: vec![source.display().to_string()], values })
+}
+
+/// `--judge LOG`: das Urteil, und mit `--conformance` im Bericht.
+fn judge(args: &Args, log: &str) -> bool {
+    let text = match std::fs::read(log) {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e) => {
+            eprintln!("{log}: {e}");
+            return false;
+        }
+    };
+    let verdict = port::judge(&text);
+    print!("{verdict}");
+    if let Some(path) = args.value("--conformance") {
+        let Some(name) = args.value("--port") else {
+            eprintln!("--conformance: `--port NAME` fehlt; er nennt den Abschnitt `[port NAME]`");
+            return false;
+        };
+        if let Err(e) = record(path, verdict.entry(name, &report::today())) {
+            eprintln!("{path}: {e}");
+            return false;
+        }
+        println!("  Bericht: {path}");
+    }
+    verdict.passed()
+}
+
+/// Traegt das Urteil in den Bericht unter `path` ein; ohne Bericht beginnt
+/// einer mit Datum und Werkzeug.
+fn record(path: &str, entry: report::PortEntry) -> Result<(), String> {
+    let mut r = match std::fs::read_to_string(path) {
+        Ok(text) => report::parse(&text).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut r = Report { format_version: report::FORMAT_VERSION, ..Report::default() };
+            r.run.date = report::today();
+            r.run.tool = format!("takt {}", env!("CARGO_PKG_VERSION"));
+            r
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    match r.ports.iter_mut().find(|p| p.name == entry.name) {
+        Some(old) => *old = entry,
+        None => r.ports.push(entry),
+    }
+    std::fs::write(path, report::render(&r)).map_err(|e| e.to_string())
+}

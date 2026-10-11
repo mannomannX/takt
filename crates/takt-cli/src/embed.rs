@@ -299,6 +299,12 @@ pub(crate) fn check_form(
 /// Hardware-Konfiguration; ohne sie ist die Form nicht zu pruefen und baut
 /// nicht. Ein Tick, der kuerzer ist, kaeme jedes Mal zu spaet, und Jobs
 /// rechnen nur, wenn der Wirt einen Job-Interrupt stellt.
+///
+/// **Ein Job verlaengert die Runde.** Der Job-Interrupt liegt ueber der
+/// Hauptschleife, die den Schritt ruft; der Schritt unterbricht ihn nicht
+/// und wartet, bis er fertig ist. Die laengste `duration` zaehlt darum zur
+/// Runde, und ein Tick darunter ist derselbe Fehler (M11 Schritt 15: Die
+/// Portpruefung sah den Tick hinter jedem langen Job zu spaet).
 fn check_poll(p: &takt_mir::Program, host: takt_mir::hardware::Host, name: &str) -> Result<(), String> {
     let Some(round) = host.main_loop_ns else {
         return Err(format!(
@@ -319,6 +325,17 @@ fn check_poll(p: &takt_mir::Program, host: takt_mir::hardware::Host, name: &str)
             "das Programm startet Jobs (4.5), der Wirt stellt in der Pollform keinen Job-Interrupt \
              (`job_interrupt = true` im Ziel `{name}` der Hardware-Konfiguration); einen Interrupt niedrigster \
              Prioritaet stellen, der `job_work` ruft, oder die Interruptform (12.11)"
+        ));
+    }
+    if let Some((job, native)) = takt_frame::parts::longest_job(p)
+        && p.config.tick < round.saturating_add(job)
+    {
+        return Err(format!(
+            "in der Pollform unterbricht der Schritt keinen Job: Der Job-Interrupt liegt ueber der Hauptschleife, die \
+             `service` ruft, und `{native}` verlaengert ihre Runde um seine Dauer. Runde (`main_loop_ns = {round}`) \
+             und `duration` ({job} ns) reichen ueber den Tick ({} ns); kuerzere Jobs, ein laengerer Tick oder die \
+             Interruptform (12.11)",
+            p.config.tick
         ));
     }
     Ok(())
@@ -538,7 +555,9 @@ mod tests {
     /// **Die Pollform prueft die Hauptschleife des Wirts** (12.11, GEN-036):
     /// Ohne Runde baut sie nicht; ein Tick von 10 ms unter einer Runde von
     /// 20 ms ist ein Fehler mit beiden Zahlen; Jobs brauchen den
-    /// Job-Interrupt. Die anderen Formen fragen nicht danach.
+    /// Job-Interrupt, und jeder Job verlaengert die Runde um seine
+    /// `duration`: 25 ms passen nicht in einen Tick von 10 ms, 5 ms neben
+    /// einer Runde von 1 ms schon. Die anderen Formen fragen nicht danach.
     #[test]
     fn the_poll_form_checks_the_main_loop_of_its_host() {
         let valve = valve(None);
@@ -551,7 +570,10 @@ mod tests {
         let jobs = compile(&source("corpus-try/40_jobs.takt"));
         let e = check_form(&jobs, Form::Poll, Some(&poll_host(1_000_000, false)), "x86_64").expect_err("Jobs");
         assert!(e.contains("Job-Interrupt") && e.contains("job_interrupt = true"), "{e}");
-        assert_eq!(check_form(&jobs, Form::Poll, Some(&poll_host(1_000_000, true)), "x86_64"), Ok(()));
+        let e = check_form(&jobs, Form::Poll, Some(&poll_host(1_000_000, true)), "x86_64").expect_err("lange Jobs");
+        assert!(e.contains("`sha256`") && e.contains("25000000 ns") && e.contains("main_loop_ns = 1000000"), "{e}");
+        let short = compile(&source("corpus-try/40_jobs.takt").replace("duration = 25 ms", "duration = 5 ms"));
+        assert_eq!(check_form(&short, Form::Poll, Some(&poll_host(1_000_000, true)), "x86_64"), Ok(()));
         for form in [Form::Own, Form::Interrupt, Form::Rtos] {
             assert_eq!(check_form(&jobs, form, None, "x86_64"), Ok(()), "{}", form.name());
         }

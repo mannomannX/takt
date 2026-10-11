@@ -216,6 +216,15 @@ pub trait Jobs {
 pub trait Tunables {
     /// Die Aenderungen der Tick-Grenze `k`, in Aufzeichnungsreihenfolge.
     fn poll(&mut self, k: u64, apply: &mut dyn FnMut(u32, &[u8]));
+
+    /// Ruht die Quelle, waere also jeder Aufruf von [`Tunables::poll`] bis
+    /// jetzt leer? Eine Konsole ohne wartendes Byte ruht; eine Aufzeichnung
+    /// mit Aenderungen je Grenze weiss es nicht und sagt `false`. Nach einem
+    /// langen Schlaf fragt der Kern eine ruhende Quelle nicht an jeder
+    /// geschlafenen Grenze einzeln (9.9).
+    fn idle(&mut self) -> bool {
+        false
+    }
 }
 
 /// Was ein Tick gekostet hat und was er ergab.
@@ -790,6 +799,14 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
         let Some(a) = self.asleep else { return };
         let polling = self.program.wake_sources();
         if tunables.is_none() && !polling {
+            return;
+        }
+        // Eine ruhende Quelle liefert an keiner Grenze etwas: Die Grenzen bis
+        // jetzt gelten als abgefragt. Je Grenze einzeln gefragt, begaenne der
+        // Tick an der Frist eines langen Schlafs um so viele Abfragen zu spaet
+        // (M11 Schritt 15); den Tick an der Frist fragt sein Schritt selbst.
+        if !polling && reborrow(&mut tunables).is_some_and(|t| t.idle()) {
+            self.tuned = self.tuned.max(self.boundary_at(now.saturating_add(1)).min(self.k));
             return;
         }
         let first = match (tunables.is_some(), polling) {

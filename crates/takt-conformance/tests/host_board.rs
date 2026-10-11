@@ -9,7 +9,7 @@
 mod common;
 
 use common::board::{a_wake_source_ends_the_sleep, agreement, driver_edge_agrees, unread_channels_are_recorded};
-use takt_conformance::board::{self, Board, host::Host};
+use takt_conformance::board::{self, Board, Options, host::Host};
 
 /// Der Wirt mit dem Pruefgeraet; ohne clang keiner.
 fn probe() -> Option<Host> {
@@ -42,6 +42,26 @@ fn a_wake_source_ends_the_sleep_on_the_host() {
     let Some(mut host) = probe() else { return };
     let failed = a_wake_source_ends_the_sleep(&mut host);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Der Programmzaehler steht nur bei Aenderung im Trace** (T4, 11.2): Im
+/// Pruefprogramm der Portpruefung bleibt `kernel` eine Sekunde in `RUN`, und
+/// nur jede sechzehnte Aktivierung endet an einer anderen Anweisung. Schriebe
+/// der Rahmen die Zeile `pc` jeder Maschine in jedem Tick, truege die Leitung
+/// des F401 den Trace nicht (M11 Schritt 15).
+#[test]
+fn a_program_counter_shows_only_when_it_changes() {
+    if common::clang_path().is_none() {
+        return;
+    }
+    let mut host = Host::new();
+    let path = board::corpus_path(takt_conformance::port::CORPUS_NAME);
+    let options = Options::fresh(200);
+    let text = host.build(&path, &options).and_then(|elf| host.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
+    let shown: Vec<&str> = text.lines().filter(|l| l.contains(" pc kernel ")).collect();
+    let values: Vec<&str> = shown.iter().filter_map(|l| l.split_whitespace().nth(3)).collect();
+    assert!(values.windows(2).all(|w| w[0] != w[1]), "eine Zeile ohne Aenderung: {shown:?}");
+    assert!(!shown.is_empty() && shown.len() < 50, "{} Zeilen in 200 Ticks: {shown:?}", shown.len());
 }
 
 /// **Der MCU-Rahmen rechnet den Korpus der Boards wie der Interpreter, auch

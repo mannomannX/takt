@@ -31,6 +31,8 @@
 //! takt parse DATEI… [--ast] [--debug] [--snippet]
 //! takt tokens DATEI
 //! takt tcb review DATEI --native NAME --by NAME --date JJJJ-MM-TT [--review DATEI]
+//! takt port-test --emit embed --form FORM [--target ZIEL] [--hardware DATEI.hw] --out VERZEICHNIS
+//! takt port-test --judge LOG [--port NAME --conformance DATEI]
 //! ```
 //! Exit-Code 1 bei Fehlern, nicht kanonischen Dateien (`fmt --check`), einem
 //! Golden-Unterschied, dem Lauf-Verdikt FAIL (13.5) und unter `test` und
@@ -39,6 +41,7 @@
 mod bench;
 mod check_image;
 mod embed;
+mod port_test;
 
 use std::collections::BTreeMap;
 use std::process::ExitCode;
@@ -50,7 +53,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt check-image ABBILD --manifest P.manifest | takt bench --board NAME (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt check-image ABBILD --manifest P.manifest | takt bench --board NAME | takt port-test --emit embed|--judge LOG (siehe crates/takt-cli/src/main.rs)";
 
 /// Die Schalter je Unterbefehl, genau die, die er liest (11.1): Ein
 /// unbekannter Schalter ist ein Fehler, kein still uebergangener Tippfehler
@@ -242,6 +245,10 @@ const FLAGS: &[(&str, &[&str])] = &[
         ],
     ),
     ("check-image", &["--manifest"]),
+    (
+        "port-test",
+        &["--conformance", "--drivers", "--emit", "--form", "--hardware", "--judge", "--out", "--port", "--target"],
+    ),
 ];
 
 /// Stapel des Threads, auf dem jeder Unterbefehl laeuft (2.1): Mit hoechstens 64
@@ -337,6 +344,8 @@ impl Args {
             "--loop",
             "--load",
             "--natives",
+            "--judge",
+            "--port",
         ];
         let allowed = FLAGS.iter().find(|(c, _)| *c == command).map(|(_, f)| *f).ok_or_else(|| USAGE.to_string())?;
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
@@ -407,6 +416,7 @@ fn command() -> ExitCode {
         "tcb" => tcb(&args),
         "bench" => bench::bench(&args),
         "check-image" => check_image(&args),
+        "port-test" => port_test::port_test(&args),
         _ => {
             eprintln!("{USAGE}");
             false

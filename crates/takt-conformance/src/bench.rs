@@ -986,7 +986,7 @@ pub fn natives_on(
 /// Aktivierungen. Ein fester Versatz aller Tickbeginne verschiebt keinen
 /// Abstand, und ein spaeter Anlauf von Tick 0 verkuerzt nur den ersten;
 /// Board 1 meldete beides als Jitter, erst 121, dann 157 µs (FB-291).
-fn tick_jitter(text: &str) -> Option<i64> {
+pub(crate) fn tick_jitter(text: &str) -> Option<i64> {
     let drifts: Vec<i64> = text
         .lines()
         .filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok())
@@ -1078,6 +1078,7 @@ impl Outcome {
                 })
                 .collect(),
             corpus: None,
+            ports: Vec::new(),
         }
     }
 }

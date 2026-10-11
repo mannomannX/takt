@@ -1,0 +1,157 @@
+# 124 — Das Pruefprogramm der Portpruefung (12.11, 13.8; M11 Schritt 15).
+#
+# Ein Port gilt, wenn er dieses Programm faehrt und `takt port-test --judge`
+# seine Ausgabe annimmt. Jede Maschine prueft eine Pflicht des Ports, nach
+# einem Muster des Korpus:
+#
+# - `hasher` (40, `long_job`): eine Kette von 40 Jobs, deren jeder auf
+#   beiden Boards laenger rechnet als ein Tick. `duration` nennt einen Tick:
+#   Der Trace zeigt dann, wann jeder Lauf wirklich fertig war (4.5), und ein
+#   Port, der den Schritt nicht unterbrechen laesst, verspaetet den Tick.
+#   Eine laengere Kette schriebe mehr Trace, als die Leitung des F401 in
+#   Echtzeit traegt.
+# - `kernel`: rechnet in jedem Schritt lange mit `f32`, waehrend der Wirt in
+#   seiner Hauptschleife dasselbe tut (`takt_embed::port_test`). Sichert der
+#   Port die FPU-Register nicht, rechnet einer von beiden falsch (12.11).
+# - `pulses` (28): geplante Ausgaben (9.8).
+# - `producer` und `consumer` (106): ein interner Strom (8.6).
+# - `keeper` (59): `persist` (5.9). Nach einer Sekunde Last schlafen alle
+#   Maschinen; im Schlaffenster schreibt das Journal auch dort, wo der Flash
+#   den Kern anhaelt (12.3, Pruefung 32).
+
+system:
+    language = 1
+    tick     = 1 ms
+    float    = f32
+
+native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 640, duration = 1 ms, total
+
+output digest   : u32           @ sim("o/digest")
+output hashes   : int in 0..40  @ sim("o/hashes")
+output energy   : float         @ sim("o/energy")
+output beat     : int in 0..9   @ sim("o/beat")
+output received : int in 0..999 @ sim("o/received")
+output kept     : int in 0..999 @ sim("o/kept")
+
+stream<u8> q with capacity = 16
+
+fn first(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
+
+# Jeder Lauf hasht, was der vorige ergab.
+fn chain(d: bytes<32>, inout msg: bytes<4096>):
+    if d.len >= 1 and msg.len >= 1:
+        msg[0] = d[0]
+
+machine hasher:
+    var msg   : bytes<4096> = default
+    var d     : bytes<32> = default
+    var count : int in 0..40 = 0
+    initial LOAD
+
+    state LOAD:
+        initial FILL
+        after 1 s: -> REST
+
+        state FILL:
+            loop:
+                for i in range(256):
+                    msg.push(i as u8)
+            when msg.len >= 4096: -> HASH
+
+        state HASH:
+            sequence:
+                repeat 40:
+                    job v = sha256(msg)
+                    until v.done timeout 100 ms -> FAILED
+                    d = v.result.or(default)
+                    chain(d, msg)
+                    count = min(count + 1, 40)
+                    digest = first(d)
+                    hashes = count
+
+    state FAILED idle:
+        after 10 s: -> LOAD
+
+    state REST idle:
+        after 10 s: -> LOAD
+
+# Ein gedaempfter Schwinger, 64 Schritte je Tick; jede sechzehnte Aktivierung
+# zeigt seine Energie.
+machine kernel:
+    var x : float = 1.0
+    var v : float = 0.0
+    var n : int in 0..15 = 0
+    initial RUN
+
+    state RUN:
+        loop:
+            for i in range(64):
+                v = v - (x * 0.25 + v * 0.002) * 0.01
+                x = x + v * 0.01
+            n = (n + 1) % 16
+            if n == 0:
+                energy = x * x + v * v * 4.0
+        after 1 s: -> REST
+
+    state REST idle:
+        after 10 s: -> RUN
+
+machine pulses:
+    var k : int in 0..9 = 0
+    initial LOAD
+
+    state LOAD:
+        initial BEAT
+        after 1 s: -> REST
+
+        state BEAT:
+            enter:
+                k = (k + 1) % 10
+                at now + 7 ms:
+                    beat = k
+            after 50 ms: -> BEAT
+
+    state REST idle:
+        after 10 s: -> LOAD
+
+machine producer:
+    var k : int in 0..255 = 0
+    initial LOAD
+
+    state LOAD:
+        loop:
+            k = (k + 1) % 256
+            send q, k as u8
+        after 1 s: -> REST
+
+    state REST idle:
+        after 10 s: -> LOAD
+
+machine consumer:
+    var seen : int in 0..999 = 0
+    initial LOAD
+
+    on q as e:
+        seen = (seen + 1) % 1000
+        if seen % 32 == 0:
+            received = seen
+
+    state LOAD:
+        after 1 s: -> REST
+
+    state REST idle:
+        after 10 s: -> LOAD
+
+machine keeper:
+    persist var runs : int in 0..999 = 0 with min_interval = 0 s
+    initial COUNT
+
+    state COUNT:
+        enter:
+            runs = min(runs + 1, 999)
+            kept = runs
+        after 1 s: -> REST
+
+    state REST idle:
+        after 10 s: -> COUNT

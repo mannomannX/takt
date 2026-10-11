@@ -236,7 +236,12 @@ impl Host {
     /// Das Programm mit dem Wirtsrahmen als ausfuehrbare Datei, aus dem
     /// Zwischenspeicher oder frisch gebaut ([`Board::build`]).
     fn image(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
-        if options.bin != Bin::Takt || options.timed || options.form != Form::Own || options.hostile_fpu {
+        if options.bin != Bin::Takt
+            || options.timed
+            || options.form != Form::Own
+            || options.hostile_fpu
+            || options.flaw.is_some()
+        {
             return Err("der Wirt kennt nur den Konformitaetslauf in logischer Zeit".into());
         }
         self.check_wiring(program)?;

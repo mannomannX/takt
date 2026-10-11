@@ -55,16 +55,26 @@ pub const MARK: &str = "takt trace\r\n";
 /// kurzen Trace, und [`crate::compare`] saehe nur, was der Interpreter
 /// danach noch aendert.
 pub(crate) fn complete(text: String, options: &Options) -> Result<String, String> {
+    if options.judged {
+        return Ok(text);
+    }
     if !options.calibrating {
         within_stacks(&text)?;
     }
+    balanced(&text, options)?;
+    Ok(text)
+}
+
+/// Was [`complete`] ohne die Stacks verlangt: keine verworfenen Bytes, die
+/// Bilanz ab [`MARK`] und ein Trace bis zum letzten Tick.
+pub(crate) fn balanced(text: &str, options: &Options) -> Result<(), String> {
     let summary = text.rfind("takt schlief ");
-    if let Some(n) = counter(&text, "verworfen").filter(|n| *n > 0) {
+    if let Some(n) = counter(text, "verworfen").filter(|n| *n > 0) {
         return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"));
     }
     let mark = text[..summary.unwrap_or(text.len())].rfind(MARK);
-    match (mark, summary.zip(counter(&text, "gesendet"))) {
-        (None, None) if options.bin != Bin::Takt => return Ok(text),
+    match (mark, summary.zip(counter(text, "gesendet"))) {
+        (None, None) if options.bin != Bin::Takt => return Ok(()),
         (None, None) => return Err("Trace unvollstaendig: ohne `takt trace` und Bilanz (KON1-010)".into()),
         (Some(m), Some((s, sent))) => {
             let arrived = s - (m + MARK.len());
@@ -81,9 +91,9 @@ pub(crate) fn complete(text: String, options: &Options) -> Result<String, String
         .lines()
         .any(|l| l.strip_prefix("t=").and_then(|r| r.split_once(' ')).is_some_and(|(_, r)| r.starts_with("end ")));
     let checked = options.bin == Bin::Takt && !options.timed && options.ticks > 0 && !ended;
-    match reached(&text) {
-        _ if !checked => Ok(text),
-        Some(last) if last + 1 >= options.ticks => Ok(text),
+    match reached(text) {
+        _ if !checked => Ok(()),
+        Some(last) if last + 1 >= options.ticks => Ok(()),
         last => Err(format!(
             "Trace unvollstaendig: er reicht bis Tick {}, der Lauf hat {} Ticks (KON1-010)",
             last.map_or_else(|| "keinem".to_string(), |t| t.to_string()),
@@ -98,7 +108,7 @@ pub(crate) fn complete(text: String, options: &Options) -> Result<String, String
 /// darueber, war die Schranke falsch — die Reserve des Ports, die Marge oder
 /// der Programmanteil, den die Bilanz mitnennt —, und der Waechter darunter
 /// ist die letzte Linie.
-fn within_stacks(text: &str) -> Result<(), String> {
+pub(crate) fn within_stacks(text: &str) -> Result<(), String> {
     for (depth, bound, what, part) in [
         ("stack", "schranke", "TICK_STACK_BYTES", Some("programm")),
         ("jobstack", "jobschranke", "JOB_STACK_BYTES", None),
@@ -131,7 +141,7 @@ pub fn counter(text: &str, label: &str) -> Option<u64> {
 /// also nur jeden `m`-ten Tick (FB-271). Dieses `m` teilt jedes `k`, der
 /// groesste gemeinsame Teiler der Zeilen ist darum eine obere Schranke fuer
 /// die Luecke nach der letzten.
-fn reached(text: &str) -> Option<u64> {
+pub(crate) fn reached(text: &str) -> Option<u64> {
     let times: Vec<(u64, u64)> = text
         .lines()
         .filter_map(|l| {
@@ -148,6 +158,43 @@ fn reached(text: &str) -> Option<u64> {
     };
     let step = times.iter().map(|(k, _)| *k).fold(0, gcd).max(1);
     times.iter().map(|(k, slept)| k + slept + step - 1).max()
+}
+
+/// Wie spaet die Ticks eines Laufs in Echtzeit nach ihrer Grenze begannen
+/// (`drift` der Zeitzeilen, 7.3); die ersten beiden laufen noch an.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Drift {
+    /// Zeitzeilen.
+    pub ticks: usize,
+    /// Median in ns.
+    pub median: i64,
+    /// Der spaeteste Tick, in ns ueber dem Median.
+    pub late: i64,
+    /// Die fuenf spaetesten Ticks mit ihrer Nummer und Drift: Ihr Abstand
+    /// verraet, was sie aufhielt.
+    pub latest: Vec<(u64, i64)>,
+    /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
+    /// ueberschritt, gerechnet wie `takt bench` (13.8).
+    pub jitter: Option<i64>,
+}
+
+impl Drift {
+    /// Aus dem Trace eines Laufs in Echtzeit.
+    pub fn of(text: &str) -> Drift {
+        let mut drifts: Vec<(u64, i64)> = text
+            .lines()
+            .filter_map(|l| {
+                let tick = l.strip_prefix("t=")?.split_whitespace().next()?.parse().ok()?;
+                Some((tick, l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok()?))
+            })
+            .skip(2)
+            .collect();
+        drifts.sort_unstable_by_key(|&(_, d)| d);
+        let median = drifts.get(drifts.len() / 2).map_or(0, |&(_, d)| d);
+        let late = drifts.last().map_or(0, |&(_, d)| d - median);
+        let latest = drifts.iter().rev().take(5).copied().collect();
+        Drift { ticks: drifts.len(), median, late, latest, jitter: crate::bench::tick_jitter(text) }
+    }
 }
 
 /// Ein Verstoss gegen den Treibervertrag im Trace eines Laufs (12.6).
@@ -291,6 +338,36 @@ pub struct Options {
     /// Programms rechnet noch mit der alten Reserve, und [`complete`] haelt
     /// die Tiefe nicht gegen sie.
     pub calibrating: bool,
+    /// Ein absichtlich falscher Port, den die Portpruefung verwerfen muss
+    /// ([`Flaw`]).
+    pub flaw: Option<Flaw>,
+    /// Die Ausgabe urteilt die Portpruefung ([`crate::port::judge`]): Sie
+    /// prueft die Vollstaendigkeit selbst und nennt sie neben den anderen
+    /// Pflichten, also gibt [`complete`] sie ungeprueft weiter.
+    pub judged: bool,
+}
+
+/// Ein absichtlich falscher Port (12.11, M11 Schritt 15): Die Portpruefung
+/// ([`crate::port`]) muss ihn verwerfen. Das Bring-up des F401 baut ihn in
+/// der Interruptform (`TAKT_PORT_FLAW`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Flaw {
+    /// Eine ISR legt die FPU-Register der Hauptschleife nicht ab, und der
+    /// Schritt rechnet in ihnen weiter.
+    UnsavedFpu,
+    /// Die Jobs haben die Prioritaet des Schritts: Er kann sie nicht
+    /// unterbrechen und wartet, bis sie fertig sind.
+    UninterruptibleJobs,
+}
+
+impl Flaw {
+    /// Der Wert von `TAKT_PORT_FLAW`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Flaw::UnsavedFpu => "fpu",
+            Flaw::UninterruptibleJobs => "jobs",
+        }
+    }
 }
 
 /// Eine Zeile an die Konsole des Boards: `line`, `after` nach der ersten
@@ -356,6 +433,16 @@ impl Options {
     /// Derselbe Lauf als Messung der Stack-Reserve ([`Options::calibrating`]).
     pub fn calibrating(self) -> Options {
         Options { calibrating: true, ..self }
+    }
+
+    /// Derselbe Lauf mit einem absichtlich falschen Port ([`Flaw`]).
+    pub fn with_flaw(self, flaw: Flaw) -> Options {
+        Options { flaw: Some(flaw), ..self }
+    }
+
+    /// Derselbe Lauf fuer die Portpruefung ([`Options::judged`]).
+    pub fn judged(self) -> Options {
+        Options { judged: true, ..self }
     }
 
     /// Das Messprogramm mit `runs` Messungen je Reihe, um `shift` Byte
@@ -542,7 +629,8 @@ impl Bringup {
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
         let mut h = DefaultHasher::new();
         hash_program(program, &mut h)?;
-        (options.ticks, options.fresh, options.timed, options.form, options.hostile_fpu, self.triple).hash(&mut h);
+        (options.ticks, options.fresh, options.timed, options.form, options.hostile_fpu, options.flaw, self.triple)
+            .hash(&mut h);
         (options.build == takt_sema::Build::Hw).hash(&mut h);
         if let Some(hw) = &options.hardware {
             std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
@@ -611,6 +699,10 @@ impl Bringup {
         } else {
             cargo.env_remove("TAKT_HOSTILE_FPU");
         }
+        match options.flaw {
+            Some(flaw) => cargo.env("TAKT_PORT_FLAW", flaw.name()),
+            None => cargo.env_remove("TAKT_PORT_FLAW"),
+        };
         if let Some(feature) = options.form.feature() {
             cargo.args(["--features", feature]);
         }
@@ -1053,6 +1145,7 @@ mod tests {
             tick_program: Some(120),
             job: Some(640),
             job_bound: Some(1056),
+            job_shared: false,
         };
         takt_rt_baremetal::report(&mut t, &overrun, &stats, &journal, &stacks);
         let text = String::from_utf8(line.into_inner()).expect("ASCII");

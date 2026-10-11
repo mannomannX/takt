@@ -113,6 +113,35 @@ const HOSTILE_FPU: bool = option_env!("TAKT_HOSTILE_FPU").is_some();
 /// DN (25), FZ (24) und RMode = gegen null (23:22) in FPSCR und FPDSCR.
 const HOSTILE_FPSCR: u32 = 0x03C0_0000;
 
+/// `TAKT_PORT_FLAW` beim Bau: ein absichtlich falscher Port, den die
+/// Portpruefung verwerfen muss (12.11, M11 Schritt 15), nur in der
+/// Interruptform. `fpu` sichert die FPU-Register der Hauptschleife nicht,
+/// wenn der Schritt sie unterbricht; `jobs` gibt den Jobs die Prioritaet des
+/// Schritts, sodass er sie nicht unterbrechen kann.
+const PORT_FLAW: Option<&str> = option_env!("TAKT_PORT_FLAW");
+
+/// Ist [`PORT_FLAW`] der Fehler `name`?
+const fn port_flaw(name: &str) -> bool {
+    let Some(flaw) = PORT_FLAW else { return false };
+    let (a, b) = (flaw.as_bytes(), name.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+const _: () = assert!(
+    PORT_FLAW.is_none() || (cfg!(form = "interrupt") && (port_flaw("fpu") || port_flaw("jobs"))),
+    "`TAKT_PORT_FLAW` ist `fpu` oder `jobs` und gilt nur in der Interruptform"
+);
+
 /// Der Zyklenstand der vorigen Tickgrenze des periodischen Zeitgebers.
 #[cfg(timer = "periodic")]
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
@@ -600,6 +629,7 @@ fn conclude<C: Clock>(rt: &Takt<C>, stats: &Stats) {
             )
             .ok(),
             tick_program: env!("TAKT_TICK_STACK_PROGRAM").parse().ok(),
+            job_shared: !cfg!(form = "own"),
             job: takt_board_stm32f401::jobs::high_water(),
             job_bound: u32::try_from(app::JOB_STACK_BYTES).ok(),
         };
@@ -837,6 +867,7 @@ mod host {
     use stm32f4::stm32f401::Interrupt;
     use takt_board_stm32f401::{Iwdg, WfiSleep};
     use takt_rt_baremetal::Sleep;
+    use takt_rt_core::port_test::{self, ForeignLoad};
 
     use super::{DRAIN_ROUNDS, HW_ADDRESSES, JOBS, LED, probe, uart};
 
@@ -861,22 +892,25 @@ mod host {
         }
     }
 
-    /// Die fremde Arbeit der Hauptschleife: Sie zaehlt ihre Runden und
-    /// laesst die LED blinken, wenn das Programm sie nicht selbst fuehrt.
+    /// Die fremde Arbeit der Hauptschleife: Sie zaehlt ihre Runden, rechnet
+    /// mit der FPU wie eine fremde Aufgabe (die Last der Portpruefung, 12.11)
+    /// und laesst die LED blinken, wenn das Programm sie nicht selbst fuehrt.
     pub struct Work {
         blink: bool,
         lit: bool,
         rounds: u64,
+        load: ForeignLoad,
     }
 
     impl Work {
         pub fn new() -> Work {
-            Work { blink: !HW_ADDRESSES.contains(&"ui/led"), lit: false, rounds: 0 }
+            Work { blink: !HW_ADDRESSES.contains(&"ui/led"), lit: false, rounds: 0, load: ForeignLoad::new() }
         }
 
         /// Eine Runde zur Zeit `now_ns` der Zeitachse.
         pub fn round(&mut self, now_ns: i64) {
             self.rounds = self.rounds.wrapping_add(1);
+            self.load.round();
             let on = now_ns / BLINK_NS % 2 == 0;
             if self.blink && on != self.lit {
                 self.lit = on;
@@ -889,8 +923,9 @@ mod host {
             probe();
         }
 
-        /// Die Zeile vor der Bilanz: Die Runden zeigen, dass der Wirt neben
-        /// dem Schritt lief; `longest` ist die laengste in Nanosekunden.
+        /// Die Zeilen vor der Bilanz: Die Runden zeigen, dass der Wirt neben
+        /// dem Schritt lief; `longest` ist die laengste in Nanosekunden. Die
+        /// fremde Last nennt, wie oft sie falsch rechnete.
         pub fn report(&self, longest: Option<u64>) {
             let Some(u) = uart() else { return };
             u.drain(DRAIN_ROUNDS);
@@ -901,6 +936,11 @@ mod host {
                 u.write_u64(ns);
                 u.write(" ns");
             }
+            u.newline();
+            u.write(port_test::LINE);
+            u.write_u64(self.load.rounds());
+            u.write(port_test::ERRORS);
+            u.write_u64(self.load.errors());
             u.newline();
         }
     }
@@ -940,10 +980,31 @@ mod interrupt_form {
     use takt_rt_baremetal::interrupt::{Form, Time, release};
 
     use super::host::{self, JOB_LINE, JOB_PRIORITY, Work};
-    use super::{Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, program, runtime, uart};
+    use super::{
+        Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, mpu, port_flaw, program, runtime, uart,
+    };
 
     /// Der Schritt unter Leitung und Pruef-ISR.
     const STEP_PRIORITY: u8 = 0x20;
+
+    /// Die Jobs: unter allen Interrupts, im falschen Port `jobs` neben dem
+    /// Schritt ([`super::PORT_FLAW`]).
+    const JOB_FORM_PRIORITY: u8 = if port_flaw("jobs") { STEP_PRIORITY } else { JOB_PRIORITY };
+
+    /// Der falsche Port `fpu` ([`super::PORT_FLAW`]): Ohne `ASPEN` und `LSPEN`
+    /// in FPCCR und ohne `FPCA` legt eine ISR die FPU-Register der
+    /// Hauptschleife nicht ab, und der Schritt rechnet in ihnen weiter.
+    fn unsaved_fpu() {
+        use cortex_m::register::control::{self, Fpca};
+        let mut c = control::read();
+        c.set_fpca(Fpca::NotActive);
+        // SAFETY: Bevor ein Interrupt freigegeben ist; nur die Sicherung der
+        // FPU aendert sich, und genau das soll die Portpruefung sehen.
+        unsafe {
+            (*cortex_m::peripheral::FPU::PTR).fpccr.modify(|v| v & !(0b11 << 30));
+            control::write(c);
+        }
+    }
 
     /// Was die ISR des Alarms haelt.
     struct Stepping {
@@ -1028,6 +1089,9 @@ mod interrupt_form {
         // SAFETY: TIM2 ist noch maskiert; ab seiner Freigabe gehoert der Lauf
         // seiner ISR.
         unsafe { STEPPING = Some(Stepping { rt, form, tunes, ended: None }) };
+        if port_flaw("fpu") {
+            unsaved_fpu();
+        }
         // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
         // oben sind bereit.
         unsafe {
@@ -1035,7 +1099,7 @@ mod interrupt_form {
                 (Interrupt::USART1, mpu::ISR_PRIORITY),
                 (Interrupt::EXTI0, mpu::ISR_PRIORITY),
                 (Interrupt::TIM2, STEP_PRIORITY),
-                (JOB_LINE, JOB_PRIORITY),
+                (JOB_LINE, JOB_FORM_PRIORITY),
             ] {
                 nvic.set_priority(line, priority);
                 NVIC::unmask(line);

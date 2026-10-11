@@ -218,7 +218,7 @@ fn entry_prototypes(x: &Prefix, logic: &str) -> String {
         format!("int32_t {x}_persist_snapshot({a}, void *out, int32_t cap);"),
         format!("int32_t {x}_persist_restore({a}, const void *in, int32_t len);"),
         format!("void {x}_dump({a}, int32_t all);"),
-        format!("void {x}_pc({a});"),
+        format!("void {x}_pc({a}, int32_t all);"),
         format!("int32_t {x}_next_run({a}, int64_t *delay);"),
         format!("void {x}_end({a});"),
         format!("int64_t {x}_output({a}, int32_t index);"),
@@ -1294,7 +1294,7 @@ fn telemetry(
             "static void takt_tune_trace(int64_t k, uint32_t param, const unsigned char *v, int32_t len, \
              int32_t accepted) {{ (void)k; (void)param; (void)v; (void)len; (void)accepted; }}\n"
         );
-        program_counters(&mut t.code, p, driven, x);
+        program_counters(t, p, driven, x);
         sample(t, p, layout, x);
         commit(&mut t.code, p, layout, x);
         outputs(&mut t.code, layout, x);
@@ -1500,28 +1500,41 @@ fn telemetry(
     let _ = writeln!(s, "    takt_stream_report(a, a->done);");
     let _ = writeln!(s, "}}");
     guarded(s, x, "void", "dump", "int32_t all", "all");
-    program_counters(s, p, driven, x);
+    program_counters(t, p, driven, x);
     sample(t, p, layout, x);
     commit(&mut t.code, p, layout, x);
     outputs(&mut t.code, layout, x);
 }
 
-/// `P_pc`: wo jede Maschine steht (11.2, Instrumentierung
-/// `statements`). Ohne sie bleibt die Funktion leer.
-fn program_counters(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
-    let _ = writeln!(s, "/* Der Programmzaehler je Maschine (11.2). */");
-    let _ = writeln!(s, "void {x}_pc(struct {x}_arena *a) {{");
-    for m in driven {
-        let Some(at) =
-            takt_llvm::machine::state_struct(m, p).and_then(|st| st.byte_offset(takt_llvm::machine::Role::Pc, 0))
-        else {
-            continue;
-        };
-        let _ = writeln!(s, "    takt_board_trace(\"t=\");");
-        let _ = writeln!(s, "    takt_board_trace_i64(a->done);");
-        let _ = writeln!(s, "    takt_board_trace(\"pc {} \");", m.name);
-        let _ = writeln!(s, "    takt_board_trace_i64(*(int *)(a->{} + {at}));", takt_llvm::arena::state_name(&m.name));
-        let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+/// `P_pc`: wo jede Maschine steht (11.2, Instrumentierung `statements`
+/// oder `states`), wie ein Zustand nur, wenn er sich aendert, und mit `all`
+/// jede (grammar/trace.md, T4). Ohne Instrumentierung bleibt die Funktion
+/// leer.
+fn program_counters(t: &mut Text, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
+    let counters: Vec<(&str, u64)> = driven
+        .iter()
+        .filter_map(|m| {
+            let st = takt_llvm::machine::state_struct(m, p)?;
+            Some((m.name.as_str(), st.byte_offset(takt_llvm::machine::Role::Pc, 0)?))
+        })
+        .collect();
+    if !counters.is_empty() {
+        let _ = writeln!(t.fields, "    int32_t pc_shown[{}];", counters.len());
+    }
+    let s = &mut t.code;
+    let _ = writeln!(s, "/* Der Programmzaehler je Maschine (11.2), nur bei Aenderung (T4). */");
+    let _ = writeln!(s, "void {x}_pc(struct {x}_arena *a, int32_t all) {{");
+    let _ = writeln!(s, "    (void)a; (void)all;");
+    for (i, (name, at)) in counters.iter().enumerate() {
+        let state = takt_llvm::arena::state_name(name);
+        let _ = writeln!(s, "    if (all || *(int32_t *)(a->{state} + {at}) != a->pc_shown[{i}]) {{");
+        let _ = writeln!(s, "        a->pc_shown[{i}] = *(int32_t *)(a->{state} + {at});");
+        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "        takt_board_trace_i64(a->done);");
+        let _ = writeln!(s, "        takt_board_trace(\"pc {name} \");");
+        let _ = writeln!(s, "        takt_board_trace_i64(a->pc_shown[{i}]);");
+        let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
+        let _ = writeln!(s, "    }}");
     }
     let _ = writeln!(s, "}}\n");
 }

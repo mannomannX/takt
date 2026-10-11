@@ -299,7 +299,11 @@ fn finish(outcome: &Outcome, board: &str, target: &str, args: &Args) -> bool {
     }
     let tool = format!("takt {}", env!("CARGO_PKG_VERSION"));
     if let Some(path) = args.value("--conformance") {
-        let text = takt_conformance::report::render(&outcome.report(board, target, &tool));
+        let mut report = outcome.report(board, target, &tool);
+        // Die Urteile der Portpruefung misst dieser Lauf nicht; sie bleiben.
+        let old = std::fs::read_to_string(path).ok().and_then(|t| takt_conformance::report::parse(&t).ok());
+        report.ports = old.map(|r| r.ports).unwrap_or_default();
+        let text = takt_conformance::report::render(&report);
         if let Err(e) = std::fs::write(path, text) {
             eprintln!("{path}: {e}");
             return false;

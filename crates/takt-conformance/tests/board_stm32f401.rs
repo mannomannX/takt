@@ -11,13 +11,13 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees,
+    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, fits_the_poll_form,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
     natives_agree, overrun_reaches_every_machine, persistence_survives, runs_shared, simultaneous_jobs_finish_on_time,
-    the_form_keeps_its_deadline, the_poll_form_keeps_its_round,
+    the_flawed_port_fails, the_form_keeps_its_deadline, the_poll_form_keeps_its_round, the_port_passes,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
-use takt_conformance::board::{self, Board, Form, Options};
+use takt_conformance::board::{self, Board, Flaw, Form, Options};
 
 /// Was der F401 nicht fasst (Pruefung 39): `45_journal_cut` und
 /// `110_journal_log` halten ein Flash-Modell mit seinen Sektoren im RAM, das
@@ -313,13 +313,18 @@ fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
 /// Schritt 14): Die Hauptschleife des Bring-ups ruft `service`, sobald die
 /// Frist erreicht ist, Jobs rechnen im Job-Interrupt. In logischer Zeit
 /// oeffnet sie das Tor der Frist in jeder Runde, und der Job-Interrupt
-/// rechnet, bevor sie weiterlaeuft.
+/// rechnet, bevor sie weiterlaeuft. Programme, deren Jobs mit der Runde
+/// ueber den Tick reichen, weist die Pollform beim Bau ab (M11 Schritt 15).
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_board_agrees_with_the_interpreter_in_the_poll_form() {
     let Some((mut board, _guard)) = board() else { return };
     let only = std::env::var("TAKT_F401_ONLY").ok();
-    let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
+    let round = i64::try_from(main_loop_ns()).expect("eine Dauer");
+    let names: Vec<&str> = board::corpus()
+        .into_iter()
+        .filter(|n| !TOO_BIG.contains(n) && runs_shared(n) && fits_the_poll_form(n, round))
+        .collect();
     let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Poll));
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
@@ -341,6 +346,41 @@ fn main_loop_ns() -> u64 {
 fn the_poll_form_steps_within_a_round_of_its_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = the_poll_form_keeps_its_round(&mut board, main_loop_ns(), 20_000);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Jeder Port des F401 mit unterbrechbarem Job-Kontext besteht die
+/// Portpruefung** (12.11, 13.8; M11 Schritt 15): Interruptform, RTIC und
+/// Embassy. Die Pollform weist das Pruefprogramm beim Bau ab: Ihr Schritt
+/// unterbricht keinen Job (`port_test_cmd.rs`).
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn every_port_passes_the_port_test() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed: Vec<String> =
+        [Form::Interrupt, Form::Rtos, Form::Embassy].into_iter().flat_map(|f| the_port_passes(&mut board, f)).collect();
+    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+}
+
+/// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,
+/// M11 Schritt 15): Die Interruptform ohne verzoegertes Sichern; die fremde
+/// Last rechnet falsch, sobald der Schritt sie unterbricht.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_port_without_fpu_saving_fails_the_port_test() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = the_flawed_port_fails(&mut board, Flaw::UnsavedFpu, &["FPU-Kontext nicht gesichert"]);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Ein Port, der Jobs nicht unterbrechen laesst, faellt durch** (4.5,
+/// 12.11, M11 Schritt 15): Die Jobs mit der Prioritaet des Schritts; er
+/// wartet auf jeden, und die Ticks kommen zu spaet.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_port_with_uninterruptible_jobs_fails_the_port_test() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = the_flawed_port_fails(&mut board, Flaw::UninterruptibleJobs, &["7.3", "Tickgrenze"]);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
