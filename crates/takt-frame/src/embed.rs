@@ -46,6 +46,9 @@ pub struct Module<'a> {
     /// Hat das Programm `persist` (5.9)? Dann laesst sich die Runtime ueber
     /// ihm nur mit einem Journal bauen (12.11, FB-385).
     pub persists: bool,
+    /// Hat das Programm Jobs (4.5)? Dann bekommt es einen Job-Kontext
+    /// (`takt_embed::Work`, FB-385).
+    pub jobs: bool,
 }
 
 /// Das Modul `P.rs`.
@@ -76,7 +79,7 @@ pub fn rust_module(m: &Module<'_>) -> String {
         let _ = writeln!(s);
         s.push_str(&crate::drivers::rust_glue(m.drivers, x, ty));
     }
-    s.push_str(&hull(x, m.drivers_type, m.logic, m.persists));
+    s.push_str(&hull(x, m.drivers_type, m.logic, m.persists, m.jobs));
     s
 }
 
@@ -122,8 +125,9 @@ fn ffi(x: &Prefix, logic: &str) -> String {
 }
 
 /// Die sichere Huelle `Program` und der Griff `Jobs`.
-fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str, persists: bool) -> String {
+fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str, persists: bool, jobs: bool) -> String {
     let memory = if persists { "Persisting" } else { "Volatile" };
+    let work = if jobs { "WithJobs" } else { "NoJobs" };
     let args = if drivers_type.is_some() { ", drivers" } else { "" };
     let (param, user, borrow) = match drivers_type {
         Some(ty) => (
@@ -272,6 +276,7 @@ impl Jobs<'_> {{
 }}
 
 impl<'a> takt_embed::Program for Program<'a> {{
+    type Work = takt_embed::{work};
     type Jobs = Jobs<'a>;
     type Dispatch = Dispatch<'a>;
 

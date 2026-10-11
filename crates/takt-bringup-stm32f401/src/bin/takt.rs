@@ -55,6 +55,8 @@ use takt_board_stm32f401::alarm::Tim2Alarm;
 use takt_board_stm32f401::{BAUD, Board, CORE_HZ, FlashNvm, Iwdg, Led, Mpu, Telemetry, Wire, cycles, mpu, platform};
 #[cfg(timer = "periodic")]
 use takt_board_stm32f401::{Tim2Tick, tick};
+#[cfg(form = "own")]
+use takt_embed::Context as _;
 #[cfg(timer = "periodic")]
 use takt_rt_baremetal::TimerClock;
 use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, Trace};
@@ -231,6 +233,10 @@ static mut PERSIST_STORED: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
 
 /// Was das Programm ueber einen Lauf hinaus braucht (5.9, FB-385).
 type Needs = <app::Program<'static> as takt_rt_core::Program>::Memory;
+
+/// Ob das Programm Jobs hat (4.5, FB-385).
+#[cfg(form = "own")]
+type Work = <app::Program<'static> as takt_embed::Program>::Work;
 
 /// Das Journal im Flash, das die Runtime fuer das Programm haelt: fuer ein
 /// Programm ohne `persist` keines.
@@ -646,7 +652,7 @@ struct Setup {
     /// Der Stack des Job-Fadens im eigenen Kern (4.5); unter RTIC rechnen
     /// Jobs in einer eigenen Aufgabe, in der Interruptform im Job-Interrupt.
     #[cfg(form = "own")]
-    job_stack: Option<&'static mut [u8]>,
+    job_stack: &'static mut [u8],
     /// Unter RTIC richtet die App die Interrupts nach ihren Prioritaeten ein.
     #[cfg(not(form = "rtos"))]
     nvic: NVIC,
@@ -693,14 +699,20 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     // eigenen Faden auf ihrem Stack; unter dessen Ende liegt ein Waechter
     // (12.3). Unter RTIC und in der Interruptform rechnen sie auf dem
     // Hauptstack.
+    // Ohne Jobs ist der Stack leer, und es gibt keinen Waechter.
     // SAFETY: einmal beim Aufbau; danach haelt nur der Job-Faden den Stack.
-    let job_stack = if cfg!(form = "own") { unsafe { (*(&raw mut JOB_STACK)).bytes() } } else { None };
+    #[cfg(form = "own")]
+    let job_stack = unsafe { (*(&raw mut JOB_STACK)).bytes() };
+    #[cfg(form = "own")]
+    let guarded = (!job_stack.is_empty()).then_some(job_stack.as_ptr() as u32);
+    #[cfg(not(form = "own"))]
+    let guarded = None;
 
     #[cfg(not(form = "rtos"))]
     let nvic = cp.NVIC;
     let (mut dcb, mut dwt, mut core_mpu, mut scb) = (cp.DCB, cp.DWT, cp.MPU, cp.SCB);
     cycles::enable(&mut dcb, &mut dwt);
-    let Some(protection) = Mpu::arm(&mut core_mpu, &mut scb, job_stack.as_ref().map(|s| s.as_ptr() as u32)) else {
+    let Some(protection) = Mpu::arm(&mut core_mpu, &mut scb, guarded) else {
         if let Some(u) = uart() {
             u.write("takt: Speicherschutz nicht einrichtbar");
             u.newline();
@@ -748,8 +760,12 @@ fn main() -> ! {
 
     // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck.
     let (mut program, journal) = unsafe { program(flash) };
-    let dispatch = program.dispatch();
-    let mut jobs = JobContext::start(job_stack, dispatch, hand_over_jobs(&mut program));
+    let (dispatch, worker) = (program.dispatch(), hand_over_jobs(&mut program));
+    // 4.5: nur ein Programm mit Jobs bekommt seinen Faden (FB-385); die
+    // Griffe gibt es einmal je Programm, hier zum ersten Mal.
+    let mut jobs = <Work as takt_embed::Work>::context(|| {
+        JobContext::start(job_stack, dispatch.expect("Verteiler"), worker.expect("Griff der Jobs"))
+    });
     // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
     // reichte: gemalt erst hier, Aufbau und Journal zaehlen nicht (12.3).
     takt_board_stm32f401::stack::paint();
@@ -763,9 +779,7 @@ fn main() -> ! {
                 if let Some(u) = uart() {
                     u.drain(DRAIN_ROUNDS);
                 }
-                if let Some(context) = jobs.as_mut() {
-                    context.finish();
-                }
+                jobs.finish();
             }),
             protection,
             program,
@@ -780,9 +794,7 @@ fn main() -> ! {
                 if let Some(u) = uart() {
                     u.flush();
                 }
-                if let Some(context) = jobs.as_mut() {
-                    context.run();
-                }
+                jobs.run();
             }),
             protection,
             program,

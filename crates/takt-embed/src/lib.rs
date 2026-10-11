@@ -44,6 +44,9 @@ use takt_native_abi as _;
 /// Ein Port treibt es mit [`rt::Runtime::service`] und rechnet im
 /// Job-Kontext, was `service` als `jobs` meldet.
 pub trait Program: rt::Program {
+    /// Ob das Programm Jobs hat (4.5, FB-385): [`NoJobs`] oder [`WithJobs`].
+    /// Einen Job-Kontext bekommt es ueber [`Work::context`].
+    type Work: Work;
     /// Der Griff des Job-Kontexts.
     type Jobs: Jobs;
     /// Der Griff, der zwischen den Ticks verteilt.
@@ -65,6 +68,65 @@ pub trait Jobs: Send {
     /// Rechnet den Auftrag, den `service` gegeben hat; `service` darf ihn
     /// unterbrechen.
     fn work(&mut self);
+}
+
+/// Ob ein Programm Jobs hat (4.5, 12.11, FB-385); die Huelle nennt es
+/// ([`Program::Work`]). Ein Programm mit Jobs bekommt seinen Job-Kontext,
+/// eines ohne keinen: Wer fuer jedes Programm baut, waehlt hier, statt eine
+/// Konstante zu pruefen, und einen Job-Kontext, der still fehlt, gibt es
+/// nicht.
+pub trait Work {
+    /// Der Job-Kontext eines solchen Programms ueber dem Kontext `C` des Wirts.
+    type Context<C: Context>: Context;
+
+    /// Der Job-Kontext: `start` baut ihn, und nur fuer ein Programm mit Jobs
+    /// wird es gerufen.
+    fn context<C: Context>(start: impl FnOnce() -> C) -> Self::Context<C>;
+}
+
+/// Ein Programm ohne Jobs.
+#[derive(Debug)]
+pub enum NoJobs {}
+
+/// Ein Programm mit Jobs (4.5).
+#[derive(Debug)]
+pub enum WithJobs {}
+
+impl Work for NoJobs {
+    type Context<C: Context> = Idle;
+
+    fn context<C: Context>(_: impl FnOnce() -> C) -> Idle {
+        Idle
+    }
+}
+
+impl Work for WithJobs {
+    type Context<C: Context> = C;
+
+    fn context<C: Context>(start: impl FnOnce() -> C) -> C {
+        start()
+    }
+}
+
+/// Ein Job-Kontext, wie ihn der Wirt zwischen den Ticks treibt (4.5).
+pub trait Context {
+    /// Rechnet, was ansteht, bis der Job abgibt oder der naechste Tick ihn
+    /// unterbricht.
+    fn run(&mut self);
+
+    /// Rechnet jeden Job zu Ende: in logischer Zeit, wo der Wirt warten
+    /// darf (13.8).
+    fn finish(&mut self);
+}
+
+/// Kein Job-Kontext: der eines Programms ohne Jobs.
+#[derive(Debug)]
+pub struct Idle;
+
+impl Context for Idle {
+    fn run(&mut self) {}
+
+    fn finish(&mut self) {}
 }
 
 /// Das Verteilen der Jobs fuer einen Port, der zwischen den Ticks selbst
@@ -161,4 +223,42 @@ pub trait StreamOutput {
 pub trait Device {
     /// Lebt das Geraet?
     fn alive(&mut self, now: i64) -> bool;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Context, NoJobs, WithJobs, Work};
+
+    /// Ein Job-Kontext, der zaehlt, wie oft der Wirt ihn treibt.
+    struct Counted(u32);
+
+    impl Context for Counted {
+        fn run(&mut self) {
+            self.0 += 1;
+        }
+
+        fn finish(&mut self) {
+            self.0 += 10;
+        }
+    }
+
+    /// **Nur ein Programm mit Jobs bekommt einen Job-Kontext** (4.5,
+    /// FB-385): Fuer eines ohne wird er nicht gebaut, und was der Wirt
+    /// zwischen den Ticks treibt, tut nichts; fuer eines mit ist er der des
+    /// Wirts.
+    #[test]
+    fn only_a_program_with_jobs_gets_a_job_context() {
+        let mut built = false;
+        let mut idle = <NoJobs as Work>::context(|| {
+            built = true;
+            Counted(0)
+        });
+        idle.run();
+        idle.finish();
+        assert!(!built, "ohne Jobs kein Job-Kontext");
+        let mut context = <WithJobs as Work>::context(|| Counted(0));
+        context.run();
+        context.finish();
+        assert_eq!(context.0, 11);
+    }
 }

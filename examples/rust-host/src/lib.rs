@@ -111,6 +111,16 @@
 //! let mut arena = rust_host::lifecycle::Arena::new();
 //! let program = rust_host::lifecycle::Program::init(&mut arena);
 //! ```
+//!
+//! **Ob ein Programm Jobs hat, sagt sein Typ** (4.5, FB-385): Ein Wirt fuer
+//! jedes Programm waehlt den Job-Kontext ueber `takt_embed::Work`.
+//!
+//! ```
+//! fn with_jobs<P: takt_embed::Program<Work = takt_embed::WithJobs>>() {}
+//! fn no_jobs<P: takt_embed::Program<Work = takt_embed::NoJobs>>() {}
+//! with_jobs::<rust_host::lifecycle::Program<'static>>();
+//! no_jobs::<rust_host::valve::Program<'static>>();
+//! ```
 
 /// Das Programm (erzeugt): `Arena`, `TICK_NS`, `Drivers`, `Program`.
 #[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]

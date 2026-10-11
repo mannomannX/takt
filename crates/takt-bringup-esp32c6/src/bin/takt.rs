@@ -19,6 +19,8 @@ use esp_hal::main;
 use takt_board_esp32c6::{Button, CORE_HZ, FlashNvm, Mwdt, Telemetry, Wire, Ws2812, platform, route_uart0};
 #[cfg(form = "own")]
 use takt_board_esp32c6::{JobContext, SystimerTick};
+#[cfg(form = "own")]
+use takt_embed::Context as _;
 use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, JournalStats, Stats, Trace};
 #[cfg(form = "own")]
 use takt_rt_baremetal::{LogicalClock, Sleep, TimerClock};
@@ -341,6 +343,10 @@ type Line = Trace<fn() -> Option<&'static mut Telemetry>, Telemetry>;
 /// Was das Programm ueber einen Lauf hinaus braucht (5.9, FB-385).
 type Needs = <app::Program<'static> as takt_rt_core::Program>::Memory;
 
+/// Ob das Programm Jobs hat (4.5, FB-385).
+#[cfg(form = "own")]
+type Work = <app::Program<'static> as takt_embed::Program>::Work;
+
 /// Das Journal im Flash, das die Runtime fuer das Programm haelt: fuer ein
 /// Programm ohne `persist` keines.
 type Journaled = <Needs as takt_rt_core::Memory>::Store<'static, FlashNvm>;
@@ -522,10 +528,15 @@ fn own_core(mut program: app::Program<'static>, journal: Journaled, timer: Systi
     let dispatch = program.dispatch();
     // SAFETY: ein Faden; der Job-Faden liest den Griff erst nach `start`.
     let worker = program.jobs().map(|j| unsafe { (*(&raw mut JOBS)).insert(j) as &mut dyn takt_embed::Jobs });
-    // SAFETY: ein Faden; nur der Job-Faden haelt den Stack danach.
-    let stack = unsafe { (*(&raw mut JOB_STACK)).bytes() };
-    let mut jobs = JobContext::start(stack, dispatch, worker);
-    JOB_STACK_BOTTOM.store(jobs.as_ref().map_or(0, JobContext::bottom), Ordering::Relaxed);
+    // 4.5: nur ein Programm mit Jobs bekommt seinen Faden (FB-385); die
+    // Griffe gibt es einmal je Programm, hier zum ersten Mal.
+    let mut jobs = <Work as takt_embed::Work>::context(|| {
+        // SAFETY: ein Faden; nur der Job-Faden haelt den Stack danach.
+        let stack = unsafe { (*(&raw mut JOB_STACK)).bytes() };
+        let context = JobContext::start(stack, dispatch.expect("Verteiler"), worker.expect("Griff der Jobs"));
+        JOB_STACK_BOTTOM.store(context.bottom(), Ordering::Relaxed);
+        context
+    });
     // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
     // reichte: gemalt erst hier, Aufbau und Journal zaehlen nicht (12.3).
     takt_board_esp32c6::stack::paint();
@@ -538,9 +549,7 @@ fn own_core(mut program: app::Program<'static>, journal: Journaled, timer: Systi
             if let Some(u) = uart() {
                 u.drain(DRAIN_ROUNDS);
             }
-            if let Some(context) = jobs.as_mut() {
-                context.finish();
-            }
+            jobs.finish();
         });
         conduct(program, clock, journal);
     } else {
@@ -549,9 +558,7 @@ fn own_core(mut program: app::Program<'static>, journal: Journaled, timer: Systi
             if let Some(u) = uart() {
                 u.flush();
             }
-            if let Some(context) = jobs.as_mut() {
-                context.run();
-            }
+            jobs.run();
         });
         conduct(program, clock, journal);
     }

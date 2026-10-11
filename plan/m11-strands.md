@@ -302,8 +302,14 @@ So arbeitet jeder Strang, als wäre er allein:
       (`Unloaded::load`: ein ungeladenes schrieb still nie). Die Ports
       (`run`, `stats`, Interrupt- und Pollform) verlieren `persist`; Wirte
       für jedes Programm nehmen `Memory::store`. `compile_fail`-Doctests in
-      `takt-rt-core` und im Beispiel `rust-host`. Offen: dasselbe Muster für
-      den Griff der Jobs (`JobContext::start` mit drei `Option`).
+      `takt-rt-core` und im Beispiel `rust-host`.
+    - **Griff der Jobs umgesetzt 2026-10-11** (Boardlauf steht aus): Die
+      Hülle nennt `takt_embed::Program::Work` (`NoJobs` oder `WithJobs`);
+      `JobContext::start` beider Boards nimmt Stack, Verteiler und Griff ohne
+      `Option` — drei Wege, den Job-Faden still abzuschalten, sind fort. Wirte
+      für jedes Programm wählen über `Work::context`; `JobStack::bytes` ist
+      ohne Jobs leer statt `None`. Die Runtime hält den Job-Kontext nicht:
+      Er läuft in einem anderen Kontext als der Schritt (12.11).
 
 ### 17 — Wirt mit Instanzen in Fäden, `linux_rt`
 

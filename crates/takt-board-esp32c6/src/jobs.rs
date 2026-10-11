@@ -25,7 +25,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use esp_hal::interrupt::{DirectBindableCpuInterrupt, Priority};
 use esp_hal::peripherals::{INTPRI, Interrupt};
-use takt_embed::{Dispatch, Jobs};
+use takt_embed::{Context, Dispatch, Jobs};
 
 /// Die Register eines Fadens, wie der Trap-Handler sie ablegt: `ra`, `sp`,
 /// `t0`–`t2`, `s0`, `s1`, `a0`–`a7`, `s2`–`s11`, `t3`–`t6`, `mepc`,
@@ -221,6 +221,22 @@ fn watch(bottom: u32) {
     }
 }
 
+/// Nur aus der Hauptschleife, in ihrer Wartezeit; `finish` dort, wo sie
+/// warten darf (13.8).
+impl<D: Dispatch> Context for JobContext<D> {
+    fn run(&mut self) {
+        if self.dispatch.next() {
+            self.resume();
+        }
+    }
+
+    fn finish(&mut self) {
+        while self.dispatch.next() {
+            self.resume();
+        }
+    }
+}
+
 impl<D: Dispatch> JobContext<D> {
     /// Legt den Faden des Jobs auf `stack` an und bindet die Umschaltung;
     /// der Faden beginnt in [`worker`], sobald die Hauptschleife ihn zum
@@ -258,39 +274,18 @@ impl<D: Dispatch> JobContext<D> {
     }
 
     /// Der Job-Faden des Programms auf `stack`, den der Rahmen fuer ihn
-    /// bemisst; `None`, wenn das Programm keine Jobs startet und darum einer
-    /// der drei fehlt.
-    pub fn start(
-        stack: Option<&'static mut [u8]>,
-        dispatch: Option<D>,
-        jobs: Option<&'static mut dyn Jobs>,
-    ) -> Option<JobContext<D>> {
-        let (stack, dispatch, jobs) = (stack?, dispatch?, jobs?);
+    /// bemisst. Nur ein Programm mit Jobs bekommt ihn (`takt_embed::Work`,
+    /// FB-385).
+    pub fn start(stack: &'static mut [u8], dispatch: D, jobs: &'static mut dyn Jobs) -> JobContext<D> {
         // SAFETY: einmal vor dem Faden, der es liest; `on` gibt ihn danach mit
         // `STARTED` frei.
         unsafe { JOBS = Some(jobs) };
-        Some(JobContext::on(stack, dispatch))
+        JobContext::on(stack, dispatch)
     }
 
     /// Das untere Ende des Job-Stacks, wo der Waechter liegt (12.3).
     pub fn bottom(&self) -> u32 {
         self.bottom
-    }
-
-    /// Rechnet, was ansteht, bis der Job abgibt oder der naechste Tick ihn
-    /// unterbricht. Nur aus der Hauptschleife, in ihrer Wartezeit.
-    pub fn run(&mut self) {
-        if self.dispatch.next() {
-            self.resume();
-        }
-    }
-
-    /// Rechnet jeden Job zu Ende — in logischer Zeit, wo die Hauptschleife
-    /// warten darf (13.8).
-    pub fn finish(&mut self) {
-        while self.dispatch.next() {
-            self.resume();
-        }
     }
 
     /// Laesst den Job rechnen, bis er abgibt oder der naechste Tick ihn

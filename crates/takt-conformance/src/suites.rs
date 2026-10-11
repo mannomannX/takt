@@ -185,4 +185,38 @@ mod tests {
         let rows: Vec<Vec<String>> = csv_rows("a,\"b, \"\"c\"\"\nd\",e\r\nf\n").collect();
         assert_eq!(rows, [vec!["a", "b, \"c\"\nd", "e"], vec!["f"]]);
     }
+
+    /// **Jede Zeile jeder Tabelle in `plan/` hat so viele Felder wie ihr
+    /// Kopf**: Ein Komma ohne Anfuehrungszeichen verschiebt jede Spalte
+    /// dahinter, und wer die Zeile nach ihrem Status fragt, liest eine
+    /// andere Zelle (2026-10-11, FB-385).
+    #[test]
+    fn every_plan_table_has_the_width_of_its_header() {
+        let plan = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plan");
+        let mut failed = Vec::new();
+        let mut tables = 0;
+        for entry in std::fs::read_dir(&plan).expect("plan/").flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "csv") {
+                continue;
+            }
+            tables += 1;
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let mut rows = csv_rows(&text);
+            let width = rows.next().map_or(0, |head| head.len());
+            for (i, row) in rows.enumerate() {
+                if row.len() != width {
+                    let id = row.first().map_or("", String::as_str);
+                    failed.push(format!(
+                        "{}:{} `{id}`: {} Felder, der Kopf hat {width}",
+                        path.display(),
+                        i + 2,
+                        row.len()
+                    ));
+                }
+            }
+        }
+        assert!(tables >= 5, "nur {tables} Tabellen in plan/");
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
 }

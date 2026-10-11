@@ -611,10 +611,10 @@ pub fn job_stack_bytes(p: &Program, reserve: u32) -> u64 {
 }
 
 /// Der Typ des Job-Stacks fuer einen Wirt in Rust (12.11): `bytes` Bytes,
-/// an 32 Byte ausgerichtet ([`job_stack_bytes`]). Ob es ihn gibt, steht beim
-/// Erzeugen fest; der Wirt pruefte sonst eine Konstante gegen null.
+/// an 32 Byte ausgerichtet ([`job_stack_bytes`]). Ohne Jobs ist er leer, und
+/// kein Wirt fragt nach ihm: Ob ein Programm einen Job-Kontext bekommt, sagt
+/// sein Typ (`takt_embed::Work`, FB-385).
 pub fn rust_job_stack(x: &Prefix, bytes: u64) -> String {
-    let stack = if bytes == 0 { "None" } else { "Some(&mut self.0[..])" };
     format!(
         "/// Die Groesse des Job-Stacks in Bytes (4.5, 12.11); 0 ohne Jobs.
 pub const JOB_STACK_BYTES: usize = {bytes};
@@ -632,9 +632,9 @@ impl JobStack {{
         JobStack([0; JOB_STACK_BYTES])
     }}
 
-    /// Der Stack fuer den Job-Kontext; `None` ohne Jobs.
-    pub fn bytes(&mut self) -> Option<&mut [u8]> {{
-        {stack}
+    /// Der Stack fuer den Job-Kontext.
+    pub fn bytes(&mut self) -> &mut [u8] {{
+        &mut self.0
     }}
 }}
 
