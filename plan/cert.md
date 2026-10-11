@@ -53,6 +53,7 @@ Workspace ohne Zeile, keine Zeile ohne Crate.
 | takt-bringup-stm32f401 | dasselbe für die Black Pill; im Profil `shared` dazu RTIC 2 und `rtic-sync` — das RTOS gehört dort zur TCB (12.8) |
 | takt-bringup-host | die Schleife auf dem Wirt für `takt driver-test --crate` (13.8): `takt_board_trace*` hinter der C-ABI, die Leitung als statische Konsole; Lieferform, Hülle und Kleber zum Prüfstand bindet das Programm, das `takt-conformance::board::host` erzeugt |
 | takt-embed | Takt als Baustein in Rust (12.11): in der Testhilfe `takt_board_trace*` hinter der C-ABI, die Leitung je Faden; die Geräte-Traits und der Bauhelfer stehen unter `deny(unsafe_code)` |
+| takt-embed-c | Takt als Baustein in C (12.11, M11 Schritt 18a): der Kern ohne Warten hinter der C-ABI (`takt_core_*`), die Tabelle `P_ops` und das Gerät des Journals als Rückrufe des Wirts, der Kern im Speicher des Wirts (`takt_core`); dazu der Panic-Handler des Archivs (`abort`) |
 
 **Rechnen außerhalb der TCB.** Was in einem Board-Crate keine
 Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,

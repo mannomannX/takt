@@ -1,0 +1,144 @@
+/* takt_sdk.h - Takt als Baustein in C (12.11): der Kern ohne Warten im
+ * SDK-Archiv `libtakt_sdk.a` (`takt_sdk.lib` fuer MSVC).
+ *
+ * Eine Programmbibliothek aus `takt build --emit embed` bringt ihre
+ * Einstiege als Tabelle `P_ops`. Der Wirt stellt Arena, Treiberobjekt und
+ * den Speicher des Kerns, baut ihn mit `takt_core_init` (mit `persist`:
+ * `takt_core_init_journaled` mit Geraet und Puffern) und ruft dann
+ * `takt_core_service` zu jeder Frist, die der Kern nennt; wartet ein Job,
+ * ruft ein Kontext niedrigerer Prioritaet `takt_core_job_work` und danach
+ * der Schrittkontext `takt_core_service` erneut (12.11). Den Trace schreibt
+ * der Rahmen ueber `takt_board_trace*`, die der Wirt definiert (12.5).
+ *
+ * Der Kern wartet nie und nimmt keinen Heap; `takt_core_service` laeuft nie
+ * zweimal zugleich. `ops`, Arena und Treiberobjekt leben so lange wie der
+ * Kern.
+ */
+#ifndef TAKT_SDK_H
+#define TAKT_SDK_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Die Fassung dieser Schnittstelle; eine Tabelle anderer Fassung nimmt
+ * `takt_core_init` nicht an. */
+#define TAKT_SDK_ABI 1u
+
+/* So viele Byte haelt `takt_core`; das Archiv prueft beim Bau, dass sein
+ * Kern hineinpasst. */
+#define TAKT_CORE_BYTES 1024u
+
+/* Die Einstiege einer Programmbibliothek (`P_ops`); `arena` ist ihre Arena. */
+struct takt_ops {
+    uint32_t abi;
+    uint8_t persists;
+    uint8_t overrun_alert;
+    int64_t tick_ns;
+    uint64_t logic_hash;
+    int64_t persist_min_interval_ns;
+    uint32_t persist_bound;
+    void (*init)(void *arena, void *user);
+    int32_t (*init_with)(void *arena, void *user, const void *bytes, int32_t len);
+    void (*tick)(void *arena, int64_t k);
+    void (*commit)(void *arena);
+    uint8_t (*idle)(void *arena);
+    int64_t (*deadline)(void *arena);
+    void (*advance)(void *arena, int64_t n);
+    int32_t (*tune)(void *arena, int64_t k, uint32_t param, const void *value, int32_t len);
+    uint8_t (*woken)(void *arena, int64_t k);
+    uint8_t (*wake_sources)(void);
+    int32_t (*persist_snapshot)(void *arena, void *out, int32_t cap);
+    int32_t (*persist_restore)(void *arena, const void *bytes, int32_t len);
+    void (*dump)(void *arena, int32_t all);
+    void (*pc)(void *arena, int32_t all);
+    int32_t (*next_run)(void *arena, int64_t *delay);
+    void (*end)(void *arena);
+    void (*overrun)(void *arena);
+    void (*hardware)(void *arena);
+    void (*tolerance)(int64_t *ns, uint32_t *runs);
+    uint8_t (*output_timing)(void);
+    int32_t (*job_dispatch)(void *arena);
+    void (*job_work)(void *arena);
+};
+
+/* Das Geraet des Journals (5.9, 12.3): zwei Slots gleicher Groesse;
+ * ein Vorgang beginnt und wird abgefragt, `read` darf vor dem ersten Tick
+ * blockieren. `ctx` geht an jeden Rueckruf. */
+struct takt_nvm {
+    void *ctx;
+    uint32_t slot_size;
+    int64_t blocking_ns; /* so lange haelt ein Vorgang den Kern an; < 0: in der Hardware */
+    uint8_t (*begin_erase)(void *ctx, uint8_t slot);
+    uint8_t (*begin_write)(void *ctx, uint8_t slot, uint32_t offset, const uint8_t *bytes, uint32_t len);
+    int32_t (*poll)(void *ctx); /* TAKT_NVM_* */
+    uint8_t (*read)(void *ctx, uint8_t slot, uint32_t offset, uint8_t *into, uint32_t len);
+};
+
+/* Was `poll` des Geraets meldet. */
+#define TAKT_NVM_IDLE 0
+#define TAKT_NVM_BUSY 1
+#define TAKT_NVM_DONE 2
+#define TAKT_NVM_FAILED 3
+
+/* Der Speicher des Kerns, im Wirt gestellt. */
+typedef struct takt_core {
+    _Alignas(8) unsigned char opaque[TAKT_CORE_BYTES];
+} takt_core;
+
+/* Das Laufzeitprofil (12.8). */
+#define TAKT_PROFILE_BAREMETAL 0
+#define TAKT_PROFILE_SHARED 1
+#define TAKT_PROFILE_LINUX_RT 2
+
+/* Rueckgaben von `takt_core_init` und `takt_core_init_journaled`. */
+#define TAKT_OK 0
+#define TAKT_ERR_NULL (-1)
+#define TAKT_ERR_ABI (-2)
+#define TAKT_ERR_MEMORY (-3) /* mit `persist` der Einstieg mit Journal, ohne der andere (5.9) */
+#define TAKT_ERR_PROFILE (-4)
+#define TAKT_ERR_BOUND (-5) /* die Puffer fassen `P_PERSIST_BOUND` nicht */
+
+/* Das Ende eines Laufs (12.7) in `takt_next.ended`; 0, solange er geht. */
+#define TAKT_NEXT_NOW 1
+#define TAKT_NEXT_AFTER 2
+#define TAKT_NEXT_ON_WAKE 3
+#define TAKT_NEXT_ON_START 4
+
+/* Was `takt_core_service` dem Wirt sagt. */
+typedef struct takt_next {
+    int64_t deadline_ns;       /* wann der Kern wieder gerufen werden will */
+    int64_t next_run_delay_ns; /* bei TAKT_NEXT_AFTER die Dauer */
+    int32_t ended;             /* 0 oder TAKT_NEXT_* */
+    uint8_t jobs;              /* ein Job wartet: `takt_core_job_work` */
+} takt_next;
+
+/* Baut den Kern eines Programms ohne `persist`: `ops` seine Einstiege
+ * (`P_ops`), `arena` seine Arena, `user` das Treiberobjekt, `profile`
+ * TAKT_PROFILE_*. Danach steht das Programm in Tick 0 (9.4). */
+int32_t takt_core_init(takt_core *core, const struct takt_ops *ops, void *arena, void *user, int32_t profile);
+
+/* Wie `takt_core_init`, fuer ein Programm mit `persist`: Es beginnt ueber
+ * sein Journal auf `nvm`, mit zwei Puffern von je `bound` Byte
+ * (`P_PERSIST_BOUND`), die nur der Kern benutzt (5.9). */
+int32_t takt_core_init_journaled(takt_core *core, const struct takt_ops *ops, void *arena, void *user,
+                                 int32_t profile, const struct takt_nvm *nvm, uint8_t *current, uint8_t *stored,
+                                 uint32_t bound);
+
+/* Rechnet alle Tickgrenzen bis `now_ns` (12.1). */
+takt_next takt_core_service(takt_core *core, int64_t now_ns);
+
+/* Rechnet die verteilten Jobs (4.5), unterbrechbar durch `takt_core_service`. */
+void takt_core_job_work(takt_core *core);
+
+/* Beendet den Lauf an einer Grenze des Wirts (12.7): das Journal synchron,
+ * und ein Schlaf ueber das Ende gibt die Zeile des Ticks davor frei (9.9). */
+void takt_core_finish(takt_core *core);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* TAKT_SDK_H */

@@ -15,6 +15,13 @@ use takt_llvm::Target;
 use takt_llvm::symbols::Prefix;
 use takt_mir::program::RuntimeProfile;
 
+/// Der Kopf des C-SDK (`crates/takt-embed-c`), wie die Lieferform ihn neben
+/// `P.h` legt: Er beschreibt die Tabelle `P_ops` und den Kern ohne Warten.
+const SDK_HEADER: &str = include_str!("../../takt-embed-c/include/takt_sdk.h");
+
+/// Sein Name in der Lieferform.
+const SDK_HEADER_NAME: &str = "takt_sdk.h";
+
 /// Wer `service` ruft (12.11, Tabelle der Formen).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Form {
@@ -132,13 +139,20 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     let (obj, obj_frame) = (e.out.join(format!("{x}.o")), e.out.join(format!("{x}_frame.o")));
     compile(&ll, &obj, e.target, Code::Generated, &flags)?;
     compile(&c, &obj_frame, e.target, Code::Frame, &flags)?;
-    let lib = e.out.join(if e.triple.ends_with("-msvc") { format!("{x}.lib") } else { format!("lib{x}.a") });
-    archive(&lib, &[&obj, &obj_frame])?;
     let tick_stack = tick_stack(e, &obj, &memory)?;
 
     let job_stack = frame.job_stack_bytes;
     let stacks = Stacks { tick: tick_stack.bytes(), job: job_stack };
     write(&e.out.join(format!("{x}.h")), &header(&frame.header, e.program, x, e.nvm_blocking_ns, &stacks))?;
+    // M11 Schritt 18a: die Einstiege als Tabelle fuer das C-SDK, mit dessen Kopf.
+    write(&e.out.join(SDK_HEADER_NAME), SDK_HEADER)?;
+    let (ops, obj_ops) = (e.out.join(format!("{x}_ops.c")), e.out.join(format!("{x}_ops.o")));
+    write(&ops, &takt_frame::embed::c_ops(x))?;
+    let include = format!("-I{}", e.out.display());
+    let ops_flags: Vec<&str> = flags.iter().copied().chain([include.as_str()]).collect();
+    compile(&ops, &obj_ops, e.target, Code::Frame, &ops_flags)?;
+    let lib = e.out.join(if e.triple.ends_with("-msvc") { format!("{x}.lib") } else { format!("lib{x}.a") });
+    archive(&lib, &[&obj, &obj_frame, &obj_ops])?;
     let layout = takt_frame::layout::of(e.program);
     let drivers = takt_frame::drivers::of(e.program, &layout);
     let logic = takt_frame::mcu::logic_hex(e.program);
@@ -366,6 +380,8 @@ fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns
         let _ = writeln!(consts, "#define {upper}_OUT_{name} {index}");
     }
     let _ = writeln!(consts, "#define {upper}_OUTPUTS {}\n", outputs.len());
+    let _ = writeln!(consts, "/* Die Einstiege als Tabelle fuer das C-SDK (`takt_sdk.h`, `takt_core_init`). */");
+    let _ = writeln!(consts, "struct takt_ops;\nextern const struct takt_ops {x}_ops;\n");
     let body = frame_header.trim_end().strip_suffix("#endif").unwrap_or(frame_header);
     format!("{body}{consts}#endif\n")
 }

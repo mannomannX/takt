@@ -660,18 +660,36 @@ pub fn native_library() -> Result<std::path::PathBuf, String> {
 /// Dieselbe Bibliothek fuer ein Ziel (`Some(triple)`, etwa die Boards) oder
 /// den Wirt (`None`), ohne Zwischenspeicher im Prozess.
 pub fn native_library_for(triple: Option<&str>) -> Result<std::path::PathBuf, String> {
+    static_library("takt-native-abi", &["host", "ecdsa", "rsa", "aes-gcm"], triple)
+}
+
+/// Das SDK-Archiv des C-Wirts (`crates/takt-embed-c`, 12.11, M11 Schritt
+/// 18a): der Kern ohne Warten mit Natives und Mathematik, fuer ein Ziel oder
+/// den Wirt. Es traegt die Natives selbst; neben [`native_library`] gelinkt,
+/// staenden sie zweimal im Abbild.
+pub fn sdk_library_for(triple: Option<&str>) -> Result<std::path::PathBuf, String> {
+    static_library("takt-embed-c", &[], triple)
+}
+
+/// Baut das Crate `krate` als statische Bibliothek mit `features`, im
+/// eigenen Zielverzeichnis, damit der Bau nicht auf die Sperre eines
+/// laufenden `cargo` wartet.
+fn static_library(krate: &str, features: &[&str], triple: Option<&str>) -> Result<std::path::PathBuf, String> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut cargo = std::process::Command::new("cargo");
-    cargo.args(["rustc", "--release", "--lib", "--crate-type", "staticlib", "--features", "host,ecdsa,rsa,aes-gcm"]);
+    cargo.args(["rustc", "--release", "--lib", "--crate-type", "staticlib"]);
+    if !features.is_empty() {
+        cargo.args(["--features", &features.join(",")]);
+    }
     if let Some(triple) = triple {
         cargo.args(["--target", triple]);
     }
     let out = cargo
         .arg("--message-format=json-render-diagnostics")
         .arg("--manifest-path")
-        .arg(root.join("crates/takt-native-abi/Cargo.toml"))
+        .arg(root.join("crates").join(krate).join("Cargo.toml"))
         .arg("--target-dir")
-        .arg(crate::target_dir().join("native-abi"))
+        .arg(crate::target_dir().join(krate.trim_start_matches("takt-")))
         .output()
         .map_err(|e| format!("cargo: {e}"))?;
     if !out.status.success() {

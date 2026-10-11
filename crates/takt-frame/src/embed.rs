@@ -124,6 +124,64 @@ fn ffi(x: &Prefix, logic: &str) -> String {
     s
 }
 
+/// Die Einstiege eines Programms `x` als Tabelle fuer das C-SDK
+/// (`takt_sdk.h`, `struct takt_ops`; M11 Schritt 18a): je Einstieg mit Arena
+/// ein Adapter, der sie als `void *` nimmt, denn eine Funktion durch einen
+/// Zeiger anderen Typs zu rufen, waere in C undefiniert. Der Kern des SDK
+/// faehrt das Programm darueber wie die Huelle `P.rs` einen Rust-Wirt.
+pub fn c_ops(x: &Prefix) -> String {
+    let upper = x.as_str().to_uppercase();
+    let with_arena: [(&str, &str, &str, &str); 19] = [
+        ("void", "init", "void *a, void *user", "A(a), user"),
+        ("int32_t", "init_with", "void *a, void *user, const void *bytes, int32_t len", "A(a), user, bytes, len"),
+        ("void", "tick", "void *a, int64_t k", "A(a), k"),
+        ("void", "commit", "void *a", "A(a)"),
+        ("uint8_t", "idle", "void *a", "A(a)"),
+        ("int64_t", "deadline", "void *a", "A(a)"),
+        ("void", "advance", "void *a, int64_t n", "A(a), n"),
+        (
+            "int32_t",
+            "tune",
+            "void *a, int64_t k, uint32_t param, const void *value, int32_t len",
+            "A(a), k, param, value, len",
+        ),
+        ("uint8_t", "woken", "void *a, int64_t k", "A(a), k"),
+        ("int32_t", "persist_snapshot", "void *a, void *out, int32_t cap", "A(a), out, cap"),
+        ("int32_t", "persist_restore", "void *a, const void *bytes, int32_t len", "A(a), bytes, len"),
+        ("void", "dump", "void *a, int32_t all", "A(a), all"),
+        ("void", "pc", "void *a, int32_t all", "A(a), all"),
+        ("int32_t", "next_run", "void *a, int64_t *delay", "A(a), delay"),
+        ("void", "end", "void *a", "A(a)"),
+        ("void", "overrun", "void *a", "A(a)"),
+        ("void", "hardware", "void *a", "A(a)"),
+        ("int32_t", "job_dispatch", "void *a", "A(a)"),
+        ("void", "job_work", "void *a", "A(a)"),
+    ];
+    let mut s = format!(
+        "/* Erzeugt von `takt build --emit embed` (12.11): die Einstiege von `{x}` als\n * \
+         Tabelle fuer das C-SDK (`takt_sdk.h`, `takt_core_init`). */\n\
+         #include \"{x}.h\"\n#include \"takt_sdk.h\"\n\n#define A(a) ((struct {x}_arena *)(a))\n\n"
+    );
+    for (ret, name, params, args) in with_arena {
+        let call = if ret == "void" { format!("{x}_{name}({args});") } else { format!("return {x}_{name}({args});") };
+        s.push_str(&format!("static {ret} {x}_ops_{name}({params}) {{ {call} }}\n"));
+    }
+    s.push_str(&format!(
+        "\nconst struct takt_ops {x}_ops = {{\n    .abi = TAKT_SDK_ABI,\n    .persists = {upper}_PERSIST_BOUND > 0u,\n    \
+         .overrun_alert = {upper}_OVERRUN_ALERT,\n    .tick_ns = {upper}_TICK_NS,\n    \
+         .logic_hash = {upper}_LOGIC_HASH,\n    .persist_min_interval_ns = {upper}_PERSIST_MIN_INTERVAL_NS,\n    \
+         .persist_bound = {upper}_PERSIST_BOUND,\n"
+    ));
+    for (_, name, _, _) in with_arena {
+        s.push_str(&format!("    .{name} = {x}_ops_{name},\n"));
+    }
+    for name in ["wake_sources", "tolerance", "output_timing"] {
+        s.push_str(&format!("    .{name} = {x}_{name},\n"));
+    }
+    s.push_str("};\n");
+    s
+}
+
 /// Die sichere Huelle `Program` und der Griff `Jobs`.
 fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str, persists: bool, jobs: bool) -> String {
     let memory = if persists { "Persisting" } else { "Volatile" };

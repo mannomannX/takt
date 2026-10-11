@@ -1,0 +1,35 @@
+[package]
+name = "takt-embed-c"
+version = "0.1.0"
+description = "Takt als Baustein in C: das SDK-Archiv mit dem Kern ohne Warten, den Natives und der Mathematik (12.11)"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.86"
+
+# Eigener Workspace wie takt-embed und die Bring-ups: Die Grenze zu C braucht
+# `unsafe`, und `forbid` (13.4) laesst sich nicht lokal aufheben.
+[workspace]
+
+# Das Archiv `libtakt_sdk.a` (`takt_sdk.lib` fuer MSVC) baut `cargo rustc
+# --release --lib --crate-type staticlib [--target TRIPEL]`, wie das der
+# Natives fuer den Wirtsrahmen; als rlib laufen die Tests.
+[lib]
+name = "takt_sdk"
+
+[dependencies]
+# Der Kern ohne Warten (12.11).
+takt-rt-core = { path = "../takt-rt-core" }
+# Was der erzeugte Code ruft: Natives, korrekt gerundete Mathematik, Rand
+# (4.5, 4.2, 12.6); ihre C-Symbole gehen mit ins Archiv.
+takt-native-abi = { path = "../takt-native-abi" }
+
+# Ohne Abwickeln: Ein C-Wirt faengt keinen Panic.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "deny"
