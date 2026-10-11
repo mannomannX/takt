@@ -266,6 +266,8 @@ So arbeitet jeder Strang, als wäre er allein:
     `InterruptExecutor`, die Zeit aus `embassy-time`.
   - Unterwegs: FB-385 (der Port verlangt das Journal) und FB-458 (der
     Stack von `main` auf dem C6; behoben 2026-10-11).
+  - FB-513: die Stack-Reserve je Form statt je Ziel (der Bench misst sie
+    schon je Form; auf dem F401 2628 Byte im eigenen Kern, 3648 unter RTIC).
   - **FB-385, entschieden 2026-10-11:**
     - **Die Regel im Typ:** `takt_rt_core::Program` nennt, was das
       Programm braucht (`Volatile` oder `Persisting`; die Hülle setzt es,
