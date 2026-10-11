@@ -1256,7 +1256,7 @@ impl Enc<'_> {
                     }
                     return Ok(x);
                 }
-                let own = cx.m.is_some() && ch.owner == cx.m;
+                let own = cx.m.is_some_and(|m| self.p.owns(m, *c));
                 let loc = self.loc_out(*c);
                 let src = if own { env } else { cx.pre };
                 src.get(&loc).cloned().ok_or_else(|| Unsupported { what: "Output".into(), span })?
@@ -2962,7 +2962,7 @@ impl Enc<'_> {
         }
         if target == Target::Faulted {
             for (i, c) in self.p.channels.iter().enumerate() {
-                if c.owner != Some(m) || c.dir != Direction::Output {
+                if !self.p.owns(m, ChannelId(i as u32)) || c.dir != Direction::Output {
                     continue;
                 }
                 if let Some(safe) = c.attrs.safe.clone() {
@@ -3216,23 +3216,26 @@ impl Enc<'_> {
     fn runtime_faults(&mut self, running: &Term, cur: &mut Env) {
         for (i, kind) in RUNTIME_KINDS.iter().enumerate() {
             let code = stream::RUNTIME + i as i64;
-            let raised: Vec<(Option<MachineId>, String)> = match kind {
+            // `Driver` trifft, wer den Output im Lauf besitzt (FB-602).
+            let raised: Vec<(Option<ChannelId>, String)> = match kind {
                 RuntimeKind::Driver => self
                     .p
                     .channels
                     .iter()
-                    .filter(|c| c.dir == Direction::Output)
-                    .map(|c| (c.owner, runtime_input(*kind, Some(&c.name))))
+                    .enumerate()
+                    .filter(|(_, c)| c.dir == Direction::Output)
+                    .map(|(i, c)| (Some(ChannelId(i as u32)), runtime_input(*kind, Some(&c.name))))
                     .collect(),
                 _ => vec![(None, runtime_input(*kind, None))],
             };
-            for (owner, name) in raised {
-                if owner.is_some_and(|o| !self.order.contains(&o)) {
+            for (output, name) in raised {
+                let meant = |m: MachineId| output.is_none_or(|c| self.p.owns(m, c));
+                if !self.order.iter().any(|&m| meant(m)) {
                     continue;
                 }
                 let hit = Term::and(vec![running.clone(), self.input(name, Sort::Bool)]);
                 for &m in &self.order.clone() {
-                    if owner.is_some_and(|o| o != m) {
+                    if !meant(m) {
                         continue;
                     }
                     let at = self.loc_pending(m);
@@ -3938,8 +3941,8 @@ impl Enc<'_> {
         for &m in &self.order.clone() {
             let faulted = pre[&self.loc_faulted(m)].clone();
             for (i, c) in self.p.channels.clone().iter().enumerate() {
-                let Some(safe) = c.attrs.safe.as_ref().filter(|_| c.dir == Direction::Output && c.owner == Some(m))
-                else {
+                let own = self.p.owns(m, ChannelId(i as u32));
+                let Some(safe) = c.attrs.safe.as_ref().filter(|_| c.dir == Direction::Output && own) else {
                     continue;
                 };
                 let (Ok(safe), Ok(shape)) = (self.const_value(None, safe), self.shape(c.ty, c.span)) else { continue };

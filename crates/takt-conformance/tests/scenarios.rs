@@ -199,3 +199,73 @@ fn every_scenario_outcome_is_the_interpreters() {
         assert_eq!(final_verdict(&native, fault_is_fail), want, "{name}: das Endverdikt nativ:\n{native}");
     }
 }
+
+/// Zwei Szenarien stellen dieselben `sim`-Outputs (13.6). Die Sema nennt
+/// das erste Besitzer; im Lauf gehoeren sie dem laufenden.
+const SHARED: &str = "system:
+    language      = 1
+    tick          = 1 ms
+    fault_is_fail = false
+
+output x_sim : int in 0..99 @ sim(\"bus/x\") with safe = 1
+output seen  : int in 0..99 @ sim(\"seen\")
+
+scenario \"first\" every 1 ms:
+    initial RUN
+    state RUN:
+        enter:
+            x_sim = 5
+            seen = x_sim
+        after 2 ms: -> BREAK
+    state BREAK:
+        loop:
+            check false, \"absichtlich\"
+
+scenario \"second\" every 1 ms:
+    initial RUN
+    state RUN:
+        enter:
+            x_sim = 7
+            seen = x_sim
+        after 2 ms: -> BREAK
+    state BREAK:
+        loop:
+            check false, \"absichtlich\"
+";
+
+/// **Ein `sim`-Output gehoert im Lauf dem laufenden Szenario** (13.6,
+/// FB-602): Jedes der beiden Szenarien liest im Tick, in dem es schreibt,
+/// seinen eigenen Wert, und sein Fault setzt den Output auf `safe` — im
+/// Interpreter, im erzeugten Code und im Modell gleich.
+#[test]
+fn a_sim_output_of_two_scenarios_belongs_to_the_one_that_runs() {
+    let Some(clang) = common::clang() else { return };
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(SHARED, &options);
+    let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    let p = out.program.expect("Programm");
+    for (name, value) in [("first", 5), ("second", 7)] {
+        let options = takt_interp::RunOptions {
+            ticks: TICKS,
+            inputs: true,
+            scenario: Some(name.to_string()),
+            ..Default::default()
+        };
+        let result = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf");
+        let interpreted = result.trace.render();
+        assert!(interpreted.contains(&format!("t=0 out seen {value}\n")), "{name}: der eigene Wert:\n{interpreted}");
+        assert!(interpreted.contains("out x_sim 1\n"), "{name}: der Fault setzt `safe`:\n{interpreted}");
+        let last = result.trace.lines.iter().map(|l| l.tick).max().unwrap_or(0);
+        let native = common::run_native_scenario(&clang, &p, &format!("geteilt_{name}"), name, TICKS)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let native: String = native.lines().filter(|l| tick_of(l) <= last).map(|l| format!("{l}\n")).collect();
+        let diffs = compare(&interpreted, &native);
+        assert!(diffs.is_empty(), "{name}: {diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
+        let id = p.machines.iter().position(|m| m.name == name).expect("Szenario");
+        let model = takt_prove::encode_scenario(&p, takt_mir::MachineId(id as u32)).expect("kodierbar");
+        let traced = model.run(&p, &takt_interp::Trace::default(), &result, TICKS).expect("Lauf des Modells");
+        let diffs = takt_prove::mismatches(&result.trace, &traced);
+        assert!(diffs.is_empty(), "{name}: Interpreter und Modell:\n{}", diffs.join("\n"));
+    }
+}

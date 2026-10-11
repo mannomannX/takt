@@ -526,7 +526,11 @@ impl<'a> Tree<'a> {
             .p
             .channels
             .iter()
-            .filter(|c| own.is_some_and(|i| c.owner == Some(crate::ids::MachineId(i as u32))) && c.attrs.safe.is_some())
+            .enumerate()
+            .filter(|(c, ch)| {
+                own.is_some_and(|i| self.ctx.p.owns(crate::ids::MachineId(i as u32), crate::ids::ChannelId(*c as u32)))
+                    && ch.attrs.safe.is_some()
+            })
             .count();
         STEP + BYTE.times(1 + safe as u64)
     }

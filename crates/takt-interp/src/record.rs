@@ -20,8 +20,8 @@
 
 use std::fmt::Write as _;
 
-use takt_mir::MachineId;
 use takt_mir::program::Program;
+use takt_mir::{ChannelId, MachineId};
 
 use crate::trace::{LineKind, Trace};
 
@@ -433,8 +433,9 @@ pub fn machine_slice(p: &Program, recording: &Recording, trace: &Trace, m: Machi
             LineKind::Output { channel, .. } => p
                 .channels
                 .iter()
-                .find(|c| c.name == *channel)
-                .is_some_and(|c| c.owner != Some(m) && !is_stream(p, c.ty)),
+                .enumerate()
+                .find(|(_, c)| c.name == *channel)
+                .is_some_and(|(i, c)| !p.owns(m, ChannelId(i as u32)) && !is_stream(p, c.ty)),
             LineKind::State { machine, .. }
             | LineKind::Published { machine, .. }
             | LineKind::Signal { machine, .. } => machine != name,
@@ -462,7 +463,9 @@ pub fn machine_lines(p: &Program, trace: &Trace, m: MachineId) -> Trace {
         .lines
         .iter()
         .filter(|l| match &l.kind {
-            LineKind::Output { channel, .. } => p.channels.iter().any(|c| c.name == *channel && c.owner == Some(m)),
+            LineKind::Output { channel, .. } => {
+                p.channels.iter().enumerate().any(|(i, c)| c.name == *channel && p.owns(m, ChannelId(i as u32)))
+            }
             LineKind::State { machine, .. }
             | LineKind::Published { machine, .. }
             | LineKind::Signal { machine, .. }

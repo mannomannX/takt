@@ -596,7 +596,7 @@ impl Enc<'_> {
                 if self.foreign(ch.owner) {
                     return no("zusammengesetzter Output einer anderen Maschine", span);
                 }
-                let own = cx.m.is_some() && ch.owner == cx.m;
+                let own = cx.m.is_some_and(|m| self.p.owns(m, *c));
                 let src = if own { env } else { cx.pre };
                 self.load(src, &self.loc_out(*c), &shape, span)?
             }

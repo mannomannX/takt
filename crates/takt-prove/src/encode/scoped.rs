@@ -181,7 +181,7 @@ impl Enc<'_> {
             }
         }
         for (i, c) in self.p.channels.iter().enumerate() {
-            if c.dir != Direction::Output || c.owner != Some(m) {
+            if c.dir != Direction::Output || !self.p.owns(m, takt_mir::ChannelId(i as u32)) {
                 continue;
             }
             if let Some(safe) = c.attrs.safe.clone() {
