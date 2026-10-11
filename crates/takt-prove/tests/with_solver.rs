@@ -5,8 +5,8 @@
 use takt_mir::Program;
 use takt_mir::analysis::proof::{Site, parse, render};
 use takt_prove::{
-    CheckVerdict, ContractVerdict, Solver, Verdict, classify, classify_compositional, encode, find, prove,
-    verify_contracts,
+    CheckVerdict, ContractVerdict, Solver, Verdict, classify, classify_compositional, classify_sites, encode, find,
+    prove, verify_contracts,
 };
 
 fn compile(src: &str) -> Program {
@@ -533,6 +533,20 @@ fn a_path_found_alone_is_confirmed_on_the_whole() {
     let site = sites.iter().find(|s| s.kind == "range").expect("Range-Stelle");
     let CheckVerdict::Reachable { at, .. } = &site.verdict else { panic!("{site:?}") };
     assert_eq!(*at, 1);
+}
+
+/// **`classify_sites` fragt nur die Stellen, die es behaelt** (FB-511):
+/// ueber ihnen dieselben Urteile wie `classify_compositional`, keine anderen.
+#[test]
+fn classifying_some_sites_judges_them_like_all() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with("19_faults.takt", "");
+    let whole = encode(&p).expect("kodierbar");
+    let (all, _) = classify_compositional(&p, Some(&whole), 3, &solver, 60).expect("Solver laeuft");
+    let (some, _) = classify_sites(&p, Some(&whole), 3, &solver, 60, &|c| c.kind == "range").expect("Solver laeuft");
+    let ranges: Vec<_> = all.into_iter().filter(|c| c.kind == "range").collect();
+    assert!(!ranges.is_empty(), "19_faults hat Range-Stellen");
+    assert_eq!(some, ranges);
 }
 
 /// 13.3: `max_slew` gilt als Annahme — die Aenderung ist durch die Rate seit

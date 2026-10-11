@@ -240,6 +240,183 @@ fn update(which: &str) {
     assert!(lasting.is_empty(), "ohne neue Pfade, der Solver scheiterte:\n{}", lasting.join("\n"));
 }
 
+/// Die Frist je Anfrage beim Einordnen (FB-511 Schritt 1).
+const CLASSIFY_TIMEOUT_S: u64 = 60;
+
+/// Die Programme, deren Stellen der Solver nicht am Teilmodell fragen kann
+/// (FB-604): Jede Anfrage ginge ans Gesamtmodell, das er nicht entscheidet.
+const WITHOUT_PARTS: &[&str] = &["45_journal_cut.takt", "110_journal_log.takt"];
+
+/// Die Stellen eines Programms, an denen kein Lauf einen Fault sah und die
+/// seine Beweisdatei nicht fuehrt (Spalte drei von `UNREACHED`): explizite
+/// Pruefungen als (Maschine, Art, Anfang), implizite als (Anfang, Ende, Art).
+type Open = (Vec<(String, String, u32)>, Vec<(u32, u32, String)>);
+
+fn never_failed(name: &str, p: &Program) -> Open {
+    let mut coverage = Coverage::default();
+    for case in takt_conformance::cases::cases(name, p) {
+        let Ok(stimulus) = takt_interp::Trace::parse(&case.stimulus) else { continue };
+        let options = takt_interp::RunOptions { ticks: case.ticks, inputs: true, ..Default::default() };
+        if let Ok(r) = takt_interp::run(p, &stimulus, &options) {
+            coverage.merge(&r.coverage);
+        }
+    }
+    let proven = paths::proof(name).map(|pr| pr.tags()).unwrap_or_default();
+    let mut out: Open = Default::default();
+    for item in takt_interp::coverage::items(p) {
+        let kind = item.key.split(' ').next().unwrap_or("").to_string();
+        match item.kind {
+            CoverKind::Check if kind != "verify" && !coverage.has(CoverKind::CheckFailed, &item) => {
+                let start = item.key.rsplit_once('@').and_then(|(_, s)| s.parse().ok()).expect("check @<anfang>");
+                out.0.push((item.machine.clone(), kind, start));
+            }
+            CoverKind::Site if !coverage.has(CoverKind::SiteFailed, &item) => {
+                let tag = takt_mir::analysis::walk::tag_of_name(&kind);
+                if !tag.is_some_and(|t| proven.contains(&(item.span.start, item.span.end, t))) {
+                    out.1.push((item.span.start, item.span.end, kind));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Die Gruppe eines Urteils (FB-511 Schritt 1): erreichbar (auch tiefer,
+/// als Spacer zeigt), bewiesen, nicht k-induktiv, ausserhalb des Fragments
+/// der Invariantensuche, Frist, oder ein Pfad, den der Interpreter nicht
+/// bestaetigt.
+fn group(verdict: &CheckVerdict) -> &'static str {
+    match verdict {
+        CheckVerdict::Reachable { .. } => "erreichbar",
+        CheckVerdict::Unreachable { .. } => "bewiesen",
+        CheckVerdict::Undecided { reason } if reason.starts_with("ohne Urteil") => "ohne Urteil",
+        CheckVerdict::Undecided { reason } if reason.contains("findet einen Pfad") => "erreichbar, tiefer",
+        CheckVerdict::Undecided { reason } if reason.contains("ausserhalb ihres Fragments") => "Fragment",
+        CheckVerdict::Undecided { reason } if reason.contains("Induktionsschritt offen") => "nicht k-induktiv",
+        CheckVerdict::Undecided { reason } if reason.contains("Solver sagt") => "Frist",
+        CheckVerdict::Undecided { .. } => "unbestaetigt",
+    }
+}
+
+/// **FB-511 Schritt 1: die unerreichten Stellen einordnen.** Je Tiefe aus
+/// `depths` (`10,20`) fragt der Solver mit [`CLASSIFY_TIMEOUT_S`] je Anfrage
+/// die Stellen ohne Fault, die die vorige Tiefe nicht entschied; das
+/// Ergebnis steht je Stelle in `CARGO_TARGET_TMPDIR/fb511-<tiefe>.tsv` und
+/// gezaehlt im Protokoll. Eine entschiedene Antwort nimmt der Cache. Im
+/// Release-Bau, wie `UPDATE_PATHS`.
+fn classify_unreached(depths: &str) {
+    let found = Some(takt_prove::find()).filter(|s| !matches!(s, Solver::Missing));
+    let Some(solver) = takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren") else {
+        return;
+    };
+    let solver = solver.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache"));
+    let mut names = takt_conformance::suites::programs("vergleich");
+    names.extend(takt_conformance::suites::EXAMPLES);
+    names.retain(|n| !WITHOUT_PARTS.contains(n));
+    // `CLASSIFY_PROGRAMS=<datei>,<datei>` beschraenkt den Lauf, etwa zur Probe.
+    if let Ok(only) = std::env::var("CLASSIFY_PROGRAMS") {
+        names.retain(|n| only.split(',').any(|o| o.trim() == *n));
+    }
+    let mut open: BTreeMap<&str, Open> = BTreeMap::new();
+    for name in &names {
+        let src = source(name);
+        let p = compile(name, &src, paths::proof(name).as_ref());
+        let sites = never_failed(name, &p);
+        if !sites.0.is_empty() || !sites.1.is_empty() {
+            open.insert(name, sites);
+        }
+    }
+    for depth in depths.split(',').map(|d| d.trim().parse::<u32>().expect("Tiefe")) {
+        let started = std::time::Instant::now();
+        let queue = std::sync::Mutex::new(open.keys().copied().collect::<Vec<_>>());
+        let rows = std::sync::Mutex::new(Vec::<(String, CheckReport)>::new());
+        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+        std::thread::scope(|scope| {
+            for _ in 0..((cores - 1) / 2).max(1) {
+                let worker = || {
+                    loop {
+                        let next = queue.lock().expect("Warteschlange").pop();
+                        let Some(name) = next else { break };
+                        let (checks, sites) = &open[name];
+                        let src = source(name);
+                        let p = compile(name, &src, paths::proof(name).as_ref());
+                        let whole = takt_prove::encode(&p).ok();
+                        let keep = |c: &takt_prove::CheckSite| {
+                            checks.iter().any(|(m, k, s)| *m == c.machine && *k == c.kind && *s == c.start)
+                                || sites.iter().any(|(a, b, k)| *a == c.span.start && *b == c.span.end && *k == c.kind)
+                        };
+                        match takt_prove::classify_sites(&p, whole.as_ref(), depth, &solver, CLASSIFY_TIMEOUT_S, &keep)
+                        {
+                            Ok((reports, notes)) => {
+                                // Eine Stelle ohne Urteil: Kein Modell fuehrt sie.
+                                let none = |kind: &str, machine: &str, start: u32, end: u32| CheckReport {
+                                    start,
+                                    span: takt_diag::Span::new(start, end),
+                                    machine: machine.to_string(),
+                                    kind: kind.to_string(),
+                                    verdict: CheckVerdict::Undecided {
+                                        reason: format!("ohne Urteil; {}", notes.join("; ")),
+                                    },
+                                };
+                                let mut missing: Vec<CheckReport> = checks
+                                    .iter()
+                                    .filter(|(m, k, s)| {
+                                        !reports.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s)
+                                    })
+                                    .map(|(m, k, s)| none(k, m, *s, *s))
+                                    .collect();
+                                missing.extend(
+                                    sites
+                                        .iter()
+                                        .filter(|(a, b, k)| {
+                                            !reports
+                                                .iter()
+                                                .any(|r| r.span.start == *a && r.span.end == *b && r.kind == *k)
+                                        })
+                                        .map(|(a, b, k)| none(k, "", *a, *b)),
+                                );
+                                let mut rows = rows.lock().expect("Zeilen");
+                                rows.extend(reports.into_iter().chain(missing).map(|r| (name.to_string(), r)));
+                            }
+                            Err(e) => eprintln!("{name}: {e}"),
+                        }
+                    }
+                };
+                std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(scope, worker).expect("Faden");
+            }
+        });
+        let mut rows = rows.into_inner().expect("Zeilen");
+        rows.sort_by(|a, b| (&a.0, a.1.start).cmp(&(&b.0, b.1.start)));
+        let mut text = String::new();
+        let mut tally: BTreeMap<(&str, String), usize> = BTreeMap::new();
+        for (name, r) in &rows {
+            let g = group(&r.verdict);
+            *tally.entry((g, r.kind.clone())).or_default() += 1;
+            let why = r.text();
+            let why = why.lines().next().unwrap_or_default();
+            text.push_str(&format!("{name}\t{}\t{}\t{}-{}\t{g}\t{why}\n", r.machine, r.kind, r.span.start, r.span.end));
+        }
+        let file = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("fb511-{depth}.tsv"));
+        std::fs::write(&file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+        eprintln!("Tiefe {depth}: {} Stellen in {:.0?}, {}", rows.len(), started.elapsed(), file.display());
+        let mut by_group: BTreeMap<&str, usize> = BTreeMap::new();
+        for ((g, kind), n) in &tally {
+            *by_group.entry(g).or_default() += n;
+            eprintln!("  {g:<20} {kind:<10} {n}");
+        }
+        eprintln!("  {by_group:?}");
+        // Tiefer gefragt wird nur, was diese Tiefe offen liess.
+        let decided: Vec<&(String, CheckReport)> =
+            rows.iter().filter(|(_, r)| !matches!(r.verdict, CheckVerdict::Undecided { .. })).collect();
+        for (name, (checks, sites)) in open.iter_mut() {
+            let mine: Vec<&CheckReport> = decided.iter().filter(|(n, _)| n == name).map(|(_, r)| r).collect();
+            checks.retain(|(m, k, s)| !mine.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s));
+            sites.retain(|(a, b, k)| !mine.iter().any(|r| r.span.start == *a && r.span.end == *b && r.kind == *k));
+        }
+    }
+}
+
 /// **Die Pfade und Beweise des Solvers passen zum Korpus.** Jede
 /// Beweisdatei ist an ihre Quelle gebunden, jeder Pfad erreicht sein Ziel,
 /// und nichts unter `corpus-try/paths` gehoert zu einem Programm ausserhalb
@@ -248,6 +425,9 @@ fn update(which: &str) {
 fn the_stored_solver_paths_still_hold() {
     if let Ok(which) = std::env::var("UPDATE_PATHS") {
         update(&which);
+    }
+    if let Ok(depths) = std::env::var("CLASSIFY_UNREACHED") {
+        classify_unreached(&depths);
     }
     let hint = "`UPDATE_PATHS=<datei> cargo nextest run --release -p takt-conformance --test solver_paths` erzeugt neu";
     let mut failed = Vec::new();

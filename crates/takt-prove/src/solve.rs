@@ -345,6 +345,20 @@ pub fn classify_compositional(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<(Vec<CheckReport>, Vec<String>), String> {
+    classify_sites(program, whole, depth, solver, timeout_s, &|_| true)
+}
+
+/// Wie [`classify_compositional`], nur ueber die Pruefstellen, die `keep`
+/// nennt (FB-511): Was ein Lauf schon erreicht, fragt der Solver nicht, und
+/// eine Maschine ohne solche Stelle bekommt keine Lemmata.
+pub fn classify_sites(
+    program: &Program,
+    whole: Option<&Model>,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+    keep: &dyn Fn(&crate::encode::CheckSite) -> bool,
+) -> Result<(Vec<CheckReport>, Vec<String>), String> {
     let whole = whole.map(|w| strengthened(w, solver, timeout_s)).transpose()?;
     let whole = whole.as_ref();
     let mut out = Vec::new();
@@ -357,11 +371,13 @@ pub fn classify_compositional(
     for id in takt_mir::analysis::schedule::runnable(program) {
         let machine = &program.machines[id.index()];
         let model = match crate::encode::encode_machine(program, id) {
+            Ok(m) if !m.checks.iter().any(keep) => continue,
             Ok(m) => strengthened(&m, solver, timeout_s)?,
             Err(e) => {
                 notes.push(format!("`{}` nicht kodierbar: {}", machine.name, e.what));
                 if let Some(w) = whole {
-                    for (j, site) in w.checks.iter().enumerate().filter(|(_, s)| s.machine == machine.name) {
+                    let mine = w.checks.iter().enumerate().filter(|(_, s)| s.machine == machine.name && keep(s));
+                    for (j, site) in mine {
                         out.push(report(site, classify_site(w, program, j, depth, solver, timeout_s)?));
                     }
                 }
@@ -369,7 +385,7 @@ pub fn classify_compositional(
             }
         };
         notes.extend(model.notes.iter().cloned());
-        for (j, site) in model.checks.iter().enumerate() {
+        for (j, site) in model.checks.iter().enumerate().filter(|(_, s)| keep(s)) {
             let bmc = solver.run(&query(&model, depth, Target::Check(j), Query::Bmc), timeout_s, "check-bmc")?;
             let verdict = match answer(&bmc) {
                 "unsat" => induction_verdict(&model, j, depth, solver, timeout_s)?,
