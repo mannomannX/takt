@@ -24,14 +24,31 @@
 
 #![cfg_attr(not(test), no_std)]
 #![allow(unsafe_code, reason = "die Grenze zu C (12.11); 9.5 fuehrt den Kern in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use core::ffi::c_void;
 use core::marker::PhantomData;
 use core::mem::{MaybeUninit, align_of, size_of};
 
 use takt_rt_core::{
-    Clock, Journal, Memory, NextRun, Nvm, NvmState, Outputs, Persist, Persisting, Policy, Profile, Runtime, Sink,
-    Tick, Tolerance, Unloaded, Volatile, Watchdog,
+    Clock, Journal, Memory, NextRun, Nvm, NvmState, Outputs, Persist, Persisting, Policy, Profile, Runtime, Sink, Tick,
+    Tolerance, Unloaded, Volatile, Watchdog,
 };
 
 // Die Natives und die Mathematik: Ihre Symbole ruft der erzeugte Code, und
@@ -279,13 +296,18 @@ impl<M> CProgram<M> {
     }
 }
 
+/// Der Rahmen zaehlt Ticks ab 1 (12.11).
+fn frame_tick(k: u64) -> i64 {
+    i64::try_from(k).unwrap_or(i64::MAX).saturating_add(1)
+}
+
 impl<M: Memory> takt_rt_core::Program for CProgram<M> {
     type Memory = M;
 
     fn tick(&mut self, k: u64, _now: i64) {
         self.ensure_init();
         // SAFETY: die Arena aus `takt_core_init`; der Rahmen zaehlt ab 1.
-        unsafe { (self.ops().tick)(self.arena, k as i64 + 1) }
+        unsafe { (self.ops().tick)(self.arena, frame_tick(k)) }
     }
 
     fn raise_overrun(&mut self) {
@@ -329,7 +351,7 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
     fn advance(&mut self, ticks: u64) {
         self.ensure_init();
         // SAFETY: die Arena.
-        unsafe { (self.ops().advance)(self.arena, ticks as i64) }
+        unsafe { (self.ops().advance)(self.arena, i64::try_from(ticks).unwrap_or(i64::MAX)) }
     }
 
     fn persist_snapshot(&mut self, out: &mut [u8]) -> usize {
@@ -342,15 +364,14 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
 
     fn persist_restore(&mut self, bytes: &[u8]) -> usize {
         let len = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
-        // SAFETY: Der Rahmen liest `len` Byte ab `bytes`; vor dem Start
-        // beginnt er damit, danach ersetzt er nur die Werte.
-        let n = unsafe {
-            if self.initialized {
-                (self.ops().persist_restore)(self.arena, bytes.as_ptr().cast(), len)
-            } else {
-                self.initialized = true;
-                (self.ops().init_with)(self.arena, self.user, bytes.as_ptr().cast(), len)
-            }
+        let n = if self.initialized {
+            // SAFETY: Der Rahmen liest `len` Byte ab `bytes` und ersetzt nur
+            // die Werte.
+            unsafe { (self.ops().persist_restore)(self.arena, bytes.as_ptr().cast(), len) }
+        } else {
+            self.initialized = true;
+            // SAFETY: Der Rahmen liest `len` Byte ab `bytes` und beginnt damit.
+            unsafe { (self.ops().init_with)(self.arena, self.user, bytes.as_ptr().cast(), len) }
         };
         usize::try_from(n).unwrap_or(0)
     }
@@ -359,7 +380,7 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
         self.ensure_init();
         let len = i32::try_from(value.len()).unwrap_or(i32::MAX);
         // SAFETY: Der Rahmen liest `len` Byte ab `value` (8.4).
-        let _ = unsafe { (self.ops().tune)(self.arena, k as i64 + 1, param, value.as_ptr().cast(), len) };
+        let _ = unsafe { (self.ops().tune)(self.arena, frame_tick(k), param, value.as_ptr().cast(), len) };
     }
 
     fn woken(&mut self, k: u64) -> bool {
@@ -367,7 +388,7 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
             return false;
         }
         // SAFETY: Der Rahmen tastet die Treiber ab wie der Schritt von Tick `k + 1`.
-        unsafe { (self.ops().woken)(self.arena, k as i64 + 1) != 0 }
+        unsafe { (self.ops().woken)(self.arena, frame_tick(k)) != 0 }
     }
 
     fn wake_sources(&self) -> bool {
@@ -399,10 +420,9 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
             Outputs::All => 1,
         };
         // SAFETY: liest die Arena und schreibt ueber die Leitung des Wirts.
-        unsafe {
-            (self.ops().dump)(self.arena, all);
-            (self.ops().pc)(self.arena, all);
-        }
+        unsafe { (self.ops().dump)(self.arena, all) };
+        // SAFETY: ebenso, die Zeile der Programmzaehler.
+        unsafe { (self.ops().pc)(self.arena, all) };
     }
 
     fn end(&mut self) {
@@ -594,16 +614,19 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     if nvm.is_null() || current.is_null() || stored.is_null() {
         return status::NULL;
     }
-    // SAFETY: von `prepare` und oben geprueft.
-    let (o, device) = unsafe { (&*ops, *nvm) };
+    // SAFETY: `prepare` hat die Tabelle geprueft; sie lebt so lange wie der Kern.
+    let o = unsafe { &*ops };
+    // SAFETY: oben auf null geprueft; der Wirt stellt eine gueltige Tabelle.
+    let device = unsafe { *nvm };
+    let Ok(len) = usize::try_from(bound) else { return status::BOUND };
     if bound < o.persist_bound {
         return status::BOUND;
     }
-    let len = bound as usize;
-    // SAFETY: Der Wirt stellt je `bound` Byte, die nur der Kern benutzt und
-    // die so lange leben wie er.
-    let (current, stored) =
-        unsafe { (core::slice::from_raw_parts_mut(current, len), core::slice::from_raw_parts_mut(stored, len)) };
+    // SAFETY: Der Wirt stellt `bound` Byte an `current`, die nur der Kern
+    // benutzt und die so lange leben wie er.
+    let current = unsafe { core::slice::from_raw_parts_mut(current, len) };
+    // SAFETY: ebenso `stored`, ein eigener Puffer neben `current`.
+    let stored = unsafe { core::slice::from_raw_parts_mut(stored, len) };
     let journal = Journal::new(HostNvm(device), o.logic_hash, o.persist_min_interval_ns);
     let mut program = CProgram::new(ops, arena, user);
     let (persist, _, _) = Unloaded::new(journal, current, stored).load(&mut program);
@@ -652,13 +675,18 @@ pub unsafe extern "C" fn takt_core_finish(core: *mut Core) {
 /// `core` ist ein Kern aus [`takt_core_init`]; nur der Job-Kontext ruft.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_core_job_work(core: *mut Core) {
+    // Feld fuer Feld ueber den Zeiger: Eine Referenz auf den ganzen Kern
+    // ueberschnitte sich mit dem `&mut` des unterbrochenen `service`.
     let parts = core.cast::<Parts>();
-    // SAFETY: Tabelle und Arena, gesetzt in `takt_core_init`; den Kern
-    // beruehrt der Job-Kontext nicht.
-    unsafe {
-        let (ops, arena) = ((*parts).ops, (*parts).arena);
-        ((*ops).job_work)(arena);
-    }
+    // SAFETY: die Tabelle, gesetzt in `takt_core_init`.
+    let ops = unsafe { (*parts).ops };
+    // SAFETY: die Arena, gesetzt in `takt_core_init`.
+    let arena = unsafe { (*parts).arena };
+    // SAFETY: Die Tabelle lebt so lange wie der Kern.
+    let job_work = unsafe { (*ops).job_work };
+    // SAFETY: Der Job-Kontext rechnet seine Auftraege in der Arena; den Kern
+    // beruehrt er nicht.
+    unsafe { job_work(arena) };
 }
 
 /// Der Kopf `include/takt_sdk.h` gegen das Archiv (12.11): Die Felder der

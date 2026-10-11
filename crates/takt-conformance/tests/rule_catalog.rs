@@ -118,6 +118,29 @@ fn tier2() -> Tier {
     tier
 }
 
+/// Die Lints der Zeile `2 mit `unsafe``.
+fn unsafe_tier_lints() -> BTreeSet<String> {
+    let rows = table(&section(), "| Stufe | Crates | dazu |");
+    let row = rows.iter().find(|r| r[0] == "2 mit `unsafe`").expect("Zeile der Stufe 2 mit `unsafe`");
+    let mut out = BTreeSet::new();
+    for part in row[2].split(';').map(str::trim) {
+        let names = ticked(part);
+        if part.starts_with("Clippy") {
+            out.extend(names.into_iter().map(|n| format!("clippy::{n}")));
+        } else if part.starts_with("rustc") {
+            out.extend(names);
+        }
+    }
+    out
+}
+
+/// Die Crates mit `unsafe` aus dem Manifest in Abschnitt 2.
+fn unsafe_crates() -> BTreeSet<String> {
+    let cert = read(&root().join("plan/cert.md"));
+    let from = cert.find("### Crates mit `unsafe`").expect("Manifest der Crates mit `unsafe`");
+    table(&cert[from..], "| Crate | Grund |").into_iter().map(|r| r[0].clone()).collect()
+}
+
 /// Die Lints, die der Katalog nennt (alle Stufen): Eine Abweichung davon
 /// braucht eine Regel.
 fn catalog_lints() -> BTreeSet<String> {
@@ -147,7 +170,19 @@ const PENDING: &[&str] = &[
     "takt-bringup-host",
     "takt-bringup-stm32f401",
     "takt-embed",
-    "takt-embed-c",
+    "takt-native-abi",
+    "takt-trampoline-stm32f401",
+];
+
+/// Crates mit `unsafe`, die die Lints der Stufe `2 mit `unsafe`` noch nicht
+/// tragen; schrumpft wie [`PENDING`].
+const PENDING_UNSAFE: &[&str] = &[
+    "takt-board-esp32c6",
+    "takt-board-stm32f401",
+    "takt-bringup-esp32c6",
+    "takt-bringup-host",
+    "takt-bringup-stm32f401",
+    "takt-embed",
     "takt-native-abi",
     "takt-trampoline-stm32f401",
 ];
@@ -259,6 +294,28 @@ fn every_crate_of_tier_two_carries_its_lints() {
                 continue;
             }
             let missing: Vec<&String> = tier.lints.difference(&have).collect();
+            assert!(missing.is_empty(), "{}: es fehlen {missing:?}", head.display());
+        }
+    }
+}
+
+#[test]
+fn every_crate_with_unsafe_carries_the_unsafe_lints() {
+    let (lints, crates) = (unsafe_tier_lints(), unsafe_crates());
+    assert!(!lints.is_empty(), "die Zeile `2 mit `unsafe`` nennt Lints");
+    let pending: BTreeSet<String> = PENDING_UNSAFE.iter().map(|s| s.to_string()).collect();
+    assert!(pending.is_subset(&crates), "PENDING_UNSAFE nennt Crates ohne `unsafe`");
+    for krate in &crates {
+        for head in heads(krate) {
+            let have = denied(&read(&head));
+            if pending.contains(krate) {
+                assert!(
+                    !lints.is_subset(&have),
+                    "`{krate}` traegt die Lints schon; es faellt aus PENDING_UNSAFE heraus"
+                );
+                continue;
+            }
+            let missing: Vec<&String> = lints.difference(&have).collect();
             assert!(missing.is_empty(), "{}: es fehlen {missing:?}", head.display());
         }
     }
