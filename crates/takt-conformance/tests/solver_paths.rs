@@ -299,11 +299,60 @@ fn group(verdict: &CheckVerdict) -> &'static str {
     }
 }
 
-/// Eine Zeile des Protokolls: Programm, Maschine, Art, Spanne, Gruppe, Urteil.
-fn row_line(name: &str, r: &CheckReport) -> String {
-    let why = r.text();
-    let why = why.lines().next().unwrap_or_default();
-    format!("{name}\t{}\t{}\t{}-{}\t{}\t{why}\n", r.machine, r.kind, r.span.start, r.span.end, group(&r.verdict))
+/// Eine Zeile des Protokolls (`fb511-<tiefe>.tsv`): Programm, Maschine, Art,
+/// Anfang der Anweisung, Spanne, Gruppe, Urteil.
+#[derive(Clone)]
+struct Row {
+    name: String,
+    machine: String,
+    kind: String,
+    start: u32,
+    span: (u32, u32),
+    group: String,
+    why: String,
+}
+
+impl Row {
+    fn of(name: &str, r: &CheckReport) -> Row {
+        let why = r.text().lines().next().unwrap_or_default().to_string();
+        Row {
+            name: name.to_string(),
+            machine: r.machine.clone(),
+            kind: r.kind.clone(),
+            start: r.start,
+            span: (r.span.start, r.span.end),
+            group: group(&r.verdict).to_string(),
+            why,
+        }
+    }
+
+    fn line(&self) -> String {
+        let Row { name, machine, kind, start, span: (a, b), group, why } = self;
+        format!("{name}\t{machine}\t{kind}\t{start}\t{a}-{b}\t{group}\t{why}\n")
+    }
+
+    fn parse(line: &str) -> Option<Row> {
+        let mut f = line.splitn(7, '\t');
+        let (name, machine, kind) = (f.next()?, f.next()?, f.next()?);
+        let start = f.next()?.parse().ok()?;
+        let (a, b) = f.next()?.split_once('-')?;
+        let (group, why) = (f.next()?, f.next()?);
+        let span = (a.parse().ok()?, b.parse().ok()?);
+        Some(Row {
+            name: name.into(),
+            machine: machine.into(),
+            kind: kind.into(),
+            start,
+            span,
+            group: group.into(),
+            why: why.into(),
+        })
+    }
+
+    /// Entschieden: erreichbar mit bestaetigtem Pfad oder bewiesen.
+    fn decided(&self) -> bool {
+        self.group == "erreichbar" || self.group == "bewiesen"
+    }
 }
 
 /// **FB-511 Schritt 1: die unerreichten Stellen einordnen.** Je Tiefe aus
@@ -337,9 +386,19 @@ fn classify_unreached(depths: &str) {
     let tmp = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     for depth in depths.split(',').map(|d| d.trim().parse::<u32>().expect("Tiefe")) {
         let started = std::time::Instant::now();
-        let _ = std::fs::remove_file(tmp.join(format!("fb511-{depth}.laufend.tsv")));
-        let queue = std::sync::Mutex::new(open.keys().copied().collect::<Vec<_>>());
-        let rows = std::sync::Mutex::new(Vec::<(String, CheckReport)>::new());
+        // `CLASSIFY_RESUME=1` nimmt, was ein abgebrochener Lauf dieser Tiefe
+        // schon eingeordnet hat; sonst beginnt die Tiefe neu.
+        let progress = tmp.join(format!("fb511-{depth}.laufend.tsv"));
+        let resumed: Vec<Row> = match std::env::var("CLASSIFY_RESUME") {
+            Ok(_) => std::fs::read_to_string(&progress).unwrap_or_default().lines().filter_map(Row::parse).collect(),
+            Err(_) => {
+                let _ = std::fs::remove_file(&progress);
+                Vec::new()
+            }
+        };
+        let done: Vec<&str> = resumed.iter().map(|r| r.name.as_str()).collect();
+        let queue = std::sync::Mutex::new(open.keys().copied().filter(|n| !done.contains(n)).collect::<Vec<_>>());
+        let rows = std::sync::Mutex::new(resumed.clone());
         let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
         std::thread::scope(|scope| {
             for _ in 0..((cores - 1) / 2).max(1) {
@@ -387,10 +446,9 @@ fn classify_unreached(depths: &str) {
                                 );
                                 // Je Programm gleich ins Protokoll: Ein abgebrochener Lauf
                                 // verliert so nur das laufende.
-                                let mine: Vec<CheckReport> = reports.into_iter().chain(missing).collect();
-                                let lines: String = mine.iter().map(|r| row_line(name, r)).collect();
+                                let mine: Vec<Row> = reports.iter().chain(&missing).map(|r| Row::of(name, r)).collect();
+                                let lines: String = mine.iter().map(Row::line).collect();
                                 let mut rows = rows.lock().expect("Zeilen");
-                                let progress = tmp.join(format!("fb511-{depth}.laufend.tsv"));
                                 let appended = std::fs::OpenOptions::new()
                                     .create(true)
                                     .append(true)
@@ -398,7 +456,7 @@ fn classify_unreached(depths: &str) {
                                     .and_then(|mut f| std::io::Write::write_all(&mut f, lines.as_bytes()));
                                 appended.unwrap_or_else(|e| panic!("{}: {e}", progress.display()));
                                 eprintln!("{name}: {} Stellen nach {:.0?}", mine.len(), started.elapsed());
-                                rows.extend(mine.into_iter().map(|r| (name.to_string(), r)));
+                                rows.extend(mine);
                             }
                             Err(e) => eprintln!("{name}: {e}"),
                         }
@@ -408,12 +466,12 @@ fn classify_unreached(depths: &str) {
             }
         });
         let mut rows = rows.into_inner().expect("Zeilen");
-        rows.sort_by(|a, b| (&a.0, a.1.start).cmp(&(&b.0, b.1.start)));
+        rows.sort_by(|a, b| (&a.name, a.start).cmp(&(&b.name, b.start)));
         let mut text = String::new();
-        let mut tally: BTreeMap<(&str, String), usize> = BTreeMap::new();
-        for (name, r) in &rows {
-            *tally.entry((group(&r.verdict), r.kind.clone())).or_default() += 1;
-            text.push_str(&row_line(name, r));
+        let mut tally: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        for r in &rows {
+            *tally.entry((r.group.as_str(), r.kind.as_str())).or_default() += 1;
+            text.push_str(&r.line());
         }
         let file = tmp.join(format!("fb511-{depth}.tsv"));
         std::fs::write(&file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
@@ -425,12 +483,10 @@ fn classify_unreached(depths: &str) {
         }
         eprintln!("  {by_group:?}");
         // Tiefer gefragt wird nur, was diese Tiefe offen liess.
-        let decided: Vec<&(String, CheckReport)> =
-            rows.iter().filter(|(_, r)| !matches!(r.verdict, CheckVerdict::Undecided { .. })).collect();
         for (name, (checks, sites)) in open.iter_mut() {
-            let mine: Vec<&CheckReport> = decided.iter().filter(|(n, _)| n == name).map(|(_, r)| r).collect();
+            let mine: Vec<&Row> = rows.iter().filter(|r| r.name == *name && r.decided()).collect();
             checks.retain(|(m, k, s)| !mine.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s));
-            sites.retain(|(a, b, k)| !mine.iter().any(|r| r.span.start == *a && r.span.end == *b && r.kind == *k));
+            sites.retain(|(a, b, k)| !mine.iter().any(|r| r.span == (*a, *b) && r.kind == *k));
         }
     }
 }
