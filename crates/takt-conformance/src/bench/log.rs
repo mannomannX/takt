@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! takt bench 3f2a9c0d11e4b7a8
+//! bench part 1 1
 //! bench core_hz 84000000
 //! bench shift 8
 //! bench overhead min 6 mean 6 max 7 n 200 digest 0
@@ -19,18 +20,21 @@
 //! Ein Lauf beginnt mit `takt bench <kennung>` und endet mit `takt end`;
 //! was davor und danach steht — Startmeldungen, ein zweiter Lauf —, gehoert
 //! nicht dazu. `bench shift` schreibt der Wirt, wenn er sein Abbild
-//! verschoben hat (FB-367). Innerhalb eines Laufs ist der Leser streng: Eine
-//! unbekannte `bench`-Zeile ist ein Fehler, keine ueberlesene.
+//! verschoben hat (FB-367), `bench part` der Laeufer eines Teils (FB-740);
+//! ohne sie ist es das ganze Messprogramm. Innerhalb eines Laufs ist der Leser
+//! streng: Eine unbekannte `bench`-Zeile ist ein Fehler, keine ueberlesene.
 
 use std::collections::BTreeMap;
 
-use super::Series;
+use super::{Part, Series};
 
 /// Ein Lauf des Messprogramms, so wie das Board ihn meldete.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Run {
     /// Die Kennung der Kerne ([`super::suite_id`]).
     pub suite: String,
+    /// Welcher Teil des Messprogramms (FB-740).
+    pub part: Part,
     /// Kerntakt in Hertz.
     pub core_hz: u32,
     /// Um wie viele Byte der Wirt sein Programm verschoben hat.
@@ -46,8 +50,9 @@ pub struct Run {
     pub entries: BTreeMap<String, Series>,
     /// Die Mathematik an ihren Vektoren, ohne Stack.
     pub math: Vec<crate::math::Measured>,
-    /// Faelle des Subnormal-Vektors mit falschem Ergebnis (4.2).
-    pub subnormal: u64,
+    /// Faelle des Subnormal-Vektors mit falschem Ergebnis (4.2); `None`, wo
+    /// der Lauf ihn nicht rechnete — in einem Teil ohne die Mathematik.
+    pub subnormal: Option<u64>,
 }
 
 /// Die Laeufe in einem Protokoll, in ihrer Reihenfolge.
@@ -89,7 +94,12 @@ fn read(run: &mut Run, line: &str) -> Result<(), String> {
     match w.next() {
         Some("core_hz") => run.core_hz = u32::try_from(number(w.next(), line)?).map_err(|e| format!("{e}: {line}"))?,
         Some("shift") => run.shift = u32::try_from(number(w.next(), line)?).map_err(|e| format!("{e}: {line}"))?,
-        Some("subnormal") => run.subnormal = number(w.next(), line)?,
+        Some("part") => {
+            let mut next = || u32::try_from(number(w.next(), line)?).map_err(|e| format!("{e}: {line}"));
+            let (index, of) = (next()?, next()?);
+            run.part = Part::new(index, of).map_err(|e| format!("{e}: `bench {line}`"))?;
+        }
+        Some("subnormal") => run.subnormal = Some(number(w.next(), line)?),
         Some("overhead") => run.overhead = series(w, line)?,
         Some(kind @ ("takt" | "c" | "entry")) => {
             let name = w.next().ok_or_else(|| format!("Name fehlt in `bench {line}`"))?.to_string();
@@ -208,6 +218,74 @@ pub fn merge(runs: &[Run]) -> Result<Run, String> {
     Ok(out)
 }
 
+/// Die Teile des Messprogramms (FB-740) als ein Lauf je Lage, in der
+/// Reihenfolge, in der die Lagen zuerst vorkommen. Zu jeder Lage gehoert
+/// jeder Teil derselben Teilung genau einmal, und jeder Kern steht in genau
+/// einem Teil.
+///
+/// Erwartet Laeufe ohne Messaufwand ([`Run::without_overhead`]): Jeder Teil
+/// misst seinen eigenen, denn der haengt an der Lage seines Codes, und er
+/// geht von den Reihen seines Teils ab, bevor sie zusammenkommen.
+pub fn combine(runs: &[Run]) -> Result<Vec<Run>, String> {
+    let mut shifts: Vec<u32> = Vec::new();
+    for run in runs {
+        if !shifts.contains(&run.shift) {
+            shifts.push(run.shift);
+        }
+    }
+    shifts
+        .iter()
+        .map(|&shift| {
+            let parts: Vec<&Run> = runs.iter().filter(|r| r.shift == shift).collect();
+            parts_joined(&parts, shift)
+        })
+        .collect()
+}
+
+/// Die Teile einer Lage als ein Lauf.
+fn parts_joined(parts: &[&Run], shift: u32) -> Result<Run, String> {
+    let Some(first) = parts.first() else { return Err(format!("Lage {shift}: kein Teil")) };
+    let of = first.part.of;
+    if parts.iter().any(|r| r.part.of != of) {
+        return Err(format!("Lage {shift}: Teile verschiedener Teilungen des Messprogramms"));
+    }
+    for index in 1..=of {
+        match parts.iter().filter(|r| r.part.index == index).count() {
+            1 => {}
+            0 => return Err(format!("Lage {shift}: Teil {index} von {of} fehlt im Protokoll")),
+            _ => return Err(format!("Lage {shift}: Teil {index} von {of} steht mehrfach im Protokoll")),
+        }
+    }
+    let mut out = Run { part: Part::WHOLE, ..(*first).clone() };
+    for run in parts.iter().skip(1) {
+        if run.suite != out.suite || run.core_hz != out.core_hz {
+            return Err(format!(
+                "Lage {shift}: die Teile passen nicht zusammen: Kennung {} bei {} Hz gegen {} bei {} Hz",
+                out.suite, out.core_hz, run.suite, run.core_hz
+            ));
+        }
+        out.overhead = joined(&out.overhead, &run.overhead, "overhead")?;
+        for (map, theirs) in [(&mut out.takt, &run.takt), (&mut out.c, &run.c), (&mut out.entries, &run.entries)] {
+            for (name, series) in theirs {
+                if map.insert(name.clone(), *series).is_some() {
+                    return Err(format!("Lage {shift}: `{name}` steht in zwei Teilen"));
+                }
+            }
+        }
+        for m in &run.math {
+            if out.math.iter().any(|o| o.index == m.index) {
+                return Err(format!("Lage {shift}: Vektor {} der Mathematik steht in zwei Teilen", m.index));
+            }
+            out.math.push(m.clone());
+        }
+        out.subnormal = match (out.subnormal, run.subnormal) {
+            (Some(_), Some(_)) => return Err(format!("Lage {shift}: der Subnormal-Vektor steht in zwei Teilen")),
+            (ours, theirs) => ours.or(theirs),
+        };
+    }
+    Ok(out)
+}
+
 /// Zwei Reihen desselben Kerns als eine.
 fn joined(a: &Series, b: &Series, name: &str) -> Result<Series, String> {
     if a.digest != b.digest {
@@ -270,5 +348,55 @@ mod tests {
         assert!(runs(&LOG.replace("takt end", "")).is_err(), "ohne Ende");
         assert!(runs(&LOG.replace("bench overhead min 6 mean 6 max 9 n 200 digest 0\r\n", "")).is_err());
         assert_eq!(runs("takt end\nbench takt x\n").expect("ausserhalb eines Laufs"), Vec::new());
+        assert!(runs(&LOG.replace("bench shift 8", "bench part 3 2")).is_err(), "Teil 3 von 2");
+    }
+
+    /// Zwei Teile einer Lage (FB-740): `pid` im ersten, die Mathematik im
+    /// zweiten. Ohne `bench part` ist ein Lauf das ganze Messprogramm.
+    fn two_parts() -> [Run; 2] {
+        let first = LOG.replace("bench shift 8", "bench part 1 2\r\nbench shift 8");
+        let first = first
+            .lines()
+            .filter(|l| !l.starts_with("bench entry") && !l.starts_with("math ") && !l.starts_with("bench subnormal"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let second = LOG
+            .replace("bench shift 8", "bench part 2 2\r\nbench shift 8")
+            .replace("bench overhead min 6 mean 6 max 9", "bench overhead min 7 mean 7 max 7");
+        let second = second.lines().filter(|l| !l.contains(" pid ")).collect::<Vec<_>>().join("\n");
+        [runs(&first).expect("Teil 1").remove(0), runs(&second).expect("Teil 2").remove(0)]
+    }
+
+    /// Die Teile einer Lage werden ein Lauf: jeder Kern, die Mathematik und
+    /// der Subnormal-Vektor aus seinem Teil; jeder Teil mit seinem eigenen
+    /// Messaufwand.
+    #[test]
+    fn the_parts_of_a_placement_combine() {
+        assert_eq!(runs(LOG).expect("lesbar")[0].part, Part::WHOLE);
+        let [a, b] = two_parts();
+        assert_eq!((a.part, b.part), (Part { index: 1, of: 2 }, Part { index: 2, of: 2 }));
+        assert_eq!((a.subnormal, b.subnormal), (None, Some(0)));
+        let combined = combine(&[a.without_overhead(), b.without_overhead()]).expect("passt");
+        let [run] = combined.as_slice() else { panic!("eine Lage: {combined:?}") };
+        assert_eq!((run.part, run.shift, run.subnormal), (Part::WHOLE, 8, Some(0)));
+        assert_eq!(run.takt["pid"].max, 744, "der Messaufwand des ersten Teils");
+        assert_eq!((run.entries["f64"].min, run.math[0].cycles), (9493, 4173), "der des zweiten");
+        assert_eq!(run.overhead.n, 400);
+    }
+
+    /// Fehlt ein Teil, steht er doppelt oder ein Kern in zwei Teilen, gilt
+    /// das Protokoll nicht.
+    #[test]
+    fn a_missing_or_doubled_part_is_refused() {
+        let [a, b] = two_parts();
+        let e = combine(std::slice::from_ref(&a)).expect_err("Teil 2 fehlt");
+        assert!(e.contains("Teil 2 von 2 fehlt"), "{e}");
+        assert!(combine(&[a.clone(), a.clone(), b.clone()]).is_err(), "Teil 1 doppelt");
+        let mut both = b.clone();
+        both.takt.insert("pid".into(), a.takt["pid"]);
+        let e = combine(&[a.clone(), both]).expect_err("pid in zwei Teilen");
+        assert!(e.contains("`pid` steht in zwei Teilen"), "{e}");
+        let whole = Run { part: Part::WHOLE, ..b };
+        assert!(combine(&[a, whole]).is_err(), "Teile verschiedener Teilungen");
     }
 }

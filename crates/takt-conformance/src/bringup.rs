@@ -250,6 +250,18 @@ pub fn takt() -> PathBuf {
 /// Die Umgebungsvariable, die das Werkzeug ausdruecklich nennt ([`takt`]).
 pub const TOOL: &str = "TAKT_TOOL";
 
+/// Die Umgebungsvariable, die den Teil des Messprogramms nennt, den ein Bau
+/// von `takt bench` bindet ([`bench_part`]).
+pub const BENCH_PART: &str = "TAKT_BENCH_PART";
+
+/// Der Teil des Messprogramms (`I/N`, FB-740), den das Bauskript eines
+/// Bring-ups an `takt bench --emit embed --part` weitergibt; ohne die Variable
+/// das ganze. Pruefen tut ihn das Werkzeug.
+pub fn bench_part() -> Option<String> {
+    println!("cargo:rerun-if-env-changed={BENCH_PART}");
+    env::var(BENCH_PART).ok()
+}
+
 /// Wie das Werkzeug fuer `profile` entsteht; `dev` und `debug` sind Cargos Vorgabe.
 fn build_command(profile: &str) -> String {
     if profile == "release" { "cargo build -p takt-cli --release".into() } else { "cargo build -p takt-cli".into() }

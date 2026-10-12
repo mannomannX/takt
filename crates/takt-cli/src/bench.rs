@@ -1,7 +1,7 @@
 //! `takt bench` (13.8): die Kostentabelle eines Ziels, gemessen.
 //!
 //! ```text
-//! takt bench --emit embed --target ZIEL [--hardware DATEI.hw] --out VERZEICHNIS
+//! takt bench --emit embed --target ZIEL [--hardware DATEI.hw] [--part I/N] --out VERZEICHNIS
 //! takt bench --import LOG… --target ZIEL [--loop LOG] [--load LOG…] [--natives LOG]
 //!            [--board NAME] [--hardware DATEI.hw] [--conformance DATEI]
 //! takt bench --board stm32f401|esp32c6 [--runs N] [--logs VERZEICHNIS]
@@ -17,13 +17,15 @@
 //! Protokolle unter `--logs`. `--hardware` traegt die Messwerte in die
 //! Konfiguration ein, ohne ihre Kommentare zu verwerfen; `--conformance`
 //! schreibt den Konformitaetsbericht daneben, die Quelle der Zahlen (13.8).
+//! `--part I/N` baut nur einen Teil des Messprogramms, fuer einen Wirt, in
+//! den das ganze nicht passt (FB-740); `--import` fuehrt die Teile zusammen.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use takt_conformance::bench::library::{self, NAME};
-use takt_conformance::bench::{self as suite, Kernel, Logs, Outcome, Role};
+use takt_conformance::bench::library::{self, Contents, NAME};
+use takt_conformance::bench::{self as suite, Kernel, Logs, Outcome, Part, Role};
 use takt_llvm::Target;
 use takt_llvm::symbols::Prefix;
 
@@ -62,9 +64,16 @@ fn emit_embed(args: &Args) -> bool {
     } else {
         None
     };
-    match build_library(target, &triple, hw.as_ref(), Path::new(out)) {
+    let part = match args.value("--part").map_or(Ok(Part::WHOLE), Part::parse) {
+        Ok(part) => part,
+        Err(e) => {
+            eprintln!("--part: {e}");
+            return false;
+        }
+    };
+    match build_library(target, &triple, hw.as_ref(), part, Path::new(out)) {
         Ok(steps) => {
-            println!("{out}: `{NAME}` fuer {triple}, {steps} Schritte");
+            println!("{out}: `{NAME}` fuer {triple}, Teil {part}, {steps} Schritte");
             true
         }
         Err(e) => {
@@ -85,18 +94,22 @@ fn target_of(name: &str) -> Result<(Target, String), String> {
 /// Die Objekte eines Kerns nach seiner Stellung in der Suite.
 type Built = (usize, Result<Vec<PathBuf>, String>);
 
-/// Baut Kerne, C-Referenzen und Laeufer nach `out` und bindet sie zu einer
-/// Bibliothek, mit Kopf, Modul, Manifest und unter `xip_flash` den
-/// Fragmenten fuer den Linker. Liefert die Zahl der Schritte.
+/// Baut die Kerne von `part`, ihre C-Referenzen und den Laeufer nach `out`
+/// und bindet sie zu einer Bibliothek, mit Kopf, Modul, Manifest und unter
+/// `xip_flash` den Fragmenten fuer den Linker. Die Kennung gilt dem ganzen
+/// Messprogramm. Liefert die Zahl der Schritte.
 fn build_library(
     target: Target,
     triple: &str,
     hw: Option<&takt_mir::hardware::Hardware>,
+    part: Part,
     out: &Path,
 ) -> Result<usize, String> {
-    let kernels = suite::suite();
     let vectors = suite::math_vectors()?;
-    let id = suite::suite_id(&kernels, &vectors);
+    let id = suite::suite_id(&suite::suite(), &vectors);
+    let selection = suite::selection(part);
+    let kernels = selection.kernels;
+    let contents = Contents { kernels: &kernels, math: selection.math.then_some(vectors.as_slice()), part };
     let src = out.join("src");
     std::fs::create_dir_all(&src).map_err(|e| format!("{}: {e}", src.display()))?;
     let march = if target.march.is_empty() { None } else { Some(format!("-march={}", target.march)) };
@@ -132,8 +145,8 @@ fn build_library(
     }
 
     let runner = src.join(format!("{NAME}.c"));
-    write(&src.join(format!("{NAME}.h")), &library::header(&kernels, &id))?;
-    write(&runner, &library::runner(&kernels, &vectors))?;
+    write(&src.join(format!("{NAME}.h")), &library::header(&contents, &id))?;
+    write(&runner, &library::runner(&contents))?;
     let runner_obj = src.join(format!("{NAME}.o"));
     let include = format!("-I{}", src.display());
     let runner_flags: Vec<&str> = flags.iter().map(String::as_str).chain([include.as_str()]).collect();
@@ -144,8 +157,8 @@ fn build_library(
     let lib = out.join(if triple.ends_with("-msvc") { format!("{NAME}.lib") } else { format!("lib{NAME}.a") });
     let refs: Vec<&Path> = objects.iter().map(PathBuf::as_path).collect();
     crate::embed::archive(&lib, &refs)?;
-    write(&out.join(format!("{NAME}.h")), &library::header(&kernels, &id))?;
-    write(&out.join(format!("{NAME}.rs")), &library::rust_module(&kernels, &id))?;
+    write(&out.join(format!("{NAME}.h")), &library::header(&contents, &id))?;
+    write(&out.join(format!("{NAME}.rs")), &library::rust_module(&contents, &id))?;
     // 12.3: Unter `xip_flash` misst der Kern aus dem RAM, wie das Programm
     // spaeter laeuft; aus dem Flash maesse er den Cache mit.
     let xip = hw.and_then(|hw| hw.target(target.name)).is_some_and(|t| t.memory.iram.is_some());
@@ -153,8 +166,8 @@ fn build_library(
         write(&out.join(format!("{NAME}_ram.x")), &takt_frame::linker::bench_ld_fragment())?;
         write(&out.join(format!("{NAME}.lf")), &takt_frame::linker::bench_ldgen_fragment())?;
     }
-    write(&out.join(format!("{NAME}.manifest")), &library::manifest(&kernels, &id, target.name, triple, xip))?;
-    Ok(library::steps(&kernels))
+    write(&out.join(format!("{NAME}.manifest")), &library::manifest(&contents, &id, target.name, triple, xip))?;
+    Ok(contents.steps())
 }
 
 /// Die Objekte eines Kerns: erzeugter Code, Rahmen und, bei einem
@@ -265,7 +278,7 @@ fn on_board(args: &Args) -> bool {
         }
     };
     if let Some(dir) = args.value("--logs")
-        && let Err(e) = keep(&logs, Path::new(dir), board.placements())
+        && let Err(e) = keep(&logs, Path::new(dir))
     {
         eprintln!("{dir}: {e}");
         return false;
@@ -279,11 +292,18 @@ fn on_board(args: &Args) -> bool {
     }
 }
 
-/// Die Protokolle eines Laufs, je Lage eines, fuer einen spaeteren Import.
-fn keep(logs: &Logs, dir: &Path, placements: &[u32]) -> Result<(), String> {
+/// Die Protokolle eines Laufs, je Lage und Teil eines, fuer einen spaeteren
+/// Import: `bench-<lage>.log`, geteilt `bench-<lage>-<teil>.log`.
+fn keep(logs: &Logs, dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    for (text, shift) in logs.bench.iter().zip(placements) {
-        write(&dir.join(format!("bench-{shift}.log")), text)?;
+    for (i, text) in logs.bench.iter().enumerate() {
+        let run = suite::log::runs(text)?.into_iter().next();
+        let name = match run.map(|r| (r.shift, r.part)) {
+            Some((shift, part)) if part.of > 1 => format!("bench-{shift}-{}.log", part.index),
+            Some((shift, _)) => format!("bench-{shift}.log"),
+            None => format!("bench-{}.log", i + 1),
+        };
+        write(&dir.join(name), text)?;
     }
     for (name, text) in [("loop.log", &logs.looped), ("natives.log", &logs.natives)] {
         if let Some(text) = text {

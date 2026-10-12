@@ -80,10 +80,16 @@ fn form() -> &'static str {
     named
 }
 
-/// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`.
+/// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`, ganz
+/// oder in Teilen (`TAKT_BENCH_PART`, FB-740).
 fn bench() -> Option<takt_embed::build::Built> {
-    env::var_os("CARGO_FEATURE_BENCH")
-        .map(|_| takt_embed::build::Bench::new().tool(bringup::takt()).hardware(hardware()).build())
+    env::var_os("CARGO_FEATURE_BENCH").map(|_| {
+        let mut bench = takt_embed::build::Bench::new().tool(bringup::takt()).hardware(hardware());
+        if let Some(part) = bringup::bench_part() {
+            bench = bench.part(part);
+        }
+        bench.build()
+    })
 }
 
 /// Legt den Tick-Pfad ins RAM (12.3): das Fragment der Lieferform
