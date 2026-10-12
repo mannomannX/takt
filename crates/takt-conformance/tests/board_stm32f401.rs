@@ -380,9 +380,27 @@ fn every_port_passes_the_port_test() {
 fn the_zephyr_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(takt_conformance::port::TICKS).judged();
-    let run = zephyr_image(board.name(), takt_conformance::zephyr::STM32F401)
+    let example = takt_conformance::zephyr::ZEPHYR;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), run));
+    verdict(&zephyr_verdict(board.name(), example, true, run));
+}
+
+/// **Der CMSIS-RTOS2-Port besteht die Portpruefung auf dem F401** (12.11,
+/// 13.8; M11 Schritt 19c): `examples/cmsis-rtos2` faehrt das Pruefprogramm
+/// ueber den Port mit Faeden und seinen generischen Adapter auf CMSIS-RTOS2,
+/// unter Zephyrs CMSIS-Schicht; Leitung, Lage und Rueckgabe des Boards wie
+/// beim Zephyr-Port. Braucht ausser dem Board Zephyr (`TAKT_WEST` und die
+/// Umgebung aus `D:\takt-tools\activate.ps1`) und `<target>/release/takt`.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_cmsis_rtos2_port_passes_the_port_test() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(takt_conformance::port::TICKS).judged();
+    let example = takt_conformance::zephyr::CMSIS_RTOS2;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401)
+        .and_then(|image| board.run(&image.elf, &options));
+    verdict(&zephyr_verdict(board.name(), example, false, run));
 }
 
 /// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,

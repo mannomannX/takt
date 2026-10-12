@@ -86,7 +86,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | frei |
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt, der Watchdog als Dienst (Fassung 2 des SDK, 33f64ed1), Tunables und Weckereignis (3e1460c0), die Vorlage `c-port` als Adapter des gemeinsamen Ports mit Fäden (`ports/rtos`); 18b (Interruptform in C auf dem F401) Strang G (Helfer, seit 2026-10-12, Zweig `g-18b-c-irq`) |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | Strang D (Helfer, seit 2026-10-12, Zweig `d-9-one-frame`) |
-| 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards, gemergt cea0c88c; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`). 19b: Partition umgesetzt bis auf den Board-Lauf, Format des Devicetree-Adapters in der Referenz (FB-734); der Erzeuger `P_zephyr.c` nach Schritt 9 (Strang D) |
+| 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards, gemergt cea0c88c; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`). 19b: Partition umgesetzt bis auf den Board-Lauf, Format des Devicetree-Adapters in der Referenz (FB-734), gemergt 9f0673d1; der Erzeuger `P_zephyr.c` nach Schritt 9 (Strang D). 19c: Vertrag `takt_os.h` erweitert (60aa91d0), Adapter `ports/cmsis-rtos2` und `examples/cmsis-rtos2` bauen für den F401; Portprüfung am Board offen |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G nach 18b, als Adapter `ports/freertos` hinter `ports/rtos/takt_os.h` auf dem C-Wirt aus 18b |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
@@ -544,6 +544,32 @@ So arbeitet jeder Strang, als wäre er allein:
     Erzeuger nur mit `--zephyr`. UART mit dem Ring aus Schritt 22, ADC
     nach einer Entscheidung über die Skalierung (FB-735). Der Erzeuger
     `P_zephyr.c` folgt nach Schritt 9 (Strang D berührt dieselben Dateien).
+- **Stand 19c (Strang F, 2026-10-12):**
+  - **Vertrag** (60aa91d0, mit der Koordination abgestimmt): `takt_os_now`
+    ohne `const`; nur der Schrittfaden ruft `now` und `take` mit Frist, ein
+    Adapter erweitert eine 32-Bit-Uhr ohne Atomik und wartet ferne Fristen
+    in Stücken unter dem halben Umlauf. Malen und Messen sind Primitive des
+    Adapters (`takt_os_paint` vor dem Anlegen, `takt_os_depth` nach dem Ende
+    und vor `join`, Fehler statt Zahl, wenn er nicht messen kann); die
+    Vorgabe `takt_rtos_paint`/`takt_rtos_depth` rufen POSIX, Zephyr und die
+    Vorlage. Der Schrittfaden wartet am Ende auf die Endmeldung des
+    Jobfadens; `takt_rtos_join` misst erst, dann wartet es ab, und lehnt ab,
+    solange der Schrittfaden läuft. Katalog des C-Teils unverändert.
+  - **Adapter** `ports/cmsis-rtos2`: ein binäres `osSemaphore` je Ereignis
+    (die Thread-Flags rundet Zephyrs Schicht auf Millisekunden ab, FB-736),
+    die Uhr aus `osKernelGetTickCount` auf 64 Bit erweitert, Fristen
+    aufgerundet in Ticks, Fäden mit `osThreadNew` (joinable, Stack des
+    Wirts, Priorität von Takt gleich `osPriority_t`, 0 `osPriorityNormal`),
+    Ende mit `osThreadExit`, Messung mit `osThreadGetStackSpace` (Tiefe
+    `bytes` minus frei). Ein schon beendeter Faden gilt als abgewartet
+    (Zephyrs `osThreadJoin` lehnt ihn ab, FB-736).
+  - **Modul:** `CONFIG_TAKT_PORT` wählt den Adapter (`TAKT_PORT_ZEPHYR` mit
+    `!INIT_STACKS`, `TAKT_PORT_CMSIS_RTOS2` mit `CMSIS_RTOS_V2`).
+  - **Beispiel** `examples/cmsis-rtos2` (F401): Leitung und Rückgabe aus
+    `examples/zephyr`, Stacks `K_THREAD_STACK_DEFINE` mit
+    `K_THREAD_STACK_SIZEOF`, ohne Partition. `zephyr_example.rs` baut es
+    (`the_cmsis_rtos2_example_builds_for_the_f401`), der Board-Test
+    `the_cmsis_rtos2_port_passes_the_port_test` fährt die Portprüfung.
 
 ### 15, 16, 18, 9, 19 bis 23
 

@@ -1,6 +1,8 @@
-//! Takt unter Zephyr (12.11, M11 Schritt 19): `examples/zephyr` mit `west
-//! build` fuer ein Board, das Pruefprogramm ueber `takt_add_program` aus dem
-//! Modul (`zephyr/` an der Wurzel) und mit dem SDK-Archiv seines Ziels.
+//! Takt unter Zephyr (12.11, M11 Schritt 19): ein Beispiel ([`ZEPHYR`] mit
+//! dem Adapter auf den Faeden des Zephyr-Kerns, [`CMSIS_RTOS2`] mit dem auf
+//! CMSIS-RTOS2) mit `west build` fuer ein Board, das Pruefprogramm ueber
+//! `takt_add_program` aus dem Modul (`zephyr/` an der Wurzel) und mit dem
+//! SDK-Archiv seines Ziels.
 //!
 //! **Die Werkzeuge liegen ausserhalb des Baums** (plan/m11.md 6: Zephyr und
 //! sein SDK sind gross): `TAKT_WEST` nennt `west`, und die Umgebung traegt,
@@ -52,17 +54,25 @@ impl Image {
     }
 }
 
-/// Baut `examples/zephyr` fuer `board` in `dir`, mit dem Werkzeug `takt`
+/// Das Beispiel mit dem Adapter auf den Faeden des Zephyr-Kerns, auf beiden
+/// Boards (`examples/zephyr`).
+pub const ZEPHYR: &str = "zephyr";
+
+/// Das Beispiel mit dem Adapter auf CMSIS-RTOS2 unter Zephyrs CMSIS-Schicht,
+/// auf dem F401 (`examples/cmsis-rtos2`, M11 Schritt 19c).
+pub const CMSIS_RTOS2: &str = "cmsis-rtos2";
+
+/// Baut `examples/<example>` fuer `board` in `dir`, mit dem Werkzeug `takt`
 /// und dem SDK-Archiv fuer das Tripel des Boards. Mit zwei Jobs: Ein
 /// Zephyr-Bau ist klein, und der Rechner neben ihm baut oft Rust.
-pub fn build(west: &Path, board: Board, dir: &Path, takt: &Path) -> Result<Image, String> {
+pub fn build(west: &Path, example: &str, board: Board, dir: &Path, takt: &Path) -> Result<Image, String> {
     let sdk = crate::harness::sdk_library_for(Some(board.triple))?;
     // CMake liest `\` in einem Pfad als Escape.
     let cmake_path = |p: &Path| p.display().to_string().replace('\\', "/");
     let out = Command::new(west)
         .args(["build", "--pristine", "always", "--board", board.west, "--build-dir"])
         .arg(dir)
-        .arg(crate::repo_root().join("examples").join("zephyr"))
+        .arg(crate::repo_root().join("examples").join(example))
         .arg("-o=-j2")
         .arg("--")
         .arg(format!("-DTAKT_EXECUTABLE={}", cmake_path(takt)))
@@ -71,7 +81,7 @@ pub fn build(west: &Path, board: Board, dir: &Path, takt: &Path) -> Result<Image
         .map_err(|e| format!("{}: {e}", west.display()))?;
     if !out.status.success() {
         return Err(format!(
-            "west build fuer {}:\n{}{}",
+            "west build von examples/{example} fuer {}:\n{}{}",
             board.west,
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)

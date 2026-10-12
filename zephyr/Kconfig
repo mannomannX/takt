@@ -2,26 +2,46 @@
 
 menuconfig TAKT
 	bool "Takt"
-	depends on TIMEOUT_64BIT
-	depends on !INIT_STACKS && !STACK_SENTINEL
 	select FPU_SHARING if FPU
 	help
 	  Takt-Programme als Bausteine der Anwendung (12.11): `takt_add_program`
 	  in ihrer CMakeLists.txt baut ein Programm in der Form `rtos` fuer
-	  dieses Ziel, und der Port mit Faeden (`ports/rtos` mit dem Adapter
-	  `ports/zephyr`) faehrt es in einem Schritt- und einem Jobfaden. Uhr
-	  und Fristen rechnen in Systemticks; ist die Tickperiode eines
-	  Programms ein Vielfaches des Systemticks, kommt jeder Schritt auf
-	  seiner Frist. Mit einer FPU sichert der Zephyr-Kern die FPU-Register
-	  jedes Fadens (12.11, Portvertrag 2).
+	  dieses Ziel, und der Port mit Faeden (`ports/rtos`) faehrt es in einem
+	  Schritt- und einem Jobfaden, ueber den Adapter, den `TAKT_PORT`
+	  waehlt. Mit einer FPU sichert der Zephyr-Kern die FPU-Register jedes
+	  Fadens (12.11, Portvertrag 2).
+
+if TAKT
+
+choice TAKT_PORT
+	prompt "Adapter des Ports mit Faeden"
+	default TAKT_PORT_ZEPHYR
+
+config TAKT_PORT_ZEPHYR
+	bool "Faeden des Zephyr-Kerns (ports/zephyr)"
+	depends on TIMEOUT_64BIT
+	depends on !INIT_STACKS && !STACK_SENTINEL
+	help
+	  Der Adapter auf den Faeden, Semaphoren und Zeitgebern des
+	  Zephyr-Kerns. Uhr und Fristen rechnen in Systemticks; ist die
+	  Tickperiode eines Programms ein Vielfaches des Systemticks, kommt
+	  jeder Schritt auf seiner Frist.
 
 	  Die Stacks beider Faeden bemalt der Port vor dem Start mit seiner
 	  Farbe und misst nach dem Ende, wie tief sie reichten (12.3).
 	  `INIT_STACKS` und `STACK_SENTINEL` beschrieben sie beim Anlegen des
 	  Fadens neu, die Farbe des Ports waere fort und jeder Stack voll;
-	  darum ist TAKT mit einem von beiden nicht waehlbar.
+	  darum ist dieser Adapter mit einem von beiden nicht waehlbar.
 
-if TAKT
+config TAKT_PORT_CMSIS_RTOS2
+	bool "CMSIS-RTOS2 (ports/cmsis-rtos2)"
+	depends on CMSIS_RTOS_V2
+	help
+	  Der generische Adapter auf CMSIS-RTOS2, hier ueber Zephyrs
+	  CMSIS-Schicht: binaere Semaphore, die Uhr aus dem Tickzaehler,
+	  die Stacks misst die Implementierung (`osThreadGetStackSpace`).
+
+endchoice
 
 config TAKT_TARGET
 	string "Tripel des Ziels"
@@ -36,6 +56,7 @@ config TAKT_TARGET
 
 config TAKT_STEP_PRIORITY
 	int "Prioritaet des Schrittfadens unter den kooperativen"
+	depends on TAKT_PORT_ZEPHYR
 	default 0
 	help
 	  Der Schrittfaden ist kooperativ, `K_PRIO_COOP(n)`: Kein Faden
@@ -47,6 +68,7 @@ config TAKT_STEP_PRIORITY
 
 config TAKT_JOB_PRIORITY
 	int "Prioritaet des Jobfadens unter den verdraengbaren"
+	depends on TAKT_PORT_ZEPHYR
 	default 0
 	help
 	  Der Jobfaden ist verdraengbar, `K_PRIO_PREEMPT(n)`, damit der Schritt
