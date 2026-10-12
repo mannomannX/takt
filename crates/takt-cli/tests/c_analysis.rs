@@ -379,7 +379,8 @@ fn a_planted_cert_c_violation_is_caught() {
 /// aus MISRA C:2012 oder CERT C, ein Befund des MISRA-Addons seine eigene;
 /// von einer Regel der Kategorie Mandatory weicht nichts ab, dort steht nur
 /// eine Fehlmeldung des Werkzeugs. Jede ausgeschaltete Pruefung steht im
-/// Aufruf von clang-tidy und umgekehrt.
+/// Aufruf eines Werkzeugs (`-pruefung` bei clang-tidy, `--suppress=` bei
+/// cppcheck) und umgekehrt.
 #[test]
 fn every_deviation_of_the_c_part_names_its_rule() {
     let catalog = catalog();
@@ -399,7 +400,9 @@ fn every_deviation_of_the_c_part_names_its_rule() {
         assert!(d.count > 0 && !d.reason.is_empty(), "{id} ({part}): Zahl und Grund");
     }
     let checks = catalog.tidy.args.iter().find_map(|a| a.strip_prefix("--checks=")).expect("--checks=");
-    let off: BTreeSet<&str> = checks.split(',').filter_map(|c| c.strip_prefix('-')).filter(|c| *c != "*").collect();
+    let suppressed = catalog.cppcheck.args.iter().filter_map(|a| a.strip_prefix("--suppress="));
+    let off: BTreeSet<&str> =
+        checks.split(',').filter_map(|c| c.strip_prefix('-')).filter(|c| *c != "*").chain(suppressed).collect();
     assert_eq!(off, catalog.off.keys().map(String::as_str).collect(), "ausgeschaltet im Aufruf und in der Tabelle");
     for (check, rule) in &catalog.off {
         assert!(rule == "—" || rule_ok(rule), "{check}: `{rule}`");

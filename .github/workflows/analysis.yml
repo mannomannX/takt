@@ -29,9 +29,11 @@ jobs:
       # cppcheck 2.22.0 aus den Quellen des Projekts, wie LLVM mit
       # Pruefsumme: Die Zahlen im Katalog haengen an der Fassung. Das
       # MISRA-Addon laeuft ohne die Regeltexte und nennt nur die Nummern.
+      # Gesichert gleich nach dem Bau, nicht erst am Ende eines Jobs, der
+      # an einem Befund scheitern darf.
       - name: cppcheck 2.22.0 aus dem Cache
         id: cppcheck
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/cppcheck-2.22.0
           key: cppcheck-2.22.0-linux-x64-1
@@ -50,6 +52,13 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$dest" -DFILESDIR="$dest/share/Cppcheck"
           cmake --build cppcheck-build -j "$(nproc)"
           cmake --install cppcheck-build
+
+      - name: cppcheck 2.22.0 in den Cache
+        if: steps.cppcheck.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/cppcheck-2.22.0
+          key: cppcheck-2.22.0-linux-x64-1
 
       - name: cppcheck einrichten
         shell: bash

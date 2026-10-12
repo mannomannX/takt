@@ -292,6 +292,116 @@ im Katalog:
 | 21.6.2 | C5 | Sprache: Besitz und `Drop` |
 | 22.3.1 | C5 | Review: `const _: () = assert!(…)` für Konstanten |
 
+### Der C-Teil (M11 Schritt 33b)
+
+Der C-Teil ist, was ein C-Wirt übersetzt: der Rahmen, den `takt build
+--emit embed` je Programm schreibt (`P_frame.c`, `P_ops.c`, `P.h`; erzeugt
+von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der POSIX-Port
+(`crates/takt-embed-c/ports/posix`) und die Beispiele
+(`examples/c-host/main.c`, `examples/posix/main.c`). Für ihn gelten CERT C
+und MISRA C:2012 unmittelbar (FB-524).
+
+`crates/takt-cli/tests/c_analysis.rs` erzeugt den Rahmen für drei
+Programme — `examples/c-host/takt/valve.takt` mit dem Beispiel `c-host`,
+`corpus-try/124_port_test.takt` mit dem Port und dem Beispiel `posix`,
+`corpus-try/05_streams_and_protocol.takt` für Ströme, Records und den
+Rand — und prüft jede Bindung, also die Quellen eines Programms des Wirts,
+mit beiden Werkzeugen. Der Test liest Aufruf und Abweichungen aus diesem
+Abschnitt; er läuft unter Linux (die Kopfdateien von POSIX), auf CI in
+`.github/workflows/analysis.yml` bei jedem Push.
+
+| Werkzeug | Fassung | Aufruf |
+|---|---|---|
+| clang-tidy | LLVM 22.1.8 | `--checks=-*,cert-*,bugprone-*,clang-analyzer-*,concurrency-*,misc-no-recursion,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-optin.performance.Padding` |
+| cppcheck | 2.22.0 | `--enable=warning,style,performance,portability` `--addon=misra` `--library=posix` `--library=tools/c-analysis/takt.cfg` `--suppress=unusedStructMember` |
+
+Das MISRA-Addon von cppcheck prüft einen Teil von MISRA C:2012 und läuft
+ohne die Regeltexte: Es nennt nur die Nummer. `tools/c-analysis/takt.cfg`
+macht ihm die Builtins des Rahmens (`__atomic_*`, `__builtin_ia32_*`) und
+die POSIX-Namen bekannt, die `posix.cfg` nicht führt; ohne sie wäre jeder
+Aufruf eine Funktion ohne Deklaration (17.3). Volle Konformität zu MISRA C
+verlangt einen qualifizierten Prüfer; das entscheidet die Zertifizierung.
+
+**Ausgeschaltet.** Prüfungen, die keine Regel tragen oder etwas verlangen,
+das es im C-Teil nicht gibt:
+
+| Ausgeschaltet | Regel | Grund |
+|---|---|---|
+| `bugprone-easily-swappable-parameters` | — | eine Heuristik ohne Regel aus CERT C oder MISRA C; die Parameter der Einstiege und Treiber legt die C-ABI fest (`takt_sdk.h`, `P.h`) |
+| `clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling` | CERT C MSC24-C | verlangt die Funktionen aus Anhang K von C11 (`memcpy_s`, `fprintf_s`); Anhang K ist optional und fehlt in glibc wie in jeder freistehenden Umgebung des Rahmens. MSC24-C ist eine Empfehlung; die Längen prüft der Code selbst |
+| `clang-analyzer-optin.performance.Padding` | — | Die Lage der Strukturen gibt `takt-hal` vor, der Rahmen hält sie mit `_Static_assert` je Feld; Umordnen hieße die ABI ändern |
+| `unusedStructMember` | — | keine Regel; die Typen des Randes teilt der Rahmen mit `takt-hal`, und ein Feld, das ein Programm nicht liest, liest die Bibliothek |
+
+**Der Rahmen ist erzeugter Code.** Er entsteht je Programm aus derselben
+Quelle in `takt-frame`, niemand bearbeitet ihn, und er läuft gegen den
+Interpreter (Satz 9.4.4: `tests/differential.rs`, die Board-Suiten). Regeln,
+die gegen Fehler beim Schreiben und Ändern von Hand schützen — Form,
+Klammern, ein Ausgang je Funktion —, hält für ihn der Generator; so sieht
+MISRA automatisch erzeugten Code (MISRA AC AGC). Was ein Werkzeug als
+Fehler im Ablauf meldet, ist behoben: `memcpy` statt Zeiger-Casts im Trace
+(CERT C EXP39-C), kein ungelesenes `now`, `NULL` statt `0`, ausdrücklich
+breite Multiplikationen vor einem Versatz.
+
+**Abweichungen.** Jeder Befund steht hier mit Teil und genauer Zahl;
+`tests/c_analysis.rs` verlangt genau diese Zahlen. Ein neuer Befund
+scheitert wie ein behobener, und die Zahl fällt nur. Der Grund einer
+Fehlmeldung beginnt mit „Fehlmeldung“; von einer Regel der Kategorie
+Mandatory (M) weicht nichts ab.
+
+| Befund | Teil | Zahl | Regel | Grund |
+|---|---|---|---|---|
+| `misra-c2012-1.4` | SDK | 1 | MISRA C:2012 1.4 (R) | `_Alignas(8)` am Speicher des Kerns: Das Archiv legt dort einen Rust-Typ mit Ausrichtung 8 ab; ohne die Angabe hinge sie an der ABI des Wirts |
+| `misra-c2012-2.5` | SDK | 17 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
+| `constParameterPointer` | Port | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: `pthread_attr_setstack` nimmt den Stack als `void *`, und der Faden schreibt hinein; `const` brauchte einen Cast, der es wieder entfernt (11.8) |
+| `misra-c2012-11.5` | Port | 3 | MISRA C:2012 11.5 (A) | `pthread_create` reicht den Port als `void *` an den Faden, der Wirt den Stack als `void *` (`takt_posix_config`) |
+| `misra-c2012-2.5` | Port | 1 | MISRA C:2012 2.5 (A) | `_POSIX_C_SOURCE` liest nur die C-Bibliothek: Es macht `clock_gettime` und `pthread_condattr_setclock` sichtbar |
+| `misra-c2012-21.1` | Port | 1 | MISRA C:2012 21.1 (R) | `#define _POSIX_C_SOURCE` wählt die Schnittstelle, wie POSIX es vorschreibt (Feature Test Macro); kein Bezeichner der Bibliothek ändert sich |
+| `misra-c2012-21.10` | Port | 1 | MISRA C:2012 21.10 (R) | Der Port ist die Uhr des Wirts: `CLOCK_MONOTONIC` und `struct timespec` aus `<time.h>`; Datum und Ortszeit benutzt er nicht |
+| `misra-c2012-1.4` | Beispiele | 2 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack |
+| `misra-c2012-11.5` | Beispiele | 4 | MISRA C:2012 11.5 (A) | Die Rückrufe der Leitung und der Treiber bekommen den Zeiger des Wirts als `void *` (`takt_sdk.h`); nur der Wirt weiß, was dahinter liegt |
+| `misra-c2012-17.3` | Beispiele | 1 | MISRA C:2012 17.3 (M) | Fehlmeldung: `fcntl` ist in `<fcntl.h>` deklariert; `posix.cfg` kennt die Form mit drei Argumenten nicht |
+| `misra-c2012-21.1` | Beispiele | 1 | MISRA C:2012 21.1 (R) | wie im Port: `_POSIX_C_SOURCE` |
+| `misra-c2012-21.6` | Beispiele | 9 | MISRA C:2012 21.6 (R) | Ein Wirt auf dem Rechner schreibt den Trace nach stdout und Fehler nach stderr; auf einem Ziel ist die Leitung ein UART (`struct takt_line`). Die Ein- und Ausgabe gehört zum Beispiel, nicht zum SDK |
+| `clang-analyzer-security.ArrayBound` | Rahmen | 1 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |
+| `constParameterPointer` | Rahmen | 49 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
+| `knownConditionTrueFalse` | Rahmen | 8 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |
+| `misc-no-recursion` | Rahmen | 6 | MISRA C:2012 17.2 (R) | `takt_dump_field` und `takt_dump_fields` steigen nur im Trace in die Felder eines Records ab; die Tiefe ist die Schachtelung der Typen des Programms, eine Konstante, und der Stack des Ticks ist gemessen (12.3) |
+| `misra-c2012-1.4` | Rahmen | 61 | MISRA C:2012 1.4 (R) | `_Alignas` und `_Alignof`: Arena und Puffer des Randes liegen ausgerichtet, wie der erzeugte LLVM-Code sie liest (12.11) |
+| `misra-c2012-10.1` | Rahmen | 9 | MISRA C:2012 10.1 (R) | Das Modell der wesentlichen Typen: Der Rahmen rechnet in den Typen des erzeugten Codes und mischt sie, wo Takt es festlegt; was herauskommt, prüft der Vergleich mit dem Interpreter bitgleich (Satz 9.4.4) |
+| `misra-c2012-10.4` | Rahmen | 321 | MISRA C:2012 10.4 (R) | wie 10.1 |
+| `misra-c2012-10.7` | Rahmen | 6 | MISRA C:2012 10.7 (R) | wie 10.1 |
+| `misra-c2012-10.8` | Rahmen | 11 | MISRA C:2012 10.8 (R) | wie 10.1 |
+| `misra-c2012-11.3` | Rahmen | 7 | MISRA C:2012 11.3 (R) | Die Arena ist ein Byte-Feld mit festen Versätzen, die der erzeugte Code mit genau einem Typ je Versatz liest und schreibt; der Rahmen greift mit demselben Typ zu. Ohne `-fno-strict-aliasing` bleibt das gegen CERT C EXP39-C offen (FB-650) |
+| `misra-c2012-11.5` | Rahmen | 69 | MISRA C:2012 11.5 (A) | Arena und Treiberobjekt kommen als `void *` über die C-ABI (`takt_sdk.h`, `P_ops`) |
+| `misra-c2012-12.1` | Rahmen | 142 | MISRA C:2012 12.1 (A) | erzeugte Ausdrücke; den Vorrang legt der Generator fest, nicht ein Leser |
+| `misra-c2012-12.3` | Rahmen | 88 | MISRA C:2012 12.3 (A) | Deklarationen mehrerer Felder und Variablen in einer Zeile des erzeugten Texts |
+| `misra-c2012-13.3` | Rahmen | 8 | MISRA C:2012 13.3 (A) | `x++` in Vergleichen und Indizes der Ringe; erzeugt, nicht von Hand geändert |
+| `misra-c2012-14.4` | Rahmen | 70 | MISRA C:2012 14.4 (R) | Bedingungen auf Zählern und Zeigern (`if (k)`, `if (o->variants)`) im erzeugten Text |
+| `misra-c2012-15.5` | Rahmen | 237 | MISRA C:2012 15.5 (A) | früher Ausgang in erzeugten Funktionen; jeder Weg läuft gegen den Interpreter |
+| `misra-c2012-15.6` | Rahmen | 238 | MISRA C:2012 15.6 (R) | einzeilige Rümpfe im erzeugten Text; die Gefahr der Regel, eine später eingefügte Anweisung, besteht nur von Hand |
+| `misra-c2012-15.7` | Rahmen | 9 | MISRA C:2012 15.7 (R) | Ketten aus `if … else if` ohne `else`, wo der letzte Fall nichts tut |
+| `misra-c2012-16.6` | Rahmen | 10 | MISRA C:2012 16.6 (R) | Ein `switch` über die Kanäle eines Programms hat für ein Programm ohne solche Kanäle nur `default` |
+| `misra-c2012-17.3` | Rahmen | 27 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für die Gleitkomma-Umgebung (4.2), gekapselt in je zwei Funktionen (D.4.3) |
+| `misra-c2012-17.7` | Rahmen | 59 | MISRA C:2012 17.7 (R) | `memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
+| `misra-c2012-17.8` | Rahmen | 10 | MISRA C:2012 17.8 (A) | Parameter als Zähler in erzeugten Schleifen |
+| `misra-c2012-18.4` | Rahmen | 25 | MISRA C:2012 18.4 (A) | Zeiger in die Arena als Basis plus Versatz, die Versätze aus dem Layout (`takt-frame::layout`) |
+| `misra-c2012-2.2` | Rahmen | 20 | MISRA C:2012 2.2 (R) | `+ 0` und `* 1`: Der Generator schreibt jeden Zugriff in derselben Form (Basis plus Versatz), auch beim Versatz 0; der Übersetzer faltet die Konstante |
+| `misra-c2012-2.4` | Rahmen | 2 | MISRA C:2012 2.4 (A) | Tags der geteilten Typen des Randes, die nicht jedes Programm braucht |
+| `misra-c2012-2.5` | Rahmen | 20 | MISRA C:2012 2.5 (A) | Makros des Kopfs und der geteilten Typen, die nicht jedes Programm nutzt |
+| `misra-c2012-2.7` | Rahmen | 22 | MISRA C:2012 2.7 (A) | Die Einstiege haben für jedes Programm dieselbe Signatur (`P_ops`); ein Programm ohne Journal oder Tunables liest manche Parameter nicht |
+| `misra-c2012-20.1` | Rahmen | 5 | MISRA C:2012 20.1 (A) | `#include <stddef.h>` im Block der geteilten Typen des Randes, den ein Wächter-Makro umschließt |
+| `misra-c2012-21.15` | Rahmen | 2 | MISRA C:2012 21.15 (R) | `memcpy` zwischen einem Wert und dem Byte-Feld der Arena; die Bytes sind der Wert |
+| `misra-c2012-21.2` | Rahmen | 12 | MISRA C:2012 21.2 (R) | Der Rahmen ist freistehend (`-ffreestanding`, keine C-Bibliothek) und deklariert `memcpy`, `memmove`, `memset` und `memcmp` selbst, mit den Signaturen des Standards |
+| `misra-c2012-5.1` | Rahmen | 3 | MISRA C:2012 5.1 (R) | Das Symbol `P_logic_<Hash>` trägt den Logik-Hash, damit das Archiv eines anderen Programms nicht bindet; die Linker aller Ziele unterscheiden die volle Länge |
+| `misra-c2012-5.6` | Rahmen | 2 | MISRA C:2012 5.6 (R) | wie 5.7, für den Typ der Jobs |
+| `misra-c2012-5.7` | Rahmen | 64 | MISRA C:2012 5.7 (R) | Rahmen und `P.h` beschreiben dieselben Strukturen je für sich, aus derselben Quelle in `takt-frame`; `_Static_assert` hält Größe und Versätze gleich |
+| `misra-c2012-7.3` | Rahmen | 45 | MISRA C:2012 7.3 (R) | Fehlmeldung: Das Addon hält den Parameter `all` für ein Literal mit dem Suffix `l` |
+| `misra-c2012-8.2` | Rahmen | 155 | MISRA C:2012 8.2 (R) | Prototypen der Einstiege des erzeugten LLVM-Codes und der Funktionen des Randes ohne Namen der Parameter; die Typen prüft der Übersetzer |
+| `misra-c2012-8.4` | Rahmen | 54 | MISRA C:2012 8.4 (R) | Der Rahmen definiert die Einstiege, die `P.h` deklariert, ohne `P.h` einzubinden; beide entstehen aus derselben Quelle, und die Lieferform bindet beide (`tests/embed_cmd.rs`) |
+| `misra-c2012-8.5` | Rahmen | 88 | MISRA C:2012 8.5 (R) | wie 8.4: Funktionen und Objekte stehen im Rahmen und in `P.h` |
+| `misra-c2012-8.7` | Rahmen | 14 | MISRA C:2012 8.7 (A) | Einstiege mit externer Bindung, die ein Programm nur in einer Einheit ruft; ein Wirt ruft sie von außen |
+| `misra-c2012-8.9` | Rahmen | 38 | MISRA C:2012 8.9 (A) | konstante Tabellen des Programms auf Dateiebene, neben den Funktionen, die sie lesen |
+
 ## 7. Zielnormen
 
 IEC 61508 (SIL 2–3), IEC 61513 (Kerntechnik), DO-178C (vom Ground
