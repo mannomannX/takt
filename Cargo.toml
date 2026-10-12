@@ -60,3 +60,11 @@ all = "warn"
 # 130 MB PDB, und das Zielverzeichnis lief waehrend eines Laufs voll.
 # Backtraces nennen weiter Datei und Zeile.
 debug = "line-tables-only"
+
+# `takt port-test --emit embed` bemisst die Nachricht eines Jobs nach dem
+# Durchsatz von `sha256` in diesem Prozess (M11 Schritt 18c); rechnen wird
+# sie das SDK, das immer optimiert baut. Unoptimiert maesse ein Test-Build
+# ein Vielfaches zu langsam, und jeder Job waere im Tick nach seinem Start
+# fertig.
+[profile.dev.package.takt-native]
+opt-level = 3
