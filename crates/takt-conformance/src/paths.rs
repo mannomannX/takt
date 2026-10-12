@@ -35,8 +35,11 @@ use takt_mir::analysis::proof::{Site, render};
 /// So tief sucht der Solver; die Pfade enden spaetestens dort.
 pub const DEPTH: u32 = 5;
 
-/// So viele Sekunden hat jede Anfrage an den Solver.
-pub const TIMEOUT_S: u64 = 10;
+/// So viele Sekunden hat jede Anfrage an den Solver: so viele wie beim
+/// Einordnen (FB-511 Schritt 1). Mit 10 s fiel auf einem Runner von GitHub
+/// ein Beweis weg, den der Entwicklungsrechner gefunden hatte (`71_places`),
+/// und einer, den die Einordnung fand, kam nicht (`46_matrices`; Schritt 4).
+pub const TIMEOUT_S: u64 = 60;
 
 /// So beginnt der Name eines Pfads aus dem langen Lauf ([`from_run`]).
 pub const RUN: &str = "lauf-";
