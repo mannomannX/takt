@@ -353,8 +353,14 @@ const F401_DEFINES: &[&str] =
     &["-DTAKT_TICKS=2000u", "-DTAKT_LOGICAL=1", "-DTAKT_FRESH_JOURNAL=1", "-DTAKT_TICK_STACK_PROGRAM=0u"];
 
 /// Das Ziel des C-Wirts der Black Pill fuer clang-tidy.
-const F401_TARGET: &[&str] =
-    &["--target=thumbv7em-none-eabihf", "-mcpu=cortex-m4", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-ffreestanding"];
+const F401_TARGET: &[&str] = &[
+    "--target=thumbv7em-none-eabihf",
+    "-mcpu=cortex-m4",
+    "-mfpu=fpv4-sp-d16",
+    "-mfloat-abi=hard",
+    "-ffreestanding",
+    "-fshort-enums",
+];
 
 /// Schreibt die Lieferformen nach `out` und nennt die Bindungen: je
 /// Programm sein Rahmen, bei `valve` mit `examples/c-host`, bei `port_test`
