@@ -16,6 +16,9 @@
 
 #include <stdint.h>
 
+/* Das obere Ende des Stacks, aus dem Linker-Skript `stm32f401.ld`. */
+extern uint32_t board_stack_top;
+
 /* Der Takt des Kerns nach `board_init`. */
 #define BOARD_CORE_HZ 84000000u
 

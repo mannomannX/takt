@@ -45,13 +45,14 @@ void abort(void);
 #define RCC_APB1ENR_PWREN 0x10000000u
 #define RCC_APB2ENR_USART1EN 0x00000010u
 
-/* Die PLL: 25 MHz / M * N / P = 84 MHz, der Takt von USB / Q = 48 MHz. */
+/* Die PLL: 25 MHz / M * N / P = 84 MHz, der Takt von USB / Q = 48 MHz; die
+ * Werte an ihrer Stelle in RCC_PLLCFGR. */
 #define PLL_FIELDS 0x0F437FFFu /* PLLQ, PLLSRC, PLLP, PLLN, PLLM */
 #define PLL_SRC_HSE 0x00400000u
-#define PLL_M 25u
-#define PLL_N 336u
-#define PLL_P_4 1u /* Kodierung von P = 4 */
-#define PLL_Q 7u
+#define PLL_M_25 0x00000019u   /* M = 25 in 5:0 */
+#define PLL_N_336 0x00005400u  /* N = 336 in 14:6 */
+#define PLL_P_4 0x00010000u    /* P = 4 (Kodierung 01) in 17:16 */
+#define PLL_Q_7 0x07000000u    /* Q = 7 in 27:24 */
 
 /* PWR und die Backup-Register in der RTC. */
 #define PWR_CR 0x40007000u
@@ -171,10 +172,10 @@ _Static_assert(BOARD_LINE_PRIORITY < BOARD_STEP_PRIORITY, "die Leitung liegt ueb
 #define BOARD_PAINT 0xC5C5C5C5u
 #define BOARD_PAINT_MARGIN 256u
 
-/* Aus dem Linker-Skript `stm32f401.ld`. */
-extern uint8_t board_stack_guard[];
-extern uint8_t board_stack_bottom[];
-extern uint8_t board_stack_top[];
+/* Aus dem Linker-Skript `stm32f401.ld`: der Waechter und das untere Ende
+ * des Stacks. */
+extern uint32_t board_stack_guard;
+extern uint32_t board_stack_bottom;
 
 /* Das FIFO der Leitung: `tail` schreibt, wer sendet (Schritt oder Wirt, nie
  * beide zugleich), `head` nur die ISR; beide zaehlen frei und atomar. */
@@ -183,13 +184,13 @@ static uint32_t board_tx_head;
 static uint32_t board_tx_tail;
 
 /* Atomar: Der Adapter sandte XOFF und noch kein XON. */
-static uint32_t board_paused;
+static int board_paused;
 
 /* Atomar: Der Host verlangte das Board zurueck. */
-static uint32_t board_handback;
+static int board_handback;
 
 /* Atomar: Die Leitung ist eingerichtet. */
-static uint32_t board_line_ready;
+static int board_line_ready;
 
 /* Wie viele Bytes von `TAKT` der Erkenner gesehen hat; nur die ISR der
  * Leitung, oder der Halt bei gesperrten Interrupts. */
@@ -202,6 +203,9 @@ static int32_t board_nvm_state = TAKT_NVM_IDLE;
 static volatile uint32_t *board_reg(uintptr_t address) { return (volatile uint32_t *)address; }
 
 static volatile uint8_t *board_reg8(uintptr_t address) { return (volatile uint8_t *)address; }
+
+/* Die Adresse eines Objekts als Zahl: fuer den Stack und die Region der MPU. */
+static uintptr_t board_address(const volatile uint32_t *object) { return (uintptr_t)object; }
 
 /* Sperrt die Interrupts und nennt, wie PRIMASK vorher stand. */
 static uint32_t board_lock(void) {
@@ -264,8 +268,8 @@ static uint32_t board_clocks(void) {
         ok = board_wait(RCC_CR, RCC_CR_HSERDY, RCC_CR_HSERDY);
     }
     if (ok != 0u) {
-        *board_reg(RCC_PLLCFGR) = (*board_reg(RCC_PLLCFGR) & ~PLL_FIELDS) | PLL_SRC_HSE | (PLL_Q << 24u) |
-                                  (PLL_P_4 << 16u) | (PLL_N << 6u) | PLL_M;
+        *board_reg(RCC_PLLCFGR) =
+            (*board_reg(RCC_PLLCFGR) & ~PLL_FIELDS) | PLL_SRC_HSE | PLL_Q_7 | PLL_P_4 | PLL_N_336 | PLL_M_25;
         *board_reg(RCC_CR) |= RCC_CR_PLLON;
         ok = board_wait(RCC_CR, RCC_CR_PLLRDY, RCC_CR_PLLRDY);
     }
@@ -302,7 +306,7 @@ int board_init(void) {
     *board_reg(GPIOC_MODER) = (*board_reg(GPIOC_MODER) & ~PC13_MODE) | PC13_OUTPUT;
     if (board_clocks() != 0u) {
         board_usart();
-        __atomic_store_n(&board_line_ready, 1u, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&board_line_ready, 1, __ATOMIC_SEQ_CST);
         rc = 0;
     } else {
         /* Ohne Takt keine Leitung: Die LED leuchtet. */
@@ -349,9 +353,10 @@ static uint32_t board_feed(uint8_t byte) {
 
 uint8_t board_line_put(void *ctx, uint8_t byte) {
     const uint32_t tail = __atomic_load_n(&board_tx_tail, __ATOMIC_SEQ_CST);
+    const uint32_t head = __atomic_load_n(&board_tx_head, __ATOMIC_SEQ_CST);
     uint8_t taken = 0u;
     (void)ctx;
-    if ((tail - __atomic_load_n(&board_tx_head, __ATOMIC_SEQ_CST)) < BOARD_TX_BYTES) {
+    if ((tail - head) < BOARD_TX_BYTES) {
         board_tx[tail % BOARD_TX_BYTES] = byte;
         __atomic_store_n(&board_tx_tail, tail + 1u, __ATOMIC_SEQ_CST);
         taken = 1u;
@@ -360,12 +365,13 @@ uint8_t board_line_put(void *ctx, uint8_t byte) {
 }
 
 void board_line_flush(void *ctx) {
+    const uint32_t tail = __atomic_load_n(&board_tx_tail, __ATOMIC_SEQ_CST);
+    const uint32_t head = __atomic_load_n(&board_tx_head, __ATOMIC_SEQ_CST);
     (void)ctx;
-    if (__atomic_load_n(&board_handback, __ATOMIC_SEQ_CST) != 0u) {
+    if (__atomic_load_n(&board_handback, __ATOMIC_SEQ_CST) != 0) {
         board_hand_back();
     }
-    if ((__atomic_load_n(&board_tx_tail, __ATOMIC_SEQ_CST) != __atomic_load_n(&board_tx_head, __ATOMIC_SEQ_CST)) &&
-        (__atomic_load_n(&board_paused, __ATOMIC_SEQ_CST) == 0u)) {
+    if ((tail != head) && (__atomic_load_n(&board_paused, __ATOMIC_SEQ_CST) == 0)) {
         const uint32_t primask = board_lock();
         *board_reg(USART1_CR1) |= USART_CR1_TXEIE;
         board_unlock(primask);
@@ -387,12 +393,12 @@ void USART1_IRQHandler(void) {
         } else {
             const uint8_t byte = (uint8_t)(*board_reg(USART1_DR) & 0xFFu);
             if (byte == BOARD_XOFF) {
-                __atomic_store_n(&board_paused, 1u, __ATOMIC_SEQ_CST);
+                __atomic_store_n(&board_paused, 1, __ATOMIC_SEQ_CST);
             } else if (byte == BOARD_XON) {
-                __atomic_store_n(&board_paused, 0u, __ATOMIC_SEQ_CST);
+                __atomic_store_n(&board_paused, 0, __ATOMIC_SEQ_CST);
                 *board_reg(USART1_CR1) |= USART_CR1_TXEIE;
             } else if (board_feed(byte) != 0u) {
-                __atomic_store_n(&board_handback, 1u, __ATOMIC_SEQ_CST);
+                __atomic_store_n(&board_handback, 1, __ATOMIC_SEQ_CST);
             } else {
                 /* Ein Byte ohne Bedeutung fuer diesen Wirt: Er liest keine Tunes. */
             }
@@ -400,8 +406,8 @@ void USART1_IRQHandler(void) {
     }
     if (((*board_reg(USART1_CR1) & USART_CR1_TXEIE) != 0u) && ((*board_reg(USART1_SR) & USART_SR_TXE) != 0u)) {
         const uint32_t head = __atomic_load_n(&board_tx_head, __ATOMIC_SEQ_CST);
-        if ((__atomic_load_n(&board_paused, __ATOMIC_SEQ_CST) == 0u) &&
-            (head != __atomic_load_n(&board_tx_tail, __ATOMIC_SEQ_CST))) {
+        const uint32_t tail = __atomic_load_n(&board_tx_tail, __ATOMIC_SEQ_CST);
+        if ((__atomic_load_n(&board_paused, __ATOMIC_SEQ_CST) == 0) && (head != tail)) {
             *board_reg(USART1_DR) = (uint32_t)board_tx[head % BOARD_TX_BYTES];
             __atomic_store_n(&board_tx_head, head + 1u, __ATOMIC_SEQ_CST);
         } else {
@@ -468,7 +474,8 @@ static uint32_t board_flash_program(uintptr_t address, const uint8_t *bytes, uin
             uint32_t word = 0xFFFFFFFFu;
             for (uint32_t i = 0u; (i < 4u) && (i < (len - at)); i++) {
                 const uint32_t shift = 8u * i;
-                word = (word & ~(0xFFu << shift)) | ((uint32_t)bytes[at + i] << shift);
+                const uint32_t mask = (uint32_t)0xFFu << shift;
+                word = (word & ~mask) | ((uint32_t)bytes[at + i] << shift);
             }
             *board_reg(address + at) = word;
             ok = board_flash_settled();
@@ -540,7 +547,7 @@ int board_nvm_wipe(void) {
 
 void board_protect_stack(void) {
     *board_reg(MPU_RNR) = 0u;
-    *board_reg(MPU_RBAR) = (uint32_t)(uintptr_t)board_stack_guard;
+    *board_reg(MPU_RBAR) = (uint32_t)board_address(&board_stack_guard);
     *board_reg(MPU_RASR) = MPU_RASR_GUARD;
     *board_reg(SCB_SHCSR) |= SCB_SHCSR_MEMFAULTENA;
     *board_reg(MPU_CTRL) = MPU_CTRL_ON;
@@ -549,15 +556,15 @@ void board_protect_stack(void) {
 
 void board_paint_stack(void) {
     uint32_t here = 0u;
-    const uintptr_t limit = ((uintptr_t)&here - BOARD_PAINT_MARGIN) & ~(uintptr_t)3u;
-    for (uintptr_t at = (uintptr_t)board_stack_bottom; at < limit; at += 4u) {
+    const uintptr_t limit = (board_address(&here) - BOARD_PAINT_MARGIN) & ~(uintptr_t)3u;
+    for (uintptr_t at = board_address(&board_stack_bottom); at < limit; at += 4u) {
         *board_reg(at) = BOARD_PAINT;
     }
 }
 
 uint32_t board_stack_depth(void) {
-    const uintptr_t top = (uintptr_t)board_stack_top;
-    uintptr_t at = (uintptr_t)board_stack_bottom;
+    const uintptr_t top = board_address(&board_stack_top);
+    uintptr_t at = board_address(&board_stack_bottom);
     while ((at < top) && (*board_reg(at) == BOARD_PAINT)) {
         at += 4u;
     }
@@ -582,7 +589,7 @@ static void board_put_polled(uint8_t byte) {
 void board_halt(void) {
     static const char text[] = "\r\ntakt: angehalten\r\n";
     (void)board_lock();
-    if (__atomic_load_n(&board_line_ready, __ATOMIC_SEQ_CST) != 0u) {
+    if (__atomic_load_n(&board_line_ready, __ATOMIC_SEQ_CST) != 0) {
         for (uint32_t i = 0u; text[i] != '\0'; i++) {
             board_put_polled((uint8_t)text[i]);
         }

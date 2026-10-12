@@ -110,7 +110,8 @@ static uint64_t takt_counts(void) {
         const uint32_t epoch = __atomic_load_n(&takt_epoch, __ATOMIC_SEQ_CST);
         const uint32_t low = *takt_reg(TIM2_CNT);
         const uint32_t wrapped = *takt_reg(TIM2_SR) & TIM_SR_UIF;
-        if (__atomic_load_n(&takt_epoch, __ATOMIC_SEQ_CST) == epoch) {
+        const uint32_t again = __atomic_load_n(&takt_epoch, __ATOMIC_SEQ_CST);
+        if (again == epoch) {
             uint64_t high = (uint64_t)epoch;
             if ((wrapped != 0u) && (low < 0x80000000u)) {
                 high += 1u;
@@ -191,7 +192,10 @@ int takt_irq_chip_start(struct takt_irq *irq) {
     return rc;
 }
 
-int64_t takt_irq_chip_now(void) { return (int64_t)(takt_counts() * TAKT_NS_PER_COUNT); }
+int64_t takt_irq_chip_now(void) {
+    const uint64_t ns = takt_counts() * TAKT_NS_PER_COUNT;
+    return (int64_t)ns;
+}
 
 void takt_irq_chip_arm(int64_t at_ns) {
     const uint32_t primask = takt_lock();
@@ -221,8 +225,10 @@ void TIM2_IRQHandler(void) {
     const uint32_t sr = *takt_reg(TIM2_SR);
     int due = 0;
     if ((sr & TIM_SR_UIF) != 0u) {
+        /* Nur diese ISR zaehlt die Epoche. */
+        const uint32_t epoch = __atomic_load_n(&takt_epoch, __ATOMIC_SEQ_CST);
         *takt_reg(TIM2_SR) = ~TIM_SR_UIF;
-        (void)__atomic_add_fetch(&takt_epoch, 1u, __ATOMIC_SEQ_CST);
+        __atomic_store_n(&takt_epoch, epoch + 1u, __ATOMIC_SEQ_CST);
     }
     if ((sr & TIM_SR_CC1IF) != 0u) {
         *takt_reg(TIM2_SR) = ~TIM_SR_CC1IF;

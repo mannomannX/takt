@@ -18,13 +18,15 @@
 
 #include "board.h"
 
-/* Aus dem Linker-Skript. */
-extern uint32_t board_data_load[];
-extern uint32_t board_data_start[];
-extern uint32_t board_data_end[];
-extern uint32_t board_bss_start[];
-extern uint32_t board_bss_end[];
-extern uint8_t board_stack_top[];
+/* Aus dem Linker-Skript: der Anfang der Vektortabelle, wo `.data` im Flash
+ * liegt, wo `.data` und `.bss` im RAM liegen; das obere Ende des Stacks
+ * nennt `board.h`. */
+extern uint32_t board_vectors;
+extern uint32_t board_data_load;
+extern uint32_t board_data_start;
+extern uint32_t board_data_end;
+extern uint32_t board_bss_start;
+extern uint32_t board_bss_end;
 
 int main(void);
 
@@ -61,8 +63,8 @@ struct board_vectors {
     board_handler irqs[BOARD_IRQS];
 };
 
-__attribute__((section(".vectors"), used)) const struct board_vectors board_vector_table = {
-    board_stack_top,
+__attribute__((section(".vectors"), used)) static const struct board_vectors board_vector_table = {
+    &board_stack_top,
     Reset_Handler,
     {NMI_Handler, HardFault_Handler, MemManage_Handler, BusFault_Handler, UsageFault_Handler, NULL, NULL, NULL, NULL,
      SVC_Handler, DebugMon_Handler, NULL, PendSV_Handler, SysTick_Handler},
@@ -102,20 +104,26 @@ __attribute__((section(".vectors"), used)) const struct board_vectors board_vect
     },
 };
 
-/* Ein Register an seiner Adresse aus dem Handbuch. */
-static volatile uint32_t *board_start_reg(uintptr_t address) { return (volatile uint32_t *)address; }
+/* Ein Wort an seiner Adresse: ein Register aus dem Handbuch oder ein Wort
+ * von `.data` und `.bss`. */
+static volatile uint32_t *board_word(uintptr_t address) { return (volatile uint32_t *)address; }
+
+/* Die Adresse eines Objekts als Zahl. */
+static uintptr_t board_start_address(const volatile uint32_t *object) { return (uintptr_t)object; }
 
 void Reset_Handler(void) {
-    const uintptr_t data = ((uintptr_t)board_data_end - (uintptr_t)board_data_start) / sizeof(uint32_t);
-    const uintptr_t bss = ((uintptr_t)board_bss_end - (uintptr_t)board_bss_start) / sizeof(uint32_t);
-    *board_start_reg(SCB_VTOR) = (uint32_t)(uintptr_t)&board_vector_table;
-    *board_start_reg(SCB_CPACR) |= SCB_CPACR_FPU;
+    const uintptr_t load = board_start_address(&board_data_load);
+    const uintptr_t data = board_start_address(&board_data_start);
+    const uintptr_t data_end = board_start_address(&board_data_end);
+    const uintptr_t bss_end = board_start_address(&board_bss_end);
+    *board_word(SCB_VTOR) = (uint32_t)board_start_address(&board_vectors);
+    *board_word(SCB_CPACR) |= SCB_CPACR_FPU;
     __asm__ volatile("dsb\n\tisb" : : : "memory");
-    for (uintptr_t i = 0u; i < data; i++) {
-        board_data_start[i] = board_data_load[i];
+    for (uintptr_t at = data; at < data_end; at += sizeof(uint32_t)) {
+        *board_word(at) = *board_word(load + (at - data));
     }
-    for (uintptr_t i = 0u; i < bss; i++) {
-        board_bss_start[i] = 0u;
+    for (uintptr_t at = board_start_address(&board_bss_start); at < bss_end; at += sizeof(uint32_t)) {
+        *board_word(at) = 0u;
     }
     (void)main();
     board_halt();

@@ -22,6 +22,7 @@ SECTIONS
 {
   .vectors :
   {
+    board_vectors = .;
     KEEP(*(.vectors))
   } > FLASH
 
