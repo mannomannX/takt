@@ -272,7 +272,8 @@ fn analyse(catalog: &Catalog, links: &[Link], out: &Path) -> Option<BTreeSet<Fin
 }
 
 /// Die Befunde gegen den Katalog: je Befund und Teil genau die Zahl der
-/// Abweichung. Der Fehler nennt die Zeilen, die der Katalog braeuchte.
+/// Abweichung. Der Fehler nennt die Zeilen, die der Katalog braeuchte, und
+/// die Stellen jedes Befunds, dessen Zahl nicht stimmt.
 fn judge(found: &BTreeSet<Finding>, catalog: &Catalog) -> Result<(), String> {
     let mut counted: BTreeMap<(String, String), usize> = BTreeMap::new();
     for f in found {
@@ -280,14 +281,20 @@ fn judge(found: &BTreeSet<Finding>, catalog: &Catalog) -> Result<(), String> {
     }
     let mut problems = Vec::new();
     for ((id, part), n) in &counted {
+        let at = || -> Vec<&str> {
+            found.iter().filter(|f| f.id == *id && f.part == part).take(8).map(|f| f.at.as_str()).collect()
+        };
         match catalog.deviations.get(&(id.clone(), part.clone())) {
             Some(d) if d.count == *n => {}
-            Some(d) => problems.push(format!("| `{id}` | {part} | {n} | {} | … | (Katalog: {})", d.rule, d.count)),
-            None => {
-                let at: Vec<&str> =
-                    found.iter().filter(|f| f.id == *id && f.part == part).take(3).map(|f| f.at.as_str()).collect();
-                problems.push(format!("| `{id}` | {part} | {n} | ? | … | neu, etwa {at:?}"));
+            Some(d) => {
+                problems.push(format!(
+                    "| `{id}` | {part} | {n} | {} | … | (Katalog: {}), an {:?}",
+                    d.rule,
+                    d.count,
+                    at()
+                ));
             }
+            None => problems.push(format!("| `{id}` | {part} | {n} | ? | … | neu, an {:?}", at())),
         }
     }
     for ((id, part), d) in &catalog.deviations {

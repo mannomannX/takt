@@ -365,8 +365,9 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 |---|---|---|---|---|
 | `misra-c2012-1.4` | SDK | 1 | MISRA C:2012 1.4 (R) | `_Alignas(8)` am Speicher des Kerns: Das Archiv legt dort einen Rust-Typ mit Ausrichtung 8 ab; ohne die Angabe hinge sie an der ABI des Wirts |
 | `misra-c2012-2.5` | SDK | 18 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
-| `constParameterPointer` | Port | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: `pthread_attr_setstack` nimmt den Stack als `void *`, und der Faden schreibt hinein; `const` brauchte einen Cast, der es wieder entfernt (11.8) |
-| `misra-c2012-11.5` | Port | 3 | MISRA C:2012 11.5 (A) | `pthread_create` reicht den Port als `void *` an den Faden, der Wirt den Stack als `void *` (`takt_posix_config`) |
+| `constParameterPointer` | Port | 2 | MISRA C:2012 8.13 (A) | Fehlmeldung: `pthread_attr_setstack` nimmt den Stack als `void *`, und der Faden schreibt hinein; `const` brauchte einen Cast, der es wieder entfernt (11.8). Und `takt_os_join` des POSIX-Adapters liest den Zustand nur, doch der Vertrag `takt_os.h` gilt jedem Adapter, und unter Zephyr schreibt das Warten in den Faden (`k_thread_join`) |
+| `constParameterCallback` | Port | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: Der Einstieg eines Fadens (`takt_os_run`) hat die Gestalt, die `pthread_create` verlangt (`void *(*)(void *)`) |
+| `misra-c2012-11.5` | Port | 4 | MISRA C:2012 11.5 (A) | Die Faeden bekommen ihr Argument als `void *`: `pthread_create` reicht es an den Einstieg des Adapters, `takt_os_spawn` den Port an Schritt- und Jobfaden; der Wirt gibt die Stacks als `void *` (`takt_rtos_config`) |
 | `cert-dcl37-c` | Port | 1 | CERT C DCL37-C | `#define _POSIX_C_SOURCE` ist das Feature Test Macro, mit dem POSIX die Schnittstelle wählen lässt; der Name gehört der Umgebung, die ihn liest |
 | `misra-c2012-2.5` | Port | 1 | MISRA C:2012 2.5 (A) | `_POSIX_C_SOURCE` liest nur die C-Bibliothek: Es macht `clock_gettime` und `pthread_condattr_setclock` sichtbar |
 | `misra-c2012-21.1` | Port | 1 | MISRA C:2012 21.1 (R) | `#define _POSIX_C_SOURCE` wählt die Schnittstelle, wie POSIX es vorschreibt (Feature Test Macro); kein Bezeichner der Bibliothek ändert sich |
