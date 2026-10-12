@@ -397,6 +397,33 @@ mod tests {
 
     const VALVE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/rust-host/takt/valve.takt");
 
+    /// **Die Leitung sammelt je Faden, was der Rahmen schreibt** (12.5): Text,
+    /// Zahlen mit und ohne Vorzeichen, Fliesskommazahlen und Bytes eines
+    /// Stroms in der Form des Interpreters; `take` leert sie, und was ein
+    /// anderer Faden schreibt, bleibt in dessen Leitung (M11 Schritt 17:
+    /// Instanzen in Faeden). Die Funktionen laufen ueber ihren Rust-Pfad ohne
+    /// Rahmen, damit Miri ihr `unsafe` prueft (FB-652).
+    #[test]
+    fn the_line_collects_per_thread_what_the_frame_writes() {
+        take();
+        // SAFETY: ein nullterminierter Text, der waehrend des Aufrufs gilt.
+        unsafe { takt_board_trace(c"t=1 out x ".as_ptr()) };
+        takt_board_trace_i64(-3);
+        takt_board_trace_u64(7);
+        takt_board_trace_f64(0.5);
+        takt_board_trace_hex8(0xab);
+        let other = std::thread::spawn(|| {
+            // SAFETY: wie oben.
+            unsafe { takt_board_trace(c"fremd".as_ptr()) };
+            take()
+        })
+        .join()
+        .expect("Faden");
+        assert_eq!(other, "fremd");
+        assert_eq!(take(), "t=1 out x -3 7 0.5 0xab");
+        assert_eq!(take(), "", "geleert");
+    }
+
     /// **Der Vergleich besteht nicht leer**: Der Trace des Interpreters
     /// selbst besteht; ein Lauf ohne Zeilen, ein falscher Wert und ein
     /// fehlender Ausgang scheitern und nennen, was fehlt.
