@@ -50,22 +50,23 @@ static JOB_STACK: AtomicU32 = AtomicU32::new(0);
 
 /// Der Programmzustand als Adressbereich.
 fn state_range() -> (u32, u32) {
-    (&raw const __takt_state_start as u32, &raw const __takt_state_end as u32)
+    let (start, end) = (&raw const __takt_state_start, &raw const __takt_state_end);
+    (crate::word(start.expose_provenance()), crate::word(end.expose_provenance()))
 }
 
 /// Ein Waechter: 32 Byte an der ersten ausgerichteten Adresse ab `bottom`.
 fn guard_above(bottom: u32) -> Region {
-    Region { base: bottom.div_ceil(32) * 32, size: 32, eighths: 8 }
+    Region { base: bottom.div_ceil(32).saturating_mul(32), size: 32, eighths: 8 }
 }
 
 /// Der Waechter unter dem Hauptstack.
 fn guard() -> Region {
-    guard_above(&raw const _stack_end as u32)
+    guard_above(crate::word((&raw const _stack_end).expose_provenance()))
 }
 
 /// Der Waechter unter dem Job-Stack, falls es einen gibt.
 fn job_guard() -> Option<Region> {
-    Some(JOB_STACK.load(Ordering::Relaxed)).filter(|&b| b != 0).map(guard_above)
+    Some(JOB_STACK.load(Ordering::SeqCst)).filter(|&b| b != 0).map(guard_above)
 }
 
 /// Wo der Waechter unter dem Hauptstack liegt: die Adresse, auf die ein
@@ -78,7 +79,7 @@ pub fn guard_address() -> u32 {
 /// darf auch das Stack-Painting nicht schreiben und nicht lesen (FB-353).
 pub fn stack_floor() -> u32 {
     let g = guard();
-    g.base + g.size
+    g.base.saturating_add(g.size)
 }
 
 /// Wo der Waechter unter dem Job-Stack liegt, falls es einen gibt.
@@ -109,11 +110,10 @@ pub fn isr<R>(f: impl FnOnce() -> R) -> R {
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
     let r = f();
-    // SAFETY: wie oben.
-    unsafe {
-        mpu.rnr.write(STATE);
-        mpu.rasr.write(before);
-    }
+    // SAFETY: wie oben; die ISR hat `RNR` vielleicht umgestellt.
+    unsafe { mpu.rnr.write(STATE) };
+    // SAFETY: wie oben; die Rechte von vorher.
+    unsafe { mpu.rasr.write(before) };
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
     r
@@ -133,43 +133,55 @@ impl Mpu {
     /// Grenze gelegt hat, die eine Region tragen kann.
     pub fn arm(mpu: &mut MPU, scb: &mut SCB, job_stack: Option<u32>) -> Option<Mpu> {
         let (start, end) = state_range();
-        let state = Region::covering(start, end - start)?;
-        JOB_STACK.store(job_stack.unwrap_or(0), Ordering::Relaxed);
+        let state = Region::covering(start, end.checked_sub(start)?)?;
+        JOB_STACK.store(job_stack.unwrap_or(0), Ordering::SeqCst);
         let guard = guard();
-        // SAFETY: Konfiguration der eigenen MPU vor dem ersten Tick; kein
-        // anderer Code benutzt sie.
-        unsafe {
-            mpu.ctrl.write(0);
-            if let Some(g) = job_guard() {
-                mpu.rnr.write(JOB_GUARD);
-                mpu.rbar.write(g.rbar(JOB_GUARD));
-                mpu.rasr.write(g.rasr(Access::None));
-            }
-            mpu.rnr.write(GUARD);
-            mpu.rbar.write(guard.rbar(GUARD));
-            mpu.rasr.write(guard.rasr(Access::None));
-            // Zuletzt: `RNR` bleibt auf dem Programmzustand stehen (`isr`).
-            mpu.rnr.write(STATE);
-            mpu.rbar.write(state.rbar(STATE));
-            mpu.rasr.write(state.rasr(Access::ReadWrite));
-            // ENABLE und PRIVDEFENA: Ausserhalb der Regionen gilt die
-            // Standardkarte.
-            mpu.ctrl.write(0b101);
-            scb.enable(cortex_m::peripheral::scb::Exception::MemoryManagement);
+        // Konfiguration der eigenen MPU vor dem ersten Tick; kein anderer
+        // Code benutzt sie, und bis `CTRL` sie wieder einschaltet, gilt keine
+        // Region.
+        // SAFETY: schaltet die MPU aus, siehe oben.
+        unsafe { mpu.ctrl.write(0) };
+        if let Some(g) = job_guard() {
+            // SAFETY: waehlt die Region des Waechters unter dem Job-Stack.
+            unsafe { mpu.rnr.write(JOB_GUARD) };
+            // SAFETY: seine Basis, an 32 Byte ausgerichtet (`guard_above`).
+            unsafe { mpu.rbar.write(g.rbar(JOB_GUARD)) };
+            // SAFETY: 32 Byte ohne Zugriff.
+            unsafe { mpu.rasr.write(g.rasr(Access::None)) };
         }
+        // SAFETY: waehlt die Region des Waechters unter dem Hauptstack.
+        unsafe { mpu.rnr.write(GUARD) };
+        // SAFETY: seine Basis, an 32 Byte ausgerichtet (`guard_above`).
+        unsafe { mpu.rbar.write(guard.rbar(GUARD)) };
+        // SAFETY: 32 Byte ohne Zugriff.
+        unsafe { mpu.rasr.write(guard.rasr(Access::None)) };
+        // Zuletzt: `RNR` bleibt auf dem Programmzustand stehen (`isr`).
+        // SAFETY: waehlt die Region des Programmzustands.
+        unsafe { mpu.rnr.write(STATE) };
+        // SAFETY: seine Basis aus `Region::covering`, passend ausgerichtet.
+        unsafe { mpu.rbar.write(state.rbar(STATE)) };
+        // SAFETY: zunaechst offen; die Schleife schliesst ihn (`Protection`).
+        unsafe { mpu.rasr.write(state.rasr(Access::ReadWrite)) };
+        // ENABLE und PRIVDEFENA: Ausserhalb der Regionen gilt die
+        // Standardkarte.
+        // SAFETY: Code, Stacks und Peripherie liegen ausserhalb der Waechter
+        // und bleiben zugaenglich.
+        unsafe { mpu.ctrl.write(0b101) };
+        scb.enable(cortex_m::peripheral::scb::Exception::MemoryManagement);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
         Some(Mpu { state })
     }
 
     fn set(&self, access: Access) {
-        // SAFETY: ein Registerpaar der MPU, von der Schleife zwischen den
-        // Ticks geschrieben; eine ISR stellt es wieder her (`isr`).
-        unsafe {
-            let mpu = &*MPU::PTR;
-            mpu.rnr.write(STATE);
-            mpu.rasr.write(self.state.rasr(access));
-        }
+        // Ein Registerpaar der MPU, von der Schleife zwischen den Ticks
+        // geschrieben; eine ISR stellt es wieder her (`isr`).
+        // SAFETY: die Register der MPU, siehe oben.
+        let mpu = unsafe { &*MPU::PTR };
+        // SAFETY: waehlt die Region des Programmzustands, siehe oben.
+        unsafe { mpu.rnr.write(STATE) };
+        // SAFETY: aendert nur ihre Rechte, siehe oben.
+        unsafe { mpu.rasr.write(self.state.rasr(access)) };
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
     }
@@ -185,13 +197,13 @@ impl Protection for Mpu {
     }
 
     fn take_violation(&self) -> Option<Violation> {
-        let region = match REGION.swap(0, Ordering::Relaxed) {
+        let region = match REGION.swap(0, Ordering::SeqCst) {
             0 => return None,
             1 => "Programmzustand",
             2 => "Waechter",
             _ => "anderswo",
         };
-        Some(Violation { region, address: ADDRESS.load(Ordering::Relaxed) })
+        Some(Violation { region, address: ADDRESS.load(Ordering::SeqCst) })
     }
 }
 
@@ -232,7 +244,7 @@ unsafe extern "C" fn takt_mem_manage(frame: *mut u32) {
     }
     let address = scb.mmfar.read();
     let (start, end) = state_range();
-    let hit = |g: Region| (g.base..g.base + g.size).contains(&address);
+    let hit = |g: Region| (g.base..g.base.saturating_add(g.size)).contains(&address);
     let region = if (start..end).contains(&address) {
         1
     } else if hit(guard()) || job_guard().is_some_and(hit) {
@@ -240,14 +252,20 @@ unsafe extern "C" fn takt_mem_manage(frame: *mut u32) {
     } else {
         3
     };
-    ADDRESS.store(address, Ordering::Relaxed);
-    REGION.store(region, Ordering::Relaxed);
+    ADDRESS.store(address, Ordering::SeqCst);
+    REGION.store(region, Ordering::SeqCst);
+    let slot = frame.wrapping_add(6);
     // SAFETY: `frame` zeigt auf den gestapelten Rahmen (siehe oben); an
-    // Index 6 steht der PC des verletzenden Befehls, und dort liegt Code.
-    unsafe {
-        let pc = frame.add(6).read_volatile();
-        let halfword = (pc as *const u16).read_volatile();
-        frame.add(6).write_volatile(pc + instruction_bytes(halfword));
-        scb.cfsr.write(mmfsr);
-    }
+    // Index 6 steht der PC des verletzenden Befehls.
+    let pc = unsafe { slot.read_volatile() };
+    let instruction = core::ptr::with_exposed_provenance::<u16>(crate::address(pc));
+    // SAFETY: Der PC zeigt auf den Befehl, der die Verletzung ausloeste, und
+    // dort liegt lesbarer Code.
+    let halfword = unsafe { instruction.read_volatile() };
+    // SAFETY: wie beim Lesen; der Ruecksprung entstapelt den Rahmen und
+    // faehrt hinter dem Befehl fort.
+    unsafe { slot.write_volatile(pc.wrapping_add(instruction_bytes(halfword))) };
+    // SAFETY: `CFSR` loescht, was mit Einsen beschrieben wird: genau die
+    // gemeldete Verletzung.
+    unsafe { scb.cfsr.write(mmfsr) };
 }

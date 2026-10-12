@@ -15,6 +15,10 @@ use embassy_time_queue_utils::Queue;
 
 use crate::alarm;
 
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: im Konstantenausdruck verbreitert nur `as`; u32 nach u64 ist verlustfrei"
+)]
 const _: () = assert!(embassy_time_driver::TICK_HZ == crate::TIMER_HZ as u64, "ein Tick je Schritt des SYSTIMER");
 
 /// Die Weckzeitpunkte der Aufgaben.

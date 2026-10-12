@@ -29,9 +29,12 @@ impl Wire {
         rcc.ahb1enr().modify(|_, w| w.gpioaen().set_bit());
         // Errata: zwei APB-Takte Verzoegerung, siehe lib.rs.
         let _ = rcc.ahb1enr().read();
+        // SAFETY: `BSRR` loescht genau das Bit von PA0; die uebrigen Pins bleiben.
         gpioa.bsrr().write(|w| unsafe { w.bits(1 << (OUT_PIN + 16)) });
         let (out, inp) = (OUT_PIN * 2, IN_PIN * 2);
+        // SAFETY: aendert nur die Felder von PA0 (Ausgang) und PA1 (Eingang).
         gpioa.moder().modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << out | 0b11 << inp)) | 0b01 << out) });
+        // SAFETY: aendert nur das Feld von PA1 (Pull-down).
         gpioa.pupdr().modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << inp)) | 0b10 << inp) });
         Wire { gpioa, stats: WireStats::default() }
     }
@@ -44,6 +47,7 @@ impl Wire {
     pub fn write(&mut self, level: bool) {
         let start = crate::cycles::now();
         let shift = if level { OUT_PIN } else { OUT_PIN + 16 };
+        // SAFETY: `BSRR` setzt oder loescht genau das Bit von PA0.
         self.gpioa.bsrr().write(|w| unsafe { w.bits(1 << shift) });
         let arrived = (0..ARRIVAL_POLLS).find_map(|_| (self.input() == level).then(crate::cycles::now));
         self.stats.wrote(start, arrived, level);

@@ -7,9 +7,44 @@
 //! (9.9), der Trace ueber USB-Serial-JTAG. Welches Programm laeuft, sagt
 //! `takt.toml`. Hier steht nur, was das Board ist: Peripherie, Geraete
 //! und die Telemetriefunktionen des Rahmens.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
 #![allow(unsafe_code, reason = "C-ABI des Rahmens; 9.5 fuehrt Treiber in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
@@ -30,7 +65,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 /// Das Programm als Lieferform (12.11): Konstanten, Arena, Treiber-Traits,
 /// Kleber und Huelle, erzeugt von `takt build --emit embed` (`build.rs`).
-mod app {
+pub mod app {
     #![allow(dead_code)]
     include!(env!("TAKT_APP_RS"));
 }
@@ -73,12 +108,34 @@ static mut LED: Option<Ws2812> = None;
 static mut BTN: Option<Button> = None;
 static mut WIRE: Option<Wire> = None;
 
+// Die Statics der Peripherie legt `main` vor dem ersten Tick ab. Danach
+// greift je Zeitpunkt nur ein Kontext auf sie zu: der des Schritts, solange
+// der Lauf laeuft, davor und danach die Hauptschleife; wo beide die Leitung
+// nachfuellen, in einem kritischen Abschnitt.
+
 fn uart() -> Option<&'static mut Telemetry> {
-    unsafe { (&raw mut UART).as_mut().and_then(Option::as_mut) }
+    let slot = &raw mut UART;
+    // SAFETY: siehe oben.
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
 }
 
 fn wire() -> Option<&'static mut Wire> {
-    unsafe { (&raw mut WIRE).as_mut().and_then(Option::as_mut) }
+    let slot = &raw mut WIRE;
+    // SAFETY: siehe oben.
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
+}
+
+fn led() -> Option<&'static mut Ws2812> {
+    let slot = &raw mut LED;
+    // SAFETY: siehe oben; bindet das Programm die LED nicht, schaltet sie nur
+    // die Hauptschleife der Interruptform und der Form `rtos`.
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
+}
+
+fn button() -> Option<&'static mut Button> {
+    let slot = &raw mut BTN;
+    // SAFETY: siehe oben.
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
 }
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
@@ -95,12 +152,12 @@ pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
     for _ in 0..256 {
         // SAFETY: der Rahmen uebergibt einen nullterminierten String; die
         // Schleife endet spaetestens nach 256 Byte.
-        let b = unsafe { *p };
+        let b = unsafe { p.read() };
         if b == 0 {
             return;
         }
         uart.write_byte(b);
-        p = unsafe { p.add(1) };
+        p = p.wrapping_add(1);
     }
 }
 
@@ -163,11 +220,11 @@ fn probe() {
     unsafe extern "C" {
         static mut __stack_chk_guard: u32;
     }
-    let target = match PROBE.swap(0, Ordering::Relaxed) {
+    let target = match PROBE.swap(0, Ordering::SeqCst) {
         1 => &raw mut __stack_chk_guard,
-        2 => match JOB_STACK_BOTTOM.load(Ordering::Relaxed) {
+        2 => match JOB_STACK_BOTTOM.load(Ordering::SeqCst) {
             0 => return,
-            bottom => bottom as *mut u32,
+            bottom => core::ptr::with_exposed_provenance_mut::<u32>(takt_board_esp32c6::address(bottom)),
         },
         _ => return,
     };
@@ -187,7 +244,7 @@ static mut ARENA: app::Arena = app::Arena::new();
 
 /// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
 /// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
-mod drivers {
+pub mod drivers {
     include!(concat!(env!("OUT_DIR"), "/takt_rig.rs"));
 }
 
@@ -213,12 +270,12 @@ static mut PERSIST_STORED: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
 /// nennt. `main` richtet die Peripherie ein; die Geraete erreichen sie ueber
 /// die Statics oben.
 #[allow(dead_code, reason = "ein Vorrat fuer jedes Programm; welche Geraete eines braucht, nennt sein Pruefstand")]
-mod devices {
+pub mod devices {
     use core::sync::atomic::Ordering;
 
     use takt_embed::{Device, Input, Output, Quality, Sample};
 
-    use super::{BTN, LED, PREVIOUS_RUN, PROBE, wire};
+    use super::{PREVIOUS_RUN, PROBE, button, led, wire};
 
     /// Ein Geraet, das fest am Board sitzt: Es lebt, solange das Board
     /// laeuft (12.4).
@@ -237,8 +294,7 @@ mod devices {
 
     impl Output<bool> for UiLed {
         fn write(&mut self, value: bool, _now: i64) -> bool {
-            // SAFETY: ein Faden; `main` setzt die LED vor dem ersten Tick.
-            let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
+            let Some(led) = led() else { return false };
             if value {
                 led.on();
             } else {
@@ -257,8 +313,7 @@ mod devices {
 
     impl Input<bool> for UiButton {
         fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
-            // SAFETY: wie bei `UiLed`.
-            let button = unsafe { (&raw mut BTN).as_mut().and_then(Option::as_mut) }?;
+            let button = button()?;
             let (value, stable) = button.poll();
             Some(Sample { value, quality: if stable { Quality::Good } else { Quality::Suspect }, t: now })
         }
@@ -292,7 +347,7 @@ mod devices {
 
     impl Input<u32> for SysPreviousRun {
         fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
-            Some(Sample::good(PREVIOUS_RUN.load(Ordering::Relaxed), now))
+            Some(Sample::good(PREVIOUS_RUN.load(Ordering::SeqCst), now))
         }
     }
 
@@ -304,7 +359,7 @@ mod devices {
     impl Output<bool> for TestGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
             if value {
-                PROBE.store(1, Ordering::Relaxed);
+                PROBE.store(1, Ordering::SeqCst);
             }
             true
         }
@@ -318,7 +373,7 @@ mod devices {
     impl Output<bool> for TestJobGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
             if value {
-                PROBE.store(2, Ordering::Relaxed);
+                PROBE.store(2, Ordering::SeqCst);
             }
             true
         }
@@ -440,7 +495,7 @@ fn platform(next: Option<NextRun>) {
 fn main() -> ! {
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     takt_board_esp32c6::reenumerate_if_requested();
-    PREVIOUS_RUN.store(platform::previous_run(), Ordering::Relaxed);
+    PREVIOUS_RUN.store(platform::previous_run(), Ordering::SeqCst);
     let mut telemetry = takt_board_esp32c6::telemetry(peripherals.USB_DEVICE);
     #[cfg(form = "own")]
     let Ok(timer) = takt_board_esp32c6::init(peripherals.SYSTIMER, TICK_NS) else {
@@ -471,15 +526,20 @@ fn main() -> ! {
     telemetry.newline();
     telemetry.mark();
     let telemetry = if LOGICAL { telemetry.lossless() } else { telemetry };
+    // SAFETY: vor dem ersten Tick und vor jeder Freigabe eines Interrupts,
+    // der die Leitung nachfuellt.
     unsafe { UART = Some(telemetry) };
     if let Ok(led) = Ws2812::new(peripherals.RMT, peripherals.GPIO8) {
+        // SAFETY: wie die Leitung.
         unsafe { LED = Some(led) };
     }
+    // SAFETY: wie die Leitung.
     unsafe { BTN = Some(Button::new(peripherals.GPIO9)) };
     // 12.10: Ein `port @ mmio(...)` schreibt Register; die Verbindung zum
     // Pad macht die GPIO-Matrix, nicht der Treiber. Dieselbe Bruecke ist
     // die Messschleife, wenn das Programm sie bindet (13.8).
     if HW_ADDRESSES.iter().any(|a| a.starts_with("gpio/loop_")) {
+        // SAFETY: wie die Leitung.
         unsafe { WIRE = Some(Wire::new(peripherals.GPIO7, peripherals.GPIO17)) };
     } else {
         route_uart0(peripherals.GPIO7, peripherals.GPIO17);
@@ -487,12 +547,18 @@ fn main() -> ! {
 
     // 5.9: s0 kommt aus dem Journal, darum laden vor dem ersten Eintritt.
     // Ohne `persist` im Programm gibt es kein Journal und keinen Flash-Zugriff.
+    let (current, stored) = (&raw mut PERSIST_CURRENT, &raw mut PERSIST_STORED);
     // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck, und nur das
     // Journal haelt die Puffer.
-    let (current, stored) = unsafe { (&mut *(&raw mut PERSIST_CURRENT), &mut *(&raw mut PERSIST_STORED)) };
+    let current = unsafe { &mut *current };
+    // SAFETY: ebenso.
+    let stored = unsafe { &mut *stored };
+    let (arena, rig) = (&raw mut ARENA, &raw mut RIG);
     // SAFETY: Arena und Pruefstand gehoeren nur diesem Programm; `main`
     // kehrt nicht zurueck, und ausser ihm greift niemand auf sie zu.
-    let (arena, rig) = unsafe { (&mut *(&raw mut ARENA), (*(&raw mut RIG)).insert(drivers::Rig::default())) };
+    let arena = unsafe { &mut *arena };
+    // SAFETY: ebenso.
+    let rig = unsafe { &mut *rig }.insert(drivers::Rig::default());
     let mut program = app::Program::new(arena, rig);
     let flash = peripherals.FLASH;
     let mut loaded = None;
@@ -532,15 +598,23 @@ fn own_core(mut program: app::Program<'static>, journal: Journaled, timer: Systi
     // 4.5: Jobs rechnen in der Wartezeit bis zum Tick, im eigenen Faden;
     // der Tick holt den Kern zurueck.
     let dispatch = program.dispatch();
-    // SAFETY: ein Faden; der Job-Faden liest den Griff erst nach `start`.
-    let worker = program.jobs().map(|j| unsafe { (*(&raw mut JOBS)).insert(j) as &mut dyn takt_embed::Jobs });
+    let worker = program.jobs().map(|j| {
+        let slot = &raw mut JOBS;
+        // SAFETY: ein Faden; der Job-Faden liest den Griff erst nach `start`.
+        let worker: &'static mut dyn takt_embed::Jobs = unsafe { &mut *slot }.insert(j);
+        worker
+    });
     // 4.5: nur ein Programm mit Jobs bekommt seinen Faden (FB-385); die
     // Griffe gibt es einmal je Programm, hier zum ersten Mal.
     let mut jobs = <Work as takt_embed::Work>::context(|| {
+        let slot = &raw mut JOB_STACK;
         // SAFETY: ein Faden; nur der Job-Faden haelt den Stack danach.
-        let stack = unsafe { (*(&raw mut JOB_STACK)).bytes() };
-        let context = JobContext::start(stack, dispatch.expect("Verteiler"), worker.expect("Griff der Jobs"));
-        JOB_STACK_BOTTOM.store(context.bottom(), Ordering::Relaxed);
+        let stack = unsafe { &mut *slot }.bytes();
+        // Nur fuer ein Programm mit Jobs ruft `Work` den Start, und ein
+        // solches gibt beide Griffe beim ersten Aufruf.
+        let (Some(dispatch), Some(worker)) = (dispatch, worker) else { halt() };
+        let context = JobContext::start(stack, dispatch, worker);
+        JOB_STACK_BOTTOM.store(context.bottom(), Ordering::SeqCst);
         context
     });
     // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
@@ -574,6 +648,14 @@ fn own_core(mut program: app::Program<'static>, journal: Journaled, timer: Systi
     loop {
         sleep.sleep_until_event();
         Mwdt::feed();
+    }
+}
+
+/// Haelt den Kern an, wenn das Board nicht weiter kann.
+#[cfg(any(form = "own", form = "embassy"))]
+fn halt() -> ! {
+    loop {
+        core::hint::spin_loop();
     }
 }
 
@@ -620,7 +702,7 @@ mod embassy_form {
     use takt_rt_baremetal::interrupt::{Alarm as _, Form, Time, release};
 
     use super::{
-        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, Journaled, LED, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude,
+        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, Journaled, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude, led,
         probe, runtime, uart,
     };
 
@@ -650,9 +732,10 @@ mod embassy_form {
     /// Der Executor, sobald er angelegt ist.
     #[esp_hal::ram]
     fn executor() -> Option<&'static Executor> {
+        let slot = &raw const EXECUTOR;
         // SAFETY: Angelegt einmal, bevor der Software-Interrupt zum ersten
         // Mal ansteht; danach nur gelesen.
-        unsafe { (*(&raw const EXECUTOR)).as_ref() }
+        unsafe { &*slot }.as_ref()
     }
 
     /// Embassy ruft es, wenn eine Aufgabe des Executors bereit ist.
@@ -668,7 +751,7 @@ mod embassy_form {
 
     /// Der Alarm des Boards: der Vergleicher fuer den Zeittreiber, die Jobs
     /// (`jobs`) und der Executor (`step`).
-    pub fn alarm(
+    pub(crate) fn alarm(
         systimer: SYSTIMER<'static>,
         jobs: FROM_CPU_INTR1<'static>,
         step: FROM_CPU_INTR2<'static>,
@@ -709,9 +792,10 @@ mod embassy_form {
     #[esp_hal::handler(priority = Priority::Priority1)]
     fn job_work() {
         alarm::jobs_taken();
+        let slot = &raw mut JOBS;
         // SAFETY: `run` legt den Griff vor dem ersten Schritt ab; danach
         // rechnet nur dieser Interrupt mit ihm.
-        if let Some(handle) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
+        if let Some(handle) = unsafe { slot.as_mut() }.and_then(Option::as_mut) {
             handle.work();
         }
         WAKE.job_done();
@@ -727,9 +811,11 @@ mod embassy_form {
     /// der Lauf an die Hauptschleife.
     #[embassy_executor::task]
     async fn takt(mut rt: Takt<Time<SystimerAlarm>>) {
-        let alarm = TaskAlarm::new(&WAKE, pend_jobs as fn());
+        let pend: fn() = pend_jobs;
+        let alarm = TaskAlarm::new(&WAKE, pend);
         let mut form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
-        let mut tunes = Console::new(takt_board_esp32c6::console_byte as fn() -> Option<u8>);
+        let byte: fn() -> Option<u8> = takt_board_esp32c6::console_byte;
+        let mut tunes = Console::new(byte);
         let flush = || {
             if let Some(u) = uart() {
                 u.flush();
@@ -739,14 +825,15 @@ mod embassy_form {
         // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
         // Aufgabe nicht mehr.
         unsafe { ENDED_RUN = Some((rt, stats)) };
-        ENDED.store(true, Ordering::Release);
+        ENDED.store(true, Ordering::SeqCst);
     }
 
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
-    pub fn run(mut program: app::Program<'static>, journal: Journaled, alarm: SystimerAlarm) -> ! {
+    pub(crate) fn run(mut program: app::Program<'static>, journal: Journaled, alarm: SystimerAlarm) -> ! {
+        let jobs = &raw mut JOBS;
         // SAFETY: einmal je Lauf, bevor der erste Schritt rechnet; danach
         // rechnet nur der Job-Interrupt mit dem Griff.
-        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { (&raw mut JOBS).as_mut() }) {
+        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { jobs.as_mut() }) {
             *slot = Some(j);
         }
         // Gemalt nach `init` und vor der Uhr des Laufs, wie in der
@@ -754,10 +841,13 @@ mod embassy_form {
         takt_board_esp32c6::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let rt = runtime(clock, Profile::SHARED, program, journal);
+        let place = &raw mut EXECUTOR;
         // SAFETY: einmal, bevor der Software-Interrupt zum ersten Mal ansteht;
         // danach liest nur seine ISR.
-        let executor = unsafe { (*(&raw mut EXECUTOR)).insert(Executor::new(core::ptr::null_mut())) };
-        executor.spawner().spawn(takt(rt).expect("die Takt-Aufgabe gibt es einmal"));
+        let executor = unsafe { &mut *place }.insert(Executor::new(core::ptr::null_mut()));
+        // Die Takt-Aufgabe gibt es einmal, und sie startet hier.
+        let Ok(task) = takt(rt) else { super::halt() };
+        executor.spawner().spawn(task);
         // Die Aufgabe steht bereit; ihr erster Lauf stellt die erste Frist.
         pender(core::ptr::null_mut());
         host(alarm)
@@ -774,8 +864,9 @@ mod embassy_form {
         // Die Last der Portpruefung (12.11): Ohne FPU rechnet sie in
         // Software, und es gibt keine Register zu sichern.
         let mut load = takt_rt_core::port_test::ForeignLoad::new();
-        let mut gate = TaskAlarm::new(&WAKE, pend_jobs as fn());
-        while !ENDED.load(Ordering::Acquire) {
+        let pend: fn() = pend_jobs;
+        let mut gate = TaskAlarm::new(&WAKE, pend);
+        while !ENDED.load(Ordering::SeqCst) {
             rounds = rounds.wrapping_add(1);
             load.round();
             if LOGICAL {
@@ -789,16 +880,17 @@ mod embassy_form {
             let on = alarm.now_ns() / BLINK_NS % 2 == 0;
             if blink && on != lit {
                 lit = on;
-                // SAFETY: Das Programm bindet die LED nicht; nur diese
-                // Schleife schaltet sie.
-                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
+                // Das Programm bindet die LED nicht; nur diese Schleife
+                // schaltet sie.
+                if let Some(led) = led() {
                     if on { led.on() } else { led.off() }
                 }
             }
             probe();
         }
+        let slot = &raw mut ENDED_RUN;
         // SAFETY: Ab `ENDED` gehoert der Lauf dieser Schleife.
-        if let Some((rt, stats)) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
+        if let Some((rt, stats)) = unsafe { slot.as_mut() }.and_then(Option::take) {
             // Die Runden des Wirts zeigen, dass er neben dem Schritt lief.
             if let Some(u) = uart() {
                 u.drain(DRAIN_ROUNDS);
@@ -857,7 +949,7 @@ mod interrupt_form {
     use takt_rt_baremetal::interrupt::{Form, Time, release};
 
     use super::{
-        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, Journaled, LED, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude,
+        Console, DRAIN_ROUNDS, HW_ADDRESSES, JOBS, Journaled, LOGICAL, Mwdt, Profile, Stats, Takt, app, conclude, led,
         probe, runtime, uart,
     };
 
@@ -890,7 +982,7 @@ mod interrupt_form {
 
     /// Der Alarm des Boards, mit den ISRs des Schritts, der Jobs (`jobs`) und
     /// des Verteilens (`redispatch`).
-    pub fn alarm(
+    pub(crate) fn alarm(
         systimer: SYSTIMER<'static>,
         jobs: FROM_CPU_INTR1<'static>,
         redispatch: FROM_CPU_INTR2<'static>,
@@ -907,12 +999,13 @@ mod interrupt_form {
     /// nimmt die Leitung, was sie nimmt.
     #[esp_hal::ram]
     fn stepping(f: impl FnOnce(&mut Stepping)) {
-        if ENDED.load(Ordering::Acquire) {
+        if ENDED.load(Ordering::SeqCst) {
             return;
         }
+        let slot = &raw mut STEPPING;
         // SAFETY: Bis zum Ende gehoert der Lauf dem Schrittkontext, und
         // seine ISRs unterbrechen einander nicht (`STEPPING`).
-        if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::as_mut) } {
+        if let Some(s) = unsafe { slot.as_mut() }.and_then(Option::as_mut) {
             f(s);
         }
         if let Some(u) = uart() {
@@ -930,7 +1023,7 @@ mod interrupt_form {
         stepping(|s| {
             if let Some(stats) = s.form.on_alarm(&mut s.rt, Some(&mut s.tunes)) {
                 s.ended = Some(stats);
-                ENDED.store(true, Ordering::Release);
+                ENDED.store(true, Ordering::SeqCst);
             }
         });
     }
@@ -953,9 +1046,10 @@ mod interrupt_form {
     #[esp_hal::handler(priority = Priority::Priority1)]
     fn job_work() {
         alarm::jobs_taken();
+        let slot = &raw mut JOBS;
         // SAFETY: `run` legt den Griff vor dem ersten Schritt ab; danach
         // rechnet nur dieser Interrupt mit ihm.
-        if let Some(handle) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
+        if let Some(handle) = unsafe { slot.as_mut() }.and_then(Option::as_mut) {
             handle.work();
         }
         critical_section::with(|cs| {
@@ -966,10 +1060,11 @@ mod interrupt_form {
     }
 
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
-    pub fn run(mut program: app::Program<'static>, journal: Journaled, alarm: SystimerAlarm) -> ! {
+    pub(crate) fn run(mut program: app::Program<'static>, journal: Journaled, alarm: SystimerAlarm) -> ! {
+        let slot = &raw mut JOBS;
         // SAFETY: einmal je Lauf, bevor der erste Schritt rechnet; danach
         // rechnet nur der Job-Interrupt mit dem Griff.
-        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { (&raw mut JOBS).as_mut() }) {
+        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { slot.as_mut() }) {
             *slot = Some(j);
         }
         // Die Abschlusszeile meldet, wie tief der Stack unter Wirt, Jobs und
@@ -979,7 +1074,8 @@ mod interrupt_form {
         takt_board_esp32c6::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let mut rt = runtime(clock, Profile::SHARED, program, journal);
-        let tunes = Console::new(takt_board_esp32c6::console_byte as fn() -> Option<u8>);
+        let byte: fn() -> Option<u8> = takt_board_esp32c6::console_byte;
+        let tunes = Console::new(byte);
         // Der Lauf liegt im Static, bevor der erste Alarm ihn sucht.
         critical_section::with(|_| {
             let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
@@ -1001,7 +1097,7 @@ mod interrupt_form {
         // Die Last der Portpruefung (12.11): Ohne FPU rechnet sie in
         // Software, und es gibt keine Register zu sichern.
         let mut load = takt_rt_core::port_test::ForeignLoad::new();
-        while !ENDED.load(Ordering::Acquire) {
+        while !ENDED.load(Ordering::SeqCst) {
             rounds = rounds.wrapping_add(1);
             load.round();
             if LOGICAL {
@@ -1015,17 +1111,18 @@ mod interrupt_form {
             let on = alarm.now_ns() / BLINK_NS % 2 == 0;
             if blink && on != lit {
                 lit = on;
-                // SAFETY: Das Programm bindet die LED nicht; nur diese
-                // Schleife schaltet sie.
-                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
+                // Das Programm bindet die LED nicht; nur diese Schleife
+                // schaltet sie.
+                if let Some(led) = led() {
                     if on { led.on() } else { led.off() }
                 }
             }
             probe();
         }
+        let slot = &raw mut STEPPING;
         // SAFETY: Nach dem Ende rechnet der Schrittkontext nicht mehr mit dem
         // Lauf; er gehoert jetzt dieser Schleife.
-        if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
+        if let Some(s) = unsafe { slot.as_mut() }.and_then(Option::take) {
             // Die Runden des Wirts zeigen, dass er neben dem Schritt lief.
             if let Some(u) = uart() {
                 u.drain(DRAIN_ROUNDS);

@@ -22,12 +22,14 @@ use esp_hal::timer::systimer::{SystemTimer, Unit};
 use takt_rt_baremetal::TickSource;
 
 static COUNTS_PER_TICK: AtomicU32 = AtomicU32::new(0);
+/// Das Periodenfeld des Vergleichers ist 26 Bit breit.
+const PERIOD_MAX: u32 = (1 << 26) - 1;
 static LAST_COUNTS: AtomicU32 = AtomicU32::new(0);
 static ORIGIN: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
 
 /// Von `init` gesetzt: so viele SYSTIMER-Schritte ist ein Tick lang.
 pub(crate) fn set_counts_per_tick(counts: u32) {
-    COUNTS_PER_TICK.store(counts, Ordering::Relaxed);
+    COUNTS_PER_TICK.store(counts, Ordering::SeqCst);
 }
 
 /// Streckt die Periode des Alarms um `percent` Prozent, mit null wieder auf
@@ -40,9 +42,10 @@ pub(crate) fn set_counts_per_tick(counts: u32) {
 /// wie beim Umschalten des Betriebs mit neuer Phase anzufangen (FB-352).
 /// Die Zahl der Ticks bleibt am Raster.
 pub fn stretch(percent: u32) {
-    let counts = u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed));
-    // Das Periodenfeld ist 26 Bit breit; darueber bleibt die laengste Periode.
-    let period = (counts + counts * u64::from(percent) / 100).min((1 << 26) - 1) as u32;
+    let counts = u64::from(COUNTS_PER_TICK.load(Ordering::SeqCst));
+    let stretched = counts.saturating_add(counts.saturating_mul(u64::from(percent)) / 100);
+    // Ueber dem Periodenfeld bleibt die laengste Periode.
+    let period = u32::try_from(stretched).map_or(PERIOD_MAX, |p| p.min(PERIOD_MAX));
     let systimer = esp_hal::peripherals::SYSTIMER::regs();
     // SAFETY: `period` passt ins Feld; der Alarm 0 gehoert der Tickquelle.
     systimer.target_conf(0).modify(|_, w| unsafe { w.period().bits(period) });
@@ -65,7 +68,7 @@ fn since_origin() -> u64 {
 /// SYSTIMER-Schritten.
 #[esp_hal::ram]
 pub fn on_timer_interrupt(elapsed_counts: u32) {
-    LAST_COUNTS.store(elapsed_counts, Ordering::Relaxed);
+    LAST_COUNTS.store(elapsed_counts, Ordering::SeqCst);
     // 4.5: Ein Job, der gerade rechnet, gibt den Kern an die Hauptschleife.
     crate::jobs::preempt();
 }
@@ -76,9 +79,9 @@ pub fn on_timer_interrupt(elapsed_counts: u32) {
 /// Zaehler wird waehrenddessen gelesen.
 #[esp_hal::ram]
 pub fn count() -> u64 {
-    match u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed)) {
+    match u64::from(COUNTS_PER_TICK.load(Ordering::SeqCst)) {
         0 => 0,
-        counts => since_origin() / counts,
+        counts => since_origin().checked_div(counts).unwrap_or(0),
     }
 }
 
@@ -121,7 +124,7 @@ impl TickSource for SystimerTick {
 
     #[esp_hal::ram]
     fn last_period_ns(&self) -> i64 {
-        takt_board_support::clock::period_ns(self.timer_hz, LAST_COUNTS.load(Ordering::Relaxed))
+        takt_board_support::clock::period_ns(self.timer_hz, LAST_COUNTS.load(Ordering::SeqCst))
     }
 
     /// Ein `wfi`, ausser der Tick ist schon da; geprueft bei gesperrten

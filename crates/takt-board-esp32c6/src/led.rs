@@ -52,9 +52,9 @@ impl Ws2812 {
         let frame = frame(rgb);
         self.channel = Some(match channel.transmit(&frame) {
             Ok(tx) => match tx.wait() {
-                Ok(channel) | Err((_, channel)) => channel,
+                Ok(back) | Err((_, back)) => back,
             },
-            Err((_, channel)) => channel,
+            Err((_, back)) => back,
         });
     }
 
@@ -73,8 +73,8 @@ impl Ws2812 {
 fn frame([r, g, b]: [u8; 3]) -> [PulseCode; 26] {
     let mut out = [PulseCode::end_marker(); 26];
     let grb = (u32::from(g) << 16) | (u32::from(r) << 8) | u32::from(b);
-    for (i, code) in out.iter_mut().take(24).enumerate() {
-        let (high, low) = if grb & (1 << (23 - i)) != 0 { ONE } else { ZERO };
+    for (code, bit) in out.iter_mut().zip((0..24).rev()) {
+        let (high, low) = if grb & (1 << bit) != 0 { ONE } else { ZERO };
         *code = PulseCode::new(Level::High, high, Level::Low, low);
     }
     out[24] = PulseCode::new(Level::Low, RESET, Level::Low, RESET);

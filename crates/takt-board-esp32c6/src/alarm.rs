@@ -75,10 +75,11 @@ fn aim(target: u64) {
     let regs = SYSTIMER::regs();
     let origin = critical_section::with(|cs| ORIGIN.borrow(cs).get());
     loop {
-        let at = origin.wrapping_add(target).max(SystemTimer::unit_value(Unit::Unit0) + MARGIN);
+        let at = origin.wrapping_add(target).max(SystemTimer::unit_value(Unit::Unit0).saturating_add(MARGIN));
+        let [a, b, c, d, e, f, g, h] = at.to_le_bytes();
         regs.conf().modify(|_, w| w.target0_work_en().clear_bit());
-        regs.trgt(0).hi().write(|w| w.hi().set((at >> 32) as u32));
-        regs.trgt(0).lo().write(|w| w.lo().set((at & 0xFFFF_FFFF) as u32));
+        regs.trgt(0).hi().write(|w| w.hi().set(u32::from_le_bytes([e, f, g, h])));
+        regs.trgt(0).lo().write(|w| w.lo().set(u32::from_le_bytes([a, b, c, d])));
         regs.comp_load(0).write(|w| w.load().set_bit());
         regs.conf().modify(|_, w| w.target0_work_en().set_bit());
         if SystemTimer::unit_value(Unit::Unit0) < at {

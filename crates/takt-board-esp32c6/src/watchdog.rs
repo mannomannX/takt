@@ -33,8 +33,11 @@ impl Mwdt {
     #[esp_hal::ram]
     pub fn feed() {
         let regs = TIMG0::regs();
+        // SAFETY: `WKEY` hebt den Schreibschutz des MWDT auf ...
         regs.wdtwprotect().write(|w| unsafe { w.wdt_wkey().bits(WKEY) });
+        // SAFETY: ... ein beliebiger Wert in `WDTFEED` laedt ihn nach ...
         regs.wdtfeed().write(|w| unsafe { w.bits(1) });
+        // SAFETY: ... und jeder andere Schluessel schuetzt wieder.
         regs.wdtwprotect().write(|w| unsafe { w.wdt_wkey().bits(0) });
     }
 }

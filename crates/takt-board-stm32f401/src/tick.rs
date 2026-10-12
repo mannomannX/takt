@@ -39,7 +39,7 @@ static COUNTS_PER_TICK: AtomicU32 = AtomicU32::new(0);
 
 /// Von `init` gesetzt, bevor TIM2 laeuft.
 pub(crate) fn set_counts_per_tick(counts: u32) {
-    COUNTS_PER_TICK.store(counts, Ordering::Relaxed);
+    COUNTS_PER_TICK.store(counts, Ordering::SeqCst);
 }
 
 /// Streckt die Periode von TIM2 um `percent` Prozent, mit null wieder auf
@@ -51,11 +51,12 @@ pub(crate) fn set_counts_per_tick(counts: u32) {
 /// Ueberlauf: Ein kuerzerer Wert unter dem laufenden Zaehler liesse ihn
 /// sonst bis 2^32 weiterzaehlen.
 pub fn stretch(percent: u32) {
-    let counts = u64::from(COUNTS_PER_TICK.load(Ordering::Relaxed));
-    let stretched = counts + counts * u64::from(percent) / 100;
+    let counts = u64::from(COUNTS_PER_TICK.load(Ordering::SeqCst));
+    let stretched = counts.saturating_add(counts.saturating_mul(u64::from(percent)) / 100);
     // SAFETY: TIM2 gehoert der Tickquelle; nur `ARPE` und `ARR` werden geschrieben.
     let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
     tim2.cr1().modify(|_, w| w.arpe().set_bit());
+    // SAFETY: `ARR` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
     tim2.arr().write(|w| unsafe { w.bits(u32::try_from(stretched).unwrap_or(u32::MAX).saturating_sub(1)) });
 }
 
@@ -68,7 +69,7 @@ pub fn stretch(percent: u32) {
 /// belegt, laesst sich nicht zweimal in dasselbe Programm binden.
 pub fn on_timer_interrupt(elapsed_cycles: u32) {
     TICKS.tick();
-    LAST_CYCLES.store(elapsed_cycles, Ordering::Relaxed);
+    LAST_CYCLES.store(elapsed_cycles, Ordering::SeqCst);
     // 4.5: Ein Job, der gerade rechnet, gibt den Kern an die Hauptschleife.
     crate::jobs::preempt();
 }
@@ -119,7 +120,7 @@ impl TickSource for Tim2Tick {
     fn last_period_ns(&self) -> i64 {
         // Die Messung steht in Kernzyklen; `Measurement` rechnet sie um —
         // dieselbe Rechnung, die auch `takt bench` benutzen wird (13.8).
-        takt_board_support::Measurement { cycles: LAST_CYCLES.load(Ordering::Relaxed), core_hz: self.core_hz }.ns()
+        takt_board_support::Measurement { cycles: LAST_CYCLES.load(Ordering::SeqCst), core_hz: self.core_hz }.ns()
     }
 
     /// Ticks mal Schritte je Tick plus der Stand von TIM2 innerhalb des
@@ -132,7 +133,7 @@ impl TickSource for Tim2Tick {
             let before = count();
             let cnt = u64::from(tim2.cnt().read().bits());
             if count() == before {
-                break before * u64::from(self.counts_per_tick) + cnt;
+                break before.saturating_mul(u64::from(self.counts_per_tick)).saturating_add(cnt);
             }
         };
         self.scale.ns(counts)

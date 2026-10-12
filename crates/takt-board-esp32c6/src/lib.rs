@@ -38,8 +38,43 @@
 //! | Telemetrie | USB-Serial-JTAG als Leitung hinter dem Ring aus `takt-rt-baremetal` (`uart.rs`) |
 //! | LED | WS2812 an IO8 (DevKitM-1), ueber RMT-Kanal 0 |
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![allow(unsafe_code, reason = "Registerzugriff und C-ABI; 9.5 fuehrt Treiber in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 pub mod alarm;
 pub mod button;
@@ -86,6 +121,28 @@ pub const CORE_HZ: u32 = 160_000_000;
 
 /// Der Takt des SYSTIMER in Hertz (XTAL 40 MHz durch 2,5).
 pub const TIMER_HZ: u32 = 16_000_000;
+
+// Der RV32-Kern adressiert mit 32 Bit: Ein Registerwort und eine Adresse sind
+// gleich breit, und [`address`] und [`word`] wandeln verlustfrei.
+const _: () = assert!(core::mem::size_of::<usize>() == core::mem::size_of::<u32>());
+
+/// Ein Registerwort als Adresse.
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: in einer const fn wandelt nur `as`; u32 und usize sind auf diesem Ziel gleich breit"
+)]
+pub const fn address(word: u32) -> usize {
+    word as usize
+}
+
+/// Eine Adresse als Registerwort; verlustfrei wie [`address`].
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: in einer const fn wandelt nur `as`; u32 und usize sind auf diesem Ziel gleich breit"
+)]
+pub const fn word(address: usize) -> u32 {
+    address as u32
+}
 
 /// Warum der Tick nicht eingerichtet werden konnte.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

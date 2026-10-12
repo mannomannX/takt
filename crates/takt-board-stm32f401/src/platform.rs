@@ -49,9 +49,21 @@ const LSE_START_CYCLES: u32 = 2 * CORE_HZ;
 const SETTLE: u32 = 1_000_000;
 
 fn registers() -> (&'static rcc::RegisterBlock, &'static pwr::RegisterBlock, &'static rtc::RegisterBlock) {
-    // SAFETY: Beim Start und am Ende eines Laufs fasst nur dieses Modul
-    // RCC_CSR, RCC_BDCR, PWR und die RTC an.
-    unsafe { (&*RCC::ptr(), &*PWR::ptr(), &*RTC::ptr()) }
+    // Beim Start und am Ende eines Laufs fasst nur dieses Modul RCC_CSR,
+    // RCC_BDCR, PWR und die RTC an.
+    // SAFETY: die Register des RCC, siehe oben.
+    let rcc = unsafe { &*RCC::ptr() };
+    // SAFETY: die Register von PWR, siehe oben.
+    let pwr = unsafe { &*PWR::ptr() };
+    // SAFETY: die Register der RTC, siehe oben.
+    let rtc = unsafe { &*RTC::ptr() };
+    (rcc, pwr, rtc)
+}
+
+/// Die untere und die obere Haelfte von `x`, je ein Backup-Register.
+fn halves(x: u64) -> (u32, u32) {
+    let [a, b, c, d, e, f, g, h] = x.to_le_bytes();
+    (u32::from_le_bytes([a, b, c, d]), u32::from_le_bytes([e, f, g, h]))
 }
 
 /// `sys/previous_run` (12.7) aus der Reset-Ursache in `RCC_CSR` und dem
@@ -102,9 +114,10 @@ pub fn continue_deep_sleep() {
 /// ([`continue_deep_sleep`]).
 pub fn deep_sleep(duration_ns: Option<i64>) -> ! {
     let rest = duration_ns.map_or(WITHOUT_TIMER, |d| u64::try_from(d).unwrap_or(0));
+    let (low, high) = halves(rest);
     backup(ENDED, ENDED_MARK);
-    backup(1, rest as u32);
-    backup(2, (rest >> 32) as u32);
+    backup(1, low);
+    backup(2, high);
     backup(0, PENDING);
     SCB::sys_reset()
 }
@@ -122,6 +135,7 @@ fn rtc_hz(rcc: &rcc::RegisterBlock) -> u32 {
     let start = cycles::now();
     for _ in 0..LSE_START_CYCLES {
         if rcc.bdcr().read().lserdy().bit_is_set() {
+            // SAFETY: `0b01` waehlt in `RTCSEL` den LSE, der eben anlief.
             rcc.bdcr().modify(|_, w| unsafe { w.rtcsel().bits(0b01) }.rtcen().set_bit());
             return LSE_HZ;
         }
@@ -136,6 +150,7 @@ fn rtc_hz(rcc: &rcc::RegisterBlock) -> u32 {
             break;
         }
     }
+    // SAFETY: `0b10` waehlt in `RTCSEL` den LSI.
     rcc.bdcr().modify(|_, w| unsafe { w.rtcsel().bits(0b10) }.rtcen().set_bit());
     set_one_hertz(LSI_HZ);
     LSI_HZ
@@ -152,7 +167,13 @@ fn set_one_hertz(hz: u32) {
             break;
         }
     }
-    rtc.prer().write(|w| unsafe { w.prediv_a().bits(127).prediv_s().bits((hz / 128 - 1) as u16) });
+    let prediv_s = u16::try_from((hz / 128).saturating_sub(1)).unwrap_or(u16::MAX).min(0x7FFF);
+    rtc.prer().write(|w| {
+        // SAFETY: 127 passt in die sieben Bit von `PREDIV_A` ...
+        unsafe { w.prediv_a().bits(127) };
+        // SAFETY: ... und `prediv_s` ist auf die 15 Bit von `PREDIV_S` begrenzt.
+        unsafe { w.prediv_s().bits(prediv_s) }
+    });
     rtc.isr().modify(|_, w| w.init().clear_bit());
     lock(rtc);
 }
@@ -166,15 +187,22 @@ fn arm(rtc: &rtc::RegisterBlock, plan: RtcWakeup) {
             break;
         }
     }
+    // SAFETY: `WUT` ist 16 Bit breit und nimmt jeden Wert.
     rtc.wutr().write(|w| unsafe { w.wut().bits(plan.wutr) });
+    // SAFETY: `rtc_wakeup` waehlt `0b000`, `0b100` oder `0b110`, Takte, die
+    // `WUCKSEL` kennt.
     rtc.cr().modify(|_, w| unsafe { w.wucksel().bits(plan.wucksel) });
     rtc.isr().modify(|_, w| w.wutf().clear_bit());
     rtc.cr().modify(|_, w| w.wutie().set_bit().wute().set_bit());
     lock(rtc);
     let rest = u64::try_from(plan.rest_ns).unwrap_or(0);
+    let (low, high) = halves(rest);
+    // SAFETY: Die Backup-Register sind Speicher und nehmen jedes Wort.
     rtc.bkpr(0).write(|w| unsafe { w.bits(if rest > 0 { PENDING } else { 0 }) });
-    rtc.bkpr(1).write(|w| unsafe { w.bits(rest as u32) });
-    rtc.bkpr(2).write(|w| unsafe { w.bits((rest >> 32) as u32) });
+    // SAFETY: wie oben.
+    rtc.bkpr(1).write(|w| unsafe { w.bits(low) });
+    // SAFETY: wie oben.
+    rtc.bkpr(2).write(|w| unsafe { w.bits(high) });
 }
 
 /// Kein Zeitgeber: der Wakeup-Timer aus, kein Rest.
@@ -183,6 +211,7 @@ fn disarm(rtc: &rtc::RegisterBlock) {
     rtc.cr().modify(|_, w| w.wute().clear_bit().wutie().clear_bit());
     rtc.isr().modify(|_, w| w.wutf().clear_bit());
     lock(rtc);
+    // SAFETY: Die Backup-Register sind Speicher und nehmen jedes Wort.
     rtc.bkpr(0).write(|w| unsafe { w.bits(0) });
 }
 
@@ -198,16 +227,22 @@ pub(crate) fn backup(n: usize, value: u32) {
     let (rcc, pwr, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
     pwr.cr().modify(|_, w| w.dbp().set_bit());
+    // SAFETY: Die Backup-Register sind Speicher und nehmen jedes Wort.
     rtc.bkpr(n).write(|w| unsafe { w.bits(value) });
     pwr.cr().modify(|_, w| w.dbp().clear_bit());
 }
 
+/// Hebt den Schreibschutz der RTC auf (RM0368 17.3.5).
 fn unlock(rtc: &rtc::RegisterBlock) {
+    // SAFETY: `0xCA`, dann `0x53` ist die Folge, die `WPR` erwartet.
     rtc.wpr().write(|w| unsafe { w.key().bits(0xCA) });
+    // SAFETY: siehe oben.
     rtc.wpr().write(|w| unsafe { w.key().bits(0x53) });
 }
 
+/// Setzt den Schreibschutz wieder.
 fn lock(rtc: &rtc::RegisterBlock) {
+    // SAFETY: Jeder andere Wert als die Folge sperrt `WPR` wieder.
     rtc.wpr().write(|w| unsafe { w.key().bits(0xFF) });
 }
 

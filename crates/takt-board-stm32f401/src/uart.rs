@@ -63,12 +63,13 @@ static RING_TAKEN: AtomicBool = AtomicBool::new(false);
 /// Der Ring fuer die erste Telemetrie des Laufs; jede weitere bekommt einen
 /// leeren und verwirft, was sie schreibt, sichtbar in `verworfen`.
 fn ring() -> &'static mut [u8] {
-    if RING_TAKEN.swap(true, Ordering::AcqRel) {
+    if RING_TAKEN.swap(true, Ordering::SeqCst) {
         return &mut [];
     }
+    let bytes = &raw mut RING_BYTES;
     // SAFETY: Nur der erste Aufruf erreicht die Statik; danach haelt die
     // Telemetrie sie allein.
-    unsafe { (&raw mut RING_BYTES).as_mut() }.map_or(&mut [], |r| &mut r[..])
+    unsafe { bytes.as_mut() }.map_or(&mut [], |r| &mut r[..])
 }
 
 /// Was die Leitung ohne Warten annimmt: gut fuenf Millisekunden bei
@@ -117,11 +118,23 @@ impl Usart1 {
 
         // PA9 sendet, PA10 empfaengt. RX mit Pull-up: Ohne Gegenstelle
         // laege der Pin in der Luft und lieferte Rahmenfehler als Bytes.
-        gpioa.moder().modify(|_, w| unsafe { w.moder9().bits(0b10).moder10().bits(0b10) });
-        gpioa.afrh().modify(|_, w| unsafe { w.afrh9().bits(7).afrh10().bits(7) });
+        gpioa.moder().modify(|_, w| {
+            // SAFETY: `0b10` ist in `MODER` die alternative Funktion ...
+            unsafe { w.moder9().bits(0b10) };
+            // SAFETY: ... fuer beide Pins.
+            unsafe { w.moder10().bits(0b10) }
+        });
+        gpioa.afrh().modify(|_, w| {
+            // SAFETY: AF7 ist USART1 an PA9 ...
+            unsafe { w.afrh9().bits(7) };
+            // SAFETY: ... und an PA10 (Datenblatt, Tabelle 9).
+            unsafe { w.afrh10().bits(7) }
+        });
+        // SAFETY: `0b01` ist in `PUPDR` der Pull-up.
         gpioa.pupdr().modify(|_, w| unsafe { w.pupdr10().bits(0b01) });
         // Hohe Flankensteilheit: Bei 921600 Baud ist die Flanke ein
         // merklicher Teil des Bits.
+        // SAFETY: `0b10` ist in `OSPEEDR` die hohe Geschwindigkeit.
         gpioa.ospeedr().modify(|_, w| unsafe { w.ospeedr9().bits(0b10) });
 
         // Der Teiler steht als Festkommazahl: obere 12 Bit ganzzahlig,
@@ -129,6 +142,7 @@ impl Usart1 {
         // `takt-board-support`, wo sie getestet ist — und wo ihre erste
         // Fassung um den Faktor 16 danebenlag (FB-274).
         let brr = takt_board_support::uart::divisor(pclk_hz, baud)?;
+        // SAFETY: `uart::divisor` prueft den Teiler gegen die 16 Bit von `BRR`.
         usart.brr().write(|w| unsafe { w.bits(brr) });
         usart.cr1().modify(|_, w| {
             w.te().set_bit();
@@ -163,15 +177,17 @@ pub fn on_interrupt() {
             if sr.rxne().bit_is_clear() && sr.ore().bit_is_clear() {
                 break;
             }
-            match usart.dr().read().dr().bits() as u8 {
-                XOFF => PAUSED.store(true, Ordering::Relaxed),
+            // Acht Datenbits: Das neunte Bit von `DR` ist ohne Paritaet null.
+            let [byte, _] = usart.dr().read().dr().bits().to_le_bytes();
+            match byte {
+                XOFF => PAUSED.store(true, Ordering::SeqCst),
                 XON => {
-                    PAUSED.store(false, Ordering::Relaxed);
+                    PAUSED.store(false, Ordering::SeqCst);
                     usart.cr1().modify(|_, w| w.txeie().set_bit());
                 }
                 b => {
                     if magic.feed(b) {
-                        HANDBACK.store(true, Ordering::Relaxed);
+                        HANDBACK.store(true, Ordering::SeqCst);
                     }
                     let _ = RX.push(b);
                 }
@@ -180,8 +196,9 @@ pub fn on_interrupt() {
         cell.set(magic);
     });
     if usart.cr1().read().txeie().bit_is_set() && usart.sr().read().txe().bit_is_set() {
-        match if PAUSED.load(Ordering::Relaxed) { None } else { TX.pop() } {
+        match if PAUSED.load(Ordering::SeqCst) { None } else { TX.pop() } {
             Some(b) => {
+                // SAFETY: ein Datenbyte in den neun Bit von `DR`.
                 usart.dr().write(|w| unsafe { w.dr().bits(u16::from(b)) });
             }
             None => {
@@ -204,10 +221,10 @@ impl Port for Usart1 {
 
     /// Weckt den Sende-Interrupt und fuehrt einen Wunsch des Hosts aus.
     fn flush(&mut self) {
-        if HANDBACK.load(Ordering::Relaxed) {
+        if HANDBACK.load(Ordering::SeqCst) {
             crate::bootloader::request();
         }
-        if !TX.is_empty() && !PAUSED.load(Ordering::Relaxed) {
+        if !TX.is_empty() && !PAUSED.load(Ordering::SeqCst) {
             cortex_m::interrupt::free(|_| self.usart.cr1().modify(|_, w| w.txeie().set_bit()));
         }
     }

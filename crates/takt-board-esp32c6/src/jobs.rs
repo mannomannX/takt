@@ -66,26 +66,26 @@ static PAINTED: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 /// Malt den Job-Stack ueber dem Waechter, bevor der Faden ihn benutzt, und
 /// merkt sich seine Grenzen.
 fn paint(stack: &mut [u8]) {
-    let top = stack.as_ptr() as usize + stack.len();
+    let top = stack.as_ptr_range().end.expose_provenance();
     let from = GUARD.min(stack.len());
-    let painted = &mut stack[from..];
-    let bottom = painted.as_ptr() as usize;
+    let painted = stack.get_mut(from..).unwrap_or_default();
+    let bottom = painted.as_ptr().expose_provenance();
     for word in painted.chunks_exact_mut(4) {
         word.copy_from_slice(&crate::stack::PATTERN.to_ne_bytes());
     }
-    PAINTED[0].store(bottom as u32, Ordering::Relaxed);
-    PAINTED[1].store(top as u32, Ordering::Relaxed);
+    PAINTED[0].store(crate::word(bottom), Ordering::SeqCst);
+    PAINTED[1].store(crate::word(top), Ordering::SeqCst);
 }
 
 /// Wie tief der Job-Stack bisher reichte, in Byte vom oberen Ende (12.3,
 /// 13.8); `None` ohne Job-Faden. Nur, wenn der Faden nicht rechnet: nach dem
 /// Lauf oder aus dem Kontext des Schritts.
 pub fn high_water() -> Option<u32> {
-    if !STARTED.load(Ordering::Acquire) {
+    if !STARTED.load(Ordering::SeqCst) {
         return None;
     }
-    let (bottom, top) = (PAINTED[0].load(Ordering::Relaxed), PAINTED[1].load(Ordering::Relaxed));
-    Some(crate::stack::depth(bottom as usize, top as usize))
+    let (bottom, top) = (PAINTED[0].load(Ordering::SeqCst), PAINTED[1].load(Ordering::SeqCst));
+    Some(crate::stack::depth(crate::address(bottom), crate::address(top)))
 }
 
 /// Der Griff, mit dem der Faden des Jobs rechnet: vor `STARTED` gesetzt,
@@ -243,33 +243,39 @@ impl<D: Dispatch> JobContext<D> {
     /// ersten Mal rechnen laesst.
     fn on(stack: &'static mut [u8], dispatch: D) -> JobContext<D> {
         paint(stack);
-        let bottom = stack.as_ptr() as u32;
+        let bottom = crate::word(stack.as_ptr().expose_provenance());
         watch(bottom);
-        let top = (stack.as_mut_ptr() as usize + stack.len()) & !15;
+        let top = stack.as_mut_ptr_range().end.expose_provenance() & !15;
         let mut mstatus: u32;
         // SAFETY: liest nur das Statusregister des Kerns.
         unsafe { core::arch::asm!("csrr {0}, mstatus", out(reg) mstatus) };
         mstatus = (mstatus & !MIE) | MPIE | MPP_MACHINE;
         let mut job: Thread = [0; 31];
-        job[SP] = top as u32;
-        job[MEPC] = worker as extern "C" fn() -> ! as usize as u32;
+        job[SP] = crate::word(top);
+        job[MEPC] = crate::word(worker_address());
         job[MSTATUS] = mstatus;
-        let s = &raw mut TAKT_JOB_SWITCH;
-        // SAFETY: Vor dem ersten Wechsel liest niemand die Tabelle; die
-        // Unterbrechung wird erst danach gebunden.
-        unsafe {
-            write_volatile(&raw mut JOB, job);
-            write_volatile(&raw mut (*s).cur, &raw mut MAIN);
-            write_volatile(&raw mut (*s).next, &raw mut MAIN);
-            write_volatile(&raw mut (*s).source, INTPRI::regs().cpu_intr_from_cpu(0).as_ptr());
-        }
+        // Vor dem ersten Wechsel liest niemand die Tabelle; die Unterbrechung
+        // wird erst danach gebunden. Was folgt, schreibt allein.
+        let (main, slot) = (&raw mut MAIN, &raw mut JOB);
+        // SAFETY: die Register des Job-Fadens, siehe oben.
+        unsafe { write_volatile(slot, job) };
+        // SAFETY: bildet nur die Adresse eines Felds der Statik.
+        let cur = unsafe { &raw mut TAKT_JOB_SWITCH.cur };
+        // SAFETY: Es laeuft die Hauptschleife, siehe oben.
+        unsafe { write_volatile(cur, main) };
+        // SAFETY: Ohne Wunsch bleibt sie es, siehe oben.
+        unsafe { write_volatile(next(), main) };
+        // SAFETY: bildet nur die Adresse eines Felds der Statik.
+        let source = unsafe { &raw mut TAKT_JOB_SWITCH.source };
+        // SAFETY: die Quelle, die der Handler loescht, siehe oben.
+        unsafe { write_volatile(source, INTPRI::regs().cpu_intr_from_cpu(0).as_ptr()) };
         esp_hal::interrupt::enable_direct(
             Interrupt::FROM_CPU_INTR0,
             Priority::Priority1,
             DirectBindableCpuInterrupt::Interrupt0,
             takt_job_switch,
         );
-        STARTED.store(true, Ordering::Release);
+        STARTED.store(true, Ordering::SeqCst);
         JobContext { bottom, dispatch }
     }
 
@@ -302,17 +308,26 @@ impl<D: Dispatch> JobContext<D> {
 /// die Hauptschleife, die schon lief.
 #[esp_hal::ram]
 pub fn preempt() {
-    if STARTED.load(Ordering::Acquire) {
+    if STARTED.load(Ordering::SeqCst) {
+        let main = &raw mut MAIN;
         // SAFETY: ein Wort, das der Handler bei gesperrten Interrupts liest.
-        unsafe { write_volatile(&raw mut TAKT_JOB_SWITCH.next, &raw mut MAIN) };
+        unsafe { write_volatile(next(), main) };
         raise();
     }
+}
+
+/// Das Feld `next` der Tabelle, ohne es zu lesen; jeder Zugriff darauf ist
+/// volatil, denn der Handler liest es.
+#[esp_hal::ram]
+fn next() -> *mut *mut Thread {
+    // SAFETY: bildet nur die Adresse eines Felds der Statik.
+    unsafe { &raw mut TAKT_JOB_SWITCH.next }
 }
 
 /// Wechselt zu `thread` und kehrt zurueck, wenn der Kern wieder hier ist.
 fn switch_to(thread: *mut Thread) {
     // SAFETY: ein Wort, das der Handler bei gesperrten Interrupts liest.
-    unsafe { write_volatile(&raw mut TAKT_JOB_SWITCH.next, thread) };
+    unsafe { write_volatile(next(), thread) };
     raise();
     // Der Handler loescht die Quelle beim Wechsel; steht sie nicht mehr,
     // ist dieser Faden schon wieder dran.
@@ -328,11 +343,23 @@ fn raise() {
 /// den Kern zurueck.
 extern "C" fn worker() -> ! {
     loop {
+        let slot = &raw mut JOBS;
         // SAFETY: `start` setzte es vor dem ersten Wechsel hierher; danach
         // benutzt es nur dieser Faden.
-        if let Some(jobs) = unsafe { (&raw mut JOBS).as_mut() }.and_then(Option::as_deref_mut) {
+        if let Some(jobs) = unsafe { slot.as_mut() }.and_then(Option::as_deref_mut) {
             jobs.work();
         }
         switch_to(&raw mut MAIN);
     }
+}
+
+/// Die Adresse von [`worker`]: Der Handler laedt sie beim ersten Wechsel in
+/// den Job-Faden als `mepc`.
+#[expect(
+    clippy::fn_to_numeric_cast_any,
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.11.1: die Register des Fadens nennen seinen Einsprung als Adresse; die einer Funktion liefert nur `as`"
+)]
+fn worker_address() -> usize {
+    worker as extern "C" fn() -> ! as usize
 }

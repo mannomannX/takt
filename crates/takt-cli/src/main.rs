@@ -1205,9 +1205,10 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
         p.config.overrun == takt_mir::program::OverrunPolicy::Alert
     ));
 
-    s.push_str("/// Die Ausgaenge in der Reihenfolge, die `P_output` des Rahmens erwartet.\n");
+    // Die Ausgaenge in der Reihenfolge, die `P_output` des Rahmens erwartet.
     let outputs = output_names(p);
     for (index, name) in outputs.iter().enumerate() {
+        s.push_str(&format!("/// Die Stellung des Ausgangs `{name}` fuer `P_output`.\n"));
         s.push_str(&format!("pub const OUT_{name}: i32 = {index};\n"));
     }
     s.push_str(&format!("\n/// Wie viele Ausgaenge das Programm hat.\npub const OUTPUTS: i32 = {};\n", outputs.len()));

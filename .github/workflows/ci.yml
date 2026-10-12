@@ -55,8 +55,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Die Crates mit `unsafe`, die als eigene Workspaces neben dem Haupt-
-      # Workspace stehen (plan/cert.md Abschnitt 2); die Board-Crates und
-      # Bring-ups kommen mit dem Bau der Abbilder dazu (M11 Schritt 34d).
+      # Workspace stehen (plan/cert.md Abschnitt 2); die Board-Crates, das
+      # Sprungbrett und die Bring-ups prueft der Job `boards`.
       - name: rustfmt und Clippy der eigenen Workspaces
         shell: bash
         run: |
@@ -67,6 +67,82 @@ jobs:
           cargo clippy --manifest-path crates/takt-embed-c/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path crates/takt-native-abi/Cargo.toml --features host,ecdsa,rsa,aes-gcm --lib -- -D warnings
           cargo clippy --manifest-path crates/takt-native-abi/Cargo.toml --all-targets -- -D warnings
+
+  # Die Board-Crates, das Sprungbrett und die Bring-ups (M11 Schritt 33a):
+  # eigene Workspaces fuer ihre Ziele, neben dem Haupt-Workspace. Die
+  # Bring-ups uebersetzen beim Bau ein Takt-Programm (`build.rs`, das aus
+  # `takt.toml`) mit dem `takt` aus `target/release`; darum ein gemeinsames
+  # Zielverzeichnis und Clippy im Profil `release` wie `tools/embedded.sh`.
+  # Jede Form des Ports (12.11) baut das Binary `takt` anders. Jeder Schritt
+  # prueft alles und scheitert erst am Ende, mit jedem Befund im Protokoll.
+  boards:
+    name: rustfmt und Clippy der Board-Crates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      # Von aussen gilt `.cargo/config.toml` des Bring-ups nicht (FB-449).
+      ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK: "true"
+      ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM: "false"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: boards
+          workspaces: |
+            . -> target
+            crates/takt-board-stm32f401 -> ../../target
+            crates/takt-board-esp32c6 -> ../../target
+            crates/takt-trampoline-stm32f401 -> ../../target
+            crates/takt-bringup-host -> ../../target
+            crates/takt-bringup-stm32f401 -> ../../target
+            crates/takt-bringup-esp32c6 -> ../../target
+      - name: rustfmt
+        shell: bash
+        run: |
+          for m in takt-board-stm32f401 takt-board-esp32c6 takt-trampoline-stm32f401 takt-bringup-host \
+                   takt-bringup-stm32f401 takt-bringup-esp32c6; do
+            cargo fmt --manifest-path "crates/$m/Cargo.toml" --check
+          done
+      - name: Clippy der Board-Crates und des Sprungbretts
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          failed=()
+          check() { echo "::group::$*"; cargo clippy "$@" -- -D warnings || failed+=("$*"); echo "::endgroup::"; }
+          f401=(--release --target thumbv7em-none-eabihf)
+          c6=(--release --target riscv32imac-unknown-none-elf)
+          for features in "" embassy; do
+            check --manifest-path crates/takt-board-stm32f401/Cargo.toml "${f401[@]}" --features "$features"
+            check --manifest-path crates/takt-board-esp32c6/Cargo.toml "${c6[@]}" --features "$features"
+          done
+          check --manifest-path crates/takt-trampoline-stm32f401/Cargo.toml "${f401[@]}"
+          check --manifest-path crates/takt-bringup-host/Cargo.toml --all-targets
+          if [ ${#failed[@]} -gt 0 ]; then printf 'gescheitert: %s\n' "${failed[@]}"; exit 1; fi
+      - name: takt
+        id: takt
+        if: ${{ !cancelled() }}
+        run: cargo build --release -p takt-cli
+      # Die eigene Form mit allen Binaries und dem Messprogramm, dann `takt`
+      # in jeder weiteren Form.
+      - name: Clippy der Bring-ups
+        if: ${{ !cancelled() && steps.takt.outcome == 'success' }}
+        shell: bash
+        run: |
+          failed=()
+          check() { echo "::group::$*"; cargo clippy "$@" -- -D warnings || failed+=("$*"); echo "::endgroup::"; }
+          f401=(--manifest-path crates/takt-bringup-stm32f401/Cargo.toml --release --target thumbv7em-none-eabihf)
+          c6=(--manifest-path crates/takt-bringup-esp32c6/Cargo.toml --release --target riscv32imac-unknown-none-elf)
+          check "${f401[@]}" --bins --features bench
+          for form in interrupt poll rtic embassy; do
+            check "${f401[@]}" --bin takt --features "$form"
+          done
+          check "${c6[@]}" --bins --features bench
+          for form in interrupt embassy; do
+            check "${c6[@]}" --bin takt --features "$form"
+          done
+          if [ ${#failed[@]} -gt 0 ]; then printf 'gescheitert: %s\n' "${failed[@]}"; exit 1; fi
 
   test:
     name: Suite (${{ matrix.os }})

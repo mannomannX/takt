@@ -47,15 +47,15 @@ pub fn previous_run() -> u32 {
     );
     let stored = match reason {
         Some(SocResetReason::SysRtcWdt) => RUNNING,
-        _ => ENDED.load(Ordering::Relaxed),
+        _ => ENDED.load(Ordering::SeqCst),
     };
-    ENDED.store(RUNNING, Ordering::Relaxed);
+    ENDED.store(RUNNING, Ordering::SeqCst);
     takt_board_support::platform::previous_run(watchdog, stored)
 }
 
 /// `next_run = NOW`: der Software-Reset; der naechste Lauf meldet `ENDED`.
 pub fn restart() -> ! {
-    ENDED.store(ENDED_MARK, Ordering::Relaxed);
+    ENDED.store(ENDED_MARK, Ordering::SeqCst);
     esp_hal::system::software_reset()
 }
 
@@ -65,10 +65,19 @@ pub fn restart() -> ! {
 /// also weckt ohne Zeitgeber nur ein Reset — `ON_WAKE` und `ON_START` sind
 /// hier dasselbe.
 pub fn deep_sleep(duration_ns: Option<i64>) -> ! {
-    ENDED.store(ENDED_MARK, Ordering::Relaxed);
+    ENDED.store(ENDED_MARK, Ordering::SeqCst);
     // SAFETY: Der Lauf ist zu Ende; ausser diesem Aufruf haelt niemand `LPWR`.
     let mut low = LowPower::new(unsafe { LPWR::steal() });
     let us = duration_ns.map_or(NO_WAKE_TIMER_US, deep_sleep_us);
-    low.set_wakeup_deadline(Instant::now() + Duration::from_micros(us));
+    low.set_wakeup_deadline(wake_at(us));
     low.sleep_deep(RtcSleepConfig::deep())
+}
+
+/// Der Zeitpunkt `us` Mikrosekunden nach jetzt.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "MISRA C:2025 D.4.1: `Instant` aus `esp-hal` addiert nur mit `+`; `deep_sleep_us` bleibt unter 2^54 us und die Zeitachse beim Start nahe null, die Summe also weit unter 2^64"
+)]
+fn wake_at(us: u64) -> Instant {
+    Instant::now() + Duration::from_micros(us)
 }

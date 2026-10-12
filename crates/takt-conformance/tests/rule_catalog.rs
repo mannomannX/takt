@@ -158,40 +158,18 @@ fn catalog_lints() -> BTreeSet<String> {
     out
 }
 
-/// Crates der Stufe 2, die ihre Lints noch nicht tragen (M11 Schritt 33a,
-/// in Arbeit). Die Liste schrumpft nur: Wer den Kopf bekommt, faellt
-/// heraus, sonst scheitert der Test.
-const PENDING: &[&str] = &[
-    "takt-board-esp32c6",
-    "takt-board-stm32f401",
-    "takt-bringup-esp32c6",
-    "takt-bringup-host",
-    "takt-bringup-stm32f401",
-    "takt-trampoline-stm32f401",
-];
+/// Crates der Stufe 2, die ihre Lints noch nicht tragen. Die Liste
+/// schrumpft nur: Wer den Kopf bekommt, faellt heraus, sonst scheitert der
+/// Test. Seit M11 Schritt 33a leer; ein neues Crate der Stufe 2 kommt mit
+/// seinem Kopf.
+const PENDING: &[&str] = &[];
 
 /// Crates mit `unsafe`, die die Lints der Stufe `2 mit `unsafe`` noch nicht
 /// tragen; schrumpft wie [`PENDING`].
-const PENDING_UNSAFE: &[&str] = &[
-    "takt-board-esp32c6",
-    "takt-board-stm32f401",
-    "takt-bringup-esp32c6",
-    "takt-bringup-host",
-    "takt-bringup-stm32f401",
-    "takt-trampoline-stm32f401",
-];
+const PENDING_UNSAFE: &[&str] = &[];
 
-/// Crates, die Stufe 1 noch nicht tragen: die Board-Crates, das Sprungbrett
-/// und die Bring-ups, die erst mit einem Board-Bau geprueft werden;
-/// schrumpft wie [`PENDING`].
-const PENDING_TIER1: &[&str] = &[
-    "takt-board-esp32c6",
-    "takt-board-stm32f401",
-    "takt-bringup-esp32c6",
-    "takt-bringup-host",
-    "takt-bringup-stm32f401",
-    "takt-trampoline-stm32f401",
-];
+/// Crates, die Stufe 1 noch nicht tragen; schrumpft wie [`PENDING`].
+const PENDING_TIER1: &[&str] = &[];
 
 /// Die Wurzeln eines Crates: `lib.rs` und `main.rs`, ohne beide jedes
 /// Programm unter `src/bin`. Jede ist ein eigenes Crate mit eigenem Kopf.
@@ -369,7 +347,13 @@ fn every_crate_with_unsafe_carries_the_unsafe_lints() {
 /// Abweichungen je Crate und Regel. Die Zahl steht hier, damit eine neue
 /// Abweichung auffaellt und eine behobene die Ratsche senkt.
 const DEVIATIONS: &[(&str, &str, usize)] = &[
+    ("takt-board-esp32c6", "D.4.1", 1),
+    ("takt-board-esp32c6", "R.10.5", 3),
+    ("takt-board-esp32c6", "R.11.1", 1),
+    ("takt-board-stm32f401", "R.10.5", 3),
+    ("takt-board-stm32f401", "R.11.1", 1),
     ("takt-board-support", "R.10.5", 2),
+    ("takt-bringup-stm32f401", "R.10.5", 1),
     ("takt-embed", "D.4.1", 5),
     ("takt-hal", "R.10.5", 2),
     ("takt-native", "D.4.1", 1),

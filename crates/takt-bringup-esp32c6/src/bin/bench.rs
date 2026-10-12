@@ -6,9 +6,44 @@
 //! gesperrten Interrupts. Messprogramm und Haken liegen im RAM (12.3,
 //! `takt_bench_ram.x`): Aus dem Flash-Cache maesse der Kern den Cache mit.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
 #![allow(unsafe_code, reason = "C-ABI des Messprogramms; 9.5 fuehrt Treiber in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
@@ -18,7 +53,7 @@ use takt_rt_baremetal::{DRAIN_ROUNDS, Sleep};
 esp_bootloader_esp_idf::esp_app_desc!();
 
 /// Das Messprogramm (`TAKT_BENCH_RS`).
-mod takt_bench {
+pub mod takt_bench {
     #![allow(dead_code, reason = "die Kennung `SUITE` braucht nur, wer das Protokoll selbst prueft")]
     include!(env!("TAKT_BENCH_RS"));
 }

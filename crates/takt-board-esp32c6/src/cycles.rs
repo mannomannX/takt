@@ -11,12 +11,11 @@ use takt_board_support::Measurement;
 
 /// Schaltet den Zaehler ein: Ereignis Zyklen, Zaehlen erlaubt.
 pub fn enable() {
-    // SAFETY: Schreibzugriffe auf die Performance-CSRs des eigenen Kerns;
-    // sie beeinflussen nur den Zaehler.
-    unsafe {
-        core::arch::asm!("csrw 0x7e0, {0}", in(reg) 1usize, options(nomem, nostack));
-        core::arch::asm!("csrw 0x7e1, {0}", in(reg) 1usize, options(nomem, nostack));
-    }
+    // SAFETY: Schreibzugriff auf einen Performance-CSR des eigenen Kerns;
+    // er beeinflusst nur den Zaehler.
+    unsafe { core::arch::asm!("csrw 0x7e0, {0}", in(reg) 1usize, options(nomem, nostack)) };
+    // SAFETY: wie oben.
+    unsafe { core::arch::asm!("csrw 0x7e1, {0}", in(reg) 1usize, options(nomem, nostack)) };
 }
 
 /// Der aktuelle Zaehlerstand; laeuft bei 160 MHz alle 27 Sekunden ueber,
@@ -25,7 +24,7 @@ pub fn now() -> u32 {
     let r: usize;
     // SAFETY: ein Lesezugriff auf den Zaehler-CSR ohne Nebenwirkung.
     unsafe { core::arch::asm!("csrr {0}, 0x7e2", out(reg) r, options(nomem, nostack)) };
-    r as u32
+    crate::word(r)
 }
 
 /// Misst, wie lange `f` dauert.

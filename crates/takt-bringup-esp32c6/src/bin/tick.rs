@@ -2,8 +2,43 @@
 //! Zaehler in der ISR, gemessene Periode aus dem Zyklenzaehler. Jede
 //! Sekunde eine Zeile ueber USB-Serial-JTAG — Tickzaehler, gemessene
 //! Periode, verpasste Ticks.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use esp_hal::clock::CpuClock;
 use esp_hal::main;
@@ -50,10 +85,10 @@ fn main() -> ! {
     loop {
         clock.wait_for_tick();
         let now = clock.ticks();
-        missed += now.saturating_sub(last).saturating_sub(1);
+        missed = missed.saturating_add(now.saturating_sub(last).saturating_sub(1));
         last = now;
         if now >= next_report {
-            next_report = now + REPORT_EVERY;
+            next_report = now.saturating_add(REPORT_EVERY);
             lit = !lit;
             if let Some(led) = led.as_mut() {
                 if lit { led.on() } else { led.off() }

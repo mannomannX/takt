@@ -24,7 +24,33 @@
 //! es als Lieferform (`takt_embed::build`), mit dem Pruefstand `Rig` als
 //! Treiberobjekt, und reicht die Huelle an [`run`].
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![allow(unsafe_code, reason = "Telemetrie fuer den C-Rahmen; 9.5 fuehrt ihn in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "die Lints fuer `unsafe` (plan/cert.md Abschnitt 6); Stufe 2 nicht, das Crate laeuft nur auf dem Wirt"
+    )
+)]
 
 use std::io::{BufWriter, Stdout, Write as _};
 use std::process::ExitCode;
@@ -55,8 +81,9 @@ type Line = Telemetry<Console>;
 static mut LINE: Option<Line> = None;
 
 fn line() -> Option<&'static mut Line> {
+    let slot = &raw mut LINE;
     // SAFETY: ein Faden; der Rahmen ruft die Leitung nur aus der Schleife.
-    unsafe { (&raw mut LINE).as_mut().and_then(Option::as_mut) }
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
 }
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
@@ -175,8 +202,8 @@ where
         eprintln!("Aufruf: <binary> TICKS");
         return ExitCode::FAILURE;
     };
-    // SAFETY: vor dem ersten Aufruf des Rahmens, in einem Faden.
     let ring = vec![0; 4096].leak();
+    // SAFETY: vor dem ersten Aufruf des Rahmens, in einem Faden.
     unsafe { LINE = Some(Telemetry::new(Console(BufWriter::new(std::io::stdout())), ring).lossless()) };
     let Some(head) = line() else { return ExitCode::FAILURE };
     head.write("takt auf dem wirt");

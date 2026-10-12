@@ -12,9 +12,44 @@
 //! Peripherie, kein Reset-Flag. Die Anwendung beginnt wie direkt hinter dem
 //! HID-Bootloader und setzt `VTOR` selbst (`set-vtor` im Bring-up).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
 #![allow(unsafe_code, reason = "Sprung in die Anwendung ueber ihre Vektortabelle; 9.5 fuehrt den Start in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use cortex_m_rt::entry;
 use takt_board_stm32f401::bootloader;
@@ -30,10 +65,12 @@ const RAM: core::ops::RangeInclusive<u32> = 0x2000_0000..=0x2001_0000;
 
 #[entry]
 fn main() -> ! {
-    let table = APP as *const u32;
-    // SAFETY: die ersten beiden Worte der Anwendung, im Flash, das immer
-    // lesbar abgebildet ist; geloescht stehen dort `0xFFFF_FFFF`.
-    let (sp, reset) = unsafe { (table.read_volatile(), table.add(1).read_volatile()) };
+    let table = core::ptr::with_exposed_provenance::<u32>(takt_board_stm32f401::address(APP));
+    // SAFETY: das erste Wort der Anwendung, im Flash, das immer lesbar
+    // abgebildet ist; geloescht steht dort `0xFFFF_FFFF`.
+    let sp = unsafe { table.read_volatile() };
+    // SAFETY: das zweite, ebenso.
+    let reset = unsafe { table.wrapping_add(1).read_volatile() };
     if RAM.contains(&sp) && (APP..APP_END).contains(&reset) && reset % 2 == 1 {
         // SAFETY: Die Vektortabelle ist plausibel: Stackzeiger im RAM,
         // Resetvektor in der Anwendung und Thumb. Das Sprungbrett kehrt

@@ -7,7 +7,7 @@
 //! das untere liegt ueber dem Waechter der MPU (`mpu::stack_floor`): Dort
 //! schreibt und liest niemand, auch das Painting nicht (FB-353).
 
-use core::ptr::{read_volatile, write_volatile};
+use core::ptr::{read_volatile, with_exposed_provenance, with_exposed_provenance_mut, write_volatile};
 
 unsafe extern "C" {
     static _stack_start: u32;
@@ -21,27 +21,25 @@ pub(crate) const PATTERN: u32 = 0xC5C5_C5C5;
 const MARGIN: usize = 256;
 
 fn bounds() -> (usize, usize) {
-    (crate::mpu::stack_floor() as usize, &raw const _stack_start as usize)
+    (crate::address(crate::mpu::stack_floor()), (&raw const _stack_start).expose_provenance())
 }
 
 /// Fuellt den Stack vom unteren Ende bis kurz unter den Stackzeiger.
 pub fn paint() {
     let (bottom, _) = bounds();
-    let limit = (cortex_m::register::msp::read() as usize).saturating_sub(MARGIN) & !3;
-    let mut at = bottom;
-    while at < limit {
+    let limit = crate::address(cortex_m::register::msp::read()).saturating_sub(MARGIN) & !3;
+    for at in (bottom..limit).step_by(4) {
         // SAFETY: Das Wort liegt zwischen dem unteren Ende des Stacks und
         // dem Stackzeiger — Speicher, den niemand benutzt, bis der Stack
         // dorthin waechst.
-        unsafe { write_volatile(at as *mut u32, PATTERN) };
-        at += 4;
+        unsafe { write_volatile(with_exposed_provenance_mut::<u32>(at), PATTERN) };
     }
 }
 
 /// Die groesste Tiefe des Stacks seit [`paint`] in Byte, vom oberen Ende.
 pub fn high_water() -> u32 {
     let (bottom, top) = bounds();
-    (top - deepest(bottom, top)) as u32
+    depth(bottom, top)
 }
 
 /// Der Stack-Bedarf eines Aufrufs in Byte (13.8: Stack-Bedarf je Native),
@@ -54,33 +52,30 @@ pub fn high_water() -> u32 {
 /// bleibt: Die Leitung sendet im Interrupt.
 pub fn usage_of(window: usize, f: impl FnOnce()) -> u32 {
     cortex_m::interrupt::free(|_| {
-        let sp = cortex_m::register::msp::read() as usize & !3;
+        let sp = crate::address(cortex_m::register::msp::read()) & !3;
         let bottom = sp.saturating_sub(window & !3).max(bounds().0);
-        let mut at = bottom;
-        while at < sp {
+        for at in (bottom..sp).step_by(4) {
             // SAFETY: Unter dem Stackzeiger, bei gesperrten Interrupts:
             // Speicher, den bis zum Aufruf niemand benutzt.
-            unsafe { write_volatile(at as *mut u32, PATTERN) };
-            at += 4;
+            unsafe { write_volatile(with_exposed_provenance_mut::<u32>(at), PATTERN) };
         }
         f();
-        (sp - deepest(bottom, sp)) as u32
+        depth(bottom, sp)
     })
 }
 
 /// Die Tiefe eines gemalten Stacks `[bottom, top)` in Byte, vom oberen Ende.
 pub(crate) fn depth(bottom: usize, top: usize) -> u32 {
-    (top - deepest(bottom, top)) as u32
+    crate::word(top.saturating_sub(deepest(bottom, top)))
 }
 
 /// Das unterste Wort zwischen `bottom` und `limit`, das nicht mehr das
 /// Muster traegt; `limit`, wenn keines.
 fn deepest(bottom: usize, limit: usize) -> usize {
-    let mut at = bottom;
-    // SAFETY: Lesen im Stackbereich; das Muster steht dort, wo der Stack
-    // seit dem Malen nicht hinkam.
-    while at < limit && unsafe { read_volatile(at as *const u32) } == PATTERN {
-        at += 4;
-    }
-    at
+    let painted = |at: usize| {
+        // SAFETY: Lesen im Stackbereich; das Muster steht dort, wo der Stack
+        // seit dem Malen nicht hinkam.
+        unsafe { read_volatile(with_exposed_provenance::<u32>(at)) == PATTERN }
+    };
+    (bottom..limit).step_by(4).find(|&at| !painted(at)).unwrap_or(limit)
 }
