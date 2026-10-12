@@ -7,21 +7,22 @@
 use takt_rt_core::{Clock, Policy, Profile, Program, Runtime, Sink, Tick, Watchdog};
 use takt_rt_linux::{Guarantee, RealtimeClock, Scheduling, prepare};
 
-/// 12.2: Die drei Teile der Zeitgarantie gelten zusammen oder gar nicht.
+/// 12.2: Die Teile der Zeitgarantie gelten zusammen oder gar nicht.
 ///
 /// Ein Thread mit Echtzeitprioritaet auf einem Kern, dessen Seiten
 /// ausgelagert werden koennen, hat sie nicht: Ein Seitenfehler kostet
-/// Millisekunden.
+/// Millisekunden. Ebenso einer, dessen Kern der Job-Faden mit ihm teilt.
 #[test]
-fn the_guarantee_holds_only_when_all_three_parts_do() {
-    let full = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 };
+fn the_guarantee_holds_only_when_all_its_parts_do() {
+    let full = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1, apart: true };
     assert!(full.is_complete());
     assert!(full.missing().is_empty());
 
     for teil in [
-        Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1 },
-        Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: false, cpus: 1 },
-        Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 4 },
+        Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1, apart: true },
+        Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: false, cpus: 1, apart: true },
+        Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 4, apart: true },
+        Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1, apart: false },
     ] {
         assert!(!teil.is_complete(), "{teil:?} sollte unvollstaendig sein");
         assert_eq!(teil.missing().len(), 1, "genau ein Teil fehlt: {teil:?}");
@@ -31,19 +32,23 @@ fn the_guarantee_holds_only_when_all_three_parts_do() {
 /// Ein Befund ohne Abhilfe ist eine Klage: Jede Meldung nennt den Weg.
 #[test]
 fn every_missing_part_names_its_remedy() {
-    let nothing = Guarantee { scheduling: Scheduling::Normal, locked: false, cpus: 8 };
+    let nothing = Guarantee { scheduling: Scheduling::Normal, locked: false, cpus: 8, apart: false };
     let missing = nothing.missing();
-    assert_eq!(missing.len(), 3);
+    assert_eq!(missing.len(), 4);
     assert!(missing.iter().any(|m| m.contains("chrt")), "die Prioritaet nennt `chrt`: {missing:?}");
     assert!(missing.iter().any(|m| m.contains("RLIMIT_MEMLOCK")), "`mlockall` nennt das Limit: {missing:?}");
     assert!(missing.iter().any(|m| m.contains("taskset")), "die Bindung nennt `taskset`: {missing:?}");
+    assert!(
+        missing.iter().any(|m| m.contains("Job-Faden") && m.contains("zweiten Kern")),
+        "die Trennung nennt den zweiten Kern: {missing:?}"
+    );
 }
 
 /// 12.2: Das Programm setzt die Prioritaet *nicht* selbst, und die
 /// Meldung sagt warum — sonst versucht es der naechste.
 #[test]
 fn the_message_explains_why_the_program_does_not_set_the_priority() {
-    let ohne = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1 };
+    let ohne = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1, apart: true };
     let text = ohne.missing().join(" ");
     assert!(text.contains("CAP_SYS_NICE"), "der Grund fehlt: {text}");
 }
@@ -53,12 +58,13 @@ fn the_message_explains_why_the_program_does_not_set_the_priority() {
 /// steht in der Aufzeichnung, nicht in der Erinnerung des Bedieners.
 #[test]
 fn the_guarantee_goes_into_the_run_header() {
-    let g = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 };
+    let g = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1, apart: true };
     let lines = g.header_lines();
     assert!(lines.iter().any(|z| z == "scheduling fifo"));
+    assert!(lines.iter().any(|z| z == "getrennt ja"));
     assert!(lines.iter().any(|z| z == "echtzeit ja"));
 
-    let ohne = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1 };
+    let ohne = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1, apart: true };
     assert!(ohne.header_lines().iter().any(|z| z == "echtzeit nein"), "die fehlende Zusage steht im Kopf");
 }
 
@@ -72,6 +78,21 @@ fn prepare_reports_what_it_found() {
         assert_eq!(g.scheduling, Scheduling::Unknown);
         assert!(!g.is_complete(), "ohne Linux keine Zeitgarantie");
     }
+}
+
+/// **Die Zusage gilt je Faden** (12.2): `prepare` in einem eigenen Faden mit
+/// Kern 0 bindet genau diesen an genau den Kern, und auf einem Rechner mit
+/// mehr als einem Kern bleibt dem Rest des Prozesses einer. Die
+/// Schedulingklasse ist die dieses Fadens (`/proc/thread-self/stat`).
+#[test]
+#[cfg_attr(not(target_os = "linux"), ignore = "Kernbindung und Schedulingklasse gibt es nur unter Linux (12.2)")]
+fn prepare_binds_its_own_thread() {
+    let unbound = prepare(None).cpus;
+    let g = std::thread::spawn(|| prepare(Some(0))).join().expect("Faden");
+    assert_eq!(g.cpus, 1, "an Kern 0 gebunden: {g:?}");
+    assert_eq!(g.apart, unbound > 1, "{unbound} Kerne: {g:?}");
+    assert_ne!(g.scheduling, Scheduling::Unknown, "die Klasse des Fadens ist lesbar: {g:?}");
+    assert_eq!(prepare(None).cpus, unbound, "den rufenden Faden hat das nicht gebunden");
 }
 
 // --- Die Uhr (12.2, 7.1) ------------------------------------------------
@@ -122,14 +143,44 @@ fn an_overdue_deadline_is_counted_not_awaited() {
     assert_eq!(c.late, 1, "sie wird gezaehlt");
 }
 
+/// **Ein Wecker beendet das Warten vor der Frist** (12.11, Portvertrag 3):
+/// Ein anderer Faden macht `ready` wahr und weckt; die Frist eine Sekunde
+/// spaeter wird nicht abgewartet, und zu spaet kam nichts. Ohne Wecker
+/// endet das Warten an der Frist und nicht davor.
+#[test]
+fn a_wake_ends_the_wait_before_the_deadline() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let mut c = RealtimeClock::new();
+    let ready = AtomicBool::new(false);
+    let waiter = std::thread::current();
+    let woken = std::thread::scope(|s| {
+        s.spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            ready.store(true, Ordering::SeqCst);
+            waiter.unpark();
+        });
+        c.wait_until_or(1_000_000_000, || ready.load(Ordering::SeqCst))
+    });
+    assert!(woken, "der Wecker beendete das Warten");
+    assert!(c.now() < 500_000_000, "die Frist wurde nicht abgewartet: {}", c.now());
+    assert_eq!(c.late, 0);
+
+    let deadline = c.now() + 30_000_000;
+    assert!(!c.wait_until_or(deadline, || false), "ohne Wecker bis zur Frist");
+    assert!(c.now() >= deadline, "nicht vor der Frist: {} < {deadline}", c.now());
+    assert_eq!(c.late, 0);
+    assert!(!c.wait_until_or(0, || false), "eine vergangene Frist");
+    assert_eq!(c.late, 1, "sie kam zu spaet");
+}
+
 /// 7.1, 12.6 Zeile 7: Die gemessene Periode zaehlt nur unter der Zusage
 /// aus 12.2. Ohne sie misst der Abstand zweier Wecker den Scheduler mit;
 /// statt eines `Runtime(Hardware)` sagt das der Befund im Lauf-Header.
 #[test]
 fn the_period_counts_only_under_the_guarantee() {
     use takt_rt_core::Clock;
-    let normal = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1 };
-    let full = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 };
+    let normal = Guarantee { scheduling: Scheduling::Normal, locked: true, cpus: 1, apart: true };
+    let full = Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1, apart: true };
     for (guarantee, measured) in [(&normal, false), (&full, true)] {
         let mut c = RealtimeClock::under(guarantee);
         c.wait_until(1_000_000);
@@ -196,7 +247,7 @@ fn the_tick_loop_runs_on_the_real_clock() {
 /// die die Runtime liefert.
 #[test]
 fn the_guarantee_survives_the_recording() {
-    let g = Guarantee { scheduling: Scheduling::Normal, locked: false, cpus: 8 };
+    let g = Guarantee { scheduling: Scheduling::Normal, locked: false, cpus: 8, apart: true };
     let mut header = takt_interp::record::Header {
         version: 1,
         edition: 1,
@@ -224,7 +275,8 @@ fn the_guarantee_survives_the_recording() {
 
     // Und mit Zusage ebenso.
     header.runtime =
-        Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1 }.header_lines();
+        Guarantee { scheduling: Scheduling::Realtime { priority: 80 }, locked: true, cpus: 1, apart: true }
+            .header_lines();
     let text = header.render();
     assert!(text.contains("#! runtime echtzeit ja"), "{text}");
 }

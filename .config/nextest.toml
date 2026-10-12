@@ -53,3 +53,13 @@ test-group = "memory"
 filter = "test(=a_posix_port_passes_the_port_test)"
 threads-required = "num-cpus"
 success-output = "final"
+
+[[profile.default.overrides]]
+# `linux_rt` mit erzeugtem Code (M11 Schritt 17): Vier Tick-Faeden mit ihren
+# Job-Faeden rechnen in Echtzeit, jeder auf seinem Kern; neben anderen Tests
+# koennte ein voller Rechner den Tick verspaeten, wie beim POSIX-Port, und ein
+# Ueberlauf ist ein Fault im Trace. Die Ausgabe nennt die Zusage jedes Laufs,
+# auch wenn er besteht.
+filter = "test(=generated_code_runs_in_the_tick_thread_like_the_interpreter)"
+threads-required = "num-cpus"
+success-output = "final"

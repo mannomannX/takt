@@ -81,7 +81,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | B1 | FB-497 Rest: Maps und Puffer als Arrays der SMT-Theorie | P | – | 29 | Strang B, umgesetzt |
 | B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Schritt 1 umgesetzt und eingeordnet (CI-Lauf 38188098609); Schritt 2, Teil 1 (kleine Anfragen zuerst) umgesetzt und gemergt 2026-10-12, eingeordnet in 38199208294: Speicher 106 → 68, 38 bewiesen (FB-612); die Gruppe „nicht k-induktiv“ ist größtenteils tief erreichbar und gehört zu Schritt 3 (FB-613); Schritt 3 (tiefe Pfade) bei Strang B (Helfer, seit 2026-10-12, Zweig `b3-fb511-step3`); Schritte 2 (Rest), 4 und 5 frei |
 | 14 | Rust ohne RTOS und mit Frameworks | R, E | beide | 10 | Strang A, umgesetzt 2026-10-11 |
-| 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | Strang D (Helfer, seit 2026-10-12, Zweig `d-17-host-threads`) |
+| 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | Strang D (Helfer, seit 2026-10-12, Zweig `d-17-host-threads`): umgesetzt, CI grün auf `ubuntu-24.04` und `windows-2025` (Lauf 38249279690 auf d9b1f4a); wartet auf den Merge |
 | 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A, umgesetzt 2026-10-11 |
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | frei |
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt (POSIX-Port besteht die Portprüfung, b52327e); 18b nach 34e (Strang A) |
@@ -392,9 +392,24 @@ So arbeitet jeder Strang, als wäre er allein:
 ### 17 — Wirt mit Instanzen in Fäden, `linux_rt`
 
 - **Abnahme:** acht Instanzen gleich dem Interpreter, ein Lauf im Tick-Faden
-  unter Linux (Docker aus `tools/Dockerfile.linux`).
+  unter Linux. Statt Docker aus `tools/Dockerfile.linux` prüft das seit
+  Schritt 34 CI auf `ubuntu-24.04`.
 - **Mitgeführt:** FB-501 bleibt offen, bis ein Gerät der Klasse da ist; der
   Lauf unter qemu ist dafür kein Ersatz.
+- **Stand (Strang D, 2026-10-12):** Acht Instanzen von
+  `examples/rust-host/takt/instance.takt` (Eingang, Job je Runde, Schlaf)
+  rechnen in acht Fäden in logischer Zeit, jede mit eigenem Startwert gleich
+  dem Interpreter (`tests/instances.rs`). Der Port der Form `linux` ist
+  `takt_rt_linux::port`: `spawn` legt den Tick-Faden an (Stack des Programms
+  plus `HOST_STACK_BYTES`), bindet ihn und sperrt den Speicher, bevor das
+  Programm im Faden entsteht; `serve` wartet mit `clock_nanosleep` auf jede
+  Frist, die Jobs rechnen auf einem Job-Faden auf den übrigen Kernen, und ein
+  fertiger Job weckt den Tick-Faden vor der Frist (Portvertrag 3,
+  `RealtimeClock::wait_until_or`). Vier Programme der Form `linux` laufen
+  zugleich in ihren Tick-Fäden gleich dem Interpreter, die Zusage im Kopf
+  (`examples/rust-host/tests/linux_rt.rs`, allein aus
+  `crates/takt-cli/tests/linux_rt.rs`). Befunde FB-680 bis FB-683; offen
+  FB-683 (Stack-Reserve der Form `linux` gemessen) und FB-501.
 
 ### 15, 16, 18, 9, 19 bis 23
 

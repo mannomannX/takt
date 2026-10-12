@@ -1,0 +1,38 @@
+# Eine Instanz unter vielen (12.11, M11 Schritt 17): Jede hat ihre Arena,
+# ihr Treiberobjekt und ihren Job-Kontext, und der Wirt gibt jeder einen
+# eigenen Startwert. Die Maschine hasht Startwert und Runde in einem Job,
+# zeigt das Wort und schlaeft bis zur naechsten Runde. Teilten zwei
+# Instanzen Zustand, saehe eine die Woerter der anderen.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+native job sha256(b: bytes<64>) -> bytes<32> with cost = 60000, stack = 640, duration = 25 ms, total
+
+input  seed  : int in 0..255  @ hw("u/seed") with max_age = 1 s
+output word  : u32            @ sim("o/word")
+output count : int in 0..1000 @ sim("o/count")
+
+fn low_word(d: bytes<32>) -> u32:
+    return (d[0] as u32) | ((d[1] as u32) << 8)
+
+machine m:
+    var msg : bytes<64> = default
+    var n   : int in 0..1000 = 0
+    initial HASH
+
+    state HASH:
+        sequence:
+            msg = default
+            msg.push(seed.or(0) as u8)
+            msg.push((n % 256) as u8)
+            job v = sha256(msg)
+            until v.done timeout 1 s -> REST
+            word = low_word(v.result.or(default))
+            n = (n + 1) % 1000
+            count = n
+            -> REST
+
+    state REST idle:
+        after 100 ms: -> HASH

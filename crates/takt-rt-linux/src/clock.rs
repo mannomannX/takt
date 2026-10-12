@@ -62,6 +62,40 @@ impl RealtimeClock {
         RealtimeClock { measures: guarantee.is_complete(), ..RealtimeClock::new() }
     }
 
+    /// Wartet bis zur absoluten Frist `deadline` wie [`Clock::wait_until`],
+    /// oder bis `ready` wahr ist, was zuerst kommt; wahr, wenn `ready` das
+    /// Warten beendete.
+    ///
+    /// Der Port wartet so, solange ein Job rechnet (12.11, Portvertrag 3):
+    /// Ist er fertig, weckt der Job-Faden diesen Faden mit `Thread::unpark`,
+    /// und der Schrittkontext ruft `service` vor der Frist erneut.
+    /// `clock_nanosleep` liesse sich nur durch ein Signal unterbrechen. Die
+    /// Frist bleibt absolut: Jede Runde rechnet den Rest neu, und
+    /// `park_timeout` wartet unter Linux mit `FUTEX_WAIT_BITSET` auf eine
+    /// absolute Zeit auf `CLOCK_MONOTONIC`. Ein frueheres Aufwachen ohne
+    /// `ready` wartet weiter.
+    pub fn wait_until_or(&mut self, deadline: i64, ready: impl Fn() -> bool) -> bool {
+        let mut first = true;
+        loop {
+            if ready() {
+                return true;
+            }
+            let rest = deadline.saturating_sub(self.now());
+            if rest <= 0 {
+                // Wie `wait_until`: Eine Frist, die beim Eintritt schon
+                // vorbei war, kam zu spaet (7.3).
+                if first {
+                    self.late = self.late.saturating_add(1);
+                }
+                break;
+            }
+            first = false;
+            std::thread::park_timeout(std::time::Duration::from_nanos(u64::try_from(rest).unwrap_or(0)));
+        }
+        self.note_wake();
+        false
+    }
+
     /// Haelt den Wecker fest: Der Abstand zum vorigen ist die Periode, mit
     /// der die Tickquelle diesen Tick gebracht hat (7.1, 12.6 Zeile 7).
     fn note_wake(&mut self) {

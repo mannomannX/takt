@@ -236,11 +236,28 @@ pub struct Tank {
     pub openings: u32,
 }
 
-impl valve::Drivers for Tank {
-    fn out_tank_valve(&mut self, value: bool, _now: i64) -> bool {
+impl Tank {
+    /// Stellt das Ventil und zaehlt, ob es sich dabei oeffnet.
+    fn set(&mut self, value: bool) -> bool {
         self.openings += u32::from(value && !self.open);
         self.open = value;
         true
+    }
+}
+
+impl valve::Drivers for Tank {
+    fn out_tank_valve(&mut self, value: bool, _now: i64) -> bool {
+        self.set(value)
+    }
+
+    fn alive_tank(&mut self, _now: i64) -> bool {
+        true
+    }
+}
+
+impl valve_rt::Drivers for Tank {
+    fn out_tank_valve(&mut self, value: bool, _now: i64) -> bool {
+        self.set(value)
     }
 
     fn alive_tank(&mut self, _now: i64) -> bool {
@@ -344,6 +361,78 @@ impl aging::Drivers for Once {
         let k = u64::try_from(now / self.tick_ns.max(1)).ok()?;
         (k == self.at).then(|| takt_embed::Sample::good(self.value, now))
     }
+}
+
+/// Eine Instanz unter vielen (12.11): Startwert, Job und Schlaf
+/// (`tests/instances.rs`).
+#[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]
+pub mod instance {
+    include!(env!("TAKT_INSTANCE_RS"));
+}
+
+/// Ein Startwert je Instanz: `u/seed` liefert ihn in jedem Tick frisch. Das
+/// Geraet zaehlt, wie oft das Programm abtastete, und merkt sich den Faden
+/// der ersten Abtastung.
+#[derive(Debug)]
+pub struct Seed {
+    /// Der Startwert.
+    pub value: i64,
+    /// Wie oft das Programm abtastete.
+    pub samples: u64,
+    /// Der Name des Fadens, in dem es zuerst abtastete.
+    pub thread: Option<String>,
+}
+
+impl Seed {
+    /// Ein Geraet mit dem Startwert `value`.
+    pub fn new(value: i64) -> Seed {
+        Seed { value, samples: 0, thread: None }
+    }
+
+    fn sample(&mut self, now: i64) -> Option<takt_embed::Sample<i64>> {
+        self.samples += 1;
+        if self.thread.is_none() {
+            self.thread = std::thread::current().name().map(str::to_string);
+        }
+        Some(takt_embed::Sample::good(self.value, now))
+    }
+}
+
+impl instance::Drivers for Seed {
+    fn in_u_seed(&mut self, now: i64) -> Option<takt_embed::Sample<i64>> {
+        self.sample(now)
+    }
+}
+
+impl instance_rt::Drivers for Seed {
+    fn in_u_seed(&mut self, now: i64) -> Option<takt_embed::Sample<i64>> {
+        self.sample(now)
+    }
+}
+
+/// `instance` in der Form `linux` (12.2, 12.11), fuer den Tick-Faden
+/// (`tests/linux_rt.rs`); ebenso die drei folgenden Module.
+#[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]
+pub mod instance_rt {
+    include!(env!("TAKT_INSTANCE_RT_RS"));
+}
+
+/// `valve` in der Form `linux`.
+#[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]
+pub mod valve_rt {
+    include!(env!("TAKT_VALVE_RT_RS"));
+}
+
+/// `lifecycle` in der Form `linux`.
+#[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]
+pub mod lifecycle_rt {
+    include!(env!("TAKT_LIFECYCLE_RT_RS"));
+}
+
+/// `idle_multirate` in der Form `linux`.
+#[allow(missing_docs, reason = "erzeugter Code; die Dokumentation steht im Programm")]
+pub mod idle_multirate_rt {
+    include!(env!("TAKT_IDLE_MULTIRATE_RT_RS"));
 }
 
 /// Tunables ueber den Weg der Schleife (8.4), ohne Treiber.
