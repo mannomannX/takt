@@ -111,9 +111,11 @@ impl Enc<'_> {
         format!("s.{}.last_fault", self.machine(m).name)
     }
 
-    /// Der Tick, in dem gerade gerechnet wird.
+    /// Der Tick, in dem gerade gerechnet wird. Ihn zaehlt das Modell, wo
+    /// eine Maschine `last_fault` liest; `now` steht an der Grenze von
+    /// `Duration` still (3.3, FB-614).
     pub(super) fn tick_index(&self) -> Term {
-        Term::bin(Op::Div, self.now.clone(), Term::int(self.p.config.tick.max(1)))
+        self.ticks.clone()
     }
 
     /// Der Typ `LastFault` aus dem Prelude.

@@ -42,8 +42,9 @@ fn target(k: i64) -> i64 {
 }
 
 /// Uebersetzt `src` mit einem Treiber, dessen `main` `body` ausfuehrt, und
-/// liefert seine Ausgabe. `app_now` liest den Tick `tick` des Treibers; was
-/// die Maschine sonst von der Runtime ruft, ist ein leerer Stummel.
+/// liefert seine Ausgabe. `app_now` und `app_tick_count` lesen den Tick
+/// `tick` des Treibers; was die Maschine sonst von der Runtime ruft, ist ein
+/// leerer Stummel.
 fn run_native(name: &str, src: &str, body: &str) -> Option<String> {
     let path = takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")?;
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
@@ -55,12 +56,14 @@ fn run_native(name: &str, src: &str, body: &str) -> Option<String> {
     let stubs: String = low
         .ir
         .lines()
-        .filter(|l| l.starts_with("declare") && l.contains("@app_") && !l.contains("@app_now("))
+        .filter(|l| l.starts_with("declare") && l.contains("@app_"))
+        .filter(|l| !l.contains("@app_now(") && !l.contains("@app_tick_count("))
         .filter_map(|l| l.split("@app_").nth(1)?.split('(').next().map(|n| format!("void app_{n}(void) {{}}\n")))
         .collect();
     let driver = format!(
         "#include <stdio.h>\n#include <string.h>\nstatic _Alignas(8) unsigned char arena[{bytes}];\n\
-         static long long tick;\nlong long app_now(void *a) {{ (void)a; return tick * 10000000LL; }}\n{stubs}\
+         static long long tick;\nlong long app_now(void *a) {{ (void)a; return tick * 10000000LL; }}\n\
+         long long app_tick_count(void *a) {{ (void)a; return tick; }}\n{stubs}\
          void app_m_init_vars(void *);\nvoid app_m_enter(void *);\nlong long app_m_deadline(void *);\n\
          void app_m_advance(void *, long long);\nint main(void) {{\n{body}    return 0;\n}}\n"
     );

@@ -189,7 +189,9 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
 
     let tick = p.config.tick;
     let _ = writeln!(s, "static void takt_edge_commit(struct {x}_arena *a, long long tick) {{");
-    let _ = writeln!(s, "    struct takt_window w = {{ tick * {tick}LL - {tick}LL, tick * {tick}LL, {tick}LL }};");
+    // `Window::of_tick`: das Ende gesaettigt wie `now`, der Anfang eine Periode davor.
+    let _ = writeln!(s, "    long long hi = takt_ticks_ns(tick);");
+    let _ = writeln!(s, "    struct takt_window w = {{ hi - {tick}LL, hi, {tick}LL }};");
     let _ = writeln!(s, "    struct takt_event ev[{}];", max + devices);
     let _ = writeln!(
         s,

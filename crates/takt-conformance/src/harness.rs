@@ -199,9 +199,9 @@ fn build_inner(
     );
     let _ = writeln!(t.code, "}}");
     // 3.3: `now` ist die Dauer seit dem Start des Laufs — die Tickzahl
-    // mal T0, wie im Interpreter. Die Runtime fuehrt sie, weil alle
-    // Maschinen dieselbe Uhr lesen (12.1).
-    let _ = writeln!(t.code, "long long {x}_now(struct {x}_arena *a) {{ return a->tick * {}LL; }}", p.config.tick);
+    // mal T0, gesaettigt, wie im Interpreter. Die Runtime fuehrt sie, weil
+    // alle Maschinen dieselbe Uhr lesen (12.1).
+    takt_frame::parts::now(&mut t.code, p, x);
     let _ =
         writeln!(t.code, "void {x}_measure(struct {x}_arena *a, int m, int site, double v, unsigned char invalid) {{");
     let _ = writeln!(t.code, "    if (invalid) printf(\"t=%lld measure %d %d <invalid>\\n\", a->tick, m, site);");
@@ -352,7 +352,7 @@ fn build_inner(
     let _ = writeln!(t.code, "        takt_edge_stimulus(a, a->tick);");
     // 8.3: die `sim`-Kopplung der Stroeme nach dem Rand, wie
     // `apply_sim_bindings` im Interpreter.
-    let _ = writeln!(t.code, "        takt_sim_streams(a, a->tick * {}LL);", p.config.tick);
+    let _ = writeln!(t.code, "        takt_sim_streams(a, takt_ticks_ns(a->tick));");
     // 8.5: Ein Command gilt einen Tick. Der Rahmen setzt es vor dem
     // Schritt und loescht es danach — wie die Runtime (12.1).
     for (name, slot) in layout.commands.iter().map(|c| (c.name.clone(), c.offset)) {

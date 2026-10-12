@@ -352,7 +352,11 @@ Fehler im Ablauf meldet, ist behoben: kein ungelesenes `now`, `NULL` statt
 der Arena (`latch`, `image`, `params`, die Zustände) liest und schreibt der
 Rahmen nur über `__builtin_memcpy`, nie über einen Zeiger-Cast (CERT C
 EXP39-C, FB-650); die Ausrichtung kennt clang aus der Struktur der Arena,
-und es bleibt ein Laden und Speichern je Wort.
+und es bleibt ein Laden und Speichern je Wort. Jede Zeit aus Ticks rechnet
+er über `takt_ticks_ns` und `takt_add_ns`, gesättigt bei der größten
+`Duration` wie der Interpreter und ohne vorzeichenbehafteten Überlauf (CERT
+C INT32-C, FB-614); die beiden Helfer sind wie von Hand geschrieben, mit
+einem Ausgang und Klammern.
 
 **Abweichungen.** Jeder Befund steht hier mit Teil und genauer Zahl;
 `tests/c_analysis.rs` verlangt genau diese Zahlen. Ein neuer Befund
@@ -388,7 +392,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-10.7` | Rahmen | 6 | MISRA C:2012 10.7 (R) | wie 10.1 |
 | `misra-c2012-10.8` | Rahmen | 11 | MISRA C:2012 10.8 (R) | wie 10.1 |
 | `misra-c2012-11.5` | Rahmen | 69 | MISRA C:2012 11.5 (A) | Arena und Treiberobjekt kommen als `void *` über die C-ABI (`takt_sdk.h`, `P_ops`) |
-| `misra-c2012-12.1` | Rahmen | 143 | MISRA C:2012 12.1 (A) | erzeugte Ausdrücke; den Vorrang legt der Generator fest, nicht ein Leser |
+| `misra-c2012-12.1` | Rahmen | 133 | MISRA C:2012 12.1 (A) | erzeugte Ausdrücke; den Vorrang legt der Generator fest, nicht ein Leser |
 | `misra-c2012-12.3` | Rahmen | 89 | MISRA C:2012 12.3 (A) | Deklarationen mehrerer Felder und Variablen in einer Zeile des erzeugten Texts |
 | `misra-c2012-13.3` | Rahmen | 8 | MISRA C:2012 13.3 (A) | `x++` in Vergleichen und Indizes der Ringe; erzeugt, nicht von Hand geändert |
 | `misra-c2012-14.4` | Rahmen | 70 | MISRA C:2012 14.4 (R) | Bedingungen auf Zählern und Zeigern (`if (k)`, `if (o->variants)`) im erzeugten Text |
@@ -401,7 +405,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-17.7` | Rahmen | 120 | MISRA C:2012 17.7 (R) | `memcpy`, `__builtin_memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
 | `misra-c2012-17.8` | Rahmen | 10 | MISRA C:2012 17.8 (A) | Parameter als Zähler in erzeugten Schleifen |
 | `misra-c2012-18.4` | Rahmen | 25 | MISRA C:2012 18.4 (A) | Zeiger in die Arena als Basis plus Versatz, die Versätze aus dem Layout (`takt-frame::layout`) |
-| `misra-c2012-2.2` | Rahmen | 20 | MISRA C:2012 2.2 (R) | `+ 0` und `* 1`: Der Generator schreibt jeden Zugriff in derselben Form (Basis plus Versatz), auch beim Versatz 0; der Übersetzer faltet die Konstante |
+| `misra-c2012-2.2` | Rahmen | 18 | MISRA C:2012 2.2 (R) | `+ 0` und `* 1`: Der Generator schreibt jeden Zugriff in derselben Form (Basis plus Versatz), auch beim Versatz 0; der Übersetzer faltet die Konstante |
 | `misra-c2012-2.4` | Rahmen | 2 | MISRA C:2012 2.4 (A) | Tags der geteilten Typen des Randes, die nicht jedes Programm braucht |
 | `misra-c2012-2.5` | Rahmen | 20 | MISRA C:2012 2.5 (A) | Makros des Kopfs und der geteilten Typen, die nicht jedes Programm nutzt |
 | `misra-c2012-2.7` | Rahmen | 23 | MISRA C:2012 2.7 (A) | Die Einstiege haben für jedes Programm dieselbe Signatur (`P_ops`); ein Programm ohne Journal oder Tunables liest manche Parameter nicht |
@@ -413,7 +417,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-5.7` | Rahmen | 64 | MISRA C:2012 5.7 (R) | Rahmen und `P.h` beschreiben dieselben Strukturen je für sich, aus derselben Quelle in `takt-frame`; `_Static_assert` hält Größe und Versätze gleich |
 | `misra-c2012-7.3` | Rahmen | 45 | MISRA C:2012 7.3 (R) | Fehlmeldung: Das Addon hält den Parameter `all` für ein Literal mit dem Suffix `l` |
 | `misra-c2012-8.2` | Rahmen | 155 | MISRA C:2012 8.2 (R) | Prototypen der Einstiege des erzeugten LLVM-Codes und der Funktionen des Randes ohne Namen der Parameter; die Typen prüft der Übersetzer |
-| `misra-c2012-8.4` | Rahmen | 54 | MISRA C:2012 8.4 (R) | Der Rahmen definiert die Einstiege, die `P.h` deklariert, ohne `P.h` einzubinden; beide entstehen aus derselben Quelle, und die Lieferform bindet beide (`tests/embed_cmd.rs`) |
+| `misra-c2012-8.4` | Rahmen | 57 | MISRA C:2012 8.4 (R) | Der Rahmen definiert die Einstiege, die `P.h` deklariert, ohne `P.h` einzubinden; beide entstehen aus derselben Quelle, und die Lieferform bindet beide (`tests/embed_cmd.rs`). Die Aufrufe des erzeugten Codes in den Rahmen (`P_now`, `P_tick_count`, `takt-llvm::abi`) deklariert dessen IR; die Pruefung `the_harness_answers_the_whole_abi` haelt beide Seiten zusammen |
 | `misra-c2012-8.5` | Rahmen | 88 | MISRA C:2012 8.5 (R) | wie 8.4: Funktionen und Objekte stehen im Rahmen und in `P.h` |
 | `misra-c2012-8.7` | Rahmen | 14 | MISRA C:2012 8.7 (A) | Einstiege mit externer Bindung, die ein Programm nur in einer Einheit ruft; ein Wirt ruft sie von außen |
 | `misra-c2012-8.9` | Rahmen | 38 | MISRA C:2012 8.9 (A) | konstante Tabellen des Programms auf Dateiebene, neben den Funktionen, die sie lesen |

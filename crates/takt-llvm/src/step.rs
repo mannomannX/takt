@@ -1087,7 +1087,7 @@ fn reset_counters(ctx: &Ctx<'_>, s: Option<takt_mir::StateId>, m: &mut Module) {
 ///
 /// Die `every`-Zaehler bleiben unberuehrt — 9.9 sagt es ausdruecklich,
 /// und in `idle` gibt es kein `loop:`, also auch kein `every`.
-pub fn advance_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut Module) -> Result<(), NotYet> {
+pub fn advance_function(m: &Machine, st: &StateStruct, module: &mut Module) -> Result<(), NotYet> {
     module.begin_cold(
         &format!("{}_advance", m.name),
         &crate::ty::LlvmType::Void,
@@ -1104,7 +1104,7 @@ pub fn advance_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
         let activations = if m.period <= 1 {
             "%1".to_string()
         } else {
-            let r = lag(m, p, module);
+            let r = lag(m, module);
             let reach = module.inst(&format!("add i64 %1, {r}"));
             module.inst(&format!("udiv i64 {reach}, {}", m.period)).to_string()
         };
@@ -1115,15 +1115,14 @@ pub fn advance_function(m: &Machine, st: &StateStruct, p: &Program, module: &mut
     Ok(())
 }
 
-/// Die Lage der Maschine im globalen Basis-Tick `k` aus `now` der Runtime
-/// (`Abi::NOW`, 3.3; FB-429): `r = (k - Phase) mod Periode`, die Ticks seit
-/// ihrer letzten Aktivierung (7.2: aktiv in den Ticks `t % Periode == Phase`).
-/// Der Rahmen fuehrt den Tick; `now` ist nie negativ.
-fn lag(m: &Machine, p: &Program, module: &mut Module) -> crate::emit::Reg {
+/// Die Lage der Maschine im globalen Basis-Tick `k` der Runtime
+/// (`Abi::TICK_COUNT`; FB-429, FB-614): `r = (k - Phase) mod Periode`, die
+/// Ticks seit ihrer letzten Aktivierung (7.2: aktiv in den Ticks
+/// `t % Periode == Phase`). Der Rahmen fuehrt den Tick; er ist nie negativ.
+fn lag(m: &Machine, module: &mut Module) -> crate::emit::Reg {
     let period = u64::from(m.period.max(1));
     let phase = u64::from(m.phase) % period;
-    let now = module.inst(&format!("call i64 @{}(ptr %arena)", module.runtime(crate::abi::Abi::NOW)));
-    let k = module.inst(&format!("udiv i64 {now}, {}", p.config.tick.max(1)));
+    let k = module.inst(&format!("call i64 @{}(ptr %arena)", module.runtime(crate::abi::Abi::TICK_COUNT)));
     let shifted = module.inst(&format!("add i64 {k}, {}", period - phase));
     module.inst(&format!("urem i64 {shifted}, {period}"))
 }
@@ -1477,7 +1476,7 @@ pub fn deadline_function(m: &Machine, st: &StateStruct, p: &Program, module: &mu
     let ticks = if period == 1 {
         module.inst(&format!("add i64 {missing}, 1"))
     } else {
-        let r = lag(m, p, module);
+        let r = lag(m, module);
         let ahead = module.inst(&format!("sub i64 {period}, {r}"));
         let rest = module.inst(&format!("mul i64 {missing}, {period}"));
         module.inst(&format!("add i64 {ahead}, {rest}"))
@@ -1792,7 +1791,7 @@ fn after(d: &takt_mir::expr::Expr, at: StateId, ctx: &Ctx<'_>, m: &mut Module) -
         return Ok(crate::expr::Lowered { value: reached.to_string(), ty: crate::ty::LlvmType::Int(1) });
     }
     let deadline = crate::expr::lower(d, ctx.program, m, &vars)?;
-    let elapsed = m.inst(&format!("mul i64 {ticks}, {period_ns}"));
+    let elapsed = crate::expr::ticks_ns(&ticks.to_string(), period_ns, m);
     let positive = m.inst(&format!("icmp sgt i64 {elapsed}, 0"));
     let reached = m.inst(&format!("icmp sge i64 {elapsed}, {}", deadline.value));
     let both = m.inst(&format!("and i1 {positive}, {reached}"));
@@ -2455,7 +2454,7 @@ fn fault_body(from: FaultFrom, from_val: &str, ctx: &mut Ctx<'_>, m: &mut Module
     ));
     // 5.3: `last_fault`, wenn die Maschine es liest.
     if let Some(at) = ctx.field(Role::LastFault, 0, m) {
-        crate::fault::record(&at, &code.to_string(), ctx.program.config.tick, m);
+        crate::fault::record(&at, &code.to_string(), m);
     }
     // 9.3: Ein Abort-Pfad setzt den Latch; bis zum naechsten normalen
     // Uebergang uebergeht die Maschine weitere Aborts (5.4).

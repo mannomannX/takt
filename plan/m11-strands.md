@@ -316,7 +316,7 @@ So arbeitet jeder Strang, als wäre er allein:
     eine Prüfstelle steht unter keiner (13.3). Die 6 in `87_fault_kinds`
     sind unerreichbar, aber nicht k-induktiv. Was `now` nach 2^63 ns ist,
     sagt die Definition nicht, und Interpreter, Modell und Rahmen rechnen es
-    verschieden (FB-614, Sprachentscheidung offen).
+    verschieden (FB-614, inzwischen entschieden und behoben, unten).
   - Gruppen als Grund, für Spalte drei (Schritt 5): Jede Zeile von
     `UNREACHED` teilt ihre nie verletzten Stellen nach Gruppen auf
     (`GROUPS`, Test `every_never_failed_site_has_a_group`), aus den
@@ -338,7 +338,21 @@ So arbeitet jeder Strang, als wäre er allein:
   - Weiter: Schritt 4 (die 54 bewiesenen Stellen in die Beweisdateien,
     mit `solver.yml`, Art `pfade`), Schritt 2 für `nicht k-induktiv` und
     `Fragment`, Gruppen auch für Übergänge und nie bestandene Stellen
-    (Schritt 5), FB-614 (Sprachentscheidung).
+    (Schritt 5).
+- **FB-614 (2026-10-12, Zweig `b4-fb614-now`):** Entschieden ist (a): `now`
+  bleibt bei 2^63 − 1 ns stehen, wie der Interpreter es schon tat; ebenso
+  `time_in_state` und jede Zeit aus Ticks mal Periode (3.3,
+  Entscheidungslog). Das Modell sättigt sie und zählt den Tick für
+  `last_fault.tick` selbst; beide C-Rahmen rechnen jede Zeit aus Ticks mit
+  `takt_ticks_ns` und `takt_add_ns` (`parts::now`), ohne
+  vorzeichenbehafteten Überlauf; der erzeugte Code sättigt `time_in_state`,
+  `after` und das `now` der Monitore und fragt den Tick mit
+  `P_tick_count` statt `now / T0`. Die Runtimes in Rust und der Port für
+  Fäden sättigten schon. Drei Tests fahren die Grenze mit T0 = 30 000 Tage
+  in der MIR (die Sema lässt Ticks bis 1 s zu): Interpreter gegen Modell,
+  gegen Wirtsrahmen und erzeugten Code, und der MCU-Rahmen mit einer Falle
+  für jeden Überlauf. Die 3 Stellen der Gruppe `Zeitschranke` bleiben
+  erreichbar: Hinter der Grenze faultet `now + d`.
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.

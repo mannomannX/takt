@@ -183,7 +183,7 @@ fn program_into(p: &Program, mut m: Module) -> Lowered {
         if let Err(e) = crate::step::trigger_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });
         }
-        let _ = crate::step::advance_function(machine, &st, p, &mut m);
+        let _ = crate::step::advance_function(machine, &st, &mut m);
         let _ = crate::step::deadline_function(machine, &st, p, &mut m);
         if let Err(e) = crate::psi::publish_function(machine, &st, p, &mut m) {
             skipped.push(Skipped { machine: machine.name.clone(), reason: e.what.to_string() });

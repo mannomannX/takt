@@ -281,8 +281,8 @@ impl Vars for MonitorVars<'_> {
         match b {
             takt_mir::expr::Builtin::Tick => Some(Lowered { value: p.config.tick.to_string(), ty: dur }),
             takt_mir::expr::Builtin::Now => {
-                let v = m.inst(&format!("mul i64 %4, {}", p.config.tick));
-                Some(Lowered { value: v.to_string(), ty: dur })
+                let v = crate::expr::ticks_ns("%4", p.config.tick, m);
+                Some(Lowered { value: v, ty: dur })
             }
             _ => None,
         }

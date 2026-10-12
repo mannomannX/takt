@@ -475,8 +475,8 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     crate::parts::alert_table(t, p, x);
     let s = &mut t.code;
 
-    // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0.
-    let _ = writeln!(s, "long long {x}_now(struct {x}_arena *a) {{ return a->tick * {}LL; }}\n", p.config.tick);
+    // 3.3: `now` ist die Dauer seit dem Start — Tickzahl mal T0, gesaettigt.
+    crate::parts::now(s, p, x);
 
     // Jede Beobachtungszeile traegt ihren Tick, wie beim Interpreter
     // (`grammar/trace.md`): Ohne ihn laesst sie sich keinem Tick zuordnen.
@@ -986,7 +986,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(s, "    takt_sample(a);");
     // 8.3: die `sim`-Kopplung der Stroeme nach dem Rand, wie
     // `apply_sim_bindings` im Interpreter.
-    let _ = writeln!(s, "    takt_sim_streams(a, k * {}LL);", p.config.tick);
+    let _ = writeln!(s, "    takt_sim_streams(a, takt_ticks_ns(k));");
     crate::parts::steps(s, p, layout, driven, "    ", "k", x);
     crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
     crate::parts::signal_lines(s, p, driven, "    ", "k", crate::streams::Trace::Board);
@@ -998,7 +998,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(s, "}}");
     locked(s, x, "void", "tick", "int64_t k", "k", "");
 
-    sleep(s, p.config.tick, layout, p, driven, x);
+    sleep(s, layout, p, driven, x);
     platform(s, p, layout, x);
     wake(t, p, layout, x);
 }
@@ -1016,7 +1016,6 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
 /// liefert es zuerst. Eine Uhr ohne diese Frage weckte erst an der Frist,
 /// und ein Taster wirkte Stunden spaeter (FB-388).
 fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
-    let tick = p.config.tick;
     let scalars: Vec<BoundScalar> = bound_scalars(p, layout, x).into_iter().filter(|b| b.wake.is_some()).collect();
     let streams: Vec<BoundStream> = bound_streams(p, x).into_iter().filter(|b| b.wake.is_some()).collect();
     let commands: Vec<&crate::layout::Slot> =
@@ -1037,7 +1036,7 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "/* Weckereignisse im Schlaf (9.9). */");
     let _ = writeln!(s, "uint8_t {x}_wake_sources(void) {{ return {any}u; }}");
     let _ = writeln!(s, "static uint8_t takt_woken(struct {x}_arena *a, int64_t k) {{");
-    let _ = writeln!(s, "    int64_t now = k * {tick}LL;");
+    let _ = writeln!(s, "    int64_t now = takt_ticks_ns(k);");
     for slot in &commands {
         let _ = writeln!(s, "    if (a->image[{}]) return 1; /* {} */", slot.offset, slot.name);
     }
@@ -1061,12 +1060,7 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
             // Wie `aging` an dieser Grenze: alle Ticks seit dem letzten.
             let _ = writeln!(s, "        if (!got && a->image[{q}] != 2 && a->image[{q}] != 3) {{");
             let _ = writeln!(s, "            long long at; __builtin_memcpy(&at, a->image + {age}, sizeof at);");
-            let _ = writeln!(
-                s,
-                "            long long d = k - a->tick > {}LL ? {max}LL : (k - a->tick) * {tick}LL;",
-                i64::MAX / tick.max(1),
-                max = i64::MAX
-            );
+            let _ = writeln!(s, "            long long d = takt_ticks_ns(k - a->tick);");
             let _ = writeln!(s, "            if (at > {}LL - d || at + d > {max}LL) return 1;", i64::MAX);
             let _ = writeln!(s, "        }}");
         }
@@ -1165,7 +1159,7 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
 /// Fault, der hinter einem Abort wartet, prueft der Rahmen, weil ihm
 /// Prozessabbild, Warteschlangen und `pending` gehoeren — und laufende
 /// Jobs (4.5): Mit ihnen schlaeft das System nicht.
-fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
+fn sleep(s: &mut String, layout: &Layout, p: &Program, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
     let _ = writeln!(s, "/* Systemschlaf (9.9). */");
     let _ = writeln!(s, "static uint8_t takt_idle(struct {x}_arena *a) {{");
     if driven.is_empty() {
@@ -1210,7 +1204,7 @@ fn sleep(s: &mut String, tick: i64, layout: &Layout, p: &Program, driven: &[&tak
         let _ = writeln!(s, "    }}");
     }
     let _ = writeln!(s, "    if (best < 0) return -1;");
-    let _ = writeln!(s, "    return {x}_now(a) + best * {tick}LL;");
+    let _ = writeln!(s, "    return takt_add_ns({x}_now(a), takt_ticks_ns(best));");
     let _ = writeln!(s, "}}");
     guarded(s, x, "int64_t", "deadline", "", "");
 
@@ -1743,7 +1737,6 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// Sim-Build ist das Modell seine Quelle, und ein Treiber, der zu
 /// Tickbeginn laese, ueberschriebe es (8.3).
 fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
-    let tick = p.config.tick;
     let scalars = bound_scalars(p, layout, x);
     let streams = bound_streams(p, x);
     // Ein Platz je Element, das ein Strom in einem Tick liefern darf, und
@@ -1851,7 +1844,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     }
     let _ = writeln!(s, "    takt_edge_commit(a, a->tick);");
     let _ = writeln!(s, "}}\n");
-    with_now(s, body, &format!("a->tick * {tick}LL"));
+    with_now(s, body, "takt_ticks_ns(a->tick)");
 }
 
 /// Stellt `now`, die Zeit des Ticks, an den Anfang des Rumpfs ab `body`,
@@ -2267,7 +2260,7 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     }
     let _ = writeln!(s, "}}");
     // Die Grenze des gerechneten Ticks: Ein Schlaf (9.9) rueckt `tick` schon vor dem Commit vor.
-    with_now(s, body, &format!("a->done * {}LL", p.config.tick));
+    with_now(s, body, "takt_ticks_ns(a->done)");
     locked(s, x, "void", "commit", "", "", "");
 }
 

@@ -552,7 +552,7 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &
     let _ = writeln!(s, "    return 1;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static _Bool takt_int_send(struct {x}_arena *a, int k, const char *b, int n) {{");
-    let _ = writeln!(s, "    return takt_int_push(a, k, b, n, (long long)a->tick * {}LL, 0);", p.config.tick);
+    let _ = writeln!(s, "    return takt_int_push(a, k, b, n, takt_ticks_ns(a->tick), 0);");
     let _ = writeln!(s, "}}");
     if !staged.is_empty() {
         // 8.6, `System::send`: Mit `drop_oldest` weist ein `send` nur ein
@@ -944,7 +944,7 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
         // dieses Ticks (`System::drain_tx`).
         if read.contains(i) {
             let keep = keeping.iter().position(|(k, _)| *k == slot);
-            let at = format!("a->tick * {}LL", p.config.tick);
+            let at = "takt_ticks_ns(a->tick)".to_string();
             deliver_taken(s, p, *i, slot, keep, &format!("takt_int_slot({i})"), &at, 0);
         }
         if port {

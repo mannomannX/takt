@@ -2496,3 +2496,66 @@ fn a_held_stale_delivery_keeps_its_hidden_value() {
     let stimulus = "t=0 in chamber_p 1.0\nt=1 in chamber_p 1.0\nt=1 in supply_p 100.0 stale\n";
     agree_program("03_sequences_and_faults.takt", &corpus("03_sequences_and_faults.takt"), stimulus, 7);
 }
+
+/// `now` an der Grenze von `Duration` (3.3, FB-614): `now` und
+/// `time_in_state` in einer Maschine, in einer zweiten `now + 1 ns`, sobald
+/// die Grenze naht, und ein Fault-Ziel, das `last_fault.tick` ausgibt. Die Sema laesst Ticks bis 1 s zu (1.3); damit
+/// laege die Grenze nach 9,2 · 10^9 Ticks. Der Test setzt T0 darum in der
+/// MIR auf 30 000 Tage ([`LIMIT_TICK_NS`]): Im Tick 4 laege die Dauer seit
+/// dem Start ueber 2^63 − 1 ns. Das Programm hat kein `after` und kein
+/// `every`, nichts also, was die Sema aus T0 vorausgerechnet haette.
+const AT_THE_LIMIT: &str = "system:
+    language = 1
+    tick     = 1 s
+
+output clock : Duration @ sim(\"clock\")
+output since : Duration @ sim(\"since\")
+output stamp : int @ sim(\"stamp\")
+output late  : Duration @ sim(\"late\")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            clock = now
+            since = time_in_state
+
+machine n:
+    fault -> REPORT
+    initial RUN
+
+    state RUN:
+        loop:
+            if now > 100000 d:
+                late = now + 1 ns
+
+    state REPORT:
+        enter:
+            stamp = last_fault.tick
+";
+
+/// 30 000 Tage in Nanosekunden.
+const LIMIT_TICK_NS: i64 = 30_000 * 86_400 * 1_000_000_000;
+
+/// **`now` bleibt an der Grenze von `Duration` stehen** (3.3, FB-614):
+/// Interpreter und Modell saettigen `now` und `time_in_state` im selben
+/// Tick, `now + 1 ns` faultet dort in beiden, und `last_fault.tick` zaehlt
+/// die Ticks weiter, obwohl `now` steht. Das Modell wickelte `now` vorher.
+#[test]
+fn now_stops_at_the_largest_duration_in_the_model_too() {
+    let mut p = compile("AT_THE_LIMIT", AT_THE_LIMIT);
+    p.config.tick = LIMIT_TICK_NS;
+    let r = run(&p, &Trace::default(), &RunOptions { ticks: 7, ..Default::default() }).expect("Lauf");
+    let trace = r.trace.render();
+    assert!(trace.contains("t=3 out clock 90000 d"), "{trace}");
+    for line in [
+        "t=4 out clock 9223372036854775807 ns",
+        "t=4 out since 9223372036854775807 ns",
+        "t=4 fault n Arithmetic(Overflow)",
+        "t=4 out stamp 4",
+    ] {
+        assert!(trace.contains(line), "`{line}` fehlt:\n{trace}");
+    }
+    agree_program("AT_THE_LIMIT", &p, "", 7);
+}
