@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::c_host::{Binding, CHost};
+use super::c_host::{Binding, CHost, Kernel};
 use super::dfuse::Dfuse;
 use super::{Board, Bringup, Builder, ConsoleLine, Form, Options, attached, capture, missed, publish_checked};
 
@@ -57,9 +57,22 @@ pub(super) const BRINGUP: Bringup = Bringup {
     env: &[],
 };
 
-/// Der C-Wirt der Black Pill (12.11, M11 Schritt 18b): Start, Takt, Leitung
-/// und Journal in `examples/boards/stm32f401`, in der Interruptform mit dem
-/// Port `ports/irq` und seinem Adapter fuer STM32F4 (TIM2, PendSV).
+/// Der Kern von FreeRTOS, den der C-Wirt unter FreeRTOS bindet (M11 Schritt
+/// 20): V11.3.1 mit dem Port `ARM_CM4F`, aus `FREERTOS_KERNEL_PATH` (auf CI
+/// aus der Setup-Aktion, lokal aus `D:\takt-tools\activate`).
+const FREERTOS: Kernel = Kernel {
+    env: "FREERTOS_KERNEL_PATH",
+    version: "V11.3.1",
+    marker: ("include/task.h", "#define tskKERNEL_VERSION_NUMBER"),
+    sources: &["tasks.c", "queue.c", "list.c", "portable/GCC/ARM_CM4F/port.c"],
+    include: &["include", "portable/GCC/ARM_CM4F"],
+};
+
+/// Der C-Wirt der Black Pill (12.11, M11 Schritte 18b und 20): Start, Takt,
+/// Leitung und Journal in `examples/boards/stm32f401`; in der Interruptform
+/// mit dem Port `ports/irq` und seinem Adapter fuer STM32F4 (TIM2, PendSV),
+/// unter FreeRTOS mit dem Port mit Faeden `ports/rtos` und seinem Adapter
+/// `ports/freertos`.
 pub const C_HOST: CHost = CHost {
     dir: "examples/boards/stm32f401",
     triple: "thumbv7em-none-eabihf",
@@ -70,12 +83,33 @@ pub const C_HOST: CHost = CHost {
     cflags: &["-mcpu=cortex-m4", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-mthumb", "-fshort-enums"],
     board: &["startup.c", "board.c"],
     script: "stm32f401.ld",
-    bindings: &[Binding {
-        form: Form::Interrupt,
-        main: "irq.c",
-        sources: &["crates/takt-embed-c/ports/irq/takt_irq.c", "crates/takt-embed-c/ports/irq/stm32f4/takt_irq_chip.c"],
-        include: &["crates/takt-embed-c/ports/irq"],
-    }],
+    bindings: &[
+        Binding {
+            form: Form::Interrupt,
+            main: "irq.c",
+            sources: &[
+                "crates/takt-embed-c/ports/irq/takt_irq.c",
+                "crates/takt-embed-c/ports/irq/stm32f4/takt_irq_chip.c",
+            ],
+            include: &["crates/takt-embed-c/ports/irq"],
+            interrupt_stack: None,
+            kernel: None,
+        },
+        // Schritt und Jobs rechnen auf den Stacks ihrer Aufgaben; der Stack der
+        // Interrupts traegt nur noch `main` vor FreeRTOS und die ISRs.
+        Binding {
+            form: Form::Rtos,
+            main: "freertos.c",
+            sources: &["crates/takt-embed-c/ports/rtos/takt_rtos.c", "crates/takt-embed-c/ports/freertos/takt_os.c"],
+            include: &[
+                "crates/takt-embed-c/ports/rtos",
+                "crates/takt-embed-c/ports/freertos",
+                "examples/boards/stm32f401/libc",
+            ],
+            interrupt_stack: Some(2048),
+            kernel: Some(FREERTOS),
+        },
+    ],
 };
 
 /// Das Sprungbrett im Stand des Bring-ups.
@@ -336,7 +370,7 @@ impl Board for Stm32f401C {
     }
 
     fn forms(&self) -> &'static [Form] {
-        &[Form::Interrupt]
+        &[Form::Interrupt, Form::Rtos]
     }
 }
 

@@ -306,11 +306,15 @@ Der C-Teil ist, was ein C-Wirt übersetzt: der Rahmen, den `takt build
 --emit embed` je Programm schreibt (`P_frame.c`, `P_ops.c`, `P.h`; erzeugt
 von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der Port für Systeme
 mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
-(`ports/posix`), der Port der Interruptform (`ports/irq`) mit seinem
-Adapter für STM32F4 (`ports/irq/stm32f4`) und die Beispiele
-(`examples/c-host/main.c`, `examples/posix/main.c`, der C-Wirt der Black
-Pill in `examples/boards/stm32f401`). Für ihn gelten CERT C und MISRA
-C:2012 unmittelbar (FB-524). Die Adapter für Zephyr und
+(`ports/posix`) und seinem Adapter für FreeRTOS (`ports/freertos`), der
+Port der Interruptform (`ports/irq`) mit seinem Adapter für STM32F4
+(`ports/irq/stm32f4`) und die Beispiele (`examples/c-host/main.c`,
+`examples/posix/main.c`, der C-Wirt der Black Pill in
+`examples/boards/stm32f401` mit seinem Wirt unter FreeRTOS). Für ihn gelten
+CERT C und MISRA C:2012 unmittelbar (FB-524). Der Kern von FreeRTOS gehört
+nicht dazu: Er bringt seine eigene Dokumentation nach MISRA C mit
+(`MISRA.md` im Kern), und was die Werkzeuge in seinen Köpfen finden, zählt
+der Test nicht. Die Adapter für Zephyr und
 CMSIS-RTOS2 (`ports/zephyr`, `ports/cmsis-rtos2`), das Gerät des Journals
 im Flash unter Zephyr (`ports/zephyr-nvm`) und ihre Beispiele
 (`examples/zephyr`, `examples/cmsis-rtos2`) gehören dazu, stehen aber noch
@@ -322,15 +326,17 @@ Lieferformen — `examples/c-host/takt/valve.takt` mit dem Beispiel `c-host`,
 `corpus-try/124_port_test.takt` mit dem Port für Fäden und dem Beispiel
 `posix`, `corpus-try/05_streams_and_protocol.takt` für Ströme, Records und
 den Rand, und noch einmal `124_port_test.takt` für `thumbv7em` mit dem Port
-der Interruptform und dem C-Wirt der Black Pill (M11 Schritt 18b) — und
-prüft jede Bindung, also die Quellen eines Programms des Wirts, mit beiden
-Werkzeugen. Die Bindung für `thumbv7em` prüft clang-tidy für ihr Ziel
-(`--target=thumbv7em-none-eabihf`, freistehend) und cppcheck mit der
-Plattform `unix32`, beide mit den Werten, die ihr Bau setzt; so sehen sie
-auch den Zweig des Rahmens für die FPU des Cortex-M4. Der Test liest
-Aufruf und Abweichungen aus diesem Abschnitt; er läuft unter Linux (die
-Kopfdateien von POSIX), auf CI in `.github/workflows/analysis.yml` bei
-jedem Push.
+der Interruptform und dem C-Wirt der Black Pill (M11 Schritt 18b); die
+Lieferform für `thumbv7em` bindet er auch an den Wirt der Black Pill unter
+FreeRTOS mit dem Kern V11.3.1 aus der Setup-Aktion (`FREERTOS_KERNEL_PATH`,
+M11 Schritt 20). Jede Bindung, also die Quellen eines Programms des Wirts,
+prüft er mit beiden Werkzeugen. Die Bindungen für `thumbv7em` prüft
+clang-tidy für ihr Ziel (`--target=thumbv7em-none-eabihf`, freistehend) und
+cppcheck mit der Plattform `unix32`, beide mit den Werten, die ihr Bau
+setzt; so sehen sie auch den Zweig des Rahmens für die FPU des Cortex-M4.
+Der Test liest Aufruf und Abweichungen aus diesem Abschnitt; er läuft unter
+Linux (die Kopfdateien von POSIX), auf CI in
+`.github/workflows/analysis.yml` bei jedem Push.
 
 | Werkzeug | Fassung | Aufruf |
 |---|---|---|

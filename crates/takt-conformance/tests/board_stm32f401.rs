@@ -498,6 +498,20 @@ fn the_c_interrupt_port_agrees_with_the_interpreter() {
     verdict(&failed);
 }
 
+/// **Der Port mit Faeden unter FreeRTOS besteht die Portpruefung** (12.11,
+/// 13.8; M11 Schritt 20): der C-Wirt der Black Pill mit dem SDK-Archiv,
+/// `ports/rtos`, seinem Adapter `ports/freertos` und dem Kern von FreeRTOS
+/// V11.3.1 (`ARM_CM4F`). Den Schritt rechnet eine Aufgabe hoechster
+/// Prioritaet, die Jobs eine darunter, darunter rechnet die Aufgabe des Wirts
+/// die fremde Last mit der FPU.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_freertos_port_passes_the_port_test() {
+    let Some((board, _guard)) = board() else { return };
+    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Rtos);
+    verdict(&failed);
+}
+
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_natives_agree_with_the_host() {

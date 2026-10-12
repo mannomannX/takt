@@ -174,12 +174,20 @@ struct Link {
     target: Vec<String>,
     /// Die Plattform fuer cppcheck: Breite von Zeigern und Ganzzahlen.
     platform: &'static str,
+    /// Verzeichnisse fremden Codes, den die Bindung einbindet, aber nicht zum
+    /// C-Teil gehoert: der Kern von FreeRTOS. Was dort steht, zaehlt nicht.
+    external: Vec<PathBuf>,
 }
 
 impl Link {
     /// Eine Bindung auf dem Wirt.
     fn host(units: Vec<PathBuf>, include: Vec<PathBuf>) -> Link {
-        Link { units, include, defines: Vec::new(), target: Vec::new(), platform: "unix64" }
+        Link { units, include, defines: Vec::new(), target: Vec::new(), platform: "unix64", external: Vec::new() }
+    }
+
+    /// Steht die Datei `file` in fremdem Code der Bindung?
+    fn is_external(&self, file: &str) -> bool {
+        self.external.iter().any(|dir| Path::new(file).starts_with(dir))
     }
 }
 
@@ -236,7 +244,9 @@ fn run_tidy(tool: &Path, args: &[String], link: &Link, out: &Path) -> Vec<Findin
             let id = cert.or_else(|| ids.split(',').next()).unwrap_or(ids);
             let mut at = place.rsplitn(3, ':');
             let (Some(column), Some(line), Some(file)) = (at.next(), at.next(), at.next()) else { continue };
-            found.push(finding(id, file, line, column, out));
+            if !link.is_external(file) {
+                found.push(finding(id, file, line, column, out));
+            }
         }
     }
     found
@@ -271,7 +281,9 @@ fn run_cppcheck(tool: &Path, args: &[String], link: &Link, out: &Path, report: &
         };
         let mut at = place.rsplitn(3, ':');
         let (Some(column), Some(line), Some(file)) = (at.next(), at.next(), at.next()) else { continue };
-        found.push(finding(id, file, line, column, out));
+        if !link.is_external(file) {
+            found.push(finding(id, file, line, column, out));
+        }
     }
     found
 }
@@ -352,6 +364,11 @@ const PROGRAMS: &[(&str, &str, &str, &[&str])] = &[
 const F401_DEFINES: &[&str] =
     &["-DTAKT_TICKS=2000u", "-DTAKT_LOGICAL=1", "-DTAKT_FRESH_JOURNAL=1", "-DTAKT_TICK_STACK_PROGRAM=0u"];
 
+/// Was der Bau des C-Wirts unter FreeRTOS setzt: ein Lauf in Echtzeit mit
+/// leerem Journal (`examples/boards/stm32f401/freertos.c`).
+const FREERTOS_DEFINES: &[&str] =
+    &["-DTAKT_TICKS=2000u", "-DTAKT_LOGICAL=0", "-DTAKT_FRESH_JOURNAL=1", "-DTAKT_TICK_STACK_PROGRAM=0u"];
+
 /// Das Ziel des C-Wirts der Black Pill fuer clang-tidy.
 const F401_TARGET: &[&str] = &[
     "--target=thumbv7em-none-eabihf",
@@ -366,7 +383,8 @@ const F401_TARGET: &[&str] = &[
 /// Programm sein Rahmen, bei `valve` mit `examples/c-host`, bei `port_test`
 /// mit dem Port fuer Faeden, seinem POSIX-Adapter und `examples/posix`, bei
 /// `app` mit dem Port der Interruptform, seinem Adapter fuer STM32F4 und dem
-/// C-Wirt `examples/boards/stm32f401`, fuer dessen Ziel.
+/// C-Wirt `examples/boards/stm32f401`, fuer dessen Ziel. Dazu der C-Wirt
+/// unter FreeRTOS ([`freertos`]).
 fn deliveries(out: &Path) -> Vec<Link> {
     let root = root();
     let ports = root.join("crates/takt-embed-c/ports");
@@ -406,7 +424,46 @@ fn deliveries(out: &Path) -> Vec<Link> {
         }
         links.push(link);
     }
+    links.extend(freertos(out));
     links
+}
+
+/// Der C-Wirt der Black Pill unter FreeRTOS (M11 Schritt 20): der Port mit
+/// Faeden, sein Adapter `ports/freertos`, der Wirt `freertos.c` und
+/// `FreeRTOSConfig.h`, gegen den Kern V11.3.1 (`FREERTOS_KERNEL_PATH`, auf CI
+/// aus der Setup-Aktion). Der Kern selbst gehoert nicht zum C-Teil: Er bringt
+/// seine eigene Dokumentation nach MISRA C mit (`MISRA.md` im Kern), und was
+/// die Werkzeuge in seinen Koepfen finden, zaehlt nicht. Die Lieferform ist
+/// die von `app`: Rahmen und Kopf des Programms zaehlen dort einmal.
+fn freertos(out: &Path) -> Option<Link> {
+    let hint = "`FREERTOS_KERNEL_PATH` auf den Kern V11.3.1 setzen (auf CI die Setup-Aktion)";
+    let kernel = takt_testkit::require("freertos", std::env::var_os("FREERTOS_KERNEL_PATH"), hint)?;
+    let kernel = std::fs::canonicalize(PathBuf::from(kernel)).expect("der Kern von FreeRTOS");
+    let root = root();
+    let ports = root.join("crates/takt-embed-c/ports");
+    let board = root.join("examples/boards/stm32f401");
+    let units = vec![
+        ports.join("rtos/takt_rtos.c"),
+        ports.join("freertos/takt_os.c"),
+        board.join("startup.c"),
+        board.join("board.c"),
+        board.join("freertos.c"),
+    ];
+    let include = vec![
+        out.join("app"),
+        ports.join("rtos"),
+        ports.join("freertos"),
+        board.join("libc"),
+        board,
+        kernel.join("include"),
+        kernel.join("portable/GCC/ARM_CM4F"),
+    ];
+    let mut link = Link::host(units, include);
+    link.defines = FREERTOS_DEFINES.iter().map(|d| (*d).to_string()).collect();
+    link.target = F401_TARGET.iter().map(|t| (*t).to_string()).collect();
+    link.platform = "unix32";
+    link.external = vec![kernel];
+    Some(link)
 }
 
 // --- Die Tests --------------------------------------------------------------

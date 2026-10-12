@@ -41,6 +41,56 @@ pub struct Binding {
     pub sources: &'static [&'static str],
     /// Die Kopfpfade des Ports, relativ zur Wurzel.
     pub include: &'static [&'static str],
+    /// Der Stack der Interrupts in Byte, gegen den das Linker-Skript prueft
+    /// (`board_stack_bytes`). `None`: Schritt und Jobs rechnen auf ihm, wie in
+    /// der Interruptform, und er braucht `P_TICK_STACK_BYTES +
+    /// P_JOB_STACK_BYTES` (12.3).
+    pub interrupt_stack: Option<u64>,
+    /// Der Kern eines RTOS, den der Wirt mitbindet.
+    pub kernel: Option<Kernel>,
+}
+
+/// Der Kern eines RTOS ausserhalb des Repositorys, in einer festen Fassung:
+/// Eine Umgebungsvariable nennt sein Verzeichnis, die Fassung geht in den
+/// Stand ein, und der Bau prueft sie am Kern.
+#[derive(Clone, Copy, Debug)]
+pub struct Kernel {
+    /// Die Umgebungsvariable, die das Verzeichnis des Kerns nennt.
+    pub env: &'static str,
+    /// Die Fassung, die der Bau verlangt.
+    pub version: &'static str,
+    /// Die Datei des Kerns, die seine Fassung nennt, und die Zeile darin, die
+    /// sie traegt (ihr Anfang; die Fassung steht in Anfuehrungszeichen dahinter).
+    pub marker: (&'static str, &'static str),
+    /// Die Quellen, relativ zum Kern.
+    pub sources: &'static [&'static str],
+    /// Die Kopfpfade, relativ zum Kern.
+    pub include: &'static [&'static str],
+}
+
+impl Kernel {
+    /// Das Verzeichnis des Kerns aus der Umgebung, geprueft auf seine Fassung.
+    pub fn dir(&self) -> Result<PathBuf, String> {
+        let dir = std::env::var_os(self.env).map(PathBuf::from).ok_or_else(|| {
+            format!("`{}` nennt den Kern nicht, den der Wirt bindet (Fassung {})", self.env, self.version)
+        })?;
+        self.check(&dir)?;
+        Ok(dir)
+    }
+
+    /// Ist der Kern in `dir` die verlangte Fassung?
+    fn check(&self, dir: &Path) -> Result<(), String> {
+        let (file, line) = self.marker;
+        let path = dir.join(file);
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let quoted = format!("\"{}\"", self.version);
+        let found = text.lines().find(|l| l.trim_start().starts_with(line));
+        if found.is_some_and(|l| l.contains(&quoted)) {
+            Ok(())
+        } else {
+            Err(format!("{}: nicht die Fassung {} ({})", dir.display(), self.version, found.unwrap_or("ohne Fassung")))
+        }
+    }
 }
 
 /// Ein C-Wirt eines Boards.
@@ -120,6 +170,12 @@ impl CHost {
             f.str(file);
             f.file_if_any(&root.join(file));
         }
+        // Ein Kern ausserhalb des Repositorys zaehlt mit seiner Fassung, die
+        // der Bau am Kern prueft: Der Stand ist auf jedem Rechner derselbe.
+        for kernel in self.bindings.iter().filter_map(|b| b.kernel) {
+            f.str(kernel.env);
+            f.str(kernel.version);
+        }
         hash_crates(&mut f)?;
         hash_build_inputs(&root.join(self.dir), &mut f)?;
         Ok(f.finish())
@@ -170,6 +226,7 @@ impl CHost {
             .find(|b| b.form == options.form)
             .ok_or_else(|| format!("der C-Wirt `{}` bindet nicht in der Form {:?}", self.dir, options.form))?;
         let root = root();
+        let kernel = binding.kernel.map(|k| k.dir().map(|dir| (k, dir))).transpose()?;
         let embed = out.join("embed");
         let hardware = options.hardware.clone().unwrap_or_else(|| root.join(self.hardware));
         let delivered = Command::new(tool)
@@ -215,6 +272,13 @@ impl CHost {
         for include in binding.include {
             cc.arg("-I").arg(root.join(include));
         }
+        if let Some((k, kernel_dir)) = &kernel {
+            for include in k.include {
+                cc.arg("-I").arg(kernel_dir.join(include));
+            }
+            cc.args(k.sources.iter().map(|file| kernel_dir.join(file)));
+        }
+        let interrupt_stack = binding.interrupt_stack.unwrap_or(tick_stack + job_stack);
         cc.args(self.board.iter().map(|file| dir.join(file)))
             .arg(dir.join(binding.main))
             .args(binding.sources.iter().map(|file| root.join(file)))
@@ -222,8 +286,7 @@ impl CHost {
             .arg(&sdk)
             .arg(format!("-Wl,-T,{}", dir.join(self.script).display()))
             .arg("-Wl,--gc-sections")
-            // Schritt und Jobs rechnen auf dem Stack der Interrupts (12.3).
-            .arg(format!("-Wl,--defsym=board_stack_bytes={}", tick_stack + job_stack))
+            .arg(format!("-Wl,--defsym=board_stack_bytes={interrupt_stack}"))
             .arg(format!("-Wl,--defsym={}{key}=0", takt_board_support::image_key::SYMBOL))
             .arg("-o")
             .arg(&elf);
@@ -293,5 +356,34 @@ mod tests {
         assert!(supported(&Options::fresh(10).with_flaw(super::super::Flaw::UnsavedFpu)).is_err());
         let tuned = Options::fresh(10).with_console(std::time::Duration::from_millis(5), "tune 0 01\n");
         assert!(supported(&tuned).is_err());
+    }
+
+    /// **Ein Kern bindet nur in seiner Fassung**: Sie steht im Stand der
+    /// Abbilder, also baut ein anderer Kern nicht still ein anderes Abbild
+    /// unter demselben Schluessel.
+    #[test]
+    fn a_kernel_of_another_version_is_refused() {
+        let kernel = Kernel {
+            env: "TAKT_TEST_KERNEL",
+            version: "V11.3.1",
+            marker: ("include/task.h", "#define tskKERNEL_VERSION_NUMBER"),
+            sources: &[],
+            include: &[],
+        };
+        let dir = crate::target_dir().join("tmp").join("takt-kernel-version");
+        let header = dir.join("include");
+        std::fs::create_dir_all(&header).expect("Verzeichnis");
+        let task = |version: &str| {
+            let text = format!(
+                " * tskKERNEL_VERSION_NUMBER im Kommentar\n#define tskKERNEL_VERSION_NUMBER    \"{version}\"\n"
+            );
+            std::fs::write(header.join("task.h"), text).expect("Datei");
+        };
+        task("V11.3.1");
+        assert_eq!(kernel.check(&dir), Ok(()));
+        task("V11.2.0");
+        assert!(kernel.check(&dir).is_err_and(|e| e.contains("nicht die Fassung V11.3.1")));
+        std::fs::remove_file(header.join("task.h")).expect("Datei");
+        assert!(kernel.check(&dir).is_err(), "ohne Kopf keine Fassung");
     }
 }
