@@ -362,6 +362,14 @@ impl Row {
 /// Ergebnis steht je Stelle in `CARGO_TARGET_TMPDIR/fb511-<tiefe>.tsv` und
 /// gezaehlt im Protokoll. Eine entschiedene Antwort nimmt der Cache. Im
 /// Release-Bau, wie `UPDATE_PATHS`.
+///
+/// Weitere Variablen: `CLASSIFY_PROGRAMS=<datei>,<datei>` beschraenkt den
+/// Lauf; `CLASSIFY_SHARD=i/n` nimmt aus den offenen Programmen, nach Namen
+/// sortiert, jedes n-te ab i (ab null), fuer parallele Laeufe auf mehreren
+/// Rechnern, und haengt `-s<i>von<n>` an die Dateinamen;
+/// `CLASSIFY_MEMORY_MB` ist die Speichergrenze je z3-Anfrage (Vorgabe 2048,
+/// FB-607); `CLASSIFY_WORKERS` die Zahl der Faeden (Vorgabe: die Haelfte der
+/// Kerne ohne einen); `CLASSIFY_RESUME=1` setzt einen abgebrochenen Lauf fort.
 fn classify_unreached(depths: &str) {
     let found = Some(takt_prove::find()).filter(|s| !s.is_missing());
     let Some(solver) = takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren") else {
@@ -370,8 +378,24 @@ fn classify_unreached(depths: &str) {
     // 2 GB je Anfrage statt `MEMORY_MB`: Neben den zwei Faeden laufen
     // WSL, Editoren und Sprachserver, und frei sind oft nur 9 GB Commit
     // (FB-607). Was mehr braucht, entscheidet in der Frist ohnehin kaum.
+    let number = |var: &str, default: u64| {
+        std::env::var(var).map_or(default, |v| v.trim().parse().unwrap_or_else(|_| panic!("{var}: Zahl erwartet")))
+    };
+    let memory = number("CLASSIFY_MEMORY_MB", 2048);
     let solver =
-        solver.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache")).with_memory(2048);
+        solver.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache")).with_memory(memory);
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    let workers = number("CLASSIFY_WORKERS", ((cores - 1) / 2).max(1) as u64).max(1) as usize;
+    let shard = std::env::var("CLASSIFY_SHARD").ok().map(|v| {
+        let parsed = v
+            .split_once('/')
+            .and_then(|(i, n)| Some((i.trim().parse::<usize>().ok()?, n.trim().parse::<usize>().ok()?)));
+        match parsed {
+            Some((i, n)) if i < n => (i, n),
+            _ => panic!("CLASSIFY_SHARD: `i/n` mit 0 <= i < n erwartet, nicht `{v}`"),
+        }
+    });
+    let suffix = shard.map_or(String::new(), |(i, n)| format!("-s{i}von{n}"));
     let mut names = takt_conformance::suites::programs("vergleich");
     names.extend(takt_conformance::suites::EXAMPLES);
     names.retain(|n| !WITHOUT_PARTS.contains(n));
@@ -388,12 +412,25 @@ fn classify_unreached(depths: &str) {
             open.insert(name, sites);
         }
     }
+    let all = open.len();
+    if let Some((i, n)) = shard {
+        let mut k = 0;
+        open.retain(|_, _| {
+            k += 1;
+            (k - 1) % n == i
+        });
+    }
+    eprintln!(
+        "FB-511: {all} offene Programme, davon {} in diesem Lauf{}; {workers} Faeden, {memory} MB je Anfrage",
+        open.len(),
+        shard.map_or(String::new(), |(i, n)| format!(" (Teil {i} von {n})"))
+    );
     let tmp = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"));
     for depth in depths.split(',').map(|d| d.trim().parse::<u32>().expect("Tiefe")) {
         let started = std::time::Instant::now();
         // `CLASSIFY_RESUME=1` nimmt, was ein abgebrochener Lauf dieser Tiefe
         // schon eingeordnet hat; sonst beginnt die Tiefe neu.
-        let progress = tmp.join(format!("fb511-{depth}.laufend.tsv"));
+        let progress = tmp.join(format!("fb511-{depth}{suffix}.laufend.tsv"));
         let resumed: Vec<Row> = match std::env::var("CLASSIFY_RESUME") {
             Ok(_) => std::fs::read_to_string(&progress).unwrap_or_default().lines().filter_map(Row::parse).collect(),
             Err(_) => {
@@ -404,9 +441,8 @@ fn classify_unreached(depths: &str) {
         let done: Vec<&str> = resumed.iter().map(|r| r.name.as_str()).collect();
         let queue = std::sync::Mutex::new(open.keys().copied().filter(|n| !done.contains(n)).collect::<Vec<_>>());
         let rows = std::sync::Mutex::new(resumed.clone());
-        let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
         std::thread::scope(|scope| {
-            for _ in 0..((cores - 1) / 2).max(1) {
+            for _ in 0..workers {
                 let worker = || {
                     loop {
                         let next = queue.lock().expect("Warteschlange").pop();
@@ -478,7 +514,7 @@ fn classify_unreached(depths: &str) {
             *tally.entry((r.group.as_str(), r.kind.as_str())).or_default() += 1;
             text.push_str(&r.line());
         }
-        let file = tmp.join(format!("fb511-{depth}.tsv"));
+        let file = tmp.join(format!("fb511-{depth}{suffix}.tsv"));
         std::fs::write(&file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
         eprintln!("Tiefe {depth}: {} Stellen in {:.0?}, {}", rows.len(), started.elapsed(), file.display());
         let mut by_group: BTreeMap<&str, usize> = BTreeMap::new();
