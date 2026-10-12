@@ -1,21 +1,17 @@
 name: Takt-Werkzeuge
 description: >-
-  Rust 1.98.0 mit den Zielen der Boards und llvm-tools, LLVM 22, die
-  aarch64-Werkzeugkette mit qemu (wie tools/Dockerfile.linux), z3 4.13.4 und
-  cvc5 1.2.0 (wie unter ~/.takt/bin auf dem Entwicklungsrechner) und
-  cargo-nextest.
+  Rust 1.98.0 mit den Zielen der Boards und llvm-tools, LLVM 22, z3 4.13.4,
+  cvc5 1.2.0 und cargo-nextest 0.9.146, dieselben Versionen wie auf dem
+  Entwicklungsrechner. Unter Linux dazu die aarch64-Werkzeugkette mit qemu
+  und libudev (wie tools/Dockerfile.linux).
+
+# Die Pruefsummen sind beim Einrichten (2026-10-12) gerechnet, die von LLVM
+# veroeffentlicht GitHub: Ein ausgetauschter Solver urteilte unbemerkt, ein
+# ausgetauschter clang uebersetzte unbemerkt anders.
 
 runs:
   using: composite
   steps:
-    # Die Suite braucht mehr Platte, als der Runner frei hat; die
-    # vorinstallierten SDKs braucht Takt nicht.
-    - name: Platz auf der Platte
-      shell: bash
-      run: |
-        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-        df -h /
-
     - name: Rust 1.98.0
       shell: bash
       run: |
@@ -24,10 +20,22 @@ runs:
           --target thumbv7em-none-eabihf,riscv32imac-unknown-none-elf,aarch64-unknown-linux-gnu
         rustup default 1.98.0
 
+    # --- Linux ---------------------------------------------------------------
+
+    # Die Suite braucht mehr Platte, als der Runner frei hat; die
+    # vorinstallierten SDKs braucht Takt nicht.
+    - name: Platz auf der Platte
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        df -h /
+
     # LLVM in derselben Hauptversion wie auf dem Wirt: Der Codegen schreibt
-    # IR fuer 22 (tools/Dockerfile.linux, KON2-013).
-    # `libudev` fuer `serialport` (takt-trace-serial, die Board-Harness).
+    # IR fuer 22 (tools/Dockerfile.linux, KON2-013). `libudev` fuer
+    # `serialport` (takt-trace-serial, die Board-Harness).
     - name: LLVM 22, aarch64, qemu und libudev
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update -qq
@@ -43,11 +51,8 @@ runs:
           echo QEMU_LD_PREFIX=/usr/aarch64-linux-gnu
         } >> "$GITHUB_ENV"
 
-    # Dieselben Versionen wie auf dem Entwicklungsrechner: Der Cache der
-    # Solver-Antworten haengt an Name und Version (takt-prove). Die
-    # Pruefsummen sind beim Einrichten (2026-10-12) aus den Release-Dateien
-    # gerechnet; ein Solver, der ausgetauscht wurde, urteilte unbemerkt.
     - name: z3 4.13.4 und cvc5 1.2.0
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         mkdir -p "$HOME/.takt/bin"
@@ -66,11 +71,61 @@ runs:
         "$HOME/.takt/bin/z3" --version
         "$HOME/.takt/bin/cvc5" --version | head -1
 
-    # Dieselbe Version wie auf dem Entwicklungsrechner, mit Pruefsumme.
     - name: cargo-nextest 0.9.146
+      if: runner.os == 'Linux'
       shell: bash
       run: |
         cd "$RUNNER_TEMP"
         curl -LsSf -o nextest.tar.gz https://get.nexte.st/0.9.146/linux
         echo "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428  nextest.tar.gz" | sha256sum -c -
         tar zxf nextest.tar.gz -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+
+    # --- Windows -------------------------------------------------------------
+
+    # Das LLVM des Runners ist aelter; 22.1.8 wie auf dem Entwicklungsrechner,
+    # und `TAKT_CLANG` nennt es, damit kein anderes clang gewinnt.
+    - name: LLVM 22.1.8
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $installer = Join-Path $env:RUNNER_TEMP 'LLVM-22.1.8-win64.exe'
+        Invoke-WebRequest -Uri https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-win64.exe -OutFile $installer
+        $want = '16E5709785FEF73C854646241C4A92C5CD574318D1B33C63330DD7721903E55C'
+        if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne $want) { throw "Pruefsumme von LLVM passt nicht" }
+        Start-Process -FilePath $installer -ArgumentList '/S', '/D=C:\LLVM22' -Wait
+        'C:\LLVM22\bin' | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+        'TAKT_CLANG=C:\LLVM22\bin\clang.exe' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        & C:\LLVM22\bin\clang.exe --version
+
+    - name: z3 4.13.4 und cvc5 1.2.0
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $bin = Join-Path $env:USERPROFILE '.takt\bin'
+        New-Item -ItemType Directory -Force $bin | Out-Null
+        Set-Location $env:RUNNER_TEMP
+        $files = @{
+          'z3-4.13.4-x64-win.zip' = @('https://github.com/Z3Prover/z3/releases/download/z3-4.13.4/z3-4.13.4-x64-win.zip', '0A36DD5654FE423D23A727C4570C9DB9A315926A4301189B868B6EB9BFD5979D')
+          'cvc5-Win64-x86_64-static.zip' = @('https://github.com/cvc5/cvc5/releases/download/cvc5-1.2.0/cvc5-Win64-x86_64-static.zip', '256F4AF3F4181E770801DF436852CB3C76C86DBF9B69A47064D7F8D5BC0EE1D2')
+        }
+        foreach ($name in $files.Keys) {
+          Invoke-WebRequest -Uri $files[$name][0] -OutFile $name
+          if ((Get-FileHash $name -Algorithm SHA256).Hash -ne $files[$name][1]) { throw "Pruefsumme von $name passt nicht" }
+          Expand-Archive $name -DestinationPath . -Force
+        }
+        Copy-Item z3-4.13.4-x64-win\bin\z3.exe, z3-4.13.4-x64-win\bin\libz3.dll $bin
+        Copy-Item cvc5-Win64-x86_64-static\bin\cvc5.exe $bin
+        $bin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+        & (Join-Path $bin 'z3.exe') --version
+        & (Join-Path $bin 'cvc5.exe') --version | Select-Object -First 1
+
+    - name: cargo-nextest 0.9.146
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $zip = Join-Path $env:RUNNER_TEMP 'nextest.zip'
+        Invoke-WebRequest -Uri https://get.nexte.st/0.9.146/windows -OutFile $zip
+        if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne '0FA689815C8157E4633225B6B173184B3D546EB6FFB754C3D0E6EA5973284A20') { throw "Pruefsumme von nextest passt nicht" }
+        $cargoBin = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' } else { Join-Path $env:USERPROFILE '.cargo\bin' }
+        Expand-Archive $zip -DestinationPath $cargoBin -Force
+        cargo nextest --version
