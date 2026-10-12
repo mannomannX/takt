@@ -29,13 +29,16 @@ static TARGET: Mutex<Cell<Option<u64>>> = Mutex::new(Cell::new(None));
 pub(crate) fn start(rcc: &stm32f4::stm32f401::RCC, tim2: &TIM2, prescaler: u16) {
     rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
     let _ = rcc.apb1enr().read();
+    // SAFETY: `PSC` nimmt jeden 16-Bit-Wert.
     tim2.psc().write(|w| unsafe { w.psc().bits(prescaler) });
+    // SAFETY: `ARR` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
     tim2.arr().write(|w| unsafe { w.bits(u32::MAX) });
     // Uebernehmen und das dabei gesetzte `UIF` wieder loeschen, wie beim
     // periodischen Tick (`start_tim2`): Der erste Ueberlauf kommt vom Zaehler.
     tim2.egr().write(|w| w.ug().set_bit());
+    // SAFETY: `SR` ist `rc_w0`; Nullen loeschen jedes Flag.
     tim2.sr().write(|w| unsafe { w.bits(0) });
-    EPOCH.store(0, Ordering::Relaxed);
+    EPOCH.store(0, Ordering::SeqCst);
     tim2.dier().write(|w| w.uie().set_bit());
     tim2.cr1().modify(|_, w| w.cen().set_bit());
 }
@@ -51,10 +54,10 @@ fn tim2() -> &'static stm32f4::stm32f401::tim2::RegisterBlock {
 pub fn now_counts() -> u64 {
     let t = tim2();
     loop {
-        let epoch = EPOCH.load(Ordering::Relaxed);
+        let epoch = EPOCH.load(Ordering::SeqCst);
         let low = t.cnt().read().bits();
         let wrapped = t.sr().read().uif().bit_is_set();
-        if EPOCH.load(Ordering::Relaxed) == epoch {
+        if EPOCH.load(Ordering::SeqCst) == epoch {
             return counts(epoch, low, wrapped);
         }
     }
@@ -69,7 +72,9 @@ fn aim(target: u64) {
     match compare(target, now_counts()) {
         Compare::Due => NVIC::pend(Interrupt::TIM2),
         Compare::At(low) => {
+            // SAFETY: `CCR1` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
             t.ccr1().write(|w| unsafe { w.bits(low) });
+            // SAFETY: `SR` ist `rc_w0`; das Muster loescht nur `CC1IF`.
             t.sr().write(|w| unsafe { w.bits(!(1 << 1)) });
             t.dier().modify(|_, w| w.cc1ie().set_bit());
             if passed(target, now_counts()) {
@@ -100,11 +105,13 @@ pub fn on_interrupt() -> bool {
     let t = tim2();
     let sr = t.sr().read();
     if sr.uif().bit_is_set() {
-        // `rc_w0`: Nullen loeschen, Einsen lassen stehen.
+        // SAFETY: `rc_w0`: Nullen loeschen, Einsen lassen stehen; das Muster
+        // loescht nur `UIF`.
         t.sr().write(|w| unsafe { w.bits(!1) });
-        EPOCH.fetch_add(1, Ordering::Relaxed);
+        EPOCH.fetch_add(1, Ordering::SeqCst);
     }
     if sr.cc1if().bit_is_set() {
+        // SAFETY: wie `UIF`, hier nur `CC1IF`.
         t.sr().write(|w| unsafe { w.bits(!(1 << 1)) });
     }
     let target = cortex_m::interrupt::free(|cs| TARGET.borrow(cs).get());

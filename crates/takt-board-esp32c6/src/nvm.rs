@@ -91,13 +91,13 @@ impl FlashNvm {
     /// Fuehrt einen Flash-Zugriff aus, wenn keiner laeuft; sonst `None`.
     /// Liefert das Ergebnis und die Dauer in SYSTIMER-Schritten.
     fn exclusive<R>(f: impl FnOnce() -> R) -> Option<(R, u64)> {
-        if BUSY.swap(true, Ordering::Acquire) {
+        if BUSY.swap(true, Ordering::SeqCst) {
             return None;
         }
         let start = SystemTimer::unit_value(Unit::Unit0);
         let out = f();
         let took = SystemTimer::unit_value(Unit::Unit0).wrapping_sub(start);
-        BUSY.store(false, Ordering::Release);
+        BUSY.store(false, Ordering::SeqCst);
         Some((out, took))
     }
 
@@ -105,11 +105,24 @@ impl FlashNvm {
     /// Speicher beginnen soll (13.8, Konformitaet).
     pub fn wipe(&mut self) -> bool {
         let (storage, base) = (&mut self.storage, self.base);
-        Self::exclusive(|| storage.erase(base, base + 2 * SLOT).is_ok()).is_some_and(|(ok, _)| ok)
+        Self::exclusive(|| storage.erase(base, base.saturating_add(SLOT.saturating_mul(2))).is_ok())
+            .is_some_and(|(ok, _)| ok)
     }
 
+    /// Die Adresse von `offset` in Slot `slot`; die Aufrufer pruefen beide
+    /// vorher gegen [`SLOT`].
     fn at(&self, slot: u8, offset: u32) -> u32 {
-        self.base + u32::from(slot) * SLOT + offset
+        self.base.saturating_add(u32::from(slot).saturating_mul(SLOT)).saturating_add(offset)
+    }
+
+    /// Passen `len` Byte ab `offset` in einen Slot?
+    fn fits(offset: u32, len: usize) -> bool {
+        u32::try_from(len).is_ok_and(|len| offset.saturating_add(len) <= SLOT)
+    }
+
+    /// `at` um die Laenge eines Stuecks weiter.
+    fn after(at: u32, len: usize) -> u32 {
+        at.saturating_add(u32::try_from(len).unwrap_or(u32::MAX))
     }
 }
 
@@ -124,7 +137,7 @@ impl Nvm for FlashNvm {
         }
         let from = self.at(slot, 0);
         let storage = &mut self.storage;
-        let Some((ok, took)) = Self::exclusive(|| storage.erase(from, from + SLOT).is_ok()) else {
+        let Some((ok, took)) = Self::exclusive(|| storage.erase(from, from.saturating_add(SLOT)).is_ok()) else {
             return false;
         };
         self.erase_max = self.erase_max.max(took);
@@ -133,7 +146,7 @@ impl Nvm for FlashNvm {
     }
 
     fn begin_write(&mut self, slot: u8, offset: u32, bytes: &[u8]) -> bool {
-        if slot > 1 || offset % 4 != 0 || offset.saturating_add(bytes.len() as u32) > SLOT {
+        if slot > 1 || offset % 4 != 0 || !Self::fits(offset, bytes.len()) {
             return false;
         }
         // Wortweise, mit `0xFF` aufgefuellt: Im geloeschten Flash sind das
@@ -144,10 +157,12 @@ impl Nvm for FlashNvm {
             let mut ok = true;
             for part in bytes.chunks(Chunk::BYTES) {
                 let mut chunk = Chunk([0xFF; Chunk::BYTES]);
-                chunk.0[..part.len()].copy_from_slice(part);
+                for (to, from) in chunk.0.iter_mut().zip(part) {
+                    *to = *from;
+                }
                 let n = part.len().next_multiple_of(4);
-                ok &= storage.write_nor(at, &chunk.0[..n]).is_ok();
-                at += n as u32;
+                ok &= chunk.0.get(..n).is_some_and(|words| storage.write_nor(at, words).is_ok());
+                at = Self::after(at, n);
             }
             ok
         }) else {
@@ -163,7 +178,7 @@ impl Nvm for FlashNvm {
     }
 
     fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool {
-        if slot > 1 || offset % 4 != 0 || offset.saturating_add(into.len() as u32) > SLOT {
+        if slot > 1 || offset % 4 != 0 || !Self::fits(offset, into.len()) {
             return false;
         }
         let mut at = self.at(slot, offset);
@@ -172,9 +187,13 @@ impl Nvm for FlashNvm {
             let mut ok = true;
             for part in into.chunks_mut(Chunk::BYTES) {
                 let mut chunk = Chunk([0; Chunk::BYTES]);
-                ok &= storage.read_nor(at, &mut chunk.0[..part.len()]).is_ok();
-                part.copy_from_slice(&chunk.0[..part.len()]);
-                at += part.len() as u32;
+                if let Some(read) = chunk.0.get_mut(..part.len()) {
+                    ok &= storage.read_nor(at, read).is_ok();
+                    part.copy_from_slice(read);
+                } else {
+                    ok = false;
+                }
+                at = Self::after(at, part.len());
             }
             ok
         })

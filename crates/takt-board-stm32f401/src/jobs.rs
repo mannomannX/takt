@@ -53,26 +53,26 @@ static PAINTED: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
 /// Malt den Job-Stack ueber dem Waechter, bevor der Faden ihn benutzt, und
 /// merkt sich seine Grenzen.
 fn paint(stack: &mut [u8]) {
-    let top = stack.as_ptr() as usize + stack.len();
+    let top = stack.as_ptr_range().end.expose_provenance();
     let from = GUARD.min(stack.len());
-    let painted = &mut stack[from..];
-    let bottom = painted.as_ptr() as usize;
+    let painted = stack.get_mut(from..).unwrap_or_default();
+    let bottom = painted.as_ptr().expose_provenance();
     for word in painted.chunks_exact_mut(4) {
         word.copy_from_slice(&crate::stack::PATTERN.to_ne_bytes());
     }
-    PAINTED[0].store(bottom as u32, Ordering::Relaxed);
-    PAINTED[1].store(top as u32, Ordering::Relaxed);
+    PAINTED[0].store(crate::word(bottom), Ordering::SeqCst);
+    PAINTED[1].store(crate::word(top), Ordering::SeqCst);
 }
 
 /// Wie tief der Job-Stack bisher reichte, in Byte vom oberen Ende (12.3,
 /// 13.8); `None` ohne Job-Faden. Nur, wenn der Faden nicht rechnet: nach dem
 /// Lauf oder aus dem Kontext des Schritts.
 pub fn high_water() -> Option<u32> {
-    if !STARTED.load(Ordering::Acquire) {
+    if !STARTED.load(Ordering::SeqCst) {
         return None;
     }
-    let (bottom, top) = (PAINTED[0].load(Ordering::Relaxed), PAINTED[1].load(Ordering::Relaxed));
-    Some(crate::stack::depth(bottom as usize, top as usize))
+    let (bottom, top) = (PAINTED[0].load(Ordering::SeqCst), PAINTED[1].load(Ordering::SeqCst));
+    Some(crate::stack::depth(crate::address(bottom), crate::address(top)))
 }
 
 /// Der Griff, mit dem der Faden des Jobs rechnet: vor `STARTED` gesetzt,
@@ -166,31 +166,39 @@ impl<D: Dispatch> JobContext<D> {
         // Die Hardware erwartet beim Verlassen von PendSV einen Rahmen aus
         // acht Worten auf dem PSP: r0–r3, r12, lr, pc, xPSR; der Stack ist
         // auf acht Byte ausgerichtet.
-        let top = (stack.as_mut_ptr() as usize + stack.len()) & !7;
-        let frame = (top - 32) as *mut u32;
-        let entry = worker as extern "C" fn() -> ! as usize as u32;
-        // SAFETY: `frame` liegt am oberen Ende von `stack`, der diesem
-        // Faden allein gehoert; noch laeuft er nicht.
-        unsafe {
-            for (i, word) in [0, 0, 0, 0, 0, u32::MAX, entry & !1, THUMB].into_iter().enumerate() {
-                write_volatile(frame.add(i), word);
-            }
+        let top = stack.as_mut_ptr_range().end.expose_provenance() & !7;
+        let frame = core::ptr::with_exposed_provenance_mut::<u32>(top.saturating_sub(32));
+        let entry = crate::word(worker_address());
+        for (i, word) in [0, 0, 0, 0, 0, u32::MAX, entry & !1, THUMB].into_iter().enumerate() {
+            // SAFETY: `frame` liegt am oberen Ende von `stack`, der diesem
+            // Faden allein gehoert; noch laeuft er nicht.
+            unsafe { write_volatile(frame.wrapping_add(i), word) };
         }
-        let s = &raw mut TAKT_JOB_SWITCH;
-        // SAFETY: Vor dem ersten Wechsel liest niemand die Tabelle, und
-        // PendSV bekommt erst danach die niedrigste Prioritaet.
-        unsafe {
-            let job = &raw mut (*s).threads[JOB as usize];
-            write_volatile(job, [0; 26]);
-            write_volatile(&raw mut (*job)[0], frame as u32);
-            write_volatile(&raw mut (*job)[9], THREAD_PSP);
-            write_volatile(&raw mut (*s).current, MAIN);
-            write_volatile(&raw mut (*s).want, MAIN);
-            // SHPR3, Byte fuer PendSV (Ausnahme 14): die niedrigste Prioritaet.
-            (*SCB::PTR).shpr[10].write(0xFF);
-        }
-        STARTED.store(true, Ordering::Release);
-        JobContext { bottom: stack.as_ptr() as u32, dispatch }
+        // Vor dem ersten Wechsel liest niemand die Tabelle, und PendSV
+        // bekommt erst danach die niedrigste Prioritaet: Was folgt, schreibt
+        // allein.
+        // SAFETY: bildet nur die Adresse eines Felds der Statik.
+        let threads = unsafe { &raw mut TAKT_JOB_SWITCH.threads };
+        let job = threads.cast::<[u32; 26]>().wrapping_add(crate::address(JOB));
+        // SAFETY: der Platz des Job-Fadens in der Tabelle, siehe oben.
+        unsafe { write_volatile(job, [0; 26]) };
+        // SAFETY: Wort 0 des Fadens ist `sp`, siehe oben.
+        unsafe { write_volatile(job.cast::<u32>(), crate::word(frame.expose_provenance())) };
+        // SAFETY: Wort 9 ist `EXC_RETURN`, siehe oben.
+        unsafe { write_volatile(job.cast::<u32>().wrapping_add(9), THREAD_PSP) };
+        // SAFETY: bildet nur die Adresse eines Felds der Statik.
+        let current = unsafe { &raw mut TAKT_JOB_SWITCH.current };
+        // SAFETY: siehe oben.
+        unsafe { write_volatile(current, MAIN) };
+        // SAFETY: siehe oben.
+        unsafe { write_volatile(want(), MAIN) };
+        // SAFETY: die Register des SCB; nur dieser Faden schreibt die Prioritaet von PendSV.
+        let scb = unsafe { &*SCB::PTR };
+        // SHPR3, Byte fuer PendSV (Ausnahme 14): die niedrigste Prioritaet.
+        // SAFETY: PendSV laeuft erst nach dem ersten Wunsch eines Wechsels.
+        unsafe { scb.shpr[10].write(0xFF) };
+        STARTED.store(true, Ordering::SeqCst);
+        JobContext { bottom: crate::word(stack.as_ptr().expose_provenance()), dispatch }
     }
 
     /// Der Job-Faden des Programms auf `stack`, den der Rahmen fuer ihn
@@ -222,16 +230,23 @@ impl<D: Dispatch> JobContext<D> {
 /// und dem Wechsel verloren geht: Rechnet der Job nicht, wechselt PendSV
 /// nicht.
 pub fn preempt() {
-    if STARTED.load(Ordering::Acquire) {
+    if STARTED.load(Ordering::SeqCst) {
         // SAFETY: ein Wort, das PendSV bei gesperrten Interrupts liest.
-        unsafe { write_volatile(&raw mut TAKT_JOB_SWITCH.want, MAIN) };
+        unsafe { write_volatile(want(), MAIN) };
         SCB::set_pendsv();
     }
 }
 
+/// Das Feld `want` der Tabelle, ohne es zu lesen; jeder Zugriff darauf ist
+/// volatil, denn PendSV liest es.
+fn want() -> *mut u32 {
+    // SAFETY: bildet nur die Adresse eines Felds der Statik.
+    unsafe { &raw mut TAKT_JOB_SWITCH.want }
+}
+
 fn switch_to(thread: u32) {
     // SAFETY: ein Wort, das PendSV bei gesperrten Interrupts liest.
-    unsafe { write_volatile(&raw mut TAKT_JOB_SWITCH.want, thread) };
+    unsafe { write_volatile(want(), thread) };
     SCB::set_pendsv();
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
@@ -241,11 +256,23 @@ fn switch_to(thread: u32) {
 /// den Kern zurueck.
 extern "C" fn worker() -> ! {
     loop {
+        let slot = &raw mut JOBS;
         // SAFETY: `start` setzte es vor dem ersten Wechsel hierher; danach
         // benutzt es nur dieser Faden.
-        if let Some(jobs) = unsafe { (&raw mut JOBS).as_mut() }.and_then(Option::as_deref_mut) {
+        if let Some(jobs) = unsafe { slot.as_mut() }.and_then(Option::as_deref_mut) {
             jobs.work();
         }
         switch_to(MAIN);
     }
+}
+
+/// Die Adresse von [`worker`]: Der Rahmen, den die Hardware beim ersten
+/// Wechsel entstapelt, traegt sie als `pc`.
+#[expect(
+    clippy::fn_to_numeric_cast_any,
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.11.1: der Rahmen des Fadens nennt seinen Einsprung als Adresse; die einer Funktion liefert nur `as`"
+)]
+fn worker_address() -> usize {
+    worker as extern "C" fn() -> ! as usize
 }

@@ -40,10 +40,14 @@ impl Iwdg {
     pub fn arm(timeout_ns: i64) -> Iwdg {
         let (pr, rlr) = takt_board_support::watchdog::iwdg(timeout_ns, LSI_MAX_HZ);
         let iwdg = registers();
+        // SAFETY: `0xCCCC` startet den Watchdog (RM0368 17.4.1).
         iwdg.kr().write(|w| unsafe { w.key().bits(0xCCCC) });
+        // SAFETY: `0x5555` gibt `PR` und `RLR` zum Schreiben frei.
         iwdg.kr().write(|w| unsafe { w.key().bits(0x5555) });
         settle(iwdg);
+        // SAFETY: `watchdog::iwdg` liefert einen Vorteiler in 0..=6 ...
         iwdg.pr().write(|w| unsafe { w.pr().bits(pr) });
+        // SAFETY: ... und einen Nachladewert in 0..=0xFFF.
         iwdg.rlr().write(|w| unsafe { w.rl().bits(rlr) });
         settle(iwdg);
         Iwdg::feed();
@@ -52,6 +56,7 @@ impl Iwdg {
 
     /// Setzt die Frist zurueck; ohne gestarteten Watchdog wirkungslos.
     pub fn feed() {
+        // SAFETY: `0xAAAA` laedt den Zaehler nach (RM0368 17.4.1).
         registers().kr().write(|w| unsafe { w.key().bits(0xAAAA) });
     }
 }

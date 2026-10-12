@@ -46,8 +46,43 @@
 //! | Tick | TIM2, 32-bittig, vier Compare-Kanaele |
 //! | Telemetrie | USART1 auf PA9/PA10 |
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![allow(unsafe_code, reason = "Registerzugriff ueber die PAC; 9.5 fuehrt Treiber in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 pub mod alarm;
 pub mod bootloader;
@@ -124,6 +159,28 @@ pub const CORE_HZ: u32 = 84_000_000;
 /// Timer-Schritten in Zeit exakt — ein krummer Teiler waere eine
 /// Rundungsquelle in der Groessenordnung, die `tick_tolerance` misst.
 pub const TIMER_HZ: u32 = 1_000_000;
+
+// Der Cortex-M4 adressiert mit 32 Bit: Ein Registerwort und eine Adresse sind
+// gleich breit, und [`address`] und [`word`] wandeln verlustfrei.
+const _: () = assert!(core::mem::size_of::<usize>() == core::mem::size_of::<u32>());
+
+/// Ein Registerwort als Adresse, etwa fuer eine Vektortabelle.
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: in einer const fn wandelt nur `as`; u32 und usize sind auf diesem Ziel gleich breit"
+)]
+pub const fn address(word: u32) -> usize {
+    word as usize
+}
+
+/// Eine Adresse als Registerwort; verlustfrei wie [`address`].
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: in einer const fn wandelt nur `as`; u32 und usize sind auf diesem Ziel gleich breit"
+)]
+pub const fn word(address: usize) -> u32 {
+    address as u32
+}
 
 /// Fehler beim Aufsetzen des Boards.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -218,6 +275,7 @@ fn clocks(
     // enabling"). Ohne ihn kann der folgende Schreibvorgang verloren
     // gehen — und zwar je nach Optimierungsgrad mal ja, mal nein.
     let _ = rcc.apb1enr().read();
+    // SAFETY: `0b10` ist ein Wert, den `VOS` annimmt (RM0368 5.4.1).
     pwr.cr().modify(|_, w| unsafe { w.vos().bits(0b10) });
 
     // Dann die Flash-Wartezyklen, bevor der Takt steigt — andersherum
@@ -237,6 +295,7 @@ fn clocks(
     // abhaengig, den der vorige Tick hinterliess — das Gate (7.2) braucht
     // eine Schranke, und eine Messung mit warmem Cache ist keine fuer einen
     // Tick mit kaltem.
+    // SAFETY: zwei Wartezyklen sind ein Wert, den `LATENCY` annimmt (RM0368 3.8.1).
     flash.acr().modify(|_, w| unsafe { w.latency().bits(2) }.prften().set_bit().icen().clear_bit().dcen().clear_bit());
     if !wait_for(|| flash.acr().read().latency().bits() == 2) {
         return Err(InitError::ClockNotReady);
@@ -260,11 +319,16 @@ fn clocks(
     }
 
     let pllp = takt_board_support::pll::divider_p().ok_or(InitError::UnsupportedCrystal)?;
-    rcc.pllcfgr().write(|w| unsafe {
+    // Die Teiler kommen aus `takt_board_support::pll`, das sie gegen die
+    // Grenzen der PLL prueft (RM0368 6.3.2); jeder passt in sein Feld.
+    rcc.pllcfgr().write(|w| {
         w.pllsrc().set_bit(); // HSE als Quelle
-        w.pllm().bits(pllm);
-        w.plln().bits(takt_board_support::pll::divider_n());
-        w.pllp().bits(pllp);
+        // SAFETY: `pllm` liegt in 2..=63, wie `pll::divider_m` es zusagt.
+        unsafe { w.pllm().bits(pllm) };
+        // SAFETY: `pll::divider_n` ist 336, im Band 50..=432.
+        unsafe { w.plln().bits(takt_board_support::pll::divider_n()) };
+        // SAFETY: `pllp` ist die Kodierung eines der vier Teiler 2, 4, 6, 8.
+        unsafe { w.pllp().bits(pllp) };
         w
     });
     rcc.cr().modify(|_, w| w.pllon().set_bit());
@@ -288,11 +352,15 @@ fn clocks(
     // Registerwerte. Ein Teiler hier wuerde Kern, Timer und UART gemeinsam
     // verlangsamen, ohne dass die gemessene Periode es zeigte — Timer und
     // Sollwert haengen an derselben Uhr.
-    rcc.cfgr().modify(|_, w| unsafe {
-        w.hpre().bits(0b0000);
-        w.ppre1().bits(0b100);
-        w.ppre2().bits(0b000)
+    rcc.cfgr().modify(|_, w| {
+        // SAFETY: `0b0000` ist „ohne Teiler“ in `HPRE` (RM0368 6.3.3).
+        unsafe { w.hpre().bits(0b0000) };
+        // SAFETY: `0b100` ist der Teiler 2 in `PPRE1`.
+        unsafe { w.ppre1().bits(0b100) };
+        // SAFETY: `0b000` ist „ohne Teiler“ in `PPRE2`.
+        unsafe { w.ppre2().bits(0b000) }
     });
+    // SAFETY: `0b10` waehlt in `SW` die PLL, die oben angelaufen ist.
     rcc.cfgr().modify(|_, w| unsafe { w.sw().bits(0b10) });
     if !wait_for(|| rcc.cfgr().read().sws().bits() == 0b10) {
         return Err(InitError::ClockNotReady);
@@ -309,6 +377,7 @@ pub(crate) fn run_on_hsi(rcc: &stm32f4::stm32f401::rcc::RegisterBlock) -> bool {
     if !wait_for(|| rcc.cr().read().hsirdy().bit_is_set()) {
         return false;
     }
+    // SAFETY: `0b00` waehlt in `SW` den HSI, der oben bereitsteht.
     rcc.cfgr().modify(|_, w| unsafe { w.sw().bits(0b00) });
     if !wait_for(|| rcc.cfgr().read().sws().bits() == 0b00) {
         return false;
@@ -334,8 +403,10 @@ fn start_tim2(rcc: &stm32f4::stm32f401::RCC, tim2: &stm32f4::stm32f401::TIM2, ps
     rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
     let _ = rcc.apb1enr().read();
 
+    // SAFETY: `PSC` nimmt jeden 16-Bit-Wert.
     tim2.psc().write(|w| unsafe { w.psc().bits(psc) });
     // Der Zaehler laeuft von 0 bis `arr`, das sind `arr + 1` Schritte.
+    // SAFETY: `ARR` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
     tim2.arr().write(|w| unsafe { w.bits(counts.saturating_sub(1)) });
 
     // Die neuen Werte uebernehmen, bevor der Zaehler laeuft.
@@ -351,6 +422,7 @@ fn start_tim2(rcc: &stm32f4::stm32f401::RCC, tim2: &stm32f4::stm32f401::TIM2, ps
     // `write` mit Maske, weil `SR` ein `rc_w0`-Register ist: Nullen
     // loeschen, Einsen lassen stehen. Hier ist ohnehin alles frisch, aber
     // die Form bleibt dieselbe wie in der ISR.
+    // SAFETY: `SR` ist `rc_w0`; das Muster loescht nur `UIF`.
     tim2.sr().write(|w| unsafe { w.bits(!1) });
 
     tim2.dier().modify(|_, w| w.uie().set_bit());

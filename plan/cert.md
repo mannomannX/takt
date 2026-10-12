@@ -174,8 +174,16 @@ Liste, bei Programmen unter `src/bin` am Kopf jedes Programms.
 | Stufe | Crates | dazu |
 |---|---|---|
 | 1 | jedes eigene Crate | rustc `deprecated`, `unreachable_code`, `unused_must_use`, `unused_assignments`, `unused_mut`, `unfulfilled_lint_expectations`; Clippy `unwrap_used`, `todo`, `unimplemented`, `dbg_macro`, `exit` |
-| 2 | was auf dem Ziel läuft oder ins Abbild gelinkt wird: `takt-rt-core`, `takt-rt-baremetal`, `takt-rt-linux`, `takt-native`, `takt-hal` (der Kern ohne `mir`), `takt-crypto`, `libtaktm`, `takt-board-*`, `takt-bringup-*`, `takt-trampoline-stm32f401`, `takt-native-abi`, `takt-embed`, `takt-embed-c` | Clippy `panic`, `expect_used`, `arithmetic_side_effects`, `indexing_slicing`, `as_conversions`, `fn_to_numeric_cast_any`, `shadow_unrelated`, `else_if_without_else`; rustc `unreachable_pub`; nur `Ordering::SeqCst` |
+| 2 | was auf dem Ziel läuft oder ins Abbild gelinkt wird: `takt-rt-core`, `takt-rt-baremetal`, `takt-rt-linux`, `takt-native`, `takt-hal` (der Kern ohne `mir`), `takt-crypto`, `libtaktm`, `takt-board-*`, `takt-bringup-stm32f401`, `takt-bringup-esp32c6`, `takt-trampoline-stm32f401`, `takt-native-abi`, `takt-embed`, `takt-embed-c` | Clippy `panic`, `expect_used`, `arithmetic_side_effects`, `indexing_slicing`, `as_conversions`, `fn_to_numeric_cast_any`, `shadow_unrelated`, `else_if_without_else`; rustc `unreachable_pub`; nur `Ordering::SeqCst` |
 | 2 mit `unsafe` | die Crates aus Abschnitt 2 | Clippy `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`; rustc `unsafe_op_in_unsafe_fn` |
+
+`takt-bringup-host` steht nicht in Stufe 2: Es faehrt den Rahmen fuer
+`takt driver-test --crate` auf dem Wirt und wird nie in ein Abbild
+gelinkt. Es traegt Stufe 1 und als Crate mit `unsafe` die Lints dieser
+Zeile. Was die Bring-ups aus der Lieferform einbinden (`app`, den
+Pruefstand, die Vektoren, das Messprogramm), steht in ihrem Abbild und
+haelt Stufe 2 wie ihr eigener Code; der Erzeuger (`takt-frame`,
+`takt-conformance`) schreibt es so.
 
 **Abweichungen** stehen am Ort als
 `#[expect(lint, reason = "MISRA C:2025 D.4.1: …")]`: Der Grund beginnt mit

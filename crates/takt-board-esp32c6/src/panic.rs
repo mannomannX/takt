@@ -18,13 +18,15 @@ static mut RING: [u8; 128] = [0; 128];
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    // SAFETY: Nach dem Panic laeuft nichts mehr, das die Schnittstelle
-    // haelt; der Treiber richtet sie nur ein, ohne sie zurueckzusetzen.
+    let bytes = &raw mut RING;
     // SAFETY: Nach dem Panic rechnet niemand mehr mit dem Ring; er wird
     // einmal genommen, denn der Handler kehrt nicht zurueck.
-    let ring = unsafe { (&raw mut RING).as_mut() }.map_or(&mut [][..], |r| &mut r[..]);
+    let ring = unsafe { bytes.as_mut() }.map_or(&mut [][..], |r| &mut r[..]);
+    // SAFETY: Nach dem Panic laeuft nichts mehr, das die Schnittstelle
+    // haelt; der Treiber richtet sie nur ein, ohne sie zurueckzusetzen.
+    let usb = unsafe { USB_DEVICE::steal() };
     // Verlustfrei: Die Meldung wartet auf die Leitung, statt zu verwerfen.
-    let mut uart = Telemetry::new(UsbJtag::new(unsafe { USB_DEVICE::steal() }), ring).lossless();
+    let mut uart = Telemetry::new(UsbJtag::new(usb), ring).lossless();
     let _ = write!(uart, "\r\ntakt panic: {info}\r\n");
     uart.drain(DRAIN_ROUNDS);
     loop {

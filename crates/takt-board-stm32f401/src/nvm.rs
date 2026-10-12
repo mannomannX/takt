@@ -82,11 +82,18 @@ impl FlashNvm {
     /// Loescht beide Slots: ein Lauf, der wie der Interpreter ohne
     /// Speicher beginnen soll (13.8, Konformitaet).
     pub fn wipe(&mut self) -> bool {
-        (0..2).all(|slot| erase(&self.flash, FIRST_SECTOR + slot))
+        (0..2).all(|slot| erase(&self.flash, FIRST_SECTOR.saturating_add(slot)))
     }
 
+    /// Die Adresse von `offset` in Slot `slot`; die Aufrufer pruefen beide
+    /// vorher gegen [`SLOT`].
     fn at(slot: u8, offset: u32) -> u32 {
-        BASE + u32::from(slot) * SLOT + offset
+        BASE.saturating_add(u32::from(slot).saturating_mul(SLOT)).saturating_add(offset)
+    }
+
+    /// Passen `len` Byte ab `offset` in einen Slot?
+    fn fits(offset: u32, len: usize) -> bool {
+        u32::try_from(len).is_ok_and(|len| offset.saturating_add(len) <= SLOT)
     }
 }
 
@@ -100,14 +107,14 @@ impl Nvm for FlashNvm {
             return false;
         }
         let start = cycles::now();
-        let ok = erase(&self.flash, FIRST_SECTOR + slot);
+        let ok = erase(&self.flash, FIRST_SECTOR.saturating_add(slot));
         self.erase_max = self.erase_max.max(cycles::now().wrapping_sub(start));
         self.state = if ok { NvmState::Done } else { NvmState::Failed };
         true
     }
 
     fn begin_write(&mut self, slot: u8, offset: u32, bytes: &[u8]) -> bool {
-        if slot > 1 || offset % 4 != 0 || offset.saturating_add(bytes.len() as u32) > SLOT {
+        if slot > 1 || offset % 4 != 0 || !FlashNvm::fits(offset, bytes.len()) {
             return false;
         }
         let start = cycles::now();
@@ -122,14 +129,15 @@ impl Nvm for FlashNvm {
     }
 
     fn read(&mut self, slot: u8, offset: u32, into: &mut [u8]) -> bool {
-        if slot > 1 || offset.saturating_add(into.len() as u32) > SLOT {
+        if slot > 1 || !FlashNvm::fits(offset, into.len()) {
             return false;
         }
+        let from = core::ptr::with_exposed_provenance::<u8>(crate::address(FlashNvm::at(slot, offset)));
         // SAFETY: Der Bereich liegt in Sektor 2 oder 3, im Flash, das immer
         // lesbar abgebildet ist. Beschrieben wird er nur ueber `&mut self`,
         // also nicht, solange die Scheibe lebt.
-        let slot = unsafe { core::slice::from_raw_parts(FlashNvm::at(slot, offset) as *const u8, into.len()) };
-        into.copy_from_slice(slot);
+        let stored = unsafe { core::slice::from_raw_parts(from, into.len()) };
+        into.copy_from_slice(stored);
         true
     }
 
@@ -141,6 +149,7 @@ impl Nvm for FlashNvm {
 /// Loescht einen Sektor (RM0368 3.5.3).
 fn erase(flash: &RegisterBlock, sector: u8) -> bool {
     operate(flash, |flash| {
+        // SAFETY: `sector` ist 2 oder 3, eine Nummer, die `SNB` annimmt.
         flash.cr().modify(|_, w| unsafe { w.psize().psize32().ser().set_bit().snb().bits(sector) });
         flash.cr().modify(|_, w| w.strt().set_bit());
         let done = settled(flash);
@@ -156,14 +165,16 @@ fn program(flash: &RegisterBlock, address: u32, bytes: &[u8]) -> bool {
     operate(flash, |flash| {
         flash.cr().modify(|_, w| w.psize().psize32().pg().set_bit());
         let mut done = true;
+        let words = core::ptr::with_exposed_provenance_mut::<u32>(crate::address(address));
         for (i, part) in bytes.chunks(4).enumerate() {
             let mut word = [0xFF; 4];
-            word[..part.len()].copy_from_slice(part);
-            let at = (address + 4 * i as u32) as *mut u32;
+            for (to, from) in word.iter_mut().zip(part) {
+                *to = *from;
+            }
             // SAFETY: Die Adresse liegt im Journal (Sektor 2 oder 3) und ist
             // wortausgerichtet; mit `PG` gesetzt programmiert der Schreibzugriff
             // das Flash, statt es zu veraendern wie RAM.
-            unsafe { at.write_volatile(u32::from_le_bytes(word)) };
+            unsafe { words.wrapping_add(i).write_volatile(u32::from_le_bytes(word)) };
             done = settled(flash);
             if !done {
                 break;
@@ -186,6 +197,8 @@ fn operate(flash: &RegisterBlock, f: impl FnOnce(&RegisterBlock) -> bool) -> boo
             flash.keyr().write(|w| w.key().set(key));
         }
     }
+    // SAFETY: Die Fehlerbits und `EOP` loescht eine Eins; die uebrigen Bits
+    // von `SR` sind nur lesbar.
     flash.sr().write(|w| unsafe { w.bits(ERRORS | EOP) });
     let done = f(flash);
     flash.cr().modify(|_, w| w.lock().set_bit());

@@ -25,7 +25,10 @@ impl Led {
         let _ = rcc.ahb1enr().read();
         let pin = board.led.1;
         // Ausgang (0b01) im Moder-Register, zwei Bits je Pin.
-        gpioc.moder().modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << (pin * 2))) | (0b01 << (pin * 2))) });
+        let field = pin.saturating_mul(2);
+        // SAFETY: aendert nur die zwei Bits des Pins, und `0b01` ist dort ein
+        // Wert, den `MODER` annimmt.
+        gpioc.moder().modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << field)) | (0b01 << field)) });
         let led = Led { gpioc, pin, active_low: board.led_active_low };
         led.off();
         led
@@ -55,7 +58,9 @@ impl Led {
     /// ist schlecht — an einem Register mit W1C-Bits (FB-11) zerstoert
     /// sie Ereignisse.
     fn drive(&self, high: bool) {
-        let shift = if high { self.pin } else { self.pin + 16 };
+        let shift = if high { self.pin } else { self.pin.saturating_add(16) };
+        // SAFETY: `BSRR` setzt oder loescht genau das Bit, das gesetzt ist;
+        // die uebrigen Pins bleiben.
         self.gpioc.bsrr().write(|w| unsafe { w.bits(1 << shift) });
     }
 }

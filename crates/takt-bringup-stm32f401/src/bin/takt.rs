@@ -33,9 +33,44 @@
 //! hat. Eine frueher Fassung liess sie unabhaengig vom Latch blinken, und
 //! damit sagte sie ueber das Programm genau nichts.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
@@ -66,7 +101,7 @@ use takt_rt_core::{Clock, Journal, Loaded, NextRun, Policy, Profile, Runtime, St
 
 /// Das Programm als Lieferform (12.11): Konstanten, Arena, Treiber-Traits,
 /// Kleber und Huelle, erzeugt von `takt build --emit embed` (`build.rs`).
-mod app {
+pub mod app {
     #![allow(dead_code)]
     include!(env!("TAKT_APP_RS"));
 }
@@ -84,6 +119,10 @@ const END_OF_RUN_NS: i64 = 8_000_000_000;
 
 /// Alle wie viele Ticks die Ausgaenge im Betrieb ausgegeben werden: jeden,
 /// wenn eine Zeile ein Zehntel der Periode fuellt, sonst jeden hundertsten.
+#[expect(
+    clippy::as_conversions,
+    reason = "MISRA C:2025 R.10.5: im Konstantenausdruck wandelt nur `as`; BAUD verbreitert verlustfrei, TICK_NS ist positiv (7.1)"
+)]
 const TRACE_EVERY: u64 = {
     const CHARS: u64 = 32;
     const NS_PER_LINE: u64 = CHARS * 10 * 1_000_000_000 / BAUD as u64;
@@ -123,18 +162,14 @@ const PORT_FLAW: Option<&str> = option_env!("TAKT_PORT_FLAW");
 /// Ist [`PORT_FLAW`] der Fehler `name`?
 const fn port_flaw(name: &str) -> bool {
     let Some(flaw) = PORT_FLAW else { return false };
-    let (a, b) = (flaw.as_bytes(), name.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut i = 0;
-    while i < a.len() {
-        if a[i] != b[i] {
-            return false;
+    let (mut a, mut b) = (flaw.as_bytes(), name.as_bytes());
+    loop {
+        match (a.split_first(), b.split_first()) {
+            (Some((x, rest_a)), Some((y, rest_b))) if *x == *y => (a, b) = (rest_a, rest_b),
+            (None, None) => return true,
+            _ => return false,
         }
-        i += 1;
     }
-    true
 }
 
 const _: () = assert!(
@@ -157,12 +192,28 @@ static mut LED: Option<Led> = None;
 /// Die Messschleife an PA0 und PA1, wenn das Programm sie bindet (13.8).
 static mut WIRE: Option<Wire> = None;
 
+// Die Statics der Peripherie legt `setup` vor dem ersten Tick ab. Danach
+// greift je Zeitpunkt nur ein Kontext auf sie zu: der des Schritts, solange
+// der Lauf laeuft, davor und danach die Hauptschleife; die ISR der Leitung
+// hat ihren eigenen FIFO (`takt_board_stm32f401::uart`).
+
 fn wire() -> Option<&'static mut Wire> {
-    unsafe { (&raw mut WIRE).as_mut().and_then(Option::as_mut) }
+    let slot = &raw mut WIRE;
+    // SAFETY: siehe oben.
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
 }
 
 fn uart() -> Option<&'static mut Telemetry> {
-    unsafe { (&raw mut UART).as_mut().and_then(Option::as_mut) }
+    let slot = &raw mut UART;
+    // SAFETY: siehe oben.
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
+}
+
+fn led() -> Option<&'static mut Led> {
+    let slot = &raw mut LED;
+    // SAFETY: siehe oben; bindet das Programm die LED nicht, schaltet sie nur
+    // die Hauptschleife der Interrupt- und Pollform.
+    unsafe { slot.as_mut() }.and_then(Option::as_mut)
 }
 
 /// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
@@ -176,12 +227,13 @@ pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
     let Some(uart) = uart() else { return };
     let mut p = text;
     for _ in 0..256 {
-        let b = unsafe { *p };
+        // SAFETY: siehe oben; gelesen wird bis zur Null, hoechstens 256 Byte.
+        let b = unsafe { p.read() };
         if b == 0 {
             return;
         }
         uart.write_byte(b);
-        p = unsafe { p.add(1) };
+        p = p.wrapping_add(1);
     }
 }
 
@@ -238,7 +290,7 @@ static mut ARENA: app::Arena = app::Arena::new();
 
 /// Der Pruefstand des Programms (12.6): je Adresse das Geraet, das die
 /// Verdrahtung nennt, sonst ein Stummel (`build.rs`).
-mod drivers {
+pub mod drivers {
     include!(concat!(env!("OUT_DIR"), "/takt_rig.rs"));
 }
 
@@ -280,8 +332,11 @@ type Journaled = <Needs as takt_rt_core::Memory>::Store<'static, FlashNvm>;
 /// Einmal je Lauf: Arena, Pruefstand und die Puffer des Journals gehoeren
 /// danach dem Programm.
 unsafe fn program(flash: FLASH) -> (app::Program<'static>, Journaled) {
+    let (arena, rig) = (&raw mut ARENA, &raw mut RIG);
     // SAFETY: siehe oben.
-    let (arena, rig) = unsafe { (&mut *(&raw mut ARENA), (*(&raw mut RIG)).insert(drivers::Rig::default())) };
+    let arena = unsafe { &mut *arena };
+    // SAFETY: siehe oben.
+    let rig = unsafe { &mut *rig }.insert(drivers::Rig::default());
     let mut program = app::Program::new(arena, rig);
     let mut loaded = None;
     let journal = <Needs as takt_rt_core::Memory>::store(|| {
@@ -289,8 +344,11 @@ unsafe fn program(flash: FLASH) -> (app::Program<'static>, Journaled) {
         if FRESH_JOURNAL && !nvm.wipe() {
             say(format_args!("journal: loeschen scheiterte"));
         }
+        let (current, stored) = (&raw mut PERSIST_CURRENT, &raw mut PERSIST_STORED);
         // SAFETY: siehe oben.
-        let (current, stored) = unsafe { (&mut *(&raw mut PERSIST_CURRENT), &mut *(&raw mut PERSIST_STORED)) };
+        let current = unsafe { &mut *current };
+        // SAFETY: siehe oben.
+        let stored = unsafe { &mut *stored };
         let unloaded = Unloaded::new(Journal::new(nvm, LOGIC_HASH, PERSIST_MIN_INTERVAL_NS), current, stored);
         let (journal, found, applied) = unloaded.load(&mut program);
         loaded = Some((found, applied));
@@ -318,9 +376,12 @@ fn say(text: core::fmt::Arguments) {
 /// Legt den Griff der Jobs ab, mit dem der Job-Faden oder die Job-Aufgabe
 /// rechnet; `None`, wenn das Programm keine Jobs hat.
 fn hand_over_jobs(program: &mut app::Program<'static>) -> Option<&'static mut dyn takt_embed::Jobs> {
+    let jobs = program.jobs()?;
+    let slot = &raw mut JOBS;
     // SAFETY: ein Aufruf je Lauf, bevor jemand rechnet; danach benutzt den
     // Griff nur der Job-Kontext.
-    program.jobs().map(|j| unsafe { (*(&raw mut JOBS)).insert(j) as &mut dyn takt_embed::Jobs })
+    let jobs: &'static mut dyn takt_embed::Jobs = unsafe { &mut *slot }.insert(jobs);
+    Some(jobs)
 }
 
 /// Die Geraete des Boards (12.6): je Adresse der Typ, den `takt-drivers.toml`
@@ -333,12 +394,12 @@ mod devices {
     use stm32f4::stm32f401::{Interrupt, NVIC};
     use takt_embed::{Device, Input, Output, Sample};
 
-    use super::{LED, PREVIOUS_RUN, PROBE, wire};
+    use super::{PREVIOUS_RUN, PROBE, led, wire};
 
     /// Ein Geraet, das fest am Board sitzt: Es lebt, solange das Board
     /// laeuft (12.4).
     #[derive(Debug, Default)]
-    pub struct Fixed;
+    pub(crate) struct Fixed;
 
     impl Device for Fixed {
         fn alive(&mut self, _now: i64) -> bool {
@@ -349,12 +410,11 @@ mod devices {
     /// `ui/led`: die LED der Black Pill an PC13, gegen 3V3 — was `true`
     /// elektrisch heisst, weiss nur dieses Geraet.
     #[derive(Debug, Default)]
-    pub struct UiLed;
+    pub(crate) struct UiLed;
 
     impl Output<bool> for UiLed {
         fn write(&mut self, value: bool, _now: i64) -> bool {
-            // SAFETY: ein Faden; `setup` setzt die LED vor dem ersten Tick.
-            let Some(led) = (unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) }) else { return false };
+            let Some(led) = led() else { return false };
             if value {
                 led.on();
             } else {
@@ -366,7 +426,7 @@ mod devices {
 
     /// `gpio/loop_out`: PA0, ueber die Bruecke an PA1 (13.8).
     #[derive(Debug, Default)]
-    pub struct GpioLoopOut;
+    pub(crate) struct GpioLoopOut;
 
     impl Output<bool> for GpioLoopOut {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -378,7 +438,7 @@ mod devices {
 
     /// `gpio/loop_in`: PA1, das Ende der Bruecke (13.8).
     #[derive(Debug, Default)]
-    pub struct GpioLoopIn;
+    pub(crate) struct GpioLoopIn;
 
     impl Input<bool> for GpioLoopIn {
         fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
@@ -388,25 +448,25 @@ mod devices {
 
     /// `sys/previous_run` (12.7): wie der vorige Lauf endete.
     #[derive(Debug, Default)]
-    pub struct SysPreviousRun;
+    pub(crate) struct SysPreviousRun;
 
     impl Input<u32> for SysPreviousRun {
         fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
-            Some(Sample::good(PREVIOUS_RUN.load(Ordering::Relaxed), now))
+            Some(Sample::good(PREVIOUS_RUN.load(Ordering::SeqCst), now))
         }
     }
 
     /// Ein Ausgang, der einen Pruefzugriff anfordert: `true` setzt `probe`.
     fn request(value: bool, probe: u8) -> bool {
         if value {
-            PROBE.store(probe, Ordering::Relaxed);
+            PROBE.store(probe, Ordering::SeqCst);
         }
         true
     }
 
     /// `test/tcb_write` (12.3): Der naechste Leerlauf schreibt in den Programmzustand.
     #[derive(Debug, Default)]
-    pub struct TestTcbWrite;
+    pub(crate) struct TestTcbWrite;
 
     impl Output<bool> for TestTcbWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -416,7 +476,7 @@ mod devices {
 
     /// `test/guard_write` (12.3): Der naechste Leerlauf schreibt in den Waechter.
     #[derive(Debug, Default)]
-    pub struct TestGuardWrite;
+    pub(crate) struct TestGuardWrite;
 
     impl Output<bool> for TestGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -427,7 +487,7 @@ mod devices {
     /// `test/job_guard_write` (12.3): Der naechste Leerlauf schreibt in den
     /// Waechter unter dem Job-Stack.
     #[derive(Debug, Default)]
-    pub struct TestJobGuardWrite;
+    pub(crate) struct TestJobGuardWrite;
 
     impl Output<bool> for TestJobGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -438,7 +498,7 @@ mod devices {
     /// `test/isr_write` (12.3): Im naechsten Programmschritt schreibt die
     /// Pruef-ISR in den Programmzustand (`test/in_step`).
     #[derive(Debug, Default)]
-    pub struct TestIsrWrite;
+    pub(crate) struct TestIsrWrite;
 
     impl Output<bool> for TestIsrWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -450,11 +510,11 @@ mod devices {
     /// Programmzustand. Ist die Pruef-ISR angefordert, loest das Geraet sie
     /// hier aus, und sie unterbricht den Schritt.
     #[derive(Debug, Default)]
-    pub struct TestInStep;
+    pub(crate) struct TestInStep;
 
     impl Input<bool> for TestInStep {
         fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
-            if PROBE.load(Ordering::Relaxed) == 4 {
+            if PROBE.load(Ordering::SeqCst) == 4 {
                 NVIC::pend(Interrupt::EXTI0);
                 cortex_m::asm::dsb();
                 cortex_m::asm::isb();
@@ -468,7 +528,7 @@ mod devices {
     /// Pollform laeuft TIM2 frei und hat keine Periode: Das Geraet schreibt
     /// nicht.
     #[derive(Debug, Default)]
-    pub struct TestTickStretch;
+    pub(crate) struct TestTickStretch;
 
     impl Output<u8> for TestTickStretch {
         #[cfg(timer = "periodic")]
@@ -487,13 +547,13 @@ mod devices {
 /// Fuehrt einen angeforderten Pruefzugriff aus; ausserhalb des Ticks, wo
 /// kein Code der TCB den Programmzustand beschreiben darf.
 fn probe() {
-    let target = match PROBE.load(Ordering::Relaxed) {
+    let target = match PROBE.load(Ordering::SeqCst) {
         1 => Some(mpu::state_address()),
         2 => Some(mpu::guard_address()),
         3 => mpu::job_guard_address(),
         _ => return,
     };
-    PROBE.store(0, Ordering::Relaxed);
+    PROBE.store(0, Ordering::SeqCst);
     if let Some(target) = target {
         forbidden_write(target);
     }
@@ -505,7 +565,9 @@ fn forbidden_write(target: u32) {
     // weist ihn ab, der Handler uebergeht ihn, und die Runtime meldet
     // `Runtime(Hardware)`. Ohne Schutz schriebe er ein Byte, das der
     // Board-Test als Abweichung saehe.
-    unsafe { (target as *mut u8).write_volatile(0xA5) };
+    let at = core::ptr::with_exposed_provenance_mut::<u8>(takt_board_stm32f401::address(target));
+    // SAFETY: siehe oben.
+    unsafe { at.write_volatile(0xA5) };
 }
 
 /// Die Pruef-ISR (`test/isr_write`): eine Leitung, die kein Treiber
@@ -513,7 +575,7 @@ fn forbidden_write(target: u32) {
 #[interrupt]
 fn EXTI0() {
     mpu::isr(|| {
-        if PROBE.compare_exchange(4, 0, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        if PROBE.compare_exchange(4, 0, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             forbidden_write(mpu::state_address());
         }
     });
@@ -523,10 +585,12 @@ fn EXTI0() {
 #[cfg(timer = "periodic")]
 fn on_tim2() {
     mpu::isr(|| {
+        // SAFETY: TIM2 gehoert der Tickquelle; die ISR schreibt nur `SR`.
         let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
         let now = cycles::now();
-        let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::Relaxed));
-        // `rc_w0`: Nullen loeschen, Einsen lassen stehen.
+        let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::SeqCst));
+        // SAFETY: `rc_w0`: Nullen loeschen, Einsen lassen stehen; das Muster
+        // loescht nur `UIF`.
         tim2.sr().write(|w| unsafe { w.bits(!1) });
         tick::on_timer_interrupt(elapsed);
     });
@@ -661,11 +725,12 @@ fn platform(next: Option<NextRun>) {
 /// Verstellt FPSCR und FPDSCR ([`HOSTILE_FPU`]).
 fn hostile_fpu() {
     use cortex_m::register::fpscr::{self, Fpscr};
+    // SAFETY: nur die Modusbits der Fliesskomma-Umgebung dieses Kontexts.
+    unsafe { fpscr::write(Fpscr::from_bits(fpscr::read().bits() | HOSTILE_FPSCR)) };
+    // SAFETY: die Register der FPU.
+    let fpu = unsafe { &*cortex_m::peripheral::FPU::PTR };
     // SAFETY: nur die Modusbits; FPDSCR gibt sie jedem Handler mit.
-    unsafe {
-        fpscr::write(Fpscr::from_bits(fpscr::read().bits() | HOSTILE_FPSCR));
-        (*cortex_m::peripheral::FPU::PTR).fpdscr.modify(|v| v | HOSTILE_FPSCR);
-    }
+    unsafe { fpu.fpdscr.modify(|v| v | HOSTILE_FPSCR) };
 }
 
 /// Der Zeitgeber der Form: periodisch fuer den eigenen Kern und RTIC, frei
@@ -696,7 +761,7 @@ struct Setup {
 fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     // Ein Tiefschlaf mit Rest schlaeft weiter, bevor irgendetwas laeuft (12.7).
     platform::continue_deep_sleep();
-    PREVIOUS_RUN.store(platform::previous_run(), Ordering::Relaxed);
+    PREVIOUS_RUN.store(platform::previous_run(), Ordering::SeqCst);
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
 
@@ -707,21 +772,19 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     let Ok(timer) = timer else {
         // Ohne Takt keine Telemetrie: Die LED bleibt an.
         led.on();
-        loop {
-            cortex_m::asm::wfi();
-        }
+        halt()
     };
     let Ok(telemetry) = takt_board_stm32f401::telemetry(dp.USART1, &dp.GPIOA, &dp.RCC, CORE_HZ, BAUD) else {
         led.on();
-        loop {
-            cortex_m::asm::wfi();
-        }
+        halt()
     };
     let telemetry = if LOGICAL { telemetry.lossless() } else { telemetry };
     // Erst jetzt sichtbar machen: Ein Trace vor der Einrichtung schriebe
     // in ein nicht konfiguriertes Register.
+    // SAFETY: vor dem ersten Tick und vor jeder Freigabe eines Interrupts.
     unsafe { UART = Some(telemetry) };
     if HW_ADDRESSES.iter().any(|a| a.starts_with("gpio/loop_")) {
+        // SAFETY: wie die Leitung.
         unsafe { WIRE = Some(Wire::new(dp.GPIOA, &dp.RCC)) };
     }
 
@@ -730,11 +793,13 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     // (12.3). Unter RTIC und in der Interruptform rechnen sie auf dem
     // Hauptstack.
     // Ohne Jobs ist der Stack leer, und es gibt keinen Waechter.
+    #[cfg(form = "own")]
+    let job_stack = &raw mut JOB_STACK;
     // SAFETY: einmal beim Aufbau; danach haelt nur der Job-Faden den Stack.
     #[cfg(form = "own")]
-    let job_stack = unsafe { (*(&raw mut JOB_STACK)).bytes() };
+    let job_stack = unsafe { &mut *job_stack }.bytes();
     #[cfg(form = "own")]
-    let guarded = (!job_stack.is_empty()).then_some(job_stack.as_ptr() as u32);
+    let guarded = (!job_stack.is_empty()).then_some(takt_board_stm32f401::word(job_stack.as_ptr().expose_provenance()));
     #[cfg(not(form = "own"))]
     let guarded = None;
 
@@ -748,9 +813,7 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
             u.newline();
             u.drain(DRAIN_ROUNDS);
         }
-        loop {
-            cortex_m::asm::wfi();
-        }
+        halt()
     };
     if HOSTILE_FPU {
         hostile_fpu();
@@ -761,6 +824,7 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     // Periode ist die nominale.
     #[cfg(timer = "free")]
     banner(TICK_NS);
+    // SAFETY: wie die Leitung.
     unsafe { LED = Some(led) };
     Setup {
         timer,
@@ -776,16 +840,15 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
 #[cfg(form = "own")]
 #[entry]
 fn main() -> ! {
-    let dp = Peripherals::take().expect("Peripherie");
-    let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
+    let (Some(dp), Some(cp)) = (Peripherals::take(), cortex_m::Peripherals::take()) else { halt() };
     let Setup { timer, protection, job_stack, mut nvic, flash } = setup(dp, cp);
-    // SAFETY: Prioritaeten und Freigabe vor dem ersten Tick; die Handler
-    // oben sind bereit.
-    unsafe {
-        for line in [Interrupt::TIM2, Interrupt::USART1, Interrupt::EXTI0] {
-            nvic.set_priority(line, mpu::ISR_PRIORITY);
-            NVIC::unmask(line);
-        }
+    // Prioritaeten und Freigabe vor dem ersten Tick; die Handler oben sind
+    // bereit.
+    for line in [Interrupt::TIM2, Interrupt::USART1, Interrupt::EXTI0] {
+        // SAFETY: siehe oben.
+        unsafe { nvic.set_priority(line, mpu::ISR_PRIORITY) };
+        // SAFETY: siehe oben.
+        unsafe { NVIC::unmask(line) };
     }
 
     // SAFETY: einmal je Lauf; `main` kehrt nicht zurueck.
@@ -793,8 +856,11 @@ fn main() -> ! {
     let (dispatch, worker) = (program.dispatch(), hand_over_jobs(&mut program));
     // 4.5: nur ein Programm mit Jobs bekommt seinen Faden (FB-385); die
     // Griffe gibt es einmal je Programm, hier zum ersten Mal.
-    let mut jobs = <Work as takt_embed::Work>::context(|| {
-        JobContext::start(job_stack, dispatch.expect("Verteiler"), worker.expect("Griff der Jobs"))
+    let mut jobs = <Work as takt_embed::Work>::context(|| match (dispatch, worker) {
+        (Some(dispatch), Some(worker)) => JobContext::start(job_stack, dispatch, worker),
+        // Nur fuer ein Programm mit Jobs ruft `Work` den Start, und ein
+        // solches gibt beide Griffe beim ersten Aufruf.
+        _ => halt(),
     });
     // Die Abschlusszeile meldet, wie tief der Stack in der Tickschleife
     // reichte: gemalt erst hier, Aufbau und Journal zaehlen nicht (12.3).
@@ -848,8 +914,7 @@ fn main() -> ! {
 #[cfg(any(form = "interrupt", form = "poll", form = "embassy"))]
 #[entry]
 fn main() -> ! {
-    let dp = Peripherals::take().expect("Peripherie");
-    let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
+    let (Some(dp), Some(cp)) = (Peripherals::take(), cortex_m::Peripherals::take()) else { halt() };
     let Setup { timer, protection, nvic, flash } = setup(dp, cp);
     #[cfg(form = "interrupt")]
     interrupt_form::run(timer, protection, nvic, flash);
@@ -869,25 +934,26 @@ mod host {
     use takt_rt_baremetal::Sleep;
     use takt_rt_core::port_test::{self, ForeignLoad};
 
-    use super::{DRAIN_ROUNDS, HW_ADDRESSES, JOBS, LED, probe, uart};
+    use super::{DRAIN_ROUNDS, HW_ADDRESSES, JOBS, led, probe, uart};
 
     /// Die Leitung des Job-Interrupts: eine, die kein Treiber benutzt (4.5).
-    pub const JOB_LINE: Interrupt = Interrupt::EXTI1;
+    pub(crate) const JOB_LINE: Interrupt = Interrupt::EXTI1;
 
     /// Die Jobs unter allen Interrupts; nur die Hauptschleife liegt darunter.
     /// Unter RTIC setzt die App die Prioritaet der Job-Aufgabe.
     #[cfg(any(form = "interrupt", form = "poll", form = "embassy"))]
-    pub const JOB_PRIORITY: u8 = 0xF0;
+    pub(crate) const JOB_PRIORITY: u8 = 0xF0;
 
     /// Die halbe Periode der LED, wenn die Hauptschleife sie fuehrt.
     const BLINK_NS: i64 = 500_000_000;
 
     /// Rechnet den Auftrag, den der Schrittkontext dem Job-Interrupt gab
     /// (4.5).
-    pub fn work_jobs() {
+    pub(crate) fn work_jobs() {
+        let slot = &raw mut JOBS;
         // SAFETY: Den Griff legt die Form vor dem ersten Schritt ab; danach
         // rechnet nur der Job-Interrupt mit ihm.
-        if let Some(jobs) = unsafe { (&raw mut JOBS).as_mut().and_then(Option::as_mut) } {
+        if let Some(jobs) = unsafe { slot.as_mut() }.and_then(Option::as_mut) {
             jobs.work();
         }
     }
@@ -895,7 +961,7 @@ mod host {
     /// Die fremde Arbeit der Hauptschleife: Sie zaehlt ihre Runden, rechnet
     /// mit der FPU wie eine fremde Aufgabe (die Last der Portpruefung, 12.11)
     /// und laesst die LED blinken, wenn das Programm sie nicht selbst fuehrt.
-    pub struct Work {
+    pub(crate) struct Work {
         blink: bool,
         lit: bool,
         rounds: u64,
@@ -903,20 +969,20 @@ mod host {
     }
 
     impl Work {
-        pub fn new() -> Work {
+        pub(crate) fn new() -> Work {
             Work { blink: !HW_ADDRESSES.contains(&"ui/led"), lit: false, rounds: 0, load: ForeignLoad::new() }
         }
 
         /// Eine Runde zur Zeit `now_ns` der Zeitachse.
-        pub fn round(&mut self, now_ns: i64) {
+        pub(crate) fn round(&mut self, now_ns: i64) {
             self.rounds = self.rounds.wrapping_add(1);
             self.load.round();
             let on = now_ns / BLINK_NS % 2 == 0;
             if self.blink && on != self.lit {
                 self.lit = on;
-                // SAFETY: Das Programm bindet die LED nicht; nur diese
-                // Schleife schaltet sie.
-                if let Some(led) = unsafe { (&raw mut LED).as_mut().and_then(Option::as_mut) } {
+                // Das Programm bindet die LED nicht; nur diese Schleife
+                // schaltet sie.
+                if let Some(led) = led() {
                     if on { led.on() } else { led.off() }
                 }
             }
@@ -926,7 +992,7 @@ mod host {
         /// Die Zeilen vor der Bilanz: Die Runden zeigen, dass der Wirt neben
         /// dem Schritt lief; `longest` ist die laengste in Nanosekunden. Die
         /// fremde Last nennt, wie oft sie falsch rechnete.
-        pub fn report(&self, longest: Option<u64>) {
+        pub(crate) fn report(&self, longest: Option<u64>) {
             let Some(u) = uart() else { return };
             u.drain(DRAIN_ROUNDS);
             u.write("takt wirt runden ");
@@ -946,7 +1012,7 @@ mod host {
     }
 
     /// Nach dem Lauf bleibt die Leitung offen wie im eigenen Kern (FB-275).
-    pub fn park() -> ! {
+    pub(crate) fn park() -> ! {
         let mut sleep = WfiSleep;
         loop {
             sleep.sleep_until_event();
@@ -998,12 +1064,14 @@ mod interrupt_form {
         use cortex_m::register::control::{self, Fpca};
         let mut c = control::read();
         c.set_fpca(Fpca::NotActive);
-        // SAFETY: Bevor ein Interrupt freigegeben ist; nur die Sicherung der
-        // FPU aendert sich, und genau das soll die Portpruefung sehen.
-        unsafe {
-            (*cortex_m::peripheral::FPU::PTR).fpccr.modify(|v| v & !(0b11 << 30));
-            control::write(c);
-        }
+        // Bevor ein Interrupt freigegeben ist; nur die Sicherung der FPU
+        // aendert sich, und genau das soll die Portpruefung sehen.
+        // SAFETY: die Register der FPU, siehe oben.
+        let fpu = unsafe { &*cortex_m::peripheral::FPU::PTR };
+        // SAFETY: `ASPEN` und `LSPEN` aus, siehe oben.
+        unsafe { fpu.fpccr.modify(|v| v & !(0b11 << 30)) };
+        // SAFETY: `FPCA` aus, siehe oben.
+        unsafe { control::write(c) };
     }
 
     /// Was die ISR des Alarms haelt.
@@ -1039,16 +1107,17 @@ mod interrupt_form {
     fn TIM2() {
         mpu::isr(|| {
             let due = alarm::on_interrupt();
-            let job_done = JOB_DONE.swap(false, Ordering::AcqRel);
-            if ENDED.load(Ordering::Acquire) {
+            let job_done = JOB_DONE.swap(false, Ordering::SeqCst);
+            if ENDED.load(Ordering::SeqCst) {
                 return;
             }
+            let slot = &raw mut STEPPING;
             // SAFETY: Bis zum Ende gehoert der Lauf dieser ISR (`STEPPING`).
-            let Some(s) = (unsafe { (&raw mut STEPPING).as_mut().and_then(Option::as_mut) }) else { return };
+            let Some(s) = unsafe { slot.as_mut() }.and_then(Option::as_mut) else { return };
             if due {
                 if let Some(stats) = s.form.on_alarm(&mut s.rt, Some(&mut s.tunes)) {
                     s.ended = Some(stats);
-                    ENDED.store(true, Ordering::Release);
+                    ENDED.store(true, Ordering::SeqCst);
                 }
             } else if job_done {
                 s.form.on_job_done(&mut s.rt, Some(&mut s.tunes));
@@ -1067,13 +1136,13 @@ mod interrupt_form {
     fn EXTI1() {
         mpu::isr(|| {
             host::work_jobs();
-            JOB_DONE.store(true, Ordering::Release);
+            JOB_DONE.store(true, Ordering::SeqCst);
             NVIC::pend(Interrupt::TIM2);
         });
     }
 
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
-    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
+    pub(crate) fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
         let (mut program, journal) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
@@ -1085,25 +1154,26 @@ mod interrupt_form {
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let mut rt = runtime(clock, protection, Profile::SHARED, program, journal);
         let form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
-        let tunes = Console::new(takt_board_stm32f401::console_byte as fn() -> Option<u8>);
+        let byte: fn() -> Option<u8> = takt_board_stm32f401::console_byte;
+        let tunes = Console::new(byte);
         // SAFETY: TIM2 ist noch maskiert; ab seiner Freigabe gehoert der Lauf
         // seiner ISR.
         unsafe { STEPPING = Some(Stepping { rt, form, tunes, ended: None }) };
         if port_flaw("fpu") {
             unsaved_fpu();
         }
-        // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
-        // oben sind bereit.
-        unsafe {
-            for (line, priority) in [
-                (Interrupt::USART1, mpu::ISR_PRIORITY),
-                (Interrupt::EXTI0, mpu::ISR_PRIORITY),
-                (Interrupt::TIM2, STEP_PRIORITY),
-                (JOB_LINE, JOB_FORM_PRIORITY),
-            ] {
-                nvic.set_priority(line, priority);
-                NVIC::unmask(line);
-            }
+        // Prioritaeten und Freigabe nach dem Aufbau; die Handler oben sind
+        // bereit.
+        for (line, priority) in [
+            (Interrupt::USART1, mpu::ISR_PRIORITY),
+            (Interrupt::EXTI0, mpu::ISR_PRIORITY),
+            (Interrupt::TIM2, STEP_PRIORITY),
+            (JOB_LINE, JOB_FORM_PRIORITY),
+        ] {
+            // SAFETY: siehe oben.
+            unsafe { nvic.set_priority(line, priority) };
+            // SAFETY: siehe oben.
+            unsafe { NVIC::unmask(line) };
         }
         host(alarm)
     }
@@ -1114,15 +1184,16 @@ mod interrupt_form {
     /// sie die Bilanz und fuehrt im Betrieb `next_run` aus.
     fn host(mut alarm: Tim2Alarm) -> ! {
         let mut work = Work::new();
-        while !ENDED.load(Ordering::Acquire) {
+        while !ENDED.load(Ordering::SeqCst) {
             if LOGICAL {
                 release(&GATE, &mut alarm);
             }
             work.round(alarm.now_ns());
         }
+        let slot = &raw mut STEPPING;
         // SAFETY: Nach dem Ende steht kein Alarm mehr; der Lauf gehoert jetzt
         // dieser Schleife.
-        if let Some(s) = unsafe { (&raw mut STEPPING).as_mut().and_then(Option::take) } {
+        if let Some(s) = unsafe { slot.as_mut() }.and_then(Option::take) {
             work.report(None);
             conclude(&s.rt, &s.ended.unwrap_or_default());
         }
@@ -1188,9 +1259,10 @@ mod embassy_form {
 
     /// Der Executor, sobald er angelegt ist.
     fn executor() -> Option<&'static Executor> {
+        let slot = &raw const EXECUTOR;
         // SAFETY: Angelegt einmal vor der Freigabe von SPI1, danach nur
         // gelesen.
-        unsafe { (*(&raw const EXECUTOR)).as_ref() }
+        unsafe { &*slot }.as_ref()
     }
 
     /// Embassy ruft es, wenn eine Aufgabe des Executors bereit ist.
@@ -1235,9 +1307,11 @@ mod embassy_form {
     /// der Lauf an die Hauptschleife.
     #[embassy_executor::task]
     async fn takt(mut rt: Takt<Time<Tim2Alarm>>) {
-        let alarm = TaskAlarm::new(&WAKE, pend_jobs as fn());
+        let pend: fn() = pend_jobs;
+        let alarm = TaskAlarm::new(&WAKE, pend);
         let mut form = Form::start(&mut rt, alarm, LOGICAL.then_some(&GATE));
-        let mut tunes = Console::new(takt_board_stm32f401::console_byte as fn() -> Option<u8>);
+        let byte: fn() -> Option<u8> = takt_board_stm32f401::console_byte;
+        let mut tunes = Console::new(byte);
         let flush = || {
             if let Some(u) = uart() {
                 u.flush();
@@ -1247,11 +1321,11 @@ mod embassy_form {
         // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
         // Aufgabe nicht mehr.
         unsafe { ENDED_RUN = Some((rt, stats)) };
-        ENDED.store(true, Ordering::Release);
+        ENDED.store(true, Ordering::SeqCst);
     }
 
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
-    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
+    pub(crate) fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
         let (mut program, journal) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
@@ -1260,23 +1334,26 @@ mod embassy_form {
         takt_board_stm32f401::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let rt = runtime(clock, protection, Profile::SHARED, program, journal);
+        let slot = &raw mut EXECUTOR;
         // SAFETY: einmal, bevor SPI1 freigegeben ist; danach liest nur die
         // ISR.
-        let executor = unsafe { (*(&raw mut EXECUTOR)).insert(Executor::new(core::ptr::null_mut())) };
-        executor.spawner().spawn(takt(rt).expect("die Takt-Aufgabe gibt es einmal"));
-        // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
-        // oben sind bereit.
-        unsafe {
-            for (line, priority) in [
-                (Interrupt::USART1, mpu::ISR_PRIORITY),
-                (Interrupt::EXTI0, mpu::ISR_PRIORITY),
-                (Interrupt::TIM2, TIMER_PRIORITY),
-                (STEP_LINE, STEP_PRIORITY),
-                (JOB_LINE, JOB_PRIORITY),
-            ] {
-                nvic.set_priority(line, priority);
-                NVIC::unmask(line);
-            }
+        let executor = unsafe { &mut *slot }.insert(Executor::new(core::ptr::null_mut()));
+        // Die Takt-Aufgabe gibt es einmal, und sie startet hier.
+        let Ok(task) = takt(rt) else { super::halt() };
+        executor.spawner().spawn(task);
+        // Prioritaeten und Freigabe nach dem Aufbau; die Handler oben sind
+        // bereit.
+        for (line, priority) in [
+            (Interrupt::USART1, mpu::ISR_PRIORITY),
+            (Interrupt::EXTI0, mpu::ISR_PRIORITY),
+            (Interrupt::TIM2, TIMER_PRIORITY),
+            (STEP_LINE, STEP_PRIORITY),
+            (JOB_LINE, JOB_PRIORITY),
+        ] {
+            // SAFETY: siehe oben.
+            unsafe { nvic.set_priority(line, priority) };
+            // SAFETY: siehe oben.
+            unsafe { NVIC::unmask(line) };
         }
         // Die Aufgabe steht bereit; ihr erster Lauf stellt die erste Frist.
         NVIC::pend(STEP_LINE);
@@ -1288,15 +1365,17 @@ mod embassy_form {
     /// ruht das System (`release`). Nach dem Ende schreibt sie die Bilanz.
     fn host(alarm: Tim2Alarm) -> ! {
         let mut work = Work::new();
-        let mut gate = TaskAlarm::new(&WAKE, pend_jobs as fn());
-        while !ENDED.load(Ordering::Acquire) {
+        let pend: fn() = pend_jobs;
+        let mut gate = TaskAlarm::new(&WAKE, pend);
+        while !ENDED.load(Ordering::SeqCst) {
             if LOGICAL {
                 release(&GATE, &mut gate);
             }
             work.round(alarm.now_ns());
         }
+        let slot = &raw mut ENDED_RUN;
         // SAFETY: Ab `ENDED` gehoert der Lauf dieser Schleife.
-        if let Some((rt, stats)) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
+        if let Some((rt, stats)) = unsafe { slot.as_mut() }.and_then(Option::take) {
             work.report(None);
             conclude(&rt, &stats);
         }
@@ -1330,7 +1409,7 @@ mod poll_form {
     use super::{CORE_HZ, Console, LOGICAL, Mpu, Profile, conclude, hand_over_jobs, mpu, program, runtime, uart};
 
     /// Die fremde Arbeit je Runde der Hauptschleife, in Mikrosekunden.
-    pub const HOST_WORK_US: u32 = 10;
+    pub(crate) const HOST_WORK_US: u32 = 10;
 
     /// In logischer Zeit das Tor der Frist; die Hauptschleife oeffnet es,
     /// sobald sie laeuft.
@@ -1354,7 +1433,7 @@ mod poll_form {
     fn EXTI1() {
         mpu::isr(|| {
             host::work_jobs();
-            JOB_DONE.store(true, Ordering::Release);
+            JOB_DONE.store(true, Ordering::SeqCst);
         });
     }
 
@@ -1368,13 +1447,13 @@ mod poll_form {
 
     /// Rechnet `us` Mikrosekunden lang nichts: die Arbeit des Wirts.
     fn spin(us: u32) {
-        let n = CORE_HZ / 1_000_000 * us;
+        let n = (CORE_HZ / 1_000_000).saturating_mul(us);
         let start = cycles::now();
         while cycles::now().wrapping_sub(start) < n {}
     }
 
     /// Der Lauf in der Hauptschleife des Wirts, danach die Bilanz.
-    pub fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
+    pub(crate) fn run(alarm: Tim2Alarm, protection: Mpu, mut nvic: NVIC, flash: FLASH) -> ! {
         // SAFETY: einmal je Lauf; `run` kehrt nicht zurueck.
         let (mut program, journal) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
@@ -1387,23 +1466,23 @@ mod poll_form {
         let mut rt = runtime(clock, protection, Profile::SHARED, program, journal);
         let mut form = Form::start(&mut rt, Polled(pend_jobs), LOGICAL.then_some(&GATE));
         let mut tunes = Console::new(takt_board_stm32f401::console_byte);
-        // SAFETY: Prioritaeten und Freigabe nach dem Aufbau; die Handler
-        // oben sind bereit.
-        unsafe {
-            for (line, priority) in [
-                (Interrupt::USART1, mpu::ISR_PRIORITY),
-                (Interrupt::EXTI0, mpu::ISR_PRIORITY),
-                (Interrupt::TIM2, mpu::ISR_PRIORITY),
-                (JOB_LINE, JOB_PRIORITY),
-            ] {
-                nvic.set_priority(line, priority);
-                NVIC::unmask(line);
-            }
+        // Prioritaeten und Freigabe nach dem Aufbau; die Handler oben sind
+        // bereit.
+        for (line, priority) in [
+            (Interrupt::USART1, mpu::ISR_PRIORITY),
+            (Interrupt::EXTI0, mpu::ISR_PRIORITY),
+            (Interrupt::TIM2, mpu::ISR_PRIORITY),
+            (JOB_LINE, JOB_PRIORITY),
+        ] {
+            // SAFETY: siehe oben.
+            unsafe { nvic.set_priority(line, priority) };
+            // SAFETY: siehe oben.
+            unsafe { NVIC::unmask(line) };
         }
         let mut work = Work::new();
         let mut longest: u32 = 0;
         let stats = loop {
-            let job_done = JOB_DONE.swap(false, Ordering::AcqRel);
+            let job_done = JOB_DONE.swap(false, Ordering::SeqCst);
             if let Some(stats) = form.poll(&mut rt, Some(&mut tunes), job_done) {
                 break stats;
             }
@@ -1416,7 +1495,7 @@ mod poll_form {
             work.round(alarm.now_ns());
             longest = longest.max(cycles::now().wrapping_sub(started));
         };
-        work.report(Some(u64::from(longest) * 1_000_000_000 / u64::from(CORE_HZ)));
+        work.report(u64::from(longest).saturating_mul(1_000_000_000).checked_div(u64::from(CORE_HZ)));
         conclude(&rt, &stats);
         host::park()
     }
@@ -1443,11 +1522,11 @@ mod rtic_form {
     use super::{Console, LOGICAL, Mpu, Profile, Stats, Takt, conclude, hand_over_jobs, program, runtime, uart};
 
     /// Die Frist ist erreicht; die Takt-Aufgabe rechnet den Schritt.
-    pub static DUE: AtomicBool = AtomicBool::new(false);
+    pub(crate) static DUE: AtomicBool = AtomicBool::new(false);
 
     /// Die Job-Aufgabe hat ihren Auftrag gerechnet; die Takt-Aufgabe
     /// verteilt den naechsten.
-    pub static JOB_DONE: AtomicBool = AtomicBool::new(false);
+    pub(crate) static JOB_DONE: AtomicBool = AtomicBool::new(false);
 
     /// In logischer Zeit das Tor der Frist; die Idle-Aufgabe oeffnet es.
     static GATE: AtomicBool = AtomicBool::new(false);
@@ -1467,9 +1546,9 @@ mod rtic_form {
 
     /// Der Alarm der Takt-Aufgabe: TIM2 auf die Frist, die Jobs an die
     /// Job-Aufgabe.
-    pub struct TaskAlarm {
-        pub tim2: Tim2Alarm,
-        pub work: SignalWriter<'static, ()>,
+    pub(crate) struct TaskAlarm {
+        pub(crate) tim2: Tim2Alarm,
+        pub(crate) work: SignalWriter<'static, ()>,
     }
 
     impl Alarm for TaskAlarm {
@@ -1485,7 +1564,7 @@ mod rtic_form {
     /// Die Takt-Aufgabe: an der Frist der Schritt, nach einem Auftrag der
     /// Job-Aufgabe das Verteilen, danach die Leitung; am Ende geht der Lauf
     /// an die Idle-Aufgabe.
-    pub async fn run(alarm: TaskAlarm, protection: Mpu, mut wake: SignalReader<'static, ()>, flash: FLASH) {
+    pub(crate) async fn run(alarm: TaskAlarm, protection: Mpu, mut wake: SignalReader<'static, ()>, flash: FLASH) {
         // SAFETY: einmal je Lauf; die Aufgabe startet einmal.
         let (mut program, journal) = unsafe { program(flash) };
         hand_over_jobs(&mut program);
@@ -1495,12 +1574,12 @@ mod rtic_form {
         let mut tunes = Console::new(takt_board_stm32f401::console_byte);
         let stats = loop {
             wake.wait().await;
-            if DUE.swap(false, Ordering::AcqRel)
+            if DUE.swap(false, Ordering::SeqCst)
                 && let Some(stats) = form.on_alarm(&mut rt, Some(&mut tunes))
             {
                 break stats;
             }
-            if JOB_DONE.swap(false, Ordering::AcqRel) {
+            if JOB_DONE.swap(false, Ordering::SeqCst) {
                 form.on_job_done(&mut rt, Some(&mut tunes));
             }
             if let Some(u) = uart() {
@@ -1510,22 +1589,23 @@ mod rtic_form {
         // SAFETY: Bis `ENDED` liest niemand den Platz; danach rechnet diese
         // Aufgabe nicht mehr mit dem Lauf.
         unsafe { ENDED_RUN = Some(Ended { rt, stats }) };
-        ENDED.store(true, Ordering::Release);
+        ENDED.store(true, Ordering::SeqCst);
     }
 
     /// Die Idle-Aufgabe: die Hauptschleife des Wirts. In logischer Zeit gibt
     /// sie den Alarm frei, sobald sie laeuft, denn dann ruht jede Aufgabe
     /// (`release`); nach dem Ende schreibt sie die Bilanz.
-    pub fn host(mut alarm: Tim2Alarm) -> ! {
+    pub(crate) fn host(mut alarm: Tim2Alarm) -> ! {
         let mut work = Work::new();
-        while !ENDED.load(Ordering::Acquire) {
+        while !ENDED.load(Ordering::SeqCst) {
             if LOGICAL {
                 release(&GATE, &mut alarm);
             }
             work.round(alarm.now_ns());
         }
+        let slot = &raw mut ENDED_RUN;
         // SAFETY: Ab `ENDED` gehoert der Lauf dieser Aufgabe.
-        if let Some(ended) = unsafe { (&raw mut ENDED_RUN).as_mut().and_then(Option::take) } {
+        if let Some(ended) = unsafe { slot.as_mut() }.and_then(Option::take) {
             work.report(None);
             conclude(&ended.rt, &ended.stats);
         }
@@ -1548,45 +1628,52 @@ mod load {
     const RADIO_PERIOD_US: u32 = 577;
     const RADIO_US: u32 = 20;
     /// Jeder dritte Aufruf weckt die Treiber-Aufgabe.
-    pub const DRIVER_EVERY: u32 = 3;
+    pub(crate) const DRIVER_EVERY: u32 = 3;
     /// Die Treiber-Aufgabe haelt einen kritischen Abschnitt von 30 us und
     /// rechnet dann 200 us.
-    pub const CRITICAL_US: u32 = 30;
+    pub(crate) const CRITICAL_US: u32 = 30;
     const WORK_US: u32 = 200;
 
     /// Rechnet `us` Mikrosekunden lang nichts.
-    pub fn spin(us: u32) {
-        let n = CORE_HZ / 1_000_000 * us;
+    pub(crate) fn spin(us: u32) {
+        let n = (CORE_HZ / 1_000_000).saturating_mul(us);
         let start = cycles::now();
         while cycles::now().wrapping_sub(start) < n {}
     }
 
     /// TIM3 als Takt der Funk-ISR, alle `RADIO_PERIOD_US`.
-    pub fn start() {
-        // SAFETY: TIM3 und sein Takt gehoeren allein der Last; niemand
-        // sonst benutzt sie.
-        let (rcc, tim3) = unsafe { (&*stm32f4::stm32f401::RCC::ptr(), &*stm32f4::stm32f401::TIM3::ptr()) };
+    pub(crate) fn start() {
+        // TIM3 und sein Takt gehoeren allein der Last; niemand sonst benutzt
+        // sie.
+        // SAFETY: die Register des RCC; geschrieben wird nur `TIM3EN`.
+        let rcc = unsafe { &*stm32f4::stm32f401::RCC::ptr() };
+        // SAFETY: die Register von TIM3, siehe oben.
+        let tim3 = unsafe { &*stm32f4::stm32f401::TIM3::ptr() };
         rcc.apb1enr().modify(|_, w| w.tim3en().set_bit());
         let _ = rcc.apb1enr().read();
         let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).unwrap_or(0);
+        // SAFETY: `PSC` nimmt jeden 16-Bit-Wert.
         tim3.psc().write(|w| unsafe { w.psc().bits(psc) });
+        // SAFETY: `ARR` nimmt jeden Wert seiner 16 Bit; die Periode passt hinein.
         tim3.arr().write(|w| unsafe { w.bits(TIMER_HZ / 1_000_000 * RADIO_PERIOD_US - 1) });
         tim3.egr().write(|w| w.ug().set_bit());
+        // SAFETY: `SR` ist `rc_w0`; das Muster loescht nur `UIF`.
         tim3.sr().write(|w| unsafe { w.bits(!1) });
         tim3.dier().modify(|_, w| w.uie().set_bit());
         tim3.cr1().modify(|_, w| w.cen().set_bit());
     }
 
     /// Ein Aufruf der Funk-ISR.
-    pub fn radio() {
+    pub(crate) fn radio() {
         // SAFETY: nur das Statusregister des eigenen Timers.
         let tim3 = unsafe { &*stm32f4::stm32f401::TIM3::ptr() };
+        // SAFETY: `SR` ist `rc_w0`; das Muster loescht nur `UIF`.
         tim3.sr().write(|w| unsafe { w.bits(!1) });
         spin(RADIO_US);
     }
 
     /// Was die Treiber-Aufgabe nach ihrem kritischen Abschnitt rechnet.
-    pub fn driver_work() {
+    pub(crate) fn driver_work() {
         spin(WORK_US);
     }
 }
@@ -1652,9 +1739,9 @@ mod rtic_app {
         let (due, wake) = WAKE.split();
         let (hand_over, work) = WORK.split();
         let (driver_in, driver_out) = DRIVER.split();
-        takt::spawn().expect("Takt-Aufgabe");
-        driver::spawn().expect("Treiber-Aufgabe");
-        jobs::spawn().expect("Job-Aufgabe");
+        // Jede Aufgabe startet hier zum ersten Mal; `spawn` scheitert nur fuer
+        // eine, die schon laeuft.
+        let (Ok(()), Ok(()), Ok(())) = (takt::spawn(), driver::spawn(), jobs::spawn()) else { super::halt() };
         // Die Abschlusszeile meldet, wie tief der Stack unter den Aufgaben
         // reichte: gemalt am Ende des Aufbaus (12.3).
         takt_board_stm32f401::stack::paint();
@@ -1675,7 +1762,7 @@ mod rtic_app {
     fn tim2(mut cx: tim2::Context) {
         if mpu::isr(alarm::on_interrupt) {
             cx.shared.boundaries.lock(|b| *b = b.wrapping_add(1));
-            DUE.store(true, Ordering::Release);
+            DUE.store(true, Ordering::SeqCst);
             cx.local.due.write(());
         }
     }
@@ -1717,9 +1804,17 @@ mod rtic_app {
         loop {
             cx.local.work.wait().await;
             super::host::work_jobs();
-            JOB_DONE.store(true, Ordering::Release);
+            JOB_DONE.store(true, Ordering::SeqCst);
             cx.local.done.write(());
         }
+    }
+}
+
+/// Haelt den Kern an, wenn das Board nicht weiter kann: Er schlaeft, und was
+/// ihn weckt, laesst ihn wieder schlafen.
+fn halt() -> ! {
+    loop {
+        cortex_m::asm::wfi();
     }
 }
 

@@ -3,8 +3,43 @@
 //!
 //! Die RGB-LED der DevKits haengt an einem WS2812, nicht an einem Pin;
 //! das Lebenszeichen ist darum die Zeile, nicht ein Blinken.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use esp_hal::main;
 use takt_rt_baremetal::DRAIN_ROUNDS;

@@ -44,9 +44,44 @@
 //! dfu-util -a 0 -s 0x08010000:leave -D app.bin
 //! ```
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und Registerzugriff; 9.5 fuehrt Treiber in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -76,9 +111,8 @@ static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 /// Overrun sichtbar wird statt die naechste ISR zu verzoegern.
 #[interrupt]
 fn TIM2() {
-    // Sicher, weil die ISR die einzige Stelle ist, die TIM2 nach dem
-    // Start noch anfasst — `Peripherals::take` hat den Rest schon
-    // vergeben.
+    // SAFETY: Die ISR ist die einzige Stelle, die TIM2 nach dem Start noch
+    // anfasst — `Peripherals::take` hat den Rest schon vergeben.
     let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
 
     // **Gemessen wird ueber den DWT, nicht ueber den Timer selbst.** Der
@@ -87,7 +121,7 @@ fn TIM2() {
     // Abstand zweier Interrupts, und den misst der Zyklenzaehler des
     // Kerns: Er laeuft unabhaengig vom Timer und mit `CORE_HZ`.
     let now = cycles::now();
-    let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::Relaxed));
+    let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::SeqCst));
 
     // **`write` mit Maske, nicht `modify`.** `TIMx_SR` ist `rc_w0`:
     // Eine Null loescht, eine Eins laesst stehen. Ein `modify` liest
@@ -97,6 +131,7 @@ fn TIM2() {
     // Compare-Kanaele fuer `at` (7.5) kommen, und dann verloere dieser
     // Handler still ihre Ereignisse. Dieselbe Falle beschreibt FB-11 fuer
     // die Registerfeld-Zugriffsarten.
+    // SAFETY: siehe oben; das Muster loescht nur `UIF`.
     tim2.sr().write(|w| unsafe { w.bits(!1) });
     tick::on_timer_interrupt(elapsed);
 }
@@ -110,8 +145,13 @@ fn USART1() {
 
 #[entry]
 fn main() -> ! {
-    let dp = Peripherals::take().expect("Peripherie");
-    let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
+    // `take` gibt die Peripherie beim ersten Aufruf; ohne sie gibt es weder
+    // LED noch Leitung, und der Kern schlaeft.
+    let (Some(dp), Some(cp)) = (Peripherals::take(), cortex_m::Peripherals::take()) else {
+        loop {
+            cortex_m::asm::wfi();
+        }
+    };
     let board = Board::WEACT_BLACKPILL;
 
     // Die LED zuerst: Sie ist das einzige Anzeigegeraet, das ohne Takt
@@ -138,10 +178,11 @@ fn main() -> ! {
     cycles::enable(&mut dcb, &mut dwt);
 
     // Den Tick-Interrupt freigeben — ohne ihn zaehlt niemand.
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2);
-        cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::USART1);
-    }
+    // SAFETY: Der Handler oben ist bereit und teilt nur den Zaehler der Ticks.
+    unsafe { cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::TIM2) };
+    // SAFETY: Der Handler der Leitung teilt nur ihren FIFO, der fuer einen
+    // Schreiber und einen Leser gebaut ist.
+    unsafe { cortex_m::peripheral::NVIC::unmask(stm32f4::stm32f401::Interrupt::USART1) };
 
     banner(&mut uart, &clock);
     // Die Taktregister roh: Ein Takt, der nicht der konfigurierte ist,
@@ -184,7 +225,7 @@ fn main() -> ! {
             // vergangen, und ein starres `+= REPORT_EVERY` liefe ihnen
             // hinterher, bis die Bedingung dauernd erfuellt waere — die
             // LED flackerte dann statt zu blinken.
-            next_report = now + REPORT_EVERY;
+            next_report = now.saturating_add(REPORT_EVERY);
         }
     }
 }

@@ -55,8 +55,8 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # Die Crates mit `unsafe`, die als eigene Workspaces neben dem Haupt-
-      # Workspace stehen (plan/cert.md Abschnitt 2); die Board-Crates und
-      # Bring-ups kommen mit dem Bau der Abbilder dazu (M11 Schritt 34d).
+      # Workspace stehen (plan/cert.md Abschnitt 2); die Board-Crates, das
+      # Sprungbrett und die Bring-ups prueft der Job `boards`.
       - name: rustfmt und Clippy der eigenen Workspaces
         shell: bash
         run: |

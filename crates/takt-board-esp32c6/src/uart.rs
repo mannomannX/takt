@@ -60,12 +60,13 @@ static RING_TAKEN: AtomicBool = AtomicBool::new(false);
 /// Der Ring fuer die erste Telemetrie des Laufs; jede weitere bekommt einen
 /// leeren und verwirft, was sie schreibt, sichtbar in `verworfen`.
 fn ring() -> &'static mut [u8] {
-    if RING_TAKEN.swap(true, Ordering::AcqRel) {
+    if RING_TAKEN.swap(true, Ordering::SeqCst) {
         return &mut [];
     }
+    let bytes = &raw mut RING_BYTES;
     // SAFETY: Nur der erste Aufruf erreicht die Statik; danach haelt die
     // Telemetrie sie allein.
-    unsafe { (&raw mut RING_BYTES).as_mut() }.map_or(&mut [], |r| &mut r[..])
+    unsafe { bytes.as_mut() }.map_or(&mut [], |r| &mut r[..])
 }
 
 /// Bytes je Paket, unter der Puffergroesse von 64.
@@ -161,7 +162,7 @@ impl Port for UsbJtag {
         if self.in_flight || self.filled == PACKET || self.port.write_byte_nb(b).is_err() {
             return false;
         }
-        self.filled += 1;
+        self.filled = self.filled.saturating_add(1);
         true
     }
 

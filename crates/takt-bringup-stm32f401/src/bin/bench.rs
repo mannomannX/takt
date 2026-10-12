@@ -7,9 +7,44 @@
 //! wird zwischen den Schritten; `takt bench --import` liest das Protokoll.
 //! Die Lage des Programms im Flash nennt `TAKT_BENCH_SHIFT` (FB-367).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![no_main]
 #![allow(unsafe_code, reason = "Interrupt-Handler und C-ABI; 9.5 fuehrt Treiber in der TCB")]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::panic,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 use cortex_m_rt::entry;
 use panic_halt as _;
@@ -18,7 +53,7 @@ use takt_board_stm32f401::{BAUD, Board, CORE_HZ, Telemetry, WfiSleep, cycles};
 use takt_rt_baremetal::{DRAIN_ROUNDS, Sleep};
 
 /// Das Messprogramm (`TAKT_BENCH_RS`).
-mod takt_bench {
+pub mod takt_bench {
     #![allow(dead_code, reason = "die Kennung `SUITE` braucht nur, wer das Protokoll selbst prueft")]
     include!(env!("TAKT_BENCH_RS"));
 }
@@ -62,8 +97,7 @@ impl takt_bench::Host for Host {
 
 #[entry]
 fn main() -> ! {
-    let dp = Peripherals::take().expect("Peripherie");
-    let cp = cortex_m::Peripherals::take().expect("Kern-Peripherie");
+    let (Some(dp), Some(cp)) = (Peripherals::take(), cortex_m::Peripherals::take()) else { halt() };
     let board = Board::WEACT_BLACKPILL;
     let Ok(_timer) = takt_board_stm32f401::init(board, &dp.RCC, &dp.FLASH, &dp.PWR, &dp.TIM2, TICK_NS) else {
         halt();
@@ -96,8 +130,8 @@ fn main() -> ! {
     }
 }
 
-/// Ohne Takt oder Leitung gibt es nichts zu messen und niemanden, dem es
-/// zu sagen waere.
+/// Ohne Peripherie, Takt oder Leitung gibt es nichts zu messen und
+/// niemanden, dem es zu sagen waere.
 fn halt() -> ! {
     loop {
         cortex_m::asm::wfi();

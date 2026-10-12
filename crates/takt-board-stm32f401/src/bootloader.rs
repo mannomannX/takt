@@ -58,36 +58,57 @@ pub fn enter_if_requested() {
 /// Sprungbrett ruft es, wenn keine Anwendung da ist (FB-385).
 pub fn enter() -> ! {
     cortex_m::interrupt::disable();
-    // SAFETY: Ab hier laeuft nichts mehr von der Anwendung: Interrupts sind
-    // aus, und jedes Register, das die folgenden Zeilen anfassen, geht
-    // danach an den Bootloader. Wer es vorher besass, kommt nicht mehr dran.
-    unsafe {
-        (*SYST::PTR).csr.write(0);
-        let rcc = &*RCC::ptr();
-        restore_reset_state(rcc, &*FLASH::ptr());
-        let nvic = &*NVIC::PTR;
-        for (icer, icpr) in nvic.icer.iter().zip(&nvic.icpr) {
-            icer.write(u32::MAX);
-            icpr.write(u32::MAX);
-        }
-
-        // Den Systemspeicher nach Adresse 0 abbilden, wie ein Start mit
-        // BOOT0 es tut (RM0368, `SYSCFG_MEMRMP`), und die Vektortabelle
-        // dorthin legen: Der Bootloader erwartet seine eigene.
-        rcc.apb2enr().modify(|_, w| w.syscfgen().set_bit());
-        let _ = rcc.apb2enr().read();
-        (*SYSCFG::ptr()).memrmp().modify(|_, w| w.mem_mode().bits(0b01));
-        (*SCB::PTR).vtor.write(SYSTEM_MEMORY);
-
-        // CONTROL wie nach dem Reset: Hauptstack, keine FPU-Kontextmarke.
-        cortex_m::register::control::write(cortex_m::register::control::Control::from_bits(0));
-        cortex_m::asm::dsb();
-        cortex_m::asm::isb();
-        // Der Bootloader richtet seine Interrupts selbst ein und gibt sie
-        // nicht selbst frei (ST, „Jump to the bootloader from application").
-        cortex_m::interrupt::enable();
-        cortex_m::asm::bootload(SYSTEM_MEMORY as *const u32)
+    // Ab hier laeuft nichts mehr von der Anwendung: Interrupts sind aus, und
+    // jedes Register, das die folgenden Zeilen anfassen, geht danach an den
+    // Bootloader. Wer es vorher besass, kommt nicht mehr dran; darum nimmt
+    // dieser Weg die Peripherie ueber ihre Adressen.
+    // SAFETY: siehe oben; `SYST::PTR` zeigt auf die Register des SysTick.
+    let syst = unsafe { &*SYST::PTR };
+    // SAFETY: Null in `CSR` haelt den SysTick an und sperrt seine Ausnahme.
+    unsafe { syst.csr.write(0) };
+    // SAFETY: siehe oben; die Register des RCC.
+    let rcc = unsafe { &*RCC::ptr() };
+    // SAFETY: siehe oben; die Register des Flash.
+    let flash = unsafe { &*FLASH::ptr() };
+    restore_reset_state(rcc, flash);
+    // SAFETY: siehe oben; die Register des NVIC.
+    let nvic = unsafe { &*NVIC::PTR };
+    for (icer, icpr) in nvic.icer.iter().zip(&nvic.icpr) {
+        // SAFETY: Einsen in `ICER` sperren jeden Interrupt dieses Worts.
+        unsafe { icer.write(u32::MAX) };
+        // SAFETY: Einsen in `ICPR` nehmen jeden anstehenden zurueck.
+        unsafe { icpr.write(u32::MAX) };
     }
+
+    // Den Systemspeicher nach Adresse 0 abbilden, wie ein Start mit
+    // BOOT0 es tut (RM0368, `SYSCFG_MEMRMP`), und die Vektortabelle
+    // dorthin legen: Der Bootloader erwartet seine eigene.
+    rcc.apb2enr().modify(|_, w| w.syscfgen().set_bit());
+    let _ = rcc.apb2enr().read();
+    // SAFETY: siehe oben; die Register von SYSCFG, dessen Takt eben anlief.
+    let syscfg = unsafe { &*SYSCFG::ptr() };
+    // SAFETY: `0b01` ist in `MEM_MODE` der Systemspeicher.
+    syscfg.memrmp().modify(|_, w| unsafe { w.mem_mode().bits(0b01) });
+    // SAFETY: siehe oben; die Register des SCB.
+    let scb = unsafe { &*SCB::PTR };
+    // SAFETY: Am Anfang des Systemspeichers steht die Vektortabelle des
+    // Bootloaders, an 512 Byte ausgerichtet, wie `VTOR` es verlangt.
+    unsafe { scb.vtor.write(SYSTEM_MEMORY) };
+
+    // CONTROL wie nach dem Reset: Hauptstack, keine FPU-Kontextmarke.
+    // SAFETY: Der Kern laeuft privilegiert auf dem Hauptstack; der Wert
+    // aendert davon nichts und loescht nur die Marke der FPU.
+    unsafe { cortex_m::register::control::write(cortex_m::register::control::Control::from_bits(0)) };
+    cortex_m::asm::dsb();
+    cortex_m::asm::isb();
+    // Der Bootloader richtet seine Interrupts selbst ein und gibt sie
+    // nicht selbst frei (ST, „Jump to the bootloader from application").
+    // SAFETY: Jeder Interrupt ist im NVIC gesperrt und keiner steht an.
+    unsafe { cortex_m::interrupt::enable() };
+    let table = core::ptr::with_exposed_provenance(crate::address(SYSTEM_MEMORY));
+    // SAFETY: Die Tabelle beginnt mit Stackzeiger und Resetvektor des
+    // Bootloaders; von dieser Anwendung lebt danach nichts weiter.
+    unsafe { cortex_m::asm::bootload(table) }
 }
 
 /// Takte und Peripherie wie nach dem Einschalten (RM0368, Resetwerte).
