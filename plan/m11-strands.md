@@ -79,7 +79,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | Nr | Punkt | Bereiche | Boards | hängt an | Stand |
 |---|---|---|---|---|---|
 | B1 | FB-497 Rest: Maps und Puffer als Arrays der SMT-Theorie | P | – | 29 | Strang B, umgesetzt |
-| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Schritt 1 umgesetzt und eingeordnet (CI-Lauf 38188098609, siehe B2); Schritt 2 bei Strang B (Helfer, seit 2026-10-12: Speicher von z3 in drei Programmen, danach Invarianten); Schritte 3 bis 5 frei |
+| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Schritt 1 umgesetzt und eingeordnet (CI-Lauf 38188098609); Schritt 2, Teil 1 (kleine Anfragen zuerst) umgesetzt und gemergt 2026-10-12, eingeordnet in 38199208294: Speicher 106 → 68, 38 bewiesen (FB-612); die Gruppe „nicht k-induktiv“ ist größtenteils tief erreichbar und gehört zu Schritt 3 (FB-613); Schritte 2 (Rest) bis 5 frei |
 | 14 | Rust ohne RTOS und mit Frameworks | R, E | beide | 10 | Strang A, umgesetzt 2026-10-11 |
 | 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | Strang D (Helfer, seit 2026-10-12, Zweig `d-17-host-threads`) |
 | 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A, umgesetzt 2026-10-11 |
@@ -243,6 +243,39 @@ So arbeitet jeder Strang, als wäre er allein:
   `valid` (35). Schritt 2 beginnt darum bei der Kodierung dieser drei
   Programme, nicht bei mehr Speicher: 6 GB reichten bei Tiefe 20 so wenig
   wie bei Tiefe 10.
+- **Stand nach Schritt 2, Teil 1 (2026-10-12, Zweig `b2-fb511-step2`):**
+  - Ursache (FB-612): Die Kodierung ist für z3 nicht redundant, teuer ist
+    das Bit-Blasting der Gleitkommarechnung je Tick, zehnmal ausgerollt.
+    Je Operation allein (z3 4.13.4): Division `f32` 20 MB, `f64` 163 MB,
+    `fma` und `mul` `f64` 11 MB. `11_foc_drive`: Anfangszustand und ein Tick
+    brauchen 1,65 GB, davon 1,4 GB die 18 Divisionen durch `v_dc`
+    (`svpwm` in ALIGN, RUNNING, BRAKING); `46_matrices`: 524 verschiedene
+    `fma` in `f64` je Anfrage der Tiefe 10; `sim/14_7`: 81 Divisionen in
+    `f64` im Induktionsschritt mit k = 10.
+  - Umgesetzt: je Prüfstelle zuerst die Fehlerbedingung allein
+    (`CheckSite::fail`, `smt::fail_query`), dann BMC und Induktion mit
+    k = 1, erst dann die Tiefe; reicht der Speicher schon für k = 1 nicht,
+    bleibt die Stelle mit diesem Grund offen. `Model::run` prüft in jedem
+    Lauf, dass eine feuernde Stelle ihre Fehlerbedingung erfüllt.
+  - Neu eingeordnet (`solver.yml`, Lauf 38199208294, nur die drei
+    Programme, je ein Teil, 1:36 bis 2:12 h mit Bau), 119 Stellen:
+
+    | Gruppe | Schritt 1, Tiefe 10 | Schritt 2, Tiefe 10 | Schritt 2, Tiefe 20 |
+    |---|---|---|---|
+    | Speicher | 106 | 68 | 63 |
+    | bewiesen | – | 38 | – |
+    | Frist | 13 | 13 | 18 |
+
+    Bewiesen sind 20 Stellen von `11_foc_drive`, 4 von `46_matrices` und
+    14 von `sim/14_7`, alle mit k = 1. Offen bleiben dort 32, 27 und 22;
+    fünf in `46_matrices` scheitern schon mit k = 1 am Speicher.
+  - Die Gruppe „nicht k-induktiv“ (FB-613) ist zum großen Teil tief
+    erreichbar: Zähler laufen in Läufen ohne Stimulus bei t = 300 bis 2503
+    über ihre Range. Invarianten (Schritt 2) tragen dort nicht, tiefe Pfade
+    (Schritt 3) schon.
+  - Weiter: tiefe Pfade (Schritt 3); für die Speicherfälle Rechnungen
+    verschiedener Blätter teilen oder ein Solver mit kleinerem
+    Bit-Blasting (FB-612).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.

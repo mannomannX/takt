@@ -18,7 +18,7 @@ use takt_mir::types::{IntWidth, Type};
 
 use crate::encode::Model;
 use crate::eval::Val;
-use crate::smt::{Query, Target, assumptions_of, at, contract_query, horn, houdini, query};
+use crate::smt::{Query, Target, assumptions_of, at, contract_query, fail_query, horn, houdini, query};
 use crate::term::Term;
 
 /// Der gefundene Solver: sein Pfad, der Cache seiner entschiedenen
@@ -408,6 +408,14 @@ pub fn classify_sites(
         };
         notes.extend(model.notes.iter().cloned());
         for (j, site) in model.checks.iter().enumerate().filter(|(_, s)| keep(s)) {
+            let path = match (whole, in_whole(site)) {
+                (Some(w), Some(k)) => PathOn::Whole(w, k),
+                _ => PathOn::Nowhere,
+            };
+            if let Some(verdict) = shallow(&model, program, j, depth, solver, timeout_s, path)? {
+                out.push(report(site, verdict));
+                continue;
+            }
             let bmc = solver.run(&query(&model, depth, Target::Check(j), Query::Bmc), timeout_s, "check-bmc")?;
             let verdict = match answer(&bmc) {
                 "unsat" => induction_verdict(&model, j, depth, solver, timeout_s)?,
@@ -520,6 +528,9 @@ fn classify_site(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<CheckVerdict, String> {
+    if let Some(verdict) = shallow(model, program, i, depth, solver, timeout_s, PathOn::Here)? {
+        return Ok(verdict);
+    }
     let site = &model.checks[i];
     let bmc = solver.run(&query(model, depth, Target::Check(i), Query::Bmc), timeout_s, "check-bmc")?;
     Ok(match answer(&bmc) {
@@ -544,6 +555,84 @@ fn classify_site(
         "unsat" => induction_verdict(model, i, depth, solver, timeout_s)?,
         other => CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") },
     })
+}
+
+/// Wo ein Pfad, den `shallow` findet, bestaetigt wird.
+#[derive(Clone, Copy)]
+enum PathOn<'a> {
+    /// Am Modell selbst.
+    Here,
+    /// Ein Maschinenmodell, dessen Ψ frei ist: am Gesamtmodell, Stelle `k`.
+    Whole(&'a Model, usize),
+    /// Gar nicht: ein Maschinenmodell ohne Gesamtmodell.
+    Nowhere,
+}
+
+/// Die kleinen Anfragen vor den tiefen (FB-511 Schritt 2): zuerst die
+/// Fehlerbedingung allein (`smt::fail_query`), dann BMC und Induktion mit
+/// k = 1. Eine Anfrage der Tiefe `depth` rollt den Tick `depth`-mal aus, und
+/// in einem Programm aus Fliesskomma kostet jeder Tick den Solver Hunderte
+/// MB — eine Division in `f32` etwa 80 MB, in `f64` 160 MB, eine `fma` in
+/// `f64` 11 MB. Was sich so schon entscheidet, braucht die tiefen Anfragen
+/// nicht; sonst `None`, und es gilt das Urteil der Tiefe `depth`. Reicht
+/// der Speicher schon fuer k = 1 nicht, reicht er fuer die Tiefe nicht: Die
+/// Stelle bleibt mit diesem Grund offen, ohne die tiefen Anfragen.
+fn shallow(
+    model: &Model,
+    program: &Program,
+    i: usize,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+    path: PathOn<'_>,
+) -> Result<Option<CheckVerdict>, String> {
+    let target = Target::Check(i);
+    if let Some(q) = fail_query(model, target)
+        && answer(&solver.run(&q, timeout_s, "check-fail")?) == "unsat"
+    {
+        return Ok(Some(CheckVerdict::Unreachable { k: 1 }));
+    }
+    if depth <= 1 {
+        return Ok(None);
+    }
+    let memory = |what: &str, said: &str| CheckVerdict::Undecided {
+        reason: format!("{what}: Solver sagt `{said}`, schon mit k = 1"),
+    };
+    let bmc = solver.run(&query(model, 1, target, Query::Bmc), timeout_s, "check-bmc")?;
+    Ok(match answer(&bmc) {
+        said if said.contains("out of memory") => Some(memory("BMC", said)),
+        "unsat" => {
+            let ind = solver.run(&query(model, 1, target, Query::Induction), timeout_s, "check-ind")?;
+            match answer(&ind) {
+                "unsat" => Some(CheckVerdict::Unreachable { k: 1 }),
+                said if said.contains("out of memory") => Some(memory("Induktionsschritt", said)),
+                _ => None,
+            }
+        }
+        "sat" => match path {
+            PathOn::Here => confirmed(model, program, i, &bmc, 1),
+            PathOn::Whole(w, k) => {
+                let bmc = solver.run(&query(w, 1, Target::Check(k), Query::Bmc), timeout_s, "check-bmc")?;
+                if answer(&bmc) == "sat" { confirmed(w, program, k, &bmc, 1) } else { None }
+            }
+            PathOn::Nowhere => None,
+        },
+        _ => None,
+    })
+}
+
+/// Der Pfad einer BMC-Antwort `sat` bis `depth`, wenn der Interpreter ihn
+/// bestaetigt (ein `requires` das Modell, 5.7).
+fn confirmed(model: &Model, program: &Program, i: usize, bmc: &str, depth: u32) -> Option<CheckVerdict> {
+    let site = &model.checks[i];
+    let values = parse_values(bmc, "@");
+    let stimulus = stimulus(&values, program, depth);
+    let at = if site.kind == "requires" {
+        confirm_requires(model, site, &values, depth)
+    } else {
+        confirm_check(program, site, &stimulus, depth)
+    }?;
+    Some(CheckVerdict::Reachable { at, stimulus })
 }
 
 /// Die Invariantensuche nach einem offenen Induktionsschritt (FB-375):

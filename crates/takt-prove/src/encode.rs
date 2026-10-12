@@ -145,6 +145,12 @@ pub struct CheckSite {
     pub init: Term,
     /// Feuert im Uebergang, ueber dem Zustand davor und den Eingaben danach.
     pub fires: Term,
+    /// Die Fehlerbedingung von `init` ohne die Bedingung, dass die
+    /// Ausfuehrung die Stelle erreicht: Sie folgt aus `init`.
+    pub init_fail: Term,
+    /// Ebenso zu `fires` (FB-511): Ist sie aus keinem Zustand unter den
+    /// Invarianten erfuellbar, feuert die Stelle in keiner Tiefe.
+    pub fail: Term,
 }
 
 /// Der Vertrag eines Blocks als Beweisziel (5.7, B2): aus jedem
@@ -439,7 +445,7 @@ struct Enc<'p> {
     /// `abort` in diesem Tick, je Stelle.
     aborts: Vec<Term>,
     /// Feuerbedingungen der Pruefstellen der laufenden Phase, je Stelle.
-    sites: BTreeMap<SiteKey, Vec<Term>>,
+    sites: BTreeMap<SiteKey, Vec<Fire>>,
     /// Position und Maschine je Pruefstelle.
     site_info: BTreeMap<SiteKey, (Span, String)>,
     /// Je Uebergang (Maschine, Schluessel der Coverage) seine Position und
@@ -527,7 +533,23 @@ struct Enc<'p> {
 struct Called {
     ret: V,
     exits: Vec<Exit>,
-    sites: Vec<(SiteKey, Term)>,
+    sites: Vec<(SiteKey, Fire)>,
+}
+
+/// Wann eine Pruefstelle an einer Stelle des Pfads feuert: `fires`, und ihre
+/// Fehlerbedingung allein, `fail` — ohne die Bedingung, dass die Ausfuehrung
+/// dorthin kommt. `fires` impliziert `fail`.
+#[derive(Clone, Debug)]
+struct Fire {
+    fires: Term,
+    fail: Term,
+}
+
+impl Fire {
+    /// Eine Stelle, deren Fehlerbedingung sich nicht vom Pfad trennen laesst.
+    fn whole(fires: Term) -> Fire {
+        Fire { fail: fires.clone(), fires }
+    }
 }
 
 /// Unter welchen Indexpfaden die Zaehler einer Maschine laufen: je
@@ -707,6 +729,9 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
     let invariants = enc.state_invariants(&pre);
     let candidates = enc.candidates(&pre);
     let contracts = enc.contract_goals()?;
+    let either = |sites: &BTreeMap<SiteKey, Vec<Fire>>, key: &SiteKey, part: fn(&Fire) -> &Term| {
+        Term::or(sites.get(key).map(|fs| fs.iter().map(|f| part(f).clone()).collect()).unwrap_or_default())
+    };
     let checks: Vec<CheckSite> = enc
         .site_info
         .iter()
@@ -715,19 +740,26 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
             span: *span,
             machine: machine.clone(),
             kind: key.2.clone(),
-            init: Term::or(init_sites.get(key).cloned().unwrap_or_default()),
-            fires: Term::or(tick_sites.get(key).cloned().unwrap_or_default()),
+            init: either(&init_sites, key, |f| &f.fires),
+            fires: either(&tick_sites, key, |f| &f.fires),
+            init_fail: either(&init_sites, key, |f| &f.fail),
+            fail: either(&tick_sites, key, |f| &f.fail),
         })
         .collect();
     let transitions = std::mem::take(&mut enc.transitions)
         .into_iter()
-        .map(|((machine, key), (span, takes))| CheckSite {
-            start: span.start,
-            span,
-            machine,
-            kind: key,
-            init: Term::bool(false),
-            fires: Term::or(takes),
+        .map(|((machine, key), (span, takes))| {
+            let fires = Term::or(takes);
+            CheckSite {
+                start: span.start,
+                span,
+                machine,
+                kind: key,
+                init: Term::bool(false),
+                init_fail: Term::bool(false),
+                fail: fires.clone(),
+                fires,
+            }
         })
         .collect();
     let mut properties = Vec::new();
@@ -2048,14 +2080,14 @@ impl Enc<'_> {
                 let first = flow.exits.len();
                 let x = self.expr(inner, cx, env, flow)?;
                 let fires = Term::or(flow.exits[first..].iter().map(|x| x.cond.clone()).collect());
-                self.site(kind, span, fires, cx);
+                self.site(kind, span, Fire::whole(fires), cx);
                 return Ok(x);
             }
             CheckedKind::Index { len } => return self.index_access(inner, *len, span, kind, cx, env, flow)?.leaf(span),
             CheckedKind::Missing => return self.unwrap(inner, span, kind, cx, env, flow)?.leaf(span),
         };
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
-        self.site(kind, span, cond.clone(), cx);
+        self.site(kind, span, Fire { fires: cond.clone(), fail: fail.clone() }, cx);
         flow.exits.push(Exit { cond, kind: ExitKind::Fault(None, self.cause(kind.fault(), span)) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         Ok(value)
@@ -2125,9 +2157,9 @@ impl Enc<'_> {
     }
 
     /// Eine Pruefstelle (11.3): `takt prove` zeigt, ob sie je faultet.
-    fn site(&mut self, kind: &CheckedKind, span: Span, fires: Term, cx: &Cx<'_>) {
+    fn site(&mut self, kind: &CheckedKind, span: Span, fire: Fire, cx: &Cx<'_>) {
         let key = (span.start, span.end, takt_mir::analysis::walk::name(kind).to_string());
-        self.sites.entry(key.clone()).or_default().push(fires);
+        self.sites.entry(key.clone()).or_default().push(fire);
         if let Some(m) = cx.m {
             self.site_info.insert(key, (span, self.machine(m).name.clone()));
         }
@@ -2204,12 +2236,12 @@ impl Enc<'_> {
     /// des Rumpfs unter der Bedingung des Aufrufers; nur Faults beenden ihn.
     fn returned(&mut self, done: Called, cx: &Cx<'_>, flow: &mut Flow) -> V {
         let alive = flow.alive.clone();
-        for (key, t) in done.sites {
+        for (key, Fire { fires, fail }) in done.sites {
             if let Some(m) = cx.m {
                 let span = Span::new(key.0, key.1);
                 self.site_info.insert(key.clone(), (span, self.machine(m).name.clone()));
             }
-            self.sites.entry(key).or_default().push(Term::and(vec![alive.clone(), t]));
+            self.sites.entry(key).or_default().push(Fire { fires: Term::and(vec![alive.clone(), fires]), fail });
         }
         let mut faults = Vec::new();
         for mut x in done.exits {
@@ -2444,7 +2476,7 @@ impl Enc<'_> {
                     let fail = Term::and(vec![flow.alive.clone(), failed.clone()]);
                     let word = if *kind == takt_mir::stmt::CheckKind::Check { "check" } else { "expect" };
                     let key = (span.start, span.end, word.to_string());
-                    self.sites.entry(key.clone()).or_default().push(fail.clone());
+                    self.sites.entry(key.clone()).or_default().push(Fire { fires: fail.clone(), fail: failed.clone() });
                     self.site_info.insert(key, (span, self.machine(m).name.clone()));
                     let fault = if *kind == takt_mir::stmt::CheckKind::Check {
                         FaultKind::CheckFailed
@@ -2779,9 +2811,9 @@ impl Enc<'_> {
             for r in &def.requires {
                 let mut rflow = Flow::new(call_alive.clone());
                 let c = self.expr(r, &rcx, env, &mut rflow)?;
-                let fail = Term::and(vec![call_alive.clone(), !c]);
+                let fail = Term::and(vec![call_alive.clone(), c.clone().not()]);
                 let key = (span.start, span.end, "requires".to_string());
-                self.sites.entry(key.clone()).or_default().push(fail);
+                self.sites.entry(key.clone()).or_default().push(Fire { fires: fail, fail: !c });
                 self.site_info.insert(key, (span, self.machine(m).name.clone()));
             }
         }

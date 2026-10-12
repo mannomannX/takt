@@ -880,6 +880,60 @@ pub fn houdini(model: &Model, candidates: &[&Term], step: bool, assumed: bool) -
     out
 }
 
+/// Die Fehlerbedingung einer Pruefstelle allein (FB-511): ob sie im ersten
+/// Tick ueber dessen Eingaben gelten kann (`init_fail`) oder in einem Schritt
+/// aus einem beliebigen Zustand unter den Invarianten (`fail`). Das Feuern
+/// impliziert sie, und jeder erreichbare Zustand erfuellt die Invarianten:
+/// `unsat` heisst, die Stelle feuert in keiner Tiefe. Kein Uebergang wird
+/// ausgerollt; die Anfrage traegt nur die Variablen der Bedingung und die
+/// Bedingungen, die sie beruehren. `None` fuer etwas anderes als eine
+/// Pruefstelle.
+pub fn fail_query(model: &Model, target: Target) -> Option<String> {
+    let Target::Check(i) = target else { return None };
+    let site = model.checks.get(i)?;
+    let mut inside: BTreeSet<String> = vars(&site.init_fail).into_iter().chain(vars(&site.fail)).collect();
+    let constraints: Vec<&Term> = model.assumptions.iter().chain(&model.invariants).collect();
+    let bound: Vec<BTreeSet<String>> = constraints.iter().map(|t| vars(t)).collect();
+    loop {
+        let before = inside.len();
+        for deps in &bound {
+            if deps.iter().any(|d| inside.contains(d)) {
+                inside.extend(deps.iter().cloned());
+            }
+        }
+        if inside.len() == before {
+            break;
+        }
+    }
+    let kept: Vec<&Term> = constraints
+        .into_iter()
+        .zip(&bound)
+        .filter(|(_, deps)| deps.iter().any(|d| inside.contains(d)))
+        .map(|(t, _)| t)
+        .collect();
+    let tag = "@";
+    let mut out = head(model);
+    let _ = writeln!(out, "; Fehlerbedingung `{}` @{}", site.kind, site.start);
+    let sorts = model.state.iter().map(|v| (&v.name, v.sort)).chain(model.inputs.iter().map(|(n, s)| (n, *s)));
+    for (name, sort) in sorts.filter(|(n, _)| inside.contains(*n)) {
+        for k in 0..=1 {
+            let _ = writeln!(out, "(declare-const {} {})", at(name, k, tag), sort_text(sort));
+        }
+    }
+    let mut p = Printer { out: &mut out, tag, defs: HashMap::new(), next: 0, declared: BTreeSet::new() };
+    for k in 0..=1 {
+        for c in &kept {
+            let t = p.name(c, k, k);
+            let _ = writeln!(p.out, "(assert {t})");
+        }
+    }
+    let first = p.name(&site.init_fail, 0, 0);
+    let step = p.name(&site.fail, 0, 1);
+    let _ = writeln!(p.out, "(assert (or {first} {step}))");
+    let _ = writeln!(p.out, "(check-sat)");
+    Some(out)
+}
+
 /// Die Anfrage eines Ziels fuer den Solver; BMC fragt nach den Eingaben
 /// des Gegenbeispiels.
 pub fn query(model: &Model, depth: u32, target: Target, kind: Query) -> String {

@@ -249,6 +249,7 @@ fn a_reachable_check_gets_its_path() {
 
 /// B3: eine Pruefung, die der Typ schon garantiert, ist bewiesen
 /// unerreichbar — die Ranges des Zustands sind Invarianten der Kodierung.
+/// Die Fehlerbedingung allein entscheidet das, ohne Pfad (FB-511): k = 1.
 #[test]
 fn a_check_the_types_guarantee_is_proven_unreachable() {
     let Some(solver) = solver() else { return };
@@ -271,7 +272,60 @@ machine f:
     );
     let model = encode(&p).expect("kodierbar");
     let reports = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
-    assert_eq!(reports[0].verdict, CheckVerdict::Unreachable { k: 2 }, "{:?}", reports[0]);
+    assert_eq!(reports[0].verdict, CheckVerdict::Unreachable { k: 1 }, "{:?}", reports[0]);
+}
+
+/// **Kleine Anfragen zuerst** (FB-511 Schritt 2): `RUN` erreicht erst ein
+/// Lauf ueber 500 Ticks, und nur dort ruft `half` mit `g`: Das Produkt in
+/// `half` ist endlich, weil `g` eine Range hat. Die Sema sieht den
+/// Parameter ohne Range, die Fehlerbedingung allein entscheidet es.
+/// Die Division durch `x` hinter `x != 0` nicht: Allein kann `x` null sein,
+/// auf dem Pfad nie, und die Induktion mit k = 1 beweist sie. Die Division
+/// in `WAIT` faultet im ersten Tick; ihren Pfad findet BMC mit Tiefe 1, und
+/// kein Beweis ohne Pfad spricht sie frei. Gefragt sind nur Divisionen und
+/// Endlichkeit: Das Lesen von `x` in `RUN` faultet erst nach 500 Ticks.
+#[test]
+fn small_queries_decide_before_deep_ones() {
+    let Some(solver) = solver() else { return };
+    let src = "system:
+    language = 1
+    tick     = 10 ms
+
+input  x : int in -5..5 @ hw(\"i/x\")
+output w : int @ hw(\"o/w\") with safe = 0
+output r : float @ hw(\"o/r\") with safe = 0
+
+fn half(v: float) -> float:
+    return v * 0.5
+
+machine f:
+    var g : float in 0..10 = 1
+    initial WAIT
+    state WAIT:
+        loop:
+            w = 100 / x
+        after 5 s: -> RUN
+    state RUN:
+        loop:
+            g = g + 0.5 if g < 9.0 else 0.0
+            r = half(g)
+            if x != 0:
+                w = 200 / x
+";
+    let p = compile(src);
+    let whole = encode(&p).expect("kodierbar");
+    let divisions = |c: &takt_prove::CheckSite| c.kind == "div" || c.kind == "fin";
+    let (sites, _) = classify_sites(&p, Some(&whole), 3, &solver, 60, &divisions).expect("Solver laeuft");
+    let at = |text: &str, kind: &str| {
+        let start = src.find(text).expect("im Quelltext") as u32;
+        let end = start + text.len() as u32;
+        let site = sites.iter().find(|s| s.kind == kind && s.span.start >= start && s.span.end <= end);
+        site.unwrap_or_else(|| panic!("keine Stelle `{kind}` in `{text}`: {sites:?}")).verdict.clone()
+    };
+    let first = at("100 / x", "div");
+    assert!(matches!(first, CheckVerdict::Reachable { at, .. } if at <= 1), "{first:?}");
+    assert_eq!(at("v * 0.5", "fin"), CheckVerdict::Unreachable { k: 1 });
+    assert_eq!(at("200 / x", "div"), CheckVerdict::Unreachable { k: 1 });
 }
 
 /// B2: das `ensures` des Begrenzers haelt aus jedem typkonformen Zustand;
