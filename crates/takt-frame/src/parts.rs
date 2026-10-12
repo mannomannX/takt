@@ -35,16 +35,30 @@ static inline const char *takt_dur_unit(long long ns) { return takt_dur_name[tak
 /// undefiniert waere (CERT C INT32-C). Eine Tickzahl ist nie negativ.
 pub fn now(s: &mut String, p: &Program, x: &Prefix) {
     let (tick, max) = (p.config.tick.max(1), i64::MAX);
+    // Neu geschrieben wie von Hand: ein Ausgang, Klammern, jeder Fall mit `else`.
     let _ = writeln!(s, "static inline long long takt_ticks_ns(long long k) {{");
-    let _ = writeln!(s, "    if (k <= 0) return 0;");
-    let _ = writeln!(s, "    return k > {}LL ? {max}LL : k * {tick}LL;", max / tick);
+    let _ = writeln!(s, "    long long ns;");
+    let _ = writeln!(s, "    if (k > {}LL) {{", max / tick);
+    let _ = writeln!(s, "        ns = {max}LL;");
+    let _ = writeln!(s, "    }} else if (k > 0LL) {{");
+    let _ = writeln!(s, "        ns = k * {tick}LL;");
+    let _ = writeln!(s, "    }} else {{");
+    let _ = writeln!(s, "        ns = 0LL;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    return ns;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static inline long long takt_add_ns(long long t, long long d) {{");
-    let _ = writeln!(s, "    return (d > 0 && t > {max}LL - d) ? {max}LL : t + d;");
+    let _ = writeln!(s, "    long long sum;");
+    let _ = writeln!(s, "    if ((d > 0LL) && (t > ({max}LL - d))) {{");
+    let _ = writeln!(s, "        sum = {max}LL;");
+    let _ = writeln!(s, "    }} else {{");
+    let _ = writeln!(s, "        sum = t + d;");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    return sum;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "long long {x}_now(struct {x}_arena *a) {{ return takt_ticks_ns(a->tick); }}");
     // Der Tick selbst, wo `now` an der Grenze stehen bleibt (`last_fault.tick`, 7.2).
-    let _ = writeln!(s, "long long {x}_tick_count(struct {x}_arena *a) {{ return a->tick; }}\n");
+    let _ = writeln!(s, "long long {x}_tick_count(const struct {x}_arena *a) {{ return a->tick; }}\n");
 }
 
 /// Die nativen Funktionen (4.5) liegen in der Runtime: `takt-native-abi`

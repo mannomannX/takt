@@ -311,8 +311,9 @@ fn the_harness_answers_the_whole_abi() {
                 continue;
             }
             called.insert(f.clone());
-            let head = format!("app_{f}(struct app_arena *a");
-            if !src.lines().any(|l| l.contains(&head) && !l.trim_end().ends_with(';')) {
+            // Wer die Arena nur liest, nimmt sie `const` (`app_tick_count`).
+            let heads = [format!("app_{f}(struct app_arena *a"), format!("app_{f}(const struct app_arena *a")];
+            if !src.lines().any(|l| heads.iter().any(|h| l.contains(h)) && !l.trim_end().ends_with(';')) {
                 errors.push(format!("{name}: `app_{f}` ist im Rahmen nicht definiert, der erzeugte Code ruft es"));
             }
         }
@@ -654,7 +655,7 @@ fn the_deadline_is_absolute_nanoseconds() {
     );
     // FB-614: Ticks mal Periode saettigt bei der groessten `Duration`, ohne Ueberlauf in C.
     assert!(
-        src.contains("return k > 922337203685LL ? 9223372036854775807LL : k * 10000000LL;"),
+        src.contains("if (k > 922337203685LL) {\n        ns = 9223372036854775807LL;\n    } else if (k > 0LL) {\n        ns = k * 10000000LL;"),
         "gesaettigt wie der Interpreter:\n{src}"
     );
     assert!(src.contains("if (best < 0) return -1;"), "keine Frist bleibt keine Frist");
@@ -1087,7 +1088,7 @@ fn now_saturates_in_the_mcu_frame_without_overflow() {
              void takt_board_trace_f64(double v) {{ (void)v; }}\n\
              void takt_board_trace_hex8(unsigned char v) {{ (void)v; }}\n\
              long long app_now(struct app_arena *a);\n\
-             long long app_tick_count(struct app_arena *a);\n\
+             long long app_tick_count(const struct app_arena *a);\n\
              static struct app_arena arena;\n\
              int main(void) {{\n\
              \x20   static const long long ticks[] = {{ {} }};\n\
