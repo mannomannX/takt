@@ -1,0 +1,84 @@
+# Die Abbilder der Board-Suiten auf Runnern von GitHub, von Hand gestartet
+# (M11 Schritt 34d). Lokal passten Release-Bau und Bring-ups nicht mehr neben
+# andere Projekte; hier hat jeder Job 16 GB.
+#
+# Je Board laufen dessen Tests mit `TAKT_BOARD_BUILD_ONLY=1`: Jeder baut die
+# Abbilder, die er am Board braeuchte, und endet vor dem Schreiben. Der
+# Zwischenspeicher `target/takt-board-images` kommt als Artefakt zurueck,
+# mit einer Datei, die Commit und Stand nennt; `tools/board-run.ps1 -FromCi
+# <lauf>` laedt ihn und flasht und prueft nur noch. Stand und Schluessel
+# haengen nur an Inhalten, also findet der Lauf unter Windows die Abbilder
+# aus Linux wieder, wenn Quellen, rustc und clang dieselben sind.
+name: Board-Abbilder
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Zweig oder Commit; leer heisst der Stand, von dem aus gestartet wird
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  images:
+    name: Abbilder ${{ matrix.board }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [esp32c6, stm32f401]
+    steps:
+      # Werkzeuge und Quellen vom selben Stand: Die Setup-Aktion legt fest,
+      # mit welchem rustc und clang gebaut wird, und beide gehen in den Stand.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: ./.github/actions/setup
+      # Nur die Registry: Ein Cache des Zielverzeichnisses truege den
+      # Zwischenspeicher der Abbilder mit.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: boards
+          cache-targets: "false"
+      # Die Bring-ups bauen mit dem Werkzeug aus `target/release` (FB-193).
+      - name: takt
+        run: cargo build --release -p takt-cli
+      # Wie `tools/board-run.ps1`: Die Bruecke an UART0 des C6 darf fehlen.
+      - name: Abbilder bauen
+        env:
+          TAKT_BOARD_BUILD_ONLY: "1"
+          TAKT_ALLOW_MISSING: uart-bridge
+        run: >-
+          cargo nextest run -p takt-conformance --test board_${{ matrix.board }}
+          --run-ignored all --no-fail-fast --profile ci
+      - name: Stand nennen
+        if: always()
+        shell: bash
+        run: |
+          images=target/takt-board-images
+          mkdir -p "$images"
+          {
+            echo "board ${{ matrix.board }}"
+            echo "commit $(git rev-parse HEAD)"
+            for stand in "$images"/*/; do
+              [ -d "$stand" ] || continue
+              echo "stand $(basename "$stand") $(find "$stand" -name '*.elf' | wc -l) elf"
+            done
+            echo "gebaut $(cat "$images/misses.log" 2>/dev/null | wc -l)"
+          } | tee "$images/stand-${{ matrix.board }}.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: board-images-${{ matrix.board }}
+          path: target/takt-board-images/
+          if-no-files-found: error
+          retention-days: 14
