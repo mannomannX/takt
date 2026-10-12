@@ -1,0 +1,8 @@
+# Takt als Zephyr-Modul (12.11, M11 Schritt 19): der Port aus
+# crates/takt-embed-c/ports/zephyr und `takt_add_program` aus tools/cmake.
+# Eine Anwendung nimmt es ueber ihr west-Manifest oder mit
+# `-DZEPHYR_EXTRA_MODULES=<Wurzel von Takt>` und schaltet `CONFIG_TAKT=y`.
+name: takt
+build:
+  cmake: zephyr
+  kconfig: zephyr/Kconfig

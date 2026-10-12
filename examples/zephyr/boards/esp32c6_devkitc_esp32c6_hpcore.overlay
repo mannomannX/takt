@@ -1,0 +1,18 @@
+/* Board 2 (plan/esp32c6.md): ein ESP32-C6-DevKitM-1-N4, dessen Modul
+ * ESP32-C6-MINI-1 4 MB Flash hat; `esp32c6_devkitc` nimmt 8 MB an, und der
+ * Kopf des Abbilds nennte dem ROM-Lader die falsche Groesse. Die Leitung
+ * ist der USB-Serial-JTAG, wie in den Bring-ups; die Konsole bleibt auf
+ * UART0. */
+/ {
+	chosen {
+		takt,line = &usb_serial;
+	};
+};
+
+&flash0 {
+	reg = <0x0 DT_SIZE_M(4)>;
+};
+
+&usb_serial {
+	status = "okay";
+};

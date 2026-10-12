@@ -1,0 +1,57 @@
+# Takt als Zephyr-Modul (12.11, M11 Schritt 19).
+
+menuconfig TAKT
+	bool "Takt"
+	depends on TIMEOUT_64BIT
+	depends on !INIT_STACKS && !STACK_SENTINEL
+	select FPU_SHARING if FPU
+	help
+	  Takt-Programme als Bausteine der Anwendung (12.11): `takt_add_program`
+	  in ihrer CMakeLists.txt baut ein Programm in der Form `rtos` fuer
+	  dieses Ziel, und der Port mit Faeden (`ports/rtos` mit dem Adapter
+	  `ports/zephyr`) faehrt es in einem Schritt- und einem Jobfaden. Uhr
+	  und Fristen rechnen in Systemticks; ist die Tickperiode eines
+	  Programms ein Vielfaches des Systemticks, kommt jeder Schritt auf
+	  seiner Frist. Mit einer FPU sichert der Zephyr-Kern die FPU-Register
+	  jedes Fadens (12.11, Portvertrag 2).
+
+	  Die Stacks beider Faeden bemalt der Port vor dem Start mit seiner
+	  Farbe und misst nach dem Ende, wie tief sie reichten (12.3).
+	  `INIT_STACKS` und `STACK_SENTINEL` beschrieben sie beim Anlegen des
+	  Fadens neu, die Farbe des Ports waere fort und jeder Stack voll;
+	  darum ist TAKT mit einem von beiden nicht waehlbar.
+
+if TAKT
+
+config TAKT_TARGET
+	string "Tripel des Ziels"
+	default "thumbv7em-none-eabihf" if CPU_CORTEX_M4 && FPU && FP_HARDABI
+	default "riscv32imac-unknown-none-elf" if RISCV_ISA_RV32I && RISCV_ISA_EXT_M && RISCV_ISA_EXT_A && RISCV_ISA_EXT_C && !RISCV_ISA_EXT_F
+	help
+	  Das Tripel, fuer das `takt build --emit embed` die Programme dieser
+	  Anwendung uebersetzt, mit derselben Gleitkomma-ABI wie die Firmware.
+	  Vorgegeben fuer die geprueften Klassen (Cortex-M4 mit FPU,
+	  RV32IMAC); fuer jedes andere Ziel nennt die Anwendung es selbst, und
+	  das SDK-Archiv (`TAKT_SDK_LIBRARY`) ist fuer dasselbe gebaut.
+
+config TAKT_STEP_PRIORITY
+	int "Prioritaet des Schrittfadens unter den kooperativen"
+	default 0
+	help
+	  Der Schrittfaden ist kooperativ, `K_PRIO_COOP(n)`: Kein Faden
+	  verdraengt ihn, nur Interrupts. 0 ist die hoechste Prioritaet des
+	  Zephyr-Kerns; der Schritt steht ueber allem, was Takt-Kanaele bedient
+	  (12.11). Laufen mehrere Programme, bekommt das mit dem kuerzeren Tick
+	  die hoehere. Der Wirt gibt sie dem Port als
+	  `TAKT_OS_STEP_PRIORITY` (`ports/zephyr/takt_os_types.h`).
+
+config TAKT_JOB_PRIORITY
+	int "Prioritaet des Jobfadens unter den verdraengbaren"
+	default 0
+	help
+	  Der Jobfaden ist verdraengbar, `K_PRIO_PREEMPT(n)`, damit der Schritt
+	  ihn unterbricht (4.5, 12.11). Fremde Arbeit, die neben den Jobs
+	  vorankommen soll, liegt darunter. Der Wirt gibt sie dem Port als
+	  `TAKT_OS_JOB_PRIORITY`.
+
+endif # TAKT
