@@ -308,7 +308,11 @@ von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der Port für Systeme
 mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
 (`ports/posix`) und die Beispiele
 (`examples/c-host/main.c`, `examples/posix/main.c`). Für ihn gelten CERT C
-und MISRA C:2012 unmittelbar (FB-524).
+und MISRA C:2012 unmittelbar (FB-524). Die Adapter für Zephyr und
+CMSIS-RTOS2 (`ports/zephyr`, `ports/cmsis-rtos2`) und ihre Beispiele
+(`examples/zephyr`, `examples/cmsis-rtos2`) gehören dazu, stehen aber noch
+nicht in der Prüfung: Ihre Köpfe entstehen erst in einem Bau unter Zephyr
+(FB-731).
 
 `crates/takt-cli/tests/c_analysis.rs` erzeugt den Rahmen für drei
 Programme — `examples/c-host/takt/valve.takt` mit dem Beispiel `c-host`,

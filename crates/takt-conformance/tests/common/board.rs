@@ -699,14 +699,15 @@ pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
     }
 }
 
-/// Das Abbild von `examples/zephyr` fuer `zephyr` (M11 Schritt 19,
+/// Das Abbild von `examples/<example>` fuer `zephyr` (M11 Schritt 19,
 /// [`takt_conformance::zephyr`]), gebaut mit dem Werkzeug, mit dem der Harness
 /// die Bring-ups baut (`<target>/release/takt`), unter
-/// `<target>/takt-zephyr/<board>`. Zephyr und sein SDK liegen ausserhalb des
-/// Baums: Im Lauf, der nur baut, ohne `TAKT_WEST` (der Runner von GitHub),
-/// baut erst der Lauf am Board, und der Test endet dort.
+/// `<target>/takt-zephyr/<board>-<example>`. Zephyr und sein SDK liegen
+/// ausserhalb des Baums: Im Lauf, der nur baut, ohne `TAKT_WEST` (der Runner
+/// von GitHub), baut erst der Lauf am Board, und der Test endet dort.
 pub fn zephyr_image(
     name: &str,
+    example: &str,
     zephyr: takt_conformance::zephyr::Board,
 ) -> Result<takt_conformance::zephyr::Image, String> {
     let Some(west) = takt_conformance::zephyr::west() else {
@@ -718,30 +719,32 @@ pub fn zephyr_image(
     };
     let target = takt_conformance::target_dir();
     let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
-    takt_conformance::zephyr::build(&west, zephyr, &target.join("takt-zephyr").join(name), &tool)
+    let dir = target.join("takt-zephyr").join(format!("{name}-{example}"));
+    takt_conformance::zephyr::build(&west, example, zephyr, &dir, &tool)
 }
 
-/// **Der Zephyr-Port besteht die Portpruefung** (12.11, 13.8; M11 Schritt
-/// 19): das Urteil ueber den Lauf `run` von `examples/zephyr` auf dem Board
-/// `name`; der Lauf steht unter `<target>/port-test/<name>-zephyr.log`.
-pub fn zephyr_verdict(name: &str, run: Result<String, String>) -> Vec<String> {
+/// **Ein Port unter Zephyr besteht die Portpruefung** (12.11, 13.8; M11
+/// Schritt 19): das Urteil ueber den Lauf `run` von `examples/<example>` auf
+/// dem Board `name`; der Lauf steht unter
+/// `<target>/port-test/<name>-<example>.log`. Mit `partition` verlangt es
+/// dazu die Kopfzeile, mit der die Partition der Arena den Schreibzugriff
+/// eines Fadens im Benutzermodus abwies (M11 Schritt 19b).
+pub fn zephyr_verdict(name: &str, example: &str, partition: bool, run: Result<String, String>) -> Vec<String> {
     let text = match run {
         Ok(text) => text,
-        Err(e) => return vec![format!("Zephyr: kein Lauf: {e}")],
+        Err(e) => return vec![format!("{example}: kein Lauf: {e}")],
     };
-    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-zephyr.log"));
+    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-{example}.log"));
     if let Err(e) = log.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&log, &text)) {
         return vec![format!("{}: {e}", log.display())];
     }
     let verdict = port::judge(&text, port::PROGRAM);
-    eprintln!("{name}-zephyr: {}{verdict}", log.display());
-    let mut failed = if verdict.passed() { Vec::new() } else { vec![format!("Zephyr: {verdict}")] };
-    // Die Partition verweigert dem Faden im Benutzermodus die Arena (12.11,
-    // M11 Schritt 19b): die Kopfzeile der Probe vor der Marke.
+    eprintln!("{name}-{example}: {}{verdict}", log.display());
+    let mut failed = if verdict.passed() { Vec::new() } else { vec![format!("{example}: {verdict}")] };
     let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
-    if !header.lines().any(|l| l.trim_end() == ZEPHYR_PARTITION_REFUSED) {
+    if partition && !header.lines().any(|l| l.trim_end() == ZEPHYR_PARTITION_REFUSED) {
         let seen: Vec<&str> = header.lines().filter(|l| l.starts_with("takt schutz")).collect();
-        failed.push(format!("Zephyr: keine Zeile `{ZEPHYR_PARTITION_REFUSED}` vor der Marke, gesehen {seen:?}"));
+        failed.push(format!("{example}: keine Zeile `{ZEPHYR_PARTITION_REFUSED}` vor der Marke, gesehen {seen:?}"));
     }
     failed
 }

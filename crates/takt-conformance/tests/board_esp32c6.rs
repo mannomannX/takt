@@ -509,12 +509,13 @@ fn every_port_passes_the_port_test() {
 fn the_zephyr_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(takt_conformance::port::TICKS).judged();
-    let run = zephyr_image(board.name(), takt_conformance::zephyr::ESP32C6).and_then(|image| {
+    let example = takt_conformance::zephyr::ZEPHYR;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6).and_then(|image| {
         let offset = image.config("FLASH_LOAD_OFFSET").ok_or("CONFIG_FLASH_LOAD_OFFSET fehlt")?;
         let offset = u64::from_str_radix(offset.trim_start_matches("0x"), 16).map_err(|e| format!("{offset}: {e}"))?;
         board.run_raw(&image.bin, offset, &image.elf, &options)
     });
-    verdict(&zephyr_verdict(board.name(), run));
+    verdict(&zephyr_verdict(board.name(), example, true, run));
 }
 
 /// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern,

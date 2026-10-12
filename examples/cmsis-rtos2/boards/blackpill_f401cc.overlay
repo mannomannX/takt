@@ -1,0 +1,11 @@
+/* Board 1: die Leitung auf USART1 (PA9/PA10) mit der Rate aller
+ * F401-Programme, die der Host ohne Wissen um das laufende erreicht. */
+/ {
+	chosen {
+		takt,line = &usart1;
+	};
+};
+
+&usart1 {
+	current-speed = <921600>;
+};
