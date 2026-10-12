@@ -9,7 +9,9 @@ description: >-
 # Arbeitsbereich und SDK liegen im Cache, flach geklont und ohne die
 # uebrigen Toolchains des SDK. Die Python-Umgebung nicht: Sie haengt am
 # Python des Runners und entsteht in jedem Lauf neu aus dem Arbeitsbereich.
-# Die Pruefsummen des SDK stehen in seiner `sha256.sum` (sdk-ng v1.0.1).
+# Die Pruefsummen des SDK stehen in seiner `sha256.sum` (sdk-ng v1.0.1);
+# geladen wird nur ueber HTTPS. west und die Pakete, die Zephyr verlangt,
+# kommen ueber HTTPS von PyPI, wie Zephyr sie selbst nennt, ohne Pruefsumme.
 
 runs:
   using: composite
@@ -23,7 +25,7 @@ runs:
 
     - name: Zephyr aus dem Cache
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/zephyrproject
@@ -42,6 +44,10 @@ runs:
       run: |
         west="$HOME/zephyr-venv/bin/west"
         "$west" init -m https://github.com/zephyrproject-rtos/zephyr --mr v4.4.2 "$HOME/zephyrproject"
+        # Der Tag v4.4.2 zeigt auf diesen Commit, wie in D:\takt-tools; ein
+        # verschobener Tag bricht hier ab. Die Module legt sein west.yml je
+        # auf einen Commit fest.
+        test "$(git -C "$HOME/zephyrproject/zephyr" rev-parse HEAD)" = dccb09599635bdff17633fa7e9dab014b91dce90
         cd "$HOME/zephyrproject"
         "$west" config manifest.project-filter -- '-.*,+cmsis,+cmsis_6,+hal_stm32,+hal_espressif'
         "$west" update --narrow -o=--depth=1
@@ -55,7 +61,7 @@ runs:
         base=https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1
         for name in zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz \
           toolchain_gnu_linux-x86_64_arm-zephyr-eabi.tar.xz toolchain_gnu_linux-x86_64_riscv64-zephyr-elf.tar.xz; do
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$name" "$base/$name"
+          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$name" "$base/$name"
         done
         sha256sum -c - <<'SUMS'
         ca9bc0ff66fafca1dac9d592a36d953cf16d096a9d09b1c0357f021cf9f6a7eb  zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz
