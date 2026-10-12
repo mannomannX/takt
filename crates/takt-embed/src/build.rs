@@ -473,6 +473,7 @@ mod tests {
     /// **Der Fehlerpfad**: Ein Werkzeug, das scheitert, liefert seine
     /// Meldungen; eines, das es nicht gibt, sagt, dass `TAKT` es nennt.
     #[test]
+    #[cfg_attr(miri, ignore = "startet `rustc` als Prozess; Miri ruft kein `posix_spawn`")]
     fn a_failing_or_missing_tool_reports_why() {
         let call = Program::new("gibt/es/nicht.takt").invocation(Path::new("o"), "x");
         let failed = call.run(Path::new("rustc")).expect_err("rustc kennt `build` nicht");
