@@ -32,18 +32,12 @@
 #define XON 0x11U
 #define XOFF 0x13U
 
-/* Das Wort, mit dem der Host das Board zurueckverlangt. */
-static const uint8_t handback_word[] = {(uint8_t)'T', (uint8_t)'A', (uint8_t)'K', (uint8_t)'T'};
-
 static const struct device *const line_device = DEVICE_DT_GET(DT_CHOSEN(takt_line));
 
-RING_BUF_DECLARE(line_ring, LINE_BYTES);
+static struct ring_buf line_ring;
 
 /* Der Host hat `XOFF` gesandt und noch kein `XON`. */
 static atomic_t line_paused;
-
-/* Wie viele Bytes des Worts zuletzt am Stueck kamen; nur der Interrupt. */
-static size_t line_matched;
 
 /* Ein Byte der Gegenrichtung. */
 static void line_received(const struct device *dev, uint8_t byte) {
@@ -53,13 +47,17 @@ static void line_received(const struct device *dev, uint8_t byte) {
         (void)atomic_set(&line_paused, 0);
         uart_irq_tx_enable(dev);
     } else {
-        if (byte == handback_word[line_matched]) {
-            line_matched++;
+        /* Das Wort, mit dem der Host das Board zurueckverlangt, und wie
+         * viele seiner Bytes zuletzt am Stueck kamen. */
+        static const uint8_t handback_word[] = {(uint8_t)'T', (uint8_t)'A', (uint8_t)'K', (uint8_t)'T'};
+        static size_t matched;
+        if (byte == handback_word[matched]) {
+            matched++;
         } else {
-            line_matched = (byte == handback_word[0]) ? 1U : 0U;
+            matched = (byte == handback_word[0]) ? 1U : 0U;
         }
-        if (line_matched == sizeof handback_word) {
-            line_matched = 0U;
+        if (matched == sizeof handback_word) {
+            matched = 0U;
             handback_wish();
         }
     }
@@ -112,6 +110,8 @@ static void line_flush(void *ctx) {
 int line_open(struct takt_line *line) {
     int rc = -ENODEV;
     if (device_is_ready(line_device)) {
+        static uint8_t bytes[LINE_BYTES];
+        ring_buf_init(&line_ring, sizeof bytes, bytes);
         rc = uart_irq_callback_user_data_set(line_device, line_isr, NULL);
         if (rc == 0) {
             uart_irq_rx_enable(line_device);

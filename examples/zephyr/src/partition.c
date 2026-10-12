@@ -10,7 +10,7 @@ K_APPMEM_PARTITION_DEFINE(takt_arena);
 
 /* Der Stack der Probe, ein Stack fuer den Benutzermodus. */
 #define PROBE_STACK_BYTES 1024U
-K_THREAD_STACK_DEFINE(probe_stack, PROBE_STACK_BYTES);
+static K_THREAD_STACK_DEFINE(probe_stack, PROBE_STACK_BYTES);
 
 static struct k_thread probe_thread;
 
