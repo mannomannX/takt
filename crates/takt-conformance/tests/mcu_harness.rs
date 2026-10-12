@@ -370,9 +370,10 @@ fn a_hardware_path_becomes_a_driver_call() {
     );
     assert!(
         src.contains(
-            "takt_edge_output(app_out_ui_led(a->user, now, *(uint8_t *)(a->latch + 0)), alive_ui, -1, -1, -1)"
+            "{ uint8_t v; __builtin_memcpy(&v, a->latch + 0, sizeof v); \
+             if (takt_edge_output(app_out_ui_led(a->user, now, v), alive_ui, -1, -1, -1))"
         ),
-        "und wird gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
+        "und wird mit dem Wert aus dem Latch gerufen, seine Bestaetigung geprueft (12.6 Zeile 6):\n{src}"
     );
     assert!(src.contains("void app_commit(struct app_arena *a)"), "Schritt 10 hat einen Namen (12.1)");
 }

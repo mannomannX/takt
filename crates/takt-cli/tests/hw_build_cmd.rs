@@ -85,12 +85,16 @@ fn the_hardware_build_reads_the_sensor_and_links_no_model() {
 #[test]
 #[cfg_attr(not(target_arch = "x86_64"), ignore = "das Tripel des Wirts ist hier x86-64")]
 fn the_chosen_profile_is_built_in_and_named() {
+    // Der Rahmen schreibt den Parameter in die Arena: `…, &(T){ 7 }, …); /* GAIN */`.
+    let gain = |dir: &Path| {
+        read(dir, "plant_frame.c").lines().find(|l| l.ends_with("/* GAIN */")).map(str::to_string).unwrap_or_default()
+    };
     let hw = deliver("profile_high", "hw", &["--params-profile", "HIGH"]);
-    assert!(read(&hw, "plant_frame.c").contains("= 7; /* GAIN */"), "der Rahmen setzt den Default statt des Profils");
+    assert!(gain(&hw).contains("{ 7 }"), "der Rahmen setzt den Default statt des Profils: {}", gain(&hw));
     assert!(read(&hw, "plant.manifest").contains("params_profile = HIGH"));
 
     let plain = deliver("profile_none", "hw", &[]);
-    assert!(read(&plain, "plant_frame.c").contains("= 1; /* GAIN */"));
+    assert!(gain(&plain).contains("{ 1 }"), "{}", gain(&plain));
     assert!(read(&plain, "plant.manifest").contains("params_profile = none"));
 }
 
