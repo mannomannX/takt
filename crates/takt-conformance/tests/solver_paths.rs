@@ -24,6 +24,7 @@
 use std::collections::BTreeMap;
 
 use takt_conformance::paths::{self, DEPTH, Found, Path, TIMEOUT_S, Target, label};
+use takt_interp::coverage::Silent;
 use takt_interp::{CoverKind, Coverage};
 use takt_mir::Program;
 use takt_mir::analysis::proof::{Proof, Site};
@@ -143,7 +144,7 @@ fn generate(name: &str, src: &str, p: &Program, solver: &Solver) -> Result<Found
                 CheckVerdict::Reachable { at, stimulus } => {
                     let label = label("uebergang", &r.key);
                     let target = Target::Transition { machine: r.machine, key: r.key, at };
-                    found.push(Path { label, target, stimulus, ticks });
+                    found.push(Path { label, target, stimulus, ticks: ticks.max(at + 2) });
                 }
                 CheckVerdict::Unreachable { k } => unfired.push((r.machine, r.key, k)),
                 CheckVerdict::Undecided { .. } => {}
@@ -259,13 +260,23 @@ const WITHOUT_PARTS: &[&str] = &["45_journal_cut.takt", "110_journal_log.takt"];
 /// fuehrt, als (Maschine, Schluessel); nie bestandene Stellen als (Anfang,
 /// Ende, Art); nie verletzte Stellen, die die Beweisdatei nicht fuehrt —
 /// explizite als (Maschine, Art, Anfang), implizite als (Anfang, Ende, Art).
+/// `without_model` nennt je Stelle (Anfang, Ende, Art) die Gruppe, die gilt,
+/// wenn kein Modell sie fuehrt ([`WITHOUT_MODEL`]).
 #[derive(Default)]
 struct Open {
     transitions: Vec<(String, String)>,
     passes: Vec<(u32, u32, String)>,
     checks: Vec<(String, String, u32)>,
     sites: Vec<(u32, u32, String)>,
+    without_model: BTreeMap<(u32, u32, String), &'static str>,
 }
+
+/// Die Gruppen einer Stelle, die kein Modell fuehrt, und warum keines sie
+/// fuehrt: eine Funktion, die keine Maschine ruft (die Analyse nach 3.4
+/// kennt sie nicht); eine bewiesene Range, die Modell und Codegen nicht
+/// pruefen; der Platzhalter einer Meldung, die nur beim Verletzen entsteht;
+/// Bedingung oder Wert einer Beobachtung (13.2).
+const WITHOUT_MODEL: [&str; 4] = ["nie gerufen", "Range bewiesen", "in einer Meldung", "in einer Beobachtung"];
 
 impl Open {
     fn is_empty(&self) -> bool {
@@ -284,9 +295,28 @@ fn open_items(name: &str, p: &Program) -> Open {
     }
     let proven = paths::proof(name).map(|pr| pr.tags()).unwrap_or_default();
     let unfired = paths::unfired(name).map(|u| u.transitions).unwrap_or_default();
+    let source = |f: &&takt_mir::fns::Fn| f.span.file.0 == takt_mir::analysis::proof::SOURCE;
+    let called: Vec<takt_diag::Span> =
+        takt_mir::analysis::reachable_fns(p).iter().map(|f| p.fns[f.index()].span).collect();
+    let inside = |s: &takt_diag::Span, a: u32, b: u32| s.start <= a && b <= s.end;
+    let uncalled = |a: u32, b: u32| {
+        p.fns.iter().filter(source).any(|f| inside(&f.span, a, b))
+            && !called.iter().any(|s| s.file.0 == takt_mir::analysis::proof::SOURCE && inside(s, a, b))
+    };
     let mut out = Open::default();
     for item in takt_interp::coverage::items(p) {
         let kind = item.key.split(' ').next().unwrap_or("").to_string();
+        let (a, b) = (item.span.start, item.span.end);
+        let reason = match item.silent {
+            _ if uncalled(a, b) => Some(WITHOUT_MODEL[0]),
+            Some(Silent::Proven) => Some(WITHOUT_MODEL[1]),
+            Some(Silent::Message) => Some(WITHOUT_MODEL[2]),
+            Some(Silent::Observe) => Some(WITHOUT_MODEL[3]),
+            None => None,
+        };
+        if let Some(why) = reason.filter(|_| item.kind != CoverKind::Transition) {
+            out.without_model.insert((a, b, kind.clone()), why);
+        }
         match item.kind {
             CoverKind::Transition
                 if !coverage.has(CoverKind::Transition, &item)
@@ -413,9 +443,10 @@ impl Row {
         })
     }
 
-    /// Entschieden: erreichbar mit bestaetigtem Pfad oder bewiesen.
+    /// Entschieden: erreichbar mit bestaetigtem Pfad, bewiesen, oder eine
+    /// Stelle, die kein Modell fuehrt ([`WITHOUT_MODEL`]).
     fn decided(&self) -> bool {
-        self.group == "erreichbar" || self.group == "bewiesen"
+        self.group == "erreichbar" || self.group == "bewiesen" || WITHOUT_MODEL.contains(&self.group.as_str())
     }
 }
 
@@ -472,7 +503,12 @@ fn site_rows(
             .filter(|(a, b, k)| !reports.iter().any(|r| r.span.start == *a && r.span.end == *b && r.kind == *k))
             .map(|(a, b, k)| none(k, "", *a, *b)),
     );
-    Ok(reports.iter().chain(&missing).map(|r| Row::of(name, r)).collect())
+    let mut rows: Vec<Row> = reports.iter().map(|r| Row::of(name, r)).collect();
+    for r in missing.iter().map(|r| Row::of(name, r)) {
+        let group = open.without_model.get(&(r.span.0, r.span.1, r.kind.clone()));
+        rows.push(Row { group: group.map_or(r.group.clone(), |g| (*g).to_string()), ..r });
+    }
+    Ok(rows)
 }
 
 /// Die nie genommenen Uebergaenge und nie bestandenen Stellen eines
@@ -483,18 +519,27 @@ fn transition_and_pass_rows(
     name: &str,
     p: &Program,
     open: &Open,
-    whole: Option<&takt_prove::Model>,
+    whole: Result<&takt_prove::Model, &takt_prove::Unsupported>,
     what: &What,
     depth: u32,
     solver: &Solver,
 ) -> Result<Vec<Row>, String> {
+    let mut notes = Vec::new();
     let models: Vec<takt_prove::Model> = match whole {
-        Some(w) => vec![w.clone()],
-        None => takt_mir::analysis::schedule::runnable(p)
-            .into_iter()
-            .filter_map(|id| takt_prove::encode_machine(p, id).ok())
-            .collect(),
+        Ok(w) => vec![w.clone()],
+        Err(e) => {
+            notes.push(format!("Gesamtmodell: {}", e.what));
+            let mut models = Vec::new();
+            for id in takt_mir::analysis::schedule::runnable(p) {
+                match takt_prove::encode_machine(p, id) {
+                    Ok(m) => models.push(m),
+                    Err(e) => notes.push(format!("`{}` nicht kodierbar: {}", p.machines[id.index()].name, e.what)),
+                }
+            }
+            models
+        }
     };
+    let notes = if notes.is_empty() { String::new() } else { format!("; {}", notes.join("; ")) };
     let mut rows = Vec::new();
     for model in &models {
         if what.transitions && !open.transitions.is_empty() {
@@ -528,7 +573,7 @@ fn transition_and_pass_rows(
         start,
         span: (start, end),
         group: "ohne Urteil".into(),
-        why,
+        why: format!("{why}{notes}"),
     };
     if what.transitions {
         for (m, key) in &open.transitions {
@@ -542,7 +587,9 @@ fn transition_and_pass_rows(
         for (a, b, k) in &open.passes {
             let kind = format!("{PASS}{k}");
             if !rows.iter().any(|r| r.kind == kind && r.span == (*a, *b)) {
-                rows.push(none("", kind, *a, *b, "unentschieden: kein Modell".into()));
+                let row = none("", kind, *a, *b, "unentschieden: kein Modell".into());
+                let group = open.without_model.get(&(*a, *b, k.clone()));
+                rows.push(Row { group: group.map_or(row.group.clone(), |g| (*g).to_string()), ..row });
             }
         }
     }
@@ -656,10 +703,10 @@ fn classify_unreached(depths: &str) {
                         let items = &open[name];
                         let src = source(name);
                         let p = compile(name, &src, paths::proof(name).as_ref());
-                        let whole = takt_prove::encode(&p).ok();
+                        let whole = takt_prove::encode(&p);
                         let mut mine = Vec::new();
                         if !items.checks.is_empty() || !items.sites.is_empty() {
-                            match site_rows(name, &p, items, whole.as_ref(), depth, &solver) {
+                            match site_rows(name, &p, items, whole.as_ref().ok(), depth, &solver) {
                                 Ok(r) => mine.extend(r),
                                 Err(e) => eprintln!("{name}: {e}"),
                             }
