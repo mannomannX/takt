@@ -2,7 +2,7 @@
 //! Codes: `takt_m_<name>_<breite>`.
 //!
 //! Die Rechnung steht in `libtaktm` und braucht weder `std` noch eine FPU;
-//! Interpreter, Wirtsrahmen und Boards rufen dieselbe (FB-293). Den
+//! Interpreter, C-Wirte und Boards rufen dieselbe (FB-293). Den
 //! Definitionsbereich prueft der erzeugte Code vor dem Aufruf (4.1), ein
 //! nicht endliches Ergebnis danach — hier steht nur die Grenze.
 

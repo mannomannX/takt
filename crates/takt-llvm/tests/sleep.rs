@@ -6,8 +6,8 @@
 //! globalen Tick (`now` der Runtime), weil die Maschine nur in den Ticks
 //! `t % Periode == Phase` laeuft (7.2). Der Interpreter rechnet so in
 //! `Run::earliest_deadline` und `Sim::skip_tick`; den ganzen Lauf mit Schlaf
-//! vergleicht `takt-conformance/tests/differential.rs`
-//! (`virtual_sleep_is_invisible`).
+//! im Produktrahmen vergleicht `takt-conformance/tests/differential.rs`
+//! (`the_three_executors_agree`).
 
 use takt_llvm::toolchain::{Clang, find};
 

@@ -49,11 +49,15 @@ struct Idle<'a> {
     in_state: i64,
     gain: i64,
     log: Vec<String>,
+    /// Der Kern hat einen Operator-Abort gemeldet (5.4).
+    aborted: bool,
+    /// Der Kern hat eine Schutzverletzung gemeldet (12.3).
+    hardware: bool,
 }
 
 impl<'a> Idle<'a> {
     fn new(clock: &'a RefCell<Fake>) -> Idle<'a> {
-        Idle { clock, idle: true, in_state: 0, gain: 0, log: Vec::new() }
+        Idle { clock, idle: true, in_state: 0, gain: 0, log: Vec::new(), aborted: false, hardware: false }
     }
 }
 
@@ -61,6 +65,14 @@ impl Program for Idle<'_> {
     type Memory = takt_rt_core::Volatile;
 
     fn tick(&mut self, k: u64, _now: i64) {
+        if core::mem::take(&mut self.aborted) {
+            self.idle = false;
+            self.log.push(format!("t={k} abort"));
+        }
+        if core::mem::take(&mut self.hardware) {
+            self.idle = false;
+            self.log.push(format!("t={k} hardware"));
+        }
         if !self.idle {
             return;
         }
@@ -95,6 +107,14 @@ impl Program for Idle<'_> {
 
     fn tune(&mut self, _k: u64, _param: u32, value: &[u8]) {
         self.gain = value.first().copied().map_or(0, i64::from);
+    }
+
+    fn raise_abort(&mut self) {
+        self.aborted = true;
+    }
+
+    fn raise_hardware(&mut self) {
+        self.hardware = true;
     }
 }
 
@@ -273,6 +293,53 @@ fn a_wake_event_shortens_the_deadline_service_names() {
     rt.service();
     assert_eq!(rt.program.log, ["t=14 Taster"]);
     assert_eq!(rt.sink.0, 13);
+}
+
+/// **Ein Operator-Abort im Schlaf weckt an der Grenze danach und wirkt dort**
+/// (5.4, 9.9; M11 Schritt 9): Der Port meldet ihn zwischen den Grenzen 13
+/// und 14; `service` nennt die Grenze 14 statt der Frist des Schlafs, und
+/// Tick 14 bekommt ihn vor seinem Schritt. Wach wirkt er im naechsten Tick.
+#[test]
+fn an_operator_abort_ends_the_sleep_and_acts_at_the_next_boundary() {
+    let clock = RefCell::new(Fake::default());
+    let mut rt =
+        Runtime::new(Idle::new(&clock), Shared(&clock), Quiet, Slept::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    assert_eq!(rt.service().deadline, 49 * T0, "Tick 0, dann Schlaf bis zur Frist");
+    clock.borrow_mut().now = 13 * T0 + T0 / 2;
+    rt.abort();
+    assert_eq!(rt.service().deadline, 14 * T0, "der Abort zieht die Frist vor");
+    clock.borrow_mut().now = 14 * T0;
+    rt.service();
+    assert_eq!(rt.program.log, ["t=14 abort"]);
+    assert_eq!(rt.sink.0, 13);
+
+    let profile = Profile { may_sleep: false, ..Profile::BAREMETAL };
+    let clock = RefCell::new(Fake::default());
+    let mut rt = Runtime::new(Idle::new(&clock), Shared(&clock), Quiet, Slept::default(), profile, T0, Policy::Fault);
+    while rt.tick_number() < 5 {
+        rt.step();
+    }
+    rt.abort();
+    rt.step();
+    assert_eq!(rt.program.log, ["t=5 abort"]);
+}
+
+/// **Eine Schutzverletzung, die der Port meldet, wirkt wie ein Abort** (12.3,
+/// 9.9; M11 Schritt 9): an der naechsten Grenze, auch aus dem Schlaf, als
+/// `Runtime(Hardware)` vor dem Schritt.
+#[test]
+fn a_hardware_fault_of_the_port_ends_the_sleep_at_the_next_boundary() {
+    let clock = RefCell::new(Fake::default());
+    let mut rt =
+        Runtime::new(Idle::new(&clock), Shared(&clock), Quiet, Slept::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    assert_eq!(rt.service().deadline, 49 * T0);
+    clock.borrow_mut().now = 20 * T0 + 1;
+    rt.hardware_fault();
+    assert_eq!(rt.service().deadline, 21 * T0, "die Meldung zieht die Frist vor");
+    clock.borrow_mut().now = 21 * T0;
+    rt.service();
+    assert_eq!(rt.program.log, ["t=21 hardware"]);
+    assert_eq!(rt.sink.0, 20);
 }
 
 /// **Ruft der Port erst an der Frist, findet `service` die Grenze der

@@ -2,8 +2,8 @@
 //!
 //! Maschinen deklarieren und betreten, Schritte und Abort-Phase, geplante
 //! Ausgaben und Commit, Alterung, Alerts und Fault-Namen, Jobs und Natives.
-//! Beide Rahmen setzen sich daraus zusammen: der MCU-Rahmen (`mcu`) und der
-//! Wirtsrahmen des Differentials in `takt-conformance`.
+//! Der Rahmen (`mcu`) setzt sich daraus zusammen; einen zweiten fuer das
+//! Differential gibt es nicht mehr (M11 Schritt 9).
 
 use std::fmt::Write as _;
 use takt_llvm::symbols::Prefix;
@@ -14,7 +14,7 @@ use crate::layout::{Layout, c_type};
 use crate::text::Text;
 
 /// Eine Dauer in der groessten ganzzahligen Einheit, wie `takt_mir::dump::duration`
-/// sie schreibt (T2); beide Rahmen nehmen dieselben Funktionen.
+/// sie schreibt (T2).
 pub const DURATION_C: &str = "\
 static const long long takt_dur_factor[7] = { 86400000000000LL, 3600000000000LL, 60000000000LL, 1000000000LL, \
 1000000LL, 1000LL, 1LL };
@@ -62,9 +62,8 @@ pub fn now(s: &mut String, p: &Program, x: &Prefix) {
 }
 
 /// Die nativen Funktionen (4.5) liegen in der Runtime: `takt-native-abi`
-/// liefert ihre C-Einstiege, fuer den Wirtsrahmen als statische
-/// Bibliothek ([`native_library`]), fuer ein Board ueber `takt-embed`
-/// (FB-293). Der Rahmen deklariert nur, was er selbst
+/// liefert ihre C-Einstiege, fuer einen C-Wirt im SDK-Archiv, fuer ein
+/// Board ueber `takt-embed` (FB-293). Der Rahmen deklariert nur, was er selbst
 /// ruft — die Jobs; den erzeugten Code bindet der Linker direkt.
 pub fn natives(s: &mut String, p: &Program) {
     for n in &p.natives {
@@ -594,8 +593,9 @@ fn range_check(p: &Program, ty: takt_mir::TypeId) -> Option<(&'static str, Strin
 }
 
 /// Die `hw`-Eingaenge, die ein `sim`-Output derselben Adresse speist (8.3):
-/// Im Sim-Build ist das Modell ihre Quelle, kein Treiber; im Hardware-Build
-/// keiner, dort hat jeder Eingang seinen Treiber.
+/// Im Sim-Build ist das Modell ihre Quelle, und ihr Treiber ersetzt es nur
+/// in einem Tick, in dem er liefert; im Hardware-Build keiner, dort hat
+/// jeder Eingang allein seinen Treiber.
 pub fn sim_fed_inputs(p: &Program) -> Vec<usize> {
     use takt_mir::program::{Binding, Build, Direction};
     if p.config.build == Build::Hw {
@@ -1340,14 +1340,7 @@ pub fn job_tables(s: &mut String, p: &Program, x: &Prefix) -> Option<(usize, u64
 /// Die Signale des Ticks als Zeilen `signal <maschine> <name>` (5.8,
 /// FB-432), wie der Interpreter sie nach der Abort-Phase beobachtet: Was
 /// eine Maschine hob, steht bis zum Commit in ihrer Ψ-Bank.
-pub fn signal_lines(
-    s: &mut String,
-    p: &Program,
-    driven: &[&takt_mir::machine::Machine],
-    indent: &str,
-    tick: &str,
-    trace: crate::streams::Trace,
-) {
+pub fn signal_lines(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Machine], indent: &str, tick: &str) {
     use takt_llvm::psi::{Field, field_offset, region_offset};
     for m in driven {
         let Some(id) = p.machines.iter().position(|x| x.name == m.name) else { continue };
@@ -1356,18 +1349,11 @@ pub fn signal_lines(
         for (i, sig) in m.signals.iter().enumerate() {
             let Some(off) = field_offset(id, Field::Signal(takt_mir::SignalId(i as u32)), p) else { continue };
             let at = base + off;
-            let _ = match trace {
-                crate::streams::Trace::Stdio => writeln!(
-                    s,
-                    "{indent}if (a->image[{at}]) printf(\"t=%lld signal {} {}\\n\", (long long)({tick}));",
-                    m.name, sig.name
-                ),
-                crate::streams::Trace::Board => writeln!(
-                    s,
-                    "{indent}if (a->image[{at}]) {{ takt_board_trace(\"t=\"); takt_board_trace_i64({tick}); takt_board_trace(\" signal {} {}\\n\"); }}",
-                    m.name, sig.name
-                ),
-            };
+            let _ = writeln!(
+                s,
+                "{indent}if (a->image[{at}]) {{ takt_board_trace(\"t=\"); takt_board_trace_i64({tick}); takt_board_trace(\" signal {} {}\\n\"); }}",
+                m.name, sig.name
+            );
         }
     }
 }

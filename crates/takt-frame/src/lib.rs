@@ -10,13 +10,13 @@
 //! `unsafe` fuer jeden Zeiger, und das verbietet der Workspace (13.4). Der
 //! Quelltext bleibt zudem lesbar fuer die Pruefung der TCB.
 //!
-//! **Was hier steht.** `mcu` setzt den Rahmen zusammen, den die Boards und
-//! `takt-bringup-host` binden; `parts` sind seine Bausteine, die auch der
-//! Wirtsrahmen des Differentials in `takt-conformance` nutzt; `layout`,
-//! `streams` und `edge` beschreiben Abbild, Stroeme und Rand; `text` fuegt
-//! den Rahmen um die Arena zusammen (12.11). `drivers` nennt die Treiber eines
-//! Programms in jeder Form (12.6), `embed` schreibt das Rust-Modul der
-//! Lieferform (`P.rs`, 12.11).
+//! **Was hier steht.** `mcu` setzt den Rahmen zusammen, den die Boards, die
+//! Wirte und das Differential auf dem Wirt binden; `parts` sind seine
+//! Bausteine; `layout`, `streams`, `edge` und `ports` beschreiben Abbild,
+//! Stroeme, Rand und Registerports; `text` fuegt den Rahmen um die Arena
+//! zusammen (12.11). `drivers` nennt die Treiber eines Programms in jeder
+//! Form (12.6), `embed` schreibt das Rust-Modul der Lieferform (`P.rs`,
+//! 12.11).
 
 #![cfg_attr(
     not(test),
@@ -43,5 +43,6 @@ pub mod layout;
 pub mod linker;
 pub mod mcu;
 pub mod parts;
+pub mod ports;
 pub mod streams;
 pub mod text;

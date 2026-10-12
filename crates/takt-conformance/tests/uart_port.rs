@@ -154,7 +154,7 @@ fn every_reaction_of_the_driver_is_triggered() {
 /// **Jedes Szenario laeuft nativ wie im Interpreter** (12.10, 13.8;
 /// KON2-030): Overrun, Framing, Parity, Break, Bit-Flip, volle TX-FIFO und
 /// stummer Partner kommen aus dem Modell, der Reset aus dem Stimulus
-/// (`test_uart_c6.stim.trace`); der erzeugte Code mit dem Wirtsrahmen
+/// (`test_uart_c6.stim.trace`); der erzeugte Code im Produktrahmen
 /// liefert bis zum Ende jedes Szenarios dieselben Ausgaenge, Faults und
 /// Beobachtungen — `verdict` eingeschlossen.
 #[test]

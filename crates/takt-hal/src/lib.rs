@@ -6,8 +6,8 @@
 //! automatisch. Nur wenn das *Stellen* scheitert, entsteht ein Fault.
 //!
 //! Der Kern steht ohne `std` und ohne Allokation, damit jede Runtime ihn
-//! benutzt — der Interpreter, der Wirtsrahmen der Konformitaet und die
-//! MCU-Rahmen ueber ihre C-Einstiege (FB-285):
+//! benutzt — der Interpreter und der Rahmen ueber seine C-Einstiege, auf
+//! dem Wirt wie auf jedem Board (FB-285):
 //!
 //! - `contract`: der Treibervertrag (Zeilen 1, 2), die Zaehlregel der
 //!   Periode (Zeile 7) und das Urteil der Ausgabeseite (Zeile 6).

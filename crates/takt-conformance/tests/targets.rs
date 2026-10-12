@@ -65,22 +65,23 @@ fn cross_available() -> bool {
             .is_ok_and(|o| o.status.success())
 }
 
-/// Die Native-Bibliothek eines Ziels (`takt-native-abi`): Treiberrand,
-/// Natives und korrekt gerundete Mathematik, die der erzeugte Code und der
-/// Rahmen rufen. Je Ziel einmal gebaut.
-fn natives(target: Target) -> Result<std::path::PathBuf, String> {
+/// Das SDK-Archiv eines Ziels (12.11): der Kern ohne Warten mit Natives und
+/// Jobs, die der erzeugte Code und der Rahmen rufen. Je Ziel einmal gebaut.
+fn sdk(target: Target) -> Result<std::path::PathBuf, String> {
     static HOST: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
     static AARCH64: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
+    let features = &takt_conformance::testhost::SDK_FEATURES;
     if target == Target::AARCH64_LINUX {
-        AARCH64.get_or_init(|| takt_conformance::harness::native_library_for(Some(target.triple))).clone()
+        AARCH64.get_or_init(|| takt_conformance::harness::sdk_library_with(features, Some(target.triple))).clone()
     } else {
-        HOST.get_or_init(|| takt_conformance::harness::native_library_for(None)).clone()
+        HOST.get_or_init(|| takt_conformance::harness::sdk_library_with(features, None)).clone()
     }
 }
 
-/// Uebersetzt und laeuft ein Programm fuer ein Ziel, mit allen Maschinen
-/// wie die Abnahme — noetig fuer Programme mit Plant-Modell (8.3), deren
-/// Eingaenge sonst `Bad` blieben.
+/// Uebersetzt und laeuft ein Programm fuer ein Ziel im Produktrahmen mit dem
+/// Kern des SDK, wie das Differential (M11 Schritt 9), mit allen Maschinen
+/// — noetig fuer Programme mit Plant-Modell (8.3), deren Eingaenge sonst
+/// `Bad` blieben.
 fn run_for(target: Target, p: &takt_mir::Program, name: &str) -> Result<String, String> {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "takt-ziel-{}-{}",
@@ -89,27 +90,30 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str) -> Result<String, 
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let ll = dir.join("programm.ll");
-    let c = dir.join("rahmen.c");
     let exe = dir.join("lauf");
 
     // Dieselbe IR, nur mit anderem Triple: Das ist der Kern von 9.4.4.
-    let ir = common::ir_for(p, target.triple);
-    std::fs::write(&ll, &ir).map_err(|e| e.to_string())?;
-    let h = takt_conformance::harness::build_all(p, TICKS, &[]);
-    std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
+    let run = takt_conformance::testhost::Run { ticks: TICKS, ..Default::default() };
+    let sources = takt_conformance::testhost::sources(p, &run, target.triple, false)?;
+    let mut c = Vec::new();
+    for (file, text) in &sources.files {
+        std::fs::write(dir.join(file), text).map_err(|e| e.to_string())?;
+        if file.ends_with(".c") {
+            c.push(dir.join(file));
+        }
+    }
 
     // Uebersetzt wird in zwei Schritten: clang macht aus der IR ein
     // Objekt (fuer beide Ziele derselbe Weg), der Linker der jeweiligen
     // Werkzeugkette bindet. Ein clang, der auch linkt, braeuchte fuer
     // aarch64 die Startdateien und `libgcc` der Cross-Kette — der
     // gcc-Treiber kennt sie ohnehin.
-    let obj = dir.join("programm.o");
+    let obj = dir.join("app.o");
     let mut cmd = std::process::Command::new("clang");
     let out = Clang::deterministic(&mut cmd)
         .args(["-Wno-override-module", "-O1", "-c"])
         .arg(format!("--target={}", target.triple))
-        .arg(&ll)
+        .arg(dir.join("app.ll"))
         .arg("-o")
         .arg(&obj)
         .output()
@@ -124,9 +128,12 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str) -> Result<String, 
     // braucht unter glibc Threads, `dlopen` und `libm`.
     let out = std::process::Command::new(linker)
         .env("SOURCE_DATE_EPOCH", "0")
-        .arg(&c)
+        .arg("-O1")
+        .arg("-I")
+        .arg(&dir)
+        .args(&c)
         .arg(&obj)
-        .arg(natives(target)?)
+        .arg(sdk(target)?)
         .args(["-lpthread", "-ldl", "-lm"])
         .arg("-o")
         .arg(&exe)
@@ -144,9 +151,13 @@ fn run_for(target: Target, p: &takt_mir::Program, name: &str) -> Result<String, 
         std::process::Command::new(&exe).output()
     }
     .map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&run.stdout).to_string();
+    let text = String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n");
     let _ = std::fs::remove_dir_all(&dir);
-    common::finished(&run.status, text)
+    if !run.status.success() {
+        return Err(format!("der Lauf brach ab ({}):\n{}", run.status, String::from_utf8_lossy(&run.stderr)));
+    }
+    takt_conformance::testhost::complete(&text, TICKS)?;
+    Ok(text)
 }
 
 /// **Die Abnahme von Schritt 11.** Dasselbe Programm liefert auf beiden

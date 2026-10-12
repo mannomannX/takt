@@ -45,7 +45,7 @@ fn corpus(name: &str) -> takt_mir::Program {
 /// kein `printf` (12.3) — und keine Funktion der ABI, die der Rahmen selbst
 /// stellen muss.
 fn board_provides(symbol: &str) -> bool {
-    const PREFIXES: [&str; 12] = [
+    const PREFIXES: [&str; 13] = [
         "app_in_",
         "app_sys_",
         "app_out_",
@@ -53,6 +53,7 @@ fn board_provides(symbol: &str) -> bool {
         "app_free_",
         "app_idle_",
         "app_alive_",
+        "app_cmd_",
         "takt_board_",
         "takt_edge_",
         "takt_native_",
@@ -240,7 +241,7 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
 
 /// **Ein `sim`-gespeister Eingang hat schon in Tick 0 seine Quelle**
 /// (8.3, FB-348): `init` bindet nach den `safe`-Werten und vor dem ersten
-/// `enter:`, wie der Wirtsrahmen und `Sim::new`.
+/// `enter:`, wie `Sim::new`.
 #[test]
 fn a_simulated_input_is_fed_before_tick_0() {
     let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
@@ -571,9 +572,12 @@ fn every_observation_line_carries_its_tick() {
     for (name, p, kinds) in cases {
         let src = takt_frame::mcu::build(&p).source;
         for kind in kinds {
+            // Eine Verletzung schreibt der Rahmen mit ihrem Namen aus einer
+            // Tabelle (FB-391).
             let at = src
                 .find(&format!("takt_board_trace(\"{kind} "))
                 .or_else(|| src.find(&format!("takt_board_trace(\"{kind}\\n")))
+                .or_else(|| (*kind == "property").then(|| src.find("takt_board_trace(names[i]);")).flatten())
                 .unwrap_or_else(|| panic!("{name}: `{kind}` fehlt im Rahmen"));
             // Die beiden Aufrufe davor schreiben `t=` und den Tick.
             let before: Vec<&str> = src[..at].lines().rev().skip(1).take(2).map(str::trim).collect();
@@ -687,12 +691,16 @@ fn a_multirate_deadline_counts_activations() {
     assert!(with_period("mul"), "je Aktivierung eine Periode in Basis-Ticks:\n{dl}");
 }
 
+/// Was ein Eingangstreiber nach dem Wert liefert (12.6 Zeile 2).
+const SAMPLE: &str = "uint8_t *quality, uint8_t *reason, int64_t *age, int64_t *t);";
+
 /// **Eingaenge vom Board** (12.1 Schritt 2, 12.6).
 ///
 /// Das Gegenstueck zu `app_out_*`: Aus `hw("ui/button")` wird
-/// `app_in_ui_button(&value, &quality)`. Der Treiber liefert beides,
-/// weil 12.6 Eingaenge degradieren laesst statt zu faulten — ohne den
-/// Rueckweg koennte er nur luegen oder schweigen.
+/// `app_in_ui_button(&value, &quality, &reason, &age, &t)`. Der Treiber
+/// liefert die Abtastung mit allem, was 12.6 Zeile 2 von ihm verlangt, weil
+/// 12.6 Eingaenge degradieren laesst statt zu faulten — ohne den Rueckweg
+/// koennte er nur luegen oder schweigen.
 ///
 /// Liefert er nichts, bleibt der Eintrag, wie `init` ihn setzte: `Bad`
 /// (3.5). Einen Vorgabetreiber gibt es nicht: Fehlt der Treiber, linkt das
@@ -701,16 +709,10 @@ fn a_multirate_deadline_counts_activations() {
 fn a_bound_input_becomes_a_driver_symbol() {
     let src = takt_frame::mcu::build(&program(INPUTS)).source;
 
-    assert!(
-        src.contains(
-            "uint8_t app_in_ui_button(void *user, int64_t now, uint8_t *value, uint8_t *quality, int64_t *t);"
-        ),
-        "{src}"
-    );
-    assert!(
-        src.contains("uint8_t app_in_adc_temp(void *user, int64_t now, int64_t *value, uint8_t *quality, int64_t *t);"),
-        "{src}"
-    );
+    for (name, value) in [("ui_button", "uint8_t"), ("adc_temp", "int64_t")] {
+        let decl = format!("uint8_t app_in_{name}(void *user, int64_t now, {value} *value, {SAMPLE}");
+        assert!(src.contains(&decl), "{decl}:\n{src}");
+    }
     assert!(!src.contains("__attribute__((weak))"), "stark gebunden (12.6):\n{src}");
 
     // Innerhalb des Ticks: Schritt 2 steht vor Schritt 3 (12.1).
@@ -1208,14 +1210,11 @@ fn an_unread_input_is_read_for_the_recording() {
     options.channel_imports.insert("recorded.hw".to_string(), hw);
     let p = takt_sema::compile(&src, &options).program.expect("Programm");
     let frame = takt_frame::mcu::build(&p).source;
-    for decl in [
-        "uint8_t app_in_edge_r_level(void *user, int64_t now, int32_t *value, uint8_t *quality, int64_t *t);",
-        "uint8_t app_in_edge_r_mode(void *user, int64_t now, uint32_t *value, uint8_t *quality, int64_t *t);",
-        "uint8_t app_in_edge_r_on(void *user, int64_t now, uint8_t *value, uint8_t *quality, int64_t *t);",
-        "uint8_t app_in_edge_r_quiet(void *user, int64_t now, uint8_t *value, uint8_t *quality, int64_t *t);",
-        "uint8_t app_in_edge_r_temp(void *user, int64_t now, double *value, uint8_t *quality, int64_t *t);",
-    ] {
-        assert!(frame.contains(decl), "{decl}:\n{frame}");
+    for (name, value) in
+        [("level", "int32_t"), ("mode", "uint32_t"), ("on", "uint8_t"), ("quiet", "uint8_t"), ("temp", "double")]
+    {
+        let decl = format!("uint8_t app_in_edge_r_{name}(void *user, int64_t now, {value} *value, {SAMPLE}");
+        assert!(frame.contains(&decl), "{decl}:\n{frame}");
     }
     assert!(!frame.contains("edge_r_lamp"), "ein Output hat nichts aufzuzeichnen:\n{frame}");
     assert!(frame.contains("takt_board_trace_f64((double)v); takt_board_trace(\"degC \");"), "{frame}");

@@ -25,7 +25,6 @@ use takt_mir::program::{Direction, Overflow, Program};
 use takt_mir::types::Type;
 
 use crate::layout::{Layout, c_type};
-use crate::streams::Trace;
 use crate::text::Text;
 
 /// Was der Rahmen mit dem Randkern teilt, aus der Rust-Deklaration in
@@ -76,7 +75,7 @@ const WHAT: [&str; 6] = ["", "timestamp", "seq", "maxpt", "flags", "window"];
 /// Schreibt Zustand, Schnittstelle und Commit des Rands. `max` ist die
 /// Zahl der Lieferungen, die ein Tick hoechstens bringt. `takt_edge_init`
 /// setzt die Spuren auf ihren Anfang; `init` ruft es (12.11).
-pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max: usize, trace: Trace, x: &Prefix) {
+pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max: usize, x: &Prefix) {
     let n = p.channels.len().max(1);
     let mut names: Vec<String> = Vec::new();
     let device_of: Vec<usize> = p
@@ -183,7 +182,7 @@ pub fn emit(t: &mut Text, p: &Program, layout: &Layout, driven: &[&Machine], max
     if delivers {
         deliveries(s, max, x);
     }
-    report(s, trace, x);
+    report(s, x);
     degrade(s, p, layout, x);
     apply(s, p, layout, driven, delivers, x);
 
@@ -247,7 +246,7 @@ fn deliveries(s: &mut String, max: usize, x: &Prefix) {
 }
 
 /// Eine Meldung des Rands als Trace-Zeile `driver` (`grammar/trace.md`).
-fn report(s: &mut String, trace: Trace, x: &Prefix) {
+fn report(s: &mut String, x: &Prefix) {
     let _ =
         writeln!(s, "static void takt_edge_report(struct {x}_arena *a, long long tick, const struct takt_event *e) {{");
     let _ = writeln!(s, "    const char *device, *rest, *word;");
@@ -267,22 +266,15 @@ fn report(s: &mut String, trace: Trace, x: &Prefix) {
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    default: return;");
     let _ = writeln!(s, "    }}");
-    match trace {
-        Trace::Stdio => {
-            let _ = writeln!(s, "    if (rest) printf(\"t=%lld driver %s %s %s\\n\", tick, device, word, rest);");
-            let _ = writeln!(s, "    else printf(\"t=%lld driver %s %s\\n\", tick, device, word);");
-        }
-        Trace::Board => {
-            let _ = writeln!(s, "    takt_board_trace(\"t=\");");
-            let _ = writeln!(s, "    takt_board_trace_i64(tick);");
-            let _ = writeln!(s, "    takt_board_trace(\"driver \");");
-            let _ = writeln!(s, "    takt_board_trace(device);");
-            let _ = writeln!(s, "    takt_board_trace(\" \");");
-            let _ = writeln!(s, "    takt_board_trace(word);");
-            let _ = writeln!(s, "    if (rest) {{ takt_board_trace(\" \"); takt_board_trace(rest); }}");
-            let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
-        }
-    }
+    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "    takt_board_trace_i64(tick);");
+    let _ = writeln!(s, "    takt_board_trace(\"driver \");");
+    let _ = writeln!(s, "    takt_board_trace(device);");
+    let _ = writeln!(s, "    takt_board_trace(\" \");");
+    let _ = writeln!(s, "    takt_board_trace(word);");
+    let _ = writeln!(s, "    if (rest) {{ takt_board_trace(\" \"); takt_board_trace(rest); }}");
+    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+
     let _ = writeln!(s, "}}");
 }
 

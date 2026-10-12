@@ -225,6 +225,16 @@ pub trait Input<T> {
     fn sample(&mut self, now: i64) -> Option<Sample<T>>;
 }
 
+/// Ein Eingang zusammengesetzten Typs (Record, Feld, `samples`, 8.9): Der
+/// Wert geht als Bytes in seiner Speicherform nach `value`, wie der
+/// erzeugte Code ihn im Prozessabbild liest; die Abtastung nennt Qualitaet
+/// und Zeitstempel.
+pub trait BlockInput {
+    /// Schreibt die Abtastung dieses Ticks nach `value`; `None`, wenn keine
+    /// vorliegt.
+    fn sample(&mut self, value: &mut [u8], now: i64) -> Option<Sample<()>>;
+}
+
 /// Ein Eingabestrom: je Aufruf hoechstens ein Element.
 pub trait StreamInput {
     /// Schreibt das naechste Element nach `buf`; `None`, wenn keines wartet.

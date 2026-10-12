@@ -8,6 +8,7 @@ pub mod board;
 
 use takt_conformance::harness;
 use takt_conformance::stimulus::Stimulus;
+use takt_conformance::testhost::Run;
 use takt_llvm::toolchain::Clang;
 use takt_mir::program::Program;
 
@@ -82,11 +83,6 @@ pub fn ir_for(p: &Program, triple: &str) -> String {
     complete(takt_llvm::lower::program(p, triple, &takt_llvm::symbols::Prefix::default()))
 }
 
-/// Wie [`ir_of`], fuer einen Lauf unter AddressSanitizer (FB-461).
-pub fn ir_sanitized(p: &Program) -> String {
-    complete(takt_llvm::lower::program_sanitized(p, "x86_64-pc-windows-msvc", &takt_llvm::symbols::Prefix::default()))
-}
-
 /// Die IR einer vollstaendigen Senkung.
 fn complete(out: takt_llvm::lower::Lowered) -> String {
     // Eine Senkung, die etwas auslaesst, ist ein Fehlschlag und keine Notiz
@@ -107,35 +103,15 @@ fn complete(out: takt_llvm::lower::Lowered) -> String {
     out.ir
 }
 
-/// Uebersetzt ein Programm mit seinem Testrahmen und fuehrt es aus.
-pub fn run_native(clang: &Clang, p: &Program, name: &str, machine: &str, ticks: u64) -> Result<String, String> {
-    run_native_with(clang, p, name, machine, ticks, &[])
-}
-
-/// Wie `run_native`, mit Eingaben (12.5): Commands (8.5) und
-/// Stromelemente (8.6). Beide Seiten sehen damit denselben Stimulus.
-/// Uebersetzt ein Programm mit *allen* Maschinen und fuehrt es aus.
-///
-/// Fuer Programme mit Plant-Modell (8.3): Das Modell ist eine
-/// gewoehnliche Maschine, und ohne sie bleiben die Eingaenge `Bad`.
-#[allow(dead_code)]
+/// Ein Lauf im Produktrahmen auf dem Wirt (M11 Schritt 9,
+/// [`takt_conformance::testhost`]): alle Maschinen ausser den Szenarien,
+/// ohne Eingaben.
 pub fn run_native_all(clang: &Clang, p: &Program, name: &str, ticks: u64) -> Result<String, String> {
-    run_native_inner(clang, p, name, None, ticks, &[], &[])
+    run_product(clang, p, name, &Run { ticks, ..Run::default() })
 }
 
-pub fn run_native_with(
-    clang: &Clang,
-    p: &Program,
-    name: &str,
-    machine: &str,
-    ticks: u64,
-    inputs: &[Stimulus],
-) -> Result<String, String> {
-    run_native_inner(clang, p, name, Some(machine), ticks, inputs, &[])
-}
-
-/// Alle Maschinen mit Eingaben (12.5).
-#[allow(dead_code)]
+/// Wie [`run_native_all`], mit Eingaben (12.5): Der Stimulus kommt ueber
+/// die Treiber, Commands, Tunables und Faults ueber das SDK.
 pub fn run_native_all_with(
     clang: &Clang,
     p: &Program,
@@ -143,28 +119,10 @@ pub fn run_native_all_with(
     ticks: u64,
     inputs: &[Stimulus],
 ) -> Result<String, String> {
-    run_native_inner(clang, p, name, None, ticks, inputs, &[])
+    run_product(clang, p, name, &Run { ticks, stimulus: inputs, ..Run::default() })
 }
 
-/// Alle Maschinen mit virtuellem Schlaf (9.9): der Pfad `_advance`.
-#[allow(dead_code)]
-pub fn run_native_sleeping(clang: &Clang, p: &Program, name: &str, ticks: u64) -> Result<String, String> {
-    run_native_build(clang, p, name, ticks, harness::build_sleeping(p, ticks))
-}
-
-/// Wie [`run_native_sleeping`], mit Eingaben: geschlafen wird nie ueber
-/// einen Tick mit einer Lieferung.
-pub fn run_native_sleeping_with(
-    clang: &Clang,
-    p: &Program,
-    name: &str,
-    ticks: u64,
-    inputs: &[Stimulus],
-) -> Result<String, String> {
-    run_native_build(clang, p, name, ticks, harness::build_sleeping_with(p, ticks, inputs))
-}
-
-/// Alle Maschinen, mit einer Journal-Nutzlast beim Start (5.9).
+/// Wie [`run_native_all`], mit einer Journal-Nutzlast beim Start (5.9).
 pub fn run_native_persist(
     clang: &Clang,
     p: &Program,
@@ -172,24 +130,11 @@ pub fn run_native_persist(
     ticks: u64,
     payload: &[u8],
 ) -> Result<String, String> {
-    run_native_inner(clang, p, name, None, ticks, &[], payload)
+    run_product(clang, p, name, &Run { ticks, payload, ..Run::default() })
 }
 
-/// Ein Szenario nativ (13.6): die laufenden Maschinen samt dem
-/// gewaehlten Szenario, wie `takt test` sie fuehrt.
-#[allow(dead_code)]
-pub fn run_native_scenario(
-    clang: &Clang,
-    p: &Program,
-    name: &str,
-    scenario: &str,
-    ticks: u64,
-) -> Result<String, String> {
-    run_native_build(clang, p, name, ticks, harness::build_scenario(p, scenario, ticks, &[]))
-}
-
-/// Wie [`run_native_scenario`], mit Eingaben (12.5): der Stimulus des
-/// Szenarios aus `<szenario>.stim.trace`.
+/// Ein Szenario nativ (13.6): die laufenden Maschinen samt dem gewaehlten
+/// Szenario, wie `takt test` sie fuehrt, mit dem Stimulus des Szenarios.
 pub fn run_native_scenario_with(
     clang: &Clang,
     p: &Program,
@@ -198,45 +143,32 @@ pub fn run_native_scenario_with(
     ticks: u64,
     inputs: &[Stimulus],
 ) -> Result<String, String> {
-    run_native_build(clang, p, name, ticks, harness::build_scenario(p, scenario, ticks, inputs))
+    run_product(clang, p, name, &Run { ticks, stimulus: inputs, scenario: Some(scenario), ..Run::default() })
 }
 
-/// Der gemeinsame Rumpf: `Some(name)` fuehrt eine Maschine, `None` alle.
-fn run_native_inner(
+/// Wie [`run_native_scenario_with`], ohne Eingaben.
+pub fn run_native_scenario(
     clang: &Clang,
     p: &Program,
     name: &str,
-    machine: Option<&str>,
+    scenario: &str,
     ticks: u64,
-    inputs: &[Stimulus],
-    payload: &[u8],
 ) -> Result<String, String> {
-    run_native_build(clang, p, name, ticks, harness::build_restoring(p, machine, ticks, inputs, payload))
+    run_native_scenario_with(clang, p, name, scenario, ticks, &[])
 }
 
-/// Uebersetzt Programm und Rahmen, laeuft und liefert den Trace.
-///
-/// Jeder Aufruf baut in seinem eigenen Verzeichnis: Tests desselben Binarys
-/// laufen parallel ueber dieselben Programme mit verschiedenen Rahmen, und
-/// ein geteiltes Verzeichnis raeumte dem einen die Dateien des anderen weg
-/// (KON1-007).
-fn run_native_build(clang: &Clang, p: &Program, name: &str, ticks: u64, h: harness::Harness) -> Result<String, String> {
-    run_built(clang, p, name, ticks, h, None)
-}
-
-/// Wie die anderen Laeufe, unter AddressSanitizer (FB-461): erzeugter Code
-/// und Rahmen mit Schutzzonen um jeden Platz; ein Zugriff daneben bricht
-/// den Lauf mit dem Bericht des Sanitizers ab. `search` ist der Suchpfad
-/// des Laufs ([`asan_path`]).
+/// Wie [`run_product`], unter AddressSanitizer (FB-461): erzeugter Code,
+/// Rahmen und Wirt mit Schutzzonen um jeden Platz; ein Zugriff daneben
+/// bricht den Lauf mit dem Bericht des Sanitizers ab. `search` ist der
+/// Suchpfad des Laufs ([`asan_path`]).
 pub fn run_native_sanitized(
     clang: &Clang,
     p: &Program,
     name: &str,
-    ticks: u64,
-    h: harness::Harness,
+    run: &Run<'_>,
     search: &std::ffi::OsStr,
 ) -> Result<String, String> {
-    run_built(clang, p, name, ticks, h, Some(search))
+    run_in_own_dir(clang, p, name, run, Some(search))
 }
 
 /// Der Suchpfad fuer einen Lauf unter AddressSanitizer: Unter Windows laedt
@@ -253,77 +185,39 @@ pub fn asan_path(clang: &Clang) -> Option<std::ffi::OsString> {
     std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&current))).ok()
 }
 
-/// Der gemeinsame Rumpf der Laeufe; `asan` ist der Suchpfad eines Laufs
-/// unter AddressSanitizer.
-fn run_built(
+/// Das SDK-Archiv des Testwirts, einmal je Prozess gebaut (12.11): der Kern
+/// ohne Warten mit den Natives und den Jobs aus `takt-crypto`.
+pub fn sdk() -> Result<std::path::PathBuf, String> {
+    static SDK: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
+    SDK.get_or_init(|| harness::sdk_library_with(&takt_conformance::testhost::SDK_FEATURES, None)).clone()
+}
+
+/// Ein Lauf im Produktrahmen auf dem Wirt (M11 Schritt 9,
+/// [`takt_conformance::testhost`]).
+pub fn run_product(clang: &Clang, p: &Program, name: &str, run: &Run<'_>) -> Result<String, String> {
+    run_in_own_dir(clang, p, name, run, None)
+}
+
+/// Jeder Lauf baut in seinem eigenen Verzeichnis: Tests desselben Binarys
+/// laufen parallel ueber dieselben Programme, und ein geteiltes Verzeichnis
+/// raeumte dem einen die Dateien des anderen weg (KON1-007).
+fn run_in_own_dir(
     clang: &Clang,
     p: &Program,
     name: &str,
-    ticks: u64,
-    h: harness::Harness,
+    run: &Run<'_>,
     asan: Option<&std::ffi::OsStr>,
 ) -> Result<String, String> {
     static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "takt-abnahme-{}-{}-{run}",
+        "takt-wirt-{}-{}-{n}",
         name.replace(['.', '/'], "_"),
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let ll = dir.join("programm.ll");
-    let c = dir.join("rahmen.c");
-    let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
-    let ir = if asan.is_some() { ir_sanitized(p) } else { ir_of(p) };
-    std::fs::write(&ll, ir).map_err(|e| e.to_string())?;
-    std::fs::write(&c, &h.source).map_err(|e| e.to_string())?;
     let path = clang.path().ok_or("clang")?;
-    let natives = harness::native_library()?;
-    let mut cmd = std::process::Command::new(path);
-    Clang::deterministic(&mut cmd).args(["-Wno-override-module", "-O1"]);
-    if asan.is_some() {
-        cmd.arg("-fsanitize=address");
-    }
-    let build = cmd.arg(&ll).arg(&c).arg(&natives).arg("-o").arg(&exe).output().map_err(|e| e.to_string())?;
-    if !build.status.success() {
-        return Err(String::from_utf8_lossy(&build.stderr).to_string());
-    }
-    let mut run = std::process::Command::new(&exe);
-    if let Some(search) = asan {
-        run.env("PATH", search);
-    }
-    let out = run.output().map_err(|e| e.to_string())?;
-    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let text = takt_conformance::testhost::run(path, &sdk()?, p, run, &dir, asan);
     let _ = std::fs::remove_dir_all(&dir);
-    if asan.is_some() && !out.status.success() {
-        return Err(String::from_utf8_lossy(&out.stderr).lines().take(24).collect::<Vec<_>>().join("\n"));
-    }
-    finished(&out.status, text).and_then(|text| reaches(text, ticks))
-}
-
-/// Der Lauf reichte bis zum letzten Tick (KON1-010): Der Rahmen nennt am
-/// Ende, bis wohin er kam (`takt end <tick>`), nach der Schleife `ticks + 1`.
-/// Endet das Programm frueher selbst (12.7), steht das Ende in diesem Tick.
-pub fn reaches(text: String, ticks: u64) -> Result<String, String> {
-    let Some(last) = text.lines().find_map(|l| l.strip_prefix("takt end ")?.trim().parse::<u64>().ok()) else {
-        return Err(format!("der Lauf endete ohne `takt end`:\n{text}"));
-    };
-    let ended = text.lines().any(|l| l.starts_with(&format!("t={last} end ")));
-    if last == ticks + 1 || ended {
-        Ok(text)
-    } else {
-        Err(format!("der Lauf endete in Tick {last} von {ticks} ohne Ende des Programms:\n{text}"))
-    }
-}
-
-/// Ein Lauf, der abbricht, liefert einen abgeschnittenen Trace, und der
-/// Vergleich prueft nur, was beide Seiten melden (FB-305): Der Abbruch
-/// ist der Befund, nicht die Zeilen davor.
-pub fn finished(status: &std::process::ExitStatus, text: String) -> Result<String, String> {
-    if status.success() {
-        return Ok(text);
-    }
-    let tail: Vec<&str> = text.lines().rev().take(4).collect();
-    Err(format!("der Lauf brach ab ({status}); zuletzt:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n")))
+    text
 }

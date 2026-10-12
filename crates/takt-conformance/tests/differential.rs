@@ -231,89 +231,49 @@ fn interpret(p: &Program, ticks: u64) -> takt_interp::RunResult {
     takt_interp::run(p, &takt_interp::Trace::default(), &options).unwrap_or_else(|e| panic!("Interpreter: {e:?}"))
 }
 
-/// **Der virtuelle Schlaf ist unsichtbar** (Satz 9.9.1): Jedes
-/// Korpusprogramm mit einem `idle`-Zustand liefert schlafend denselben
-/// Trace wie der Interpreter, der nie schlaeft — und der Rahmen hat
-/// dabei tatsaechlich geschlafen, jedes Programm fuer sich (KON1-036).
-/// Auf dem Wirt, damit `_advance` (9.9) nicht erst auf dem Board geprueft
-/// wird (FB-268, FB-273).
-#[test]
-fn virtual_sleep_is_invisible() {
-    let Some(clang) = common::clang() else { return };
-    let mut failed = Vec::new();
-    let mut sleepy_programs = 0;
-    for name in korpus() {
-        let p = corpus(name);
-        if !p.machines.iter().any(|m| m.states.iter().any(|s| s.idle)) {
-            continue;
-        }
-        let ticks = takt_conformance::cases::ticks_for(&p);
-        let native = match common::run_native_sleeping(&clang, &p, name, ticks) {
-            Ok(t) => t,
-            Err(e) => {
-                failed.push(format!("{name}: kein nativer Lauf:\n{e}"));
-                continue;
-            }
-        };
-        // 9.9: Geschlafen wird nur, wenn alle Maschinen `idle` sind; eine
-        // ohne solchen Zustand (ein Modell, ein Zubringer) haelt das System
-        // wach, und `_advance` laeuft dort zu Recht nie.
-        let sleepy = p.machines.iter().all(|m| m.states.iter().any(|s| s.idle));
-        sleepy_programs += usize::from(sleepy);
-        if sleepy && !native.lines().any(|l| l.contains(" slept=")) {
-            failed.push(format!("{name}: jede Maschine kann schlafen, und der Rahmen schlief nie"));
-        }
-        let interpreted = interpret(&p, ticks).trace.render();
-        let widened = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(&p));
-        let diffs = compare(&widened, &native);
-        if !diffs.is_empty() {
-            failed.push(format!(
-                "{name}: {} Abweichungen mit Schlaf, etwa {:?}",
-                diffs.len(),
-                &diffs[..diffs.len().min(4)]
-            ));
-        }
-    }
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
-    assert!(sleepy_programs > 0, "kein Programm, in dem jede Maschine schlafen kann");
-}
-
-/// **Zwei Rahmen desselben Programms bauen nebeneinander** (KON1-007):
-/// `virtual_sleep_is_invisible` und die Abnahme laufen im selben Testbinary
-/// parallel ueber dieselben Programme, der eine schlafend, der andere nicht.
+/// **Zwei Laeufe desselben Programms bauen nebeneinander** (KON1-007): Die
+/// Abnahme laeuft im selben Testbinary parallel ueber dieselben Programme.
 /// Jeder Lauf baut in seinem eigenen Verzeichnis; teilten sie eines, raeumte
-/// der eine dem anderen die Dateien weg oder ueberschriebe sein Binary.
+/// der eine dem anderen die Dateien weg oder ueberschriebe sein Binary. Die
+/// Laeufe unterscheiden sich in der Tickzahl, und jeder endet an seiner.
 #[test]
-fn two_frames_of_the_same_program_build_side_by_side() {
+fn two_runs_of_the_same_program_build_side_by_side() {
     let Some(clang) = common::clang() else { return };
     let name = "56_idle_timer.takt";
     let p = corpus(name);
     let start = std::sync::Barrier::new(4);
-    let traces: Vec<(bool, Result<String, String>)> = std::thread::scope(|s| {
-        let runs: Vec<_> = [true, false, true, false]
+    let traces: Vec<(u64, Result<String, String>)> = std::thread::scope(|s| {
+        let runs: Vec<_> = [TICKS, TICKS / 2, TICKS, TICKS / 2]
             .into_iter()
-            .map(|sleeping| {
+            .map(|ticks| {
                 let (clang, p, start) = (&clang, &p, &start);
                 s.spawn(move || {
                     start.wait();
-                    let trace = if sleeping {
-                        common::run_native_sleeping(clang, p, name, TICKS)
-                    } else {
-                        common::run_native_all(clang, p, name, TICKS)
-                    };
-                    (sleeping, trace)
+                    (ticks, common::run_native_all(clang, p, name, ticks))
                 })
             })
             .collect();
         runs.into_iter().map(|r| r.join().expect("Faden")).collect()
     });
-    let widened = takt_conformance::run::widen_f32(&run_interpreted(&p), &takt_conformance::run::f32_outputs(&p));
-    for (sleeping, trace) in traces {
-        let trace = trace.unwrap_or_else(|e| panic!("schlafend {sleeping}: kein Lauf:\n{e}"));
-        assert_eq!(trace.contains(" slept="), sleeping, "der Lauf nahm den Rahmen des anderen:\n{trace}");
+    let f32s = takt_conformance::run::f32_outputs(&p);
+    for (ticks, trace) in traces {
+        let trace = trace.unwrap_or_else(|e| panic!("{ticks} Ticks: kein Lauf:\n{e}"));
+        let last = trace.lines().filter_map(|l| l.strip_prefix("t=")?.split_once(' ')?.0.parse::<u64>().ok()).max();
+        assert!(last <= Some(ticks), "{ticks} Ticks: der Lauf nahm das Binary des anderen:\n{trace}");
+        let widened = takt_conformance::run::widen_f32(&interpret(&p, ticks).trace.render(), &f32s);
         let diffs = compare(&widened, &trace);
-        assert!(diffs.is_empty(), "schlafend {sleeping}: {diffs:?}");
+        assert!(diffs.is_empty(), "{ticks} Ticks: {diffs:?}");
     }
+}
+
+/// Wie viele Ticks der Kern nach dem Tick `tick` des Rahmens schlief: die
+/// Zeitzeile der Grenze `tick - 1` des Kerns (`t=<k> time ... slept=<n>`),
+/// die den Tick `tick` rechnet (`testhost::reached`).
+fn slept_after(trace: &str, tick: u64) -> Option<u64> {
+    let head = format!("t={} time ", tick.checked_sub(1)?);
+    trace
+        .lines()
+        .find_map(|l| l.strip_prefix(&head)?.split_whitespace().find_map(|w| w.strip_prefix("slept="))?.parse().ok())
 }
 
 /// **Ein voller Wake-Strom haelt auch den erzeugten Code wach** (9.9
@@ -335,23 +295,15 @@ fn a_full_wake_window_keeps_the_native_system_awake() {
     let out = takt_sema::compile(src, &options);
     let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
     let stimulus = takt_interp::Trace::parse("t=3 in bell 7\n").expect("Stimulus");
-    let native = common::run_native_sleeping_with(
-        &clang,
-        &p,
-        "wake_window",
-        30,
-        &Stimulus::from_trace(&stimulus).expect("Stimulus"),
-    )
-    .unwrap_or_else(|e| panic!("{e}"));
+    let native =
+        common::run_native_all_with(&clang, &p, "wake_window", 30, &Stimulus::from_trace(&stimulus).expect("Stimulus"))
+            .unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: 30, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
     assert!(interpreted.contains("t=5 out led true"), "{interpreted}");
-    assert!(native.contains("t=1 time took=0 drift=0 slept=1"), "bis vor die Lieferung geschlafen:\n{native}");
+    assert_eq!(slept_after(&native, 1), Some(1), "bis vor die Lieferung geschlafen:\n{native}");
     for tick in [3, 4] {
-        assert!(
-            !native.contains(&format!("t={tick} time took=0 drift=0 slept=")),
-            "wach mit vollem Fenster:\n{native}"
-        );
+        assert_eq!(slept_after(&native, tick), Some(0), "Tick {tick} wach mit vollem Fenster:\n{native}");
     }
     let diffs = compare(&interpreted, &native);
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
@@ -407,6 +359,10 @@ const LIMIT_TICK_NS: i64 = 30_000 * 86_400 * 1_000_000_000;
 /// selben Tick wie im Interpreter. Vorher rechnete der Rahmen `tick * T0`
 /// als `long long`, ein Ueberlauf und in C undefiniert, und der Monitor sah
 /// eine negative Zeit.
+///
+/// Vier Ticks: Der Produktrahmen rechnet Tick `k` an der Grenze `k - 1` des
+/// Kerns, und dessen Zeitachse endet bei 2^63 − 1 ns. Tick 4 liegt bei 3 · T0
+/// noch darauf, Tick 5 nicht mehr (FB-694).
 #[test]
 fn now_stops_at_the_largest_duration_in_the_generated_code() {
     let Some(clang) = common::clang() else { return };
@@ -414,7 +370,7 @@ fn now_stops_at_the_largest_duration_in_the_generated_code() {
     let out = takt_sema::compile(AT_THE_LIMIT, &options);
     let mut p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
     p.config.tick = LIMIT_TICK_NS;
-    let options = takt_interp::RunOptions { ticks: 7, ..Default::default() };
+    let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
     let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
     for line in [
         "t=4 out clock 9223372036854775807 ns",
@@ -425,7 +381,7 @@ fn now_stops_at_the_largest_duration_in_the_generated_code() {
         assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
     }
     assert!(!interpreted.contains("violated"), "{interpreted}");
-    let native = common::run_native_all_with(&clang, &p, "at_the_limit", 7, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_all(&clang, &p, "at_the_limit", 4).unwrap_or_else(|e| panic!("{e}"));
     if let Some(e) = disagreement("AT_THE_LIMIT", "Interpreter", &interpreted, "nativ", &native) {
         panic!("{e}");
     }
@@ -450,11 +406,11 @@ fn a_running_job_keeps_the_native_system_awake() {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let out = takt_sema::compile(src, &options);
     let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
-    let native = common::run_native_sleeping_with(&clang, &p, "running_job", 30, &[]).unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_all(&clang, &p, "running_job", 30).unwrap_or_else(|e| panic!("{e}"));
     for tick in [1, 2] {
-        assert!(!native.contains(&format!("t={tick} time took=0 drift=0 slept=")), "wach mit laufendem Job:\n{native}");
+        assert_eq!(slept_after(&native, tick), Some(0), "Tick {tick} wach mit laufendem Job:\n{native}");
     }
-    assert!(native.contains("t=3 time took=0 drift=0 slept="), "nach dem Job geschlafen:\n{native}");
+    assert!(slept_after(&native, 3).is_some_and(|n| n > 0), "nach dem Job geschlafen:\n{native}");
     let options = takt_interp::RunOptions { ticks: 30, ..Default::default() };
     let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
     let diffs = compare(&interpreted, &native);
@@ -465,13 +421,39 @@ fn a_running_job_keeps_the_native_system_awake() {
 /// Spalte, mit Grund. Die Liste ist eine Ratsche wie [`UNREACHED`]: Eine neue
 /// Luecke scheitert ebenso wie eine, die es nicht mehr gibt. Ein Programm
 /// ausserhalb der Suite `beweiser` nennt seinen Grund im Manifest.
-const GAPS: &[(&str, &str, &str, &str)] =
-    &[("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach")];
+const GAPS: &[(&str, &str, &str, &str)] = &[
+    ("03_sequences_and_faults.takt", "pfad uebergang-SAFE__IDLE__2561", "nativ", RUNTIME_NODE),
+    ("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach"),
+    ("62_type_generics.takt", "pfad valid-1111", "nativ", SIM_INPUT),
+    ("62_type_generics.takt", "pfad valid-1310", "nativ", SIM_INPUT),
+    ("62_type_generics.takt", "stimulus", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-FIRST__SECOND__942", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-LOW__HIGH__715", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-SECOND__FIRST__1029", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad valid-1034", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "stimulus", "nativ", SIM_INPUT),
+    ("99_exit_fault.takt", "pfad range-983", "nativ", RUNTIME_NODE),
+    ("120_port_writes.takt", "pfad index-1857", "nativ", SIM_INPUT),
+];
+
+/// Ein Eingang mit `sim`-Bindung hat im Produkt keinen Treiber; nur der
+/// Interpreter nimmt dort einen Stimulus an (8.3, FB-688).
+const SIM_INPUT: &str = "der Stimulus liefert an einen Eingang mit `sim`-Bindung (FB-688)";
+
+/// Einen Knotenausfall meldet im Produkt kein Weg des Wirts (12.3, FB-689).
+const RUNTIME_NODE: &str = "`runtime Node` hat im Produkt keinen Weg (FB-689)";
 
 /// **Die Abnahme: ein Vergleich, drei Ausfuehrer** (Satz 9.4.4, M11
 /// Schritte 28, 29). Je Korpusprogramm und Lauf ([`takt_conformance::cases`])
 /// rechnen Interpreter, erzeugter Code und Modell denselben Stimulus, und
-/// derselbe Vergleich urteilt ueber jedes Paar. Zwischen Interpreter und
+/// derselbe Vergleich urteilt ueber jedes Paar. Der erzeugte Code laeuft im
+/// Produktrahmen mit dem Kern des SDK, den Stimulus als Testtreiber (M11
+/// Schritt 9, [`takt_conformance::testhost`]); was dort keinen Weg hat,
+/// nennt [`GAPS`].
+///
+/// **Der Schlaf ist unsichtbar** (Satz 9.9.1, KON1-036): Der Produktrahmen
+/// schlaeft, wo der Kern es darf, der Interpreter nie; kann jede Maschine
+/// eines Programms schlafen, hat der Kern im stillen Lauf auch geschlafen. Zwischen Interpreter und
 /// Modell gilt der strengere Zeile fuer Zeile (`takt_prove::mismatches`),
 /// der auch Zustaende und `pub var` sieht. Ueber alle Laeufe ist erreicht,
 /// was [`UNREACHED`] nicht zaehlt. Die Programme verteilen sich auf Faeden;
@@ -554,6 +536,15 @@ fn compare_program(clang: &takt_llvm::toolchain::Clang, name: &'static str, mode
         match &native {
             Ok(native) => out.failed.extend(disagreement(&run, "Interpreter", &widened, "nativ", native)),
             Err(e) => out.gaps.push((case.label.clone(), "nativ", e.lines().next().unwrap_or_default().to_string())),
+        }
+        // 9.9: Eine Maschine ohne `idle`-Zustand haelt das System wach.
+        let sleepy = p.machines.iter().all(|m| m.states.iter().any(|s| s.idle));
+        if let Ok(native) = &native
+            && case.label == "still"
+            && sleepy
+            && !native.lines().filter_map(|l| l.split_once(" slept=")).any(|(_, n)| n.trim() != "0")
+        {
+            out.failed.push(format!("{run}: jede Maschine kann schlafen, und der Kern schlief nie"));
         }
         // Verstoesse gegen den Treibervertrag liegen vor dem Rand, den das
         // Modell annimmt (13.3).
@@ -718,7 +709,6 @@ fn the_two_implementations_agree_on_recorded_inputs() {
     // `16_timing` wartet auf `go` und faellt nach 200 ms zurueck; damit
     // laeuft jeder Uebergang mindestens einmal.
     let p = corpus("16_timing.takt");
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let stimulus = takt_interp::Trace::parse(
         "t=3 cmd go
 t=40 cmd go
@@ -735,8 +725,7 @@ t=40 cmd go
         .collect();
     assert_eq!(inputs.len(), 2, "der Stimulus traegt zwei Commands");
 
-    let native =
-        common::run_native_with(&clang, &p, "eingaben", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_all_with(&clang, &p, "eingaben", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
@@ -794,7 +783,6 @@ t=40 cmd go
 fn the_two_implementations_agree_on_stream_elements() {
     let Some(clang) = common::clang() else { return };
     let p = corpus("23_patterns.takt");
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     // Vier Elemente: eines trifft `"READY"`, eines gar kein Muster, und
     // zwei tragen einen Platzhalter mit verschiedenen Werten. Ohne den
     // zweiten Fall pruefte der Test nur, dass etwas ankommt; ohne die
@@ -819,8 +807,7 @@ t=11 in rx_log Erasing sector 7
         .collect();
     assert_eq!(inputs.len(), 4, "der Stimulus traegt vier Elemente");
 
-    let native =
-        common::run_native_with(&clang, &p, "stroeme", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_all_with(&clang, &p, "stroeme", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
@@ -853,7 +840,6 @@ t=11 in rx_log Erasing sector 7
 fn the_two_implementations_agree_on_has_and_send() {
     let Some(clang) = common::clang() else { return };
     let p = corpus("24_send_has.takt");
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     // Vier Zeilen: `ERR` am Anfang, in der Mitte, am Ende, und gar nicht.
     // Ein Muster, das nur am Anfang traefe, kaeme auf eine andere Zahl.
     let stimulus = takt_interp::Trace::parse(
@@ -876,8 +862,7 @@ t=8 in rx all good
         .collect();
     assert_eq!(inputs.len(), 4, "der Stimulus traegt vier Zeilen");
 
-    let native =
-        common::run_native_with(&clang, &p, "has_send", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_all_with(&clang, &p, "has_send", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
@@ -915,7 +900,6 @@ t=8 in rx all good
 fn the_product_automaton_dispatches_like_the_interpreter() {
     let Some(clang) = common::clang() else { return };
     let p = corpus("100_dispatch.takt");
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     // 1: Guard haelt. 5: Guard faellt. 5: zwanzig Ziffern sind kein `int`.
     // 5: neunzehn Ziffern ueber `i64::MAX` — der Automat trifft, die
     // Extraktion nicht. 2: `has` an der fruehesten Stelle, und an einer
@@ -948,8 +932,7 @@ t=20 in rx ERR 9999999999999999999
         .collect();
     assert_eq!(inputs.len(), 10, "der Stimulus traegt zehn Zeilen");
 
-    let native =
-        common::run_native_with(&clang, &p, "dispatch", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_all_with(&clang, &p, "dispatch", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
@@ -1066,7 +1049,7 @@ t=8 tune GAIN 7
         "ohne Stimulus bleibt GAIN 2:
 {quiet}"
     );
-    let native = common::run_native_with(&clang, &p, "41_tunables.takt", "m", TICKS, &inputs)
+    let native = common::run_native_all_with(&clang, &p, "41_tunables.takt", TICKS, &inputs)
         .unwrap_or_else(|e| panic!("41_tunables.takt: {e}"));
     let diffs = compare(&interpreted, &native);
     let list: Vec<String> = diffs.iter().map(|d| format!("  {d}")).collect();
@@ -1091,7 +1074,6 @@ t=8 tune GAIN 7
 fn the_two_implementations_agree_on_record_elements_and_peek() {
     let Some(clang) = common::clang() else { return };
     let p = corpus("49_record_streams.takt");
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
     let stimulus = takt_interp::Trace::parse(
         "t=2 in edges Pulse(true, 3)
 t=4 in edges Pulse(false, 5)
@@ -1115,8 +1097,7 @@ t=14 in edges Pulse(true, 1)
         .collect();
     assert_eq!(inputs.len(), 7, "der Stimulus traegt sieben Elemente");
 
-    let native =
-        common::run_native_with(&clang, &p, "records", &machine, TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    let native = common::run_native_all_with(&clang, &p, "records", TICKS, &inputs).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: TICKS, profile: None, order_seed: None, ..Default::default() };
     let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
 
@@ -1488,8 +1469,10 @@ machine m:
     let native = common::run_native_all(&clang, &p, "record_duration", 4).unwrap_or_else(|e| panic!("{e}"));
     let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
     let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
-    assert!(native.contains("out timing Timing(90 min, 0)"), "{native}");
-    assert!(native.contains("out timing Timing(250 us, 1)"), "{native}");
+    // Der Rahmen schreibt nach jeder Zahl ein Leerzeichen (FB-690).
+    let written = native.replace(" )", ")");
+    assert!(written.contains("out timing Timing(90 min, 0)"), "{native}");
+    assert!(written.contains("out timing Timing(250 us, 1)"), "{native}");
     let diffs = compare(&interpreted, &native);
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
@@ -1649,7 +1632,7 @@ fn crypto_line(fun: &str, nth: usize) -> Vec<String> {
 /// **Die Natives aus M10 Schritt 21 im erzeugten Code** (4.5, Satz
 /// 9.4.4): `fft256` als Funktion ueber `[256] float` (Feld als kanonischer
 /// Puffer), `rsa3072_verify` als Job, `aes_gcm_decrypt` mit passendem und
-/// mit gekipptem Tag (`Err(FAILED)`). Interpreter und Wirtsrahmen rufen
+/// mit gekipptem Tag (`Err(FAILED)`). Interpreter und Produktrahmen rufen
 /// dieselbe Implementierung (FB-293); verglichen wird, was dazwischen liegt.
 #[test]
 fn the_new_natives_agree_with_the_interpreter() {
@@ -1732,7 +1715,7 @@ machine m:
 
 /// **Eine Signaturpruefung mit Argumenten falscher Laenge ist `false`**
 /// (4.5, FB-487): Der Schluessel aus `default` ist leer. Vorher endete der
-/// Interpreter mit einem Bug und der Wirtsrahmen mit `Err(FAILED)`.
+/// Interpreter mit einem Bug und der erzeugte Code mit `Err(FAILED)`.
 #[test]
 fn a_signature_check_with_a_short_key_is_false() {
     let Some(clang) = common::clang() else { return };

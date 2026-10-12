@@ -1,22 +1,23 @@
-//! Registerports im Wirtsrahmen (12.10, FB-261).
+//! Registerports auf einem Ziel mit Betriebssystem (12.10, FB-261).
 //!
-//! Auf dem Wirt ruft der erzeugte Code fuer jeden Portzugriff die Runtime
-//! (`takt_llvm::mmio`); hier ist der Rahmen die Runtime. Er bildet die
-//! Adresse ab wie der Interpreter (`port_read`, `port_write`): Gelesen wird
-//! der `sim`-Output `mmio/ADR/r`, den ein Modell stellt, mit Unit-Delay wie
-//! jeder Modellwert (8.3), ohne Modell der Default des Records. Stellt das
-//! Modell einen Strom, entnimmt jedes Lesen das naechste Element, das vor
-//! dem Tick in seinem Sendepuffer stand; frei wird es mit dem Commit
-//! (`takt_frame::streams::port_reads`). Geschrieben
-//! wird ein Element in den Eingabestrom `mmio/ADR/w`, und zwar der ganze
-//! Record in kanonischer Form: Ein Feld darunter wird in den gelesenen
-//! Record eingesetzt, wie `Eval::assign` es tut. Der Schreibvorgang ist ein
-//! `send`, das nicht faultet (`takt_int_offer`, FB-475); der Ring zeigt das
-//! Element ab dem naechsten Tick.
+//! Dort liegt an der Adresse eines Ports nichts, und der erzeugte Code ruft
+//! fuer jeden Zugriff die Runtime (`takt_llvm::mmio`); auf einem Ziel ohne
+//! Betriebssystem greift er selbst zu und ruft diese Einstiege nie. Der
+//! Rahmen bildet die Adresse ab wie der Interpreter (`port_read`,
+//! `port_write`): Gelesen wird der `sim`-Output `mmio/ADR/r`, den ein Modell
+//! stellt, mit Unit-Delay wie jeder Modellwert (8.3), ohne Modell der
+//! Default des Records. Stellt das Modell einen Strom, entnimmt jedes Lesen
+//! das naechste Element, das vor dem Tick in seinem Sendepuffer stand; frei
+//! wird es mit dem Commit (`crate::streams::port_reads`). Geschrieben wird
+//! ein Element in den Eingabestrom `mmio/ADR/w`, und zwar der ganze Record
+//! in kanonischer Form: Ein Feld darunter wird in den gelesenen Record
+//! eingesetzt, wie `Eval::assign` es tut. Der Schreibvorgang ist ein `send`,
+//! das nicht faultet (`takt_int_offer`, FB-475); der Ring zeigt das Element
+//! ab dem naechsten Tick.
 
 use std::fmt::Write;
 
-use takt_frame::text::Text;
+use crate::text::Text;
 use takt_llvm::symbols::Prefix;
 use takt_llvm::ty::LlvmType;
 use takt_mir::pattern::Address;
@@ -105,7 +106,7 @@ fn canonical(p: &Program, ty: TypeId, llvm: &LlvmType, at: u64, out: &mut Vec<(u
 /// Nimmt den Wert der Modelle in dem Stand, in dem er committet ist: am
 /// Ende eines Ticks und vor Tick 0, dort, wo auch die `sim`-Bindungen
 /// laufen. Gelesen wird er im naechsten Tick (8.3).
-pub(crate) fn sample(s: &mut String, p: &Program, indent: &str) {
+pub fn sample(s: &mut String, p: &Program, indent: &str) {
     for (i, port) in p.ports.iter().enumerate() {
         let Some(ty) = takt_llvm::ty::lower(port.ty, p) else { continue };
         if let Some(Ok(Model::Level(offset))) = model(p, port, &ty) {
@@ -119,7 +120,7 @@ pub(crate) fn sample(s: &mut String, p: &Program, indent: &str) {
 /// Was der Rahmen nicht abbilden kann, bricht den Bau des Rahmens mit
 /// `#error` ab, statt still einen Default zu lesen: ein Modellrecord, der
 /// anders im Speicher liegt als der Port.
-pub(crate) fn emit(t: &mut Text, p: &Program, x: &Prefix) {
+pub fn emit(t: &mut Text, p: &Program, x: &Prefix) {
     if p.ports.is_empty() {
         return;
     }

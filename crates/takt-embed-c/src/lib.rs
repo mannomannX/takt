@@ -107,8 +107,10 @@ extern "C" fn rust_eh_personality() {}
 
 /// Die Fassung der Schnittstelle (`TAKT_SDK_ABI`); eine Tabelle anderer
 /// Fassung nimmt [`takt_core_init`] nicht an. Fassung 2: Der Wirt nennt
-/// seinen Watchdog bei `takt_core_init` (12.11).
-pub const ABI: u32 = 2;
+/// seinen Watchdog bei `takt_core_init` (12.11). Fassung 3: Die Tabelle
+/// traegt `P_operator_abort`, den der Kern nach [`takt_core_abort`] meldet
+/// (5.4).
+pub const ABI: u32 = 3;
 
 /// So viele Byte haelt `takt_core` fuer den Kern (`TAKT_CORE_BYTES`).
 pub const CORE_BYTES: usize = 1024;
@@ -189,6 +191,8 @@ pub struct Ops {
     pub overrun: unsafe extern "C" fn(arena: *mut c_void),
     /// `P_hardware`.
     pub hardware: unsafe extern "C" fn(arena: *mut c_void),
+    /// `P_operator_abort`: ein Operator-Abort fuer den naechsten Tick (5.4).
+    pub operator_abort: unsafe extern "C" fn(arena: *mut c_void),
     /// `P_tolerance`.
     pub tolerance: unsafe extern "C" fn(ns: *mut i64, runs: *mut u32),
     /// `P_output_timing`.
@@ -605,6 +609,12 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
         unsafe { (self.ops().hardware)(self.arena) }
     }
 
+    fn raise_abort(&mut self) {
+        self.ensure_init();
+        // SAFETY: wie oben.
+        unsafe { (self.ops().operator_abort)(self.arena) }
+    }
+
     fn tick_tolerance(&self) -> Option<Tolerance> {
         let (mut ns, mut runs) = (0i64, 0u32);
         // SAFETY: schreibt zwei Zahlen an die uebergebenen Stellen.
@@ -841,21 +851,27 @@ enum Engine {
 }
 
 impl Engine {
+    /// Rechnet bis `now`, mit dem Weckereignis `wake` im Speicher des Kerns;
+    /// zuerst meldet der Kern, was der Wirt seit dem letzten Aufruf von aussen
+    /// meldete (`outer`: Operator-Abort, Schutzverletzung).
     fn service(
         &mut self,
         now: i64,
         wake: *const AtomicBool,
+        outer: Outer,
         tunables: Option<&mut dyn Tunables>,
     ) -> takt_rt_core::Next {
         match self {
             Engine::Volatile(rt) => {
                 rt.clock = HostClock { now, wake };
+                outer.raise(rt);
                 let next = rt.service_with(tunables);
                 rt.clock.wake = null();
                 next
             }
             Engine::Persisting(rt) => {
                 rt.clock = HostClock { now, wake };
+                outer.raise(rt);
                 let next = rt.service_with(tunables);
                 rt.clock.wake = null();
                 next
@@ -890,16 +906,48 @@ impl Engine {
     }
 }
 
-/// Was im Speicher des Wirts liegt. Tabelle, Arena und das Weckereignis
-/// stehen vor dem Kern: Der Job-Kontext liest nur Tabelle und Arena,
-/// [`takt_core_wake`] setzt nur das Flag, waehrend der Schrittkontext den
-/// Kern haelt.
+/// Was im Speicher des Wirts liegt. Tabelle, Arena und die Flags der
+/// Ereignisse von aussen stehen vor dem Kern: Der Job-Kontext liest nur
+/// Tabelle und Arena, [`takt_core_wake`], [`takt_core_abort`] und
+/// [`takt_core_hardware_fault`] setzen nur ihr Flag, waehrend der
+/// Schrittkontext den Kern haelt.
 #[repr(C)]
 struct Parts {
     ops: *const Ops,
     arena: *mut c_void,
     wake: AtomicBool,
+    abort: AtomicBool,
+    hardware: AtomicBool,
     engine: Engine,
+}
+
+/// Was der Wirt seit dem letzten Aufruf von aussen meldete.
+#[derive(Clone, Copy)]
+struct Outer {
+    /// Ein Operator-Abort (5.4, [`takt_core_abort`]).
+    abort: bool,
+    /// Eine Schutzverletzung (12.3, [`takt_core_hardware_fault`]).
+    hardware: bool,
+}
+
+impl Outer {
+    /// Meldet dem Kern, was kam; er gibt es vor dem Schritt der naechsten
+    /// Grenze an das Programm und beendet einen Schlaf dort.
+    fn raise<P, C, W, S, J>(self, rt: &mut Runtime<P, C, W, S, J>)
+    where
+        P: takt_rt_core::Program,
+        C: Clock,
+        W: Watchdog,
+        S: takt_rt_core::Sink,
+        J: Store,
+    {
+        if self.abort {
+            rt.abort();
+        }
+        if self.hardware {
+            rt.hardware_fault();
+        }
+    }
 }
 
 /// Die Uhr eines neuen Kerns; das Weckereignis reicht erst `takt_core_service`.
@@ -986,9 +1034,9 @@ pub unsafe extern "C" fn takt_core_init(
     let mut program = CProgram::new(ops, arena, user);
     program.ensure_init();
     let rt = Runtime::new(program, host_clock(), watchdog, host_sink(tick_ns), profile, tick_ns, policy);
-    let wake = AtomicBool::new(false);
+    let (wake, abort, hardware) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false));
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
-    unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, engine: Engine::Volatile(rt) }) };
+    unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, abort, hardware, engine: Engine::Volatile(rt) }) };
     status::OK
 }
 
@@ -1044,9 +1092,11 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     program.ensure_init();
     let sink = host_sink(o.tick_ns);
     let rt = Runtime::journaled(program, persist, host_clock(), watchdog, sink, profile, o.tick_ns, policy);
-    let wake = AtomicBool::new(false);
+    let (wake, abort, hardware) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false));
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
-    unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, engine: Engine::Persisting(rt) }) };
+    unsafe {
+        core.cast::<Parts>().write(Parts { ops, arena, wake, abort, hardware, engine: Engine::Persisting(rt) });
+    };
     status::OK
 }
 
@@ -1083,13 +1133,53 @@ pub unsafe extern "C" fn takt_core_service_with(
     let parts = core.cast::<Parts>();
     // SAFETY: nur die Adresse des Flags, ohne Referenz; andere Kontexte setzen es.
     let wake = unsafe { &raw const (*parts).wake };
-    // SAFETY: nur der Kern, nicht Tabelle, Arena und Flag, die andere Kontexte lesen.
+    // SAFETY: nur das Flag; `takt_core_abort` setzt es aus jedem Kontext.
+    let abort = unsafe { &(*parts).abort }.swap(false, Ordering::SeqCst);
+    // SAFETY: ebenso das Flag von `takt_core_hardware_fault`.
+    let hardware = unsafe { &(*parts).hardware }.swap(false, Ordering::SeqCst);
+    let outer = Outer { abort, hardware };
+    // SAFETY: nur der Kern, nicht Tabelle, Arena und Flags, die andere Kontexte lesen.
     let engine = unsafe { &mut (*parts).engine };
     let source: Option<&mut dyn Tunables> = match source.as_mut() {
         Some(s) => Some(s),
         None => None,
     };
-    engine.service(now_ns, wake, source).into()
+    engine.service(now_ns, wake, outer, source).into()
+}
+
+/// Ein Operator-Abort (5.4): Der Kern meldet ihn dem Programm vor dem
+/// Schritt der naechsten Grenze, die `takt_core_service` erreicht, fuer alle
+/// Maschinen; schlaeft er, endet der Schlaf dort (9.9). Darf aus jedem
+/// Kontext kommen, auch aus einer ISR oder waehrend eines Schritts; nie
+/// rechnet er waehrend `service`.
+///
+/// # Safety
+///
+/// `core` ist ein Kern aus [`takt_core_init`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_core_abort(core: *mut Core) {
+    // SAFETY: nur das Flag; den Kern haelt der Schrittkontext, Tabelle und
+    // Arena beruehrt dieser Aufruf nicht.
+    let abort = unsafe { &(*core.cast::<Parts>()).abort };
+    abort.store(true, Ordering::SeqCst);
+}
+
+/// Eine Schutzverletzung (12.3): Die Schutzeinheit hat einen Zugriff der TCB
+/// auf den Programmzustand abgewiesen. Der Kern meldet dem Programm
+/// `Runtime(Hardware)` vor dem Schritt der naechsten Grenze, die
+/// `takt_core_service` erreicht, fuer alle Maschinen; schlaeft er, endet der
+/// Schlaf dort (9.9). Darf aus jedem Kontext kommen, auch aus einem
+/// Fault-Handler oder einer ISR und waehrend eines Schritts.
+///
+/// # Safety
+///
+/// `core` ist ein Kern aus [`takt_core_init`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_core_hardware_fault(core: *mut Core) {
+    // SAFETY: nur das Flag; den Kern haelt der Schrittkontext, Tabelle und
+    // Arena beruehrt dieser Aufruf nicht.
+    let hardware = unsafe { &(*core.cast::<Parts>()).hardware };
+    hardware.store(true, Ordering::SeqCst);
 }
 
 /// Ein Weckereignis des Wirts (9.9): Schlaeft der Kern, endet der Schlaf an
@@ -1242,6 +1332,7 @@ mod tests {
             ("end", offset_of!(Ops, end)),
             ("overrun", offset_of!(Ops, overrun)),
             ("hardware", offset_of!(Ops, hardware)),
+            ("operator_abort", offset_of!(Ops, operator_abort)),
             ("tolerance", offset_of!(Ops, tolerance)),
             ("output_timing", offset_of!(Ops, output_timing)),
             ("job_dispatch", offset_of!(Ops, job_dispatch)),
@@ -1291,6 +1382,18 @@ mod tests {
         let foreign = in_order(vec![("rounds", offset_of!(Foreign, rounds)), ("errors", offset_of!(Foreign, errors))]);
         assert_eq!(fields("typedef struct takt_foreign {"), foreign);
         assert_eq!(define("TAKT_SDK_ABI"), i64::from(ABI));
+        // Jeder Einstieg des Archivs steht im Kopf: Einen, den er nicht
+        // deklariert, kann kein C-Wirt rufen. `takt_board_trace*` deklariert
+        // der Kopf des Programms (`P.h`).
+        let entries: Vec<&str> = include_str!("lib.rs")
+            .lines()
+            .filter_map(|l| l.split("extern \"C\" fn ").nth(1)?.split('(').next())
+            .filter(|name| ["takt_core_", "takt_line_", "takt_foreign_"].iter().any(|p| name.starts_with(p)))
+            .collect();
+        assert!(entries.contains(&"takt_core_hardware_fault"), "{entries:?}");
+        for name in entries {
+            assert!(HEADER.contains(&format!(" {name}(")), "`{name}` fehlt im Kopf");
+        }
         assert_eq!(define("TAKT_CORE_BYTES"), CORE_BYTES as i64);
         for (name, value) in [
             ("TAKT_OK", status::OK),
@@ -1327,9 +1430,10 @@ mod core_abi {
     use std::vec::Vec;
 
     use super::{
-        ABI, Core, LineOps, NvmOps, Ops, TunablesOps, WatchdogOps, nvm, status, takt_board_trace, takt_core_finish,
-        takt_core_init, takt_core_init_journaled, takt_core_job_work, takt_core_report, takt_core_service,
-        takt_core_service_with, takt_core_wake, takt_line_flush, takt_line_init, takt_line_lossless,
+        ABI, Core, LineOps, NvmOps, Ops, TunablesOps, WatchdogOps, nvm, status, takt_board_trace, takt_core_abort,
+        takt_core_finish, takt_core_hardware_fault, takt_core_init, takt_core_init_journaled, takt_core_job_work,
+        takt_core_report, takt_core_service, takt_core_service_with, takt_core_wake, takt_line_flush, takt_line_init,
+        takt_line_lossless,
     };
 
     const TICK_NS: i64 = 1_000_000;
@@ -1346,6 +1450,14 @@ mod core_abi {
         /// Die letzte Aenderung eines Tunables: Tick des Rahmens, Parameter,
         /// erstes Byte.
         tuned: Option<(i64, u32, u8)>,
+        /// Ein Operator-Abort ist gemeldet und wartet auf den Schritt.
+        abort_pending: bool,
+        /// Der Tick des Rahmens, vor dessen Schritt der Abort kam.
+        aborted_in: Option<i64>,
+        /// Eine Schutzverletzung ist gemeldet und wartet auf den Schritt.
+        hardware_pending: bool,
+        /// Der Tick des Rahmens, vor dessen Schritt sie kam.
+        hardware_in: Option<i64>,
     }
 
     /// Die Arena hinter dem Zeiger des Archivs.
@@ -1388,7 +1500,24 @@ mod core_abi {
 
     unsafe extern "C" fn tick(arena: *mut c_void, k: i64) {
         // SAFETY: die Arena des Tests.
-        unsafe { counter(arena) }.tick = k;
+        let c = unsafe { counter(arena) };
+        c.tick = k;
+        if core::mem::take(&mut c.abort_pending) {
+            c.aborted_in = Some(k);
+        }
+        if core::mem::take(&mut c.hardware_pending) {
+            c.hardware_in = Some(k);
+        }
+    }
+
+    unsafe extern "C" fn hardware_fault(arena: *mut c_void) {
+        // SAFETY: die Arena des Tests.
+        unsafe { counter(arena) }.hardware_pending = true;
+    }
+
+    unsafe extern "C" fn operator_abort(arena: *mut c_void) {
+        // SAFETY: die Arena des Tests.
+        unsafe { counter(arena) }.abort_pending = true;
     }
 
     unsafe extern "C" fn snapshot(arena: *mut c_void, out: *mut c_void, cap: i32) -> i32 {
@@ -1493,6 +1622,7 @@ mod core_abi {
             end: nothing,
             overrun: nothing,
             hardware: nothing,
+            operator_abort: nothing,
             tolerance,
             output_timing: constant,
             job_dispatch,
@@ -1808,6 +1938,51 @@ mod core_abi {
             takt_core_service(core.as_mut_ptr(), 6 * TICK_NS);
         }
         assert_eq!(dozing.tick, 7, "das Weckereignis beendet den Schlaf an der Grenze bei 6 ms");
+
+        // Ein Operator-Abort (5.4) weckt ebenso und kommt vor dem Schritt an
+        // dieser Grenze beim Programm an, einmal.
+        let mut halting = ops(false);
+        halting.idle = yes;
+        halting.deadline = far;
+        halting.operator_abort = operator_abort;
+        let mut halted = Counter::default();
+        let mut core = MaybeUninit::<Core>::uninit();
+        // SAFETY: wie oben.
+        let rc =
+            unsafe { takt_core_init(core.as_mut_ptr(), &halting, (&raw mut halted).cast(), null_mut(), 0, &watchdog) };
+        assert_eq!(rc, status::OK);
+        // SAFETY: wie oben; der Abort kommt zwischen zwei Aufrufen.
+        unsafe {
+            takt_core_service(core.as_mut_ptr(), 0);
+            takt_core_abort(core.as_mut_ptr());
+            takt_core_service(core.as_mut_ptr(), 6 * TICK_NS);
+            takt_core_service(core.as_mut_ptr(), 8 * TICK_NS);
+        }
+        assert_eq!(halted.aborted_in, Some(7), "der Abort wirkt im Tick an der Grenze bei 6 ms");
+        assert!(!halted.abort_pending, "der Kern meldete den Abort zweimal");
+
+        // Eine Schutzverletzung (12.3) ebenso: Sie weckt und kommt als
+        // `Runtime(Hardware)` vor dem Schritt an dieser Grenze an, einmal.
+        let mut guarding = ops(false);
+        guarding.idle = yes;
+        guarding.deadline = far;
+        guarding.hardware = hardware_fault;
+        let mut guarded = Counter::default();
+        let mut core = MaybeUninit::<Core>::uninit();
+        // SAFETY: wie oben.
+        let rc = unsafe {
+            takt_core_init(core.as_mut_ptr(), &guarding, (&raw mut guarded).cast(), null_mut(), 0, &watchdog)
+        };
+        assert_eq!(rc, status::OK);
+        // SAFETY: wie oben; die Meldung kommt zwischen zwei Aufrufen.
+        unsafe {
+            takt_core_service(core.as_mut_ptr(), 0);
+            takt_core_hardware_fault(core.as_mut_ptr());
+            takt_core_service(core.as_mut_ptr(), 6 * TICK_NS);
+            takt_core_service(core.as_mut_ptr(), 8 * TICK_NS);
+        }
+        assert_eq!(guarded.hardware_in, Some(7), "die Schutzverletzung wirkt im Tick an der Grenze bei 6 ms");
+        assert!(!guarded.hardware_pending, "der Kern meldete sie zweimal");
 
         let journaled = ops(true);
         let mut flash = Flash { slots: [[0xff; SLOT]; 2], pending: nvm::IDLE };

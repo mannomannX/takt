@@ -188,6 +188,7 @@ fn kernel_objects(
             // Ein Messkern misst den Tick, nicht die Peripherie (12.6).
             stubs: true,
             job_stack_reserve: takt_frame::mcu::JOB_STACK_RESERVE,
+            scenario: None,
         },
     );
     let (ll, c) = (src.join(format!("{x}.ll")), src.join(format!("{x}_frame.c")));

@@ -218,7 +218,7 @@ fn mutable_shared(symbols: &[takt_llvm::inspect::Symbol]) -> (bool, Vec<String>)
 /// `libtaktm`, die kuratierten Natives und der Randkern liegen einmal im
 /// Abbild, auch bei mehreren Programmen und Instanzen (12.11); darum steht
 /// keines ihrer Symbole in `.data` oder `.bss`. Geprueft wird die
-/// Bibliothek, die der Wirtsrahmen bindet.
+/// Bibliothek der Natives fuer den Wirt.
 #[test]
 fn the_shared_libraries_hold_no_mutable_state() {
     let Some(_) = common::clang_path() else { return };

@@ -60,16 +60,8 @@ fn native_monitors_report_the_same_violations_in_the_same_tick() {
         })
         .collect();
     let native = common::run_native_all_with(&clang, &p, "47_monitors.takt", TICKS, &inputs).expect("nativ");
-    let mut reported = Vec::new();
-    for line in native.lines() {
-        let w: Vec<&str> = line.split_whitespace().collect();
-        if w.len() == 4 && w[1] == "property" {
-            let i: usize = w[2].parse().expect("Index");
-            let prop = &p.properties[i];
-            let word = if prop.assumption { "assumption" } else { "property" };
-            reported.push(format!("{} {word} {} violated {}", w[0], prop.name, w[3]));
-        }
-    }
+    // Der Rahmen schreibt die Verletzung wie der Interpreter (FB-391).
+    let reported: Vec<String> = violations(&native).iter().map(|l| l.trim_end().to_string()).collect();
     let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
     let r = takt_interp::run(&p, &stimulus, &options).expect("Lauf");
     let interpreted = r.trace.render();

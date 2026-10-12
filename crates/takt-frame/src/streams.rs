@@ -25,16 +25,6 @@ use takt_mir::types::Type;
 
 use crate::text::Text;
 
-/// Wohin der Rahmen seine Trace-Zeilen schreibt: `printf` auf dem Wirt,
-/// die `takt_board_trace*`-Aufrufe des Boards auf der MCU.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Trace {
-    /// `stdio`, der Linux-Rahmen.
-    Stdio,
-    /// Das Board stellt `takt_board_trace`, `_i64` und `_hex8`.
-    Board,
-}
-
 /// Schreibt die Aufrufe aus `takt-llvm/src/stream.rs` als C: jeder Strom,
 /// interner wie Eingabestrom, ueber seinen Ring.
 ///
@@ -43,7 +33,7 @@ pub enum Trace {
 /// Commit und Bericht, die der Tick ruft, als leere Funktionen. Einzelne
 /// `static`-Puffer hatte der Compiler entfernt, wenn niemand sie las —
 /// Felder der Arena bleiben stehen (12.11).
-pub fn emit(t: &mut Text, p: &Program, trace: Trace, x: &Prefix) {
+pub fn emit(t: &mut Text, p: &Program, x: &Prefix) {
     let dyns = dynamic_streams(p);
     if dyns.is_empty() {
         let _ = writeln!(t.code, "static void takt_int_commit(struct {x}_arena *a) {{ (void)a; }}");
@@ -51,10 +41,10 @@ pub fn emit(t: &mut Text, p: &Program, trace: Trace, x: &Prefix) {
             t.code,
             "static void takt_stream_report(struct {x}_arena *a, long long t) {{ (void)a; (void)t; }}\n"
         );
-        emit_send(t, p, false, trace, x);
+        emit_send(t, p, false, x);
         return;
     }
-    emit_internal(t, p, &dyns, trace, x);
+    emit_internal(t, p, &dyns, x);
     let s = &mut t.code;
     let _ = writeln!(s, "/* Stroeme (8.6, 9.6): jeder ueber seinen Ring. */");
     let _ = writeln!(s, "int {x}_stream_count(struct {x}_arena *a, int s, long long cur) {{");
@@ -88,8 +78,8 @@ pub fn emit(t: &mut Text, p: &Program, trace: Trace, x: &Prefix) {
         "    return (int)(which == 0 ? a->int_dropped[k] : which == 1 ? a->int_overflowed[k] : a->int_malformed[k]);"
     );
     let _ = writeln!(s, "}}\n");
-    report(t, &dyns, trace, x);
-    emit_send(t, p, true, trace, x);
+    report(t, &dyns, x);
+    emit_send(t, p, true, x);
 }
 
 /// `takt_stream_report(t)`: die Zeile `stream <name> dropped=… overflowed=…
@@ -97,7 +87,7 @@ pub fn emit(t: &mut Text, p: &Program, trace: Trace, x: &Prefix) {
 /// `grammar/trace.md`) — erst die Eingabestroeme, dann die internen, wie
 /// der Interpreter. Der erste Aufruf nach Tick 0 merkt den Stand nur: In
 /// Tick 0 sind die Zaehler keine Beobachtung (`Recorder::stream_counters`).
-fn report(t: &mut Text, dyns: &[Dynamic], trace: Trace, x: &Prefix) {
+fn report(t: &mut Text, dyns: &[Dynamic], x: &Prefix) {
     let order: Vec<usize> = (0..dyns.len())
         .filter(|&k| dyns[k].input)
         .chain((0..dyns.len()).filter(|&k| !dyns[k].input && !dyns[k].read_output))
@@ -121,27 +111,18 @@ fn report(t: &mut Text, dyns: &[Dynamic], trace: Trace, x: &Prefix) {
         let _ = writeln!(s, "        if (a->int_based && memcmp(now, a->int_shown[k], sizeof now) == 0) continue;");
         let _ = writeln!(s, "        memcpy(a->int_shown[k], now, sizeof now);");
         let _ = writeln!(s, "        if (!a->int_based) continue;");
-        match trace {
-            Trace::Stdio => {
-                let _ = writeln!(
-                    s,
-                    "        printf(\"t=%lld stream %s dropped=%u overflowed=%u malformed=%u\\n\", t, g_int_name[k], now[0], now[1], now[2]);"
-                );
-            }
-            Trace::Board => {
-                let _ = writeln!(s, "        takt_board_trace(\"t=\");");
-                let _ = writeln!(s, "        takt_board_trace_i64(t);");
-                let _ = writeln!(s, "        takt_board_trace(\"stream \");");
-                let _ = writeln!(s, "        takt_board_trace(g_int_name[k]);");
-                let _ = writeln!(s, "        takt_board_trace(\" dropped=\");");
-                let _ = writeln!(s, "        takt_board_trace_u64(now[0]);");
-                let _ = writeln!(s, "        takt_board_trace(\"overflowed=\");");
-                let _ = writeln!(s, "        takt_board_trace_u64(now[1]);");
-                let _ = writeln!(s, "        takt_board_trace(\"malformed=\");");
-                let _ = writeln!(s, "        takt_board_trace_u64(now[2]);");
-                let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
-            }
-        }
+        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "        takt_board_trace_i64(t);");
+        let _ = writeln!(s, "        takt_board_trace(\"stream \");");
+        let _ = writeln!(s, "        takt_board_trace(g_int_name[k]);");
+        let _ = writeln!(s, "        takt_board_trace(\" dropped=\");");
+        let _ = writeln!(s, "        takt_board_trace_u64(now[0]);");
+        let _ = writeln!(s, "        takt_board_trace(\"overflowed=\");");
+        let _ = writeln!(s, "        takt_board_trace_u64(now[1]);");
+        let _ = writeln!(s, "        takt_board_trace(\"malformed=\");");
+        let _ = writeln!(s, "        takt_board_trace_u64(now[2]);");
+        let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
+
         let _ = writeln!(s, "    }}");
     }
     let _ = writeln!(s, "    a->int_based = 1;");
@@ -334,12 +315,6 @@ pub(crate) fn port_stages(p: &Program) -> bool {
         .any(|i| port_writes(p, i) && matches!(p.channels[i].attrs.overflow, Some(Overflow::DropOldest)))
 }
 
-/// Speist ein `sim`-Ausgabestrom den Eingabestrom `channel` (8.3)? Dann
-/// liefert ihn das Modell, kein Treiber.
-pub(crate) fn coupled_input(p: &Program, channel: usize) -> bool {
-    coupled(p).iter().any(|(i, _, _)| *i == channel)
-}
-
 /// `(Eingang, Ausgang, Elementtyp)` je Kopplung: ein `hw`-Eingabestrom und
 /// der `sim`-Ausgabestrom derselben Adresse (8.3).
 fn coupled(p: &Program) -> Vec<(usize, usize, TypeId)> {
@@ -364,7 +339,7 @@ fn coupled(p: &Program) -> Vec<(usize, usize, TypeId)> {
     out
 }
 
-fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &Prefix) {
+fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], x: &Prefix) {
     let n = dyns.len();
     let rows = n;
     let readers = dyns.iter().map(|d| d.readers.len()).max().unwrap_or(1).max(1);
@@ -638,7 +613,7 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}\n");
     if !staged.is_empty() {
-        deliver_sent(s, p, dyns, readers, trace, x);
+        deliver_sent(s, p, dyns, readers, x);
     }
 }
 
@@ -651,7 +626,7 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &
 /// Alert der Zustellung als Flanke (5.6); der Schreibstrom eines Ports am
 /// Ende des Ticks nach dem Verwerfen, vor dem, was der Rand im naechsten
 /// liefert, und ohne Alert (12.10, `Image::deliver_port_writes`).
-fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, trace: Trace, x: &Prefix) {
+fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, x: &Prefix) {
     let _ = writeln!(s, "static const char *const g_int_reader_name[TAKT_INT_STREAMS][{readers}] = {{");
     for d in dyns {
         let names: Vec<String> = d
@@ -718,21 +693,12 @@ fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, t
     let _ = writeln!(s, "            _Bool on = dropped > 0;");
     let _ = writeln!(s, "            if (a->int_alerted[k][r] == on) continue;");
     let _ = writeln!(s, "            a->int_alerted[k][r] = on;");
-    match trace {
-        Trace::Stdio => {
-            let _ = writeln!(
-                s,
-                "            printf(\"t=%lld alert %s %s\\n\", (long long)a->tick, g_int_reader_name[k][r], on ? \"on\" : \"off\");"
-            );
-        }
-        Trace::Board => {
-            let _ = writeln!(s, "            takt_board_trace(\"t=\");");
-            let _ = writeln!(s, "            takt_board_trace_i64(a->tick);");
-            let _ = writeln!(s, "            takt_board_trace(\"alert \");");
-            let _ = writeln!(s, "            takt_board_trace(g_int_reader_name[k][r]);");
-            let _ = writeln!(s, "            takt_board_trace(on ? \" on\\n\" : \" off\\n\");");
-        }
-    }
+    let _ = writeln!(s, "            takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "            takt_board_trace_i64(a->tick);");
+    let _ = writeln!(s, "            takt_board_trace(\"alert \");");
+    let _ = writeln!(s, "            takt_board_trace(g_int_reader_name[k][r]);");
+    let _ = writeln!(s, "            takt_board_trace(on ? \" on\\n\" : \" off\\n\");");
+
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}\n");
@@ -750,7 +716,7 @@ fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, t
 /// Ohne diese Rate stuende im nativen Trace der ganze Text in einem
 /// Tick, im interpretierten haeppchenweise — und der Vergleich saehe
 /// einen Unterschied, den es in der Sache nicht gibt.
-fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
+fn emit_send(t: &mut Text, p: &Program, rings: bool, x: &Prefix) {
     let streams: Vec<(usize, &Channel)> = p
         .channels
         .iter()
@@ -882,24 +848,15 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
             let _ = writeln!(s, "    if (a->tx_n[{slot}] > 0) {{");
             let _ = writeln!(s, "        int n = a->tx_n[{slot}] < {per_tick} ? a->tx_n[{slot}] : {per_tick};");
         }
-        match trace {
-            Trace::Stdio => {
-                let _ = writeln!(s, "        printf(\"t=%lld out {} [\", t);", c.name);
-                let _ = writeln!(s, "        for (int i = 0; i < n; i++)");
-                let _ = writeln!(s, "            printf(i ? \", 0x%02x\" : \"0x%02x\", a->tx[{slot}][i]);");
-                let _ = writeln!(s, "        printf(\"]\\n\");");
-            }
-            Trace::Board => {
-                let _ = writeln!(s, "        takt_board_trace(\"t=\");");
-                let _ = writeln!(s, "        takt_board_trace_i64(t);");
-                let _ = writeln!(s, "        takt_board_trace(\"out {} [\");", c.name);
-                let _ = writeln!(s, "        for (int i = 0; i < n; i++) {{");
-                let _ = writeln!(s, "            if (i) takt_board_trace(\", \");");
-                let _ = writeln!(s, "            takt_board_trace_hex8(a->tx[{slot}][i]);");
-                let _ = writeln!(s, "        }}");
-                let _ = writeln!(s, "        takt_board_trace(\"]\\n\");");
-            }
-        }
+        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "        takt_board_trace_i64(t);");
+        let _ = writeln!(s, "        takt_board_trace(\"out {} [\");", c.name);
+        let _ = writeln!(s, "        for (int i = 0; i < n; i++) {{");
+        let _ = writeln!(s, "            if (i) takt_board_trace(\", \");");
+        let _ = writeln!(s, "            takt_board_trace_hex8(a->tx[{slot}][i]);");
+        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "        takt_board_trace(\"]\\n\");");
+
         let _ = writeln!(s, "        memcpy(a->tx_sent[{slot}], a->tx[{slot}], (size_t)n);");
         let _ = writeln!(s, "        a->tx_sent_n[{slot}] = n;");
         let _ = writeln!(s, "        memmove(a->tx[{slot}], a->tx[{slot}] + n, (size_t)(a->tx_n[{slot}] - n));");

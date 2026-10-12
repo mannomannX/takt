@@ -21,8 +21,11 @@ use takt_llvm::symbols::Prefix;
 use crate::drivers::Driver;
 
 /// Die Version der Schnittstelle zwischen Bibliothek und Huelle (12.11):
-/// Sie steht im Symbol `P_abi_<n>` und im Manifest.
-pub const ABI: u32 = 4;
+/// Sie steht im Symbol `P_abi_<n>` und im Manifest. Fassung 5: Grund und
+/// Alter je Abtastung und eine Abtastung ohne Wert (Rueckgabe 2),
+/// Eingaenge zusammengesetzten Typs, Commands des Wirts, `P_operator_abort`
+/// (M11 Schritt 9).
+pub const ABI: u32 = 5;
 
 /// Was das Modul braucht.
 pub struct Module<'a> {
@@ -112,6 +115,7 @@ fn ffi(x: &Prefix, logic: &str) -> String {
         format!("pub(super) fn {x}_end(a: *mut c_void);"),
         format!("pub(super) fn {x}_overrun(a: *mut c_void);"),
         format!("pub(super) fn {x}_hardware(a: *mut c_void);"),
+        format!("pub(super) fn {x}_operator_abort(a: *mut c_void);"),
         format!("pub(super) fn {x}_tolerance(ns: *mut i64, runs: *mut u32);"),
         format!("pub(super) fn {x}_output_timing() -> u8;"),
         format!("pub(super) fn {x}_job_dispatch(a: *mut c_void) -> i32;"),
@@ -127,6 +131,63 @@ fn ffi(x: &Prefix, logic: &str) -> String {
     s
 }
 
+/// Die Ausgaenge, die `P_output` des Rahmens kennt, in seiner Reihenfolge,
+/// als Bezeichner in Grossbuchstaben: die Stellung im Kopf (`P_OUT_<NAME>`)
+/// und im Rust-Modul (`OUT_<NAME>`).
+pub fn output_names(p: &takt_mir::Program) -> Vec<String> {
+    p.channels
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| {
+            c.dir != takt_mir::program::Direction::Input
+                && u32::try_from(*i).is_ok_and(|i| takt_llvm::image::latch_offset(takt_mir::ChannelId(i), p).is_some())
+                && takt_llvm::ty::lower(c.ty, p).is_some()
+        })
+        .map(|(_, c)| c.name.to_uppercase().replace(|ch: char| !ch.is_ascii_alphanumeric(), "_"))
+        .collect()
+}
+
+/// Der Kopf `P.h` fuer einen Wirt in C (12.11): der Kopf des Rahmens
+/// ([`crate::mcu::McuHarness::header`]) und die Konstanten des Programms,
+/// dieselben wie im Rust-Modul, mit dem Praefix; dazu die Tabelle `P_ops`
+/// fuer das C-SDK ([`c_ops`]). `tick_stack` und `job_stack` sind die Stacks,
+/// die der Wirt stellt (12.3).
+pub fn c_header(
+    frame_header: &str,
+    p: &takt_mir::Program,
+    x: &Prefix,
+    nvm_blocking_ns: i64,
+    tick_stack: u64,
+    job_stack: u64,
+) -> String {
+    let upper = x.as_str().to_uppercase();
+    let hash = takt_mir::hash::logic_hash(p);
+    let key = hash.0.first_chunk::<8>().map_or(0, |b| u64::from_le_bytes(*b));
+    let mut consts = String::new();
+    let _ = writeln!(consts, "/* Die Konstanten des Programms (5.9, 7.1, 7.3, 12.3). */");
+    let _ = writeln!(consts, "#define {upper}_TICK_NS {}LL", p.config.tick);
+    let _ = writeln!(consts, "#define {upper}_NVM_BLOCKING_NS {nvm_blocking_ns}LL");
+    let alert = u8::from(p.config.overrun == takt_mir::program::OverrunPolicy::Alert);
+    let _ = writeln!(consts, "#define {upper}_OVERRUN_ALERT {alert}");
+    let _ = writeln!(consts, "#define {upper}_LOGIC_HASH {key:#018x}ULL");
+    // 12.3, 12.11: Beide Stacks stellt der Wirt, den Job-Stack an 32 Byte ausgerichtet.
+    let _ = writeln!(consts, "#define {upper}_TICK_STACK_BYTES {tick_stack}u");
+    let _ = writeln!(consts, "#define {upper}_JOB_STACK_BYTES {job_stack}u");
+    let _ = writeln!(consts, "#define {upper}_PERSIST_BOUND {}u", takt_mir::persist::max_payload(p).unwrap_or(0));
+    let min = takt_mir::persist::min_interval_ns(p).unwrap_or(0);
+    let _ = writeln!(consts, "#define {upper}_PERSIST_MIN_INTERVAL_NS {min}LL\n");
+    let _ = writeln!(consts, "/* Die Ausgaenge in der Reihenfolge, die `{x}_output` erwartet. */");
+    let outputs = output_names(p);
+    for (index, name) in outputs.iter().enumerate() {
+        let _ = writeln!(consts, "#define {upper}_OUT_{name} {index}");
+    }
+    let _ = writeln!(consts, "#define {upper}_OUTPUTS {}\n", outputs.len());
+    let _ = writeln!(consts, "/* Die Einstiege als Tabelle fuer das C-SDK (`takt_sdk.h`, `takt_core_init`). */");
+    let _ = writeln!(consts, "struct takt_ops;\nextern const struct takt_ops {x}_ops;\n");
+    let body = frame_header.trim_end().strip_suffix("#endif").unwrap_or(frame_header);
+    format!("{body}{consts}#endif\n")
+}
+
 /// Die Einstiege eines Programms `x` als Tabelle fuer das C-SDK
 /// (`takt_sdk.h`, `struct takt_ops`; M11 Schritt 18a): je Einstieg mit Arena
 /// ein Adapter, der sie als `void *` nimmt, denn eine Funktion durch einen
@@ -134,7 +195,7 @@ fn ffi(x: &Prefix, logic: &str) -> String {
 /// faehrt das Programm darueber wie die Huelle `P.rs` einen Rust-Wirt.
 pub fn c_ops(x: &Prefix) -> String {
     let upper = x.as_str().to_uppercase();
-    let with_arena: [(&str, &str, &str, &str); 19] = [
+    let with_arena: [(&str, &str, &str, &str); 20] = [
         ("void", "init", "void *a, void *user", "A(a), user"),
         ("int32_t", "init_with", "void *a, void *user, const void *bytes, int32_t len", "A(a), user, bytes, len"),
         ("void", "tick", "void *a, int64_t k", "A(a), k"),
@@ -157,6 +218,7 @@ pub fn c_ops(x: &Prefix) -> String {
         ("void", "end", "void *a", "A(a)"),
         ("void", "overrun", "void *a", "A(a)"),
         ("void", "hardware", "void *a", "A(a)"),
+        ("void", "operator_abort", "void *a", "A(a)"),
         ("int32_t", "job_dispatch", "void *a", "A(a)"),
         ("void", "job_work", "void *a", "A(a)"),
     ];
@@ -406,6 +468,12 @@ impl takt_embed::rt::Program for Program<'_> {{
         self.ensure_init();
         // SAFETY: wie oben.
         unsafe {{ ffi::{x}_hardware(self.arena) }}
+    }}
+
+    fn raise_abort(&mut self) {{
+        self.ensure_init();
+        // SAFETY: wie oben.
+        unsafe {{ ffi::{x}_operator_abort(self.arena) }}
     }}
 
     fn tick_tolerance(&self) -> Option<takt_embed::rt::Tolerance> {{

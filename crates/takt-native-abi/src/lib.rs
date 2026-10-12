@@ -5,7 +5,7 @@
 //!
 //! **Eine Implementierung** (FB-293). 4.5 legt die Natives in die Runtime;
 //! die Rechnung steht in `takt-native` und `takt-crypto`, und Interpreter,
-//! Linux-Runtime, Wirtsrahmen und Boards rufen dieselbe. Hier steht nur die
+//! Linux-Runtime, C-Wirte und Boards rufen dieselbe. Hier steht nur die
 //! Grenze: Zeiger und Laengen werden Slices, ein Ergebnis aus Bytes geht in
 //! kanonischer Form (5.9) in den Puffer des Aufrufers.
 //!
