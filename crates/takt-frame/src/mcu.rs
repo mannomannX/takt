@@ -655,11 +655,16 @@ impl Default for JobStack {{
 ///
 /// **Zwei Faeden, ein Uebergabepunkt.** Die Slots gehoeren der
 /// Hauptschleife: Nur sie startet, bricht ab und macht sichtbar. Dem
-/// Job-Kontext gehoert ein Auftrag (`work_*`): Die Hauptschleife fuellt
-/// ihn, solange der Kontext ruht (`P_job_dispatch`), der Kontext
-/// rechnet ihn und meldet `work_finished`, die Hauptschleife holt das
-/// Ergebnis ab. Ein Neustart oder Abbruch waehrend der Rechnung erhoeht
-/// die Generation des Slots, und ein Ergebnis zur alten verfaellt.
+/// Job-Kontext gehoert ein Auftrag (`work_*`), den `work_state` weiterreicht:
+/// Die Hauptschleife fuellt ihn, solange er frei ist, und vergibt ihn
+/// (`P_job_dispatch`); der Kontext uebernimmt ihn mit einem Vergleichen und
+/// Tauschen, rechnet und meldet ihn fertig; die Hauptschleife holt das
+/// Ergebnis ab und gibt den Auftrag frei. Jeder Uebergang ist sequentiell
+/// konsistent (MISRA C:2025 R.21.25): Unter POSIX laeuft der Job-Kontext auf
+/// einem anderen Kern als der Schritt, und ein Aufruf des Kontexts ohne
+/// vergebenen Auftrag liest nichts (FB-528). Ein Neustart oder Abbruch
+/// waehrend der Rechnung erhoeht die Generation des Slots, und ein Ergebnis
+/// zur alten verfaellt.
 ///
 /// Ohne Jobs bleiben die Einstiege, damit das Board sie ohne Unterschied
 /// rufen kann.
@@ -677,18 +682,19 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let in_max = crate::parts::job_in_max(p);
 
     let _ = writeln!(t.code, "enum {{ TAKT_JOB_FREE, TAKT_JOB_WAITING, TAKT_JOB_RUNNING, TAKT_JOB_DONE }};");
+    let _ = writeln!(t.code, "enum {{ TAKT_WORK_FREE, TAKT_WORK_ASSIGNED, TAKT_WORK_RUNNING, TAKT_WORK_DONE }};");
     let _ = writeln!(
         t.types,
         "typedef struct {{ unsigned char state, gen, late; int native; long long due, order; int in_len, out_len; unsigned char in[{in_max}], out[{out_max}]; }} {x}_job;"
     );
     // Slots und Auftrag liegen in der Runtime hinter dem Programmbereich:
     // Der Job-Kontext schreibt den Auftrag ausserhalb des Schritts, wenn der
-    // Schutz den Programmbereich sperrt (12.3); `volatile`, weil zwei Faeden
-    // ihn teilen.
+    // Schutz den Programmbereich sperrt (12.3). `work_slot` gehoert der
+    // Hauptschleife, `work_state` beiden Faeden und geht nur atomar.
     let f = &mut t.fields;
     let _ = writeln!(f, "    {x}_job jobs[{slots}];");
     let _ = writeln!(f, "    long long job_order;");
-    let _ = writeln!(f, "    volatile int work_slot, work_finished;");
+    let _ = writeln!(f, "    int work_slot, work_state;");
     let _ = writeln!(f, "    unsigned char work_gen;");
     let _ = writeln!(f, "    int work_native, work_in_len, work_out_len;");
     let _ = writeln!(f, "    unsigned char work_in[{in_max}], work_out[{out_max}];");
@@ -716,8 +722,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "/* Hauptschleife: Ein fertiger Auftrag geht in seinen Slot, wenn der noch auf ihn wartet. */");
     let _ = writeln!(s, "static void takt_jobs_collect(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    {x}_job *j;");
-    let _ = writeln!(s, "    if (a->work_slot < 0 || !a->work_finished) return;");
-    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
+    let _ = writeln!(s, "    if (__atomic_load_n(&a->work_state, __ATOMIC_SEQ_CST) != TAKT_WORK_DONE) return;");
     let _ = writeln!(s, "    j = &a->jobs[a->work_slot];");
     let _ = writeln!(s, "    if (j->state == TAKT_JOB_RUNNING && j->gen == a->work_gen) {{");
     // `-1` ist `Err(FAILED)` ohne Bytes; ein `size_t` daraus kopierte alles.
@@ -727,7 +732,8 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     );
     let _ = writeln!(s, "        j->state = TAKT_JOB_DONE;");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    a->work_finished = 0; a->work_slot = -1;");
+    let _ = writeln!(s, "    a->work_slot = -1;");
+    let _ = writeln!(s, "    __atomic_store_n(&a->work_state, TAKT_WORK_FREE, __ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
@@ -736,7 +742,7 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "int32_t {x}_job_dispatch(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    int i, next = -1;");
     let _ = writeln!(s, "    takt_jobs_collect(a);");
-    let _ = writeln!(s, "    if (a->work_slot >= 0) return 1;");
+    let _ = writeln!(s, "    if (__atomic_load_n(&a->work_state, __ATOMIC_SEQ_CST) != TAKT_WORK_FREE) return 1;");
     let _ = writeln!(s, "    for (i = 0; i < {slots}; i++)");
     let _ = writeln!(
         s,
@@ -746,21 +752,22 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    memcpy(a->work_in, a->jobs[next].in, (size_t)a->jobs[next].in_len);");
     let _ = writeln!(s, "    a->work_in_len = a->jobs[next].in_len; a->work_native = a->jobs[next].native;");
     let _ = writeln!(s, "    a->work_gen = a->jobs[next].gen; a->jobs[next].state = TAKT_JOB_RUNNING;");
-    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
-    let _ = writeln!(s, "    a->work_finished = 0; a->work_slot = next;");
+    let _ = writeln!(s, "    a->work_slot = next;");
+    let _ = writeln!(s, "    __atomic_store_n(&a->work_state, TAKT_WORK_ASSIGNED, __ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "    return 1;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "/* Job-Kontext: rechnet den Auftrag, den die Hauptschleife gegeben hat. */");
     let _ = writeln!(s, "static void takt_job_work(struct {x}_arena *a) {{");
-    let _ = writeln!(s, "    int native;");
-    let _ = writeln!(s, "    if (a->work_slot < 0 || a->work_finished) return;");
-    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
+    let _ = writeln!(s, "    int native, assigned = TAKT_WORK_ASSIGNED;");
+    let _ = writeln!(
+        s,
+        "    if (!__atomic_compare_exchange_n(&a->work_state, &assigned, TAKT_WORK_RUNNING, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) return;"
+    );
     let _ = writeln!(s, "    native = a->work_native;");
     let _ = writeln!(s, "    {{");
     crate::parts::job_call(s, p, "a->work_in", "a->work_in_len", "a->work_out", "a->work_out_len", "        ");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    __atomic_signal_fence(__ATOMIC_SEQ_CST);");
-    let _ = writeln!(s, "    a->work_finished = 1;");
+    let _ = writeln!(s, "    __atomic_store_n(&a->work_state, TAKT_WORK_DONE, __ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "}}");
     guarded(s, x, "void", "job_work", "", "");
     let _ = writeln!(
@@ -818,7 +825,8 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
         s,
         "    for (i = 0; i < {slots}; i++) {{ a->jobs[i].state = TAKT_JOB_FREE; takt_job_image(a, i, 0, 0, 2); }}"
     );
-    let _ = writeln!(s, "    a->work_slot = -1; a->work_finished = 0;");
+    let _ = writeln!(s, "    a->work_slot = -1;");
+    let _ = writeln!(s, "    __atomic_store_n(&a->work_state, TAKT_WORK_FREE, __ATOMIC_SEQ_CST);");
     let _ = writeln!(s, "}}\n");
 }
 
