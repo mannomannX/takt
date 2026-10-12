@@ -5,8 +5,8 @@
 use takt_mir::Program;
 use takt_mir::analysis::proof::{Site, parse, render};
 use takt_prove::{
-    CheckVerdict, ContractVerdict, Solver, Verdict, classify, classify_compositional, encode, find, prove,
-    verify_contracts,
+    CheckVerdict, ContractVerdict, Solver, Verdict, classify, classify_compositional, classify_sites, encode, find,
+    prove, verify_contracts,
 };
 
 fn compile(src: &str) -> Program {
@@ -31,8 +31,14 @@ fn corpus_with(name: &str, properties: &str) -> Program {
 /// Der Solver; fehlt er, scheitert der Test, es sei denn,
 /// `TAKT_ALLOW_MISSING` erlaubt das Fehlen (FB-392).
 fn solver() -> Option<Solver> {
-    let found = Some(find()).filter(|s| !matches!(s, Solver::Missing));
-    takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren")
+    let found = Some(find()).filter(|s| !s.is_missing());
+    takt_testkit::require("solver", found, "`TAKT_SOLVER` setzen oder z3/cvc5 installieren").map(cached)
+}
+
+/// Der Solver mit dem Cache seiner entschiedenen Antworten im
+/// Zielverzeichnis (M11 B2 Schritt 0).
+fn cached(s: Solver) -> Solver {
+    s.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache"))
 }
 
 /// Ein Programm, das `n` Durchlaeufe einer Schleife in `outer` Durchlaeufen ausrollt.
@@ -94,27 +100,109 @@ fn machine_with(top: &str, var: &str, body: &str) -> Program {
 /// **Die Grenze des Zustands.** Das Flash-Modell der Prelude haelt 256
 /// Chunks zu 256 Byte, ueber 65 000 Blaetter; jede Verzweigung mischte sie
 /// alle, und der Wahrheitstest der Matrix starb daran am Speicher (FB-485).
-/// Ein Viertel davon kodiert weiter.
+/// Seit grosse Sammlungen Arrays der SMT-Theorie sind (FB-497), haelt es je
+/// Blatt eines Chunks ein Array nach dem Schluessel. Eine map, ueber die
+/// `for (k, v)` laeuft, bleibt aus Slots und darum ueber der Grenze.
 #[test]
 fn a_state_beyond_the_limit_is_out_of_reach() {
-    let e = encode(&machine_with("", "mem : map<int, bytes<256>, 256> = default", "")).expect_err("ueber der Grenze");
+    let r = encode(&machine_with("", "mem : map<int, bytes<256>, 256> = default", ""));
+    let model = r.unwrap_or_else(|e| panic!("in Reichweite: {}", e.what));
+    assert!(model.state.len() < 100, "{} Orte", model.state.len());
+    let walked = "            for (k, v) in mem:\n                n = k % 7\n";
+    let e =
+        encode(&machine_with("", "mem : map<int, bytes<200>, 256> = default", walked)).expect_err("ueber der Grenze");
     assert!(e.what.contains(&takt_prove::encode::STATE_LIMIT.to_string()), "{}", e.what);
-    let r = encode(&machine_with("", "mem : map<int, bytes<64>, 256> = default", ""));
+    let r = encode(&machine_with("", "mem : map<int, bytes<64>, 256> = default", walked));
     assert!(r.is_ok(), "unter der Grenze: {:?}", r.err());
 }
 
-/// **Die Knotengrenze vor dem Bau.** `send` eines Elements aus 4096 Byte
-/// in einen Sendepuffer aus 4096 Byte waehlt fuer jeden Platz unter jedem
-/// Byte des Werts; das sind ueber 50 Millionen Knoten, und der Kodierer
-/// lehnt ab, bevor er einen baut (FB-485).
+/// **Die Knotengrenze vor dem Bau.** Wartet ein Element aus 4096 Byte
+/// ueber Commits, weil der Treiber je Tick ein Byte abholt, rechnet jeder
+/// Commit fuer jeden der 8192 Plaetze jedes Element aus den abgeholten
+/// Bytes; das sind weit ueber 16 Millionen Knoten, und der Kodierer lehnt
+/// ab, bevor er einen baut (FB-485). `send` selbst in einen Puffer aus
+/// Arrays kostet je Byte wenige Knoten (FB-497).
 #[test]
 fn a_send_beyond_the_node_limit_is_refused_before_it_is_built() {
-    let decl = "output rx : stream<bytes<4096>> @ hw(\"rx\") with capacity = 4096";
+    let reader = "input  rx : stream<bytes<4096>> @ hw(\"bus/x\") with max_rate = 100 Hz, capacity = 2\n\
+                  output tx : stream<bytes<4096>> @ sim(\"bus/x\") with max_rate = 100 Hz, capacity = 8192\n\
+                  output seen : int @ hw(\"seen\") with safe = 0\n\n\
+                  machine r:\n    initial RUN\n    state RUN:\n        on rx as e:\n            seen = e.data.len\n";
     let built = takt_prove::term::built();
-    let program = machine_with(decl, "page : bytes<4096> = default", "            send rx, page\n");
+    let program = machine_with(reader, "page : bytes<4096> = default", "            send tx, page\n");
     let e = encode(&program).expect_err("ueber der Grenze");
     assert!(e.what.contains(&takt_prove::encode::MODEL_LIMIT.to_string()), "{}", e.what);
     assert!(takt_prove::term::built() - built < takt_prove::encode::MODEL_LIMIT / 4, "gebaut, dann abgelehnt");
+    let direct = "output rx : stream<bytes<4096>> @ hw(\"rx\") with capacity = 4096";
+    let built = takt_prove::term::built();
+    let program = machine_with(direct, "page : bytes<4096> = default", "            send rx, page\n");
+    encode(&program).unwrap_or_else(|e| panic!("ein Puffer aus Arrays: {}", e.what));
+    assert!(takt_prove::term::built() - built < 1 << 20, "{} Knoten", takt_prove::term::built() - built);
+}
+
+/// **Ein Pfad durch einen grossen Puffer** (FB-497): Das Element vom Rand
+/// ist ein Array aus 300 Bytes; der Solver waehlt sein letztes Byte, der
+/// Stimulus schreibt es Byte fuer Byte, und der Interpreter bestaetigt den
+/// Fault.
+#[test]
+fn a_path_through_a_large_buffer_is_confirmed() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+input  rx   : stream<bytes<300>> @ hw(\"bus/rx\") with max_rate = 100 Hz, capacity = 2
+output seen : int in 0..300 @ hw(\"o/seen\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        on rx as e:
+            seen = e.data.len
+            check not (e.data.len == 300 and e.data[299] == 90), \"Marke\"
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert!(model.inputs.iter().any(|(n, _)| n == "i.stream.rx.0.v[*]"), "das Element ist ein Array");
+    let reports = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let check = reports.iter().find(|r| r.kind == "check").expect("die `check`-Stelle");
+    let CheckVerdict::Reachable { stimulus, .. } = &check.verdict else { panic!("{check:?}") };
+    assert!(stimulus.contains("in rx 0x") && stimulus.contains("5a t="), "{stimulus}");
+}
+
+/// **Eine induktive Invariante ueber einer grossen map** (FB-497): Die map
+/// steht nach ihren Schluesseln; der Schluessel 500 kommt nie hinein. Die
+/// k-Induktion sieht einen freien Zustand, in dem er steht; Spacer findet,
+/// dass er nie belegt ist.
+#[test]
+fn an_inductive_invariant_over_a_large_map_is_proven() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+output hit : bool @ hw(\"o/hit\") with safe = false
+
+machine m:
+    var table : map<int, int, 300> = default
+    var t     : int in 0..9 = 0
+    var r     : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            t = (t + 1) % 10
+            r = table.insert(t, t)
+            hit = table.get(500).valid
+
+property never_hit: never(hit)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    assert!(model.state.iter().any(|v| v.name == "s.m.v.table[*].has"), "die map steht nach Schluesseln");
+    let reports = prove(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    assert_eq!(reports[0].verdict, Verdict::Proven { k: 0, assumptions: vec![] }, "{:?}", reports[0]);
 }
 
 #[test]
@@ -332,53 +420,76 @@ machine consumer:
     assert!(site.machine == "consumer" && matches!(site.verdict, CheckVerdict::Unreachable { .. }), "{site:?}");
 }
 
-/// **z3 und cvc5 widersprechen sich nicht** (M11 Schritt 28c, 2.13 h): An
-/// denselben Programmen beweist keiner eine Pruefstelle unerreichbar, die
-/// der andere mit bestaetigtem Pfad erreicht, und keiner eine Eigenschaft,
-/// die der andere widerlegt. Unentschieden darf jeder bleiben — cvc5 sucht
-/// keine Invariante nach Horn-Klauseln —, aber beide entscheiden etwas.
-#[test]
-fn z3_and_cvc5_do_not_contradict_each_other() {
+/// **z3 und cvc5 widersprechen sich nicht** (M11 Schritt 28c, 2.13 h): Am
+/// Programm `name` beweist keiner eine Pruefstelle unerreichbar, die der
+/// andere mit bestaetigtem Pfad erreicht, und keiner eine Eigenschaft, die
+/// der andere widerlegt. Unentschieden darf jeder bleiben — cvc5 sucht keine
+/// Invariante nach Horn-Klauseln. Ergebnis: wie viele Stellen beide
+/// entschieden; `None` ohne beide Solver. Je Programm ein Test, damit
+/// nextest sie zugleich faehrt (B2 Schritt 0).
+fn solvers_agree_on(name: &str) -> Option<usize> {
     let need = |name: &str| {
-        let found = Some(takt_prove::named(name)).filter(|s| !matches!(s, Solver::Missing));
-        takt_testkit::require(name, found, "nach `~/.takt/bin` legen (z3 4.13.4, cvc5 1.2.0)")
+        let found = Some(takt_prove::named(name)).filter(|s| !s.is_missing());
+        takt_testkit::require(name, found, "nach `~/.takt/bin` legen (z3 4.13.4, cvc5 1.2.0)").map(cached)
     };
-    let (Some(z3), Some(cvc5)) = (need("z3"), need("cvc5")) else { return };
+    let (Some(z3), Some(cvc5)) = (need("z3"), need("cvc5")) else { return None };
     let mut decided = 0;
-    for name in ["01_minimal.takt", "03_sequences_and_faults.takt", "19_faults.takt", "47_monitors.takt"] {
-        let p = corpus_with(name, "");
-        let whole = encode(&p).ok();
-        let judge = |solver: &Solver| {
-            let checks = classify_compositional(&p, whole.as_ref(), 3, solver, 30).expect("Solver laeuft").0;
-            let props = whole.as_ref().map(|m| prove(m, &p, 3, solver, 30).expect("Solver laeuft")).unwrap_or_default();
-            (checks, props)
+    let p = corpus_with(name, "");
+    let whole = encode(&p).ok();
+    let judge = |solver: &Solver| {
+        let checks = classify_compositional(&p, whole.as_ref(), 3, solver, 30).expect("Solver laeuft").0;
+        let props = whole.as_ref().map(|m| prove(m, &p, 3, solver, 30).expect("Solver laeuft")).unwrap_or_default();
+        (checks, props)
+    };
+    let ((zc, zp), (cc, cp)) = (judge(&z3), judge(&cvc5));
+    for z in &zc {
+        let Some(c) = cc.iter().find(|c| c.start == z.start && c.kind == z.kind && c.machine == z.machine) else {
+            panic!("{name}: cvc5 kennt `{} {}` nicht", z.kind, z.start)
         };
-        let ((zc, zp), (cc, cp)) = (judge(&z3), judge(&cvc5));
-        for z in &zc {
-            let Some(c) = cc.iter().find(|c| c.start == z.start && c.kind == z.kind && c.machine == z.machine) else {
-                panic!("{name}: cvc5 kennt `{} {}` nicht", z.kind, z.start)
-            };
-            let contradiction = matches!(
-                (&z.verdict, &c.verdict),
-                (CheckVerdict::Unreachable { .. }, CheckVerdict::Reachable { .. })
-                    | (CheckVerdict::Reachable { .. }, CheckVerdict::Unreachable { .. })
-            );
-            assert!(!contradiction, "{name} {} {}: z3 {:?}, cvc5 {:?}", z.kind, z.start, z.verdict, c.verdict);
-            decided += usize::from(
-                !matches!(z.verdict, CheckVerdict::Undecided { .. })
-                    && !matches!(c.verdict, CheckVerdict::Undecided { .. }),
-            );
-        }
-        for z in &zp {
-            let c = cp.iter().find(|c| c.name == z.name).expect("dieselbe Eigenschaft");
-            let contradiction = matches!(
-                (&z.verdict, &c.verdict),
-                (Verdict::Proven { .. }, Verdict::Violated { .. }) | (Verdict::Violated { .. }, Verdict::Proven { .. })
-            );
-            assert!(!contradiction, "{name} `{}`: z3 {:?}, cvc5 {:?}", z.name, z.verdict, c.verdict);
-        }
+        let contradiction = matches!(
+            (&z.verdict, &c.verdict),
+            (CheckVerdict::Unreachable { .. }, CheckVerdict::Reachable { .. })
+                | (CheckVerdict::Reachable { .. }, CheckVerdict::Unreachable { .. })
+        );
+        assert!(!contradiction, "{name} {} {}: z3 {:?}, cvc5 {:?}", z.kind, z.start, z.verdict, c.verdict);
+        decided += usize::from(
+            !matches!(z.verdict, CheckVerdict::Undecided { .. })
+                && !matches!(c.verdict, CheckVerdict::Undecided { .. }),
+        );
     }
-    assert!(decided > 0, "keine Pruefstelle haben beide entschieden");
+    for z in &zp {
+        let c = cp.iter().find(|c| c.name == z.name).expect("dieselbe Eigenschaft");
+        let contradiction = matches!(
+            (&z.verdict, &c.verdict),
+            (Verdict::Proven { .. }, Verdict::Violated { .. }) | (Verdict::Violated { .. }, Verdict::Proven { .. })
+        );
+        assert!(!contradiction, "{name} `{}`: z3 {:?}, cvc5 {:?}", z.name, z.verdict, c.verdict);
+    }
+    Some(decided)
+}
+
+/// Beide entscheiden auch etwas: In `01_minimal` urteilen sie ueber
+/// dieselben Stellen.
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_01() {
+    if let Some(decided) = solvers_agree_on("01_minimal.takt") {
+        assert!(decided > 0, "keine Pruefstelle haben beide entschieden");
+    }
+}
+
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_03() {
+    solvers_agree_on("03_sequences_and_faults.takt");
+}
+
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_19() {
+    solvers_agree_on("19_faults.takt");
+}
+
+#[test]
+fn z3_and_cvc5_do_not_contradict_each_other_on_47() {
+    solvers_agree_on("47_monitors.takt");
 }
 
 /// **Eine Vorlage wird nicht fuer sich klassifiziert** (FB-491): Ihre
@@ -424,17 +535,31 @@ fn a_path_found_alone_is_confirmed_on_the_whole() {
     assert_eq!(*at, 1);
 }
 
+/// **`classify_sites` fragt nur die Stellen, die es behaelt** (FB-511):
+/// ueber ihnen dieselben Urteile wie `classify_compositional`, keine anderen.
+#[test]
+fn classifying_some_sites_judges_them_like_all() {
+    let Some(solver) = solver() else { return };
+    let p = corpus_with("19_faults.takt", "");
+    let whole = encode(&p).expect("kodierbar");
+    let (all, _) = classify_compositional(&p, Some(&whole), 3, &solver, 60).expect("Solver laeuft");
+    let (some, _) = classify_sites(&p, Some(&whole), 3, &solver, 60, &|c| c.kind == "range").expect("Solver laeuft");
+    let ranges: Vec<_> = all.into_iter().filter(|c| c.kind == "range").collect();
+    assert!(!ranges.is_empty(), "19_faults hat Range-Stellen");
+    assert_eq!(some, ranges);
+}
+
 /// 13.3: `max_slew` gilt als Annahme — die Aenderung ist durch die Rate seit
 /// der letzten guten Lieferung beschraenkt, wie der Rand sie erzwingt (12.6),
 /// genau bis auf die Rundung des Randes. Ein Tick ohne Lieferung haelt die
 /// vorige Abtastung (3.5); danach springt `x` um die Rate beider Ticks, und
-/// der Interpreter bestaetigt den Pfad.
-#[test]
-fn max_slew_bounds_the_change_since_the_last_good_delivery() {
-    let Some(solver) = solver() else { return };
-    let body = |attr: &str, bound: &str| {
-        format!(
-            "system:
+/// der Interpreter bestaetigt den Pfad. Drei Tests, damit nextest sie
+/// zugleich faehrt (B2 Schritt 0): Das Programm mit dem Attribut `attr` und
+/// der Schranke `bound`, und das Urteil ueber seine `check`-Stelle.
+fn slewed(attr: &str, bound: &str) -> Option<(takt_prove::Model, CheckVerdict)> {
+    let solver = solver()?;
+    let p = compile(&format!(
+        "system:
     language = 1
     tick     = 1 ms
 
@@ -453,30 +578,32 @@ machine m:
             armed = true
             y = last
 "
-        )
-    };
-    let check = |sites: Vec<takt_prove::CheckReport>| sites.into_iter().find(|s| s.kind == "check").expect("Stelle");
-    let p = compile(&body(" with max_slew = 10.0", "0.02"));
+    ));
     let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
+    let site = sites.into_iter().find(|s| s.kind == "check").expect("Stelle");
+    Some((model, site.verdict))
+}
+
+#[test]
+fn max_slew_bounds_the_change_since_the_last_good_delivery() {
+    let Some((model, verdict)) = slewed(" with max_slew = 10.0", "0.02") else { return };
     assert!(model.state.iter().any(|v| v.name == "s.q.x.good.prev"), "der letzte gute Wert liegt im Zustand");
-    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
-    let CheckVerdict::Undecided { reason } = &site.verdict else { panic!("{site:?}") };
+    let CheckVerdict::Undecided { reason } = &verdict else { panic!("{verdict:?}") };
     assert!(reason.contains("kein Pfad bis Tiefe 2"), "{reason}");
+}
 
-    let p = compile(&body(" with max_slew = 10.0", "0.015"));
-    let model = encode(&p).expect("kodierbar");
-    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
-    let CheckVerdict::Reachable { stimulus, .. } = &site.verdict else { panic!("{site:?}") };
-    assert!(
-        stimulus.lines().filter(|l| l.contains(" in x ")).count() < 3,
-        "ein Tick ohne Lieferung:
-{stimulus}"
-    );
+#[test]
+fn max_slew_allows_the_rate_of_both_ticks_after_a_tick_without_delivery() {
+    let Some((_, verdict)) = slewed(" with max_slew = 10.0", "0.015") else { return };
+    let CheckVerdict::Reachable { stimulus, .. } = &verdict else { panic!("{verdict:?}") };
+    assert!(stimulus.lines().filter(|l| l.contains(" in x ")).count() < 3, "ein Tick ohne Lieferung:\n{stimulus}");
+}
 
-    let p = compile(&body("", "0.02"));
-    let model = encode(&p).expect("kodierbar");
-    let site = check(classify(&model, &p, 2, &solver, 60).expect("Solver laeuft"));
-    assert!(matches!(site.verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {site:?}");
+#[test]
+fn without_max_slew_the_input_jumps() {
+    let Some((_, verdict)) = slewed("", "0.02") else { return };
+    assert!(matches!(verdict, CheckVerdict::Reachable { .. }), "ohne Rate springt x: {verdict:?}");
 }
 
 /// Ein Eingang bis 100, eine Variable bis 60, die ihn uebernimmt; die
@@ -644,7 +771,88 @@ fn answering(word: &str) -> Solver {
         }
         p
     };
-    Solver::At(path)
+    Solver::at(path)
+}
+
+/// Ein Solver, der jedes `(check-sat)` mit `word` beantwortet und jede
+/// Anfrage (nicht `--version`) in `asked.txt` neben sich zaehlt; sein
+/// Verzeichnis beginnt leer. Die Anfrage ist das letzte Argument, hinter
+/// den Optionen.
+fn counting(word: &str) -> (Solver, std::path::PathBuf) {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-prove-counting-{word}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let count = dir.join("asked.txt");
+    let path = if cfg!(windows) {
+        let p = dir.join("solver.cmd");
+        let (count, hits) = (count.display(), dir.join("hits.txt").display().to_string());
+        let script = format!(
+            "@echo off\r\nif not \"%1\"==\"-smt2\" (\r\necho {word}\r\nexit /b 0\r\n)\r\necho x>>\"{count}\"\r\n\
+             for %%a in (%*) do set \"last=%%~a\"\r\n\
+             findstr /b /c:\"(check-sat)\" \"%last%\" > \"{hits}\"\r\n\
+             for /f \"usebackq delims=\" %%l in (\"{hits}\") do echo {word}\r\n"
+        );
+        std::fs::write(&p, script).expect("Skript");
+        p
+    } else {
+        let p = dir.join("solver.sh");
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = \"-smt2\" ] || {{ echo {word}; exit 0; }}\necho x >> '{}'\n\
+             for last; do :; done\n\
+             grep -x '(check-sat)' \"$last\" | while read -r l; do echo {word}; done\n",
+            count.display()
+        );
+        std::fs::write(&p, script).expect("Skript");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("ausfuehrbar");
+        }
+        p
+    };
+    (Solver::at(path).cached(dir.join("cache")), count)
+}
+
+/// **Eine entschiedene Antwort fragt der Solver einmal** (M11 B2 Schritt 0):
+/// Derselbe Lauf noch einmal nimmt sie aus dem Cache; ein Zeitlimit kommt
+/// nie hinein und wird neu gefragt.
+#[test]
+fn a_decided_answer_is_asked_once() {
+    let p = corpus_with("01_minimal.takt", "");
+    let model = encode(&p).expect("kodierbar");
+    let asked = |count: &std::path::Path| std::fs::read_to_string(count).map_or(0, |t| t.lines().count());
+    let (solver, count) = counting("unsat");
+    let first = classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    let n = asked(&count);
+    assert!(n > 0, "der erste Lauf fragt");
+    let second = classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    assert_eq!(asked(&count), n, "der zweite Lauf fragt nicht");
+    assert_eq!(first, second, "dieselben Urteile");
+    let (solver, count) = counting("timeout");
+    classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    let n = asked(&count);
+    classify(&model, &p, 2, &solver, 5).expect("das Skript laeuft");
+    assert_eq!(asked(&count), 2 * n, "ein Zeitlimit fragt jedes Mal");
+}
+
+/// **Ueber der Speichergrenze bleibt die Stelle offen** (FB-607): z3 meldet
+/// `(error "out of memory")`, das Urteil ist unentschieden mit diesem
+/// Grund, kein Fehler und kein Haengen. Ohne Cache, damit keine fruehere
+/// Antwort einspringt; cvc5 kennt keine Speichergrenze.
+#[test]
+fn a_solver_out_of_memory_leaves_the_sites_open() {
+    let found = Some(takt_prove::named("z3")).filter(|s| !s.is_missing());
+    let Some(z3) = takt_testkit::require("z3", found, "nach `~/.takt/bin` legen (z3 4.13.4)") else { return };
+    let p = corpus_with("19_faults.takt", "");
+    let model = encode(&p).expect("kodierbar");
+    // Ein Cache behaelt die Antwort nicht: Sie haengt an der Grenze.
+    let cache = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-prove-out-of-memory");
+    let _ = std::fs::remove_dir_all(&cache);
+    let sites = classify(&model, &p, 3, &z3.with_memory(1).cached(&cache), 60).expect("das Urteil kommt");
+    assert!(!sites.is_empty(), "19_faults hat Pruefstellen");
+    let open = |s: &takt_prove::CheckReport| matches!(&s.verdict, CheckVerdict::Undecided { reason } if reason.contains("out of memory"));
+    assert!(sites.iter().all(open), "{sites:?}");
+    assert_eq!(std::fs::read_dir(&cache).map_or(0, |d| d.count()), 0, "keine Antwort im Cache");
 }
 
 /// INT-020: Was der Solver nicht entscheidet, bleibt offen — eine

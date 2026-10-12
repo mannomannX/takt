@@ -575,6 +575,21 @@ pub struct Port {
 }
 
 impl Program {
+    /// Gehoert der Output `c` im Lauf der Maschine `m` (1.4, 13.6)? Seinem
+    /// Besitzer; einen `sim`-Output, den nur Szenarien stellen, schreibt das
+    /// Szenario, das laeuft — die Sema nennt eines davon, und die anderen
+    /// laufen nie zusammen mit ihm. Wer ihn besitzt, liest seinen Latch und
+    /// setzt ihn beim Fault auf `safe` (FB-602).
+    pub fn owns(&self, m: MachineId, c: ChannelId) -> bool {
+        use crate::machine::MachineKind;
+        let scenario = |id: MachineId| self.machines.get(id.index()).is_some_and(|x| x.kind == MachineKind::Scenario);
+        match self.channels[c.index()].owner {
+            Some(o) if o == m => true,
+            Some(o) => scenario(o) && scenario(m),
+            None => false,
+        }
+    }
+
     /// Die Varianten von `<m>.State`: alle Zustandsnamen und `FAULTED`.
     pub fn state_variants(&self, m: &Machine) -> &[crate::types::VariantDef] {
         let e = match m.state_enum {

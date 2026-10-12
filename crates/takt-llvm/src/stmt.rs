@@ -499,11 +499,14 @@ impl Vars for StateVars<'_> {
     }
 
     /// Der Latch eines eigenen Outputs; `%3` ist der Latch (11.2). Ein
-    /// fremder Output kommt aus der Ψ-Bank seines Besitzers (8.3).
+    /// fremder Output kommt aus der Ψ-Bank seines Besitzers (8.3). Eigen ist
+    /// auch ein `sim`-Output, den das laufende Szenario mit anderen stellt
+    /// (`Program::owns`, FB-602).
     fn output(&self, channel: takt_mir::ChannelId, m: &mut Module) -> Option<Lowered> {
         let c = self.program.channels.get(channel.index())?;
         let ty = ty::lower(c.ty, self.program)?;
-        if let Some(owner) = c.owner.filter(|o| o.0 != self.machine_index) {
+        let own = self.program.owns(takt_mir::MachineId(self.machine_index), channel);
+        if let Some(owner) = c.owner.filter(|_| !own) {
             let off = crate::psi::region_offset(owner, false, self.program)?
                 + crate::psi::field_offset(owner, crate::psi::Field::Output(channel), self.program)?;
             let at = m.inst(&format!("getelementptr inbounds i8, ptr %1, i64 {off}"));

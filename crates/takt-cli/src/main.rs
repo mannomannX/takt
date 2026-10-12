@@ -2127,7 +2127,7 @@ fn prove(args: &Args) -> bool {
         return true;
     }
     let solver = match args.value("--solver") {
-        Some(p) => takt_prove::Solver::At(p.into()),
+        Some(p) => takt_prove::Solver::at(p),
         None => takt_prove::find(),
     };
     if !solver.works() {

@@ -412,6 +412,94 @@ machine dut:
     assert!(faults[0].contains("256") && faults[0].contains("64 KiB"), "{faults:?}");
 }
 
+/// **READING liest mit einem Ausschnitt wie mit der Schleife** (FB-603):
+/// Das Modell las den Puffer `out` frueher Byte fuer Byte aus `page`
+/// (`for i in range(4096): if i < size: out.push(page[addr % 256 + i])`),
+/// jetzt haengt es `page[addr % 256 .. addr % 256 + min(size, 4096)]` an.
+/// Beide Formen stehen hier als Funktion ueber derselben Seite, auf den
+/// Grenzfaellen: ohne Laenge, eine Seite, mehr als eine Seite, ein Anfang
+/// am Ende eines Chunks. `ok` setzt nur die Schleife ueber die Chunks, die
+/// beide teilen.
+#[test]
+fn reading_by_a_slice_gives_what_the_byte_loop_gave() {
+    let cases: [(u64, u64); 12] = [
+        (0, 0),
+        (255, 0),
+        (0, 1),
+        (255, 1),
+        (0, 4096),
+        (254, 4096),
+        (255, 4096),
+        (255, 4097),
+        (0, 5000),
+        (511, 4095),
+        (4096 + 255, 4096),
+        (255, 0xFFFF_FFFF),
+    ];
+    let checks: String = cases
+        .iter()
+        .map(|(a, s)| {
+            format!("            if same(read_loop({a}, {s}), read_slice({a}, {s})):\n                n = n + 1\n")
+        })
+        .collect();
+    let p = compile(&format!(
+        "
+output same_reads : int in 0..100 @ hw(\"o/same\") with safe = 0
+
+# Ein Chunk mit eigenem Muster; ab Chunk 12 geloescht.
+fn chunk_of(k: int) -> bytes<256>:
+    if k >= 12:
+        return flash_blank()
+    var b : bytes<256> = default
+    for j in range(256):
+        b.push(((k * 37 + j) % 256) as u8)
+    return b
+
+# Die Seite wie im Modell: Chunks ab `addr / 256`, bis der Ausschnitt drin ist.
+fn page_of(addr: int, size: int) -> bytes<4352>:
+    var page : bytes<4352> = default
+    var ok : bool = false
+    for i in range(17):
+        if page.len < addr % 256 + size:
+            ok = page.append(chunk_of(addr / 256 + i))
+    return page
+
+fn read_loop(addr: int, size: int) -> bytes<4096>:
+    var page : bytes<4352> = page_of(addr, size)
+    var out : bytes<4096> = default
+    for i in range(4096):
+        if i < size:
+            out.push(page[addr % 256 + i])
+    return out
+
+fn read_slice(addr: int, size: int) -> bytes<4096>:
+    var page : bytes<4352> = page_of(addr, size)
+    var out : bytes<4096> = default
+    out.append(page[addr % 256 .. addr % 256 + min(size, 4096)])
+    return out
+
+fn same(a: bytes<4096>, b: bytes<4096>) -> bool:
+    if a.len != b.len:
+        return false
+    for i in range(4096):
+        if i < a.len and a[i] != b[i]:
+            return false
+    return true
+
+machine dut:
+    var n : int in 0..100 = 0
+    initial RUN
+    state RUN:
+        enter:
+{checks}            same_reads = n
+        when false: -> RUN
+"
+    ));
+    let t = trace(&p, 2);
+    assert!(t.contains(&format!("out same_reads {}", cases.len())), "{t}");
+    assert!(!t.contains("fault"), "{t}");
+}
+
 /// 8.11 (fuenfte Runde): `cut_at_chunk = 5` schneidet das Loeschen nach
 /// fuenf Chunks. Die Chunks davor lesen 0xFF, die ab dem Schnitt behalten,
 /// was gesaet war, und der Vorgang endet mit ERROR(code = 1). Ohne den

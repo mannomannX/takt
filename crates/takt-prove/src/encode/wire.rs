@@ -105,13 +105,13 @@ impl View<'_> {
 impl Enc<'_> {
     /// `f.encode()` (3.7): der Record als `bytes<SIZE>`.
     pub(super) fn wire_encode(&self, r: RecordId, v: V, span: Span) -> R<V> {
-        let (bytes, len) = self.encode_record(r, v, span)?;
+        let (bytes, len) = self.encode_record(r, v.flat_at(span)?, span)?;
         Ok(V::Node(std::iter::once(len).chain(bytes).map(V::Leaf).collect()))
     }
 
     /// `R.decode(b)` (3.7): ob die Bytes ein Record sind, und der Record.
     pub(super) fn wire_decode(&self, r: RecordId, b: V, span: Span) -> R<(Term, V)> {
-        let V::Node(parts) = b else { return no("`decode` ohne Bytes", span) };
+        let V::Node(parts) = b.flat_at(span)? else { return no("`decode` ohne Bytes", span) };
         let mut leaves = Vec::new();
         for p in parts {
             leaves.push(p.leaf(span)?);

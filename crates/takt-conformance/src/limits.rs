@@ -78,20 +78,21 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Pruefstellen und Uebergaenge, die weder ein Lauf erreicht noch der Solver ausschliesst",
-        warum: "`UNREACHED` (`differential.rs`) haelt 94 Uebergaenge, 72 nie bestandene und 522 nie verletzte \
-                Pruefstellen in 98 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
-                bis Tiefe 5 in 10 s keinen Pfad, und k-Induktion beweist sie nicht unerreichbar.",
+        warum: "`UNREACHED` (`differential.rs`) haelt 102 Uebergaenge, 72 nie bestandene und 352 nie verletzte \
+                Pruefstellen in 99 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
+                bis Tiefe 5 in 10 s keinen Pfad, und k-Induktion beweist sie nicht unerreichbar. Dazu 186 \
+                Stellen, die nie faulten koennen (13.2: 167 `proven`, 10 `message`, 9 `observe`).",
         wann: "M11 Schritt 29, Nachtrag: induktive Invarianten je Stelle (Spacer) und tiefere Pfade.",
         row: "FB-511",
     },
     Limit {
-        was: "Das Flash-Modell aus 14.8 im Modell des Beweisers",
-        warum: "Interpreter und erzeugter Code rechnen jedes Szenario aus Kapitel 14, das Modell \
-                alle bis auf die von 14.8: Der Zustand des Flash-Modells liegt ueber `STATE_LIMIT`, \
-                und in `fallback` und `no_image` ordnet der Kodierer seinen Sendestrom keiner \
-                kodierten Maschine zu (`MODEL_GAPS` in `examples.rs`).",
-        wann: "M11 Schritt 29, Nachtrag: Maps und Puffer als Arrays der SMT-Theorie.",
-        row: "FB-497",
+        was: "Pfade und Beweise des Solvers fuer `45_journal_cut` und `110_journal_log`",
+        warum: "Keine Maschine der beiden laesst sich allein kodieren (ein gekoppelter `sim`-Strom, ein \
+                zusammengesetzter fremder Output), also fragt der Solver jede Stelle am Gesamtmodell: 112 MB je \
+                Anfrage in Tiefe 5, und z3 entscheidet eine solche auch in 300 s nicht. Ihre Stellen haelt \
+                `UNREACHED`.",
+        wann: "M11 Strang B2: Teilmodelle mit gekoppeltem Strom und zusammengesetztem fremdem Output.",
+        row: "FB-604",
     },
 ];
 

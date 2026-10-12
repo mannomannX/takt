@@ -718,27 +718,31 @@ fn number_format(ty: &takt_llvm::ty::LlvmType, signed: bool) -> (&'static str, &
 }
 
 /// Merkt Operator-Aborts und Runtime-Faults des Stimulus in ihrem Tick vor:
-/// einen `Driver`-Fault beim Besitzer seines Outputs, alles andere bei
-/// jeder Maschine.
+/// einen `Driver`-Fault bei jeder Maschine, die seinen Output im Lauf
+/// besitzt (`Program::owns`), alles andere bei jeder Maschine.
 fn pended(s: &mut String, p: &Program, inputs: &[Stimulus], indent: &str) {
     use takt_mir::machine::{FaultKind, RuntimeKind};
     let every = format!("for (int m = 0; m < {}; m++)", p.machines.len());
     for stim in inputs {
-        let (tick, code, owner) = match stim {
+        let (tick, code, owners) = match stim {
             Stimulus::Abort { tick } => (*tick, takt_llvm::abi::fault_code(FaultKind::Abort), None),
             Stimulus::Runtime { tick, kind, output } => {
-                let owner = match (kind, output) {
-                    (RuntimeKind::Driver, Some(o)) => {
-                        p.channels.iter().find(|c| c.name == *o).and_then(|c| c.owner).map(|m| m.index())
-                    }
+                let owners = match (kind, output) {
+                    (RuntimeKind::Driver, Some(o)) => p.channels.iter().position(|c| c.name == *o).map(|c| {
+                        (0..p.machines.len())
+                            .filter(|&m| p.owns(takt_mir::MachineId(m as u32), takt_mir::ChannelId(c as u32)))
+                            .collect::<Vec<_>>()
+                    }),
                     _ => None,
                 };
-                (*tick, takt_llvm::abi::fault_code(FaultKind::Runtime(*kind)), owner)
+                (*tick, takt_llvm::abi::fault_code(FaultKind::Runtime(*kind)), owners)
             }
             _ => continue,
         };
-        let _ = match owner {
-            Some(m) => writeln!(s, "{indent}if (a->tick == {tick}) takt_pend(a, {m}, {code});"),
+        let _ = match owners {
+            Some(ms) => {
+                ms.iter().try_for_each(|m| writeln!(s, "{indent}if (a->tick == {tick}) takt_pend(a, {m}, {code});"))
+            }
             None => writeln!(s, "{indent}if (a->tick == {tick}) {every} takt_pend(a, m, {code});"),
         };
     }

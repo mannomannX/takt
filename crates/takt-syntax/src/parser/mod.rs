@@ -574,9 +574,10 @@ impl<'t, 's> Parser<'t, 's> {
 
     // ------------------------------------------------------------ Spannen und Namen
 
-    /// Ein Bereich in der Datei der Tokens.
+    /// Ein Bereich in der Datei der Tokens; ein Ausschnitt zaehlt ab seinem
+    /// Anfang in der Datei (`Tokens::base`).
     fn span(&self, start: u32, end: u32) -> Span {
-        Span { file: self.toks.file, start, end }
+        Span { file: self.toks.file, start: self.toks.base + start, end: self.toks.base + end }
     }
 
     fn span_from(&self, start: usize) -> Span {

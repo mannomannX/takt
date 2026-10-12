@@ -218,6 +218,10 @@ pub struct Tokens<'src> {
     /// Die Datei, in die die Positionen des Parsers zeigen (0 fuer das
     /// Programm, 1 fuer das Prelude).
     pub file: FileId,
+    /// Wo `src` in der Datei beginnt: null, ausser bei einem Ausschnitt wie
+    /// dem Platzhalter eines Formatstrings (3.9). Der Parser rechnet seine
+    /// Positionen damit auf die Datei um.
+    pub base: u32,
 }
 
 impl<'src> Tokens<'src> {

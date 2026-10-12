@@ -131,6 +131,77 @@ fn pick(items: &[Term], pos: &Term) -> Term {
     }
 }
 
+/// Fuehrt das Modell einen Puffer aus `n` Plaetzen als Array (FB-497)?
+/// Sonst steht jeder Platz einzeln an `<ort>[k]`, das Array an `<ort>[*]`.
+fn arrayed(n: u32) -> bool {
+    u64::from(n) >= super::array::ARRAY_FROM
+}
+
+fn whole(base: &str) -> String {
+    format!("{base}[*]")
+}
+
+/// Ein leerer Puffer: null an jedem Platz.
+fn buf_init(env: &mut Env, base: &str, n: u32) {
+    if arrayed(n) {
+        env.insert(whole(base), Term::const_array(int(0)));
+        return;
+    }
+    for k in 0..n {
+        env.insert(format!("{base}[{k}]"), int(0));
+    }
+}
+
+/// Der Platz `pos` eines Puffers; ausserhalb null. Steht `pos` fest, ohne
+/// Auswahl.
+fn buf_get(env: &Env, base: &str, n: u32, pos: &Term) -> Term {
+    if arrayed(n) {
+        return Term::select(env[&whole(base)].clone(), pos.clone());
+    }
+    let items: Vec<Term> = (0..n).map(|k| env[&format!("{base}[{k}]")].clone()).collect();
+    pick(&items, pos)
+}
+
+/// Alle Plaetze eines Puffers.
+fn buf_all(env: &Env, base: &str, n: u32) -> Vec<Term> {
+    if arrayed(n) {
+        let a = env[&whole(base)].clone();
+        return (0..n).map(|k| Term::select(a.clone(), int(i64::from(k)))).collect();
+    }
+    (0..n).map(|k| env[&format!("{base}[{k}]")].clone()).collect()
+}
+
+/// Schreibt `x` an den Platz `pos`, wo `cond` gilt.
+fn buf_write(env: &mut Env, base: &str, n: u32, pos: &Term, x: &Term, cond: &Term) {
+    if arrayed(n) {
+        let a = env[&whole(base)].clone();
+        env.insert(whole(base), Term::ite(cond.clone(), Term::store(a.clone(), pos.clone(), x.clone()), a));
+        return;
+    }
+    for k in 0..n {
+        let here = Term::and(vec![cond.clone(), Term::eq(pos.clone(), int(i64::from(k)))]);
+        let at = format!("{base}[{k}]");
+        let old = env[&at].clone();
+        env.insert(at, Term::ite(here, x.clone(), old));
+    }
+}
+
+/// Fuellt einen Puffer neu: Platz `k` traegt `items[k].1`, wo `items[k].0`
+/// gilt, sonst null. Als Array eine Kette bedingter `store` ueber null, die
+/// die Auswertung nur rechnet, wo sie gilt.
+fn buf_fill(env: &mut Env, base: &str, n: u32, items: Vec<(Term, Term)>) {
+    if arrayed(n) {
+        let a = items.into_iter().enumerate().fold(Term::const_array(int(0)), |a, (k, (c, x))| {
+            Term::ite(c, Term::store(a.clone(), int(k as i64), x), a)
+        });
+        env.insert(whole(base), a);
+        return;
+    }
+    for (k, (c, x)) in items.into_iter().enumerate() {
+        env.insert(format!("{base}[{k}]"), Term::ite(c, x, int(0)));
+    }
+}
+
 /// Die Bytes je Commit (`TxBuffer::per_tick`): `max_rate · T0`, mindestens
 /// eins; ohne `max_rate` alles.
 fn per_tick(c: &takt_mir::program::Channel, tick: i64) -> u32 {
@@ -151,7 +222,10 @@ impl Enc<'_> {
         let mut out = Vec::new();
         for (i, c) in self.p.channels.iter().enumerate() {
             let Type::Stream(elem) = self.p.types.get(c.ty) else { continue };
-            if c.dir != Direction::Output || c.owner.is_some_and(|o| !self.order.contains(&o)) {
+            // Im Gesamtmodell gehoert der Puffer dem Lauf: Den `sim`-Strom
+            // zweier Szenarien beschreibt das laufende (13.6), auch wenn die
+            // Sema das andere Besitzer nennt.
+            if c.dir != Direction::Output || self.foreign(c.owner) {
                 continue;
             }
             let cap = c.attrs.capacity.unwrap_or(256);
@@ -221,30 +295,20 @@ impl Enc<'_> {
             if !t.empties() {
                 env.insert(loc(t, "head"), int(0));
             }
-            for i in 0..t.cap {
-                env.insert(loc(t, &format!("q[{i}]")), int(0));
-            }
-            for j in 0..t.per_tick {
-                env.insert(loc(t, &format!("sent[{j}]")), int(0));
-            }
+            buf_init(env, &loc(t, "q"), t.cap);
+            buf_init(env, &loc(t, "sent"), t.per_tick);
             if let Some(k) = t.keep {
                 env.insert(loc(t, "el.n"), int(0));
                 for j in 0..k.slots {
                     env.insert(loc(t, &format!("el[{j}].len")), int(0));
-                    for i in 0..k.elem {
-                        env.insert(loc(t, &format!("el[{j}][{i}]")), int(0));
-                    }
+                    buf_init(env, &loc(t, &format!("el[{j}]")), k.elem);
                 }
                 if k.queued {
                     for part in ["el.cnt", "el.lhead", "el.carry.n"] {
                         env.insert(loc(t, part), int(0));
                     }
-                    for j in 0..t.cap {
-                        env.insert(loc(t, &format!("el.lens[{j}]")), int(0));
-                    }
-                    for i in 0..k.elem {
-                        env.insert(loc(t, &format!("el.carry[{i}]")), int(0));
-                    }
+                    buf_init(env, &loc(t, "el.lens"), t.cap);
+                    buf_init(env, &loc(t, "el.carry"), k.elem);
                 }
             }
         }
@@ -288,12 +352,7 @@ impl Enc<'_> {
 
     /// Das Byte am Platz `pos` des Rings; steht der Platz fest, ohne Auswahl.
     fn tx_byte(&self, t: &Tx, pos: Term, env: &Env) -> Term {
-        match &*pos.0 {
-            Node::Int(i) => env[&loc(t, &format!("q[{i}]"))].clone(),
-            _ => (0..t.cap).rev().fold(int(0), |byte, i| {
-                Term::ite(Term::eq(pos.clone(), int(i64::from(i))), env[&loc(t, &format!("q[{i}]"))].clone(), byte)
-            }),
-        }
+        buf_get(env, &loc(t, "q"), t.cap, &pos)
     }
 
     /// Die Bytes, die `send` fuer einen Wert anlegt (`element_bytes`): Text
@@ -307,7 +366,7 @@ impl Enc<'_> {
                 Text::of(self.value(value, cx, env, flow)?, span)
             }
             Type::Array { .. } => {
-                let V::Node(items) = self.value(value, cx, env, flow)? else { return no("Array", span) };
+                let V::Node(items) = self.value(value, cx, env, flow)?.flat_at(span)? else { return no("Array", span) };
                 let mut bytes = Vec::new();
                 for item in items {
                     bytes.extend(self.buffer_bytes(item, elem, span)?);
@@ -373,31 +432,36 @@ impl Enc<'_> {
             flow.alive = fits.clone();
         }
         let tail = wrap(add(head, len.clone()), t.cap);
-        self.model_budget(u64::from(t.cap) * (3 * data.bytes.len() as u64 + 8), span)?;
-        for i in 0..t.cap {
-            // Abstand des Platzes hinter dem Ende des Puffers.
-            let d = sub(int(i64::from(i)), tail.clone());
-            let d = Term::ite(Term::bin(Op::Lt, d.clone(), int(0)), add(d.clone(), int(i64::from(t.cap))), d);
-            let inside = Term::and(vec![fits.clone(), Term::bin(Op::Lt, d.clone(), data.len.clone())]);
-            let mut byte = int(0);
-            for (k, b) in data.bytes.iter().enumerate().rev() {
-                byte = Term::ite(Term::eq(d.clone(), int(k as i64)), b.clone(), byte);
+        if arrayed(t.cap) {
+            // Je Byte des Werts ein `store` an seinen Platz hinter dem Ende.
+            self.model_budget(8 * data.bytes.len() as u64, span)?;
+            for (k, b) in data.bytes.iter().enumerate() {
+                let k = int(k as i64);
+                let inside = Term::and(vec![fits.clone(), Term::bin(Op::Lt, k.clone(), data.len.clone())]);
+                buf_write(env, &loc(&t, "q"), t.cap, &wrap(add(tail.clone(), k), t.cap), b, &inside);
             }
-            let at = loc(&t, &format!("q[{i}]"));
-            let old = env[&at].clone();
-            env.insert(at, Term::ite(inside, byte, old));
+        } else {
+            self.model_budget(u64::from(t.cap) * (3 * data.bytes.len() as u64 + 8), span)?;
+            for i in 0..t.cap {
+                // Abstand des Platzes hinter dem Ende des Puffers.
+                let d = sub(int(i64::from(i)), tail.clone());
+                let d = Term::ite(Term::bin(Op::Lt, d.clone(), int(0)), add(d.clone(), int(i64::from(t.cap))), d);
+                let inside = Term::and(vec![fits.clone(), Term::bin(Op::Lt, d.clone(), data.len.clone())]);
+                let mut byte = int(0);
+                for (k, b) in data.bytes.iter().enumerate().rev() {
+                    byte = Term::ite(Term::eq(d.clone(), int(k as i64)), b.clone(), byte);
+                }
+                let at = loc(&t, &format!("q[{i}]"));
+                let old = env[&at].clone();
+                env.insert(at, Term::ite(inside, byte, old));
+            }
         }
         match t.keep {
             // Die Laenge des neuen Elements hinter die wartenden.
             Some(k) if k.queued => {
                 let cnt = env[&loc(&t, "el.cnt")].clone();
                 let at = wrap(add(env[&loc(&t, "el.lhead")].clone(), cnt.clone()), t.cap);
-                for j in 0..t.cap {
-                    let here = Term::and(vec![fits.clone(), Term::eq(at.clone(), int(i64::from(j)))]);
-                    let slot = loc(&t, &format!("el.lens[{j}]"));
-                    let old = env[&slot].clone();
-                    env.insert(slot, Term::ite(here, data.len.clone(), old));
-                }
+                buf_write(env, &loc(&t, "el.lens"), t.cap, &at, &data.len, &fits);
                 env.insert(loc(&t, "el.cnt"), Term::ite(fits.clone(), add(cnt.clone(), int(1)), cnt));
             }
             Some(_) => self.tx_elements.entry(c).or_default().push((data.clone(), fits.clone())),
@@ -425,11 +489,13 @@ impl Enc<'_> {
             if let Some(take) = take {
                 Enc::store(env, &loc(t, "last"), &take.shape, take.last.clone());
             }
-            for j in 0..t.per_tick {
-                let byte = self.tx_byte(t, wrap(add(head.clone(), int(i64::from(j))), t.cap), env);
-                let taken = Term::bin(Op::Lt, int(i64::from(j)), n.clone());
-                env.insert(loc(t, &format!("sent[{j}]")), Term::ite(taken, byte, int(0)));
-            }
+            let sent = (0..t.per_tick)
+                .map(|j| {
+                    let byte = self.tx_byte(t, wrap(add(head.clone(), int(i64::from(j))), t.cap), env);
+                    (Term::bin(Op::Lt, int(i64::from(j)), n.clone()), byte)
+                })
+                .collect();
+            buf_fill(env, &loc(t, "sent"), t.per_tick, sent);
             env.insert(loc(t, "sent.len"), n.clone());
             match t.keep {
                 Some(k) if k.queued => self.drain_queued(t, k, &n, env)?,
@@ -452,11 +518,11 @@ impl Enc<'_> {
     fn drain_queued(&self, t: &Tx, k: Keep, n: &Term, env: &mut Env) -> R<()> {
         self.model_budget(u64::from(k.slots) * u64::from(k.elem) * (u64::from(t.per_tick) + 4), Span::default())?;
         let at = |part: &str| loc(t, part);
-        let taken: Vec<Term> = (0..t.per_tick).map(|j| env[&at(&format!("sent[{j}]"))].clone()).collect();
-        let lens: Vec<Term> = (0..t.cap).map(|j| env[&at(&format!("el.lens[{j}]"))].clone()).collect();
+        let taken = buf_all(env, &at("sent"), t.per_tick);
+        let lens = buf_all(env, &at("el.lens"), t.cap);
         let (cnt, lhead) = (env[&at("el.cnt")].clone(), env[&at("el.lhead")].clone());
         let mut carry_n = env[&at("el.carry.n")].clone();
-        let mut carry: Vec<Term> = (0..k.elem).map(|i| env[&at(&format!("el.carry[{i}]"))].clone()).collect();
+        let mut carry = buf_all(env, &at("el.carry"), k.elem);
         // `off`: abgeholte Bytes, die schon einem vollendeten Element gehoeren;
         // `open`: Noch blieb kein Element unvollendet.
         let (mut off, mut open, mut done) = (int(0), Term::bool(true), int(0));
@@ -475,12 +541,15 @@ impl Enc<'_> {
                     Term::ite(from_carry, carry[i as usize].clone(), fresh)
                 })
                 .collect();
-            let slot = |part: &str| at(&format!("el[{j}]{part}"));
-            env.insert(slot(".len"), Term::ite(whole.clone(), len.clone(), int(0)));
-            for (i, b) in bytes.iter().enumerate() {
-                let inside = Term::and(vec![whole.clone(), Term::bin(Op::Lt, int(i as i64), len.clone())]);
-                env.insert(slot(&format!("[{i}]")), Term::ite(inside, b.clone(), int(0)));
-            }
+            env.insert(at(&format!("el[{j}].len")), Term::ite(whole.clone(), len.clone(), int(0)));
+            let placed = bytes
+                .iter()
+                .enumerate()
+                .map(|(i, b)| {
+                    (Term::and(vec![whole.clone(), Term::bin(Op::Lt, int(i as i64), len.clone())]), b.clone())
+                })
+                .collect();
+            buf_fill(env, &at(&format!("el[{j}]")), k.elem, placed);
             // Bleibt es unvollendet, kommt der Rest in den Uebertrag; ein
             // vollendetes leert ihn.
             let kept = add(carry_n.clone(), rest);
@@ -502,9 +571,7 @@ impl Enc<'_> {
         env.insert(at("el.lhead"), wrap(add(lhead, done.clone()), t.cap));
         env.insert(at("el.cnt"), sub(cnt, done));
         env.insert(at("el.carry.n"), carry_n);
-        for (i, c) in carry.into_iter().enumerate() {
-            env.insert(at(&format!("el.carry[{i}]")), c);
-        }
+        buf_fill(env, &at("el.carry"), k.elem, carry.into_iter().map(|c| (Term::bool(true), c)).collect());
         Ok(())
     }
 
@@ -513,23 +580,40 @@ impl Enc<'_> {
     fn complete_elements(&self, t: &Tx, k: Keep, env: &mut Env) {
         let (slots, cap) = (k.slots, k.elem);
         let records = self.tx_elements.get(&t.channel).cloned().unwrap_or_default();
-        let mut placed: Vec<(Term, Vec<Term>)> = (0..slots).map(|_| (int(0), vec![int(0); cap as usize])).collect();
+        // Je Platz `.el[j]` die Bedingungen, unter denen ein `send` ihn
+        // belegt; hoechstens eine gilt.
+        let mut placed: Vec<Vec<(Term, Text)>> = vec![Vec::new(); slots as usize];
         let mut before = int(0);
         for (text, alive) in records {
-            for (j, (len, bytes)) in placed.iter_mut().enumerate() {
-                let here = Term::and(vec![alive.clone(), Term::eq(before.clone(), int(j as i64))]);
-                *len = Term::ite(here.clone(), text.len.clone(), len.clone());
-                for (i, b) in bytes.iter_mut().enumerate() {
-                    *b = Term::ite(here.clone(), text.bytes.get(i).cloned().unwrap_or_else(|| int(0)), b.clone());
-                }
+            for (j, on) in placed.iter_mut().enumerate() {
+                on.push((Term::and(vec![alive.clone(), Term::eq(before.clone(), int(j as i64))]), text.clone()));
             }
             before = add(before, Term::ite(alive, int(1), int(0)));
         }
         env.insert(loc(t, "el.n"), before);
-        for (j, (len, bytes)) in placed.into_iter().enumerate() {
+        for (j, on) in placed.into_iter().enumerate() {
+            let len = on.iter().fold(int(0), |acc, (here, text)| Term::ite(here.clone(), text.len.clone(), acc));
             env.insert(loc(t, &format!("el[{j}].len")), len);
-            for (i, b) in bytes.into_iter().enumerate() {
-                env.insert(loc(t, &format!("el[{j}][{i}]")), b);
+            let base = loc(t, &format!("el[{j}]"));
+            if arrayed(cap) {
+                // Das Array des Elements, das den Platz belegt; null, wenn keines.
+                let a = on.iter().fold(Term::const_array(int(0)), |acc, (here, text)| {
+                    let filled = text
+                        .bytes
+                        .iter()
+                        .take(cap as usize)
+                        .enumerate()
+                        .fold(Term::const_array(int(0)), |a, (i, b)| Term::store(a, int(i as i64), b.clone()));
+                    Term::ite(here.clone(), filled, acc)
+                });
+                env.insert(whole(&base), a);
+                continue;
+            }
+            for i in 0..cap as usize {
+                let b = on.iter().fold(int(0), |acc, (here, text)| {
+                    Term::ite(here.clone(), text.bytes.get(i).cloned().unwrap_or_else(|| int(0)), acc)
+                });
+                env.insert(format!("{base}[{i}]"), b);
             }
         }
     }
@@ -544,7 +628,7 @@ impl Enc<'_> {
                 .map(|j| {
                     let present = Term::bin(Op::Lt, int(i64::from(j)), n.clone());
                     let len = env[&loc(t, &format!("el[{j}].len"))].clone();
-                    let bytes = (0..cap).map(|i| env[&loc(t, &format!("el[{j}][{i}]"))].clone()).collect();
+                    let bytes = buf_all(env, &loc(t, &format!("el[{j}]")), cap);
                     (present, Text { len, bytes })
                 })
                 .collect(),
@@ -553,10 +637,7 @@ impl Enc<'_> {
 
     /// Der Ausschnitt des letzten Commits als Text.
     pub(super) fn sent_text(&self, t: &Tx, env: &Env) -> Text {
-        Text {
-            len: env[&loc(t, "sent.len")].clone(),
-            bytes: (0..t.per_tick).map(|j| env[&loc(t, &format!("sent[{j}]"))].clone()).collect(),
-        }
+        Text { len: env[&loc(t, "sent.len")].clone(), bytes: buf_all(env, &loc(t, "sent"), t.per_tick) }
     }
 
     /// `o.free`, `o.idle` und `o.sent` (8.8): der freie Platz jetzt, ob der
@@ -580,7 +661,7 @@ impl Enc<'_> {
                 // 8.8: auch wenn er einen `sim`-gebundenen Eingabestrom speist.
                 let sent = self.sent_text(&t, env);
                 let has = Term::bin(Op::Gt, sent.len.clone(), int(0));
-                V::Node(vec![V::Leaf(has), sent.value(*cap, None)])
+                Enc::conform(&self.shape(ty, span)?, V::Node(vec![V::Leaf(has), sent.value(*cap, None)]))
             }
             other => return no(format!("Zugriff `.{}` auf einen Ausgabestrom", other.name()), span),
         })
@@ -608,7 +689,8 @@ impl Enc<'_> {
                     out.push(within(pre[&loc(t, "el.cnt")].clone(), i64::from(t.cap)));
                     out.push(within(pre[&loc(t, "el.lhead")].clone(), i64::from(t.cap.max(1) - 1)));
                     out.push(within(pre[&loc(t, "el.carry.n")].clone(), i64::from(k.elem)));
-                    for j in 0..t.cap {
+                    // Ein Array traegt keine Invariante (13.3).
+                    for j in (0..t.cap).filter(|_| !arrayed(t.cap)) {
                         out.push(within(pre[&loc(t, &format!("el.lens[{j}]"))].clone(), i64::from(k.elem)));
                     }
                 }

@@ -2061,6 +2061,166 @@ fn collections_agree() {
     agree_program("past_len", &compile("past_len", &past_len), "", 12);
 }
 
+/// **Grosse Sammlungen als Arrays** (FB-497): dieselben Sammlungen mit
+/// Kapazitaeten ueber der Schwelle; die Plaetze stehen dann in Arrays der
+/// SMT-Theorie, und der Ausgang `buf` liest sie Platz fuer Platz.
+#[test]
+fn large_collections_agree() {
+    let large = COLLECTIONS.replace("bytes<6>", "bytes<600>").replace("vec<int, 3>", "vec<int, 300>");
+    let p = compile("large_collections", &large);
+    let model = encode(&p).expect("kodierbar");
+    for at in ["s.m.v.b[*]", "s.m.v.vs[*]", "s.out.buf[*]"] {
+        assert!(model.state.iter().any(|v| v.name == at), "`{at}` ist ein Array");
+    }
+    agree_program("large_collections", &p, "", 30);
+    let past_len = large.replace("first = b[0] as int if b.len > 0 else -1", "first = b[k % 6] as int");
+    agree_program("large_past_len", &compile("large_past_len", &past_len), "", 12);
+}
+
+/// Grosse maps (FB-497): Eine, deren Slotfolge nichts beobachtet, fuehrt das
+/// Modell nach ihren Schluesseln — voll, ersetzt, entfernt, geleert, mit
+/// Puffern als Werten (ein Array aus Arrays); eine, ueber die `for (k, v)`
+/// laeuft, bleibt aus Slots. Eine Funktion ohne Argumente kodiert das Modell
+/// einmal.
+const LARGE_MAPS: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+output size  : int in 0..999     @ sim("size")
+output ok    : bool              @ sim("ok")
+output room  : bool              @ sim("room")
+output got   : int in -2..99999  @ sim("got")
+output byte  : int in -1..255    @ sim("byte")
+output blen  : int in -1..999    @ sim("blen")
+output order : int in 0..9999999 @ sim("order")
+output kept  : int in 0..999     @ sim("kept")
+
+fn blank() -> bytes<300>:
+    var b : bytes<300> = default
+    for i in range(300):
+        b.push(0xAA)
+    return b
+
+machine m:
+    var table  : map<int, int, 300> = default
+    var chunks : map<int, bytes<300>, 64> = default
+    var walked : map<int, int, 100> = default
+    var chunk  : bytes<300> = default
+    var t      : int in 0..99 = 0
+    var r      : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            t = t + 1
+            match t:
+                case 1:
+                    for i in range(300):
+                        room = table.insert(i * 7, i)
+                case 2:
+                    room = table.insert(5000, 1)
+                    r = table.insert(21, 99)
+                case 3:
+                    r = table.remove(14)
+                    room = table.insert(5000, 9)
+                    got = table.get(5000).or(-1)
+                case 4:
+                    got = table.get(14).or(-1)
+                case 5:
+                    table.clear()
+                case _:
+                    got = table.get(21).or(-2)
+            size = table.len
+            chunk = chunks.get(t % 5).or(blank())
+            chunk[t % 300] = t as u8
+            ok = chunks.insert(t % 5, chunk)
+            if t % 4 == 0:
+                r = chunks.remove(2)
+            if t == 9:
+                chunks.clear()
+            var c : bytes<300> = chunks.get(t % 3).or(default)
+            blen = -1
+            if chunks.get(t % 3).valid:
+                blen = c.len
+            byte = c[t % 300] as int if c.len > t % 300 else -1
+            r = walked.insert((t * 37) % 101, t)
+            if t % 3 == 0:
+                r = walked.remove((t * 37 - 37) % 101)
+            var o : int in 0..9999999 = 0
+            for (k, v) in walked:
+                o = (o * 13 + k + v) % 10000000
+            order = o
+            kept = walked.len
+"#;
+
+#[test]
+fn large_maps_agree() {
+    let p = compile("LARGE_MAPS", LARGE_MAPS);
+    let model = encode(&p).expect("kodierbar");
+    let has = |at: &str| model.state.iter().any(|v| v.name == at);
+    assert!(has("s.m.v.table[*].has") && has("s.m.v.table.len"), "`table` steht nach Schluesseln");
+    let nested = model.state.iter().find(|v| v.name == "s.m.v.chunks[*].value[*]").expect("Chunks je Schluessel");
+    assert_eq!(nested.sort, takt_prove::term::Sort::Array2(takt_prove::term::Elem::Int));
+    assert!(has("s.m.v.walked[0].has") && !has("s.m.v.walked[*].has"), "`walked` bleibt aus Slots");
+    // Jeder Folgezustand hat die Sorte seines Orts, auch nach `clear` einer
+    // map aus Puffern.
+    for v in &model.state {
+        assert_eq!(v.next.sort(), v.sort, "`{}`", v.name);
+    }
+    agree_program("LARGE_MAPS", &p, "", 12);
+}
+
+/// Ein grosser Puffer ueber eine `sim`-Bindung (8.3, FB-497): Sendepuffer,
+/// die vollendeten Elemente und der Ring des Lesers sind Arrays; das
+/// Element kommt im naechsten Tick Byte fuer Byte an.
+const LARGE_FEED: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+output big_sim : stream<bytes<600>> @ sim("bus/big") with capacity = 1200
+input  big     : stream<bytes<600>> @ hw("bus/big") with max_rate = 100 Hz, capacity = 2
+output total   : int in 0..99999999 @ sim("total")
+output count   : int in 0..999      @ sim("count")
+
+machine writer:
+    var page : bytes<600> = default
+    var t    : int in 0..99 = 0
+    var r    : bool = false
+    initial RUN
+    state RUN:
+        loop:
+            t = t + 1
+            page = default
+            for i in range(600):
+                if i < t * 50:
+                    r = page.push(((i + t) % 256) as u8)
+            if t % 2 == 1:
+                send big_sim, page
+
+machine reader:
+    var n : int in 0..999 = 0
+    initial RUN
+    state RUN:
+        on big as e:
+            var s : int in 0..99999999 = 0
+            for x in e.data:
+                s = (s * 3 + x as int) % 100000000
+            total = s
+            n = (n + 1) % 1000
+            count = n
+"#;
+
+#[test]
+fn a_large_buffer_over_a_sim_binding_agrees() {
+    let p = compile("LARGE_FEED", LARGE_FEED);
+    let model = encode(&p).expect("kodierbar");
+    for at in ["s.tx.big_sim.q[*]", "s.tx.big_sim.el[0][*]", "s.stream.big.buf[0].v[*]"] {
+        assert!(model.state.iter().any(|v| v.name == at), "`{at}` ist ein Array");
+    }
+    agree_program("LARGE_FEED", &p, "", 10);
+}
+
 /// `m.state` in einem Segment einer Sequenz ist der Zustand der Sequenz
 /// (FB-469); das Modell hielt frueher den Index des Segments, und der fiel
 /// mit dem Code von `FAULTED` zusammen.
@@ -2242,4 +2402,72 @@ machine ctrl:
         .expect("Lauf");
     let text = r.trace.render();
     assert!(text.contains("malformed=2") && text.contains("out count 7"), "{text}");
+}
+
+/// Wie [`agree_program`], mit dem Szenario `scenario`, das mitlaeuft (13.6).
+fn agree_scenario(name: &str, p: &Program, scenario: &str, stimulus: &str, ticks: u64) {
+    let id = p.machines.iter().position(|m| m.name == scenario).unwrap_or_else(|| panic!("kein Szenario {scenario}"));
+    let model = takt_prove::encode_scenario(p, takt_mir::MachineId(id as u32))
+        .unwrap_or_else(|e| panic!("{name}/{scenario}: {}", e.what));
+    let stim = Trace::parse(stimulus).expect("Stimulus");
+    let options = RunOptions { ticks, inputs: true, scenario: Some(scenario.to_string()), ..Default::default() };
+    let r = run(p, &stim, &options).expect("Lauf");
+    let traced = model.run(p, &stim, &r, ticks).unwrap_or_else(|e| panic!("{name}/{scenario}: {e}"));
+    let diffs = takt_prove::mismatches(&r.trace, &traced);
+    assert!(diffs.is_empty(), "{name}/{scenario}:\n{}", diffs.join("\n"));
+    assert!(!traced.lines.is_empty(), "{name}/{scenario}: das Modell schreibt nichts");
+}
+
+/// Zwei Szenarien stellen denselben `sim`-Ausgabestrom (13.6); Besitzer im
+/// Sinne der Sema ist das erste. Laeuft das zweite, sendet es selbst, und
+/// laeuft ein drittes ohne `send`, bleibt der Strom leer — die Slotfolge
+/// der Kopplung (8.3) gehoert dem Lauf, nicht dem Besitzer.
+const SHARED_SIM: &str = r#"system:
+    language = 1
+    tick     = 10 ms
+
+input  feed     : stream<u8> @ hw("bus/feed") with max_rate = 200 Hz, capacity = 8
+output feed_sim : stream<u8> @ sim("bus/feed") with capacity = 8
+output seen     : int in 0..9999 @ hw("o/seen") with safe = 0
+
+machine reader:
+    var n : int in 0..9999 = 0
+    initial RUN
+    state RUN:
+        on feed as x:
+            n = (n * 3 + x.data as int) % 10000
+            seen = n
+
+scenario "first" every 10 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            send feed_sim, 1
+            wait 20 ms
+            verdict pass
+
+scenario "second" every 10 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            send feed_sim, 5
+            wait 10 ms
+            send feed_sim, 7
+            wait 20 ms
+            verdict pass
+
+scenario "silent" every 10 ms:
+    initial RUN
+    state RUN:
+        sequence:
+            wait 30 ms
+            verdict pass
+"#;
+
+#[test]
+fn a_sim_stream_of_two_scenarios_belongs_to_the_one_that_runs() {
+    let p = compile("SHARED_SIM", SHARED_SIM);
+    for scenario in ["first", "second", "silent"] {
+        agree_scenario("SHARED_SIM", &p, scenario, "", 8);
+    }
 }
