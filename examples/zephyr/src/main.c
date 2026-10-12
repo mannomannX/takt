@@ -79,7 +79,8 @@ K_THREAD_STACK_DEFINE(job_stack, PORT_TEST_JOB_STACK_BYTES + STACK_SLACK);
 
 /* Faehrt den Kern `core` ueber den Port, waehrend `main` die fremde Last
  * rechnet, und schreibt die Bilanz. Verlangt der Host das Board zurueck,
- * gibt `main` es sofort ab. */
+ * gibt `main` es sofort ab. Startet der Port nicht oder misst er die Stacks
+ * nicht, steht die Bilanz trotzdem da, und das Urteil nennt, was fehlt. */
 static void drive(takt_core *core) {
     static struct takt_rtos rtos;
     const struct takt_rtos_config config = {
@@ -92,10 +93,11 @@ static void drive(takt_core *core) {
         .step_priority = TAKT_OS_STEP_PRIORITY,
         .job_priority = TAKT_OS_JOB_PRIORITY,
     };
+    takt_foreign foreign = {0U, 0U};
+    struct takt_stacks stacks;
+    const struct takt_stacks *measured = NULL;
     if (takt_rtos_start(&rtos, core, &config) == 0) {
         /* Die fremde Aufgabe: rechnet mit der FPU, solange Takt laeuft. */
-        takt_foreign foreign = {0U, 0U};
-        struct takt_stacks stacks;
         while (takt_rtos_running(&rtos) != 0) {
             takt_foreign_round(&foreign);
             handback_serve();
@@ -103,9 +105,12 @@ static void drive(takt_core *core) {
         if (takt_rtos_join(&rtos, &stacks) == 0) {
             stacks.tick_bound = PORT_TEST_TICK_STACK_BYTES;
             stacks.job_bound = PORT_TEST_JOB_STACK_BYTES;
-            takt_core_report(core, &stacks, &foreign);
+            measured = &stacks;
         }
+    } else {
+        takt_board_trace("takt port: kein Start\n");
     }
+    takt_core_report(core, measured, &foreign);
 }
 
 int main(void) {
