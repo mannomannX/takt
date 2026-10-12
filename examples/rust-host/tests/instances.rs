@@ -70,8 +70,15 @@ fn eight_instances_in_threads_agree_with_the_interpreter() {
         assert!(trace.contains(" out count 29"), "Instanz {i} rechnete jede Runde:\n{trace}");
         assert!(seed.samples > 0, "Instanz {i} tastete ihr Geraet ab");
         assert_eq!(seed.thread.as_deref(), Some(format!("instanz-{i}").as_str()), "in ihrem Faden");
-        let word = trace.lines().find(|l| l.contains(" out word ") && !l.ends_with(" 0")).expect("ein Wort");
-        first_words.insert(word.split_whitespace().last().expect("Wert").to_string());
+        // Die Leitung schreibt hinter jede Zahl ein Leerzeichen; verglichen
+        // wird der Wert, nicht das Ende der Zeile.
+        let word = trace
+            .lines()
+            .filter(|l| l.contains(" out word "))
+            .filter_map(|l| l.split_whitespace().last())
+            .find(|w| *w != "0")
+            .expect("ein Wort");
+        first_words.insert(word.to_string());
     }
     assert_eq!(first_words.len(), INSTANCES, "jede Instanz hasht ihren eigenen Startwert: {first_words:?}");
 }
