@@ -1,6 +1,6 @@
 name: Takt-Werkzeuge
 description: >-
-  Rust 1.98.0 mit den Zielen der Boards und llvm-tools, LLVM 22, z3 4.13.4,
+  Rust 1.98.0 mit den Zielen der Boards und llvm-tools, LLVM 22.1.8, z3 4.13.4,
   cvc5 1.2.0 und cargo-nextest 0.9.146, dieselben Versionen wie auf dem
   Entwicklungsrechner. Unter Linux dazu die aarch64-Werkzeugkette mit qemu
   und libudev (wie tools/Dockerfile.linux).
@@ -31,25 +31,75 @@ runs:
         sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
         df -h /
 
-    # LLVM in derselben Hauptversion wie auf dem Wirt: Der Codegen schreibt
-    # IR fuer 22 (tools/Dockerfile.linux, KON2-013). `libudev` fuer
-    # `serialport` (takt-trace-serial, die Board-Harness).
-    - name: LLVM 22, aarch64, qemu und libudev
+    # `libudev` fuer `serialport` (takt-trace-serial, die Board-Harness).
+    - name: aarch64, qemu und libudev
       if: runner.os == 'Linux'
       shell: bash
       run: |
         sudo apt-get update -qq
         sudo apt-get install -y -qq --no-install-recommends \
           gcc-aarch64-linux-gnu libc6-dev-arm64-cross qemu-user libudev-dev pkg-config
-        wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
-        sudo bash /tmp/llvm.sh 22
-        sudo apt-get install -y -qq --no-install-recommends llvm-22
-        echo /usr/lib/llvm-22/bin >> "$GITHUB_PATH"
         {
           echo CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
           echo CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUNNER=qemu-aarch64
           echo QEMU_LD_PREFIX=/usr/aarch64-linux-gnu
         } >> "$GITHUB_ENV"
+
+    # LLVM 22.1.8 wie auf dem Entwicklungsrechner, aus dem Archiv des
+    # Projekts: Ein Abbild, das ein Runner baut, findet der lokale Lauf nur
+    # mit derselben Version von clang wieder (M11 Schritt 34d). Das Archiv
+    # hat 1,9 GB; der Cache haelt nur, was Takt braucht: clang mit seinen
+    # Kopfdateien und Laufzeiten (ASan), die Werkzeuge, die Takt neben clang
+    # sucht (`ld.lld`, `llvm-ar`, `llvm-nm`, `llvm-size`), und die
+    # Bibliotheken, die sie laden.
+    - name: LLVM 22.1.8 aus dem Cache
+      id: llvm
+      if: runner.os == 'Linux'
+      uses: actions/cache@v4
+      with:
+        path: ~/llvm-22.1.8
+        key: llvm-22.1.8-linux-x64-2
+
+    - name: LLVM 22.1.8 laden
+      if: runner.os == 'Linux' && steps.llvm.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cd "$RUNNER_TEMP"
+        name=LLVM-22.1.8-Linux-X64
+        curl -fsSLo "$name.tar.xz" "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/$name.tar.xz"
+        echo "df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384  $name.tar.xz" | sha256sum -c -
+        tar -xJf "$name.tar.xz" --wildcards "$name/bin/*" "$name/lib/clang/*" "$name/lib/*.so*"
+        rm "$name.tar.xz"
+        dest="$HOME/llvm-22.1.8"
+        mkdir -p "$dest/bin" "$dest/lib"
+        # Je Werkzeug die Datei selbst, nicht der Verweis: Der Name waehlt,
+        # was `clang` und `lld` sind (`ld.lld` ist der ELF-Linker).
+        tools="$name/bin/clang $name/bin/ld.lld $name/bin/llvm-ar $name/bin/llvm-nm $name/bin/llvm-size"
+        for tool in $tools; do
+          cp -L "$tool" "$dest/bin/"
+        done
+        # Die Bibliotheken aus dem Archiv, die sie laden; `$ORIGIN/../lib`
+        # findet sie neben `bin` wieder.
+        for lib in $(ldd $tools | awk -v tree="$name/" 'index($3, tree) { print $3 }' | sort -u); do
+          cp -L "$lib" "$dest/lib/"
+        done
+        # Kopfdateien und Laufzeiten, die clang neben sich erwartet.
+        cp -r "$name/lib/clang" "$dest/lib/"
+        rm -rf "$name"
+        ls -la "$dest/bin" "$dest/lib"
+        du -sh "$dest"
+
+    - name: LLVM 22.1.8 einrichten
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        echo "$HOME/llvm-22.1.8/bin" >> "$GITHUB_PATH"
+        echo "TAKT_CLANG=$HOME/llvm-22.1.8/bin/clang" >> "$GITHUB_ENV"
+        "$HOME/llvm-22.1.8/bin/clang" --version
+        "$HOME/llvm-22.1.8/bin/ld.lld" --version
+        "$HOME/llvm-22.1.8/bin/llvm-ar" --version | head -2
+        "$HOME/llvm-22.1.8/bin/llvm-nm" --version
+        "$HOME/llvm-22.1.8/bin/llvm-size" --version
 
     - name: z3 4.13.4 und cvc5 1.2.0
       if: runner.os == 'Linux'

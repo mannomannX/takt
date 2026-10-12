@@ -19,7 +19,6 @@ pub mod esp32c6;
 pub mod host;
 pub mod stm32f401;
 
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -466,6 +465,28 @@ impl Options {
     }
 }
 
+/// Die Umgebungsvariable des Laufs, der nur baut ([`build_only`]).
+pub const BUILD_ONLY: &str = "TAKT_BOARD_BUILD_ONLY";
+
+/// Der Fehler, mit dem im Lauf, der nur baut, jeder Zugriff auf ein Board
+/// endet: Das Abbild ist gebaut, und mehr ist nicht zu tun.
+pub const BUILT_ONLY: &str = "nur gebaut (TAKT_BOARD_BUILD_ONLY)";
+
+/// **Ein Lauf, der nur baut** (`TAKT_BOARD_BUILD_ONLY=1`, M11 Schritt 34d):
+/// Die Boards bauen jedes Abbild, das ihre Tests verlangen, in den
+/// Zwischenspeicher, und jeder Zugriff auf die Hardware endet mit
+/// [`BUILT_ONLY`]. Ein Runner ohne Boards baut so genau die Abbilder, die ein
+/// Lauf am Board braucht, ohne eine zweite Liste der Programme; der lokale
+/// Lauf schreibt und prueft sie nur noch (`tools/board-run.ps1 -FromCi`).
+pub fn build_only() -> bool {
+    std::env::var_os(BUILD_ONLY).is_some_and(|v| v == "1")
+}
+
+/// Der Port eines Boards; ohne Port, im Lauf, der nur baut, [`BUILT_ONLY`].
+pub(crate) fn attached(port: Option<&str>) -> Result<&str, String> {
+    port.ok_or_else(|| BUILT_ONLY.to_string())
+}
+
 /// Baut die Abbilder eines Boards, ohne das Board zu belegen
 /// ([`Board::builder`]).
 pub type Builder = Box<dyn Fn(&Path, &Options) -> Result<PathBuf, String> + Send + Sync>;
@@ -564,24 +585,25 @@ impl Bringup {
     ///
     /// Gebaut wird im Bauplatz `slot` ([`BUILDS`]): ab dem zweiten in einem
     /// eigenen Zielverzeichnis, in denselben Zwischenspeicher.
+    ///
+    /// Stand und Schluessel haengen nur an Inhalten ([`Fingerprint`]): Ein
+    /// Abbild, das ein Runner unter Linux baut, findet ein Lauf unter Windows
+    /// wieder (M11 Schritt 34d).
     pub fn build(&self, program: &Path, options: &Options, slot: usize) -> Result<PathBuf, String> {
-        let images = crate::target_dir().join("takt-board-images");
-        let stand = images.join(format!("{}-{:016x}", self.triple, self.sources()?));
+        let stand = self.stand()?;
         let key = format!("{:016x}", self.key(program, options)?);
         let cached = stand.join(format!("{key}.elf"));
         if cached.is_file() {
             return Ok(cached);
         }
+        missed(&stand, &cached, &program.display().to_string())?;
         let ours = |part: &Path| -> Result<bool, String> {
             let elf = std::fs::read(part).map_err(|e| format!("{}: {e}", part.display()))?;
             Ok(takt_board_support::image_key::carries(&elf, &key))
         };
         for _ in 0..ATTEMPTS {
             let elf = self.build_uncached(program, options, &key, slot)?;
-            if !stand.is_dir() {
-                self.forget_stale(&images);
-            }
-            std::fs::create_dir_all(&stand).map_err(|e| format!("{}: {e}", stand.display()))?;
+            self.enter(&stand)?;
             if publish_checked(&elf, &cached, ours)? {
                 return Ok(cached);
             }
@@ -589,67 +611,85 @@ impl Bringup {
         Err(format!("{key}: {ATTEMPTS}-mal gebaut, jedes Mal hatte ein anderer Prozess das ELF ueberschrieben"))
     }
 
-    /// Entfernt die Abbilder frueherer Staende dieses Boards; gegen sie
-    /// baut niemand mehr.
-    fn forget_stale(&self, images: &Path) {
-        let prefix = format!("{}-", self.triple);
-        for entry in std::fs::read_dir(images).into_iter().flatten().flatten() {
-            if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                let _ = std::fs::remove_dir_all(entry.path());
+    /// Das Verzeichnis des Stands im Zwischenspeicher: `<tripel>-<stand>`
+    /// unter [`IMAGES`].
+    pub(crate) fn stand(&self) -> Result<PathBuf, String> {
+        Ok(images().join(format!("{}-{:016x}", self.triple, self.sources()?)))
+    }
+
+    /// Legt das Verzeichnis des Stands an. Ist es neu, gehen zuerst die
+    /// Abbilder frueherer Staende dieses Boards: Gegen sie baut niemand mehr.
+    pub(crate) fn enter(&self, stand: &Path) -> Result<(), String> {
+        if !stand.is_dir() {
+            let prefix = format!("{}-", self.triple);
+            for entry in std::fs::read_dir(images()).into_iter().flatten().flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
             }
         }
+        std::fs::create_dir_all(stand).map_err(|e| format!("{}: {e}", stand.display()))
     }
 
     /// Der Stand, gegen den gebaut wird: die Quellen und Verdrahtungen aller
     /// Crates und die Dateien des Bring-ups.
     fn sources(&self) -> Result<u64, String> {
-        let mut h = DefaultHasher::new();
+        let mut f = Fingerprint::new();
         let dir = root().join(self.dir);
         for name in self.inputs {
-            std::fs::read(dir.join(name)).unwrap_or_default().hash(&mut h);
+            f.str(name);
+            f.file_if_any(&dir.join(name));
         }
-        let crates = root().join("crates");
-        let mut dirs: Vec<PathBuf> =
-            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).collect();
-        dirs.sort();
-        for dir in &dirs {
-            if dir.join("src").is_dir() {
-                hash_tree(&dir.join("src"), &mut h)?;
+        for (name, krate) in crate_dirs()? {
+            f.str(&name);
+            let src = krate.join("src");
+            if src.is_dir() {
+                hash_tree(&src, &mut f)?;
             }
             // Die Verdrahtung des Bring-ups und der Treiber-Crates (12.6).
-            std::fs::read(dir.join(crate::bringup::WIRING)).unwrap_or_default().hash(&mut h);
+            f.file_if_any(&krate.join(crate::bringup::WIRING));
         }
-        hash_build_inputs(&dir, &mut h);
-        Ok(h.finish())
+        hash_build_inputs(&dir, &mut f)?;
+        Ok(f.finish())
     }
 
     /// Der Schluessel eines Abbilds in seinem Stand: das Programm samt den
     /// Konfigurationen, die es importiert, die Optionen und die C-Referenz.
     /// Aendert sich nichts davon, ist das Abbild dasselbe.
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
-        let mut h = DefaultHasher::new();
-        hash_program(program, &mut h)?;
-        (options.ticks, options.fresh, options.timed, options.form, options.hostile_fpu, options.flaw, self.triple)
-            .hash(&mut h);
-        (options.build == takt_sema::Build::Hw).hash(&mut h);
-        if let Some(hw) = &options.hardware {
-            std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
+        let mut f = Fingerprint::new();
+        hash_program(program, &mut f)?;
+        f.str(self.triple);
+        f.u64(options.ticks);
+        for flag in [options.fresh, options.timed, options.hostile_fpu, options.build == takt_sema::Build::Hw] {
+            f.u64(u64::from(flag));
+        }
+        f.str(options.form.feature().unwrap_or("own"));
+        f.str(options.flaw.map_or("", Flaw::name));
+        match &options.hardware {
+            Some(hw) => {
+                f.u64(1);
+                f.file(hw)?;
+            }
+            None => f.u64(0),
         }
         match &options.bin {
-            Bin::Takt => 0u8.hash(&mut h),
+            Bin::Takt => f.str("takt"),
             // Die Kerne stehen ausserhalb von `src`; ihre Kennung deckt sie.
             Bin::Bench { shift } => {
-                (1u8, shift).hash(&mut h);
-                crate::bench::suite_id(&crate::bench::suite(), &crate::bench::math_vectors()?).hash(&mut h);
+                f.str("bench");
+                f.u64(u64::from(*shift));
+                f.str(&crate::bench::suite_id(&crate::bench::suite(), &crate::bench::math_vectors()?));
             }
-            // Die Vektoren stehen in der Spezifikation, nicht in `src`.
+            // Die Vektoren der Natives und der Mathematik, die das Bauskript
+            // liest, stehen in den Spezifikationen, nicht in `src`.
             Bin::Natives => {
-                2u8.hash(&mut h);
-                let spec = crate::natives::spec_path();
-                std::fs::read(&spec).map_err(|e| format!("{}: {e}", spec.display()))?.hash(&mut h);
+                f.str("natives");
+                f.file(&crate::natives::spec_path())?;
+                f.file(&crate::math::spec_path())?;
             }
         }
-        Ok(h.finish())
+        Ok(f.finish())
     }
 
     /// `cargo build` des Bring-ups mit dem Programm; `key` landet als Symbol
@@ -734,16 +774,123 @@ pub(crate) fn built_executable(cargo: &mut Command) -> Result<PathBuf, String> {
         .ok_or_else(|| "cargo meldete kein Binary".to_string())
 }
 
+/// Das Verzeichnis des Zwischenspeichers der Abbilder im Zielverzeichnis.
+pub const IMAGES: &str = "takt-board-images";
+
+/// Die Datei in [`IMAGES`], in die jeder Bau eines Abbilds, das der
+/// Zwischenspeicher nicht hielt, vorher eine Zeile schreibt: `<stand>/<datei>
+/// <programm>`. `tools/board-run.ps1 -FromCi` zaehlt sie; Ziel ist keine.
+pub const MISSES: &str = "misses.log";
+
+/// Der Zwischenspeicher der Abbilder ([`IMAGES`]).
+pub fn images() -> PathBuf {
+    crate::target_dir().join(IMAGES)
+}
+
+/// Vermerkt in [`MISSES`], dass `cached` im Stand `stand` fehlte und fuer
+/// `what` gebaut wird.
+pub(crate) fn missed(stand: &Path, cached: &Path, what: &str) -> Result<(), String> {
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let log = images().join(MISSES);
+    std::fs::create_dir_all(images())
+        .and_then(|()| std::fs::OpenOptions::new().create(true).append(true).open(&log))
+        .and_then(|mut file| file.write_all(format!("{}/{} {what}\n", name(stand), name(cached)).as_bytes()))
+        .map_err(|e| format!("{}: {e}", log.display()))
+}
+
+/// Ein Fingerabdruck ueber Inhalte, auf jedem Wirt derselbe: SHA-256, davon
+/// die ersten acht Byte (M11 Schritt 34d).
+///
+/// `DefaultHasher` taugte dafuer nicht: Seine Ausgabe ist ueber Versionen von
+/// Rust nicht festgelegt, und ein `OsStr` hasht unter Windows andere Bytes als
+/// unter Linux. Hier geht jedes Stueck mit seiner Laenge davor ein, Namen als
+/// UTF-8 und der Inhalt einer Datei ohne `\r`: Dieselbe Datei mit CRLF und
+/// mit LF ist dieselbe.
+pub(crate) struct Fingerprint(takt_native::sha256::Ctx);
+
+impl Fingerprint {
+    pub(crate) fn new() -> Fingerprint {
+        Fingerprint(takt_native::sha256::Ctx::new())
+    }
+
+    /// Eine Zahl, acht Byte Little Endian.
+    pub(crate) fn u64(&mut self, n: u64) {
+        self.0.update(&n.to_le_bytes());
+    }
+
+    /// Bytes mit ihrer Laenge davor: Zwei Folgen von Stuecken ergeben nur
+    /// dann denselben Strom, wenn sie gleich sind.
+    pub(crate) fn bytes(&mut self, bytes: &[u8]) {
+        self.u64(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+        self.0.update(bytes);
+    }
+
+    /// Ein Name oder Wert.
+    pub(crate) fn str(&mut self, text: &str) {
+        self.bytes(text.as_bytes());
+    }
+
+    /// Der Inhalt einer Datei, ohne `\r`.
+    pub(crate) fn text(&mut self, content: &[u8]) {
+        let lf: Vec<u8> = content.iter().copied().filter(|&b| b != b'\r').collect();
+        self.bytes(&lf);
+    }
+
+    /// Die Datei `path` wie [`Fingerprint::text`].
+    pub(crate) fn file(&mut self, path: &Path) -> Result<(), String> {
+        let content = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        self.text(&content);
+        Ok(())
+    }
+
+    /// Die Datei `path`, wenn es sie gibt; sonst ein Zeichen dafuer, dass
+    /// sie fehlt.
+    pub(crate) fn file_if_any(&mut self, path: &Path) {
+        match std::fs::read(path) {
+            Ok(content) => {
+                self.u64(1);
+                self.text(&content);
+            }
+            Err(_) => self.u64(0),
+        }
+    }
+
+    /// Die ersten acht Byte, so gelesen, dass `{:016x}` die ersten sechzehn
+    /// Hexziffern des SHA-256 ergibt.
+    pub(crate) fn finish(self) -> u64 {
+        let [a, b, c, d, e, f, g, h, ..] = self.0.finish();
+        u64::from_be_bytes([a, b, c, d, e, f, g, h])
+    }
+}
+
+/// Die Crates des Repositorys: je Verzeichnis unter `crates` mit einem
+/// `Cargo.toml` sein Name und Pfad, nach Namen geordnet.
+pub(crate) fn crate_dirs() -> Result<Vec<(String, PathBuf)>, String> {
+    let crates: Vec<(String, PathBuf)> = entries(&root().join("crates"))?;
+    Ok(crates.into_iter().filter(|(_, dir)| dir.join("Cargo.toml").is_file()).collect())
+}
+
+/// Die Eintraege eines Verzeichnisses mit ihrem Namen als UTF-8, nach Namen
+/// geordnet: eine Ordnung, die nicht am System haengt.
+fn entries(dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    let mut out: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+        .collect();
+    out.sort();
+    Ok(out)
+}
+
 /// Ein Programm und die Konfigurationen, die es per `import channels`
 /// liest (8.2): Sie liegen neben ihm und gehen in sein Abbild ein.
-pub(crate) fn hash_program(program: &Path, h: &mut DefaultHasher) -> Result<(), String> {
+pub(crate) fn hash_program(program: &Path, f: &mut Fingerprint) -> Result<(), String> {
     let text = std::fs::read_to_string(program).map_err(|e| format!("{}: {e}", program.display()))?;
-    text.hash(h);
+    f.text(text.as_bytes());
     let dir = program.parent().unwrap_or(Path::new("."));
     for file in takt_sema::channel_imports(&text) {
-        let path = dir.join(&file);
-        file.hash(h);
-        std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?.hash(h);
+        f.str(&file);
+        f.file(&dir.join(&file))?;
     }
     Ok(())
 }
@@ -751,26 +898,35 @@ pub(crate) fn hash_program(program: &Path, h: &mut DefaultHasher) -> Result<(), 
 /// Was ein Abbild bestimmt, ohne in `src` zu stehen: Bauskripte und
 /// Manifeste aller Crates, Manifest und Lock des Workspace und die Versionen
 /// von rustc (wie `cargo` sie im Bring-up `dir` waehlt) und clang.
-pub(crate) fn hash_build_inputs(dir: &Path, h: &mut DefaultHasher) {
+///
+/// Von `--version` zaehlt nur die erste Zeile, die Version samt Quelle und
+/// Commit: Die Zeilen danach nennen Zielplattform und Installationspfad, und
+/// die sind unter Windows andere als unter Linux.
+pub(crate) fn hash_build_inputs(dir: &Path, f: &mut Fingerprint) -> Result<(), String> {
     let root = root();
     for name in ["Cargo.toml", "Cargo.lock"] {
-        std::fs::read(root.join(name)).unwrap_or_default().hash(h);
+        f.str(name);
+        f.file_if_any(&root.join(name));
     }
-    let mut crates: Vec<PathBuf> =
-        std::fs::read_dir(root.join("crates")).into_iter().flatten().flatten().map(|e| e.path()).collect();
-    crates.sort();
-    for krate in &crates {
-        for name in ["build.rs", "Cargo.toml"] {
-            std::fs::read(krate.join(name)).unwrap_or_default().hash(h);
+    for (name, krate) in crate_dirs()? {
+        f.str(&name);
+        for file in ["build.rs", "Cargo.toml"] {
+            f.file_if_any(&krate.join(file));
         }
     }
-    let version = |tool: &Path| {
-        Command::new(tool).arg("--version").current_dir(dir).output().map(|o| o.stdout).unwrap_or_default()
+    let first_line = |tool: &Path| {
+        Command::new(tool)
+            .arg("--version")
+            .current_dir(dir)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or_default().trim().to_string())
+            .unwrap_or_default()
     };
-    version(Path::new("rustc")).hash(h);
+    f.str(&first_line(Path::new("rustc")));
     if let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() {
-        version(&clang).hash(h);
+        f.str(&first_line(&clang));
     }
+    Ok(())
 }
 
 /// Kopiert ein gebautes Abbild in den Zwischenspeicher: erst unter einem
@@ -805,17 +961,20 @@ pub(crate) fn publish_checked(
     published
 }
 
-/// Namen und Inhalte eines Verzeichnisbaums, in fester Ordnung.
-fn hash_tree(dir: &Path, h: &mut DefaultHasher) -> Result<(), String> {
-    let mut entries: Vec<PathBuf> =
-        std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.flatten().map(|e| e.path()).collect();
-    entries.sort();
-    for path in entries {
-        path.file_name().hash(h);
+/// Namen und Inhalte eines Verzeichnisbaums, in fester Ordnung: die Zahl der
+/// Eintraege, dann je Eintrag sein Name und der Inhalt der Datei oder der
+/// Baum des Verzeichnisses. Wo der Baum liegt, zaehlt nicht.
+pub(crate) fn hash_tree(dir: &Path, f: &mut Fingerprint) -> Result<(), String> {
+    let entries = entries(dir)?;
+    f.u64(u64::try_from(entries.len()).unwrap_or(u64::MAX));
+    for (name, path) in entries {
+        f.str(&name);
         if path.is_dir() {
-            hash_tree(&path, h)?;
+            f.u64(1);
+            hash_tree(&path, f)?;
         } else {
-            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?.hash(h);
+            f.u64(0);
+            f.file(&path)?;
         }
     }
     Ok(())
@@ -1215,6 +1374,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert_ne!(board_before, board_after, "das Board baute mit der alten Konfiguration");
         assert_ne!(host_before, host_after, "der Wirt baute mit der alten Konfiguration");
+    }
+
+    /// **Stand und Schluessel haengen am Inhalt, nicht an Zeilenenden oder
+    /// Ort** (M11 Schritt 34d): Derselbe Baum mit CRLF und mit LF, an zwei
+    /// Orten, ergibt denselben Fingerabdruck, ebenso das Programm darin; ein
+    /// anderer Inhalt einen anderen. Sonst faende ein Lauf unter Windows die
+    /// Abbilder eines Runners unter Linux nicht.
+    #[test]
+    fn the_fingerprint_follows_the_content_not_the_line_ends() {
+        let tree = |name: &str, eol: &str, tick: u32| -> PathBuf {
+            let dir = scratch(name);
+            std::fs::create_dir_all(dir.join("sub")).expect("Verzeichnis");
+            std::fs::write(dir.join("a.rs"), format!("fn a() {{{eol}    {tick}{eol}}}{eol}")).expect("Datei");
+            let program = format!("system:{eol}    language = 1{eol}    tick     = {tick} ms{eol}");
+            std::fs::write(dir.join("sub/b.takt"), program).expect("Programm");
+            dir
+        };
+        let stand = |dir: &Path| {
+            let mut f = Fingerprint::new();
+            hash_tree(dir, &mut f).expect("Baum");
+            f.finish()
+        };
+        let bringup = Bringup { dir: "crates/takt-bringup-host", triple: "x", inputs: &[], env: &[] };
+        let key = |dir: &Path| bringup.key(&dir.join("sub/b.takt"), &Options::fresh(10)).expect("Schluessel");
+        let dirs = [tree("lf", "\n", 1), tree("crlf", "\r\n", 1), tree("other", "\n", 2)];
+        let stands = dirs.each_ref().map(|d| stand(d));
+        let keys = dirs.each_ref().map(|d| key(d));
+        for dir in &dirs {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        assert_eq!(stands[0], stands[1], "derselbe Baum mit CRLF und mit LF");
+        assert_ne!(stands[0], stands[2], "ein anderer Inhalt");
+        assert_eq!(keys[0], keys[1], "dasselbe Programm mit CRLF und mit LF");
+        assert_ne!(keys[0], keys[2], "ein anderes Programm");
+    }
+
+    /// Der Fingerabdruck ist SHA-256, die ersten acht Byte in der Folge der
+    /// Hexziffern: Ueber leeren Eingaben `e3b0c442…`.
+    #[test]
+    fn the_fingerprint_is_the_head_of_sha256() {
+        assert_eq!(format!("{:016x}", Fingerprint::new().finish()), "e3b0c44298fc1c14");
     }
 
     /// **Ein abgebrochenes Kopieren hinterlaesst kein gueltiges Abbild**

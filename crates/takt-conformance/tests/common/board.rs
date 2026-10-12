@@ -12,6 +12,35 @@ use takt_mir::program::Program;
 /// Ticks eines Konformitaetslaufs auf dem Board.
 pub const TICKS: u64 = 60;
 
+/// Ist `e` das Ende eines Zugriffs im Lauf, der nur baut
+/// ([`board::BUILT_ONLY`])? Die Helfer tragen den Fehler eines Laufs mit
+/// ihrem Kontext in ihre Befunde; er bleibt darin erkennbar.
+fn not_run(e: &str) -> bool {
+    e.contains(board::BUILT_ONLY)
+}
+
+/// **Das Urteil eines Board-Tests ueber seine Befunde** (M11 Schritt 34d).
+/// Am Board besteht er ohne Befund. Im Lauf, der nur baut
+/// (`TAKT_BOARD_BUILD_ONLY`), endet jeder Lauf mit [`board::BUILT_ONLY`],
+/// nachdem sein Abbild gebaut ist, und nur ein anderer Befund — ein Bau, der
+/// scheiterte — laesst ihn scheitern.
+pub fn verdict(failed: &[String]) {
+    let found: Vec<&str> = failed.iter().map(String::as_str).filter(|f| !not_run(f)).collect();
+    assert!(found.is_empty(), "{}", found.join("\n\n"));
+}
+
+/// Der Wert eines Zugriffs auf das Board, fuer einen Test, der ihn selbst
+/// prueft; `None` im Lauf, der nur baut: Das Abbild ist gebaut, und der Test
+/// endet dort bestanden ([`verdict`]). Jeder andere Fehler laesst ihn
+/// scheitern.
+pub fn ran<T>(result: Result<T, String>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(e) if not_run(&e) => None,
+        Err(e) => panic!("{e}"),
+    }
+}
+
 /// Ein Programm des Korpus, fuer die Simulation uebersetzt.
 pub fn corpus(name: &str) -> Program {
     program(&board::corpus_path(name))
