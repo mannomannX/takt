@@ -92,7 +92,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
 | 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | frei |
 | 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a bis 33c umgesetzt (33b/33c Strang C, gemergt 7b924a3; Board-Crates Strang E, gemergt 0a57fe7a); offen der Board-Lauf über den neuen Stand (Strang A) |
-| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34d umgesetzt (34d von Strang B, gemergt 8eb251d); 34e Strang A: die Test-Binaries der Boards als nextest-Archiv von einem Windows-Runner, lokal nur flashen und prüfen |
+| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34e umgesetzt (34d Strang B, 34e Strang A); offen der neue Bench nach dem Umbau der Runtime (Stack-Reserve `rtos` auf dem F401) |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
 | 24 | Vorlagen, `takt doctor`, Anleitung, Inventur, Abschluss | W | beide | alle | zuletzt |
 
