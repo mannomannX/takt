@@ -60,10 +60,11 @@ machine hasher:
         after 1 s: -> REST
 
         state FILL:
-            # In 64 Ticks voll, wie lang die Nachricht auch ist.
+            # In 64 Ticks voll, wie lang die Nachricht auch ist; `i % 256`,
+            # weil `i` ueber 255 reicht, sobald die Nachricht 16 KiB uebersteigt.
             loop:
                 for i in range(JOB_BYTES / 64):
-                    msg.push(i as u8)
+                    msg.push((i % 256) as u8)
             when msg.len >= JOB_BYTES: -> HASH
 
         state HASH:

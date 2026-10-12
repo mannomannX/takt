@@ -589,4 +589,16 @@ mod tests {
         assert_eq!(job_bytes_for(500_000), 1 << 21);
         assert_eq!(job_bytes_for(u64::MAX), JOB_BYTES_MAX);
     }
+
+    /// **Eine lange Nachricht fuellt sich ohne Fault** (M11 Schritt 18c): Auf
+    /// einem Wirt zaehlt `i` im Fuellschritt ueber 255, und `i as u8` war
+    /// dort ein `RangeFault` in Tick 0 — der Interpreter fiel mit, also
+    /// stimmte der Trace, und kein Job begann.
+    #[test]
+    fn a_long_message_fills_without_a_fault() {
+        let p = program(&source(1 << 17).expect("Quelle")).expect("uebersetzt");
+        let options = takt_interp::RunOptions { ticks: 70, ..Default::default() };
+        let trace = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+        assert!(!trace.contains(" fault "), "{trace}");
+    }
 }

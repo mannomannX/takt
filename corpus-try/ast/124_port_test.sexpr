@@ -27,7 +27,7 @@
     (state FILL
       (loop
         (for i in (range (/ JOB_BYTES 64))
-          (.push msg (as i u8))))
+          (.push msg (as (paren (% i 256)) u8))))
       (when (>= (.len msg) JOB_BYTES) -> HASH))
     (state HASH
       (sequence
