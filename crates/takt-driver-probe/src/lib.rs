@@ -18,6 +18,23 @@
 //! Beide Bring-ups und das Wirts-Bring-up binden es; auf dem Wirt faehrt
 //! `takt driver-test --crate` es wie jedes andere Treiber-Crate.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 
 use takt_board_support::{edge_probe, wake_probe};

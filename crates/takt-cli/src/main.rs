@@ -38,6 +38,24 @@
 //! Golden-Unterschied, dem Lauf-Verdikt FAIL (13.5) und unter `test` und
 //! `campaign` jedem Urteil ausser PASS (13.5, 13.7).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 mod bench;
 mod check_image;
 mod embed;

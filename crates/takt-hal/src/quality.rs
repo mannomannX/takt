@@ -10,6 +10,7 @@
     not(test),
     deny(
         clippy::expect_used,
+        clippy::panic,
         clippy::arithmetic_side_effects,
         clippy::indexing_slicing,
         clippy::as_conversions,

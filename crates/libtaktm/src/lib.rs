@@ -45,6 +45,23 @@
 //! Frage, ob ein Ergebnis endlich sein *muss*, beantwortet der Aufrufer
 //! (4.1: `ArithmeticFault(NonFinite)`), nicht die Bibliothek.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 // Ohne das Feature `std` ist das Crate `no_std` — dann fehlen `sqrt`,
 // `fma` und die Rundungen, weil `core` sie auf stabilem Rust nicht hat
 // (plan/m4.md 2.3c). Mit dem Feature (Standard) nutzt es die
@@ -54,6 +71,7 @@
     not(test),
     deny(
         clippy::expect_used,
+        clippy::panic,
         clippy::arithmetic_side_effects,
         clippy::indexing_slicing,
         clippy::as_conversions,

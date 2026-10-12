@@ -118,10 +118,10 @@ fn tier2() -> Tier {
     tier
 }
 
-/// Die Lints der Zeile `2 mit `unsafe``.
-fn unsafe_tier_lints() -> BTreeSet<String> {
+/// Die Lints der Zeile `stufe` (`1`, `2 mit `unsafe``) der Tabelle der Stufen.
+fn tier_lints(stufe: &str) -> BTreeSet<String> {
     let rows = table(&section(), "| Stufe | Crates | dazu |");
-    let row = rows.iter().find(|r| r[0] == "2 mit `unsafe`").expect("Zeile der Stufe 2 mit `unsafe`");
+    let row = rows.iter().find(|r| r[0] == stufe).unwrap_or_else(|| panic!("Zeile der Stufe {stufe}"));
     let mut out = BTreeSet::new();
     for part in row[2].split(';').map(str::trim) {
         let names = ticked(part);
@@ -181,43 +181,76 @@ const PENDING_UNSAFE: &[&str] = &[
     "takt-trampoline-stm32f401",
 ];
 
-/// Wo die Lints der Stufe stehen: am Kopf des Crates, bei den Bring-ups am
-/// Kopf jedes Programms unter `src/bin`, bei `takt-hal` an den Modulen des
-/// Kerns ohne `mir` (Katalog: „der Kern ohne `mir`“).
-fn heads(krate: &str) -> Vec<PathBuf> {
+/// Crates, die Stufe 1 noch nicht tragen: die Board-Crates, das Sprungbrett
+/// und die Bring-ups, die erst mit einem Board-Bau geprueft werden;
+/// schrumpft wie [`PENDING`].
+const PENDING_TIER1: &[&str] = &[
+    "takt-board-esp32c6",
+    "takt-board-stm32f401",
+    "takt-bringup-esp32c6",
+    "takt-bringup-host",
+    "takt-bringup-stm32f401",
+    "takt-trampoline-stm32f401",
+];
+
+/// Die Wurzeln eines Crates: `lib.rs` und `main.rs`, ohne beide jedes
+/// Programm unter `src/bin`. Jede ist ein eigenes Crate mit eigenem Kopf.
+fn roots(krate: &str) -> Vec<PathBuf> {
     let src = root().join("crates").join(krate).join("src");
-    if krate == "takt-hal" {
-        return vec![src.join("contract.rs"), src.join("quality.rs")];
-    }
-    let (lib, main) = (src.join("lib.rs"), src.join("main.rs"));
-    if lib.is_file() {
-        vec![lib]
-    } else if main.is_file() {
-        vec![main]
-    } else {
-        walk(&src.join("bin"))
-    }
+    let found: Vec<PathBuf> = ["lib.rs", "main.rs"].iter().map(|f| src.join(f)).filter(|p| p.is_file()).collect();
+    if found.is_empty() { walk(&src.join("bin")) } else { found }
 }
 
-/// Die Lints im `deny(…)` eines inneren Attributs, leer ohne eines.
+/// Wo die Lints der Stufe 2 stehen: an den Wurzeln, bei `takt-hal` an den
+/// Modulen des Kerns ohne `mir` (Katalog: „der Kern ohne `mir`“).
+fn heads(krate: &str) -> Vec<PathBuf> {
+    if krate == "takt-hal" {
+        let src = root().join("crates/takt-hal/src");
+        return vec![src.join("contract.rs"), src.join("quality.rs")];
+    }
+    roots(krate)
+}
+
+/// Die inneren Attribute einer Datei (`#![…]`), je als Text.
+fn inner_attributes(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices("#![") {
+        let mut depth = 0usize;
+        let end = text[at..].char_indices().find_map(|(i, c)| {
+            match c {
+                '[' => depth += 1,
+                ']' => depth -= 1,
+                _ => {}
+            }
+            (c == ']' && depth == 0).then_some(at + i + 1)
+        });
+        if let Some(end) = end {
+            out.push(&text[at..end]);
+        }
+    }
+    out
+}
+
+/// Die Lints in den `deny(…)` aller inneren Attribute einer Datei.
 fn denied(text: &str) -> BTreeSet<String> {
-    let Some(at) = text.find("#![").and_then(|a| text[a..].find("deny(").map(|d| a + d + "deny(".len())) else {
-        return BTreeSet::new();
-    };
-    let mut depth = 1usize;
-    let end = text[at..]
-        .char_indices()
-        .find_map(|(i, c)| {
+    let mut out = BTreeSet::new();
+    for attr in inner_attributes(text) {
+        let Some(at) = attr.find("deny(").map(|d| d + "deny(".len()) else { continue };
+        let mut depth = 1usize;
+        let Some(end) = attr[at..].char_indices().find_map(|(i, c)| {
             match c {
                 '(' => depth += 1,
                 ')' => depth -= 1,
                 _ => {}
             }
             (depth == 0).then_some(at + i)
-        })
-        .expect("deny( endet");
-    let lints = text[at..end].split("reason").next().unwrap_or("");
-    lints.split(',').map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect()
+        }) else {
+            continue;
+        };
+        let lints = attr[at..end].split("reason").next().unwrap_or("");
+        out.extend(lints.split(',').map(str::trim).filter(|l| !l.is_empty()).map(str::to_string));
+    }
+    out
 }
 
 /// Die `.rs`-Dateien unter `dir`.
@@ -294,8 +327,26 @@ fn every_crate_of_tier_two_carries_its_lints() {
 }
 
 #[test]
+fn every_own_crate_carries_tier_one() {
+    let lints = tier_lints("1");
+    assert!(lints.contains("clippy::unwrap_used") && lints.contains("unused_must_use"), "{lints:?}");
+    let pending: BTreeSet<String> = PENDING_TIER1.iter().map(|s| s.to_string()).collect();
+    for krate in own_crates() {
+        for root in roots(&krate) {
+            let have = denied(&read(&root));
+            if pending.contains(&krate) {
+                assert!(!lints.is_subset(&have), "`{krate}` traegt Stufe 1 schon; es faellt aus PENDING_TIER1 heraus");
+                continue;
+            }
+            let missing: Vec<&String> = lints.difference(&have).collect();
+            assert!(missing.is_empty(), "{}: es fehlen {missing:?}", root.display());
+        }
+    }
+}
+
+#[test]
 fn every_crate_with_unsafe_carries_the_unsafe_lints() {
-    let (lints, crates) = (unsafe_tier_lints(), unsafe_crates());
+    let (lints, crates) = (tier_lints("2 mit `unsafe`"), unsafe_crates());
     assert!(!lints.is_empty(), "die Zeile `2 mit `unsafe`` nennt Lints");
     let pending: BTreeSet<String> = PENDING_UNSAFE.iter().map(|s| s.to_string()).collect();
     assert!(pending.is_subset(&crates), "PENDING_UNSAFE nennt Crates ohne `unsafe`");
@@ -319,7 +370,7 @@ fn every_crate_with_unsafe_carries_the_unsafe_lints() {
 /// Abweichung auffaellt und eine behobene die Ratsche senkt.
 const DEVIATIONS: &[(&str, &str, usize)] = &[
     ("takt-board-support", "R.10.5", 2),
-    ("takt-embed", "D.4.1", 3),
+    ("takt-embed", "D.4.1", 5),
     ("takt-hal", "R.10.5", 2),
     ("takt-native", "D.4.1", 1),
     ("takt-native", "R.10.5", 2),
@@ -380,9 +431,11 @@ fn an_allow_and_a_deviation_without_rule_are_caught() {
         Ok(vec!["D.4.1".into()])
     );
     assert_eq!(check("#[allow(clippy::large_enum_variant, reason = \"kein Katalog-Lint\")]"), Ok(vec![]));
-    let head =
-        "#![no_std]\n#![cfg_attr(not(test), deny(clippy::indexing_slicing, unreachable_pub, reason = \"a, b\"))]";
-    assert_eq!(denied(head), BTreeSet::from(["clippy::indexing_slicing".to_string(), "unreachable_pub".to_string()]));
+    // Zwei Bloecke am Kopf, wie bei einem Crate der Stufe 2: beide zaehlen.
+    let head = "#![cfg_attr(not(test), deny(clippy::unwrap_used, reason = \"Stufe 1\"))]\n#![no_std]\n\
+                #![cfg_attr(not(test), deny(clippy::indexing_slicing, unreachable_pub, reason = \"a, b\"))]";
+    let want = ["clippy::indexing_slicing", "clippy::unwrap_used", "unreachable_pub"];
+    assert_eq!(denied(head), want.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>());
 }
 
 #[test]

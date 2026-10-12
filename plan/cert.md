@@ -166,14 +166,15 @@ MISRA C:2025 neu; ihre Kurzfassung ist nicht gegen den Normtext geprüft
 (TODO, sobald MISRA C:2025 vorliegt).
 
 **Stufen.** Was ein Lint hält, steht als `deny` am Crate. Cargo erlaubt
-neben `lints.workspace = true` keine eigenen Einträge: Stufe 1 steht in
-`[workspace.lints]` und in den `[lints]` der eigenen Workspaces, Stufe 2
-als `#![deny(…)]` am Kopf jedes Crates ihrer Liste.
+neben `lints.workspace = true` keine eigenen Einträge, und `[lints]` gälte
+auch für Tests, in denen ein Panic das Ergebnis ist. Beide Stufen stehen
+darum als `#![cfg_attr(not(test), deny(…))]` am Kopf jedes Crates ihrer
+Liste, bei Programmen unter `src/bin` am Kopf jedes Programms.
 
 | Stufe | Crates | dazu |
 |---|---|---|
-| 1 | jedes eigene Crate | rustc `deprecated`, `unreachable_code`, `unused_must_use`, `unused_assignments`, `unused_mut`, `unfulfilled_lint_expectations`; Clippy `unwrap_used`, `panic`, `todo`, `unimplemented`, `dbg_macro`, `exit`, `let_underscore_must_use` (außerhalb von Tests) |
-| 2 | was auf dem Ziel läuft oder ins Abbild gelinkt wird: `takt-rt-core`, `takt-rt-baremetal`, `takt-rt-linux`, `takt-native`, `takt-hal` (der Kern ohne `mir`), `takt-crypto`, `libtaktm`, `takt-board-*`, `takt-bringup-*`, `takt-trampoline-stm32f401`, `takt-native-abi`, `takt-embed`, `takt-embed-c` | Clippy `expect_used`, `arithmetic_side_effects`, `indexing_slicing`, `as_conversions`, `fn_to_numeric_cast_any`, `shadow_unrelated`, `else_if_without_else`; rustc `unreachable_pub`; nur `Ordering::SeqCst` |
+| 1 | jedes eigene Crate | rustc `deprecated`, `unreachable_code`, `unused_must_use`, `unused_assignments`, `unused_mut`, `unfulfilled_lint_expectations`; Clippy `unwrap_used`, `todo`, `unimplemented`, `dbg_macro`, `exit` |
+| 2 | was auf dem Ziel läuft oder ins Abbild gelinkt wird: `takt-rt-core`, `takt-rt-baremetal`, `takt-rt-linux`, `takt-native`, `takt-hal` (der Kern ohne `mir`), `takt-crypto`, `libtaktm`, `takt-board-*`, `takt-bringup-*`, `takt-trampoline-stm32f401`, `takt-native-abi`, `takt-embed`, `takt-embed-c` | Clippy `panic`, `expect_used`, `arithmetic_side_effects`, `indexing_slicing`, `as_conversions`, `fn_to_numeric_cast_any`, `shadow_unrelated`, `else_if_without_else`; rustc `unreachable_pub`; nur `Ordering::SeqCst` |
 | 2 mit `unsafe` | die Crates aus Abschnitt 2 | Clippy `undocumented_unsafe_blocks`, `multiple_unsafe_ops_per_block`; rustc `unsafe_op_in_unsafe_fn` |
 
 **Abweichungen** stehen am Ort als
@@ -191,10 +192,10 @@ Lint noch Test, nur das Review.
 | D.1.2 (R) | alle | Spracherweiterungen sind dokumentiert; in Rust die instabilen Features | Prüfung: kein `#![feature(…)]` in einem eigenen Crate | `tests/rule_catalog.rs` |
 | D.2.1 (R), R.1.1 (R) | alle | Übersetzen ohne Fehler, ohne Verstoß gegen Syntax und Einschränkungen der Sprache | rustc; die Suite baut jedes Crate | Suite |
 | D.3.1 (R) | alle | Code ist auf dokumentierte Anforderungen rückführbar | Fähigkeitsmatrix: jeder Absatz der Referenz hat eine Zeile, jede fertige Zeile nennt einen Test | `tests/capabilities.rs` |
-| D.4.1 (R), D.4.11 (A) | alle | Laufzeitfehler minimieren, in Rust meist Panics; Werte an Bibliotheksfunktionen prüfen | Stufe 1: `unwrap_used`, `panic`, `todo`, `unimplemented`, `exit`; Stufe 2 zusätzlich `expect_used`, `arithmetic_side_effects`, `indexing_slicing` | `tests/rule_catalog.rs` |
+| D.4.1 (R), D.4.11 (A) | alle | Laufzeitfehler minimieren, in Rust meist Panics; Werte an Bibliotheksfunktionen prüfen | Stufe 1: `unwrap_used`, `todo`, `unimplemented`, `exit`; Stufe 2 zusätzlich `panic`, `expect_used`, `arithmetic_side_effects`, `indexing_slicing`. Im Werkzeug ist ein `panic!` mit Meldung so dokumentiert wie ein `expect`: Es liefert keinen Code statt eines falschen | `tests/rule_catalog.rs` |
 | D.4.4 (A) | alle | kein auskommentierter Code | Review; kein Lint (Lücke) | — |
 | D.4.5 (A) | alle | Bezeichner im selben Namensraum sind typografisch eindeutig | Review; `similar_names` ist pedantisch und nicht gesetzt (Lücke) | — |
-| D.4.7 (A), R.17.7 (R) | alle | Rückgabewerte, besonders Fehler, werden ausgewertet | rustc `unused_must_use` (`Result` und `#[must_use]`); Stufe 1: `let_underscore_must_use` | `tests/rule_catalog.rs` |
+| D.4.7 (A), R.17.7 (R) | alle | Rückgabewerte, besonders Fehler, werden ausgewertet | Stufe 1: rustc `unused_must_use` (`Result` und `#[must_use]`); ein Wert wird nie stillschweigend verworfen. `let _ = …` ist das ausdrückliche Verwerfen, das Gegenstück zu `(void)` in MISRA C; `let_underscore_must_use` ist darum nicht gesetzt | `tests/rule_catalog.rs` |
 | D.4.9 (A) | alle | Funktion statt funktionsartigem Makro | Review: Makros nur, wo eine Funktion es nicht kann (Lücke) | — |
 | D.4.12 (A) | alle | keine dynamische Allokation | Prüfung: kein Crate der Stufe 2 mit `no_std` bindet `alloc`. Abweichung im Ganzen: Die Werkzeug-Crates allozieren; sie laufen auf dem Wirt, nie im Abbild | `tests/rule_catalog.rs` |
 | D.4.13 (R), R.22.13 (R), R.22.14 (R), R.22.15 (R), R.22.20 (R) | alle | Ressourcen, Fäden und Synchronisationsobjekte in der richtigen Reihenfolge anlegen, benutzen und freigeben | Sprache: Besitz, Lebensdauern und `Drop` | — |

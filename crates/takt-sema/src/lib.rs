@@ -6,6 +6,24 @@
 //! Fehler auftraten. Jede Diagnose traegt den Code ihrer Pruefung (`SC-n`),
 //! damit Inventur, Tests und Meldungen dieselbe Nummer haben.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 pub mod calibrated;
 pub mod checks;
 pub mod collect;

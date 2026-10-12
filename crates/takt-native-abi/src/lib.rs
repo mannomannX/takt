@@ -17,12 +17,30 @@
 //! **Total.** Jeder Einstieg nimmt jede Eingabe: Eine Laenge unter eins
 //! ist leer, ein `Sha256Ctx`, der keiner ist, der leere Zustand.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![allow(unsafe_code, reason = "C-ABI der Natives fuer den erzeugten Code; 9.5 fuehrt sie in der TCB")]
 #![cfg_attr(
     not(test),
     deny(
         clippy::expect_used,
+        clippy::panic,
         clippy::arithmetic_side_effects,
         clippy::indexing_slicing,
         clippy::as_conversions,

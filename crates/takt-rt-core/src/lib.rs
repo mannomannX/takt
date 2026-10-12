@@ -24,11 +24,29 @@
 //! zwei Tickschleifen driften auseinander — der Fehler, den 5.2 fuer
 //! Treiber ausschliesst, auf der Ebene darueber.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 #![cfg_attr(
     not(test),
     deny(
         clippy::expect_used,
+        clippy::panic,
         clippy::arithmetic_side_effects,
         clippy::indexing_slicing,
         clippy::as_conversions,

@@ -20,6 +20,23 @@
 //! Nicht-ASCII-Byte gehoert zu keiner; der Vergleich bleibt damit
 //! byteweise korrekt.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 
 /// Die Art eines Platzhalters (8.7, Tabelle der Zeichenklassen).

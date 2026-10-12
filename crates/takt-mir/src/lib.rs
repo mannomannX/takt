@@ -11,6 +11,24 @@
 //!
 //! Knoten werden gebaut und gelesen; grosse Varianten neben kleinen sind
 //! gewollt (Zugriff ohne Indirektion).
+
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![allow(clippy::large_enum_variant)]
 
 /// Ein Enum ohne Nutzlast mit der Liste aller Varianten (`ALL`, in der

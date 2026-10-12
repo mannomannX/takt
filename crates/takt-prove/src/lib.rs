@@ -5,6 +5,24 @@
 //! Gegenbeispiel des Solvers muss dort die Eigenschaft tatsaechlich
 //! verletzen (`solve.rs`).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 pub mod encode;
 pub mod eval;
 pub mod run;

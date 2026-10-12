@@ -18,6 +18,24 @@
 //! Programms in jeder Form (12.6), `embed` schreibt das Rust-Modul der
 //! Lieferform (`P.rs`, 12.11).
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 pub mod drivers;
 pub mod edge;
 pub mod embed;

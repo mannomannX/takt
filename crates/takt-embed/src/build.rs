@@ -254,6 +254,10 @@ impl Built {
     ///
     /// Wenn das Manifest fehlt oder den Schluessel nicht nennt: Der Bau
     /// ginge sonst mit einer Annahme weiter.
+    #[expect(
+        clippy::panic,
+        reason = "MISRA C:2025 D.4.1: der Bauhelfer laeuft im Bauskript auf dem Wirt; ein Manifest ohne den Schluessel bricht den Bau ab, nie ein Abbild"
+    )]
     pub fn value(&self, key: &str) -> String {
         let text =
             std::fs::read_to_string(&self.manifest).unwrap_or_else(|e| panic!("{}: {e}", self.manifest.display()));
@@ -296,6 +300,10 @@ pub struct Invocation {
 impl Invocation {
     /// Ruft das Werkzeug aus einem Bauskript, bindet die Bibliothek und nennt
     /// das Modul; `what` ist die Meldung, wenn es scheitert.
+    #[expect(
+        clippy::panic,
+        reason = "MISRA C:2025 D.4.1: scheitert `takt build`, bricht das Bauskript den Bau ab; die Meldungen stehen davor als Warnungen"
+    )]
     fn build(&self, tool: Option<&Path>, hardware: Option<&Path>, what: &str) -> Built {
         let tool = match tool {
             Some(path) => path.to_path_buf(),

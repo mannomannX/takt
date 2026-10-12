@@ -20,6 +20,24 @@
 //! clang beides in einem Zug uebersetzt — ein Rust-Gegenstueck braeuchte
 //! `unsafe` und `extern "C"`, was der Workspace verbietet.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 #[cfg(feature = "board")]
 pub mod bench;
 #[cfg(feature = "board")]

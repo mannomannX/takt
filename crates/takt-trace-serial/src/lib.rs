@@ -20,6 +20,24 @@
 //! werden kann, ohne ein Board anzuschliessen: [`Reader`] nimmt Bytes aus
 //! beliebiger Quelle, [`open`] liefert die serielle.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+
 use std::io::Read;
 use std::time::{Duration, Instant};
 

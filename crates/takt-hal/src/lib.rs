@@ -34,6 +34,23 @@
 //! nicht. Die Pruefungen 3 und 4 brauchen vom Wert nur Ordnung und
 //! Differenz; `Scalar` ist genau das und nicht mehr.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 #![no_std]
 
 /// Eine `#[repr(C)]`-Struktur, die der erzeugte C-Rahmen mit dem Kern teilt,
