@@ -101,7 +101,7 @@ impl Model {
             // `safe` stehen im Zustand danach und im Trace im selben Tick.
             if shown.get(ENDED) == Some(&Val::Bool(true)) {
                 writer.end(k, &shown)?;
-                let (after, _, _) = runner.advance(self, k + 1, Some(&next), &inputs)?;
+                let after = runner.advance(self, k + 1, Some(&next), &inputs)?.next;
                 writer.changes(k, &runner.observed(self, &after))?;
                 break;
             }
@@ -188,7 +188,7 @@ impl Runner {
         pre: Option<&[Val]>,
         inputs: &BTreeMap<(u64, String), Val>,
     ) -> Result<Vec<Val>, Stop> {
-        let (next, given, sites) = self.advance(model, k, pre, inputs)?;
+        let Advanced { next, given, sites } = self.advance(model, k, pre, inputs)?;
         let bare = |f: &[Val]| f[0] == Val::Bool(true) && f[1] != Val::Bool(true);
         if let Some(i) = sites.chunks(2).position(bare) {
             let site = &model.checks[i];
@@ -218,7 +218,7 @@ impl Runner {
         k: u64,
         pre: Option<&[Val]>,
         inputs: &BTreeMap<(u64, String), Val>,
-    ) -> Result<(Vec<Val>, Vec<Val>, Vec<Val>), Stop> {
+    ) -> Result<Advanced, Stop> {
         let now: HashMap<&str, Val> = inputs
             .range((k, String::new())..(k + 1, String::new()))
             .map(|((_, n), v)| (n.as_str(), v.clone()))
@@ -243,13 +243,23 @@ impl Runner {
             Some(pre) => self.next.0.eval(&gather(&self.next.1, pre, &given)),
         };
         let sites = next.split_off(model.state.len());
-        Ok((next, given, sites))
+        Ok(Advanced { next, given, sites })
     }
 
     /// Die Orte des Zustands, die der Trace liest, mit ihrem Wert.
     fn observed(&self, model: &Model, state: &[Val]) -> Env {
         self.observed.iter().map(|&i| (model.state[i].name.clone(), state[i].clone())).collect()
     }
+}
+
+/// Ein Tick, gerechnet und noch nicht geprueft (`Runner::advance`).
+struct Advanced {
+    /// Der Zustand danach.
+    next: Vec<Val>,
+    /// Die Eingaben des Ticks in der Folge von `Model::inputs`.
+    given: Vec<Val>,
+    /// Je Pruefstelle ihr Feuern und ihre Fehlerbedingung, hintereinander.
+    sites: Vec<Val>,
 }
 
 /// Die Werte der Variablen eines Plans.
