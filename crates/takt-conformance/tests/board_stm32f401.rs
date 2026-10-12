@@ -5,6 +5,10 @@
 //! an USART1 (`COM7`); ohne Port wird der Test uebersprungen. Das Board
 //! braucht keine Hand: Jedes Programm gibt es auf `TAKT` an den
 //! DFU-Bootloader zurueck (FB-275).
+//!
+//! **Oder baut nur.** Mit `TAKT_BOARD_BUILD_ONLY=1` baut jeder Test die
+//! Abbilder, die er braucht, und endet vor dem Schreiben bestanden (M11
+//! Schritt 34d, `.github/workflows/boards.yml`).
 
 mod common;
 
@@ -13,8 +17,9 @@ use std::time::Duration;
 use common::board::{
     Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, fits_the_poll_form,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
-    natives_agree, overrun_reaches_every_machine, persistence_survives, runs_shared, simultaneous_jobs_finish_on_time,
-    the_flawed_port_fails, the_form_keeps_its_deadline, the_poll_form_keeps_its_round, the_port_passes,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
+    the_poll_form_keeps_its_round, the_port_passes, verdict,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -31,6 +36,7 @@ static BOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Das Board, exklusiv. Die Tests laufen nur mit `--ignored`; wer sie
 /// verlangt, verlangt das Board, und ohne `TAKT_F401_PORT` scheitern sie.
+/// Im Lauf, der nur baut, ist es eines ohne Port.
 fn board() -> Option<(Stm32f401, std::sync::MutexGuard<'static, ()>)> {
     let board = Stm32f401::from_env().expect("TAKT_F401_PORT nennt kein Board");
     Some((board, BOARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner)))
@@ -48,7 +54,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/deep_sleep.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
-    let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
+    let Some(first) = ran(board.run(&elf, &options)) else { return };
     assert!(first.contains("end after"), "der erste Lauf endet mit `next_run`:\n{first}");
     let quiet = board.listen(Duration::from_millis(1200)).unwrap_or_else(|e| panic!("{e}"));
     assert!(!quiet.contains("takt auf stm32f401"), "zu frueh geweckt:\n{quiet}");
@@ -70,7 +76,7 @@ fn a_run_ended_now_begins_the_next_at_once() {
     let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/restart.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
-    let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{e}"));
+    let Some(first) = ran(board.run(&elf, &options)) else { return };
     assert!(first.contains("end now"), "der erste Lauf endet mit `next_run`:\n{first}");
     assert!(first.contains("out previous NONE"), "nach dem Flashen kein voriger Lauf:\n{first}");
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
@@ -87,7 +93,7 @@ fn a_run_ended_now_begins_the_next_at_once() {
 fn persistence_survives_a_reset_and_a_new_image() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = persistence_survives(&mut board, |board, elf, options| board.run(elf, options));
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Unter `overrun = alert` kostet das Journal Zeit, aber keine
@@ -98,7 +104,7 @@ fn persistence_survives_a_reset_and_a_new_image() {
 fn the_journal_costs_time_but_not_semantics() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = journal_costs_time_but_not_semantics(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3,
@@ -108,7 +114,7 @@ fn the_journal_costs_time_but_not_semantics() {
 fn the_journal_writes_in_sleep_windows() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = journal_writes_in_sleep_windows(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Ein Job, der laenger rechnet als ein Tick, verspaetet keinen** (4.5,
@@ -119,7 +125,7 @@ fn the_journal_writes_in_sleep_windows() {
 fn a_long_job_runs_between_the_ticks() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = long_job_keeps_the_tick(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Ein Ueberlauf faultet im naechsten Tick jede Maschine** (7.3, 5.4,
@@ -129,7 +135,7 @@ fn a_long_job_runs_between_the_ticks() {
 fn an_overrun_faults_every_machine_in_the_next_tick() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = overrun_reaches_every_machine(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Ein ausgelassener Kick setzt zurueck, und der naechste Lauf weiss es**
@@ -145,7 +151,7 @@ fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     let options = Options::timed(0);
     let program = board::root().join("crates/takt-conformance/tests/programs/watchdog.takt");
     let elf = board.build(&program, &options).unwrap_or_else(|e| panic!("{e}"));
-    let text = board.run_for(&elf, Duration::from_secs(10)).unwrap_or_else(|e| panic!("{e}"));
+    let Some(text) = ran(board.run_for(&elf, Duration::from_secs(10))) else { return };
     // Je Lauf ein Abschnitt ab der Marke; davor steht nur der Start.
     let runs: Vec<&str> = text.split(board::MARK).skip(1).collect();
     let first = |run: &str, name: &str| {
@@ -167,7 +173,7 @@ fn the_board_hands_itself_back_for_the_next_program() {
     let name = "01_minimal.takt";
     let options = Options::fresh(TICKS);
     let elf = board.build(&board::corpus_path(name), &options).unwrap_or_else(|e| panic!("{name}: {e}"));
-    let first = board.run(&elf, &options).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let Some(first) = ran(board.run(&elf, &options).map_err(|e| format!("{name}: {e}"))) else { return };
     let second = board.run(&elf, &options).unwrap_or_else(|e| panic!("{name}, zweiter Lauf: {e}"));
     let outs = |t: &str| {
         t.lines().filter(|l| l.starts_with("t=") && l.contains(" out ")).map(str::to_string).collect::<Vec<_>>()
@@ -219,7 +225,7 @@ fn the_board_agrees_with_the_interpreter() {
     let only = std::env::var("TAKT_F401_ONLY").ok();
     let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n)).collect();
     let failed = agreement(&mut board, &names, only.as_deref());
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    verdict(&failed);
 }
 
 /// **Unter RTIC rechnet der Korpus wie der Interpreter** (12.8, M10
@@ -234,7 +240,7 @@ fn the_board_agrees_with_the_interpreter_under_rtos() {
     let only = std::env::var("TAKT_F401_ONLY").ok();
     let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
     let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Rtos));
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    verdict(&failed);
 }
 
 /// **In der Interruptform rechnet der Korpus wie der Interpreter** (12.11,
@@ -249,7 +255,7 @@ fn the_board_agrees_with_the_interpreter_in_the_interrupt_form() {
     let only = std::env::var("TAKT_F401_ONLY").ok();
     let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
     let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Interrupt));
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    verdict(&failed);
 }
 
 /// **Unter Embassy rechnet der Korpus wie der Interpreter** (12.11, M11
@@ -263,7 +269,7 @@ fn the_board_agrees_with_the_interpreter_under_embassy() {
     let only = std::env::var("TAKT_F401_ONLY").ok();
     let names: Vec<&str> = board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n)).collect();
     let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Embassy));
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    verdict(&failed);
 }
 
 /// **Unter Embassy beginnt der Schritt auf seiner Frist, neben einer fremden
@@ -273,7 +279,7 @@ fn the_board_agrees_with_the_interpreter_under_embassy() {
 fn the_embassy_task_steps_on_its_deadline_beside_a_foreign_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = the_form_keeps_its_deadline(&mut board, Form::Embassy);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Die Takt-Aufgabe beginnt zweistellige Mikrosekunden nach der Grenze**
@@ -289,8 +295,7 @@ fn the_rtos_task_starts_within_tens_of_microseconds() {
     let Some((mut board, _guard)) = board() else { return };
     let program = board::root().join("crates/takt-conformance/tests/programs/rtos_jitter.takt");
     let options = Options::timed(3000).in_form(Form::Rtos);
-    let text =
-        board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
+    let Some(text) = ran(board.build(&program, &options).and_then(|elf| board.run(&elf, &options))) else { return };
     let drift = Drift::of(&text);
     eprintln!("rtos: {} Ticks, Median {} ns, spaetester {} ns darueber", drift.ticks, drift.median, drift.late);
     assert!(drift.ticks >= 2000, "{} Zeitzeilen", drift.ticks);
@@ -306,7 +311,7 @@ fn the_rtos_task_starts_within_tens_of_microseconds() {
 fn the_interrupt_form_steps_on_its_deadline_beside_a_foreign_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = the_form_keeps_its_deadline(&mut board, Form::Interrupt);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **In der Pollform rechnet der Korpus wie der Interpreter** (12.11, M11
@@ -326,7 +331,7 @@ fn the_board_agrees_with_the_interpreter_in_the_poll_form() {
         .filter(|n| !TOO_BIG.contains(n) && runs_shared(n) && fits_the_poll_form(n, round))
         .collect();
     let failed = agreement_with(&mut board, &names, only.as_deref(), &Options::fresh(TICKS).in_form(Form::Poll));
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    verdict(&failed);
 }
 
 /// Die laengste Runde der Hauptschleife, die die Hardware-Konfiguration des
@@ -346,7 +351,7 @@ fn main_loop_ns() -> u64 {
 fn the_poll_form_steps_within_a_round_of_its_main_loop() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = the_poll_form_keeps_its_round(&mut board, main_loop_ns(), 20_000);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Jeder Port des F401 mit unterbrechbarem Job-Kontext besteht die
@@ -359,7 +364,7 @@ fn every_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let failed: Vec<String> =
         [Form::Interrupt, Form::Rtos, Form::Embassy].into_iter().flat_map(|f| the_port_passes(&mut board, f)).collect();
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    verdict(&failed);
 }
 
 /// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,
@@ -370,7 +375,7 @@ fn every_port_passes_the_port_test() {
 fn a_port_without_fpu_saving_fails_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = the_flawed_port_fails(&mut board, Flaw::UnsavedFpu, &["FPU-Kontext nicht gesichert"]);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Ein Port, der Jobs nicht unterbrechen laesst, faellt durch** (4.5,
@@ -381,7 +386,7 @@ fn a_port_without_fpu_saving_fails_the_port_test() {
 fn a_port_with_uninterruptible_jobs_fails_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = the_flawed_port_fails(&mut board, Flaw::UninterruptibleJobs, &["7.3", "Tickgrenze"]);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Zwei Jobs desselben Ticks sind im naechsten fertig**, in jeder Form des
@@ -395,7 +400,7 @@ fn simultaneous_jobs_finish_on_time_on_the_board() {
         .into_iter()
         .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
         .collect();
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    verdict(&failed);
 }
 
 #[test]
@@ -403,7 +408,7 @@ fn simultaneous_jobs_finish_on_time_on_the_board() {
 fn the_natives_agree_with_the_host() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = natives_agree(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Eine verstellte FPU aendert nichts** (4.2, 12.11, M11 Schritt 6):
@@ -413,14 +418,7 @@ fn the_natives_agree_with_the_host() {
 fn a_hostile_fpu_changes_nothing_on_the_board() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = a_hostile_fpu_changes_nothing(&mut board);
-    assert!(
-        failed.is_empty(),
-        "{}",
-        failed.join(
-            "
-"
-        )
-    );
+    verdict(&failed);
 }
 
 /// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
@@ -430,7 +428,7 @@ fn a_hostile_fpu_changes_nothing_on_the_board() {
 fn the_driver_edge_judges_like_the_interpreter() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = driver_edge_agrees(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Ein Zeitgeber, der seine Periode verfehlt, ist `Runtime(Hardware)`**
@@ -440,7 +438,7 @@ fn the_driver_edge_judges_like_the_interpreter() {
 fn a_stretched_tick_is_runtime_hardware() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_stretched_tick_is_runtime_hardware(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
@@ -451,7 +449,7 @@ fn a_stretched_tick_is_runtime_hardware() {
 fn a_schedule_inside_the_guard_is_a_timing_fault() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_schedule_inside_the_guard_is_a_timing_fault(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Ein Tune von der Konsole gilt ab seiner Grenze und weckt das Board**
@@ -461,7 +459,7 @@ fn a_schedule_inside_the_guard_is_a_timing_fault() {
 fn a_tune_from_the_console_wakes_the_board() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_tune_from_the_console_wakes_the_board(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Eine Wake-Quelle weckt an der Grenze nach ihrem Ereignis** (9.9,
@@ -472,7 +470,7 @@ fn a_tune_from_the_console_wakes_the_board() {
 fn a_wake_source_ends_the_sleep() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::a_wake_source_ends_the_sleep(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Was das Programm nicht liest, zeichnet der Rahmen auf** (8.2, 12.5,
@@ -482,7 +480,7 @@ fn a_wake_source_ends_the_sleep() {
 fn the_unread_channels_are_recorded() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::unread_channels_are_recorded(&mut board);
-    assert!(failed.is_empty(), "{}", failed.join("\n"));
+    verdict(&failed);
 }
 
 /// **Die MPU weist einen Zugriff der TCB ab und meldet ihn** (12.3, M10
@@ -505,8 +503,9 @@ fn the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware() {
     ] {
         let program = board::root().join(format!("crates/takt-conformance/tests/programs/protect_{which}.takt"));
         let options = Options::fresh(20);
-        let text =
-            board.build(&program, &options).and_then(|elf| board.run(&elf, &options)).unwrap_or_else(|e| panic!("{e}"));
+        let Some(text) = ran(board.build(&program, &options).and_then(|elf| board.run(&elf, &options))) else {
+            continue;
+        };
         assert!(
             text.contains(&format!("t={tick} runtime Hardware")),
             "{which}: kein Runtime(Hardware) im Tick nach dem Zugriff:\n{text}"

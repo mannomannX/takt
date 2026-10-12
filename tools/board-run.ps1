@@ -21,6 +21,14 @@ und eine Zusammenfassung (`<zeit>-<stand>.log`, `.txt`). Danach entfernt
 `prune-target.ps1 -Since <Beginn>` aus dem Zielverzeichnis des Laufs, was er
 nicht mehr braucht; der Abbild-Cache haelt ohnehin nur den laufenden Stand.
 
+`-FromCi <lauf>` nimmt die Abbilder aus einem Lauf von
+`.github/workflows/boards.yml` (M11 Schritt 34d): `gh run download` legt sie in
+den Abbild-Cache des Zielverzeichnisses, ohne `-Rev` gilt der Commit, den der
+Lauf gebaut hat, und weder `takt` noch ein Abbild wird hier gebaut — der Lauf
+schreibt und prueft nur. Die Zusammenfassung nennt, wie viele Abbilder der
+Cache trotzdem nicht hielt (`misses.log`); Ziel ist keines. Fehlt eines, baut
+die Harness es mit dem `takt` aus einem frueheren Lauf oder scheitert daran.
+
 `-AllowMissing` nennt, was an diesem Rechner fehlen darf (`TAKT_ALLOW_MISSING`);
 der Test dazu meldet sich als uebersprungen, und die Zusammenfassung sagt es.
 Vorgabe ist die Bruecke an UART0 des C6, die nicht angesteckt ist.
@@ -37,6 +45,7 @@ Umgebung beschraenken den Korpusvergleich auf ein Programm.
 pwsh -NoProfile -File tools/board-run.ps1
 pwsh -NoProfile -File tools/board-run.ps1 -Rev e6093b4 -Boards esp32c6
 pwsh -NoProfile -File tools/board-run.ps1 -Boards esp32c6 -Filter 'test(=the_board_agrees_with_the_interpreter)'
+pwsh -NoProfile -File tools/board-run.ps1 -FromCi 18423456789
 #>
 param(
     [string]$Rev = 'HEAD',
@@ -47,11 +56,14 @@ param(
     [string]$Esp32c6Port = 'COM4',
     [string]$F401Port = 'COM7',
     [string]$AllowMissing = 'uart-bridge',
-    [string]$Filter = ''
+    [string]$Filter = '',
+    [string]$FromCi = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
+$suites = if ($Boards -eq 'both') { 'esp32c6', 'stm32f401' } else { , $Boards }
+$images = Join-Path $Target 'takt-board-images'
 New-Item -ItemType Directory -Force $Logs | Out-Null
 $lockPath = Join-Path $Logs 'boards.lock'
 try {
@@ -61,9 +73,46 @@ try {
     exit 2
 }
 
+# Die Abbilder eines Laufs von boards.yml in den Abbild-Cache: je Board der
+# Stand `<tripel>-<stand>`, der fruehere desselben Boards geht. Liefert den
+# Commit, den der Lauf gebaut hat, und je Stand eine Zeile.
+function Import-CiImages([string]$Run) {
+    $download = Join-Path $Target 'takt-board-ci'
+    if (Test-Path $download) { Remove-Item -Recurse -Force $download }
+    $names = $suites | ForEach-Object { '-n'; "board-images-$_" }
+    Push-Location $repo
+    try {
+        gh run download $Run @names -D $download | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "gh run download $Run scheiterte" }
+    } finally {
+        Pop-Location
+    }
+    $commits = @(Get-ChildItem $download -Recurse -Filter 'stand-*.txt' | Get-Content |
+        Where-Object { $_ -match '^commit ([0-9a-f]{40})$' } | ForEach-Object { $matches[1] } | Sort-Object -Unique)
+    if ($commits.Count -ne 1) { throw "Lauf $Run nennt nicht genau einen Commit: $($commits -join ', ')" }
+    New-Item -ItemType Directory -Force $images | Out-Null
+    $stands = foreach ($stand in Get-ChildItem $download -Recurse -Directory | Where-Object Name -match '-[0-9a-f]{16}$') {
+        $triple = $stand.Name -replace '-[0-9a-f]{16}$', ''
+        Get-ChildItem $images -Directory -Filter "$triple-*" | Remove-Item -Recurse -Force
+        $into = Join-Path $images $stand.Name
+        Move-Item $stand.FullName $into
+        '{0}: {1} Abbilder' -f $stand.Name, @(Get-ChildItem $into -Filter '*.elf').Count
+    }
+    Remove-Item -Recurse -Force $download
+    [pscustomobject]@{ Commit = $commits[0]; Stands = @($stands) }
+}
+
 try {
+    if ($FromCi) {
+        $ci = Import-CiImages $FromCi
+        $ci.Stands | Out-Host
+        if (-not $PSBoundParameters.ContainsKey('Rev')) { $Rev = $ci.Commit }
+    }
     $sha = (git -C $repo rev-parse --verify "$Rev^{commit}").Trim()
     if ($LASTEXITCODE -ne 0) { throw "Stand `$Rev` unbekannt" }
+    if ($FromCi -and $sha -ne $ci.Commit) {
+        Write-Warning "Lauf $FromCi baute $($ci.Commit), gefahren wird ${sha}: Nur gleiche Quellen finden ihre Abbilder."
+    }
     # Ein Rest eines abgebrochenen Laufs geht zuerst.
     if (Test-Path $Worktree) { git -C $repo worktree remove --force $Worktree }
     git -C $repo worktree prune
@@ -79,14 +128,20 @@ try {
     $env:TAKT_ESP32C6_PORT = $Esp32c6Port
     $env:TAKT_F401_PORT = $F401Port
     $env:TAKT_ALLOW_MISSING = $AllowMissing
+    # Je Lauf zaehlt die Harness neu, was der Abbild-Cache nicht hielt.
+    $misses = Join-Path $images 'misses.log'
+    if (Test-Path $misses) { Remove-Item $misses }
 
     $results = [ordered]@{}
     Push-Location $Worktree
     try {
-        # Die Bring-ups lehnen ein `takt` ab, das aelter ist als seine Quellen (FB-193).
-        cargo build --release -p takt-cli -j 2 *>> $log
-        $cli = $LASTEXITCODE
-        $suites = if ($Boards -eq 'both') { 'esp32c6', 'stm32f401' } else { , $Boards }
+        # Die Bring-ups lehnen ein `takt` ab, das aelter ist als seine Quellen
+        # (FB-193); mit den Abbildern aus CI baut keines.
+        $cli = 0
+        if (-not $FromCi) {
+            cargo build --release -p takt-cli -j 2 *>> $log
+            $cli = $LASTEXITCODE
+        }
         foreach ($b in $suites) {
             if ($cli -ne 0) { $results[$b] = 'nicht gelaufen: der Bau von takt scheiterte'; continue }
             $select = if ($Filter) { @('-E', $Filter) } else { @() }
@@ -104,8 +159,12 @@ try {
     $failed = Select-String -Path $log -Pattern '^\s+(FAIL|ABORT|TIMEOUT) \[' | ForEach-Object { $_.Line.Trim() } |
         Sort-Object -Unique
     $lines = @("Stand $sha", "Beginn $($since.ToString('s')), Ende $((Get-Date).ToString('s'))")
+    if ($FromCi) { $lines += "Abbilder aus Lauf $FromCi von boards.yml:"; $lines += $ci.Stands | ForEach-Object { "  $_" } }
     if ($Filter) { $lines += "nur: $Filter" }
     $lines += $results.GetEnumerator() | ForEach-Object { '{0}: {1}' -f $_.Key, $_.Value }
+    $missed = @(if (Test-Path $misses) { Get-Content $misses })
+    $lines += "Abbilder gebaut, weil der Cache sie nicht hielt: $($missed.Count)"
+    $lines += $missed | Select-Object -First 10 | ForEach-Object { "  $_" }
     if ($AllowMissing) { $lines += "fehlen darf: $AllowMissing (die Tests dazu uebersprungen)" }
     $lines += $failed
     $lines | Set-Content -Encoding utf8 (Join-Path $Logs "$name.txt")

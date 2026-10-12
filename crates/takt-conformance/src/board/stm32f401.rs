@@ -29,14 +29,29 @@ use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
 use super::dfuse::Dfuse;
-use super::{Board, Bringup, Builder, ConsoleLine, Form, Options, capture};
+use super::{Board, Bringup, Builder, ConsoleLine, Form, Options, attached, capture, missed, publish_checked};
 
+/// Das Bring-up; seine Eingaben nennen auch die Dateien des Sprungbretts
+/// ausserhalb von `src`: Es liegt im selben Stand ([`trampoline`]).
 pub(super) const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-stm32f401",
     triple: "thumbv7em-none-eabihf",
-    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "memory.x", "takt_state.x", "../../corpus-try/hw/stm32f401.hw"],
+    inputs: &[
+        "build.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "memory.x",
+        "takt_state.x",
+        "takt_stack.x",
+        "../../corpus-try/hw/stm32f401.hw",
+        "../takt-trampoline-stm32f401/Cargo.lock",
+        "../takt-trampoline-stm32f401/memory.x",
+    ],
     env: &[],
 };
+
+/// Das Sprungbrett im Stand des Bring-ups.
+const TRAMPOLINE_IMAGE: &str = "trampoline.bin";
 
 /// Die Rate der Leitung, wie `takt-board-stm32f401::uart::BAUD`: eine fuer
 /// jedes Programm, damit der Host das laufende erreicht, ohne es zu kennen.
@@ -70,26 +85,33 @@ const BY_HAND: Duration = Duration::from_secs(60);
 /// Board 1 am Host.
 #[derive(Clone, Debug)]
 pub struct Stm32f401 {
-    port: String,
+    /// Der Port des Adapters; keiner im Lauf, der nur baut.
+    port: Option<String>,
 }
 
 impl Stm32f401 {
-    /// Das Board an `TAKT_F401_PORT`; `None` ohne die Variable.
+    /// Das Board an `TAKT_F401_PORT`; `None` ohne die Variable. Im Lauf, der
+    /// nur baut ([`super::build_only`]), eines ohne Port: Es baut Abbilder und
+    /// Sprungbrett, und jeder Zugriff auf das Board endet mit
+    /// [`super::BUILT_ONLY`].
     pub fn from_env() -> Option<Stm32f401> {
+        if super::build_only() {
+            return Some(Stm32f401 { port: None });
+        }
         let port = std::env::var("TAKT_F401_PORT").ok()?;
-        Some(Stm32f401 { port })
+        Some(Stm32f401 { port: Some(port) })
     }
 
-    /// Der Port des Adapters.
-    pub fn port(&self) -> &str {
-        &self.port
+    /// Der Port des Adapters; [`super::BUILT_ONLY`] im Lauf, der nur baut.
+    pub fn port(&self) -> Result<&str, String> {
+        attached(self.port.as_deref())
     }
 
     /// Liest, was das Board von sich aus schreibt, ohne es neu zu starten —
     /// nach dem Wecken aus dem Tiefschlaf (12.7). Die Leitung bleibt dabei
     /// offen, nur das Board schweigt, solange es schlaeft.
     pub fn listen(&self, within: Duration) -> Result<String, String> {
-        capture(&self.port, BAUD, serialport::FlowControl::Software, within, false, &[], || Ok(()))
+        capture(self.port()?, BAUD, serialport::FlowControl::Software, within, false, &[], || Ok(()))
     }
 
     /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
@@ -100,15 +122,18 @@ impl Stm32f401 {
     }
 
     /// Wie [`Stm32f401::run_for`]; `console` geht waehrenddessen an die
-    /// Konsole des Boards.
+    /// Konsole des Boards. Rohabbild und Sprungbrett entstehen vor dem ersten
+    /// Zugriff auf das Board: Der Lauf, der nur baut, legt sie so mit in den
+    /// Zwischenspeicher.
     fn run_with(&mut self, elf: &Path, within: Duration, console: &[ConsoleLine]) -> Result<String, String> {
         let bin = self.image(elf)?;
         let bytes = std::fs::read(&bin).map_err(|e| format!("{}: {e}", bin.display()))?;
         let trampoline = trampoline()?;
+        let port = self.port()?;
         self.to_bootloader()?;
         // Der Adapter haelt das Board an, statt Bytes zu verlieren, wenn der
         // Wirt nicht abholt (FB-306).
-        capture(&self.port, BAUD, serialport::FlowControl::Software, within, true, console, || {
+        capture(port, BAUD, serialport::FlowControl::Software, within, true, console, || {
             let dfu = Dfuse::open(DFU.0, DFU.1)?;
             if !dfu.holds(TRAMPOLINE, trampoline)? {
                 dfu.write(TRAMPOLINE, trampoline)?;
@@ -120,6 +145,7 @@ impl Stm32f401 {
 
     /// Steht das Board im DFU-Bootloader?
     pub fn in_bootloader(&self) -> Result<bool, String> {
+        self.port()?;
         super::dfuse::present(DFU.0, DFU.1)
     }
 
@@ -138,7 +164,7 @@ impl Stm32f401 {
         eprintln!(
             "{}: das Programm antwortet nicht auf `TAKT`. Von Hand: BOOT0 halten, NRST druecken und loslassen, \
              BOOT0 loslassen (warte {} s)",
-            self.port,
+            self.port()?,
             BY_HAND.as_secs()
         );
         if self.wait_for_bootloader(BY_HAND)? {
@@ -149,7 +175,7 @@ impl Stm32f401 {
 
     /// `TAKT` auf die Leitung: Die laufende Anwendung springt in den Bootloader.
     fn hand_back(&self) -> Result<(), String> {
-        let port = &self.port;
+        let port = self.port()?;
         let mut serial =
             serialport::new(port, BAUD).timeout(Duration::from_secs(1)).open().map_err(|e| format!("{port}: {e}"))?;
         serial.write_all(b"TAKT").and_then(|()| serial.flush()).map_err(|e| format!("{port}: {e}"))
@@ -217,14 +243,37 @@ impl Board for Stm32f401 {
     }
 }
 
-/// Das Sprungbrett als Rohabbild: einmal je Prozess gebaut, im eigenen
-/// Zielverzeichnis, und geprueft wie ein Abbild der Anwendung.
+/// Das Sprungbrett als Rohabbild, einmal je Prozess gelesen und geprueft wie
+/// ein Abbild der Anwendung. Es liegt im Stand des Bring-ups im
+/// Zwischenspeicher der Abbilder; fehlt es dort, wird es gebaut.
 fn trampoline() -> Result<&'static [u8], String> {
     static IMAGE: OnceLock<Result<Vec<u8>, String>> = OnceLock::new();
-    IMAGE.get_or_init(build_trampoline).as_deref().map_err(Clone::clone)
+    IMAGE.get_or_init(cached_trampoline).as_deref().map_err(Clone::clone)
 }
 
-fn build_trampoline() -> Result<Vec<u8>, String> {
+fn cached_trampoline() -> Result<Vec<u8>, String> {
+    let read = |bin: &Path| -> Result<Vec<u8>, String> {
+        let bytes = std::fs::read(bin).map_err(|e| format!("{}: {e}", bin.display()))?;
+        check_table(&bytes, TRAMPOLINE..APP).map_err(|e| format!("Sprungbrett {}: {e}", bin.display()))?;
+        Ok(bytes)
+    };
+    let stand = BRINGUP.stand()?;
+    let cached = stand.join(TRAMPOLINE_IMAGE);
+    if !cached.is_file() {
+        missed(&stand, &cached, TRAMPOLINE_CRATE)?;
+        let built = build_trampoline()?;
+        let published =
+            BRINGUP.enter(&stand).and_then(|()| publish_checked(&built, &cached, |b| read(b).map(|_| true)));
+        let _ = std::fs::remove_file(&built);
+        published?;
+    }
+    read(&cached)
+}
+
+/// Baut das Sprungbrett im eigenen Zielverzeichnis und liefert sein
+/// Rohabbild, je Prozess unter eigenem Namen: Ein anderer Lauf liest
+/// womoeglich gerade.
+fn build_trampoline() -> Result<PathBuf, String> {
     let mut cargo = Command::new("cargo");
     cargo
         .args(["build", "--release", "--target", BRINGUP.triple])
@@ -233,16 +282,11 @@ fn build_trampoline() -> Result<Vec<u8>, String> {
         .arg(super::root().join(TRAMPOLINE_CRATE).join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", crate::target_dir().join("takt-trampoline"));
     let elf = super::built_executable(&mut cargo).map_err(|e| format!("Sprungbrett: {e}"))?;
-    // Je Prozess ein eigenes Rohabbild: Ein anderer Lauf liest womoeglich gerade.
     let bin = elf.with_extension(format!("{}.bin", std::process::id()));
     if !Binutils::best_for(Target::THUMBV7EM).raw_image(&elf, &bin) {
         return Err(format!("{}: kein Rohabbild (objcopy fehlt?)", elf.display()));
     }
-    let bytes = std::fs::read(&bin).map_err(|e| format!("{}: {e}", bin.display()));
-    let _ = std::fs::remove_file(&bin);
-    let bytes = bytes?;
-    check_table(&bytes, TRAMPOLINE..APP).map_err(|e| format!("Sprungbrett: {e}"))?;
-    Ok(bytes)
+    Ok(bin)
 }
 
 /// Ob ein Rohabbild in den Anwendungsbereich gehoert.

@@ -21,15 +21,14 @@
 //! Treiber-Crate bekommt jede Adresse ausser denen des Bring-ups einen
 //! Stummel: Ein Eingang liefert nichts, ein Ausgang gilt als bestaetigt.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use super::{
-    ATTEMPTS, Bin, Board, Builder, END, Form, Options, complete, hash_build_inputs, hash_program, hash_tree,
-    publish_checked, root, run_bounded,
+    ATTEMPTS, Bin, Board, Builder, END, Fingerprint, Form, Options, complete, crate_dirs, hash_build_inputs,
+    hash_program, hash_tree, publish_checked, root, run_bounded,
 };
 use crate::bringup::WIRING;
 
@@ -182,30 +181,35 @@ impl Host {
     /// und Verdrahtungen aller Crates und was den Bau sonst bestimmt
     /// ([`hash_build_inputs`]).
     pub(super) fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
-        let mut h = DefaultHasher::new();
-        cfg!(debug_assertions).hash(&mut h);
-        (options.build == takt_sema::Build::Hw).hash(&mut h);
-        hash_program(program, &mut h)?;
-        if let Some(hw) = &options.hardware {
-            std::fs::read(hw).map_err(|e| format!("{}: {e}", hw.display()))?.hash(&mut h);
+        let mut f = Fingerprint::new();
+        f.u64(u64::from(cfg!(debug_assertions)));
+        f.u64(u64::from(options.build == takt_sema::Build::Hw));
+        hash_program(program, &mut f)?;
+        match &options.hardware {
+            Some(hw) => {
+                f.u64(1);
+                f.file(hw)?;
+            }
+            None => f.u64(0),
         }
-        let crates = root().join("crates");
-        let mut dirs: Vec<PathBuf> =
-            std::fs::read_dir(&crates).map_err(|e| e.to_string())?.flatten().map(|e| e.path()).collect();
-        dirs.sort();
-        let mut trees: Vec<PathBuf> = dirs.iter().flat_map(|d| [d.join("src"), d.join(WIRING)]).collect();
+        let mut trees: Vec<PathBuf> =
+            crate_dirs()?.into_iter().flat_map(|(_, d)| [d.join("src"), d.join(WIRING)]).collect();
         if let Some(driver) = &self.driver {
             trees.extend([driver.join("src"), driver.join("Cargo.toml"), driver.join(WIRING)]);
         }
         for path in &trees {
             if path.is_dir() {
-                hash_tree(path, &mut h)?;
+                f.u64(2);
+                hash_tree(path, &mut f)?;
             } else if path.is_file() {
-                std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?.hash(&mut h);
+                f.u64(1);
+                f.file(path)?;
+            } else {
+                f.u64(0);
             }
         }
-        hash_build_inputs(&root(), &mut h);
-        Ok(h.finish())
+        hash_build_inputs(&root(), &mut f)?;
+        Ok(f.finish())
     }
 }
 

@@ -16,12 +16,22 @@ use std::time::Duration;
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
-use super::{Board, Bringup, Builder, ConsoleLine, Failure, Form, Options, capture, port_listed, run_bounded};
+use super::{
+    Board, Bringup, Builder, ConsoleLine, Failure, Form, Options, attached, capture, port_listed, run_bounded,
+};
 
 pub(super) const BRINGUP: Bringup = Bringup {
     dir: "crates/takt-bringup-esp32c6",
     triple: "riscv32imac-unknown-none-elf",
-    inputs: &["build.rs", "Cargo.toml", "Cargo.lock", "board_ram.x", "millicode.S", "../../corpus-try/hw/esp32c6.hw"],
+    inputs: &[
+        "build.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+        "board_ram.x",
+        "millicode.S",
+        "takt_stack.x",
+        "../../corpus-try/hw/esp32c6.hw",
+    ],
     // 12.3: RAM-Residenz des Takt-Programms.
     env: &[("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true"), ("ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM", "false")],
 };
@@ -45,18 +55,24 @@ const TRACE: Duration = Duration::from_secs(30);
 /// Board 2 am Host.
 #[derive(Clone, Debug)]
 pub struct Esp32c6 {
-    port: String,
+    /// Der Port der Konsole; keiner im Lauf, der nur baut.
+    port: Option<String>,
 }
 
 impl Esp32c6 {
-    /// Das Board an `TAKT_ESP32C6_PORT`; `None` ohne die Variable.
+    /// Das Board an `TAKT_ESP32C6_PORT`; `None` ohne die Variable. Im Lauf,
+    /// der nur baut ([`super::build_only`]), eines ohne Port: Es baut, und
+    /// jeder Zugriff auf das Board endet mit [`super::BUILT_ONLY`].
     pub fn from_env() -> Option<Esp32c6> {
-        std::env::var("TAKT_ESP32C6_PORT").ok().map(|port| Esp32c6 { port })
+        if super::build_only() {
+            return Some(Esp32c6 { port: None });
+        }
+        std::env::var("TAKT_ESP32C6_PORT").ok().map(|port| Esp32c6 { port: Some(port) })
     }
 
-    /// Der Port der Konsole.
-    pub fn port(&self) -> &str {
-        &self.port
+    /// Der Port der Konsole; [`super::BUILT_ONLY`] im Lauf, der nur baut.
+    pub fn port(&self) -> Result<&str, String> {
+        attached(self.port.as_deref())
     }
 
     /// Schreibt ein Abbild, ohne es zu starten.
@@ -124,7 +140,7 @@ impl Esp32c6 {
         // USB staut selbst zurueck; XON/XOFF braucht es hier nicht.
         let flow = serialport::FlowControl::None;
         let reset = || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ());
-        capture(&self.port, BAUD, flow, within, true, console, reset)
+        capture(self.port()?, BAUD, flow, within, true, console, reset)
     }
 
     /// Schreibt das Abbild, startet es und liest bis `takt end`, hoechstens
@@ -135,25 +151,25 @@ impl Esp32c6 {
         self.download(elf)?;
         std::thread::sleep(Duration::from_millis(500));
         let reset = || self.probe_rs(&["reset", "--chip", "esp32c6"]).map(|_| ());
-        capture(&self.port, BAUD, serialport::FlowControl::None, within, true, &[], reset)
+        capture(self.port()?, BAUD, serialport::FlowControl::None, within, true, &[], reset)
     }
 
     /// Liest, was das Board von sich aus schreibt, ohne es zurueckzusetzen —
     /// nach einem Neustart, den das Programm befiehlt (12.7).
     pub fn listen(&self, within: Duration) -> Result<String, String> {
-        capture(&self.port, BAUD, serialport::FlowControl::None, within, false, &[], || Ok(()))
+        capture(self.port()?, BAUD, serialport::FlowControl::None, within, false, &[], || Ok(()))
     }
 
     /// Wartet, bis der Port verschwindet: Im Tiefschlaf ist der
-    /// USB-Serial-JTAG aus (12.7).
+    /// USB-Serial-JTAG aus (12.7). Ohne Port nie.
     pub fn port_gone(&self, within: Duration) -> bool {
-        port_listed(&self.port, false, within)
+        self.port().is_ok_and(|port| port_listed(port, false, within))
     }
 
     /// Wartet, bis der Port wieder da ist: Der Chip ist aus dem Tiefschlaf
-    /// erwacht (12.7).
+    /// erwacht (12.7). Ohne Port nie.
     pub fn listen_port(&self, within: Duration) -> bool {
-        port_listed(&self.port, true, within)
+        self.port().is_ok_and(|port| port_listed(port, true, within))
     }
 
     /// Der Tickzaehler des Rahmens, ueber JTAG gelesen: in der Arena
@@ -190,6 +206,7 @@ impl Esp32c6 {
     /// FB-264) oder kehrt `probe-rs` nicht zurueck, verlangt der Aufruf den
     /// Chip-Reset ueber die Konsole und versucht es einmal neu.
     pub fn probe_rs(&self, args: &[&str]) -> Result<String, String> {
+        self.port()?;
         match run_bounded("probe-rs", args, PROBE_RS) {
             Err(Failure::Timeout) => self.recover(args, "probe-rs kehrt nicht zurueck".to_string()),
             Err(Failure::Status(e)) if e.contains("DMI") => self.recover(args, e),
@@ -199,6 +216,7 @@ impl Esp32c6 {
 
     /// `probe-rs` ohne Genesung, fuer den Test der Genesung selbst.
     pub fn probe_rs_plain(&self, args: &[&str]) -> Result<String, String> {
+        self.port()?;
         run_bounded("probe-rs", args, PROBE_RS).map_err(|e| format!("probe-rs: {e}"))
     }
 
@@ -224,7 +242,7 @@ impl Esp32c6 {
     /// Meldet sich das Geraet schon unterwegs ab — ein alter Puffer trug den
     /// Wunsch schon —, ist das der gewuenschte Ausgang, und der Rest entfaellt.
     pub fn reenumerate_via_console(&self) -> Result<(), String> {
-        let port = &self.port;
+        let port = self.port()?;
         let mut serial =
             serialport::new(port, BAUD).timeout(Duration::from_secs(1)).open().map_err(|e| format!("{port}: {e}"))?;
         let steps: [&Step; 4] = [
@@ -262,11 +280,12 @@ impl Esp32c6 {
 
     /// Wartet, bis der Port weg war und wieder da ist.
     fn settle_port(&self) -> Result<(), String> {
-        if !port_listed(&self.port, false, Duration::from_secs(3)) {
+        let port = self.port()?;
+        if !port_listed(port, false, Duration::from_secs(3)) {
             return Err("das USB-Geraet hat sich nicht abgemeldet: Bring-up ohne Neuanmeldung?".to_string());
         }
-        if !port_listed(&self.port, true, Duration::from_secs(10)) {
-            return Err(format!("{} kam nach der Neuanmeldung nicht zurueck", self.port));
+        if !port_listed(port, true, Duration::from_secs(10)) {
+            return Err(format!("{port} kam nach der Neuanmeldung nicht zurueck"));
         }
         std::thread::sleep(Duration::from_secs(1));
         Ok(())
