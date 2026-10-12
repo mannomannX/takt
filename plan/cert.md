@@ -309,7 +309,8 @@ mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
 (`ports/posix`) und die Beispiele
 (`examples/c-host/main.c`, `examples/posix/main.c`). Für ihn gelten CERT C
 und MISRA C:2012 unmittelbar (FB-524). Die Adapter für Zephyr und
-CMSIS-RTOS2 (`ports/zephyr`, `ports/cmsis-rtos2`) und ihre Beispiele
+CMSIS-RTOS2 (`ports/zephyr`, `ports/cmsis-rtos2`), das Gerät des Journals
+im Flash unter Zephyr (`ports/zephyr-nvm`) und ihre Beispiele
 (`examples/zephyr`, `examples/cmsis-rtos2`) gehören dazu, stehen aber noch
 nicht in der Prüfung: Ihre Köpfe entstehen erst in einem Bau unter Zephyr
 (FB-731).

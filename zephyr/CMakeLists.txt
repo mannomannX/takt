@@ -34,4 +34,10 @@ if(CONFIG_TAKT)
   zephyr_library_named(takt_port)
   zephyr_library_sources(${sdk}/ports/rtos/takt_rtos.c ${sdk}/ports/${adapter}/takt_os.c)
   zephyr_library_link_libraries(Takt::sdk)
+
+  # Das Geraet des Journals im Flash, fuer jeden Adapter.
+  if(CONFIG_TAKT_JOURNAL_FLASH)
+    zephyr_include_directories(${sdk}/ports/zephyr-nvm)
+    zephyr_library_sources(${sdk}/ports/zephyr-nvm/takt_zephyr_nvm.c)
+  endif()
 endif()

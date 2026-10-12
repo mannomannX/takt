@@ -26,3 +26,12 @@ set(shared ${TAKT_ROOT}/examples/zephyr/src)
 target_include_directories(app PRIVATE ${shared})
 target_sources(app PRIVATE src/main.c ${shared}/line.c ${shared}/handback.c ${shared}/handback_stm32f401.c)
 target_link_libraries(app PRIVATE port_test)
+
+# Ein frisches Journal fuer die Portpruefung, die mit dem Interpreter ohne
+# gespeicherte Werte vergleicht; ohne ueberlebt `persist` einen Neustart.
+option(TAKT_FRESH_JOURNAL "das Journal vor dem Lauf loeschen" OFF)
+if(TAKT_FRESH_JOURNAL)
+  target_compile_definitions(app PRIVATE TAKT_FRESH_JOURNAL=1)
+else()
+  target_compile_definitions(app PRIVATE TAKT_FRESH_JOURNAL=0)
+endif()

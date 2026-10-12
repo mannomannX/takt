@@ -39,3 +39,12 @@ else()
   target_sources(app PRIVATE src/handback_reboot.c)
 endif()
 target_link_libraries(app PRIVATE port_test)
+
+# Ein frisches Journal fuer die Portpruefung, die mit dem Interpreter ohne
+# gespeicherte Werte vergleicht; ohne ueberlebt `persist` einen Neustart.
+option(TAKT_FRESH_JOURNAL "das Journal vor dem Lauf loeschen" OFF)
+if(TAKT_FRESH_JOURNAL)
+  target_compile_definitions(app PRIVATE TAKT_FRESH_JOURNAL=1)
+else()
+  target_compile_definitions(app PRIVATE TAKT_FRESH_JOURNAL=0)
+endif()

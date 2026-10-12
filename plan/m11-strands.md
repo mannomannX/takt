@@ -584,6 +584,20 @@ So arbeitet jeder Strang, als wäre er allein:
     `K_THREAD_STACK_SIZEOF`, ohne Partition. `zephyr_example.rs` baut es
     (`the_cmsis_rtos2_example_builds_for_the_f401`), der Board-Test
     `the_cmsis_rtos2_port_passes_the_port_test` fährt die Portprüfung.
+- **Stand 19d (Strang F, 2026-10-12, Zweig `f-19d-flash`):**
+  - **Journal im Flash (FB-732):** `ports/zephyr-nvm` (`takt_zephyr_nvm_open`,
+    `CONFIG_TAKT_JOURNAL_FLASH`) über `flash_area` auf der Partition
+    `takt_journal`, zwei Slots je die Hälfte, synchron, `blocking_ns` aus der
+    Hardware-Konfiguration. F401 Sektor 2 und 3 wie die Bring-ups; C6 zwei
+    Sektoren zu 4 KiB ab 0x3b_0000, weil das Abbild (Simple Boot ab 0x0)
+    über 0x9000 reicht, wo die Bring-ups ihr Journal halten. Nicht NVS/ZMS:
+    ein zweites Journal darunter, und ihre Speicherbereinigung löschte zu
+    Zeiten, die Prüfung 32 nicht kennt. Beide Zephyr-Beispiele nutzen es;
+    `TAKT_FRESH_JOURNAL` (CMake) löscht es für die Portprüfung, die mit dem
+    Interpreter ohne gespeicherte Werte vergleicht. Board-Tests
+    `the_zephyr_journal_survives_a_reset` (C6) und
+    `the_zephyr_journal_survives_a_reset_and_a_new_image` (F401): Der zweite
+    Lauf beginnt mit `kept` des ersten plus eins.
 
 ### 15, 16, 18, 9, 19 bis 23
 

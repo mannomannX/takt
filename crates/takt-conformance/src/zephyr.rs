@@ -63,9 +63,12 @@ pub const ZEPHYR: &str = "zephyr";
 pub const CMSIS_RTOS2: &str = "cmsis-rtos2";
 
 /// Baut `examples/<example>` fuer `board` in `dir`, mit dem Werkzeug `takt`
-/// und dem SDK-Archiv fuer das Tripel des Boards. Mit zwei Jobs: Ein
-/// Zephyr-Bau ist klein, und der Rechner neben ihm baut oft Rust.
-pub fn build(west: &Path, example: &str, board: Board, dir: &Path, takt: &Path) -> Result<Image, String> {
+/// und dem SDK-Archiv fuer das Tripel des Boards. Mit `fresh` loescht das
+/// Abbild sein Journal vor dem Lauf (`TAKT_FRESH_JOURNAL`): Die
+/// Portpruefung vergleicht mit dem Interpreter ohne gespeicherte Werte. Mit
+/// zwei Jobs: Ein Zephyr-Bau ist klein, und der Rechner neben ihm baut oft
+/// Rust.
+pub fn build(west: &Path, example: &str, board: Board, fresh: bool, dir: &Path, takt: &Path) -> Result<Image, String> {
     let sdk = crate::harness::sdk_library_for(Some(board.triple))?;
     // CMake liest `\` in einem Pfad als Escape.
     let cmake_path = |p: &Path| p.display().to_string().replace('\\', "/");
@@ -77,6 +80,7 @@ pub fn build(west: &Path, example: &str, board: Board, dir: &Path, takt: &Path) 
         .arg("--")
         .arg(format!("-DTAKT_EXECUTABLE={}", cmake_path(takt)))
         .arg(format!("-DTAKT_SDK_LIBRARY={}", cmake_path(&sdk)))
+        .arg(format!("-DTAKT_FRESH_JOURNAL={}", if fresh { "ON" } else { "OFF" }))
         .output()
         .map_err(|e| format!("{}: {e}", west.display()))?;
     if !out.status.success() {

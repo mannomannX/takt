@@ -2,7 +2,13 @@
  * ESP32-C6-MINI-1 4 MB Flash hat; `esp32c6_devkitc` nimmt 8 MB an, und der
  * Kopf des Abbilds nennte dem ROM-Lader die falsche Groesse. Die Leitung
  * ist der USB-Serial-JTAG, wie in den Bring-ups; die Konsole bleibt auf
- * UART0. */
+ * UART0.
+ *
+ * Das Journal in zwei Sektoren zu 4 KiB am Anfang der Partition `storage`
+ * (0x3b_0000), die sonst niemand nutzt: Das Abbild liegt ab 0x0 (Simple
+ * Boot) und reicht ueber 0x9000, wo die Bring-ups ihr Journal halten. */
+/delete-node/ &storage_partition;
+
 / {
 	chosen {
 		takt,line = &usb_serial;
@@ -11,6 +17,13 @@
 
 &flash0 {
 	reg = <0x0 DT_SIZE_M(4)>;
+
+	partitions {
+		takt_journal: partition@3b0000 {
+			label = "takt-journal";
+			reg = <0x3b0000 DT_SIZE_K(8)>;
+		};
+	};
 };
 
 &usb_serial {
