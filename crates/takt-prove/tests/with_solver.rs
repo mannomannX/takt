@@ -276,13 +276,14 @@ machine f:
 }
 
 /// **Kleine Anfragen zuerst** (FB-511 Schritt 2): `RUN` erreicht erst ein
-/// Lauf ueber 500 Ticks. Die Division durch `g + 1.0` dort ist endlich, weil
-/// `g` eine Range ab null hat; das entscheidet ihre Fehlerbedingung allein.
+/// Lauf ueber 500 Ticks, und nur dort ruft `half` mit `g`: Das Produkt in
+/// `half` ist endlich, weil `g` eine Range hat. Die Sema sieht den
+/// Parameter ohne Range, die Fehlerbedingung allein entscheidet es.
 /// Die Division durch `x` hinter `x != 0` nicht: Allein kann `x` null sein,
 /// auf dem Pfad nie, und die Induktion mit k = 1 beweist sie. Die Division
 /// in `WAIT` faultet im ersten Tick; ihren Pfad findet BMC mit Tiefe 1, und
-/// kein Beweis ohne Pfad spricht sie frei. Gefragt sind nur die Divisionen:
-/// Das Lesen von `x` in `RUN` faultet erst nach 500 Ticks.
+/// kein Beweis ohne Pfad spricht sie frei. Gefragt sind nur Divisionen und
+/// Endlichkeit: Das Lesen von `x` in `RUN` faultet erst nach 500 Ticks.
 #[test]
 fn small_queries_decide_before_deep_ones() {
     let Some(solver) = solver() else { return };
@@ -294,6 +295,9 @@ input  x : int in -5..5 @ hw(\"i/x\")
 output w : int @ hw(\"o/w\") with safe = 0
 output r : float @ hw(\"o/r\") with safe = 0
 
+fn half(v: float) -> float:
+    return v * 0.5
+
 machine f:
     var g : float in 0..10 = 1
     initial WAIT
@@ -304,7 +308,7 @@ machine f:
     state RUN:
         loop:
             g = g + 0.5 if g < 9.0 else 0.0
-            r = 100.0 / (g + 1.0)
+            r = half(g)
             if x != 0:
                 w = 200 / x
 ";
@@ -320,7 +324,7 @@ machine f:
     };
     let first = at("100 / x", "div");
     assert!(matches!(first, CheckVerdict::Reachable { at, .. } if at <= 1), "{first:?}");
-    assert_eq!(at("100.0 / (g + 1.0)", "fin"), CheckVerdict::Unreachable { k: 1 });
+    assert_eq!(at("v * 0.5", "fin"), CheckVerdict::Unreachable { k: 1 });
     assert_eq!(at("200 / x", "div"), CheckVerdict::Unreachable { k: 1 });
 }
 
