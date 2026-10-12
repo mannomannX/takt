@@ -76,6 +76,19 @@ fn a_posix_port_passes_the_port_test() {
     let verdict = takt_conformance::port::judge(&log, &source);
     // Die gemessenen Tiefen sind die Reserven der Hardware-Konfiguration.
     eprintln!("{verdict}");
-    let tail: Vec<&str> = log.lines().rev().take(4).collect();
-    assert!(verdict.passed(), "{verdict}\nEnde des Laufs:\n{}", tail.join("\n"));
+    assert!(verdict.passed(), "{verdict}\n{}{}", String::from_utf8_lossy(&run.stdout), excerpt(&log));
+}
+
+/// Was ein Lauf, der durchfiel, vom Port zeigt: der Kopf, die Zeilen der
+/// Jobs und von `hashes`, das Ende.
+fn excerpt(log: &str) -> String {
+    let lines: Vec<&str> = log.lines().collect();
+    let pick = |what: &str| lines.iter().filter(|l| l.contains(what)).take(8).copied().collect::<Vec<_>>().join("\n");
+    let tail = lines.iter().rev().take(4).copied().collect::<Vec<_>>().join("\n");
+    format!(
+        "Kopf des Laufs:\n{}\nJobs:\n{}\n`hashes`:\n{}\nEnde des Laufs:\n{tail}",
+        lines.iter().take(12).copied().collect::<Vec<_>>().join("\n"),
+        pick(" job "),
+        pick(" hashes ")
+    )
 }

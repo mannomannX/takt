@@ -37,13 +37,15 @@ const VALVE: &str = "examples/c-host/takt/valve.takt";
 const TICKS: u64 = 1000;
 
 /// Der Trace des Interpreters fuer `program` ueber `ticks`, ohne
-/// gespeicherte Werte (5.9), `f32` wie der Rahmen als `f64` (4.2).
-fn interpreted(program: &str, ticks: u64) -> String {
+/// gespeicherte Werte (5.9), mit dem Stimulus `stimulus`, `f32` wie der
+/// Rahmen als `f64` (4.2).
+fn interpreted(program: &str, ticks: u64, stimulus: &str) -> String {
     let text = std::fs::read_to_string(root().join(program)).expect("Quelle");
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let p = takt_sema::compile(&text, &options).program.expect("uebersetzt");
     let run = takt_interp::RunOptions { ticks, ..Default::default() };
-    let trace = takt_interp::run(&p, &takt_interp::Trace::default(), &run).expect("Lauf").trace.render();
+    let stimulus = takt_interp::Trace::parse(stimulus).expect("Stimulus");
+    let trace = takt_interp::run(&p, &stimulus, &run).expect("Lauf").trace.render();
     takt_conformance::run::widen_f32(&trace, &takt_conformance::run::f32_outputs(&p))
 }
 
@@ -54,24 +56,25 @@ fn outputs(trace: &str) -> BTreeSet<&str> {
 
 /// Der Trace des C-Wirts fuer `program` ueber `ticks` gleicht dem
 /// Interpreter, Ausgang fuer Ausgang (13.1); ein Ausgang, den nur eine Seite
-/// nennt, ist eine Abweichung (FB-305).
+/// nennt, ist eine Abweichung (FB-305). Was der Wirt als Input aufzeichnet,
+/// etwa die Fertigstellung eines Jobs, spielt der Interpreter nach (12.5).
 fn agrees(program: &str, ticks: u64, native: &str) {
-    let expected = interpreted(program, ticks);
+    let expected = interpreted(program, ticks, &takt_conformance::run::recorded_inputs(native));
     assert_eq!(outputs(&expected), outputs(native), "Ausgaenge:\n{native}");
     let diffs = takt_conformance::compare(&expected, native);
     assert!(diffs.is_empty(), "{} Abweichungen, etwa {:?}\n{native}", diffs.len(), &diffs[..diffs.len().min(4)]);
 }
 
 /// Baut einen C-Wirt wie ein Bausystem: die Lieferform des Programms
-/// `program` mit dem Praefix `prefix` nach `dir`, dazu das SDK-Archiv, mit
-/// clang zu einem Programm aus `main_c` gebunden. `None` ohne clang, wo
-/// `TAKT_ALLOW_MISSING` das erlaubt.
-fn c_host(program: &str, prefix: &str, main_c: &Path, dir: &Path) -> Option<PathBuf> {
+/// `program` mit dem Praefix `prefix` und den Schaltern `extra` nach `dir`,
+/// dazu das SDK-Archiv, mit clang zu einem Programm aus `main_c` gebunden.
+/// `None` ohne clang, wo `TAKT_ALLOW_MISSING` das erlaubt.
+fn c_host(program: &str, prefix: &str, extra: &[&str], main_c: &Path, dir: &Path) -> Option<PathBuf> {
     let clang = takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")?;
     let out = dir.to_str().expect("Pfad");
     let args =
         ["build", program, "--emit", "embed", "--form", "logical", "--target", host_triple(), "--prefix", prefix];
-    let run = takt(&[&args[..], &["--out", out]].concat());
+    let run = takt(&[&args[..], extra, &["--out", out]].concat());
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let sdk = takt_conformance::harness::sdk_library_for(None).unwrap_or_else(|e| panic!("SDK-Archiv: {e}"));
     let lib = dir.join(if cfg!(windows) { format!("{prefix}.lib") } else { format!("lib{prefix}.a") });
@@ -106,7 +109,7 @@ fn ran(exe: &Path, args: &[&str]) -> String {
 #[cfg_attr(not(target_arch = "x86_64"), ignore = "das Tripel des Wirts ist hier x86-64")]
 fn a_c_host_agrees_with_the_interpreter() {
     let dir = scratch("takt-c-host");
-    let Some(exe) = c_host(VALVE, "valve", &root().join("examples/c-host/main.c"), &dir) else { return };
+    let Some(exe) = c_host(VALVE, "valve", &[], &root().join("examples/c-host/main.c"), &dir) else { return };
     let trace = ran(&exe, &[&TICKS.to_string()]);
     agrees(VALVE, TICKS, &trace);
     assert!(trace.contains(" out fills 2"), "das Ventil oeffnete keine zwei Mal:\n{trace}");
@@ -114,9 +117,8 @@ fn a_c_host_agrees_with_the_interpreter() {
 
 const PERSIST: &str = "corpus-try/35_persist.takt";
 
-/// Ein C-Wirt fuer `35_persist`: ein Flash im Speicher mit zwei Slots,
-/// jeder Vorgang sofort fertig, und zwei Laeufe auf ihm (5.9).
-const PERSIST_HOST: &str = r#"
+/// Der Kopf des C-Wirts fuer `35_persist`, mit seinen Treibern.
+const PERSIST_HEAD: &str = r#"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,7 +131,12 @@ uint8_t persist_out_o_count(void *user, int64_t now, int64_t value) { (void)user
 uint8_t persist_out_o_code(void *user, int64_t now, int64_t value) { (void)user; (void)now; (void)value; return 1; }
 uint8_t persist_out_o_first(void *user, int64_t now, int64_t value) { (void)user; (void)now; (void)value; return 1; }
 uint8_t persist_alive_o(void *user, int64_t now) { (void)user; (void)now; return 1; }
+"#;
 
+/// Was jeder C-Wirt dieser Tests stellt, der ein Journal hat: die Leitung
+/// nach stdout und ein Flash im Speicher mit zwei Slots, jeder Vorgang
+/// sofort fertig (5.9).
+const RAM_FLASH: &str = r#"
 static uint8_t put(void *ctx, uint8_t byte) { return fputc(byte, (FILE *)ctx) != EOF; }
 static uint8_t ring[4096];
 
@@ -172,6 +179,10 @@ static uint8_t read(void *ctx, uint8_t slot, uint32_t offset, uint8_t *into, uin
 }
 
 static const struct takt_nvm nvm = {NULL, SLOT, -1, erase, write, poll, read};
+"#;
+
+/// Zwei Laeufe von `35_persist` auf demselben Flash.
+const PERSIST_BODY: &str = r#"
 static uint8_t current[PERSIST_PERSIST_BOUND], stored[PERSIST_PERSIST_BOUND];
 static struct persist_arena arena;
 static takt_core core;
@@ -222,8 +233,8 @@ int main(int argc, char **argv) {
 fn a_c_host_keeps_persist_across_runs() {
     let dir = scratch("takt-c-host-persist");
     let main_c = dir.join("persist_host.c");
-    std::fs::write(&main_c, PERSIST_HOST).expect("Quelle");
-    let Some(exe) = c_host(PERSIST, "persist", &main_c, &dir) else { return };
+    std::fs::write(&main_c, format!("{PERSIST_HEAD}{RAM_FLASH}{PERSIST_BODY}")).expect("Quelle");
+    let Some(exe) = c_host(PERSIST, "persist", &[], &main_c, &dir) else { return };
     let trace = ran(&exe, &["60"]);
     let (first, second) = trace.split_once("takt zweiter lauf").expect("zwei Laeufe");
     agrees(PERSIST, 60, first);
@@ -234,6 +245,71 @@ fn a_c_host_keeps_persist_across_runs() {
     let end = count(first, true).expect("`count` im ersten Lauf");
     assert_ne!(end, "3", "der erste Lauf zaehlte nicht hoch:\n{first}");
     assert_eq!(count(second, false), Some(end), "der zweite Lauf beginnt nicht beim Stand des ersten:\n{second}");
+}
+
+const PORT_TEST: &str = "corpus-try/124_port_test.takt";
+
+/// Der Kopf des C-Wirts fuer das Pruefprogramm; es hat keine Treiber.
+const JOBS_HEAD: &str = r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "takt_sdk.h"
+#include "port_test.h"
+"#;
+
+/// Das Pruefprogramm in logischer Zeit: Wartet ein Job, rechnet er zu Ende,
+/// bevor die Uhr weiterspringt (12.11).
+const JOBS_BODY: &str = r#"
+static uint8_t current[PORT_TEST_PERSIST_BOUND], stored[PORT_TEST_PERSIST_BOUND];
+static struct port_test_arena arena;
+static takt_core core;
+
+int main(int argc, char **argv) {
+    long long ticks = argc > 1 ? strtoll(argv[1], NULL, 10) : 400;
+    const struct takt_line line = {stdout, put, NULL};
+    memset(slots, 0xff, sizeof slots);
+    if (takt_line_init(&line, ring, sizeof ring) != TAKT_OK ||
+        takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &nvm, current, stored,
+                                 PORT_TEST_PERSIST_BOUND) != TAKT_OK) {
+        return 2;
+    }
+    int64_t now = 0;
+    int64_t end = (int64_t)ticks * PORT_TEST_TICK_NS;
+    for (;;) {
+        takt_next next = takt_core_service(&core, now);
+        if (next.jobs) {
+            takt_core_job_work(&core);
+            continue;
+        }
+        if (next.ended != 0 || next.deadline_ns >= end) {
+            break;
+        }
+        now = next.deadline_ns;
+    }
+    takt_core_report(&core, NULL, NULL);
+    return 0;
+}
+"#;
+
+/// **Ein C-Wirt rechnet Jobs wie der Interpreter** (4.5, 12.11): das
+/// Pruefprogramm in logischer Zeit ueber `takt_core_service` und
+/// `takt_core_job_work`, ohne Faeden. Der erste Job wird im Tick nach
+/// seinem Start fertig, die Kette erreicht 20 Hashes, und der Trace gleicht
+/// dem Interpreter, der die Fertigstellungen des Wirts nachspielt (12.5).
+#[test]
+#[cfg_attr(not(target_arch = "x86_64"), ignore = "das Tripel des Wirts ist hier x86-64")]
+fn a_c_host_runs_jobs_like_the_interpreter() {
+    let dir = scratch("takt-c-host-jobs");
+    let main_c = dir.join("jobs_host.c");
+    std::fs::write(&main_c, format!("{JOBS_HEAD}{RAM_FLASH}{JOBS_BODY}")).expect("Quelle");
+    let Some(exe) = c_host(PORT_TEST, "port_test", &["--build", "sim"], &main_c, &dir) else { return };
+    let trace = ran(&exe, &["400"]);
+    assert!(trace.contains("job hasher v done start=63"), "der erste Job wurde nicht fertig:\n{trace}");
+    assert!(trace.contains(" out hashes 20"), "die Kette erreichte keine 20 Hashes:\n{trace}");
+    agrees(PORT_TEST, 400, &trace);
 }
 
 /// **Das CMake-Paket bindet dasselbe** (12.11, `tools/cmake`):
