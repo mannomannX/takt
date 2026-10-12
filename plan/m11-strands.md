@@ -243,6 +243,29 @@ So arbeitet jeder Strang, als wäre er allein:
   `valid` (35). Schritt 2 beginnt darum bei der Kodierung dieser drei
   Programme, nicht bei mehr Speicher: 6 GB reichten bei Tiefe 20 so wenig
   wie bei Tiefe 10.
+- **Stand bei Unterbrechung (2026-10-12, Strang B2, Zweig `b2-fb511-step2`):**
+  - Ursache gemessen: Die Kodierung ist für z3 nicht redundant, teuer ist
+    das Bit-Blasting der Gleitkommarechnung je Tick (z3 4.13.4, nur
+    Bit-Blasting: Division `f32` ≈ 20 MB, `f64` ≈ 160 MB, `fma`/`mul` `f64`
+    ≈ 11 MB). `11_foc_drive`: Init und ein Tick brauchen 1,65 GB, davon
+    1,4 GB die 18 Divisionen durch `v_dc` (`svpwm` in drei Blättern);
+    `46_matrices`: 524 verschiedene `fma` in `f64` bei Tiefe 10;
+    `sim/14_7`: 81 Divisionen in `f64` im Induktionsschritt mit k = 10.
+  - Umgesetzt (Commits `07e7ca2`, `50af58d`, `d7633e3`): je Prüfstelle
+    zuerst die Fehlerbedingung allein (`CheckSite::fail`,
+    `smt::fail_query`), dann BMC und Induktion mit k = 1, erst dann die
+    Tiefe; reicht der Speicher schon für k = 1 nicht, bleibt die Stelle mit
+    diesem Grund offen. `Model::run` prüft je Tick, dass eine feuernde
+    Stelle ihre Fehlerbedingung erfüllt.
+  - Laufende Läufe: CI 38200303789 (Suite des Zweigs; der vorige Lauf
+    38199410647 scheiterte nur an `small_queries_decide_before_deep_ones`,
+    behoben in `d7633e3`, und an `posix_port` aus 18c), Einordnung der drei
+    Programme `solver.yml` 38199208294 (Tiefe 10 und 20, drei Teile).
+  - Nächster Schritt: das Artefakt `fb511-ergebnis` von 38199208294 gegen
+    Schritt 1 stellen, FB-612 (Ursache, Zahlen) und FB-613 (die Gruppe
+    „nicht k-induktiv“ ist zum großen Teil tief erreichbar: Zähler laufen
+    in Läufen ohne Stimulus bei t = 300 bis 2503 über ihre Range) eintragen,
+    Zweig zum Merge melden.
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
