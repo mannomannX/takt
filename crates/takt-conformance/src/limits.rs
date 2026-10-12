@@ -113,7 +113,7 @@ mod tests {
 
     /// Der Status der Zeile `id` in `plan/feedback.csv` oder `plan/tests.csv`.
     fn status(id: &str) -> Option<String> {
-        let plan = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plan");
+        let plan = crate::repo_root().join("plan");
         ["feedback.csv", "tests.csv"].iter().find_map(|file| {
             let text = std::fs::read_to_string(plan.join(file)).ok()?;
             let mut rows = csv_rows(&text);

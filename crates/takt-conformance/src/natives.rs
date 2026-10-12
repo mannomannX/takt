@@ -11,7 +11,7 @@
 //! hier.
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use takt_native::{Native, Output};
 
@@ -28,7 +28,7 @@ pub struct Vector {
 
 /// Die Spezifikation im Repository.
 pub fn spec_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../grammar/takt-native.md")
+    crate::repo_root().join("grammar/takt-native.md")
 }
 
 /// Die Vektoren aus den Bloecken ```` ```takt-native ```` und

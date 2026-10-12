@@ -13,7 +13,7 @@
 //! `math` der Kalibrierung (FB-344).
 
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use takt_mir::analysis::stack::MATH_STACK;
 
@@ -37,7 +37,7 @@ pub struct Vector {
 
 /// Die Spezifikation im Repository.
 pub fn spec_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../grammar/libtaktm.md")
+    crate::repo_root().join("grammar/libtaktm.md")
 }
 
 /// Die Vektoren der Stufe 2 aus dem Block ```` ```libtaktm ````.

@@ -68,6 +68,15 @@ pub use stimulus::Stimulus;
 /// Das Zielverzeichnis von `cargo`: `CARGO_TARGET_DIR`, sonst `target` in
 /// der Wurzel des Repositorys.
 pub fn target_dir() -> std::path::PathBuf {
-    std::env::var_os("CARGO_TARGET_DIR")
-        .map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target"), Into::into)
+    std::env::var_os("CARGO_TARGET_DIR").map_or_else(|| repo_root().join("target"), Into::into)
+}
+
+/// Die Wurzel des Repositorys, aus dem dieser Lauf seine Quellen liest:
+/// `TAKT_ROOT`, sonst der Ort beim Bau. Ein Test-Binary aus einem
+/// nextest-Archiv laeuft woanders, als es gebaut wurde (M11 Schritt 34e:
+/// gebaut auf einem Runner, gefahren am Board), und `env!` hielte den Pfad
+/// des Runners fest; `tools/board-run.ps1` nennt darum seinen Worktree.
+pub fn repo_root() -> std::path::PathBuf {
+    std::env::var_os("TAKT_ROOT")
+        .map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."), Into::into)
 }

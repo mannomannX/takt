@@ -28,6 +28,9 @@ Lauf gebaut hat, und weder `takt` noch ein Abbild wird hier gebaut — der Lauf
 schreibt und prueft nur. Die Zusammenfassung nennt, wie viele Abbilder der
 Cache trotzdem nicht hielt (`misses.log`); Ziel ist keines. Fehlt eines, baut
 die Harness es mit dem `takt` aus einem frueheren Lauf oder scheitert daran.
+Auch die Suiten selbst kommen aus dem Lauf, als nextest-Archiv vom
+Windows-Runner (M11 Schritt 34e): Hier laeuft dann kein Compiler, und
+`TAKT_ROOT` nennt den Testprozessen den Worktree als Quelle.
 
 `-AllowMissing` nennt, was an diesem Rechner fehlen darf (`TAKT_ALLOW_MISSING`);
 der Test dazu meldet sich als uebersprungen, und die Zusammenfassung sagt es.
@@ -74,8 +77,9 @@ try {
 }
 
 # Die Abbilder eines Laufs von boards.yml in den Abbild-Cache: je Board der
-# Stand `<tripel>-<stand>`, der fruehere desselben Boards geht. Liefert den
-# Commit, den der Lauf gebaut hat, und je Stand eine Zeile.
+# Stand `<tripel>-<stand>`, der fruehere desselben Boards geht. Dazu das
+# Archiv der Board-Suiten. Liefert den Commit, den der Lauf gebaut hat, je
+# Stand eine Zeile und den Pfad des Archivs.
 function Import-CiImages([string]$Run) {
     $download = Join-Path $Target 'takt-board-ci'
     if (Test-Path $download) { Remove-Item -Recurse -Force $download }
@@ -99,7 +103,18 @@ function Import-CiImages([string]$Run) {
         '{0}: {1} Abbilder' -f $stand.Name, @(Get-ChildItem $into -Filter '*.elf').Count
     }
     Remove-Item -Recurse -Force $download
-    [pscustomobject]@{ Commit = $commits[0]; Stands = @($stands) }
+    $tests = Join-Path $Target 'takt-board-ci-tests'
+    if (Test-Path $tests) { Remove-Item -Recurse -Force $tests }
+    Push-Location $repo
+    try {
+        gh run download $Run -n board-tests-windows -D $tests | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "gh run download $Run -n board-tests-windows scheiterte" }
+    } finally {
+        Pop-Location
+    }
+    $archive = Join-Path $tests 'board-tests.tar.zst'
+    if (-not (Test-Path $archive)) { throw "Lauf $Run brachte kein Archiv der Board-Suiten" }
+    [pscustomobject]@{ Commit = $commits[0]; Stands = @($stands); Archive = $archive }
 }
 
 try {
@@ -128,6 +143,9 @@ try {
     $env:TAKT_ESP32C6_PORT = $Esp32c6Port
     $env:TAKT_F401_PORT = $F401Port
     $env:TAKT_ALLOW_MISSING = $AllowMissing
+    # Die Quellen des Laufs fuer die Testprozesse, auch fuer die aus dem
+    # Archiv, die anderswo gebaut wurden.
+    $env:TAKT_ROOT = $Worktree
     # Je Lauf zaehlt die Harness neu, was der Abbild-Cache nicht hielt.
     $misses = Join-Path $images 'misses.log'
     if (Test-Path $misses) { Remove-Item $misses }
@@ -144,9 +162,15 @@ try {
         }
         foreach ($b in $suites) {
             if ($cli -ne 0) { $results[$b] = 'nicht gelaufen: der Bau von takt scheiterte'; continue }
-            $select = if ($Filter) { @('-E', $Filter) } else { @() }
-            cargo nextest run -p takt-conformance --test "board_$b" --run-ignored ignored-only --no-fail-fast `
-                --build-jobs 2 @select *>> $log
+            if ($FromCi) {
+                $expr = if ($Filter) { "binary(=board_$b) & ($Filter)" } else { "binary(=board_$b)" }
+                cargo nextest run --archive-file $ci.Archive --workspace-remap $Worktree `
+                    --run-ignored ignored-only --no-fail-fast -E $expr *>> $log
+            } else {
+                $select = if ($Filter) { @('-E', $Filter) } else { @() }
+                cargo nextest run -p takt-conformance --test "board_$b" --run-ignored ignored-only --no-fail-fast `
+                    --build-jobs 2 @select *>> $log
+            }
             $code = $LASTEXITCODE
             $summary = Select-String -Path $log -Pattern '^\s+Summary ' | Select-Object -Last 1
             $results[$b] = '{0} ({1})' -f $(if ($code -eq 0) { 'bestanden' } else { 'gescheitert' }),

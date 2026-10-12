@@ -101,7 +101,7 @@ pub struct Unfired {
 /// Das Verzeichnis der Pfade. Ohne `crate::board`, das nur mit dem Feature
 /// `board` gebaut wird.
 pub fn dir() -> PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/paths")
+    crate::repo_root().join("corpus-try/paths")
 }
 
 /// Der Stamm eines Korpusprogramms in `corpus-try/paths`.

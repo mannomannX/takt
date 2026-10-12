@@ -531,9 +531,9 @@ pub trait Board {
     }
 }
 
-/// Die Wurzel des Repositorys.
+/// Die Wurzel des Repositorys ([`crate::repo_root`]).
 pub fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    crate::repo_root()
 }
 
 /// Ein Programm des Differentialkorpus.

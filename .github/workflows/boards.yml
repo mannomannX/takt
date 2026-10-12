@@ -9,6 +9,12 @@
 # <lauf>` laedt ihn und flasht und prueft nur noch. Stand und Schluessel
 # haengen nur an Inhalten, also findet der Lauf unter Windows die Abbilder
 # aus Linux wieder, wenn Quellen, rustc und clang dieselben sind.
+#
+# Dazu die Board-Suiten selbst als nextest-Archiv, gebaut unter Windows wie
+# der Rechner am Board (M11 Schritt 34e): Mit beidem laeuft dort kein
+# Compiler mehr. Die Quellen nennt am Board `TAKT_ROOT`
+# (`takt_conformance::repo_root`), denn ein Pfad aus `env!` waere der des
+# Runners.
 name: Board-Abbilder
 
 on:
@@ -80,5 +86,29 @@ jobs:
         with:
           name: board-images-${{ matrix.board }}
           path: target/takt-board-images/
+          if-no-files-found: error
+          retention-days: 14
+
+  tests:
+    name: Board-Suiten als Archiv
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: ./.github/actions/setup
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: board-tests
+      - name: Archiv bauen
+        shell: bash
+        run: >-
+          cargo nextest archive -p takt-conformance --test board_esp32c6 --test board_stm32f401
+          --archive-file target/board-tests.tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: board-tests-windows
+          path: target/board-tests.tar.zst
           if-no-files-found: error
           retention-days: 14

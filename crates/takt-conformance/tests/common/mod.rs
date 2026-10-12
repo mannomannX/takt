@@ -38,7 +38,7 @@ pub fn clang_path() -> Option<std::path::PathBuf> {
 /// ihre Ausnahmen sind die Luecken des Codegens) und jedes Beispiel unter
 /// `corpus-try/sim/`, das die Sema ohne Fehler annimmt.
 pub fn corpus_programs() -> Vec<(String, Program)> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try");
+    let root = takt_conformance::repo_root().join("corpus-try");
     let mut names: Vec<String> =
         takt_conformance::suites::programs("vergleich").into_iter().map(str::to_string).collect();
     names.extend(

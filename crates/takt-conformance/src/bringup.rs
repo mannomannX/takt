@@ -284,7 +284,7 @@ fn assert_fresh(takt: &Path, profile: &str) {
 pub fn tool_crates() -> Vec<PathBuf> {
     let canonical = |p: PathBuf| fs::canonicalize(&p).unwrap_or(p);
     let mut seen: Vec<PathBuf> = Vec::new();
-    let mut todo = vec![canonical(Path::new(env!("CARGO_MANIFEST_DIR")).join("../takt-cli"))];
+    let mut todo = vec![canonical(crate::repo_root().join("crates/takt-cli"))];
     while let Some(dir) = todo.pop() {
         if seen.contains(&dir) {
             continue;

@@ -675,7 +675,7 @@ pub fn sdk_library_for(triple: Option<&str>) -> Result<std::path::PathBuf, Strin
 /// eigenen Zielverzeichnis, damit der Bau nicht auf die Sperre eines
 /// laufenden `cargo` wartet.
 fn static_library(krate: &str, features: &[&str], triple: Option<&str>) -> Result<std::path::PathBuf, String> {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = crate::repo_root();
     let mut cargo = std::process::Command::new("cargo");
     cargo.args(["rustc", "--release", "--lib", "--crate-type", "staticlib"]);
     if !features.is_empty() {

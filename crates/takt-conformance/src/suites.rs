@@ -93,7 +93,7 @@ pub fn csv_rows(text: &str) -> impl Iterator<Item = Vec<String>> + '_ {
 pub fn manifest() -> &'static [(String, String)] {
     static ROWS: OnceLock<Vec<(String, String)>> = OnceLock::new();
     ROWS.get_or_init(|| {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus-try/manifest.csv");
+        let path = crate::repo_root().join("corpus-try/manifest.csv");
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let mut rows = csv_rows(&text);
         let head = rows.next().unwrap_or_default();

@@ -137,7 +137,7 @@ pub const KERNELS: [&str; 6] = ["pid", "thermocouples", "lines", "matrix", "crc3
 
 /// Ein Referenzkern: `takt` fuer das Programm, `c` fuer die Referenz.
 pub fn kernel_path(name: &str, extension: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("bench").join(format!("{name}.{extension}"))
+    crate::repo_root().join("crates/takt-conformance/bench").join(format!("{name}.{extension}"))
 }
 
 /// Die beiden Kerne einer Probe, klein und gross.
