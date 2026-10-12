@@ -503,10 +503,10 @@ pub fn rust_module(kernels: &[Kernel], suite: &str) -> String {
          /// Ein Byte des Protokolls; es geht an `takt bench --import`.\n    \
          fn put(&mut self, byte: u8);\n}}\n\n\
          mod ffi {{\n    use core::ffi::c_void;\n\n    unsafe extern \"C\" {{\n        \
-         pub fn takt_bench_begin(user: *mut c_void, core_hz: u32);\n        \
-         pub fn takt_bench_measure(user: *mut c_void, step: u32, runs: u32);\n        \
-         pub fn takt_bench_report(user: *mut c_void, step: u32);\n        \
-         pub fn takt_bench_end(user: *mut c_void);\n    }}\n}}\n\n\
+         pub(super) fn takt_bench_begin(user: *mut c_void, core_hz: u32);\n        \
+         pub(super) fn takt_bench_measure(user: *mut c_void, step: u32, runs: u32);\n        \
+         pub(super) fn takt_bench_report(user: *mut c_void, step: u32);\n        \
+         pub(super) fn takt_bench_end(user: *mut c_void);\n    }}\n}}\n\n\
          /// Der Wirt, wie die Haken ihn sehen: Ein duenner Zeiger zeigt auf diesen Griff.\n\
          type Hooks<'a> = &'a mut dyn Host;\n\n\
          #[unsafe(no_mangle)]\n\
@@ -594,7 +594,7 @@ mod tests {
         assert!(r.contains("pub const STEPS: u32 = 5;") && r.contains("pub const SUITE: &str = \"0123456789abcdef\";"));
         for entry in ["takt_bench_begin", "takt_bench_measure", "takt_bench_report", "takt_bench_end"] {
             assert!(
-                h.contains(&format!("void {entry}(void *user")) && r.contains(&format!("pub fn {entry}(")),
+                h.contains(&format!("void {entry}(void *user")) && r.contains(&format!("pub(super) fn {entry}(")),
                 "{entry}"
             );
         }

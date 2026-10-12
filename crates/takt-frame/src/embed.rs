@@ -83,7 +83,8 @@ pub fn rust_module(m: &Module<'_>) -> String {
     s
 }
 
-/// Die Einstiege der Bibliothek (C-ABI).
+/// Die Einstiege der Bibliothek (C-ABI). Sichtbar nur fuer die Huelle im
+/// Modul darueber: Der Wirt ruft das Programm ueber `Program`.
 fn ffi(x: &Prefix, logic: &str) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "/// Die Einstiege der Bibliothek (C-ABI, 12.11); die Huelle `Program` ruft sie.");
@@ -91,31 +92,33 @@ fn ffi(x: &Prefix, logic: &str) -> String {
     let _ = writeln!(s, "    use core::ffi::c_void;\n");
     let _ = writeln!(s, "    unsafe extern \"C\" {{");
     let lines = [
-        format!("pub fn {x}_init_with(a: *mut c_void, user: *mut c_void, persist: *const c_void, len: i32) -> i32;"),
-        format!("pub fn {x}_init(a: *mut c_void, user: *mut c_void);"),
-        format!("pub fn {x}_tick(a: *mut c_void, k: i64);"),
-        format!("pub fn {x}_commit(a: *mut c_void);"),
-        format!("pub fn {x}_idle(a: *mut c_void) -> u8;"),
-        format!("pub fn {x}_deadline(a: *mut c_void) -> i64;"),
-        format!("pub fn {x}_advance(a: *mut c_void, n: i64);"),
-        format!("pub fn {x}_tune(a: *mut c_void, k: i64, param: u32, value: *const c_void, len: i32) -> i32;"),
-        format!("pub fn {x}_woken(a: *mut c_void, k: i64) -> u8;"),
-        format!("pub fn {x}_wake_sources() -> u8;"),
-        format!("pub fn {x}_persist_snapshot(a: *mut c_void, out: *mut c_void, cap: i32) -> i32;"),
-        format!("pub fn {x}_persist_restore(a: *mut c_void, bytes: *const c_void, len: i32) -> i32;"),
-        format!("pub fn {x}_dump(a: *mut c_void, all: i32);"),
-        format!("pub fn {x}_pc(a: *mut c_void, all: i32);"),
-        format!("pub fn {x}_next_run(a: *mut c_void, delay: *mut i64) -> i32;"),
-        format!("pub fn {x}_end(a: *mut c_void);"),
-        format!("pub fn {x}_overrun(a: *mut c_void);"),
-        format!("pub fn {x}_hardware(a: *mut c_void);"),
-        format!("pub fn {x}_tolerance(ns: *mut i64, runs: *mut u32);"),
-        format!("pub fn {x}_output_timing() -> u8;"),
-        format!("pub fn {x}_job_dispatch(a: *mut c_void) -> i32;"),
-        format!("pub fn {x}_job_work(a: *mut c_void);"),
-        format!("pub fn {x}_output(a: *mut c_void, index: i32) -> i64;"),
-        format!("pub static {x}_abi_{ABI}: u8;"),
-        format!("pub static {x}_logic_{logic}: u8;"),
+        format!(
+            "pub(super) fn {x}_init_with(a: *mut c_void, user: *mut c_void, persist: *const c_void, len: i32) -> i32;"
+        ),
+        format!("pub(super) fn {x}_init(a: *mut c_void, user: *mut c_void);"),
+        format!("pub(super) fn {x}_tick(a: *mut c_void, k: i64);"),
+        format!("pub(super) fn {x}_commit(a: *mut c_void);"),
+        format!("pub(super) fn {x}_idle(a: *mut c_void) -> u8;"),
+        format!("pub(super) fn {x}_deadline(a: *mut c_void) -> i64;"),
+        format!("pub(super) fn {x}_advance(a: *mut c_void, n: i64);"),
+        format!("pub(super) fn {x}_tune(a: *mut c_void, k: i64, param: u32, value: *const c_void, len: i32) -> i32;"),
+        format!("pub(super) fn {x}_woken(a: *mut c_void, k: i64) -> u8;"),
+        format!("pub(super) fn {x}_wake_sources() -> u8;"),
+        format!("pub(super) fn {x}_persist_snapshot(a: *mut c_void, out: *mut c_void, cap: i32) -> i32;"),
+        format!("pub(super) fn {x}_persist_restore(a: *mut c_void, bytes: *const c_void, len: i32) -> i32;"),
+        format!("pub(super) fn {x}_dump(a: *mut c_void, all: i32);"),
+        format!("pub(super) fn {x}_pc(a: *mut c_void, all: i32);"),
+        format!("pub(super) fn {x}_next_run(a: *mut c_void, delay: *mut i64) -> i32;"),
+        format!("pub(super) fn {x}_end(a: *mut c_void);"),
+        format!("pub(super) fn {x}_overrun(a: *mut c_void);"),
+        format!("pub(super) fn {x}_hardware(a: *mut c_void);"),
+        format!("pub(super) fn {x}_tolerance(ns: *mut i64, runs: *mut u32);"),
+        format!("pub(super) fn {x}_output_timing() -> u8;"),
+        format!("pub(super) fn {x}_job_dispatch(a: *mut c_void) -> i32;"),
+        format!("pub(super) fn {x}_job_work(a: *mut c_void);"),
+        format!("pub(super) fn {x}_output(a: *mut c_void, index: i32) -> i64;"),
+        format!("pub(super) static {x}_abi_{ABI}: u8;"),
+        format!("pub(super) static {x}_logic_{logic}: u8;"),
     ];
     for line in lines {
         let _ = writeln!(s, "        {line}");
@@ -235,8 +238,9 @@ impl<'a> Program<'a> {{
         // Bibliothek und Huelle muessen dieselbe Schnittstelle sprechen und
         // dasselbe Programm meinen; ohne `{x}_abi_{ABI}` und
         // `{x}_logic_{logic}` bindet das Programm nicht (12.11).
-        // SAFETY: liest zwei Konstanten der Bibliothek.
+        // SAFETY: liest eine Konstante der Bibliothek.
         let _ = unsafe {{ core::ptr::read_volatile(&raw const ffi::{x}_abi_{ABI}) }};
+        // SAFETY: ebenso.
         let _ = unsafe {{ core::ptr::read_volatile(&raw const ffi::{x}_logic_{logic}) }};
         Program {{
             arena: core::ptr::from_mut(arena).cast(),
@@ -290,6 +294,13 @@ impl<'a> Program<'a> {{
         }}
         // SAFETY: liest einen Latch der Arena nach `init`; ein fremder Index liefert 0.
         unsafe {{ ffi::{x}_output(self.arena, index) }}
+    }}
+
+    /// Tick `k` des Kerns als Tick des Rahmens: Der Kern zaehlt ab 0, der
+    /// Rahmen nennt den ersten Tick nach dem Start `t=1` (Tick 0 ist der
+    /// Start). Jenseits von `i64` bleibt er am Ende stehen.
+    fn frame_tick(k: u64) -> i64 {{
+        i64::try_from(k).map_or(i64::MAX, |k| k.saturating_add(1))
     }}
 }}
 
@@ -358,10 +369,8 @@ impl takt_embed::rt::Program for Program<'_> {{
 
     fn tick(&mut self, k: u64, _now: i64) {{
         self.ensure_init();
-        // Der Kern zaehlt ab 0; der Rahmen nennt den ersten Tick nach dem
-        // Start `t=1` (Tick 0 ist der Start).
         // SAFETY: die Arena aus `new`.
-        unsafe {{ ffi::{x}_tick(self.arena, k as i64 + 1) }}
+        unsafe {{ ffi::{x}_tick(self.arena, Program::frame_tick(k)) }}
     }}
 
     fn raise_overrun(&mut self) {{
@@ -376,7 +385,7 @@ impl takt_embed::rt::Program for Program<'_> {{
         // SAFETY: Der Rahmen liest `len` Byte ab `value`; einen Wert, den er
         // nicht annimmt, laesst er stehen (8.4) und schreibt ihn als
         // verworfen in den Trace, in Tick `k + 1` wie `tick`.
-        let _ = unsafe {{ ffi::{x}_tune(self.arena, k as i64 + 1, param, value.as_ptr().cast(), len) }};
+        let _ = unsafe {{ ffi::{x}_tune(self.arena, Program::frame_tick(k), param, value.as_ptr().cast(), len) }};
     }}
 
     fn woken(&mut self, k: u64) -> bool {{
@@ -385,7 +394,7 @@ impl takt_embed::rt::Program for Program<'_> {{
         }}
         // SAFETY: die Arena nach `init`; der Rahmen tastet die Treiber ab
         // wie der Schritt von Tick `k + 1`.
-        unsafe {{ ffi::{x}_woken(self.arena, k as i64 + 1) != 0 }}
+        unsafe {{ ffi::{x}_woken(self.arena, Program::frame_tick(k)) != 0 }}
     }}
 
     fn wake_sources(&self) -> bool {{
@@ -428,8 +437,9 @@ impl takt_embed::rt::Program for Program<'_> {{
 
     fn advance(&mut self, ticks: u64) {{
         self.ensure_init();
+        let ticks = i64::try_from(ticks).unwrap_or(i64::MAX);
         // SAFETY: die Arena aus `new`.
-        unsafe {{ ffi::{x}_advance(self.arena, ticks as i64) }}
+        unsafe {{ ffi::{x}_advance(self.arena, ticks) }}
     }}
 
     fn persist_snapshot(&mut self, out: &mut [u8]) -> usize {{
@@ -442,15 +452,15 @@ impl takt_embed::rt::Program for Program<'_> {{
 
     fn persist_restore(&mut self, bytes: &[u8]) -> usize {{
         let len = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
-        // SAFETY: Der Rahmen liest `len` Byte ab `bytes`; vor dem Start
-        // beginnt er damit, danach ersetzt er nur die Werte.
-        let n = unsafe {{
-            if self.initialized {{
-                ffi::{x}_persist_restore(self.arena, bytes.as_ptr().cast(), len)
-            }} else {{
-                self.initialized = true;
-                ffi::{x}_init_with(self.arena, self.user, bytes.as_ptr().cast(), len)
-            }}
+        let n = if self.initialized {{
+            // SAFETY: Der Rahmen liest `len` Byte ab `bytes` und ersetzt nur
+            // die Werte.
+            unsafe {{ ffi::{x}_persist_restore(self.arena, bytes.as_ptr().cast(), len) }}
+        }} else {{
+            self.initialized = true;
+            // SAFETY: Der Rahmen liest `len` Byte ab `bytes` und beginnt
+            // damit, mit dem Treiberobjekt aus `new`.
+            unsafe {{ ffi::{x}_init_with(self.arena, self.user, bytes.as_ptr().cast(), len) }}
         }};
         usize::try_from(n).unwrap_or(0)
     }}
@@ -479,10 +489,9 @@ impl takt_embed::rt::Program for Program<'_> {{
             takt_embed::rt::Outputs::All => 1,
         }};
         // SAFETY: liest die Arena und schreibt den Trace ueber die Leitung des Wirts.
-        unsafe {{
-            ffi::{x}_dump(self.arena, all);
-            ffi::{x}_pc(self.arena, all);
-        }}
+        unsafe {{ ffi::{x}_dump(self.arena, all) }};
+        // SAFETY: ebenso die Zustandspfade.
+        unsafe {{ ffi::{x}_pc(self.arena, all) }};
     }}
 
     fn end(&mut self) {{

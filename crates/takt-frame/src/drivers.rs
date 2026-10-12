@@ -545,12 +545,16 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
             Kind::Input | Kind::Sys => {
                 let conv = if d.value.is_some_and(Value::is_bool) { "u8::from(sample.value)" } else { "sample.value" };
                 let _ = writeln!(s, "    let Some(sample) = {call}(drivers, now) else {{ return 0 }};");
-                let _ = writeln!(s, "    // SAFETY: siehe oben.");
-                let _ = writeln!(s, "    unsafe {{");
-                let _ = writeln!(s, "        *value = {conv};");
-                let _ = writeln!(s, "        *quality = sample.quality as u8;");
-                let _ = writeln!(s, "        *t = sample.t;");
-                let _ = writeln!(s, "    }}");
+                // Die Zahl der Qualitaet im Prozessabbild (3.5).
+                let _ = writeln!(s, "    let code = match sample.quality {{");
+                for (name, code) in [("Good", 0), ("Suspect", 1), ("Stale", 2), ("Bad", 3)] {
+                    let _ = writeln!(s, "        takt_embed::Quality::{name} => {code},");
+                }
+                let _ = writeln!(s, "    }};");
+                for (place, from) in [("value", conv), ("quality", "code"), ("t", "sample.t")] {
+                    let _ = writeln!(s, "    // SAFETY: siehe oben.");
+                    let _ = writeln!(s, "    unsafe {{ *{place} = {from} }};");
+                }
                 let _ = writeln!(s, "    1");
             }
             Kind::Poll => {
@@ -559,12 +563,12 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
                 let _ = writeln!(s, "    let buf = unsafe {{ core::slice::from_raw_parts_mut(buf, cap) }};");
                 let _ = writeln!(s, "    let Some(piece) = {call}(drivers, buf, now) else {{ return 0 }};");
                 let _ = writeln!(s, "    // SAFETY: siehe oben.");
-                let _ = writeln!(s, "    unsafe {{");
-                let _ = writeln!(s, "        *len = i32::try_from(piece.len.min(cap)).unwrap_or(0);");
-                let _ = writeln!(s, "        *t = piece.t;");
-                let _ = writeln!(s, "        if let Some(n) = piece.seq {{");
-                let _ = writeln!(s, "            *seq = n;");
-                let _ = writeln!(s, "        }}");
+                let _ = writeln!(s, "    unsafe {{ *len = i32::try_from(piece.len.min(cap)).unwrap_or(0) }};");
+                let _ = writeln!(s, "    // SAFETY: siehe oben.");
+                let _ = writeln!(s, "    unsafe {{ *t = piece.t }};");
+                let _ = writeln!(s, "    if let Some(n) = piece.seq {{");
+                let _ = writeln!(s, "        // SAFETY: siehe oben.");
+                let _ = writeln!(s, "        unsafe {{ *seq = n }};");
                 let _ = writeln!(s, "    }}");
                 let _ = writeln!(s, "    1");
             }
