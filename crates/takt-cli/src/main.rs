@@ -265,7 +265,19 @@ const FLAGS: &[(&str, &[&str])] = &[
     ("check-image", &["--manifest"]),
     (
         "port-test",
-        &["--conformance", "--drivers", "--emit", "--form", "--hardware", "--judge", "--out", "--port", "--target"],
+        &[
+            "--conformance",
+            "--drivers",
+            "--emit",
+            "--form",
+            "--hardware",
+            "--job-bytes",
+            "--judge",
+            "--out",
+            "--port",
+            "--program",
+            "--target",
+        ],
     ),
 ];
 

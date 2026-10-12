@@ -2,7 +2,8 @@
   (language 1)
   (tick 1ms)
   (float f32))
-(native-job sha256 (b:bytes<4096>) -> bytes<32> cost=60000 stack=640 duration=1ms)
+(const JOB_BYTES 4096)
+(native-job sha256 (b:bytes<JOB_BYTES>) -> bytes<32> cost=60000 stack=640 duration=1ms)
 (output digest :u32 @sim("o/digest"))
 (output hashes :int in 0..20 @sim("o/hashes"))
 (output energy :float @sim("o/energy"))
@@ -12,11 +13,11 @@
 (stream q :u8 capacity=16)
 (fn first (d:bytes<32>) -> u32
   (return (| (| (| (paren (as (index d 0) u32)) (paren (<< (paren (as (index d 1) u32)) 8))) (paren (<< (paren (as (index d 2) u32)) 16))) (paren (<< (paren (as (index d 3) u32)) 24)))))
-(fn chain (d:bytes<32> inout msg:bytes<4096>)
+(fn chain (d:bytes<32> inout msg:bytes<JOB_BYTES>)
   (if (and (>= (.len d) 1) (>= (.len msg) 1))
     (= (index msg 0) (index d 0))))
 (machine hasher
-  (var msg :bytes<4096> default)
+  (var msg :bytes<JOB_BYTES> default)
   (var d :bytes<32> default)
   (var count :int in 0..20 0)
   (initial LOAD)
@@ -25,9 +26,9 @@
     (after 1s -> REST)
     (state FILL
       (loop
-        (for i in (range 256)
+        (for i in (range (/ JOB_BYTES 64))
           (.push msg (as i u8))))
-      (when (>= (.len msg) 4096) -> HASH))
+      (when (>= (.len msg) JOB_BYTES) -> HASH))
     (state HASH
       (sequence
         (repeat 20

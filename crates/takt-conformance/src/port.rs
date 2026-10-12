@@ -2,7 +2,8 @@
 //! Port, der das Pruefprogramm gefahren hat.
 //!
 //! **Ein Port ist belegt, nicht geglaubt** (plan/m11.md 2.9). `takt port-test
-//! --emit embed` liefert das Pruefprogramm ([`PROGRAM`]) als Baustein. Der
+//! --emit embed` liefert das Pruefprogramm ([`PROGRAM`]) als Baustein, die
+//! Nachricht eines Jobs fuer das Ziel bemessen ([`source`]). Der
 //! Port faehrt es [`TICKS`] Ticks in Echtzeit in seiner Form, seine fremde
 //! Aufgabe rechnet daneben die Last aus `takt_embed::port_test`, und alles
 //! geht in seine Senke. [`judge`] urteilt ueber diese Ausgabe:
@@ -48,6 +49,23 @@ pub const PREFIX: &str = "port_test";
 /// So viele Ticks faehrt der Port: eine Sekunde Last, dann das
 /// Schlaffenster, in dem das Journal schreibt.
 pub const TICKS: u64 = 2000;
+
+/// Die Nachricht eines Jobs im Korpusprogramm in Byte: Auf beiden Boards
+/// rechnet `sha256` darueber laenger als einen Tick.
+pub const JOB_BYTES: u64 = 4096;
+
+/// Hoechstens so lang wird die Nachricht; sie liegt in der Arena.
+pub const JOB_BYTES_MAX: u64 = 1 << 26;
+
+/// So viele Ticks soll ein Job auf einem Wirt rechnen: Die Pflicht verlangt
+/// zwei, die Messung beim Erzeugen schwankt.
+pub const JOB_TICKS: u64 = 4;
+
+/// Die Periode des Pruefprogramms in Nanosekunden (`tick = 1 ms`).
+pub const TICK_NS: u64 = 1_000_000;
+
+/// Die Zeile, die die Laenge der Nachricht traegt.
+const JOB_LINE: &str = "const JOB_BYTES = ";
 
 /// Die Zeile der fremden Last vor der Bilanz: `takt fremd fpu runden N
 /// fehler M` (`takt_rt_core::port_test`).
@@ -133,11 +151,51 @@ impl std::fmt::Display for Verdict {
     }
 }
 
-/// Das Pruefprogramm, uebersetzt wie fuer den Port: im Sim-Build, damit
-/// seine Ausgaenge ohne Treiber in den Trace gehen.
-pub fn program() -> Result<takt_mir::Program, String> {
+/// Das Pruefprogramm mit `job_bytes` Byte je Nachricht: ein Vielfaches
+/// von 64 (die Fuellschleife schreibt je Tick ein Vierundsechzigstel)
+/// zwischen [`JOB_BYTES`] und [`JOB_BYTES_MAX`].
+pub fn source(job_bytes: u64) -> Result<String, String> {
+    if job_bytes % 64 != 0 || !(JOB_BYTES..=JOB_BYTES_MAX).contains(&job_bytes) {
+        return Err(format!(
+            "die Nachricht eines Jobs hat {job_bytes} Byte; erlaubt ist ein Vielfaches von 64 \
+             zwischen {JOB_BYTES} und {JOB_BYTES_MAX}"
+        ));
+    }
+    let line = format!("{JOB_LINE}{JOB_BYTES}\n");
+    if PROGRAM.matches(&line).count() != 1 {
+        return Err(format!("das Korpusprogramm traegt `{}` nicht genau einmal", line.trim_end()));
+    }
+    Ok(PROGRAM.replacen(&line, &format!("{JOB_LINE}{job_bytes}\n"), 1))
+}
+
+/// Die Laenge der Nachricht in `text`, wenn `text` das Pruefprogramm ist:
+/// Jede andere Abweichung von [`PROGRAM`] macht es zu einem anderen
+/// Programm, ueber das die Portpruefung nicht urteilt.
+pub fn job_bytes(text: &str) -> Result<u64, String> {
+    let text = text.replace("\r\n", "\n");
+    let value = text.lines().find_map(|l| l.strip_prefix(JOB_LINE)).ok_or("keine Zeile `const JOB_BYTES = …`")?;
+    let n = value.trim().parse::<u64>().map_err(|e| format!("`{JOB_LINE}{value}`: {e}"))?;
+    if source(n)? != text {
+        return Err("das ist nicht das Pruefprogramm: Ausser `JOB_BYTES` weicht es von 124_port_test ab".into());
+    }
+    Ok(n)
+}
+
+/// Die Laenge der Nachricht, mit der ein Job auf einem Wirt mit
+/// `bytes_per_ms` Durchsatz von `sha256` [`JOB_TICKS`] Ticks rechnet: die
+/// naechste Zweierpotenz, mindestens [`JOB_BYTES`], hoechstens
+/// [`JOB_BYTES_MAX`].
+pub fn job_bytes_for(bytes_per_ms: u64) -> u64 {
+    let ticks_ms = JOB_TICKS.saturating_mul(TICK_NS) / 1_000_000;
+    let want = bytes_per_ms.saturating_mul(ticks_ms).max(JOB_BYTES);
+    want.checked_next_power_of_two().unwrap_or(JOB_BYTES_MAX).min(JOB_BYTES_MAX)
+}
+
+/// Das Pruefprogramm `text`, uebersetzt wie fuer den Port: im Sim-Build,
+/// damit seine Ausgaenge ohne Treiber in den Trace gehen.
+pub fn program(text: &str) -> Result<takt_mir::Program, String> {
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
-    let out = takt_sema::compile(PROGRAM, &options);
+    let out = takt_sema::compile(text, &options);
     let errors: Vec<String> = out.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{d}")).collect();
     if !errors.is_empty() {
         return Err(errors.join("\n"));
@@ -145,10 +203,14 @@ pub fn program() -> Result<takt_mir::Program, String> {
     out.program.ok_or_else(|| "kein Programm".to_string())
 }
 
-/// Urteilt ueber die Ausgabe eines Ports (Modulkopf).
-pub fn judge(log: &str) -> Verdict {
+/// Urteilt ueber die Ausgabe eines Ports, der das Pruefprogramm `text`
+/// gefahren hat (Modulkopf).
+pub fn judge(log: &str, text: &str) -> Verdict {
     let mut v = Verdict { drift: Drift::of(log), ..Verdict::default() };
-    trace_agrees(log, &mut v.failures);
+    match job_bytes(text) {
+        Ok(_) => trace_agrees(log, text, &mut v.failures),
+        Err(e) => v.failures.push(e),
+    }
     foreign_load(log, &mut v);
     jobs_interruptible(log, &mut v);
     stacks(log, &mut v);
@@ -159,7 +221,7 @@ pub fn judge(log: &str) -> Verdict {
 }
 
 /// Trace vollstaendig und gleich dem Interpreter.
-fn trace_agrees(log: &str, failures: &mut Vec<String>) {
+fn trace_agrees(log: &str, text: &str, failures: &mut Vec<String>) {
     if let Err(e) = board::balanced(log, &Options::timed(TICKS)) {
         failures.push(e);
         return;
@@ -172,7 +234,7 @@ fn trace_agrees(log: &str, failures: &mut Vec<String>) {
             return;
         }
     }
-    let expected = match interpreted(log) {
+    let expected = match interpreted(log, text) {
         Ok(t) => t,
         Err(e) => {
             failures.push(format!("der Interpreter rechnete den Lauf nicht nach: {e}"));
@@ -193,8 +255,8 @@ fn trace_agrees(log: &str, failures: &mut Vec<String>) {
 }
 
 /// Der Soll-Trace: der Interpreter mit den Job-Zeilen des Ports (12.5).
-fn interpreted(log: &str) -> Result<String, String> {
-    let p = program()?;
+fn interpreted(log: &str, text: &str) -> Result<String, String> {
+    let p = program(text)?;
     let stimulus = takt_interp::Trace::parse(&stimulus(log)).map_err(|e| e.to_string())?;
     let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
     let trace = takt_interp::run(&p, &stimulus, &options).map(|r| r.trace.render()).map_err(|e| format!("{e:?}"))?;
@@ -368,7 +430,7 @@ mod tests {
             }
             let stimulus = takt_interp::Trace::parse(&stimulus).expect("Stimulus");
             let options = takt_interp::RunOptions { ticks: TICKS, ..Default::default() };
-            let p = program().expect("Pruefprogramm");
+            let p = program(PROGRAM).expect("Pruefprogramm");
             let trace = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
             // Wie der Rahmen: ein `f32` als `f64`.
             let trace = crate::run::widen_f32(&trace, &crate::run::f32_outputs(&p));
@@ -393,7 +455,7 @@ mod tests {
     fn a_port_that_keeps_every_duty_passes() {
         let log = port_log();
         assert!(log.contains("t=18 job hasher v done start=15\n"), "die Jobs enden drei Ticks nach dem Start");
-        let v = judge(log);
+        let v = judge(log, PROGRAM);
         assert!(v.passed(), "{v}");
         assert_eq!(v.longest_job, Some(3));
         assert_eq!(v.foreign, Some((40_000, 0)));
@@ -410,7 +472,7 @@ mod tests {
         let log = port_log();
         let at = log.find(" out hashes 2\n").expect("zweiter Job");
         let wrong = format!("{} out hashes 7\n{}", &log[..at], &log[at + " out hashes 2\n".len()..]);
-        let v = judge(&wrong);
+        let v = judge(&wrong, PROGRAM);
         assert!(v.failures.iter().any(|f| f.contains("weicht") && f.contains("hashes")), "{v}");
     }
 
@@ -495,6 +557,36 @@ mod tests {
     fn the_program_is_the_corpus_program() {
         let path = crate::board::corpus_path(CORPUS_NAME);
         assert_eq!(std::fs::read_to_string(path).expect("Korpus"), PROGRAM);
-        program().expect("uebersetzt");
+        program(PROGRAM).expect("uebersetzt");
+        assert_eq!(job_bytes(PROGRAM), Ok(JOB_BYTES));
+    }
+
+    #[test]
+    fn the_length_of_a_message_goes_in_and_comes_back() {
+        let text = source(1 << 20).expect("erlaubt");
+        assert_eq!(job_bytes(&text), Ok(1 << 20));
+        program(&text).expect("uebersetzt");
+        assert!(source(4100).is_err(), "kein Vielfaches von 64");
+        assert!(source(2048).is_err(), "unter der Laenge der Boards");
+        assert!(source(JOB_BYTES_MAX * 2).is_err(), "ueber der Grenze");
+    }
+
+    #[test]
+    fn another_program_is_not_the_test_program() {
+        let changed = PROGRAM.replacen("wait 10 ms", "wait 20 ms", 1);
+        assert_ne!(changed, PROGRAM);
+        assert!(job_bytes(&changed).is_err());
+        let v = judge("", &changed);
+        assert!(v.failures.iter().any(|f| f.contains("nicht das Pruefprogramm")), "{v}");
+    }
+
+    #[test]
+    fn a_fast_host_gets_a_longer_message() {
+        assert_eq!(job_bytes_for(0), JOB_BYTES, "ein Board ohne Messung");
+        assert_eq!(job_bytes_for(500), JOB_BYTES, "2 KiB in vier Ticks reichen nicht an die Boards heran");
+        // 500 MB/s: 500 KiB je Millisekunde, vier Ticks sind 2 MB, die
+        // naechste Zweierpotenz 2 MiB.
+        assert_eq!(job_bytes_for(500_000), 1 << 21);
+        assert_eq!(job_bytes_for(u64::MAX), JOB_BYTES_MAX);
     }
 }

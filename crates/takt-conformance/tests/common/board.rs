@@ -654,7 +654,7 @@ pub fn port_test(board: &mut dyn Board, form: Form, flaw: Option<Flaw>) -> Resul
     let dir = takt_conformance::target_dir().join("port-test");
     let log = dir.join(format!("{}.log", name.to_lowercase()));
     std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&log, &text)).map_err(|e| e.to_string())?;
-    let verdict = port::judge(&text);
+    let verdict = port::judge(&text, port::PROGRAM);
     eprintln!("{name}: {}{verdict}", log.display());
     Ok(verdict)
 }

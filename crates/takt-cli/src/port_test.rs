@@ -42,8 +42,23 @@ fn emit_embed(args: &Args) -> bool {
         eprintln!("takt port-test --emit embed schreibt in ein Verzeichnis; `--out VERZEICHNIS` fehlt");
         return false;
     };
+    let bytes = match job_bytes(args) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("takt port-test --emit embed: {e}");
+            return false;
+        }
+    };
+    let text = match port::source(bytes) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("takt port-test --emit embed: {e}");
+            return false;
+        }
+    };
+    println!("Nachricht je Job: {bytes} Byte");
     let source = Path::new(out).join(format!("{}.takt", port::PREFIX));
-    if let Err(e) = std::fs::create_dir_all(out).and_then(|()| std::fs::write(&source, port::PROGRAM)) {
+    if let Err(e) = std::fs::create_dir_all(out).and_then(|()| std::fs::write(&source, &text)) {
         eprintln!("{}: {e}", source.display());
         return false;
     }
@@ -53,7 +68,37 @@ fn emit_embed(args: &Args) -> bool {
     crate::build(&Args { flags: args.flags.clone(), files: vec![source.display().to_string()], values })
 }
 
+/// Die Nachricht eines Jobs: `--job-bytes N`, sonst auf einem Wirt nach dem
+/// Durchsatz von `sha256` auf dieser Maschine gemessen, auf einem Board die
+/// Laenge des Korpusprogramms (M11 Schritt 18c).
+fn job_bytes(args: &Args) -> Result<u64, String> {
+    if let Some(n) = args.value("--job-bytes") {
+        return n.parse::<u64>().map_err(|e| format!("--job-bytes {n}: {e}"));
+    }
+    let target = args.value("--target").and_then(crate::resolve_target);
+    let hosted = target
+        .is_none_or(|t| matches!(t.class, takt_llvm::target::Class::Linux64 | takt_llvm::target::Class::Linux32F64));
+    Ok(if hosted { port::job_bytes_for(sha256_bytes_per_ms()) } else { port::JOB_BYTES })
+}
+
+/// Wie viele Byte `sha256` auf dieser Maschine je Millisekunde hasht; das
+/// Beste aus fuenf Laeufen ueber 1 MiB, damit eine Stoerung nicht kuerzt.
+fn sha256_bytes_per_ms() -> u64 {
+    let data = vec![0x5au8; 1 << 20];
+    let best = (0..5)
+        .map(|_| {
+            let started = std::time::Instant::now();
+            std::hint::black_box(takt_native::sha256::sha256(std::hint::black_box(&data)));
+            started.elapsed().as_nanos().max(1)
+        })
+        .min()
+        .unwrap_or(1);
+    u64::try_from((1u128 << 20) * 1_000_000 / best).unwrap_or(u64::MAX)
+}
+
 /// `--judge LOG`: das Urteil, und mit `--conformance` im Bericht.
+/// `--program DATEI` nennt das Pruefprogramm, das der Port fuhr (die Quelle
+/// aus `--emit embed`); ohne es das Korpusprogramm.
 fn judge(args: &Args, log: &str) -> bool {
     let text = match std::fs::read(log) {
         Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
@@ -62,7 +107,17 @@ fn judge(args: &Args, log: &str) -> bool {
             return false;
         }
     };
-    let verdict = port::judge(&text);
+    let program = match args.value("--program") {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("{path}: {e}");
+                return false;
+            }
+        },
+        None => port::PROGRAM.to_string(),
+    };
+    let verdict = port::judge(&text, &program);
     print!("{verdict}");
     if let Some(path) = args.value("--conformance") {
         let Some(name) = args.value("--port") else {

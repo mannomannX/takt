@@ -26,6 +26,9 @@ takt-prove = { path = "../takt-prove" }
 # Fuer `takt bench`: die Boards am Host, die Messkerne und der
 # Konformitaetsbericht (13.8).
 takt-conformance = { path = "../takt-conformance" }
+# Fuer `takt port-test --emit embed`: der Durchsatz von `sha256` auf einem
+# Wirt bemisst die Nachricht eines Jobs.
+takt-native = { path = "../takt-native" }
 
 [dev-dependencies]
 # Ein fehlendes Werkzeug ist ein Fehler, kein Bestehen (FB-392).

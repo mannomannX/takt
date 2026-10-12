@@ -4,8 +4,11 @@
 # seine Ausgabe annimmt. Jede Maschine prueft eine Pflicht des Ports, nach
 # einem Muster des Korpus:
 #
-# - `hasher` (40, `long_job`): eine Kette von 20 Jobs, deren jeder auf
-#   beiden Boards laenger rechnet als ein Tick. `duration` nennt einen Tick:
+# - `hasher` (40, `long_job`): eine Kette von 20 Jobs, deren jeder laenger
+#   rechnet als ein Tick. Wie lang die Nachricht dafuer sein muss, haengt am
+#   Ziel: `takt port-test --emit embed` setzt `JOB_BYTES` (auf den Boards
+#   4096 Byte, auf einem Wirt nach dem gemessenen Durchsatz von `sha256`),
+#   und `--judge` urteilt ueber genau dieses Programm. `duration` nennt einen Tick:
 #   Der Trace zeigt dann, wann jeder Lauf wirklich fertig war (4.5), und ein
 #   Port, der den Schritt nicht unterbrechen laesst, verspaetet den Tick.
 #   Zwischen zwei Jobs liegen 10 ms: Dichter schriebe die Kette mehr Trace,
@@ -24,7 +27,10 @@ system:
     tick     = 1 ms
     float    = f32
 
-native job sha256(b: bytes<4096>) -> bytes<32> with cost = 60000, stack = 640, duration = 1 ms, total
+# Die Laenge der Nachricht eines Jobs; ein Vielfaches von 64.
+const JOB_BYTES = 4096
+
+native job sha256(b: bytes<JOB_BYTES>) -> bytes<32> with cost = 60000, stack = 640, duration = 1 ms, total
 
 output digest   : u32           @ sim("o/digest")
 output hashes   : int in 0..20  @ sim("o/hashes")
@@ -39,12 +45,12 @@ fn first(d: bytes<32>) -> u32:
     return (d[0] as u32) | ((d[1] as u32) << 8) | ((d[2] as u32) << 16) | ((d[3] as u32) << 24)
 
 # Jeder Lauf hasht, was der vorige ergab.
-fn chain(d: bytes<32>, inout msg: bytes<4096>):
+fn chain(d: bytes<32>, inout msg: bytes<JOB_BYTES>):
     if d.len >= 1 and msg.len >= 1:
         msg[0] = d[0]
 
 machine hasher:
-    var msg   : bytes<4096> = default
+    var msg   : bytes<JOB_BYTES> = default
     var d     : bytes<32> = default
     var count : int in 0..20 = 0
     initial LOAD
@@ -54,10 +60,11 @@ machine hasher:
         after 1 s: -> REST
 
         state FILL:
+            # In 64 Ticks voll, wie lang die Nachricht auch ist.
             loop:
-                for i in range(256):
+                for i in range(JOB_BYTES / 64):
                     msg.push(i as u8)
-            when msg.len >= 4096: -> HASH
+            when msg.len >= JOB_BYTES: -> HASH
 
         state HASH:
             sequence:

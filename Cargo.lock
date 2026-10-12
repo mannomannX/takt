@@ -835,6 +835,7 @@ dependencies = [
  "takt-interp",
  "takt-llvm",
  "takt-mir",
+ "takt-native",
  "takt-prove",
  "takt-sema",
  "takt-syntax",

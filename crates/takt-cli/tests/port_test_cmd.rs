@@ -39,6 +39,40 @@ fn the_test_program_comes_as_a_building_block() {
     }
 }
 
+/// **Die Nachricht eines Jobs ist je Ziel bemessen** (M11 Schritt 18c): Auf
+/// einem Wirt rechnet `sha256` ueber 4 KiB in Mikrosekunden, kein Job liefe
+/// ueber eine Tickgrenze. `--job-bytes` setzt die Laenge in die gelieferte
+/// Quelle, und das Urteil ueber `--program` erkennt sie als Pruefprogramm;
+/// ein anderes Programm erkennt es nicht.
+#[test]
+fn the_message_of_a_job_is_sized_for_the_target() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    let dir = scratch("takt-port-test-sized");
+    let out = dir.join("embed");
+    let out = out.to_str().expect("Pfad");
+    let run = takt(&["port-test", "--emit", "embed", "--form", "logical", "--job-bytes", "65536", "--out", out]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let source = std::fs::read_to_string(dir.join("embed").join("port_test.takt")).expect("Quelle");
+    assert_eq!(Ok(source.clone()), takt_conformance::port::source(65536));
+    assert_eq!(takt_conformance::port::job_bytes(&source), Ok(65536));
+    let log = dir.join("port.log");
+    std::fs::write(&log, "takt auf wirt\ntakt end\n").expect("Protokoll");
+    let program = dir.join("embed").join("port_test.takt");
+    let judged =
+        takt(&["port-test", "--judge", log.to_str().expect("Pfad"), "--program", program.to_str().expect("Pfad")]);
+    let text = String::from_utf8_lossy(&judged.stdout);
+    assert!(!text.contains("nicht das Pruefprogramm"), "{text}");
+    let other = dir.join("anders.takt");
+    std::fs::write(&other, source.replacen("wait 10 ms", "wait 20 ms", 1)).expect("Quelle");
+    let judged =
+        takt(&["port-test", "--judge", log.to_str().expect("Pfad"), "--program", other.to_str().expect("Pfad")]);
+    assert!(String::from_utf8_lossy(&judged.stdout).contains("nicht das Pruefprogramm"));
+    let refused = takt(&["port-test", "--emit", "embed", "--form", "logical", "--job-bytes", "4100", "--out", out]);
+    assert!(!refused.status.success(), "kein Vielfaches von 64");
+}
+
 /// **Die Pollform weist das Pruefprogramm ab** (12.11): Ihr Schritt
 /// unterbricht keinen Job, und die Jobs des Pruefprogramms reichen mit der
 /// Runde des F401 ueber den Tick. Die Portpruefung gilt den Formen mit
