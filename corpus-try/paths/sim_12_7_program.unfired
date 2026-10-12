@@ -1,0 +1,4 @@
+takt-unfired 1
+program fda39116bb854e29c0bb236ccd52a9a7c1047139e40b3fde35d4799b51ce2e7d
+solver z3 4.13.4
+uebergang boot k=0 DECIDE->HOLD @2292

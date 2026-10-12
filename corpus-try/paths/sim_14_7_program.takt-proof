@@ -1,0 +1,18 @@
+takt-proof 2
+program 6eb5b6afac9fd1211c39080bc5a10a4c319cc8b9186c38f961f915d551f0457a
+solver z3 4.13.4
+site 2622 2631 valid k=1
+site 2941 2947 valid k=1
+site 2992 2998 valid k=1
+site 3100 3106 valid k=1
+site 3115 3121 valid k=1
+site 3283 3289 valid k=1
+site 3383 3389 valid k=1
+site 3422 3428 valid k=1
+site 3491 3528 fin k=1
+site 4038 4044 valid k=1
+site 4142 4149 valid k=1
+site 4210 4217 valid k=1
+site 4226 4232 valid k=1
+site 4315 4321 valid k=1
+site 7969 7977 fin k=1
