@@ -79,7 +79,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | Nr | Punkt | Bereiche | Boards | hängt an | Stand |
 |---|---|---|---|---|---|
 | B1 | FB-497 Rest: Maps und Puffer als Arrays der SMT-Theorie | P | – | 29 | Strang B, umgesetzt |
-| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Strang B, Schritt 1 gemergt 2026-10-12 (Einordnung läuft auf CI, `solver.yml`); Schritte 2 bis 5 frei |
+| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Schritt 1 umgesetzt und eingeordnet (CI-Lauf 38188098609, siehe B2); Schritte 2 bis 5 frei |
 | 14 | Rust ohne RTOS und mit Frameworks | R, E | beide | 10 | Strang A, umgesetzt 2026-10-11 |
 | 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | frei; die Job-Länge des Prüfprogramms ist seit 18c je Ziel bemessen |
 | 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A, umgesetzt 2026-10-11 |
@@ -219,6 +219,30 @@ So arbeitet jeder Strang, als wäre er allein:
      Dreiervergleich auf.
   5. **Ratsche senken.** Was bleibt, steht mit seiner Gruppe als Grund in
      `UNREACHED` und in `LIMITS`.
+- **Stand nach Schritt 1 (2026-10-12):** Die Einordnung lief auf CI
+  (`solver.yml`, Lauf 38188098609, acht Teile, z3 mit 6 GB, Frist 60 s;
+  Artefakt `fb511-ergebnis` mit einer Zeile je Stelle und dem Cache der
+  Antworten). Bei Tiefe 10 sind es 282 Stellen:
+
+  | Gruppe | Tiefe 10 | Tiefe 20 |
+  |---|---|---|
+  | Speicher (z3 über 6 GB) | 139 | 138 |
+  | Frist | 83 | 86 |
+  | nicht k-induktiv | 22 | 21 |
+  | bewiesen | 16 | – |
+  | Fragment (Fließkomma) | 14 | 14 |
+  | ohne Urteil | 3 | 3 |
+  | erreichbar | 3 | – |
+  | erreichbar, tiefer | 1 | 1 |
+  | unbestätigt | 1 | – |
+
+  Bei Tiefe 20 fehlen die 19 Stellen, die Tiefe 10 schon entschied.
+  Der Speicher ist die größte Gruppe, und drei Programme stellen fast alle
+  dieser Stellen: `11_foc_drive` (52), `46_matrices` (31) und
+  `sim/14_7` (23). Betroffen sind vor allem `fin` (70) und
+  `valid` (35). Schritt 2 beginnt darum bei der Kodierung dieser drei
+  Programme, nicht bei mehr Speicher: 6 GB reichten bei Tiefe 20 so wenig
+  wie bei Tiefe 10.
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
