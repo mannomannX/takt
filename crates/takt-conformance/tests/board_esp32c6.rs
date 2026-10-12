@@ -16,10 +16,11 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
-    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, persistence_survives, ran, replayed, runs_shared, simultaneous_jobs_finish_on_time,
-    the_form_keeps_its_deadline, the_port_passes, verdict, zephyr_image, zephyr_persistence_survives, zephyr_verdict,
+    TICKS, ZEPHYR_WIRE_TICKS, agreement, agreement_with, corpus, driver_edge_agrees,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, replayed, runs_shared,
+    simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict, zephyr_image,
+    zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Board, Form, Options};
@@ -620,4 +621,19 @@ fn the_unread_channels_are_recorded() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::unread_channels_are_recorded(&mut board);
     verdict(&failed);
+}
+
+/// **Die Pins aus dem Devicetree treiben und lesen die Drahtbruecke des C6**
+/// (8.10, 12.11; M11 Schritt 19): `examples/zephyr-gpio` mit den Treibern aus
+/// `wire_zephyr.c` auf GPIO7 und GPIO17; jeder Tick liest den Pegel des Ticks
+/// davor.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_gpio_wire_follows_its_pin() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(ZEPHYR_WIRE_TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR_GPIO;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, false)
+        .and_then(|image| zephyr_run(&mut board, &image, &options));
+    verdict(&zephyr_wire_follows(board.name(), run));
 }

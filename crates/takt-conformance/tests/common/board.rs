@@ -1,6 +1,6 @@
 //! Der Korpus auf einem Board gegen den Interpreter (13.8, Satz 9.4.4).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub use takt_conformance::board::Drift;
@@ -1267,4 +1267,62 @@ pub fn natives_agree(board: &mut dyn Board) -> Vec<String> {
         }
         Err(e) => vec![format!("kein Lauf der Natives: {e}")],
     }
+}
+
+/// So viele Ticks faehrt `examples/zephyr-gpio` (`src/main.c`).
+pub const ZEPHYR_WIRE_TICKS: u64 = 2_000;
+
+/// **Die Pins aus dem Devicetree treiben und lesen die Drahtbruecke** (8.10,
+/// 12.11; M11 Schritt 19): das Urteil ueber den Lauf `run` von
+/// `examples/zephyr-gpio` auf dem Board `name`. Die Messschleife schreibt je
+/// Tick den anderen Pegel nach `wire/out` (`out probe`) und liest `wire/in`
+/// (`pub bridge seen`). Steht die Bruecke, sieht jeder Tick den Pegel des
+/// Ticks davor und Tick 0 den `safe`-Wert, auf den `wire_zephyr_init` den
+/// Ausgang stellte; kein Fault, keine Zeile des Treiberrands (12.6), und der
+/// Ausgang wechselt bis zum letzten Tick. Der Lauf steht unter
+/// `<target>/port-test/<name>-zephyr-gpio.log`.
+pub fn zephyr_wire_follows(name: &str, run: Result<String, String>) -> Vec<String> {
+    let text = match run {
+        Ok(text) => text,
+        Err(e) => return vec![format!("zephyr-gpio: kein Lauf: {e}")],
+    };
+    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-zephyr-gpio.log"));
+    if let Err(e) = log.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&log, &text)) {
+        return vec![format!("{}: {e}", log.display())];
+    }
+    let trace = text.find(board::MARK).map_or("", |at| &text[at..]);
+    let (mut probe, mut seen) = (BTreeMap::new(), BTreeMap::new());
+    let mut failed = Vec::new();
+    for line in trace.lines().map(str::trim_end) {
+        let mut words = line.split_whitespace();
+        let Some(tick) = words.next().and_then(|w| w.strip_prefix("t=")).and_then(|k| k.parse::<u64>().ok()) else {
+            continue;
+        };
+        match words.collect::<Vec<&str>>().as_slice() {
+            ["out", "probe", level] => {
+                probe.insert(tick, *level == "true");
+            }
+            ["pub", "bridge", "seen", level] => {
+                seen.insert(tick, *level == "true");
+            }
+            ["fault" | "driver" | "runtime", ..] => failed.push(format!("zephyr-gpio: `{line}`")),
+            _ => {}
+        }
+    }
+    let at = |levels: &BTreeMap<u64, bool>, tick: u64| levels.range(..=tick).next_back().is_some_and(|(_, l)| *l);
+    if probe.len() < usize::try_from(ZEPHYR_WIRE_TICKS).unwrap_or(usize::MAX) {
+        failed.push(format!("zephyr-gpio: der Ausgang wechselte in {} von {ZEPHYR_WIRE_TICKS} Ticks", probe.len()));
+    }
+    if at(&seen, 0) {
+        failed.push("zephyr-gpio: Tick 0 las `true`, der Ausgang stand auf `safe = false`".to_string());
+    }
+    let wrong: Vec<u64> = (1..ZEPHYR_WIRE_TICKS).filter(|&k| at(&seen, k) != at(&probe, k - 1)).collect();
+    if let Some(first) = wrong.first() {
+        failed.push(format!(
+            "zephyr-gpio: in {} Ticks las der Eingang nicht den Pegel des Ticks davor, zuerst in Tick {first}",
+            wrong.len()
+        ));
+    }
+    eprintln!("{name}-zephyr-gpio: {}", log.display());
+    failed
 }

@@ -11,3 +11,28 @@ tx_idle = false
 direction = output
 raw = bool
 safe = true
+
+# Unter `--zephyr` (8.10, Treiber aus dem Devicetree): Pins aus dem
+# Devicetree, deren `port` ein Label sein muss und deren Rohtyp `bool`.
+[device.pins]
+driver = "zephyr-gpio"
+
+[channel pins/led]
+direction = output
+raw = bool
+safe = false
+device = pins
+port = "PC13"
+
+[channel pins/buzzer]
+direction = output
+raw = bool
+safe = false
+device = pins
+
+[channel pins/level]
+direction = output
+raw = u8
+safe = 0
+device = pins
+port = "takt_level"

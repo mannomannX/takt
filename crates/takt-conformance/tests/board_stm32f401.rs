@@ -15,11 +15,12 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver, driver_edge_agrees,
-    fits_the_poll_form, journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output,
-    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
-    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
+    Drift, TICKS, ZEPHYR_WIRE_TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver,
+    driver_edge_agrees, fits_the_poll_form, journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows,
+    last_output, long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, persistence_survives, ran,
+    runs_shared, simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
     the_poll_form_keeps_its_round, the_port_passes, verdict, zephyr_image, zephyr_persistence_survives, zephyr_verdict,
+    zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -615,4 +616,19 @@ fn the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware() {
             .unwrap_or_else(|| panic!("{which}: keine Bilanz:\n{text}"));
         assert!(line.contains(&format!("verletzungen 1 region {region}")), "{which}: {line}");
     }
+}
+
+/// **Die Pins aus dem Devicetree treiben und lesen die Drahtbruecke des
+/// F401** (8.10, 12.11; M11 Schritt 19): `examples/zephyr-gpio` mit den
+/// Treibern aus `wire_zephyr.c` auf PA0 und PA1; jeder Tick liest den Pegel
+/// des Ticks davor.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_gpio_wire_follows_its_pin() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(ZEPHYR_WIRE_TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR_GPIO;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, false)
+        .and_then(|image| board.run(&image.elf, &options));
+    verdict(&zephyr_wire_follows(board.name(), run));
 }

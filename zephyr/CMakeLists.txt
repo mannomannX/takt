@@ -5,7 +5,8 @@
 # waehlt (`ports/zephyr` oder `ports/cmsis-rtos2`), und stellt der Anwendung
 # `takt_add_program` aus dem
 # CMake-Paket (tools/cmake/TaktConfig.cmake), mit der Form `rtos` und dem
-# Tripel aus `CONFIG_TAKT_TARGET` als Vorgabe:
+# Tripel aus `CONFIG_TAKT_TARGET` als Vorgabe; ein Programm mit Hardware-
+# Konfiguration bekommt die Treiber aus dem Devicetree dazu (8.10):
 #
 #   takt_add_program(valve SOURCE takt/valve.takt HARDWARE takt/board.hw)
 #   target_link_libraries(app PRIVATE valve)
@@ -19,6 +20,7 @@ if(CONFIG_TAKT)
   endif()
   set(TAKT_FORM rtos CACHE INTERNAL "die Form der Programme unter Zephyr (12.11)")
   set(TAKT_TARGET "${CONFIG_TAKT_TARGET}" CACHE INTERNAL "das Tripel der Programme (CONFIG_TAKT_TARGET)")
+  set(TAKT_ZEPHYR ON CACHE INTERNAL "die Treiber aus dem Devicetree (8.10): takt build --zephyr")
   include(${ZEPHYR_CURRENT_MODULE_DIR}/tools/cmake/TaktConfig.cmake)
 
   # Der Adapter des Ports mit Faeden, den `CONFIG_TAKT_PORT` waehlt.

@@ -1,0 +1,30 @@
+/* Board 1: die Leitung auf USART1 wie in examples/zephyr und die
+ * Drahtbruecke PA0 an PA1 (plan/f401.md) als zwei Knoten mit `gpios`, deren
+ * Labels `takt/wire.hw` nennt. `gpio-leds` und `gpio-keys` tragen nur die
+ * Pins: Ohne CONFIG_LED und CONFIG_INPUT greift kein Treiber des
+ * Zephyr-Kerns nach ihnen. */
+/ {
+	chosen {
+		takt,line = &usart1;
+	};
+
+	takt-wire-out {
+		compatible = "gpio-leds";
+
+		takt_wire_out: wire-out {
+			gpios = <&gpioa 0 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	takt-wire-in {
+		compatible = "gpio-keys";
+
+		takt_wire_in: wire-in {
+			gpios = <&gpioa 1 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};
+
+&usart1 {
+	current-speed = <921600>;
+};

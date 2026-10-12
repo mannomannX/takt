@@ -68,6 +68,10 @@ pub const ZEPHYR: &str = "zephyr";
 /// auf dem F401 (`examples/cmsis-rtos2`, M11 Schritt 19c).
 pub const CMSIS_RTOS2: &str = "cmsis-rtos2";
 
+/// Das Beispiel mit den Treibern aus dem Devicetree, auf beiden Boards: die
+/// Messschleife auf der Drahtbruecke (`examples/zephyr-gpio`, 8.10).
+pub const ZEPHYR_GPIO: &str = "zephyr-gpio";
+
 /// Baut `examples/<example>` fuer `board` in `dir`, mit dem Werkzeug `takt`
 /// und dem SDK-Archiv fuer das Tripel des Boards. Mit `fresh` loescht das
 /// Abbild sein Journal vor dem Lauf (`TAKT_FRESH_JOURNAL`): Die

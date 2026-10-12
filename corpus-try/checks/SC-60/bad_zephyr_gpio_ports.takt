@@ -1,0 +1,24 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 60 unter `--zephyr` (8.10, Treiber aus dem Devicetree): `port`
+# eines Kanals an einem Geraet mit `zephyr-gpio` ist ein Label des
+# Devicetree, und der Kanal hat den Rohtyp `bool`. Die Konfiguration nennt
+# fuer `pins/led` den Pin des Chips statt eines Labels, fuer `pins/buzzer`
+# keinen `port` und fuer `pins/level` den Rohtyp `u8`.
+
+output led : bool @ hw("pins/led") with safe = false  # ~ SC-60
+
+output buzzer : bool @ hw("pins/buzzer") with safe = false  # ~ SC-60
+
+output level : u8 @ hw("pins/level") with safe = 0  # ~ SC-60
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            led = true
+            buzzer = false
+            level = 1
