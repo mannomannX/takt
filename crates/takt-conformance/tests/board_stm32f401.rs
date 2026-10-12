@@ -107,6 +107,18 @@ fn the_journal_costs_time_but_not_semantics() {
     verdict(&failed);
 }
 
+/// **Ein Stillstand ist Rueckstand und wird nachgeholt** (7.3, FB-742):
+/// Eine Sektorloeschung haelt den Kern rund 200 ms an, und die Uhr des
+/// eigenen Kerns verliert die Perioden nicht, denn sie liest die Zeitachse
+/// von TIM2.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_stall_is_lag_and_caught_up() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_stall_is_lag_and_caught_up(&mut board);
+    verdict(&failed);
+}
+
 /// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3,
 /// FB-385), mit den Zeiten aus `corpus-try/hw/stm32f401.hw`.
 #[test]

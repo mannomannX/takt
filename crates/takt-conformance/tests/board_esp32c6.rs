@@ -381,6 +381,17 @@ fn the_journal_costs_time_but_not_semantics() {
     verdict(&failed);
 }
 
+/// **Ein Stillstand ist Rueckstand und wird nachgeholt** (7.3, FB-198):
+/// Eine Sektorloeschung haelt den Tick zweistellige Millisekunden an, und
+/// die Uhr liest den SYSTIMER.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
+fn a_stall_is_lag_and_caught_up() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_stall_is_lag_and_caught_up(&mut board);
+    verdict(&failed);
+}
+
 /// **Unter `overrun = fault` schreibt das Journal im Schlaf** (9.9, 12.3),
 /// mit den Zeiten aus `corpus-try/hw/esp32c6.hw`.
 #[test]
