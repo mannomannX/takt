@@ -25,8 +25,8 @@ pub fn carries(image: &[u8], key: &str) -> bool {
         return false;
     }
     let (symbol, key) = (SYMBOL.as_bytes(), key.as_bytes());
-    let n = symbol.len() + key.len() + 1;
-    image.windows(n).any(|w| w[..symbol.len()] == *symbol && w[symbol.len()..n - 1] == *key && w[n - 1] == 0)
+    let n = symbol.len().saturating_add(key.len()).saturating_add(1);
+    image.windows(n).any(|w| w.strip_prefix(symbol).and_then(|rest| rest.strip_prefix(key)) == Some(&[0]))
 }
 
 #[cfg(test)]

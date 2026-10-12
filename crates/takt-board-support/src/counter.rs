@@ -37,8 +37,8 @@ impl Counter64 {
     /// heisst, dass dieser Schritt auf null zurueckfaellt und die obere
     /// Haelfte mitzaehlen muss.
     pub fn tick(&self) {
-        if self.low.fetch_add(1, Ordering::Relaxed) == u32::MAX {
-            self.high.fetch_add(1, Ordering::Relaxed);
+        if self.low.fetch_add(1, Ordering::SeqCst) == u32::MAX {
+            self.high.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -51,9 +51,9 @@ impl Counter64 {
     /// und nimmt das Ergebnis erst, wenn sie stehen geblieben ist.
     pub fn get(&self) -> u64 {
         loop {
-            let hi = self.high.load(Ordering::Relaxed);
-            let lo = self.low.load(Ordering::Relaxed);
-            if self.high.load(Ordering::Relaxed) == hi {
+            let hi = self.high.load(Ordering::SeqCst);
+            let lo = self.low.load(Ordering::SeqCst);
+            if self.high.load(Ordering::SeqCst) == hi {
                 return (u64::from(hi) << 32) | u64::from(lo);
             }
         }
@@ -61,8 +61,9 @@ impl Counter64 {
 
     /// Setzt den Stand — nur fuer Tests und den Start.
     pub fn set(&self, value: u64) {
-        self.high.store((value >> 32) as u32, Ordering::Relaxed);
-        self.low.store(value as u32, Ordering::Relaxed);
+        let (high, low) = crate::halves(value);
+        self.high.store(high, Ordering::SeqCst);
+        self.low.store(low, Ordering::SeqCst);
     }
 }
 

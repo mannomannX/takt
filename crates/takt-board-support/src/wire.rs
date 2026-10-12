@@ -77,8 +77,8 @@ impl WireStats {
     /// Die Zeile fuer den Host (`takt_conformance::wire::parse`), Zeiten in Nanosekunden,
     /// aufgerundet: Eine Latenz, die abgerundet wird, verspricht zu viel.
     pub fn report(&self, core_hz: u32, out: &mut impl Write) -> fmt::Result {
-        let ns = |cycles: u32| (u64::from(cycles) * 1_000_000_000).div_ceil(u64::from(core_hz.max(1)));
-        let spread = self.offset.map_or(0, |(lo, hi)| hi - lo);
+        let ns = |cycles: u32| u64::from(cycles).saturating_mul(1_000_000_000).div_ceil(u64::from(core_hz.max(1)));
+        let spread = self.offset.map_or(0, |(lo, hi)| hi.saturating_sub(lo));
         write!(
             out,
             "takt schleife angekommen {} verloren {} falsch {} guard_ns {} jitter_ns {} latency_ns {}",

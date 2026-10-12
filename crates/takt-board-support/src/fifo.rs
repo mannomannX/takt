@@ -37,29 +37,30 @@ impl<const N: usize> ByteFifo<N> {
 
     /// Legt ein Byte hinein; falsch, wenn kein Platz ist. Nur der Schreiber.
     pub fn push(&self, b: u8) -> bool {
-        let tail = self.tail.load(Ordering::Relaxed);
-        if tail.wrapping_sub(self.head.load(Ordering::Acquire)) >= N {
+        let tail = self.tail.load(Ordering::SeqCst);
+        if tail.wrapping_sub(self.head.load(Ordering::SeqCst)) >= N {
             return false;
         }
-        self.slots[tail & (N - 1)].store(b, Ordering::Relaxed);
-        self.tail.store(tail.wrapping_add(1), Ordering::Release);
+        let Some(slot) = self.slots.get(tail & N.wrapping_sub(1)) else { return false };
+        slot.store(b, Ordering::SeqCst);
+        self.tail.store(tail.wrapping_add(1), Ordering::SeqCst);
         true
     }
 
     /// Nimmt das aelteste Byte heraus. Nur der Leser.
     pub fn pop(&self) -> Option<u8> {
-        let head = self.head.load(Ordering::Relaxed);
-        if head == self.tail.load(Ordering::Acquire) {
+        let head = self.head.load(Ordering::SeqCst);
+        if head == self.tail.load(Ordering::SeqCst) {
             return None;
         }
-        let b = self.slots[head & (N - 1)].load(Ordering::Relaxed);
-        self.head.store(head.wrapping_add(1), Ordering::Release);
+        let b = self.slots.get(head & N.wrapping_sub(1))?.load(Ordering::SeqCst);
+        self.head.store(head.wrapping_add(1), Ordering::SeqCst);
         Some(b)
     }
 
     /// Wie viele Bytes warten.
     pub fn len(&self) -> usize {
-        self.tail.load(Ordering::Acquire).wrapping_sub(self.head.load(Ordering::Acquire))
+        self.tail.load(Ordering::SeqCst).wrapping_sub(self.head.load(Ordering::SeqCst))
     }
 
     /// Wartet nichts?
@@ -99,8 +100,8 @@ mod tests {
     #[test]
     fn the_indices_wrap_without_harm() {
         let f = ByteFifo::<4>::new();
-        f.head.store(usize::MAX - 1, Ordering::Relaxed);
-        f.tail.store(usize::MAX - 1, Ordering::Relaxed);
+        f.head.store(usize::MAX - 1, Ordering::SeqCst);
+        f.tail.store(usize::MAX - 1, Ordering::SeqCst);
         for b in 0..4 {
             assert!(f.push(b));
         }

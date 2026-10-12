@@ -71,22 +71,30 @@ pub struct RtcWakeup {
 /// bis 2^17 s mit dem Zuschlag von 2^16 s; was darueber liegt, schlaeft
 /// der naechste Abschnitt. Aufgerundet, damit er nicht vor der Frist weckt.
 pub fn rtc_wakeup(duration_ns: i64, rtc_hz: u32) -> RtcWakeup {
-    const NS: i64 = 1_000_000_000;
-    const SPAN: i64 = 1 << 16;
-    let d = duration_ns.max(MIN_DEEP_SLEEP_NS);
-    let fine_hz = i64::from(rtc_hz / 16).max(1);
-    let fine = (i128::from(d) * i128::from(fine_hz) + i128::from(NS) - 1) / i128::from(NS);
-    if fine <= i128::from(SPAN) {
-        return RtcWakeup { wucksel: 0b000, wutr: (fine.max(1) - 1) as u16, rest_ns: 0 };
+    const NS: u64 = 1_000_000_000;
+    const SPAN: u64 = 1 << 16;
+    const TWO_SPANS: u64 = 1 << 17;
+    const TWO_SPANS_NS: u64 = (1 << 17) * 1_000_000_000;
+    // Der Registerwert ist die Zahl der Schritte minus eins.
+    let wutr = |steps: u64| u16::try_from(steps.max(1).saturating_sub(1)).unwrap_or(u16::MAX);
+    let d = duration_ns.max(MIN_DEEP_SLEEP_NS).unsigned_abs();
+    let fine_hz = u64::from(rtc_hz / 16).max(1);
+    let fine = u128::from(d).saturating_mul(u128::from(fine_hz)).div_ceil(u128::from(NS));
+    if fine <= u128::from(SPAN) {
+        return RtcWakeup { wucksel: 0b000, wutr: wutr(u64::try_from(fine).unwrap_or(u64::MAX)), rest_ns: 0 };
     }
-    let secs = (d + NS - 1) / NS;
+    let secs = d.div_ceil(NS);
     if secs <= SPAN {
-        return RtcWakeup { wucksel: 0b100, wutr: (secs - 1) as u16, rest_ns: 0 };
+        return RtcWakeup { wucksel: 0b100, wutr: wutr(secs), rest_ns: 0 };
     }
-    if secs <= 2 * SPAN {
-        return RtcWakeup { wucksel: 0b110, wutr: (secs - SPAN - 1) as u16, rest_ns: 0 };
+    if secs <= TWO_SPANS {
+        return RtcWakeup { wucksel: 0b110, wutr: wutr(secs.saturating_sub(SPAN)), rest_ns: 0 };
     }
-    RtcWakeup { wucksel: 0b110, wutr: u16::MAX, rest_ns: d - 2 * SPAN * NS }
+    RtcWakeup {
+        wucksel: 0b110,
+        wutr: u16::MAX,
+        rest_ns: i64::try_from(d.saturating_sub(TWO_SPANS_NS)).unwrap_or(i64::MAX),
+    }
 }
 
 #[cfg(test)]

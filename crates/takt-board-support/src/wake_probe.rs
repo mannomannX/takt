@@ -25,7 +25,9 @@ pub const BELL: u8 = 7;
 /// Der erste Tick, dessen Grenze `at` erreicht: Sein Schritt sieht das
 /// Ereignis.
 pub const fn first_tick(at: i64) -> u64 {
-    (at.div_euclid(TICK_NS) + (at.rem_euclid(TICK_NS) != 0) as i64) as u64
+    let up = if at.rem_euclid(TICK_NS) != 0 { 1 } else { 0 };
+    let k = at.div_euclid(TICK_NS).saturating_add(up);
+    if k < 0 { 0 } else { k.unsigned_abs() }
 }
 
 #[cfg(test)]

@@ -25,7 +25,11 @@ impl Magic {
     /// Wahr mit dem letzten Byte von `TAKT`; danach beginnt die Suche neu.
     pub fn feed(&mut self, b: u8) -> bool {
         let magic = MAGIC.to_be_bytes();
-        self.matched = if b == magic[self.matched] { self.matched + 1 } else { usize::from(b == magic[0]) };
+        self.matched = if magic.get(self.matched) == Some(&b) {
+            self.matched.saturating_add(1)
+        } else {
+            usize::from(b == magic[0])
+        };
         if self.matched == magic.len() {
             self.matched = 0;
             return true;

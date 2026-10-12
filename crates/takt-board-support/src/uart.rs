@@ -39,8 +39,8 @@ pub fn divisor(pclk_hz: u32, baud: u32) -> Result<u16, BaudError> {
         return Err(BaudError::Zero);
     }
     // `+ baud/2` rundet statt abzuschneiden.
-    let scaled = u64::from(pclk_hz) + u64::from(baud) / 2;
-    u16::try_from(scaled / u64::from(baud)).map_err(|_| BaudError::TooSlowForClock)
+    let scaled = u64::from(pclk_hz).saturating_add(u64::from(baud) / 2);
+    u16::try_from(scaled.checked_div(u64::from(baud)).unwrap_or(0)).map_err(|_| BaudError::TooSlowForClock)
 }
 
 /// Die Baudrate, die ein Registerwert tatsaechlich ergibt.
@@ -50,10 +50,7 @@ pub fn divisor(pclk_hz: u32, baud: u32) -> Result<u16, BaudError> {
 /// tatsaechliche Rate gehoert in die Hardware-Konfiguration, nicht die
 /// gewuenschte.
 pub fn actual_baud(pclk_hz: u32, brr: u16) -> u32 {
-    if brr == 0 {
-        return 0;
-    }
-    pclk_hz / u32::from(brr)
+    pclk_hz.checked_div(u32::from(brr)).unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ impl Measurement {
         if self.core_hz == 0 {
             return 0;
         }
-        let ns = u64::from(self.cycles) * 1_000_000_000 / u64::from(self.core_hz);
+        let ns = u64::from(self.cycles).saturating_mul(1_000_000_000).checked_div(u64::from(self.core_hz)).unwrap_or(0);
         i64::try_from(ns).unwrap_or(i64::MAX)
     }
 

@@ -48,7 +48,7 @@ impl Region {
     /// `base` nicht an ihrer Groesse ausgerichtet ist.
     pub fn covering(base: u32, bytes: u32) -> Option<Region> {
         let size = bytes.max(32).checked_next_power_of_two()?;
-        if base % size != 0 {
+        if base.checked_rem(size) != Some(0) {
             return None;
         }
         let eighths = if size >= 256 { bytes.max(1).div_ceil(size / 8) } else { 8 };
@@ -57,7 +57,7 @@ impl Region {
 
     /// Wie viel RAM die Region schuetzt; dahinter ist es frei.
     pub fn protected(&self) -> u32 {
-        self.size / 8 * self.eighths
+        (self.size / 8).saturating_mul(self.eighths)
     }
 
     /// `RBAR` mit gueltiger Regionsnummer.
@@ -67,7 +67,7 @@ impl Region {
 
     /// `RASR`: normales RAM (TEX 000, S, C), nie ausfuehrbar, eingeschaltet.
     pub fn rasr(&self, access: Access) -> u32 {
-        let size_field = self.size.trailing_zeros() - 1;
+        let size_field = self.size.trailing_zeros().saturating_sub(1);
         let disabled = if self.eighths >= 8 { 0 } else { (0xFFu32 << self.eighths) & 0xFF };
         1 << 28 | access.ap() << 24 | 1 << 18 | 1 << 17 | disabled << 8 | size_field << 1 | 1
     }

@@ -23,7 +23,7 @@ pub enum PeriodError {
 /// `None` bei einer Frequenz von null: Ein Timer ohne Takt hat keine
 /// Schrittdauer, und `1e9 / 0` waere eine Division durch null.
 pub fn ns_per_count(timer_hz: u32) -> Option<i64> {
-    (timer_hz > 0).then(|| 1_000_000_000 / i64::from(timer_hz))
+    1_000_000_000_i64.checked_div(i64::from(timer_hz))
 }
 
 /// Zaehlschritte fuer eine Periode.
@@ -39,7 +39,7 @@ pub fn counts_for(timer_hz: u32, period_ns: i64) -> Result<u32, PeriodError> {
     // Exakt in `u128`, nicht ueber `ns_per_count`: Bei 16 MHz ist ein
     // Schritt 62,5 ns, und die Ganzzahl 62 verschoebe jede Periode um
     // acht Promille (Board 2).
-    let counts = u128::from(period_ns.max(0).unsigned_abs()) * u128::from(timer_hz) / 1_000_000_000;
+    let counts = u128::from(period_ns.max(0).unsigned_abs()).saturating_mul(u128::from(timer_hz)) / 1_000_000_000;
     if counts == 0 {
         return Err(PeriodError::TooShort);
     }
@@ -53,10 +53,10 @@ pub fn counts_for(timer_hz: u32, period_ns: i64) -> Result<u32, PeriodError> {
 /// Rundungsquelle in der Groessenordnung, die `tick_tolerance` (7.1)
 /// messen soll, und darum lieber ein Fehler als eine Naeherung.
 pub fn prescaler_for(input_hz: u32, target_hz: u32) -> Option<u16> {
-    if target_hz == 0 || input_hz == 0 || input_hz % target_hz != 0 {
+    if input_hz == 0 || input_hz.checked_rem(target_hz) != Some(0) {
         return None;
     }
-    u16::try_from(input_hz / target_hz - 1).ok()
+    u16::try_from(input_hz.checked_div(target_hz)?.checked_sub(1)?).ok()
 }
 
 /// Die tatsaechliche Periode, die eine Zaehlerzahl ergibt.
@@ -69,7 +69,8 @@ pub fn period_ns(timer_hz: u32, counts: u32) -> i64 {
     if timer_hz == 0 {
         return 0;
     }
-    i64::try_from(u128::from(counts) * 1_000_000_000 / u128::from(timer_hz)).unwrap_or(i64::MAX)
+    let ns = u128::from(counts).saturating_mul(1_000_000_000).checked_div(u128::from(timer_hz)).unwrap_or(0);
+    i64::try_from(ns).unwrap_or(i64::MAX)
 }
 
 /// Die Zeit, die `counts` Schritte eines Zaehlers ausmachen — exakt, weil
@@ -97,12 +98,21 @@ pub struct Scale {
 impl Scale {
     /// Der Massstab eines Zaehlers mit `timer_hz`; ohne Takt ist jede Zeit
     /// null.
+    #[expect(
+        clippy::as_conversions,
+        reason = "MISRA C:2025 R.10.5: in einer const fn verbreitert nur `as`; u32 nach u64 ist verlustfrei"
+    )]
     pub const fn of(timer_hz: u32) -> Scale {
         if timer_hz == 0 {
             return Scale { num: 0, den: 1 };
         }
-        let g = gcd(1_000_000_000, timer_hz as u64);
-        Scale { num: 1_000_000_000 / g, den: timer_hz as u64 / g }
+        let hz = timer_hz as u64;
+        // `g` teilt beide und ist mindestens eins.
+        let g = gcd(1_000_000_000, hz);
+        match (1_000_000_000_u64.checked_div(g), hz.checked_div(g)) {
+            (Some(num), Some(den)) => Scale { num, den },
+            _ => Scale { num: 0, den: 1 },
+        }
     }
 
     /// Nanosekunden fuer `counts` Schritte, abgerundet. In `u64` bis zu
@@ -112,19 +122,25 @@ impl Scale {
         let ns = match counts.checked_mul(self.num) {
             Some(p) if self.den == 1 => u128::from(p),
             Some(p) if self.den.is_power_of_two() => u128::from(p >> self.den.trailing_zeros()),
-            Some(p) => u128::from(p / self.den),
-            None => u128::from(counts) * u128::from(self.num) / u128::from(self.den),
+            Some(p) => u128::from(p.checked_div(self.den).unwrap_or(0)),
+            None => {
+                u128::from(counts).saturating_mul(u128::from(self.num)).checked_div(u128::from(self.den)).unwrap_or(0)
+            }
         };
         i64::try_from(ns).unwrap_or(i64::MAX)
     }
 
     /// Der erste Zaehlerstand, der `ns` Nanosekunden nicht unterschreitet:
     /// Ein Alarm darauf feuert nie vor seiner Frist.
+    #[expect(
+        clippy::as_conversions,
+        reason = "MISRA C:2025 R.10.5: in einer const fn wandelt nur `as`; verbreitert wird verlustfrei, verengt erst nach der Pruefung gegen u64::MAX"
+    )]
     pub const fn counts_at(self, ns: i64) -> u64 {
         if ns <= 0 || self.num == 0 {
             return 0;
         }
-        let counts = (ns.unsigned_abs() as u128 * self.den as u128).div_ceil(self.num as u128);
+        let counts = (ns.unsigned_abs() as u128).saturating_mul(self.den as u128).div_ceil(self.num as u128);
         if counts > u64::MAX as u128 { u64::MAX } else { counts as u64 }
     }
 }
@@ -139,7 +155,13 @@ pub fn whole_micros(period_ns: i64) -> Option<u64> {
 
 const fn gcd(mut a: u64, mut b: u64) -> u64 {
     while b != 0 {
-        (a, b) = (b, a % b);
+        (a, b) = (
+            b,
+            match a.checked_rem(b) {
+                Some(r) => r,
+                None => 0,
+            },
+        );
     }
     a
 }

@@ -16,6 +16,20 @@
 //! zu schreiben. Die Ausnahme wird dadurch so klein, wie sie sein muss.
 
 #![no_std]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        reason = "Stufe 2 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 pub mod alarm;
 pub mod clock;
@@ -37,3 +51,9 @@ pub use clock::{PeriodError, counts_for, ns_per_count, prescaler_for, whole_micr
 pub use counter::Counter64;
 pub use cycles::Measurement;
 pub use fifo::ByteFifo;
+
+/// Die obere und die untere Haelfte eines `u64`.
+pub(crate) fn halves(x: u64) -> (u32, u32) {
+    let [b0, b1, b2, b3, b4, b5, b6, b7] = x.to_le_bytes();
+    (u32::from_le_bytes([b4, b5, b6, b7]), u32::from_le_bytes([b0, b1, b2, b3]))
+}

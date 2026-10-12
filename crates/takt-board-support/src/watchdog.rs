@@ -16,12 +16,12 @@ pub fn timeout_us(timeout_ns: i64) -> u64 {
 /// es nicht; dann der groesste.
 pub fn iwdg(timeout_ns: i64, lsi_hz: u32) -> (u8, u16) {
     const NS: u128 = 1_000_000_000;
-    let product = u128::try_from(timeout_ns.max(0)).unwrap_or(0) * u128::from(lsi_hz);
+    let product = u128::try_from(timeout_ns.max(0)).unwrap_or(0).saturating_mul(u128::from(lsi_hz));
     for pr in 0..=6u8 {
         let div = 4u128 << pr;
-        let counts = product.div_ceil(div * NS).max(1);
+        let counts = product.div_ceil(div.saturating_mul(NS)).max(1);
         if counts <= 4096 {
-            return (pr, (counts - 1) as u16);
+            return (pr, u16::try_from(counts.saturating_sub(1)).unwrap_or(u16::MAX));
         }
     }
     (6, 0x0FFF)

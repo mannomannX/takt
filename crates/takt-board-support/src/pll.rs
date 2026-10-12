@@ -32,8 +32,7 @@ pub fn divider_m(hse_hz: u32) -> Option<u8> {
     if hse_hz == 0 || hse_hz % 1_000_000 != 0 {
         return None;
     }
-    let m = hse_hz / 1_000_000;
-    (2..=63).contains(&m).then_some(m as u8)
+    u8::try_from(hse_hz / 1_000_000).ok().filter(|m| (2..=63).contains(m))
 }
 
 /// Der Multiplikator `N` fuer den VCO.
@@ -41,7 +40,7 @@ pub fn divider_m(hse_hz: u32) -> Option<u8> {
 /// Bei 1 MHz Eingang ist er die VCO-Frequenz in Megahertz. Der erlaubte
 /// Bereich ist 50..=432.
 pub fn divider_n() -> u16 {
-    (VCO_HZ / 1_000_000) as u16
+    u16::try_from(VCO_HZ / 1_000_000).unwrap_or(0)
 }
 
 /// Der Ausgangsteiler `P`, als Registerwert.
@@ -65,11 +64,9 @@ pub fn divider_p() -> Option<u8> {
 /// Die Gegenrechnung: Sie belegt, dass die gewaehlten Teiler zum Ziel
 /// fuehren, statt es zu behaupten.
 pub fn result_hz(hse_hz: u32, m: u8, n: u16, p_code: u8) -> u32 {
-    let p = u32::from(p_code) * 2 + 2;
-    if m == 0 || p == 0 {
-        return 0;
-    }
-    hse_hz / u32::from(m) * u32::from(n) / p
+    let p = u32::from(p_code).saturating_mul(2).saturating_add(2);
+    let vco = hse_hz.checked_div(u32::from(m)).map_or(0, |input| input.saturating_mul(u32::from(n)));
+    vco.checked_div(p).unwrap_or(0)
 }
 
 #[cfg(test)]

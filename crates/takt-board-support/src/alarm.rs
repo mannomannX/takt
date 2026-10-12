@@ -42,7 +42,7 @@ pub fn compare(target: u64, now: u64) -> Compare {
         Compare::Due
     } else if target >> 32 == now >> 32 {
         // Die unteren 32 Bit des Ziels, ohne die Epoche.
-        Compare::At((target & u64::from(u32::MAX)) as u32)
+        Compare::At(crate::halves(target).1)
     } else {
         Compare::Later
     }
