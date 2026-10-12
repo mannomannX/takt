@@ -249,6 +249,7 @@ fn a_reachable_check_gets_its_path() {
 
 /// B3: eine Pruefung, die der Typ schon garantiert, ist bewiesen
 /// unerreichbar — die Ranges des Zustands sind Invarianten der Kodierung.
+/// Die Fehlerbedingung allein entscheidet das, ohne Pfad (FB-511): k = 1.
 #[test]
 fn a_check_the_types_guarantee_is_proven_unreachable() {
     let Some(solver) = solver() else { return };
@@ -271,7 +272,52 @@ machine f:
     );
     let model = encode(&p).expect("kodierbar");
     let reports = classify(&model, &p, 2, &solver, 60).expect("Solver laeuft");
-    assert_eq!(reports[0].verdict, CheckVerdict::Unreachable { k: 2 }, "{:?}", reports[0]);
+    assert_eq!(reports[0].verdict, CheckVerdict::Unreachable { k: 1 }, "{:?}", reports[0]);
+}
+
+/// **Kleine Anfragen zuerst** (FB-511 Schritt 2): Die Divisionen in `RUN`
+/// erreicht erst ein Lauf ueber 500 Ticks. Die durch `n` entscheidet ihre
+/// Fehlerbedingung allein — `n` hat eine Range ohne null —, die durch `x`
+/// hinter `x != 0` nicht: Allein kann `x` null sein, auf dem Pfad nie, und
+/// die Induktion mit k = 1 beweist sie. Die Division in `WAIT` faultet im
+/// ersten Tick; ihren Pfad findet BMC mit Tiefe 1, und kein Beweis ohne
+/// Pfad spricht sie frei.
+#[test]
+fn small_queries_decide_before_deep_ones() {
+    let Some(solver) = solver() else { return };
+    let src = "system:
+    language = 1
+    tick     = 10 ms
+
+input  x : int in -5..5 @ hw(\"i/x\")
+output r : int @ hw(\"o/r\") with safe = 0
+
+machine f:
+    var n : int in 1..9 = 1
+    initial WAIT
+    state WAIT:
+        loop:
+            r = 100 / x
+        after 5 s: -> RUN
+    state RUN:
+        loop:
+            n = n % 9 + 1
+            r = 100 / n
+            if x != 0:
+                r = 200 / x
+";
+    let p = compile(src);
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    let at = |text: &str| {
+        let start = src.find(text).expect("im Quelltext") as u32;
+        let end = start + text.len() as u32;
+        let site = sites.iter().find(|s| s.kind == "div" && s.span.start >= start && s.span.end <= end);
+        site.unwrap_or_else(|| panic!("keine Division in `{text}`: {sites:?}")).verdict.clone()
+    };
+    assert!(matches!(at("100 / x"), CheckVerdict::Reachable { at, .. } if at <= 1), "{:?}", at("100 / x"));
+    assert_eq!(at("100 / n"), CheckVerdict::Unreachable { k: 1 });
+    assert_eq!(at("200 / x"), CheckVerdict::Unreachable { k: 1 });
 }
 
 /// B2: das `ensures` des Begrenzers haelt aus jedem typkonformen Zustand;

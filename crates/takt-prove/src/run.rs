@@ -39,7 +39,8 @@ pub enum Stop {
     },
     /// Eine Invariante oder Annahme des Modells haelt im Lauf nicht: Es
     /// schloesse einen Lauf aus, den es gibt, und ein Beweis daraus waere
-    /// keiner.
+    /// keiner. Ebenso eine Pruefstelle, die ohne ihre Fehlerbedingung
+    /// feuert (`CheckSite::fail`, FB-511).
     Violated {
         /// Der Tick.
         tick: u64,
@@ -100,7 +101,7 @@ impl Model {
             // `safe` stehen im Zustand danach und im Trace im selben Tick.
             if shown.get(ENDED) == Some(&Val::Bool(true)) {
                 writer.end(k, &shown)?;
-                let (after, _) = runner.advance(self, k + 1, Some(&next), &inputs)?;
+                let (after, _, _) = runner.advance(self, k + 1, Some(&next), &inputs)?;
                 writer.changes(k, &runner.observed(self, &after))?;
                 break;
             }
@@ -124,7 +125,8 @@ impl Model {
 
 /// Die Terme eines Ticks, einmal uebersetzt, und woher ihre Variablen ihre
 /// Werte nehmen: der Folgezustand ueber dem Zustand davor und den Eingaben,
-/// die Invarianten ueber dem Zustand danach, die Annahmen ueber ihm und den
+/// dahinter je Pruefstelle ihr Feuern und ihre Fehlerbedingung, die
+/// Invarianten ueber dem Zustand danach, die Annahmen ueber ihm und den
 /// Eingaben. Der Zustand ist ein Vektor in der Folge von `Model::state`.
 struct Runner {
     next: (Plan, Vec<Source>),
@@ -164,8 +166,9 @@ impl Runner {
                 .collect();
             (plan, sources)
         };
+        let sites = model.checks.iter().flat_map(|c| [&c.fires, &c.fail]);
         Runner {
-            next: plan(model.state.iter().map(|v| &v.next).collect(), true),
+            next: plan(model.state.iter().map(|v| &v.next).chain(sites).collect(), true),
             invariants: plan(model.invariants.iter().collect(), false),
             assumptions: plan(model.assumptions.iter().collect(), true),
             goals: plan(model.properties.iter().map(|g| &g.formula).collect(), true),
@@ -175,7 +178,9 @@ impl Runner {
     }
 
     /// Ein Tick: der Zustand danach. Jede Invariante gilt in ihm, und die
-    /// Annahmen gelten ueber ihm und den Eingaben des Ticks.
+    /// Annahmen gelten ueber ihm und den Eingaben des Ticks. Eine Pruefstelle,
+    /// die feuert, erfuellt ihre Fehlerbedingung: Auf ihr allein ruht ein
+    /// Beweis ohne Pfad (`smt::fail_query`).
     fn step(
         &mut self,
         model: &Model,
@@ -183,7 +188,13 @@ impl Runner {
         pre: Option<&[Val]>,
         inputs: &BTreeMap<(u64, String), Val>,
     ) -> Result<Vec<Val>, Stop> {
-        let (next, given) = self.advance(model, k, pre, inputs)?;
+        let (next, given, sites) = self.advance(model, k, pre, inputs)?;
+        let bare = |f: &[Val]| f[0] == Val::Bool(true) && f[1] != Val::Bool(true);
+        if let Some(i) = sites.chunks(2).position(bare) {
+            let site = &model.checks[i];
+            let what = format!("die Fehlerbedingung der Pruefstelle `{}` @{} (sie feuert ohne)", site.kind, site.start);
+            return Err(Stop::Violated { tick: k, what });
+        }
         let holds = self.invariants.0.eval(&gather(&self.invariants.1, &next, &given));
         if let Some(i) = holds.iter().position(|v| *v != Val::Bool(true)) {
             return Err(Stop::Violated { tick: k, what: format!("Invariante {i}") });
@@ -197,16 +208,17 @@ impl Runner {
         Ok(next)
     }
 
-    /// Der Zustand nach dem Tick `k` und die Eingaben, aus denen er folgt,
-    /// ohne Pruefung: Nach dem Ende eines Laufs (12.7) laeuft kein Tick
-    /// mehr, fuer den ein Rand etwas zusicherte.
+    /// Der Zustand nach dem Tick `k`, die Eingaben, aus denen er folgt, und
+    /// je Pruefstelle Feuern und Fehlerbedingung, ohne Pruefung: Nach dem
+    /// Ende eines Laufs (12.7) laeuft kein Tick mehr, fuer den ein Rand etwas
+    /// zusicherte.
     fn advance(
         &mut self,
         model: &Model,
         k: u64,
         pre: Option<&[Val]>,
         inputs: &BTreeMap<(u64, String), Val>,
-    ) -> Result<(Vec<Val>, Vec<Val>), Stop> {
+    ) -> Result<(Vec<Val>, Vec<Val>, Vec<Val>), Stop> {
         let now: HashMap<&str, Val> = inputs
             .range((k, String::new())..(k + 1, String::new()))
             .map(|((_, n), v)| (n.as_str(), v.clone()))
@@ -222,14 +234,16 @@ impl Runner {
             }
             given.push(v);
         }
-        let next = match pre {
+        let mut next = match pre {
             None => {
                 let env: Env = model.inputs.iter().map(|(n, _)| n.clone()).zip(given.iter().cloned()).collect();
-                eval::eval_all(model.state.iter().map(|v| &v.init), &env)
+                let sites = model.checks.iter().flat_map(|c| [&c.init, &c.init_fail]);
+                eval::eval_all(model.state.iter().map(|v| &v.init).chain(sites), &env)
             }
             Some(pre) => self.next.0.eval(&gather(&self.next.1, pre, &given)),
         };
-        Ok((next, given))
+        let sites = next.split_off(model.state.len());
+        Ok((next, given, sites))
     }
 
     /// Die Orte des Zustands, die der Trace liest, mit ihrem Wert.
