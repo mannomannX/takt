@@ -7,6 +7,12 @@
 # Ein Kern bleibt frei fuer anderes.
 test-threads = -1
 
+[profile.ci]
+# Der Runner von GitHub (.github/workflows/ci.yml): alle Kerne, und ein Lauf
+# zeigt jeden Befund statt nur des ersten.
+test-threads = "num-cpus"
+fail-fast = false
+
 [[profile.default.overrides]]
 # Die langen Binaries zuerst: Begaenne der laengste Test zuletzt, bestimmte
 # er das Ende der Suite.
