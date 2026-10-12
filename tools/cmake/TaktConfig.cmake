@@ -2,7 +2,7 @@
 #
 #   find_package(Takt REQUIRED)        # Takt_DIR nennt dieses Verzeichnis
 #   takt_add_program(valve SOURCE takt/valve.takt FORM logical
-#                    [HARDWARE takt/board.hw] [TARGET tripel])
+#                    [HARDWARE takt/board.hw] [TARGET tripel] [BUILD sim|hw])
 #   target_link_libraries(app PRIVATE valve)
 #
 # `takt_add_program` legt die Bibliothek `valve` an: die Lieferform von
@@ -20,8 +20,10 @@
 #                      [--target TRIPEL]`
 #
 # Das Ziel (`TARGET`) ist das Tripel des Wirts; ohne Angabe nimmt das Paket
-# `CMAKE_C_COMPILER_TARGET`, und auf einem x86-64-Wirt unter Windows oder
-# Linux dessen Tripel.
+# `TAKT_TARGET`, dann `CMAKE_C_COMPILER_TARGET`, und auf einem x86-64-Wirt
+# unter Windows oder Linux dessen Tripel. Ohne `FORM` nimmt es `TAKT_FORM`.
+# Beide setzt das Zephyr-Modul (`zephyr/`) aus seiner Konfiguration. `BUILD`
+# geht als `--build` an das Werkzeug (8.1); ohne Angabe baut es `hw`.
 
 include_guard(GLOBAL)
 
@@ -42,7 +44,9 @@ endif()
 
 # Das Tripel des Wirts, wenn `takt_add_program` keines nennt.
 function(_takt_host_triple out)
-  if(CMAKE_C_COMPILER_TARGET)
+  if(TAKT_TARGET)
+    set(${out} "${TAKT_TARGET}" PARENT_SCOPE)
+  elseif(CMAKE_C_COMPILER_TARGET)
     set(${out} "${CMAKE_C_COMPILER_TARGET}" PARENT_SCOPE)
   elseif(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(${out} "x86_64-pc-windows-msvc" PARENT_SCOPE)
@@ -54,12 +58,16 @@ function(_takt_host_triple out)
 endfunction()
 
 function(takt_add_program name)
-  cmake_parse_arguments(PARSE_ARGV 1 TAKT "" "SOURCE;FORM;HARDWARE;TARGET" "")
-  if(NOT TAKT_SOURCE OR NOT TAKT_FORM)
+  cmake_parse_arguments(PARSE_ARGV 1 ARG "" "SOURCE;FORM;HARDWARE;TARGET;BUILD" "")
+  set(form "${ARG_FORM}")
+  if(NOT form)
+    set(form "${TAKT_FORM}")
+  endif()
+  if(NOT ARG_SOURCE OR NOT form)
     message(FATAL_ERROR "takt_add_program(${name}): SOURCE und FORM fehlen (12.11)")
   endif()
-  get_filename_component(source "${TAKT_SOURCE}" ABSOLUTE)
-  set(triple "${TAKT_TARGET}")
+  get_filename_component(source "${ARG_SOURCE}" ABSOLUTE)
+  set(triple "${ARG_TARGET}")
   if(NOT triple)
     _takt_host_triple(triple)
   endif()
@@ -70,11 +78,14 @@ function(takt_add_program name)
   else()
     set(lib "${out}/lib${name}.a")
   endif()
-  set(args build "${source}" --emit embed --form "${TAKT_FORM}" --target "${triple}" --prefix "${name}"
+  set(args build "${source}" --emit embed --form "${form}" --target "${triple}" --prefix "${name}"
            --out "${out}")
+  if(ARG_BUILD)
+    list(APPEND args --build "${ARG_BUILD}")
+  endif()
   set(depends "${source}")
-  if(TAKT_HARDWARE)
-    get_filename_component(hardware "${TAKT_HARDWARE}" ABSOLUTE)
+  if(ARG_HARDWARE)
+    get_filename_component(hardware "${ARG_HARDWARE}" ABSOLUTE)
     list(APPEND args --hardware "${hardware}")
     list(APPEND depends "${hardware}")
   endif()
@@ -82,7 +93,7 @@ function(takt_add_program name)
     OUTPUT "${lib}" "${out}/${name}.h" "${out}/takt_sdk.h"
     COMMAND "${TAKT_EXECUTABLE}" ${args}
     DEPENDS ${depends}
-    COMMENT "takt build ${name} (${TAKT_FORM}, ${triple})"
+    COMMENT "takt build ${name} (${form}, ${triple})"
     VERBATIM)
   add_custom_target(${name}_takt DEPENDS "${lib}")
   # Der erzeugte Code ruft `round`, `fma` und `fmaf`: unter Linux aus

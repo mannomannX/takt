@@ -80,6 +80,22 @@ impl Esp32c6 {
         self.probe_rs(&["download", "--chip", "esp32c6", &elf.to_string_lossy()]).map(|_| ())
     }
 
+    /// Schreibt ein Rohabbild ab `offset` ins Flash, ohne es zu starten: ein
+    /// Abbild, das ein anderes Bausystem fertig liefert, wie `zephyr.bin`
+    /// mit dem Kopf fuer den ROM-Lader (M11 Schritt 19, [`crate::zephyr`]).
+    pub fn download_raw(&self, bin: &Path, offset: u64) -> Result<(), String> {
+        let at = format!("{offset:#x}");
+        let args = ["download", "--chip", "esp32c6", "--binary-format", "bin", "--base-address", &at];
+        self.probe_rs(&[&args[..], &[&*bin.to_string_lossy()]].concat()).map(|_| ())
+    }
+
+    /// Wie [`Board::run`] fuer ein Rohabbild ab `offset` ([`Esp32c6::download_raw`]);
+    /// `elf` ist sein ELF, fuer den Blick ueber JTAG, wenn die Konsole schweigt.
+    pub fn run_raw(&mut self, bin: &Path, offset: u64, elf: &Path, options: &Options) -> Result<String, String> {
+        self.download_raw(bin, offset)?;
+        self.capture(elf, options).and_then(|text| super::complete(text, options))
+    }
+
     /// Setzt das Board zurueck und liest den Trace bis `takt end`.
     ///
     /// Fehlt das Ende, entscheidet der Tickzaehler ueber JTAG: Steht das

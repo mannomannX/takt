@@ -86,7 +86,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | frei |
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt, der Watchdog als Dienst (Fassung 2 des SDK, 33f64ed1), Tunables und Weckereignis (3e1460c0), die Vorlage `c-port` als Adapter des gemeinsamen Ports mit Fäden (`ports/rtos`); 18b (Interruptform in C auf dem F401) Strang G (Helfer, seit 2026-10-12, Zweig `g-18b-c-irq`) |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | Strang D (Helfer, seit 2026-10-12, Zweig `d-9-one-frame`) |
-| 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a Modul und Port zuerst, der Port als Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`; die Portprüfung auf den Boards fährt Strang A |
+| 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`); danach 19b |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G nach 18b, als Adapter `ports/freertos` hinter `ports/rtos/takt_os.h` auf dem C-Wirt aus 18b |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
@@ -473,6 +473,55 @@ So arbeitet jeder Strang, als wäre er allein:
   (`examples/rust-host/tests/linux_rt.rs`, allein aus
   `crates/takt-cli/tests/linux_rt.rs`). Befunde FB-680 bis FB-683; offen
   FB-683 (Stack-Reserve der Form `linux` gemessen) und FB-501.
+
+### 19 — Zephyr
+
+- **Zuschnitt:** 19a Modul und Port, 19b Devicetree-Adapter und Partition,
+  19c CMSIS-RTOS2. Der Port ist kein eigener: Er ist der Port mit Fäden
+  (`crates/takt-embed-c/ports/rtos`, Strang A) mit einem Adapter für Zephyr.
+- **Abnahme 19a:** `examples/zephyr` fährt das Prüfprogramm auf
+  `blackpill_f401cc` und `esp32c6_devkitc/esp32c6/hpcore`, und das Urteil
+  der Portprüfung nimmt beide Läufe an. Was ohne Board geht, belegt der Bau.
+- **Stand (Strang F, 2026-10-12):**
+  - **Modul:** `zephyr/module.yml`, `zephyr/Kconfig` (`CONFIG_TAKT`,
+    `CONFIG_TAKT_TARGET` mit Vorgaben für Cortex-M4 mit FPU und RV32IMAC,
+    `CONFIG_TAKT_STEP_PRIORITY` unter den kooperativen,
+    `CONFIG_TAKT_JOB_PRIORITY` unter den verdrängbaren), `zephyr/CMakeLists.txt`
+    baut `ports/rtos/takt_rtos.c` mit `ports/zephyr/takt_os.c` und stellt
+    `takt_add_program` aus `tools/cmake/TaktConfig.cmake` mit der Form `rtos`
+    und dem Tripel aus Kconfig als Vorgabe (`TAKT_FORM`, `TAKT_TARGET`). Das
+    CMake-Paket kennt dafür auch `BUILD sim|hw`.
+  - **Adapter:** Ereignisse sind `k_sem` mit Grenze 1; Uhr und Fristen in
+    Systemticks ab `takt_os_init`, die Frist aufgerundet: nie vor ihr,
+    höchstens einen Systemtick danach, und genau auf ihr, wenn die Periode
+    ein Vielfaches des Systemticks ist (das Beispiel nimmt 10 µs). Nicht
+    `k_cycle_get_64`: Auf dem ESP32 haben Zyklen und Ticks verschiedene
+    Ursprünge. Fäden mit `K_FP_REGS`, nicht `K_ESSENTIAL` (sie enden mit dem
+    Lauf); `CONFIG_TAKT` wählt `FPU_SHARING`. Takt-Priorität `p` ist Zephyr
+    `K_LOWEST_APPLICATION_THREAD_PRIO + 1 - p`, ein kooperativer Jobfaden ist
+    `-EINVAL`. Der Wirt gibt das ganze Stackobjekt; der Adapter legt den Faden
+    mit `bytes - K_THREAD_STACK_RESERVED` an, so misst der Port bis zum
+    oberen Ende. `INIT_STACKS` und `STACK_SENTINEL` schließt Kconfig aus,
+    weil sie die Farbe des Ports überschreiben.
+  - **Beispiel:** Leitung über das UART-Gerät `takt,line` aus dem
+    Devicetree, gesendet aus dem Interrupt, ein Paket je Interrupt, XON/XOFF
+    (F401: USART1 mit 921600 Baud; C6: USB-Serial-JTAG). `TAKT` gibt das
+    Board zurück: der F401 springt in den DFU-Bootloader des ROM wie das
+    Bring-up, der C6 startet neu. Der F401 liegt ab Sektor 4 hinter dem
+    Sprungbrett; der C6 bekommt 4 MB Flash (DevKitM-1-N4). Journal im RAM
+    wie im POSIX-Beispiel (FB-732), Watchdog ausdrücklich ohne.
+  - **Geprüft ohne Board:** `crates/takt-cli/tests/zephyr_example.rs`
+    (`--ignored`, `TAKT_WEST`) baut für beide Boards und prüft Konfiguration,
+    Symbole und die Lage des Abbilds; bestanden lokal in 186 s. Die
+    Board-Tests `the_zephyr_port_passes_the_port_test` in
+    `board_stm32f401.rs` und `board_esp32c6.rs` bauen mit
+    `<target>/release/takt`, schreiben (F401 über DfuSe wie jedes Abbild, C6
+    `zephyr.bin` mit `probe-rs --binary-format bin` an
+    `CONFIG_FLASH_LOAD_OFFSET`) und urteilen.
+  - **Befunde:** FB-730 (Enum-Größe clang gegen GCC auf ARM, Warnung beim
+    Link), FB-731 (der Adapter fehlt in der Prüfung des C-Teils), FB-732
+    (Journal im RAM), FB-733 (Zeitgeber ist der Systemtick, nicht die
+    `counter`-API des Entwurfs).
 
 ### 15, 16, 18, 9, 19 bis 23
 

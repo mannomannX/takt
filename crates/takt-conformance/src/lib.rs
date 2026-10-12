@@ -59,6 +59,7 @@ pub mod run;
 pub mod stimulus;
 pub mod suites;
 pub mod wire;
+pub mod zephyr;
 
 pub use harness::Harness;
 pub use limits::LIMITS;

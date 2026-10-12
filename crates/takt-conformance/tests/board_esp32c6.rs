@@ -19,7 +19,7 @@ use common::board::{
     TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
     journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
     overrun_reaches_every_machine, persistence_survives, ran, replayed, runs_shared, simultaneous_jobs_finish_on_time,
-    the_form_keeps_its_deadline, the_port_passes, verdict,
+    the_form_keeps_its_deadline, the_port_passes, verdict, zephyr_image, zephyr_verdict,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
 use takt_conformance::board::{self, Board, Form, Options};
@@ -495,6 +495,26 @@ fn every_port_passes_the_port_test() {
     let failed: Vec<String> =
         [Form::Interrupt, Form::Embassy].into_iter().flat_map(|f| the_port_passes(&mut board, f)).collect();
     verdict(&failed);
+}
+
+/// **Der Zephyr-Port besteht die Portpruefung auf dem C6** (12.11, 13.8;
+/// M11 Schritt 19): `examples/zephyr` fuer `esp32c6_devkitc/esp32c6/hpcore`
+/// faehrt das Pruefprogramm ueber den Port mit Faeden und seinen Adapter fuer
+/// Zephyr. `zephyr.bin` traegt den Kopf fuer den ROM-Lader und geht an
+/// `CONFIG_FLASH_LOAD_OFFSET`; die Leitung ist der USB-Serial-JTAG. Braucht
+/// ausser dem Board Zephyr (`TAKT_WEST` und die Umgebung aus
+/// `D:\takt-tools\activate.ps1`) und `<target>/release/takt`.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_port_passes_the_port_test() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(takt_conformance::port::TICKS).judged();
+    let run = zephyr_image(board.name(), takt_conformance::zephyr::ESP32C6).and_then(|image| {
+        let offset = image.config("FLASH_LOAD_OFFSET").ok_or("CONFIG_FLASH_LOAD_OFFSET fehlt")?;
+        let offset = u64::from_str_radix(offset.trim_start_matches("0x"), 16).map_err(|e| format!("{offset}: {e}"))?;
+        board.run_raw(&image.bin, offset, &image.elf, &options)
+    });
+    verdict(&zephyr_verdict(board.name(), run));
 }
 
 /// **Zwei Jobs desselben Ticks sind im naechsten fertig**, im eigenen Kern,

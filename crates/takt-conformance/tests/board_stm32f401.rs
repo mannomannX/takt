@@ -19,7 +19,7 @@ use common::board::{
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
     natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
     simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
-    the_poll_form_keeps_its_round, the_port_passes, verdict,
+    the_poll_form_keeps_its_round, the_port_passes, verdict, zephyr_image, zephyr_verdict,
 };
 use takt_conformance::board::stm32f401::Stm32f401;
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -365,6 +365,24 @@ fn every_port_passes_the_port_test() {
     let failed: Vec<String> =
         [Form::Interrupt, Form::Rtos, Form::Embassy].into_iter().flat_map(|f| the_port_passes(&mut board, f)).collect();
     verdict(&failed);
+}
+
+/// **Der Zephyr-Port besteht die Portpruefung auf dem F401** (12.11, 13.8;
+/// M11 Schritt 19): `examples/zephyr` fuer `blackpill_f401cc` faehrt das
+/// Pruefprogramm ueber den Port mit Faeden und seinen Adapter fuer Zephyr,
+/// ab Sektor 4 wie jedes Abbild hinter dem Sprungbrett. Die Leitung ist
+/// USART1 mit XON/XOFF, und auf `TAKT` springt das Beispiel in den
+/// DFU-Bootloader: Das naechste Programm schreibt der Lauf ohne Hand. Braucht
+/// ausser dem Board Zephyr (`TAKT_WEST` und die Umgebung aus
+/// `D:\takt-tools\activate.ps1`) und `<target>/release/takt`.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_port_passes_the_port_test() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(takt_conformance::port::TICKS).judged();
+    let run = zephyr_image(board.name(), takt_conformance::zephyr::STM32F401)
+        .and_then(|image| board.run(&image.elf, &options));
+    verdict(&zephyr_verdict(board.name(), run));
 }
 
 /// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,
