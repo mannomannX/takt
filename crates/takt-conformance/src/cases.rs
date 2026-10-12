@@ -5,9 +5,10 @@
 //! Jedes Programm laeuft ohne Eingaben ueber seine Fristen (KON1-006) —
 //! der Weg, auf dem jeder Input `Bad` bleibt —, wo ein Stimulus
 //! geschrieben ist, auch mit ihm, mit den Eingaben aus seinen Deklarationen
-//! (`crate::generated`, Schritt 29a) und mit jedem Pfad, den der Solver zu
+//! (`crate::generated`, Schritt 29a), mit jedem Pfad, den der Solver zu
 //! einer Pruefstelle, einem Uebergang oder einer Verletzung fand
-//! (`crate::paths`, Schritt 28c).
+//! (`crate::paths`, Schritt 28c), und mit jedem aus dem langen Lauf
+//! (`crate::paths::from_run`, Strang B2 Schritt 3).
 
 use takt_mir::Program;
 
@@ -15,7 +16,8 @@ use takt_mir::Program;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Case {
     /// `still` ohne Eingaben, `stimulus` mit dem geschriebenen, `erzeugt …`
-    /// mit erzeugten, `pfad …` mit einem des Solvers.
+    /// mit erzeugten, `pfad …` mit einem des Solvers, `lauf …` mit einem aus
+    /// dem langen Lauf.
     pub label: String,
     /// Der Stimulus.
     pub stimulus: String,
@@ -30,8 +32,13 @@ pub fn cases(name: &str, p: &Program) -> Vec<Case> {
         out.push(Case { label: "stimulus".into(), stimulus, ticks });
     }
     out.extend(crate::generated::cases(p));
-    let paths = crate::paths::load(name).into_iter();
-    out.extend(paths.map(|p| Case { label: format!("pfad {}", p.label), stimulus: p.stimulus, ticks: p.ticks }));
+    out.extend(crate::paths::load(name).into_iter().map(|p| {
+        let label = match p.label.strip_prefix(crate::paths::RUN) {
+            Some(rest) => format!("lauf {rest}"),
+            None => format!("pfad {}", p.label),
+        };
+        Case { label, stimulus: p.stimulus, ticks: p.ticks }
+    }));
     out
 }
 

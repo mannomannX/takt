@@ -78,11 +78,13 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Pruefstellen und Uebergaenge, die weder ein Lauf erreicht noch der Solver ausschliesst",
-        warum: "`UNREACHED` (`differential.rs`) haelt 102 Uebergaenge, 72 nie bestandene und 352 nie verletzte \
-                Pruefstellen in 99 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
-                bis Tiefe 5 in 10 s keinen Pfad, und k-Induktion beweist sie nicht unerreichbar. Dazu 186 \
-                Stellen, die nie faulten koennen (13.2: 167 `proven`, 10 `message`, 9 `observe`).",
-        wann: "M11 Schritt 29, Nachtrag: induktive Invarianten je Stelle (Spacer) und tiefere Pfade.",
+        warum: "`UNREACHED` (`differential.rs`) haelt 102 Uebergaenge, 72 nie bestandene und 341 nie verletzte \
+                Pruefstellen in 98 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
+                bis Tiefe 5 in 10 s keinen Pfad, k-Induktion beweist sie nicht unerreichbar, und der lange Lauf \
+                ohne Stimulus ueber `MAX_TICKS` (`paths::from_run`) faultet dort nicht. Dazu 186 Stellen, die nie \
+                faulten koennen (13.2: 167 `proven`, 10 `message`, 9 `observe`).",
+        wann: "M11 Schritt 29, Nachtrag (Strang B2): induktive Invarianten je Stelle (Spacer), Beweisdateien, \
+               Gruppen als Grund.",
         row: "FB-511",
     },
     Limit {

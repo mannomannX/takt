@@ -16,9 +16,20 @@
 //! Test, dass jeder Pfad sein Ziel im Interpreter noch erreicht — mit
 //! derselben Regel, mit der `takt prove` ihn bestaetigte
 //! (`takt_prove::fault_at`); eine Beweisdatei bindet der Hash ihrer Quelle.
+//!
+//! **Pfade aus dem langen Lauf** (M11 Strang B2, Schritt 3; FB-613): Ein
+//! Zaehler laeuft oft erst nach Hunderten Ticks ueber seine Range, tiefer,
+//! als der Solver sucht, und doch ohne jede Eingabe. Der Interpreter laeuft
+//! darum jedes Programm ohne Stimulus ueber [`crate::cases::MAX_TICKS`]
+//! Ticks ([`from_run`]); was dort zum ersten Mal faultet oder genommen wird,
+//! bekommt einen Pfad bis kurz danach. Diese Pfade heissen `lauf-…`
+//! ([`RUN`]), brauchen keinen Solver und sind deterministisch: Der Test
+//! rechnet sie neu und vergleicht sie mit den gespeicherten.
 
 use std::path::PathBuf;
 
+use takt_interp::{CoverKind, Coverage};
+use takt_mir::Program;
 use takt_mir::analysis::proof::{Site, render};
 
 /// So tief sucht der Solver; die Pfade enden spaetestens dort.
@@ -26,6 +37,13 @@ pub const DEPTH: u32 = 5;
 
 /// So viele Sekunden hat jede Anfrage an den Solver.
 pub const TIMEOUT_S: u64 = 10;
+
+/// So beginnt der Name eines Pfads aus dem langen Lauf ([`from_run`]).
+pub const RUN: &str = "lauf-";
+
+/// So viele Ticks laeuft ein Pfad ueber sein Ziel hinaus, wie die des
+/// Solvers ueber dessen Tiefe.
+const MARGIN: u64 = 2;
 
 /// Wohin ein Pfad fuehrt.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,8 +89,21 @@ pub struct Path {
     pub target: Target,
     /// Der Stimulus.
     pub stimulus: String,
-    /// So viele Ticks laeuft er: zwei ueber die Tiefe des Solvers.
+    /// So viele Ticks laeuft er: zwei ueber die Tiefe des Solvers, aus dem
+    /// langen Lauf zwei ueber sein Ziel.
     pub ticks: u64,
+}
+
+impl Path {
+    /// Stammt der Pfad aus dem langen Lauf ([`from_run`]) statt vom Solver?
+    pub fn from_run(&self) -> bool {
+        self.label.starts_with(RUN)
+    }
+}
+
+/// Ein Name fuer eine Pfaddatei: was nicht Buchstabe oder Ziffer ist, wird `_`.
+pub fn label(head: &str, tail: &str) -> String {
+    format!("{head}-{}", tail.replace(|ch: char| !ch.is_ascii_alphanumeric(), "_"))
 }
 
 /// Was der Solver an einem Programm fand: die Beweisdatei, die bewiesen
@@ -237,10 +268,16 @@ pub fn render_path(path: &Path, solver: &str) -> String {
         Target::Property { name, at } => format!("property {name} {at}"),
         Target::Transition { machine, key, at } => format!("uebergang {machine} {at} {key}"),
     };
-    format!(
-        "# Pfad des Solvers ({solver}, Tiefe {DEPTH}), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)\n# ziel {goal}\n# ticks {}\n{}",
-        path.ticks, path.stimulus
-    )
+    let head = if path.from_run() {
+        format!(
+            "Pfad aus dem langen Lauf (Interpreter ohne Stimulus, bis {} Ticks), erzeugt mit `UPDATE_RUN_PATHS` \
+             (M11 Strang B2, Schritt 3)",
+            crate::cases::MAX_TICKS
+        )
+    } else {
+        format!("Pfad des Solvers ({solver}, Tiefe {DEPTH}), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)")
+    };
+    format!("# {head}\n# ziel {goal}\n# ticks {}\n{}", path.ticks, path.stimulus)
 }
 
 /// Die Beweisdatei zu den bewiesen unerreichbaren Stellen `sites`, an die
@@ -250,12 +287,8 @@ pub fn proof_text(source: &str, solver: &str, sites: &[Site]) -> Option<String> 
 }
 
 /// Schreibt, was der Solver fand, an die Stelle des Programms `name`; was
-/// dort vorher lag, geht.
+/// er dort vorher fand, geht, die Pfade aus dem langen Lauf bleiben.
 pub fn store(name: &str, found: &Found, solver: &str) -> std::io::Result<()> {
-    let dir = paths_dir(name);
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir)?;
-    }
     for (file, text) in [(proof_file(name), &found.proof), (unfired_file(name), &found.unfired)] {
         match text {
             Some(text) => {
@@ -266,11 +299,123 @@ pub fn store(name: &str, found: &Found, solver: &str) -> std::io::Result<()> {
             None => {}
         }
     }
-    if !found.paths.is_empty() {
+    replace(name, false, &found.paths, solver)
+}
+
+/// Schreibt die Pfade aus dem langen Lauf des Programms `name`; die vorigen
+/// gehen, die des Solvers bleiben.
+pub fn store_run(name: &str, paths: &[Path]) -> std::io::Result<()> {
+    replace(name, true, paths, "")
+}
+
+/// Ersetzt die Pfade einer Quelle — aus dem langen Lauf mit `run`, sonst
+/// die des Solvers — durch `paths`; ein leeres Verzeichnis geht.
+fn replace(name: &str, run: bool, paths: &[Path], solver: &str) -> std::io::Result<()> {
+    let dir = paths_dir(name);
+    for old in load(name).into_iter().filter(|p| p.from_run() == run) {
+        std::fs::remove_file(dir.join(format!("{}.trace", old.label)))?;
+    }
+    if !paths.is_empty() {
         std::fs::create_dir_all(&dir)?;
     }
-    for p in &found.paths {
+    for p in paths {
+        assert_eq!(p.from_run(), run, "`{}` gehoert zur anderen Quelle", p.label);
         std::fs::write(dir.join(format!("{}.trace", p.label)), render_path(p, solver))?;
     }
+    if dir.exists() && std::fs::read_dir(&dir)?.next().is_none() {
+        std::fs::remove_dir(&dir)?;
+    }
     Ok(())
+}
+
+/// **Die Pfade aus dem langen Lauf** des Programms `name` (M11 Strang B2,
+/// Schritt 3; FB-613): Der Interpreter rechnet `p` ohne Stimulus ueber
+/// [`crate::cases::MAX_TICKS`] Ticks. Jede Pruefstelle, die dabei faultet,
+/// und jeder Uebergang, der dabei genommen wird, bekommt einen Pfad bis
+/// [`MARGIN`] Ticks nach dem ersten Mal — wenn kein Lauf ohne Pfad (`still`,
+/// der geschriebene Stimulus, die erzeugten Eingaben) es schon erreicht und
+/// weder Beweisdatei noch `.unfired` es ausschliessen. Was hinter einem
+/// frueheren Fault derselben Maschine laege, erreicht der Lauf nicht: Dort
+/// braucht es eine Eingabe, oder die Stelle ist unerreichbar.
+pub fn from_run(name: &str, p: &Program) -> Vec<Path> {
+    let interpret = |stimulus: &str, ticks: u64| {
+        let trace = takt_interp::Trace::parse(stimulus).unwrap_or_else(|e| panic!("{name}: Stimulus: {e:?}"));
+        let options = takt_interp::RunOptions { ticks, ..Default::default() };
+        takt_interp::run(p, &trace, &options).unwrap_or_else(|e| panic!("{name}: Lauf: {e:?}"))
+    };
+    let mut reached = Coverage::default();
+    let regular = |c: &crate::cases::Case| !c.label.starts_with("pfad") && !c.label.starts_with("lauf");
+    for case in crate::cases::cases(name, p).into_iter().filter(regular) {
+        reached.merge(&interpret(&case.stimulus, case.ticks).coverage);
+    }
+    let long = interpret("", crate::cases::MAX_TICKS);
+    let proven = proof(name).map(|pr| pr.tags()).unwrap_or_default();
+    let unfired = unfired(name).map(|u| u.transitions).unwrap_or_default();
+    let path = |head: &str, tail: &str, target: Target, at: u64| Path {
+        label: format!("{RUN}{}", label(head, tail)),
+        target,
+        stimulus: String::new(),
+        ticks: at + MARGIN,
+    };
+    let mut out = Vec::new();
+    for site in takt_interp::coverage::sites(p) {
+        let kind = takt_mir::analysis::walk::name_of_tag(site.tag);
+        let fresh = !reached.hits.contains_key(&(CoverKind::SiteFailed, String::new(), site.key()));
+        if site.silent.is_some() || !fresh || proven.contains(&(site.start, site.end, site.tag)) {
+            continue;
+        }
+        if let Some(f) = long.faults.iter().find(|f| site.takes(f.kind, f.span)) {
+            let target = Target::Check {
+                kind: kind.into(),
+                machine: f.machine.clone(),
+                start: site.start,
+                end: site.end,
+                at: f.tick,
+            };
+            out.push(path(kind, &format!("{} {}", site.start, site.end), target, f.tick));
+        }
+    }
+    for item in takt_interp::coverage::items(p) {
+        match item.kind {
+            CoverKind::Check if !reached.has(CoverKind::CheckFailed, &item) => {
+                let kind = item.key.split(' ').next().unwrap_or_default();
+                let fault = match kind {
+                    "check" => takt_mir::machine::FaultKind::CheckFailed,
+                    "expect" => takt_mir::machine::FaultKind::Expect,
+                    _ => continue,
+                };
+                let first = long
+                    .faults
+                    .iter()
+                    .find(|f| f.machine == item.machine && f.kind == fault && f.span.start == item.span.start);
+                if let Some(f) = first {
+                    let (start, end) = (item.span.start, item.span.end);
+                    let target =
+                        Target::Check { kind: kind.into(), machine: f.machine.clone(), start, end, at: f.tick };
+                    out.push(path(kind, &start.to_string(), target, f.tick));
+                }
+            }
+            CoverKind::Transition
+                if long.coverage.has(CoverKind::Transition, &item)
+                    && !reached.has(CoverKind::Transition, &item)
+                    && !unfired.iter().any(|(m, k)| *m == item.machine && *k == item.key) =>
+            {
+                // Die Coverage nennt keinen Tick: der kuerzeste Lauf, der ihn nimmt.
+                let (mut lo, mut hi) = (0, crate::cases::MAX_TICKS);
+                while lo < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if interpret("", mid).coverage.has(CoverKind::Transition, &item) {
+                        hi = mid;
+                    } else {
+                        lo = mid + 1;
+                    }
+                }
+                let target = Target::Transition { machine: item.machine.clone(), key: item.key.clone(), at: lo };
+                out.push(path("uebergang", &item.key, target, lo));
+            }
+            _ => {}
+        }
+    }
+    out.sort_by(|a, b| a.label.cmp(&b.label));
+    out
 }

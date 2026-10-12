@@ -34,7 +34,8 @@ const TICKS: u64 = 60;
 /// unerreichbar fuehrt. Die Ratsche verlangt die Zahlen genau: Faellt eine
 /// Stelle aus der Abdeckung, ist das ein Befund; kommt eine dazu, wird die
 /// Zahl gesenkt. Was bleibt, liegt jenseits der Tiefe oder Frist des Solvers
-/// ([`takt_conformance::paths`]), jenseits von
+/// ([`takt_conformance::paths`]) und hinter dem langen Lauf ohne Stimulus
+/// ([`takt_conformance::paths::from_run`]), jenseits von
 /// [`takt_conformance::cases::MAX_TICKS`] (`after 3 s` bei 50 us in
 /// `11_foc_drive`, `after 7 d` in `sim/14_7`), in einem Programm, das
 /// das Modell nicht kodiert, oder in einem, dessen Maschinen kein Teilmodell
@@ -61,26 +62,25 @@ const UNREACHED: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("23_patterns.takt", 0, 0, 3, 0, 0, 0),
     ("24_send_has.takt", 0, 0, 1, 0, 0, 0),
     ("26_samples.takt", 0, 0, 1, 1, 0, 0),
-    ("27_every.takt", 0, 0, 2, 0, 0, 0),
+    ("27_every.takt", 0, 0, 1, 0, 0, 0),
     ("28_scheduled.takt", 0, 0, 1, 0, 0, 0),
     ("35_persist.takt", 0, 0, 0, 1, 0, 0),
     ("36_int_units.takt", 0, 0, 5, 1, 0, 0),
-    ("37_follows.takt", 0, 0, 2, 0, 0, 0),
+    ("37_follows.takt", 0, 0, 1, 0, 0, 0),
     ("40_jobs.takt", 1, 0, 0, 0, 0, 0),
-    ("41_tunables.takt", 0, 0, 1, 1, 0, 0),
-    ("42_map.takt", 0, 0, 2, 1, 0, 0),
+    ("41_tunables.takt", 0, 0, 0, 1, 0, 0),
+    ("42_map.takt", 0, 0, 1, 1, 0, 0),
     ("43_sent.takt", 0, 0, 0, 1, 0, 0),
     ("44_campaign.takt", 0, 0, 0, 1, 0, 0),
     ("45_journal_cut.takt", 14, 2, 26, 0, 0, 0), // FB-604: ohne Teilmodell keine Pfade des Solvers
     ("46_matrices.takt", 0, 0, 31, 0, 0, 0),
     ("47_monitors.takt", 0, 0, 1, 0, 0, 0),
     ("49_record_streams.takt", 0, 0, 2, 0, 0, 0),
-    ("50_clause_words.takt", 0, 0, 1, 0, 0, 0),
     ("51_text_into_bytes.takt", 0, 0, 1, 2, 0, 0),
-    ("52_padding_fields.takt", 0, 0, 1, 3, 0, 0),
-    ("53_stream_kinds.takt", 1, 0, 4, 2, 0, 0),
+    ("52_padding_fields.takt", 0, 0, 0, 3, 0, 0),
+    ("53_stream_kinds.takt", 1, 0, 3, 2, 0, 0),
     ("54_inout.takt", 0, 0, 0, 1, 0, 0),
-    ("55_frames_with_bytes.takt", 0, 0, 2, 3, 0, 0),
+    ("55_frames_with_bytes.takt", 0, 0, 1, 3, 0, 0),
     ("57_persist_often.takt", 0, 0, 0, 2, 0, 0),
     ("58_persist_alert.takt", 0, 0, 0, 2, 0, 0),
     ("59_persist_idle.takt", 0, 0, 0, 1, 0, 0),
@@ -95,7 +95,7 @@ const UNREACHED: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("73_after_levels.takt", 0, 0, 4, 0, 0, 0),
     ("74_instance_index.takt", 0, 0, 0, 2, 0, 0),
     ("75_implicit_checks.takt", 0, 0, 0, 6, 0, 0),
-    ("76_stream_views.takt", 0, 0, 4, 9, 0, 0),
+    ("76_stream_views.takt", 0, 0, 3, 9, 0, 0),
     ("77_float_faults.takt", 0, 0, 2, 0, 0, 0),
     ("78_length_guards.takt", 0, 0, 0, 7, 0, 0),
     ("79_byte_literals.takt", 0, 0, 0, 1, 0, 0),
@@ -115,7 +115,7 @@ const UNREACHED: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("94_float_ranges.takt", 0, 0, 0, 1, 0, 0),
     ("95_boundary_ranges.takt", 0, 0, 0, 3, 0, 0),
     ("96_record_outputs.takt", 0, 0, 0, 1, 0, 0),
-    ("97_fast_math.takt", 0, 0, 3, 3, 0, 0),
+    ("97_fast_math.takt", 0, 0, 2, 3, 0, 0),
     ("98_last_fault.takt", 0, 5, 2, 2, 0, 0),
     ("99_exit_fault.takt", 0, 0, 1, 0, 0, 0),
     ("100_dispatch.takt", 0, 0, 1, 7, 0, 0),
@@ -137,7 +137,7 @@ const UNREACHED: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("116_sequence_timeout.takt", 0, 0, 0, 1, 0, 0),
     ("117_many_text_handlers.takt", 0, 2, 1, 2, 0, 0),
     ("118_tx_idle.takt", 0, 0, 0, 1, 0, 0),
-    ("120_port_writes.takt", 0, 0, 2, 4, 0, 0),
+    ("120_port_writes.takt", 0, 0, 1, 4, 0, 0),
     ("122_owner_reads_instance.takt", 0, 0, 0, 1, 0, 0),
     ("123_fifo_port.takt", 0, 0, 0, 9, 0, 0),
     ("124_port_test.takt", 8, 0, 10, 6, 0, 0),
