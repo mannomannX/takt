@@ -51,6 +51,11 @@ Plan; `plan/m11.md` bleibt die Quelle für Ziel und Abnahme je Schritt.
 Zwei Stränge arbeiten nie gleichzeitig im selben Bereich. Boards sind kein
 Bereich; dort regelt die Sperre die Zeit.
 
+Seit 2026-10-12 laufen schwere Prüfungen auf CI (Schritt 34): Neben einem
+anderen Projekt reicht der Speicher des Entwicklungsrechners nicht mehr
+für die volle Suite oder Board-Bauten. Lokal nur gezielte Tests mit
+`cargo nextest run -j 1`, und nur bei mindestens 6 GB freier Zusage.
+
 | Bereich | Umfang |
 |---|---|
 | P (Beweiser) | `crates/takt-prove`, `corpus-try/paths`, Tests in `takt-conformance`, die nur das Modell betreffen |
@@ -73,21 +78,21 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 
 | Nr | Punkt | Bereiche | Boards | hängt an | Stand |
 |---|---|---|---|---|---|
-| B1 | FB-497 Rest: Maps und Puffer als Arrays der SMT-Theorie | P | – | 29 | Strang B |
-| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Strang B, nach B1 |
+| B1 | FB-497 Rest: Maps und Puffer als Arrays der SMT-Theorie | P | – | 29 | Strang B, umgesetzt |
+| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Strang B, Schritt 1 gemergt 2026-10-12 (Einordnung läuft auf CI, `solver.yml`); Schritte 2 bis 5 frei |
 | 14 | Rust ohne RTOS und mit Frameworks | R, E | beide | 10 | Strang A, umgesetzt 2026-10-11 |
-| 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | frei (nicht neben 14) |
+| 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | frei; die Job-Länge des Prüfprogramms ist seit 18c je Ziel bemessen |
 | 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A, umgesetzt 2026-10-11 |
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | frei |
-| 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A, 18a umgesetzt |
-| 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | frei |
+| 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a umgesetzt, 18c in Arbeit (Teil 1: Job-Länge je Ziel), 18b nach 34d |
+| 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | frei, nach 34d (Bereich C) |
 | 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | frei |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | frei |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
 | 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | frei |
 | 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | Strang A, in Arbeit; Stufe 1 in P nach dem Merge von B |
-| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder) | C, W | – | – | Strang A, in Arbeit |
+| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder) | C, W | – | – | 34a bis 34c Strang A; 34d Strang B (Helfer, seit 2026-10-12) |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
 | 24 | Vorlagen, `takt doctor`, Anleitung, Inventur, Abschluss | W | beide | alle | zuletzt |
 
