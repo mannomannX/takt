@@ -1,7 +1,7 @@
-# Die Suite auf einem Runner von GitHub (ubuntu-24.04, 4 Kerne, 16 GB): bei
-# jedem Push auf main, fuer Pull Requests und von Hand. Die Board-Suiten
-# brauchen Hardware und bleiben lokal (`tools/board-run.ps1`); ihre Tests
-# sind `#[ignore]`.
+# Die Suite auf Runnern von GitHub (4 Kerne, 16 GB), unter Linux und unter
+# Windows: bei jedem Push auf main, fuer Pull Requests und von Hand. Die
+# Board-Suiten brauchen Hardware und bleiben lokal (`tools/board-run.ps1`);
+# ihre Tests sind `#[ignore]`.
 name: CI
 
 on:
@@ -24,31 +24,43 @@ env:
 
 jobs:
   lint:
-    name: rustfmt und Clippy
-    runs-on: ubuntu-24.04
+    name: rustfmt und Clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
-      - name: Rust 1.98.0 und libudev
+      - name: Rust 1.98.0
+        shell: bash
         run: |
           rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
           rustup default 1.98.0
+      - name: libudev
+        if: runner.os == 'Linux'
+        run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends libudev-dev pkg-config
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: lint
+          shared-key: lint-${{ matrix.os }}
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: Suite
-    runs-on: ubuntu-24.04
+    name: Suite (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: test
+          shared-key: test-${{ matrix.os }}
       - run: cargo nextest run --workspace --profile ci
