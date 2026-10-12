@@ -79,7 +79,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | Nr | Punkt | Bereiche | Boards | hängt an | Stand |
 |---|---|---|---|---|---|
 | B1 | FB-497 Rest: Maps und Puffer als Arrays der SMT-Theorie | P | – | 29 | Strang B, umgesetzt |
-| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Schritt 1 umgesetzt und eingeordnet (CI-Lauf 38188098609); Schritt 2, Teil 1 (kleine Anfragen zuerst) umgesetzt und gemergt 2026-10-12, eingeordnet in 38199208294: Speicher 106 → 68, 38 bewiesen (FB-612); die Gruppe „nicht k-induktiv“ ist größtenteils tief erreichbar und gehört zu Schritt 3 (FB-613); Schritte 2 (Rest) bis 5 frei |
+| B2 | FB-511: jede Prüfstelle erreicht oder bewiesen unerreichbar | P, C | – | B1 | Schritt 1 umgesetzt und eingeordnet (CI-Lauf 38188098609); Schritt 2, Teil 1 (kleine Anfragen zuerst) umgesetzt und gemergt 2026-10-12, eingeordnet in 38199208294: Speicher 106 → 68, 38 bewiesen (FB-612); die Gruppe „nicht k-induktiv“ ist größtenteils tief erreichbar und gehört zu Schritt 3 (FB-613); Schritt 3 (tiefe Pfade) bei Strang B (Helfer, seit 2026-10-12, Zweig `b3-fb511-step3`); Schritte 2 (Rest), 4 und 5 frei |
 | 14 | Rust ohne RTOS und mit Frameworks | R, E | beide | 10 | Strang A, umgesetzt 2026-10-11 |
 | 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | Strang D (Helfer, seit 2026-10-12, Zweig `d-17-host-threads`) |
 | 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A, umgesetzt 2026-10-11 |
@@ -91,7 +91,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
 | 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | frei |
-| 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a Strang A (offen: Board-Crates und Bring-ups); 33b und 33c Strang C (Helfer, seit 2026-10-12, Zweig `c-33bc-analysis`, eigener Workflow `analysis.yml`) |
+| 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a Strang A bis auf die Board-Crates, Bring-ups und das Sprungbrett: die bei Strang E (Helfer, seit 2026-10-12, Zweig `e-33a-board-tiers`, mit Lint-Job auf CI); 33b und 33c Strang C, Zweig `c-33bc-analysis`, wartet auf den Merge |
 | 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34d umgesetzt (34d von Strang B, gemergt 8eb251d); 34e Strang A: die Test-Binaries der Boards als nextest-Archiv von einem Windows-Runner, lokal nur flashen und prüfen |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
 | 24 | Vorlagen, `takt doctor`, Anleitung, Inventur, Abschluss | W | beide | alle | zuletzt |
