@@ -48,6 +48,8 @@ test-group = "memory"
 [[profile.default.overrides]]
 # Der POSIX-Port in Echtzeit (M11 Schritt 18c): Seine Faeden brauchen freie
 # Kerne, sonst verspaetet ein voller Rechner den Tick, und die Portpruefung
-# verlangt null verspaetete Ticks.
+# verlangt null verspaetete Ticks. Das Urteil (Drift, Stacks, laengster
+# Job) steht auch im Protokoll eines Laufs, der besteht.
 filter = "test(=a_posix_port_passes_the_port_test)"
 threads-required = "num-cpus"
+success-output = "final"
