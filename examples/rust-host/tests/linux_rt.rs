@@ -60,8 +60,10 @@ where
 {
     let began = Instant::now();
     let (text, guarantee, served) = port::spawn(config, |guarantee| {
-        takt_embed::testing::take();
+        // Wie die Testhilfe: Der Trace beginnt mit dem ersten Aufruf von
+        // `service`, nicht mit `init`.
         let (mut program, journal) = start();
+        takt_embed::testing::take();
         let mut jobs = program.jobs().expect("der Job-Kontext gehoert dem Port");
         let clock = RealtimeClock::under(guarantee);
         let profile = Profile::LINUX_RT;
@@ -77,6 +79,11 @@ where
     })
     .expect("Tick-Faden");
     Run { text, guarantee, served, took: began.elapsed() }
+}
+
+/// Das Journal eines Programms ohne `persist` (5.9): keines, ohne Geraet.
+fn no_journal() -> NoJournal {
+    NoJournal::default()
 }
 
 /// Die Kerne dieses Rechners.
@@ -128,7 +135,7 @@ fn programs_of_the_linux_form_run_in_their_tick_threads_like_the_interpreter() {
             let (mut arena, mut tank) = (valve_rt::Arena::new(), Tank::default());
             let config = Config::new(valve_rt::TICK_STACK_BYTES, valve_rt::JOB_STACK_BYTES).cpu(core(0)).ticks(TICKS);
             let run = in_tick_thread(&config, valve_rt::TICK_NS, || {
-                (valve_rt::Program::init(&mut arena, &mut tank), NoJournal::default())
+                (valve_rt::Program::init(&mut arena, &mut tank), no_journal())
             });
             (run, tank.openings)
         });
@@ -137,7 +144,7 @@ fn programs_of_the_linux_form_run_in_their_tick_threads_like_the_interpreter() {
             let config =
                 Config::new(instance_rt::TICK_STACK_BYTES, instance_rt::JOB_STACK_BYTES).cpu(core(1)).ticks(TICKS);
             let run = in_tick_thread(&config, instance_rt::TICK_NS, || {
-                (instance_rt::Program::init(&mut arena, &mut seed), NoJournal::default())
+                (instance_rt::Program::init(&mut arena, &mut seed), no_journal())
             });
             (run, seed)
         });
@@ -160,7 +167,7 @@ fn programs_of_the_linux_form_run_in_their_tick_threads_like_the_interpreter() {
                 .cpu(core(3))
                 .ticks(TICKS);
             in_tick_thread(&config, idle_multirate_rt::TICK_NS, || {
-                (idle_multirate_rt::Program::init(&mut arena), NoJournal::default())
+                (idle_multirate_rt::Program::init(&mut arena), no_journal())
             })
         });
         let join = "ein Lauf brach ab";
