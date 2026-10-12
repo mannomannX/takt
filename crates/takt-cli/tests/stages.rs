@@ -273,6 +273,15 @@ fn bench_refuses_a_bad_run_count() {
     assert!(stderr(&out).contains("--runs"), "{}", stderr(&out));
 }
 
+/// `bench --emit embed --part` nimmt einen Teil des Messprogramms, und einen,
+/// den es nicht gibt, weist es ab, bevor es baut (FB-740).
+#[test]
+fn bench_refuses_a_part_that_does_not_exist() {
+    let out = takt(&["bench", "--emit", "embed", "--target", "thumbv7em", "--part", "3/2", "--out", "unbenutzt"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("--part: Teil 3 von 2 gibt es nicht"), "{}", stderr(&out));
+}
+
 /// 11.5: Jeder Posten von `size` nennt seine Herkunft, und die Summe ist die
 /// Summe der Posten ohne `offen`.
 #[test]

@@ -258,6 +258,7 @@ const FLAGS: &[(&str, &[&str])] = &[
             "--loop",
             "--natives",
             "--out",
+            "--part",
             "--runs",
             "--target",
         ],
@@ -378,6 +379,7 @@ impl Args {
             "--port",
             "--job-bytes",
             "--program",
+            "--part",
         ];
         let allowed = FLAGS.iter().find(|(c, _)| *c == command).map(|(_, f)| *f).ok_or_else(|| USAGE.to_string())?;
         let mut args = Args { flags: Vec::new(), files: Vec::new(), values: Vec::new() };
