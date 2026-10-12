@@ -374,18 +374,20 @@ fn every_port_passes_the_port_test() {
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_port_without_fpu_saving_fails_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed = the_flawed_port_fails(&mut board, Flaw::UnsavedFpu, &["FPU-Kontext nicht gesichert"]);
+    let failed = the_flawed_port_fails(&mut board, Flaw::UnsavedFpu, &["FPU-Kontext nicht gesichert"], &[]);
     verdict(&failed);
 }
 
 /// **Ein Port, der Jobs nicht unterbrechen laesst, faellt durch** (4.5,
 /// 12.11, M11 Schritt 15): Die Jobs mit der Prioritaet des Schritts; er
-/// wartet auf jeden, und die Ticks kommen zu spaet.
+/// wartet auf jeden, und die Ticks kommen zu spaet. Danach holt er die
+/// Ticks am Stueck nach, und ihr Trace kann den Ring vor der Leitung
+/// ueberlaufen (FB-292): dieselbe Ursache, kein eigener Befund.
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn a_port_with_uninterruptible_jobs_fails_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed = the_flawed_port_fails(&mut board, Flaw::UninterruptibleJobs, &["7.3", "Tickgrenze"]);
+    let failed = the_flawed_port_fails(&mut board, Flaw::UninterruptibleJobs, &["7.3", "Tickgrenze"], &["verwarf"]);
     verdict(&failed);
 }
 

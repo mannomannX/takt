@@ -700,13 +700,22 @@ pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
 }
 
 /// **Ein absichtlich falscher Port faellt durch, und zwar an der Pflicht,
-/// die er verletzt** (M11 Schritt 15): Das Urteil verwirft ihn, und jeder
-/// seiner Gruende nennt `reason`.
-pub fn the_flawed_port_fails(board: &mut dyn Board, flaw: Flaw, reason: &[&str]) -> Vec<String> {
+/// die er verletzt** (M11 Schritt 15): Das Urteil verwirft ihn, jeder Grund
+/// in `reason` steht darunter, und kein Befund nennt etwas anderes als
+/// `reason` oder `also`, was dieselbe Ursache daneben zeigen darf.
+pub fn the_flawed_port_fails(board: &mut dyn Board, flaw: Flaw, reason: &[&str], also: &[&str]) -> Vec<String> {
     match port_test(board, Form::Interrupt, Some(flaw)) {
         Ok(v) if v.passed() => vec![format!("{flaw:?}: der falsche Port bestand\n{v}")],
-        Ok(v) if v.failures.iter().all(|f| reason.iter().any(|r| f.contains(r))) => Vec::new(),
-        Ok(v) => vec![format!("{flaw:?}: durchgefallen, aber nicht nur an {reason:?}\n{v}")],
+        Ok(v) => {
+            let missing: Vec<&str> =
+                reason.iter().copied().filter(|r| !v.failures.iter().any(|f| f.contains(r))).collect();
+            let foreign = v.failures.iter().any(|f| !reason.iter().chain(also).any(|r| f.contains(r)));
+            if missing.is_empty() && !foreign {
+                Vec::new()
+            } else {
+                vec![format!("{flaw:?}: durchgefallen, aber nicht genau an {reason:?} (ohne {missing:?})\n{v}")]
+            }
+        }
         Err(e) => vec![format!("{flaw:?}: kein Lauf: {e}")],
     }
 }
