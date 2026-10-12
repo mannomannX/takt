@@ -353,8 +353,15 @@ fn open_items(name: &str, p: &Program) -> Open {
 /// Die Art einer Zeile fuer das Bestehen einer Stelle (Spalte zwei).
 const PASS: &str = "besteht ";
 
-/// Die Art einer Zeile fuer einen Uebergang (Spalte eins).
-const TRANSITION: &str = "uebergang";
+/// Die Art einer Zeile fuer einen Uebergang (Spalte eins), vor seinem
+/// Schluessel: Uebergaenge aus einer Klausel, die fuer mehrere Schritte
+/// gilt, teilen ihren Anfang.
+const TRANSITION: &str = "uebergang ";
+
+/// Die Art der Zeile eines Uebergangs.
+fn transition_kind(key: &str) -> String {
+    format!("{TRANSITION}{key}")
+}
 
 /// Der Anfang eines Uebergangs aus seinem Schluessel (`VON->NACH @<anfang>`).
 fn transition_start(key: &str) -> u32 {
@@ -380,8 +387,9 @@ fn group(verdict: &CheckVerdict) -> &'static str {
 }
 
 /// Eine Zeile des Protokolls (`fb511-<tiefe>.tsv`): Programm, Maschine, Art,
-/// Anfang der Anweisung, Spanne, Gruppe, Urteil. Ein Uebergang hat die Art
-/// [`TRANSITION`], das Bestehen einer Stelle die Art mit [`PASS`] davor.
+/// Anfang der Anweisung, Spanne, Gruppe, Urteil. Ein Uebergang hat als Art
+/// seinen Schluessel mit [`TRANSITION`] davor, das Bestehen einer Stelle die
+/// Art mit [`PASS`] davor.
 #[derive(Clone)]
 struct Row {
     name: String,
@@ -414,10 +422,10 @@ impl Row {
             start,
             span: takt_diag::Span::new(start, start),
             machine: r.machine.clone(),
-            kind: TRANSITION.to_string(),
+            kind: transition_kind(&r.key),
             verdict: r.verdict.clone(),
         };
-        Row { why: format!("{} {}", r.key, report.text().lines().next().unwrap_or_default()), ..Row::of(name, &report) }
+        Row::of(name, &report)
     }
 
     fn line(&self) -> String {
@@ -561,7 +569,7 @@ fn transition_and_pass_rows(
         _ => 1,
     };
     let key = |r: &Row| {
-        let machine = if r.kind == TRANSITION { r.machine.clone() } else { String::new() };
+        let machine = if r.kind.starts_with(TRANSITION) { r.machine.clone() } else { String::new() };
         (r.kind.clone(), machine, r.span)
     };
     rows.sort_by_key(|r| (key(r), rank(r)));
@@ -577,9 +585,9 @@ fn transition_and_pass_rows(
     };
     if what.transitions {
         for (m, key) in &open.transitions {
-            let start = transition_start(key);
-            if !rows.iter().any(|r| r.kind == TRANSITION && r.machine == *m && r.start == start) {
-                rows.push(none(m, TRANSITION.into(), start, start, format!("{key} unentschieden: kein Modell")));
+            let (start, kind) = (transition_start(key), transition_kind(key));
+            if !rows.iter().any(|r| r.kind == kind && r.machine == *m) {
+                rows.push(none(m, kind, start, start, "unentschieden: kein Modell".into()));
             }
         }
     }
@@ -739,7 +747,8 @@ fn classify_unreached(depths: &str) {
         let mut text = String::new();
         let mut tally: BTreeMap<(&str, &str), usize> = BTreeMap::new();
         for r in &rows {
-            *tally.entry((r.group.as_str(), r.kind.as_str())).or_default() += 1;
+            let kind = if r.kind.starts_with(TRANSITION) { TRANSITION.trim_end() } else { r.kind.as_str() };
+            *tally.entry((r.group.as_str(), kind)).or_default() += 1;
             text.push_str(&r.line());
         }
         let file = tmp.join(format!("fb511-{depth}{suffix}.tsv"));
@@ -756,10 +765,9 @@ fn classify_unreached(depths: &str) {
             let mine: Vec<&Row> = rows.iter().filter(|r| r.name == *name && r.decided()).collect();
             items.checks.retain(|(m, k, s)| !mine.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s));
             items.sites.retain(|(a, b, k)| !mine.iter().any(|r| r.span == (*a, *b) && r.kind == *k));
-            items.transitions.retain(|(m, key)| {
-                let start = transition_start(key);
-                !mine.iter().any(|r| r.kind == TRANSITION && r.machine == *m && r.start == start)
-            });
+            items
+                .transitions
+                .retain(|(m, key)| !mine.iter().any(|r| r.machine == *m && r.kind == transition_kind(key)));
             items.passes.retain(|(a, b, k)| !mine.iter().any(|r| r.span == (*a, *b) && r.kind == format!("{PASS}{k}")));
         }
     }
