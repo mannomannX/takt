@@ -69,16 +69,27 @@ pub struct Guarantee {
     /// der Scheduler ihn verschieben darf, und jede Verschiebung kostet
     /// einen kalten Cache.
     pub cpus: usize,
+    /// Dem Prozess bleibt ein Kern ausser denen des Tick-Threads: Dort
+    /// rechnet der Job-Faden (4.5, [`crate::port`]), nicht auf dem Kern des
+    /// Schritts.
+    ///
+    /// Unter `chrt` erbt jeder Faden die Echtzeitklasse des Prozesses, und
+    /// `rustix` bietet `sched_setscheduler` nicht an, mit dem der Job-Faden
+    /// sie abgaebe. Auf einem gemeinsamen Kern unterbraeche der Schritt einen
+    /// Job gleicher Prioritaet nicht (12.11, Portvertrag 3); getrennte Kerne
+    /// halten den Vertrag ohne Prioritaet.
+    pub apart: bool,
 }
 
 impl Guarantee {
     /// Traegt dieser Lauf die Zeitgarantie aus 12.2 vollstaendig?
     ///
-    /// Alle drei Teile oder keiner: Ein Thread mit Echtzeitprioritaet auf
+    /// Alle Teile oder keiner: Ein Thread mit Echtzeitprioritaet auf
     /// einem Kern, dessen Seiten ausgelagert werden koennen, hat sie
-    /// nicht — ein Seitenfehler kostet Millisekunden.
+    /// nicht — ein Seitenfehler kostet Millisekunden. Ebenso einer, dessen
+    /// Kern der Job-Faden mit ihm teilt.
     pub fn is_complete(&self) -> bool {
-        self.scheduling.is_realtime() && self.locked && self.cpus == 1
+        self.scheduling.is_realtime() && self.locked && self.cpus == 1 && self.apart
     }
 
     /// Was fehlt, als Text fuer die Meldung beim Start.
@@ -109,6 +120,14 @@ impl Guarantee {
                 self.cpus
             ));
         }
+        if !self.apart {
+            out.push(
+                "kein Kern ausser dem des Tick-Threads (12.2, 4.5): der Job-Faden rechnete auf dessen Kern, und \
+                 unter derselben Echtzeitklasse unterbricht der Schritt ihn nicht; dem Prozess mit `taskset` einen \
+                 zweiten Kern lassen"
+                    .to_string(),
+            );
+        }
         out
     }
 
@@ -118,6 +137,7 @@ impl Guarantee {
             format!("scheduling {}", self.scheduling.name()),
             format!("mlockall {}", if self.locked { "ja" } else { "nein" }),
             format!("cpus {}", self.cpus),
+            format!("getrennt {}", if self.apart { "ja" } else { "nein" }),
             format!("echtzeit {}", if self.is_complete() { "ja" } else { "nein" }),
         ]
     }
@@ -131,6 +151,16 @@ impl Guarantee {
 ///
 /// `cpu` bindet den Thread an einen Kern; `None` laesst die Bindung, wie
 /// sie ist (etwa, weil `taskset` sie schon gesetzt hat).
+///
+/// **Im Tick-Thread zu rufen**, wie es [`crate::port::spawn`] tut: Kernbindung
+/// und Schedulingklasse gelten je Faden.
+///
+/// **Vorab beruehrt.** `mlockall` mit `CURRENT` holt jede Seite, die schon
+/// abgebildet ist, in den Speicher und haelt sie dort: den ganzen Stack
+/// dieses Threads und die Arena, wo immer der Wirt sie hinlegt; mit
+/// `FUTURE` ebenso jede spaetere Abbildung, etwa den Stack des Job-Fadens.
+/// `init` beschreibt die Arena danach ganz (12.11), bevor die erste Frist
+/// faellig ist.
 #[cfg(target_os = "linux")]
 pub fn prepare(cpu: Option<usize>) -> Guarantee {
     // 12.2: „`mlockall`, vorab beruehrte Seiten". Beide Flags: CURRENT
@@ -143,30 +173,53 @@ pub fn prepare(cpu: Option<usize>) -> Guarantee {
         set.set(n);
         let _ = rustix::thread::sched_setaffinity(None, &set);
     }
-    let cpus = rustix::thread::sched_getaffinity(None).map_or(0, |s| usize::try_from(s.count()).unwrap_or(0));
+    let mine = rustix::thread::sched_getaffinity(None).ok();
+    let cpus = mine.map_or(0, |s| usize::try_from(s.count()).unwrap_or(0));
+    let apart = mine.and_then(others).is_some();
 
-    Guarantee { scheduling: scheduling(), locked, cpus }
+    Guarantee { scheduling: scheduling(), locked, cpus, apart }
 }
 
 /// Auf Nicht-Linux gibt es die Zusagen aus 12.2 nicht; der Befund sagt es.
 #[cfg(not(target_os = "linux"))]
 pub fn prepare(_cpu: Option<usize>) -> Guarantee {
-    Guarantee { scheduling: Scheduling::Unknown, locked: false, cpus: 0 }
+    Guarantee { scheduling: Scheduling::Unknown, locked: false, cpus: 0, apart: false }
 }
 
-/// Liest die Schedulingklasse aus `/proc/self/stat` (12.2).
+/// Die Kerne des Prozesses ohne `mine`, die eines Fadens; `None`, wenn
+/// keiner bleibt. Der Prozess ist sein erster Faden: Dessen Bindung setzt
+/// der Port nicht.
+#[cfg(target_os = "linux")]
+pub(crate) fn others(mine: rustix::thread::CpuSet) -> Option<rustix::thread::CpuSet> {
+    use rustix::thread::CpuSet;
+    let process = rustix::thread::sched_getaffinity(Some(rustix::process::getpid())).ok()?;
+    let mut rest = CpuSet::new();
+    for cpu in 0..CpuSet::MAX_CPU {
+        if process.is_set(cpu) && !mine.is_set(cpu) {
+            rest.set(cpu);
+        }
+    }
+    (rest.count() > 0).then_some(rest)
+}
+
+/// Liest die Schedulingklasse dieses Threads aus `/proc/thread-self/stat`
+/// (12.2).
+///
+/// **Je Faden.** `/proc/self/stat` beschriebe den ersten Faden des
+/// Prozesses, nicht den Tick-Thread, der fragt; seine Klasse kann eine
+/// andere sein.
 ///
 /// **Gelesen, nicht gesetzt.** `rustix` bietet `sched_setscheduler` nicht
 /// an, und das trifft sich mit der Entscheidung: Die Klasse ist
 /// Betriebskonfiguration wie `isolcpus` daneben.
 ///
-/// Feld 41 von `/proc/self/stat` ist die Policy (`sched(7)`): 0 ist
+/// Feld 41 von `/proc/thread-self/stat` ist die Policy (`sched(7)`): 0 ist
 /// `SCHED_OTHER`, 1 `SCHED_FIFO`, 2 `SCHED_RR`, 3 `SCHED_BATCH`, 5
 /// `SCHED_IDLE`. Feld 40 ist die Echtzeitprioritaet; Feld 18 (`priority`)
 /// waere unter Echtzeit `-1 - rt_priority`.
 #[cfg(target_os = "linux")]
 fn scheduling() -> Scheduling {
-    std::fs::read_to_string("/proc/self/stat").map_or(Scheduling::Unknown, |stat| scheduling_of(&stat))
+    std::fs::read_to_string("/proc/thread-self/stat").map_or(Scheduling::Unknown, |stat| scheduling_of(&stat))
 }
 
 /// Die Schedulingklasse aus dem Text von `/proc/<pid>/stat` (`proc(5)`).

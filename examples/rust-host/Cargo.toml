@@ -17,3 +17,6 @@ takt-embed = { path = "../../crates/takt-embed", features = ["build"] }
 
 [dev-dependencies]
 takt-embed = { path = "../../crates/takt-embed", features = ["testing", "build"] }
+# Der Port `linux_rt` (12.2, 12.11): Tick-Faden und Job-Faden fuer die
+# Programme der Form `linux` (`tests/linux_rt.rs`).
+takt-rt-linux = { path = "../../crates/takt-rt-linux" }

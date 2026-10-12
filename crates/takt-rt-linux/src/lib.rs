@@ -24,6 +24,11 @@
 //! darum im Lauf-Header (11.3) — der Unterschied zwischen „lief unter
 //! `linux_rt`" und „lief unter `linux_rt` *mit* der Zusage" ist in der
 //! Aufzeichnung sichtbar, nicht angenommen.
+//!
+//! **Der Port** ([`port`]) faehrt ein Programm der Lieferform (12.11) in der
+//! Form `linux`: ein Tick-Faden mit dieser Uhr ruft den Kern ohne Warten zu
+//! jeder Frist, ein Job-Faden auf den uebrigen Kernen rechnet die Jobs. Ein
+//! Wirt in Rust bindet das Programm mit `takt-embed` und diesen Port.
 
 #![cfg_attr(
     not(test),
@@ -62,6 +67,7 @@ pub mod clock;
 pub mod guarantee;
 pub mod jobs;
 pub mod nvm;
+pub mod port;
 pub mod tunables;
 
 pub use clock::{RealtimeClock, wall_clock_ns};
