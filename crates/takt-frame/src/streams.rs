@@ -627,10 +627,13 @@ fn emit_internal(t: &mut Text, p: &Program, dyns: &[Dynamic], trace: Trace, x: &
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "        a->int_new[k] = 0;");
     let _ = writeln!(s, "        long long min = a->int_ex[k][g_int_readers[k][0]];");
-    let _ = writeln!(s, "        for (int r = 1; r < g_int_reader_n[k]; r++) {{");
-    let _ = writeln!(s, "            long long c = a->int_ex[k][g_int_readers[k][r]];");
-    let _ = writeln!(s, "            if (c < min) min = c;");
-    let _ = writeln!(s, "        }}");
+    // Mit hoechstens einem Leser je Strom gibt es kein zweites Minimum.
+    if readers > 1 {
+        let _ = writeln!(s, "        for (int r = 1; r < g_int_reader_n[k]; r++) {{");
+        let _ = writeln!(s, "            long long c = a->int_ex[k][g_int_readers[k][r]];");
+        let _ = writeln!(s, "            if (c < min) min = c;");
+        let _ = writeln!(s, "        }}");
+    }
     let _ = writeln!(s, "        while (a->int_n[k] > 0 && takt_int_seq_at(a, k, 0) < min) takt_int_pop(a, k);");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}\n");
@@ -845,8 +848,17 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, trace: Trace, x: &Prefix) {
     // ist ein `StreamOverflow`.
     let _ = writeln!(s, "static int takt_tx_cap(int s) {{");
     let _ = writeln!(s, "    switch (s) {{");
-    for (i, c) in &streams {
-        let _ = writeln!(s, "    case {i}: return {};", c.attrs.capacity.unwrap_or(256));
+    // Gleiche Kapazitaeten nacheinander teilen sich einen Zweig: Zwei gleiche
+    // Zweige hintereinander hielte die Pruefung des C-Teils fuer kopiert.
+    for (n, (i, c)) in streams.iter().enumerate() {
+        match streams.get(n + 1) {
+            Some((_, next)) if cap(next) == cap(c) => {
+                let _ = writeln!(s, "    case {i}:");
+            }
+            _ => {
+                let _ = writeln!(s, "    case {i}: return {};", cap(c));
+            }
+        }
     }
     let _ = writeln!(s, "    default: return 0;");
     let _ = writeln!(s, "    }}");

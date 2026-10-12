@@ -254,7 +254,8 @@ fn report(s: &mut String, trace: Trace, x: &Prefix) {
         s,
         "    case 1: device = g_edge_devices_named[e->index]; word = \"degraded\"; rest = e->what < 6 ? g_edge_what[e->what] : \"\"; break;"
     );
-    let _ = writeln!(s, "    case 2: device = g_edge_devices_named[e->index]; word = \"recovered\"; rest = 0; break;");
+    let _ =
+        writeln!(s, "    case 2: device = g_edge_devices_named[e->index]; word = \"recovered\"; rest = NULL; break;");
     let _ = writeln!(s, "    case 3: {{");
     let _ = writeln!(s, "        unsigned c = a->edge_d[e->index].channel;");
     let _ = writeln!(

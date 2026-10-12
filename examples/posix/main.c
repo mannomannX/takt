@@ -15,6 +15,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -36,25 +37,26 @@ struct out {
 
 static uint8_t put(void *ctx, uint8_t byte) {
     struct out *o = ctx;
-    if (o->len == sizeof o->bytes) {
-        return 0;
+    uint8_t taken = 0u;
+    if (o->len < sizeof o->bytes) {
+        o->bytes[o->len] = byte;
+        o->len++;
+        taken = 1u;
     }
-    o->bytes[o->len] = byte;
-    o->len++;
-    return 1;
+    return taken;
 }
 
 static void flush(void *ctx) {
     struct out *o = ctx;
-    size_t done = 0;
+    size_t done = 0u;
     while (done < o->len) {
-        ssize_t n = write(STDOUT_FILENO, &o->bytes[done], o->len - done);
+        const ssize_t n = write(STDOUT_FILENO, &o->bytes[done], o->len - done);
         if (n <= 0) {
             break;
         }
         done += (size_t)n;
     }
-    memmove(o->bytes, &o->bytes[done], o->len - done);
+    (void)memmove(o->bytes, &o->bytes[done], o->len - done);
     o->len -= done;
 }
 
@@ -66,74 +68,63 @@ static int32_t pending = TAKT_NVM_IDLE;
 
 static uint8_t erase(void *ctx, uint8_t slot) {
     (void)ctx;
-    memset(slots[slot & 1u], 0xff, SLOT);
+    (void)memset(slots[slot & 1u], 0xff, SLOT);
     pending = TAKT_NVM_DONE;
-    return 1;
+    return 1u;
 }
 
 static uint8_t program(void *ctx, uint8_t slot, uint32_t offset, const uint8_t *bytes, uint32_t len) {
     (void)ctx;
-    if (offset > SLOT || len > SLOT - offset) {
+    if ((offset > SLOT) || (len > (SLOT - offset))) {
         pending = TAKT_NVM_FAILED;
-        return 1;
+    } else {
+        (void)memcpy(&slots[slot & 1u][offset], bytes, len);
+        pending = TAKT_NVM_DONE;
     }
-    memcpy(&slots[slot & 1u][offset], bytes, len);
-    pending = TAKT_NVM_DONE;
-    return 1;
+    return 1u;
 }
 
 static int32_t poll_nvm(void *ctx) {
     (void)ctx;
-    int32_t state = pending;
+    const int32_t state = pending;
     pending = TAKT_NVM_IDLE;
     return state;
 }
 
 static uint8_t read_nvm(void *ctx, uint8_t slot, uint32_t offset, uint8_t *into, uint32_t len) {
+    uint8_t ok = 0u;
     (void)ctx;
-    if (offset > SLOT || len > SLOT - offset) {
-        return 0;
+    if ((offset <= SLOT) && (len <= (SLOT - offset))) {
+        (void)memcpy(into, &slots[slot & 1u][offset], len);
+        ok = 1u;
     }
-    memcpy(into, &slots[slot & 1u][offset], len);
-    return 1;
+    return ok;
+}
+
+/* Die Zahl der Ticks aus `text` nach `ticks` (CERT C ERR34-C); 0, wenn sie
+ * eine ist. */
+static int ticks_of(const char *text, uint64_t *ticks) {
+    char *end = NULL;
+    int rc = 1;
+    errno = 0;
+    const unsigned long long value = strtoull(text, &end, 10);
+    if ((errno == 0) && (end != text) && (*end == '\0') && (text[0] != '-')) {
+        *ticks = (uint64_t)value;
+        rc = 0;
+    }
+    return rc;
 }
 
 /* Die Stacks beider Faeden; reichlich ueber PTHREAD_STACK_MIN, gemessen wird
  * die Tiefe (12.3). */
 #define STACK_BYTES (256u * 1024u)
-static _Alignas(64) uint8_t tick_stack[STACK_BYTES];
-static _Alignas(64) uint8_t job_stack[STACK_BYTES];
 
-static struct out out;
-static uint8_t ring[1u << 16];
-static const struct takt_nvm nvm = {NULL, SLOT, -1, erase, program, poll_nvm, read_nvm};
-static uint8_t current[PORT_TEST_PERSIST_BOUND], stored[PORT_TEST_PERSIST_BOUND];
-static struct port_test_arena arena;
-static takt_core core;
-static struct takt_posix posix;
-
-int main(int argc, char **argv) {
-    const uint64_t ticks = argc > 1 ? strtoull(argv[1], NULL, 10) : 2000u;
-    const int flags = fcntl(STDOUT_FILENO, F_GETFL);
-    if (flags < 0 || fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK) != 0) {
-        perror("fcntl");
-        return 2;
-    }
-    const struct takt_line line = {&out, put, flush};
-    int32_t status = takt_line_init(&line, ring, sizeof ring);
-    if (status != TAKT_OK) {
-        fprintf(stderr, "takt_line_init: %d\n", (int)status);
-        return 2;
-    }
-    takt_board_trace("takt auf posix\n");
-    takt_line_mark();
-    memset(slots, 0xff, sizeof slots);
-    status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &nvm, current, stored,
-                                      PORT_TEST_PERSIST_BOUND);
-    if (status != TAKT_OK) {
-        fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
-        return 2;
-    }
+/* Faehrt den Kern `core` ueber den Port, waehrend dieser Faden die fremde
+ * Last rechnet, und schreibt die Bilanz; 0 oder 2. */
+static int drive(takt_core *core, uint64_t ticks) {
+    static struct takt_posix posix;
+    static _Alignas(64) uint8_t tick_stack[STACK_BYTES];
+    static _Alignas(64) uint8_t job_stack[STACK_BYTES];
     const struct takt_posix_config config = {
         .ticks = ticks,
         .tick_ns = PORT_TEST_TICK_NS,
@@ -144,24 +135,67 @@ int main(int argc, char **argv) {
         .step_priority = 0,
         .job_priority = 0,
     };
-    int rc = takt_posix_start(&posix, &core, &config);
+    int rc = takt_posix_start(&posix, core, &config);
     if (rc != 0) {
-        fprintf(stderr, "takt_posix_start: %d\n", rc);
-        return 2;
+        (void)fprintf(stderr, "takt_posix_start: %d\n", rc);
+    } else {
+        /* Die fremde Aufgabe: rechnet mit der FPU, solange Takt laeuft. */
+        takt_foreign foreign = {0u, 0u};
+        struct takt_stacks stacks;
+        while (takt_posix_running(&posix) != 0) {
+            takt_foreign_round(&foreign);
+        }
+        rc = takt_posix_join(&posix, &stacks);
+        if (rc != 0) {
+            (void)fprintf(stderr, "takt_posix_join: %d\n", rc);
+        } else {
+            stacks.tick_bound = PORT_TEST_TICK_STACK_BYTES;
+            stacks.job_bound = PORT_TEST_JOB_STACK_BYTES;
+            takt_core_report(core, &stacks, &foreign);
+        }
     }
-    /* Die fremde Aufgabe: rechnet mit der FPU, solange Takt laeuft. */
-    takt_foreign foreign = {0, 0};
-    while (takt_posix_running(&posix)) {
-        takt_foreign_round(&foreign);
+    return (rc == 0) ? 0 : 2;
+}
+
+/* Was der Wirt fuer den Lauf stellt: Leitung, Journal und Kern; 0 oder 2. */
+static int run(uint64_t ticks) {
+    static struct out out;
+    static uint8_t ring[65536];
+    static uint8_t current[PORT_TEST_PERSIST_BOUND];
+    static uint8_t stored[PORT_TEST_PERSIST_BOUND];
+    static struct port_test_arena arena;
+    static takt_core core;
+    static const struct takt_nvm nvm = {NULL, SLOT, -1, erase, program, poll_nvm, read_nvm};
+    const struct takt_line line = {&out, put, flush};
+    int rc = 2;
+    int32_t status = takt_line_init(&line, ring, sizeof ring);
+    if (status != TAKT_OK) {
+        (void)fprintf(stderr, "takt_line_init: %d\n", (int)status);
+    } else {
+        takt_board_trace("takt auf posix\n");
+        takt_line_mark();
+        (void)memset(slots, 0xff, sizeof slots);
+        status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &nvm, current,
+                                          stored, PORT_TEST_PERSIST_BOUND);
+        if (status != TAKT_OK) {
+            (void)fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
+        } else {
+            rc = drive(&core, ticks);
+        }
     }
-    struct takt_stacks stacks;
-    rc = takt_posix_join(&posix, &stacks);
-    if (rc != 0) {
-        fprintf(stderr, "takt_posix_join: %d\n", rc);
-        return 2;
+    return rc;
+}
+
+int main(int argc, char **argv) {
+    uint64_t ticks = 2000u;
+    const int flags = fcntl(STDOUT_FILENO, F_GETFL);
+    int rc = 2;
+    if ((argc > 1) && (ticks_of(argv[1], &ticks) != 0)) {
+        (void)fprintf(stderr, "takt: keine Zahl von Ticks: %s\n", argv[1]);
+    } else if ((flags < 0) || (fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK) != 0)) {
+        perror("fcntl");
+    } else {
+        rc = run(ticks);
     }
-    stacks.tick_bound = PORT_TEST_TICK_STACK_BYTES;
-    stacks.job_bound = PORT_TEST_JOB_STACK_BYTES;
-    takt_core_report(&core, &stacks, &foreign);
-    return 0;
+    return rc;
 }

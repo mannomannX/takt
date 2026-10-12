@@ -18,7 +18,7 @@
 static int64_t takt_posix_now(const struct takt_posix *p) {
     struct timespec now = p->origin;
     (void)clock_gettime(CLOCK_MONOTONIC, &now);
-    return ((int64_t)now.tv_sec - (int64_t)p->origin.tv_sec) * TAKT_NS_PER_S +
+    return (((int64_t)now.tv_sec - (int64_t)p->origin.tv_sec) * TAKT_NS_PER_S) +
            ((int64_t)now.tv_nsec - (int64_t)p->origin.tv_nsec);
 }
 
@@ -26,17 +26,21 @@ static int64_t takt_posix_now(const struct takt_posix *p) {
 static struct timespec takt_posix_at(const struct takt_posix *p, int64_t ns) {
     struct timespec at = p->origin;
     const int64_t nsec = (int64_t)at.tv_nsec + (ns % TAKT_NS_PER_S);
-    at.tv_sec += (time_t)((ns / TAKT_NS_PER_S) + (nsec / TAKT_NS_PER_S));
-    at.tv_nsec = (long)(nsec % TAKT_NS_PER_S);
+    const int64_t sec = (ns / TAKT_NS_PER_S) + (nsec / TAKT_NS_PER_S);
+    const int64_t rest = nsec % TAKT_NS_PER_S;
+    at.tv_sec += (time_t)sec;
+    at.tv_nsec = (long)rest;
     return at;
 }
 
 /* Das Ende des Laufs in Nanosekunden nach Tick 0. */
 static int64_t takt_posix_end(const struct takt_posix_config *c) {
-    if (c->ticks == 0u || c->ticks > (uint64_t)(INT64_MAX / c->tick_ns)) {
-        return INT64_MAX;
+    const int64_t most = INT64_MAX / c->tick_ns;
+    int64_t end = INT64_MAX;
+    if ((c->ticks != 0u) && (c->ticks <= (uint64_t)most)) {
+        end = (int64_t)c->ticks * c->tick_ns;
     }
-    return (int64_t)c->ticks * c->tick_ns;
+    return end;
 }
 
 /* Der Schrittfaden: `takt_core_service` zu jeder Frist, und frueher, wenn
@@ -101,65 +105,69 @@ static int takt_posix_spawn(pthread_t *thread, void *(*body)(void *), struct tak
                             size_t bytes, int priority) {
     pthread_attr_t attr;
     int rc = pthread_attr_init(&attr);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = pthread_attr_setstack(&attr, stack, bytes);
-    if ((rc == 0) && (priority > 0)) {
-        struct sched_param param;
-        (void)memset(&param, 0, sizeof param);
-        param.sched_priority = priority;
-        rc = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
-        if (rc == 0) {
-            rc = pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
-        }
-        if (rc == 0) {
-            rc = pthread_attr_setschedparam(&attr, &param);
-        }
-    }
     if (rc == 0) {
-        rc = pthread_create(thread, &attr, body, p);
+        rc = pthread_attr_setstack(&attr, stack, bytes);
+        if ((rc == 0) && (priority > 0)) {
+            struct sched_param param;
+            (void)memset(&param, 0, sizeof param);
+            param.sched_priority = priority;
+            rc = pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+            if (rc == 0) {
+                rc = pthread_attr_setschedpolicy(&attr, SCHED_FIFO);
+            }
+            if (rc == 0) {
+                rc = pthread_attr_setschedparam(&attr, &param);
+            }
+        }
+        if (rc == 0) {
+            rc = pthread_create(thread, &attr, body, p);
+        }
+        (void)pthread_attr_destroy(&attr);
     }
-    (void)pthread_attr_destroy(&attr);
+    return rc;
+}
+
+/* Die Sperre; mit Prioritaeten erbt der Jobfaden die des Schritts, solange
+ * er sie haelt. */
+static int takt_posix_lock_init(struct takt_posix *p) {
+    pthread_mutexattr_t mutex_attr;
+    int rc = pthread_mutexattr_init(&mutex_attr);
+    if (rc == 0) {
+#if defined(_POSIX_THREAD_PRIO_INHERIT) && (_POSIX_THREAD_PRIO_INHERIT > 0)
+        rc = pthread_mutexattr_setprotocol(&mutex_attr, PTHREAD_PRIO_INHERIT);
+        if (rc == 0) {
+            rc = pthread_mutex_init(&p->lock, &mutex_attr);
+        }
+#else
+        rc = pthread_mutex_init(&p->lock, &mutex_attr);
+#endif
+        (void)pthread_mutexattr_destroy(&mutex_attr);
+    }
     return rc;
 }
 
 /* Sperre und Bedingungen; die Bedingungen warten auf `CLOCK_MONOTONIC`. */
 static int takt_posix_sync_init(struct takt_posix *p) {
-    pthread_mutexattr_t mutex_attr;
     pthread_condattr_t cond_attr;
-    int rc = pthread_mutexattr_init(&mutex_attr);
-    if (rc != 0) {
-        return rc;
-    }
-#if defined(_POSIX_THREAD_PRIO_INHERIT) && (_POSIX_THREAD_PRIO_INHERIT > 0)
-    /* Mit Prioritaeten erbt der Jobfaden die des Schritts, solange er die
-     * Sperre haelt. */
-    rc = pthread_mutexattr_setprotocol(&mutex_attr, PTHREAD_PRIO_INHERIT);
-#endif
+    int rc = takt_posix_lock_init(p);
     if (rc == 0) {
-        rc = pthread_mutex_init(&p->lock, &mutex_attr);
-    }
-    (void)pthread_mutexattr_destroy(&mutex_attr);
-    if (rc != 0) {
-        return rc;
-    }
-    rc = pthread_condattr_init(&cond_attr);
-    if (rc == 0) {
-        rc = pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+        rc = pthread_condattr_init(&cond_attr);
         if (rc == 0) {
-            rc = pthread_cond_init(&p->step_wake, &cond_attr);
-        }
-        if (rc == 0) {
-            rc = pthread_cond_init(&p->job_wake, &cond_attr);
-            if (rc != 0) {
-                (void)pthread_cond_destroy(&p->step_wake);
+            rc = pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+            if (rc == 0) {
+                rc = pthread_cond_init(&p->step_wake, &cond_attr);
             }
+            if (rc == 0) {
+                rc = pthread_cond_init(&p->job_wake, &cond_attr);
+                if (rc != 0) {
+                    (void)pthread_cond_destroy(&p->step_wake);
+                }
+            }
+            (void)pthread_condattr_destroy(&cond_attr);
         }
-        (void)pthread_condattr_destroy(&cond_attr);
-    }
-    if (rc != 0) {
-        (void)pthread_mutex_destroy(&p->lock);
+        if (rc != 0) {
+            (void)pthread_mutex_destroy(&p->lock);
+        }
     }
     return rc;
 }
@@ -170,29 +178,11 @@ static void takt_posix_sync_destroy(struct takt_posix *p) {
     (void)pthread_mutex_destroy(&p->lock);
 }
 
-int takt_posix_start(struct takt_posix *posix, takt_core *core, const struct takt_posix_config *config) {
-    int rc;
-    if ((posix == NULL) || (core == NULL) || (config == NULL) || (config->tick_stack == NULL) ||
-        (config->job_stack == NULL) || (config->tick_ns <= 0)) {
-        return EINVAL;
-    }
-    (void)memset(posix, 0, sizeof *posix);
-    posix->core = core;
-    posix->config = *config;
-    rc = takt_posix_sync_init(posix);
-    if (rc != 0) {
-        return rc;
-    }
-    (void)memset(config->tick_stack, (int)TAKT_POSIX_PAINT, config->tick_stack_bytes);
-    (void)memset(config->job_stack, (int)TAKT_POSIX_PAINT, config->job_stack_bytes);
-    if (clock_gettime(CLOCK_MONOTONIC, &posix->origin) != 0) {
-        rc = errno;
-        takt_posix_sync_destroy(posix);
-        return rc;
-    }
-    __atomic_store_n(&posix->running, 1, __ATOMIC_SEQ_CST);
-    rc = takt_posix_spawn(&posix->job, takt_posix_job, posix, config->job_stack, config->job_stack_bytes,
-                          config->job_priority);
+/* Startet beide Faeden; scheitert der zweite, endet der erste wieder. */
+static int takt_posix_threads(struct takt_posix *posix) {
+    const struct takt_posix_config *config = &posix->config;
+    int rc = takt_posix_spawn(&posix->job, takt_posix_job, posix, config->job_stack, config->job_stack_bytes,
+                              config->job_priority);
     if (rc == 0) {
         rc = takt_posix_spawn(&posix->step, takt_posix_step, posix, config->tick_stack, config->tick_stack_bytes,
                               config->step_priority);
@@ -204,14 +194,40 @@ int takt_posix_start(struct takt_posix *posix, takt_core *core, const struct tak
             (void)pthread_join(posix->job, NULL);
         }
     }
-    if (rc != 0) {
-        __atomic_store_n(&posix->running, 0, __ATOMIC_SEQ_CST);
-        takt_posix_sync_destroy(posix);
+    return rc;
+}
+
+int takt_posix_start(struct takt_posix *posix, takt_core *core, const struct takt_posix_config *config) {
+    int rc = EINVAL;
+    if ((posix != NULL) && (core != NULL) && (config != NULL) && (config->tick_stack != NULL) &&
+        (config->job_stack != NULL) && (config->tick_ns > 0)) {
+        (void)memset(posix, 0, sizeof *posix);
+        posix->core = core;
+        posix->config = *config;
+        rc = takt_posix_sync_init(posix);
+        if (rc == 0) {
+            (void)memset(config->tick_stack, (int)TAKT_POSIX_PAINT, config->tick_stack_bytes);
+            (void)memset(config->job_stack, (int)TAKT_POSIX_PAINT, config->job_stack_bytes);
+            if (clock_gettime(CLOCK_MONOTONIC, &posix->origin) != 0) {
+                rc = errno;
+            } else {
+                __atomic_store_n(&posix->running, 1, __ATOMIC_SEQ_CST);
+                rc = takt_posix_threads(posix);
+                if (rc != 0) {
+                    __atomic_store_n(&posix->running, 0, __ATOMIC_SEQ_CST);
+                }
+            }
+            if (rc != 0) {
+                takt_posix_sync_destroy(posix);
+            }
+        }
     }
     return rc;
 }
 
-int takt_posix_running(struct takt_posix *posix) { return __atomic_load_n(&posix->running, __ATOMIC_SEQ_CST); }
+int takt_posix_running(const struct takt_posix *posix) {
+    return __atomic_load_n(&posix->running, __ATOMIC_SEQ_CST);
+}
 
 /* Wie tief ein Stack reichte: alles ueber den Bytes, die unten noch die
  * Farbe tragen. */
@@ -221,7 +237,8 @@ static uint32_t takt_posix_depth(const void *stack, size_t bytes) {
     while ((untouched < bytes) && (s[untouched] == (uint8_t)TAKT_POSIX_PAINT)) {
         untouched++;
     }
-    return ((bytes - untouched) > UINT32_MAX) ? UINT32_MAX : (uint32_t)(bytes - untouched);
+    const size_t used = bytes - untouched;
+    return (used > UINT32_MAX) ? UINT32_MAX : (uint32_t)used;
 }
 
 int takt_posix_join(struct takt_posix *posix, struct takt_stacks *stacks) {

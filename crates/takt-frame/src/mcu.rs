@@ -1420,7 +1420,7 @@ fn telemetry(
     let _ = writeln!(s, "    switch (kind) {{");
     for kind in kinds.iter().filter(|k| *k & 0x80 == 0) {
         let ct = kind_c_type(*kind);
-        let _ = writeln!(s, "    case {kind}: return (long long)*(const {ct} *)v;");
+        let _ = writeln!(s, "    case {kind}: {{ {ct} x; memcpy(&x, v, sizeof x); return (long long)x; }}");
     }
     let _ = writeln!(s, "    default: return 0;");
     let _ = writeln!(s, "    }}");
@@ -1434,8 +1434,12 @@ fn telemetry(
     let _ = writeln!(s, "            if (f->names[i].d == v) {{ takt_board_trace(f->names[i].name); return; }}");
     let _ = writeln!(s, "        takt_board_trace(\"?\");");
     let _ = writeln!(s, "    }} else if (f->kind == {BOOL}) takt_board_trace(v ? \"true\" : \"false\");");
-    let _ = writeln!(s, "    else if (f->kind == 0x84) takt_board_trace_f64((double)*(const float *)at);");
-    let _ = writeln!(s, "    else if (f->kind == 0x88) takt_board_trace_f64(*(const double *)at);");
+    let _ = writeln!(
+        s,
+        "    else if (f->kind == 0x84) {{ float x; memcpy(&x, at, sizeof x); takt_board_trace_f64((double)x); }}"
+    );
+    let _ =
+        writeln!(s, "    else if (f->kind == 0x88) {{ double x; memcpy(&x, at, sizeof x); takt_board_trace_f64(x); }}");
     let _ = writeln!(
         s,
         "    else if (f->kind == {DURATION}) {{ takt_board_trace_i64(takt_dur_value(v)); takt_board_trace(takt_dur_unit(v)); }}"
@@ -1468,7 +1472,10 @@ fn telemetry(
     let _ = writeln!(s, "    }}");
     for kind in kinds.iter().filter(|k| *k & 0x80 != 0) {
         let ct = kind_c_type(*kind);
-        let _ = writeln!(s, "    if (o->kind == {kind}) {{ takt_board_trace_f64((double)*(const {ct} *)v); return; }}");
+        let _ = writeln!(
+            s,
+            "    if (o->kind == {kind}) {{ {ct} x; memcpy(&x, v, sizeof x); takt_board_trace_f64((double)x); return; }}"
+        );
     }
     if kinds.contains(&DURATION) {
         let _ = writeln!(s, "    if (o->kind == {DURATION}) {{");
@@ -1496,7 +1503,7 @@ fn telemetry(
     let _ = writeln!(s, "            takt_board_trace(\" [\");");
     let _ = writeln!(s, "            for (unsigned k = 0; k < o->count; k++) {{");
     let _ = writeln!(s, "                if (k) takt_board_trace(\", \");");
-    let _ = writeln!(s, "                takt_dump_value(o, v + k * w);");
+    let _ = writeln!(s, "                takt_dump_value(o, v + (size_t)k * w);");
     let _ = writeln!(s, "            }}");
     let _ = writeln!(s, "            takt_board_trace(\"]\\n\");");
     let _ = writeln!(s, "        }} else {{");
@@ -1745,7 +1752,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
 
     let _ = writeln!(s, "\n/* Schritt 2: die Lieferungen an den Rand, der Rand ins Abbild (12.1, 12.6). */");
     let _ = writeln!(s, "static void takt_sample(struct {x}_arena *a) {{");
-    let _ = writeln!(s, "    int64_t now = a->tick * {tick}LL;");
+    let body = s.len();
     for b in &scalars {
         let _ = writeln!(s, "    {{ /* {} */", b.name);
         let _ = writeln!(s, "        {} v = 0;", b.ct);
@@ -1791,7 +1798,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
             let _ = writeln!(s, "        }}");
         }
         let _ = writeln!(s, "        for (; i < {}; i++) {{", b.polls);
-        let _ = writeln!(s, "            unsigned char *buf = a->edge_pool + {off} + i * {};", b.cap);
+        let _ = writeln!(s, "            unsigned char *buf = a->edge_pool + {off} + (ptrdiff_t)i * {};", b.cap);
         let _ = writeln!(s, "            int32_t len = 0;");
         let _ = writeln!(s, "            int64_t t = now, seq = next;");
         let _ = writeln!(s, "            if (!{}(a->user, now, buf, {}, &len, &t, &seq)) break;", b.function, b.cap);
@@ -1833,6 +1840,21 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     }
     let _ = writeln!(s, "    takt_edge_commit(a, a->tick);");
     let _ = writeln!(s, "}}\n");
+    with_now(s, body, &format!("a->tick * {tick}LL"));
+}
+
+/// Stellt `now`, die Zeit des Ticks, an den Anfang des Rumpfs ab `body`,
+/// wenn er sie nennt; ein ungelesener Wert waere toter Code (MISRA C:2012
+/// 2.2, plan/cert.md „Der C-Teil“).
+fn with_now(s: &mut String, body: usize, value: &str) {
+    let ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let code = &s[body..];
+    let named = code.match_indices("now").any(|(at, _)| {
+        !code[..at].chars().next_back().is_some_and(ident) && !code[at + 3..].chars().next().is_some_and(ident)
+    });
+    if named {
+        s.insert_str(body, &format!("    int64_t now = {value};\n"));
+    }
 }
 
 /// Die hw-gebundenen Ausgabestroeme unter `read` mit ihrem Platz im
@@ -2193,8 +2215,7 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         "\n/* Schritt 10: der Latch geht an die Geraete (12.1); was scheitert, faultet im naechsten Tick. */"
     );
     let _ = writeln!(s, "static void takt_commit(struct {x}_arena *a) {{");
-    // Die Grenze des gerechneten Ticks: Ein Schlaf (9.9) rueckt `tick` schon vor dem Commit vor.
-    let _ = writeln!(s, "    int64_t now = a->done * {}LL;", p.config.tick);
+    let body = s.len();
     for d in &devices {
         let _ = writeln!(
             s,
@@ -2234,6 +2255,8 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         );
     }
     let _ = writeln!(s, "}}");
+    // Die Grenze des gerechneten Ticks: Ein Schlaf (9.9) rueckt `tick` schon vor dem Commit vor.
+    with_now(s, body, &format!("a->done * {}LL", p.config.tick));
     locked(s, x, "void", "commit", "", "", "");
 }
 
