@@ -1,6 +1,7 @@
 name: Takt-Werkzeuge
 description: >-
-  Rust 1.98.0 mit den Zielen der Boards und llvm-tools, LLVM 22.1.8, z3 4.13.4,
+  Rust 1.98.0 mit den Zielen der Boards und llvm-tools, LLVM 22.1.8 (unter Linux
+  mit clang-tidy fuer den C-Teil), z3 4.13.4,
   cvc5 1.2.0 und cargo-nextest 0.9.146, dieselben Versionen wie auf dem
   Entwicklungsrechner. Unter Linux dazu die aarch64-Werkzeugkette mit qemu
   und libudev (wie tools/Dockerfile.linux).
@@ -50,15 +51,15 @@ runs:
     # mit derselben Version von clang wieder (M11 Schritt 34d). Das Archiv
     # hat 1,9 GB; der Cache haelt nur, was Takt braucht: clang mit seinen
     # Kopfdateien und Laufzeiten (ASan), die Werkzeuge, die Takt neben clang
-    # sucht (`ld.lld`, `llvm-ar`, `llvm-nm`, `llvm-size`), und die
-    # Bibliotheken, die sie laden.
+    # sucht (`ld.lld`, `llvm-ar`, `llvm-nm`, `llvm-size`, `clang-tidy` fuer
+    # den C-Teil, M11 Schritt 33b), und die Bibliotheken, die sie laden.
     - name: LLVM 22.1.8 aus dem Cache
       id: llvm
       if: runner.os == 'Linux'
       uses: actions/cache@v4
       with:
         path: ~/llvm-22.1.8
-        key: llvm-22.1.8-linux-x64-2
+        key: llvm-22.1.8-linux-x64-3
 
     - name: LLVM 22.1.8 laden
       if: runner.os == 'Linux' && steps.llvm.outputs.cache-hit != 'true'
@@ -74,7 +75,7 @@ runs:
         mkdir -p "$dest/bin" "$dest/lib"
         # Je Werkzeug die Datei selbst, nicht der Verweis: Der Name waehlt,
         # was `clang` und `lld` sind (`ld.lld` ist der ELF-Linker).
-        tools="$name/bin/clang $name/bin/ld.lld $name/bin/llvm-ar $name/bin/llvm-nm $name/bin/llvm-size"
+        tools="$name/bin/clang $name/bin/ld.lld $name/bin/llvm-ar $name/bin/llvm-nm $name/bin/llvm-size $name/bin/clang-tidy"
         for tool in $tools; do
           cp -L "$tool" "$dest/bin/"
         done
@@ -100,6 +101,7 @@ runs:
         "$HOME/llvm-22.1.8/bin/llvm-ar" --version | head -2
         "$HOME/llvm-22.1.8/bin/llvm-nm" --version
         "$HOME/llvm-22.1.8/bin/llvm-size" --version
+        "$HOME/llvm-22.1.8/bin/clang-tidy" --version
 
     - name: z3 4.13.4 und cvc5 1.2.0
       if: runner.os == 'Linux'

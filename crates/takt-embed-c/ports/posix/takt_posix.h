@@ -68,7 +68,7 @@ struct takt_posix {
 int takt_posix_start(struct takt_posix *posix, takt_core *core, const struct takt_posix_config *config);
 
 /* Wahr, solange der Schrittfaden laeuft. */
-int takt_posix_running(struct takt_posix *posix);
+int takt_posix_running(const struct takt_posix *posix);
 
 /* Wartet auf das Ende beider Faeden und nennt in `stacks` die Tiefe jedes
  * Stacks; die Schranken traegt der Wirt ein. 0 oder der Fehler von

@@ -26,6 +26,23 @@ unsafe fn items<'a, T>(p: *mut T, n: u32) -> &'a mut [T] {
     unsafe { slice::from_raw_parts_mut(p, len) }
 }
 
+/// Wie [`items`], nur zum Lesen: Der Rahmen reicht seine Tabellen als
+/// `const`, oft aus dem Nur-Lese-Speicher; ein `&mut` darauf waere
+/// undefiniert, auch ohne Schreiben (Miri, M11 Schritt 33c).
+///
+/// # Safety
+///
+/// Ist `n` positiv und `p` nicht null, zeigt `p` auf `n` Eintraege, die
+/// waehrend des Aufrufs niemand schreibt.
+unsafe fn read<'a, T>(p: *const T, n: u32) -> &'a [T] {
+    let Ok(len) = usize::try_from(n) else { return &[] };
+    if p.is_null() || len == 0 {
+        return &[];
+    }
+    // SAFETY: vom Aufrufer zugesagt.
+    unsafe { slice::from_raw_parts(p, len) }
+}
+
 /// Die Zeilen 1 und 2 fuer die Lieferungen eines Ticks
 /// ([`contract::settle`]): `tracks` und `device_of` je Kanal, `devices` je
 /// Treiber. Die Meldungen gehen nach `events`, hoechstens `max_events`;
@@ -54,7 +71,7 @@ pub unsafe extern "C" fn takt_edge_settle(
     // SAFETY: `n_devices` Eintraege, vom Aufrufer zugesagt.
     let devices = unsafe { items(devices, n_devices) };
     // SAFETY: `channels` Eintraege, vom Aufrufer zugesagt; nur gelesen.
-    let device_of = unsafe { items(device_of.cast_mut(), channels) };
+    let device_of = unsafe { read(device_of, channels) };
     // SAFETY: `n` Eintraege, vom Aufrufer zugesagt.
     let deliveries = unsafe { items(deliveries, n) };
     // SAFETY: `max_events` Eintraege, vom Aufrufer zugesagt.
@@ -176,8 +193,8 @@ pub unsafe extern "C" fn takt_edge_decodes(
     exact: bool,
 ) -> bool {
     // SAFETY: `shape_len` Byte, vom Aufrufer zugesagt; nur gelesen.
-    let shape = unsafe { items(shape.cast_mut(), shape_len) };
+    let shape = unsafe { read(shape, shape_len) };
     // SAFETY: `len` Byte, vom Aufrufer zugesagt; nur gelesen.
-    let bytes = unsafe { items(bytes.cast_mut(), len) };
+    let bytes = unsafe { read(bytes, len) };
     takt_native::bytes::decodes(shape, bytes, exact)
 }

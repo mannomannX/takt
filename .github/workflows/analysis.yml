@@ -1,0 +1,116 @@
+# Die Pruefungen des eigenen Codes, die eigene Werkzeuge brauchen (M11
+# Schritt 33b und 33c, plan/cert.md Abschnitt 6): der C-Teil mit
+# clang-tidy und cppcheck nach CERT C und MISRA C, die Crates mit `unsafe`
+# unter Miri. Bei jedem Push, auf main wie auf einem Zweig, und von Hand.
+name: Analyse
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  c:
+    name: C-Teil nach CERT C und MISRA C
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      # clang-tidy kommt mit LLVM 22.1.8 aus der Setup-Aktion.
+      - uses: ./.github/actions/setup
+
+      # cppcheck 2.22.0 aus den Quellen des Projekts, wie LLVM mit
+      # Pruefsumme: Die Zahlen im Katalog haengen an der Fassung. Das
+      # MISRA-Addon laeuft ohne die Regeltexte und nennt nur die Nummern.
+      # Gesichert gleich nach dem Bau, nicht erst am Ende eines Jobs, der
+      # an einem Befund scheitern darf.
+      - name: cppcheck 2.22.0 aus dem Cache
+        id: cppcheck
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/cppcheck-2.22.0
+          key: cppcheck-2.22.0-linux-x64-1
+
+      - name: cppcheck 2.22.0 bauen
+        if: steps.cppcheck.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLo cppcheck-2.22.0.tar.gz https://github.com/danmar/cppcheck/archive/refs/tags/2.22.0.tar.gz
+          echo "d74945deb2d50393430e07596b766f8a779512c7f60dac2a30ea64e059ece57b  cppcheck-2.22.0.tar.gz" | sha256sum -c -
+          tar -xzf cppcheck-2.22.0.tar.gz
+          dest="$HOME/cppcheck-2.22.0"
+          cmake -S cppcheck-2.22.0 -B cppcheck-build -DCMAKE_BUILD_TYPE=Release -DUSE_MATCHCOMPILER=On \
+            -DHAVE_RULES=Off -DBUILD_GUI=Off -DBUILD_TESTS=Off \
+            -DCMAKE_INSTALL_PREFIX="$dest" -DFILESDIR="$dest/share/Cppcheck"
+          cmake --build cppcheck-build -j "$(nproc)"
+          cmake --install cppcheck-build
+
+      - name: cppcheck 2.22.0 in den Cache
+        if: steps.cppcheck.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/cppcheck-2.22.0
+          key: cppcheck-2.22.0-linux-x64-1
+
+      - name: cppcheck einrichten
+        shell: bash
+        run: |
+          echo "TAKT_CPPCHECK=$HOME/cppcheck-2.22.0/bin/cppcheck" >> "$GITHUB_ENV"
+          "$HOME/cppcheck-2.22.0/bin/cppcheck" --version
+          python3 --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: analysis
+
+      # Die Lieferformen baut `takt`; beide Tests der Pruefung sind
+      # ignoriert, weil sie die Werkzeuge brauchen.
+      - name: Der C-Teil gegen den Katalog
+        run: cargo nextest run -p takt-cli --test c_analysis --run-ignored all --profile ci
+
+  miri:
+    name: Miri (${{ matrix.krate }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Die Testhilfe von takt-embed liest Programme aus dem Baum.
+          - krate: takt-embed
+            features: --all-features
+            miriflags: -Zmiri-disable-isolation
+          - krate: takt-embed-c
+            features: ""
+            miriflags: ""
+          - krate: takt-native-abi
+            features: ""
+            miriflags: ""
+    env:
+      # Ein Nightly mit Miri, fest: Ein anderes urteilt anders.
+      NIGHTLY: nightly-2026-10-01
+    steps:
+      - uses: actions/checkout@v5
+      - name: Nightly mit Miri
+        shell: bash
+        run: |
+          rustup toolchain install "$NIGHTLY" --profile minimal --component miri,rust-src
+          cargo "+$NIGHTLY" miri --version
+          cargo "+$NIGHTLY" miri setup
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: miri-${{ matrix.krate }}
+          workspaces: crates/${{ matrix.krate }} -> target
+      - name: Miri
+        shell: bash
+        env:
+          MIRIFLAGS: ${{ matrix.miriflags }}
+        run: cargo "+$NIGHTLY" miri test --manifest-path "crates/${{ matrix.krate }}/Cargo.toml" ${{ matrix.features }}

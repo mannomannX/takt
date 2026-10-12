@@ -1108,3 +1108,339 @@ mod tests {
         }
     }
 }
+
+/// Der Kern hinter der C-Schnittstelle, wie ein C-Wirt ihn faehrt (M11
+/// Schritt 33c): Programm, Leitung und Geraet des Journals sind Rueckrufe
+/// dieses Tests. Unter Miri prueft der Lauf jeden Zugriff des Archivs ueber
+/// die Zeiger des Wirts: den Kern in `takt_core`, die Arena, die Puffer des
+/// Journals und die Leitung hinter dem `static`.
+#[cfg(test)]
+mod core_abi {
+    use core::ffi::c_void;
+    use core::mem::MaybeUninit;
+    use core::ops::Range;
+    use core::ptr::{null, null_mut};
+    use std::boxed::Box;
+    use std::string::String;
+    use std::vec::Vec;
+
+    use super::{
+        ABI, Core, LineOps, NvmOps, Ops, nvm, status, takt_board_trace, takt_core_finish, takt_core_init,
+        takt_core_init_journaled, takt_core_job_work, takt_core_report, takt_core_service, takt_line_init,
+    };
+
+    const TICK_NS: i64 = 1_000_000;
+    const TICKS: i64 = 12;
+    const SLOT: usize = 256;
+
+    /// Die Arena des Programms: der letzte Tick, wie oft es begann und
+    /// welchen Stand es aus dem Journal bekam.
+    #[derive(Default)]
+    struct Counter {
+        tick: i64,
+        starts: u32,
+        restored: i64,
+    }
+
+    /// Die Arena hinter dem Zeiger des Archivs.
+    ///
+    /// # Safety
+    ///
+    /// `arena` zeigt auf einen `Counter`, auf den waehrend des Aufrufs sonst
+    /// nichts zugreift.
+    unsafe fn counter<'a>(arena: *mut c_void) -> &'a mut Counter {
+        // SAFETY: siehe oben.
+        unsafe { &mut *arena.cast::<Counter>() }
+    }
+
+    unsafe extern "C" fn init(arena: *mut c_void, _user: *mut c_void) {
+        // SAFETY: die Arena des Tests.
+        let c = unsafe { counter(arena) };
+        c.tick = 0;
+        c.starts += 1;
+    }
+
+    unsafe extern "C" fn restore(arena: *mut c_void, bytes: *const c_void, len: i32) -> i32 {
+        if len != 8 {
+            return 0;
+        }
+        let mut value = [0u8; 8];
+        // SAFETY: Das Archiv reicht `len` lesbare Byte.
+        unsafe { core::ptr::copy_nonoverlapping(bytes.cast::<u8>(), value.as_mut_ptr(), value.len()) };
+        // SAFETY: die Arena des Tests.
+        unsafe { counter(arena) }.restored = i64::from_le_bytes(value);
+        8
+    }
+
+    unsafe extern "C" fn init_with(arena: *mut c_void, user: *mut c_void, bytes: *const c_void, len: i32) -> i32 {
+        // SAFETY: wie `init` und `restore`.
+        unsafe {
+            init(arena, user);
+            restore(arena, bytes, len)
+        }
+    }
+
+    unsafe extern "C" fn tick(arena: *mut c_void, k: i64) {
+        // SAFETY: die Arena des Tests.
+        unsafe { counter(arena) }.tick = k;
+    }
+
+    unsafe extern "C" fn snapshot(arena: *mut c_void, out: *mut c_void, cap: i32) -> i32 {
+        if cap < 8 {
+            return 0;
+        }
+        // SAFETY: die Arena des Tests.
+        let value = unsafe { counter(arena) }.tick.to_le_bytes();
+        // SAFETY: Das Archiv reicht `cap` beschreibbare Byte.
+        unsafe { core::ptr::copy_nonoverlapping(value.as_ptr(), out.cast::<u8>(), value.len()) };
+        8
+    }
+
+    unsafe extern "C" fn dump(_arena: *mut c_void, _all: i32) {
+        // SAFETY: ein nullterminiertes Literal, wie der Rahmen es reicht.
+        unsafe { takt_board_trace(c"t= dump\n".as_ptr()) };
+    }
+
+    unsafe extern "C" fn tolerance(ns: *mut i64, runs: *mut u32) {
+        // SAFETY: Das Archiv reicht zwei beschreibbare Zahlen.
+        unsafe {
+            ns.write(0);
+            runs.write(0);
+        }
+    }
+
+    extern "C" fn nothing(_: *mut c_void) {}
+
+    extern "C" fn no(_: *mut c_void) -> u8 {
+        0
+    }
+
+    extern "C" fn no_deadline(_: *mut c_void) -> i64 {
+        -1
+    }
+
+    extern "C" fn advance(_: *mut c_void, _: i64) {}
+
+    extern "C" fn tune(_: *mut c_void, _: i64, _: u32, _: *const c_void, _: i32) -> i32 {
+        0
+    }
+
+    extern "C" fn woken(_: *mut c_void, _: i64) -> u8 {
+        0
+    }
+
+    extern "C" fn constant() -> u8 {
+        0
+    }
+
+    extern "C" fn pc(_: *mut c_void, _: i32) {}
+
+    extern "C" fn next_run(_: *mut c_void, _: *mut i64) -> i32 {
+        0
+    }
+
+    extern "C" fn job_dispatch(_: *mut c_void) -> i32 {
+        0
+    }
+
+    /// Die Tabelle des Programms, wie `P_ops` sie fuellt.
+    fn ops(persists: bool) -> Ops {
+        Ops {
+            abi: ABI,
+            persists: u8::from(persists),
+            overrun_alert: 0,
+            tick_ns: TICK_NS,
+            logic_hash: 0x7a6b_7400,
+            persist_min_interval_ns: 0,
+            persist_bound: 8,
+            init,
+            init_with,
+            tick,
+            commit: nothing,
+            idle: no,
+            deadline: no_deadline,
+            advance,
+            tune,
+            woken,
+            wake_sources: constant,
+            persist_snapshot: snapshot,
+            persist_restore: restore,
+            dump,
+            pc,
+            next_run,
+            end: nothing,
+            overrun: nothing,
+            hardware: nothing,
+            tolerance,
+            output_timing: constant,
+            job_dispatch,
+            job_work: nothing,
+        }
+    }
+
+    /// Ein Flash im Speicher: zwei Slots, jeder Vorgang sofort fertig.
+    struct Flash {
+        slots: [[u8; SLOT]; 2],
+        pending: i32,
+    }
+
+    /// Das Flash hinter dem Zeiger des Geraets.
+    ///
+    /// # Safety
+    ///
+    /// Wie [`counter`], fuer ein `Flash`.
+    unsafe fn flash<'a>(ctx: *mut c_void) -> &'a mut Flash {
+        // SAFETY: siehe oben.
+        unsafe { &mut *ctx.cast::<Flash>() }
+    }
+
+    /// `offset..offset + len`, wenn es in einem Slot liegt.
+    fn span(offset: u32, len: u32) -> Option<Range<usize>> {
+        let start = usize::try_from(offset).ok()?;
+        let end = start.checked_add(usize::try_from(len).ok()?)?;
+        (end <= SLOT).then_some(start..end)
+    }
+
+    unsafe extern "C" fn erase(ctx: *mut c_void, slot: u8) -> u8 {
+        // SAFETY: das Flash des Tests.
+        let f = unsafe { flash(ctx) };
+        f.slots[usize::from(slot & 1)].fill(0xff);
+        f.pending = nvm::DONE;
+        1
+    }
+
+    unsafe extern "C" fn write(ctx: *mut c_void, slot: u8, offset: u32, bytes: *const u8, len: u32) -> u8 {
+        // SAFETY: das Flash des Tests.
+        let f = unsafe { flash(ctx) };
+        f.pending = match span(offset, len) {
+            Some(range) => {
+                // SAFETY: Das Archiv reicht `len` lesbare Byte.
+                let bytes = unsafe { core::slice::from_raw_parts(bytes, range.len()) };
+                f.slots[usize::from(slot & 1)][range].copy_from_slice(bytes);
+                nvm::DONE
+            }
+            None => nvm::FAILED,
+        };
+        1
+    }
+
+    unsafe extern "C" fn poll(ctx: *mut c_void) -> i32 {
+        // SAFETY: das Flash des Tests.
+        core::mem::replace(&mut unsafe { flash(ctx) }.pending, nvm::IDLE)
+    }
+
+    unsafe extern "C" fn read(ctx: *mut c_void, slot: u8, offset: u32, into: *mut u8, len: u32) -> u8 {
+        // SAFETY: das Flash des Tests.
+        let f = unsafe { flash(ctx) };
+        let Some(range) = span(offset, len) else { return 0 };
+        // SAFETY: Das Archiv reicht `len` beschreibbare Byte.
+        let into = unsafe { core::slice::from_raw_parts_mut(into, range.len()) };
+        into.copy_from_slice(&f.slots[usize::from(slot & 1)][range]);
+        1
+    }
+
+    /// Die Leitung: jedes Byte in den Puffer des Tests.
+    unsafe extern "C" fn put(ctx: *mut c_void, byte: u8) -> u8 {
+        // SAFETY: der Puffer des Tests; nur die Leitung schreibt in ihn.
+        unsafe { (*ctx.cast::<Vec<u8>>()).push(byte) };
+        1
+    }
+
+    /// Faehrt `core` wie ein C-Wirt in logischer Zeit ueber [`TICKS`] Ticks:
+    /// die Uhr zu jeder Frist, jeder Job zu Ende vor dem naechsten Schritt.
+    ///
+    /// # Safety
+    ///
+    /// `core` ist ein Kern aus `takt_core_init` oder `takt_core_init_journaled`.
+    unsafe fn drive(core: *mut Core) {
+        let mut now = 0;
+        for _ in 0..4 * TICKS {
+            if now >= TICKS * TICK_NS {
+                break;
+            }
+            // SAFETY: siehe oben; nie zwei Aufrufe zugleich.
+            let next = unsafe { takt_core_service(core, now) };
+            assert_eq!(next.ended, 0, "das Programm endet nie");
+            if next.jobs != 0 {
+                // SAFETY: wie oben, als Job-Kontext.
+                unsafe { takt_core_job_work(core) };
+            }
+            assert!(next.deadline_ns > now, "die Frist {} liegt nicht nach {now}", next.deadline_ns);
+            now = next.deadline_ns;
+        }
+    }
+
+    /// **Ein Kern laeuft durch die C-Schnittstelle** (12.11): ohne Journal,
+    /// dann zweimal mit Journal auf demselben Flash — der zweite Lauf
+    /// beginnt mit dem Stand des ersten —, und die Bilanz geht ueber die
+    /// Leitung.
+    #[test]
+    fn a_core_runs_through_the_c_interface() {
+        // Leitung und Ring leben so lange wie der Prozess, wie in einem C-Wirt.
+        let sink: *mut Vec<u8> = Box::into_raw(Box::default());
+        let ring: &'static mut [u8] = Box::leak(std::vec![0u8; 512].into_boxed_slice());
+        let line = LineOps { ctx: sink.cast(), try_write: put, flush: None };
+        let len = u32::try_from(ring.len()).expect("Ring");
+        // SAFETY: Tabelle und Ring gelten so lange wie der Prozess; kein Schritt laeuft.
+        assert_eq!(unsafe { takt_line_init(&line, ring.as_mut_ptr(), len) }, status::OK);
+
+        let plain = ops(false);
+        let mut arena = Counter::default();
+        let mut core = MaybeUninit::<Core>::uninit();
+        // SAFETY: Kern, Tabelle und Arena leben bis zum Ende des Tests.
+        let rc = unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0) };
+        assert_eq!(rc, status::OK);
+        // SAFETY: der Kern von eben; danach die Bilanz, waehrend kein Schritt laeuft.
+        unsafe {
+            drive(core.as_mut_ptr());
+            takt_core_report(core.as_mut_ptr(), null(), null());
+        }
+        assert!(arena.tick > 1 && arena.starts == 1, "Tick {}, Anfaenge {}", arena.tick, arena.starts);
+
+        let journaled = ops(true);
+        let mut flash = Flash { slots: [[0xff; SLOT]; 2], pending: nvm::IDLE };
+        let device = NvmOps {
+            ctx: (&raw mut flash).cast(),
+            slot_size: u32::try_from(SLOT).expect("Slot"),
+            blocking_ns: -1,
+            begin_erase: erase,
+            begin_write: write,
+            poll,
+            read,
+        };
+        let (mut current, mut stored) = ([0u8; 8], [0u8; 8]);
+        let mut runs = Vec::new();
+        for _ in 0..2 {
+            let mut arena = Counter::default();
+            let mut core = MaybeUninit::<Core>::uninit();
+            // SAFETY: Kern, Tabelle, Arena, Geraet und Puffer leben bis zum
+            // Ende des Laufs; die Puffer benutzt nur dieser Kern.
+            let rc = unsafe {
+                takt_core_init_journaled(
+                    core.as_mut_ptr(),
+                    &journaled,
+                    (&raw mut arena).cast(),
+                    null_mut(),
+                    0,
+                    &device,
+                    current.as_mut_ptr(),
+                    stored.as_mut_ptr(),
+                    8,
+                )
+            };
+            assert_eq!(rc, status::OK);
+            // SAFETY: der Kern von eben.
+            unsafe {
+                drive(core.as_mut_ptr());
+                takt_core_finish(core.as_mut_ptr());
+            }
+            runs.push((arena.tick, arena.restored));
+        }
+        assert_eq!(runs[0].1, 0, "das leere Flash hat keinen Stand");
+        assert!(runs[1].1 > 0, "der zweite Lauf beginnt mit dem Stand des ersten: {runs:?}");
+
+        // SAFETY: Kein Kern laeuft mehr; der Puffer gehoert wieder dem Test.
+        let text = String::from_utf8_lossy(unsafe { &*sink }).into_owned();
+        assert!(text.contains("t= dump") && text.contains("takt end"), "{text}");
+    }
+}
