@@ -1,0 +1,36 @@
+takt-proof 2
+program 57b3213fc603738607717e3c4440d977f6372fd487f2505c6eeb25416629f00b
+solver z3 4.13.4
+site 4145 4174 fin k=1
+site 4183 4212 fin k=1
+site 4234 4239 fin k=1
+site 4261 4328 fin k=1
+site 4265 4306 fin k=1
+site 4350 4367 fin k=1
+site 4354 4360 fin k=1
+site 4389 4470 fin k=1
+site 4393 4444 fin k=1
+site 4496 4502 fin k=1
+site 4507 4524 fin k=1
+site 4626 4633 fin k=1
+site 4644 4649 range k=1
+site 4649 4656 fin k=1
+site 4873 4878 range k=1
+site 4906 4911 range k=1
+site 6300 6308 fin k=1
+site 7950 7954 valid k=1
+site 8137 8140 valid k=1
+site 8143 8146 valid k=1
+site 8912 8916 valid k=1
+site 9242 9246 valid k=1
+site 10086 10089 valid k=1
+site 10091 10094 valid k=1
+site 10305 10317 fin k=1
+site 10529 10539 valid k=1
+site 10609 10613 valid k=1
+site 10996 10999 valid k=1
+site 11001 11004 valid k=1
+site 11214 11226 fin k=1
+site 11275 11287 fin k=1
+site 11355 11365 valid k=1
+site 11435 11439 valid k=1

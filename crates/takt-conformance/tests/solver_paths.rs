@@ -42,9 +42,13 @@ fn compile(name: &str, src: &str, proof: Option<&Proof>) -> Program {
     out.program.unwrap_or_else(|| panic!("{name}: kein Programm"))
 }
 
-/// Die Programme mit Pfaden: die Suite `beweiser`.
+/// Die Programme mit Pfaden: die Suite `beweiser` und die Beispiele, die
+/// der Vergleich neben dem Korpus faehrt (FB-511 Schritt 4). Ihre Beweise
+/// laesst der Codegen aus, der Interpreter prueft sie weiter.
 fn programs() -> Vec<&'static str> {
-    takt_conformance::suites::programs("beweiser")
+    let mut out = takt_conformance::suites::programs("beweiser");
+    out.extend(takt_conformance::suites::EXAMPLES);
+    out
 }
 
 /// Was die Laeufe ohne Pfad des Solvers erreichen: die Coverage von `still`,
@@ -195,7 +199,7 @@ fn update(which: &str) {
     let chosen: Vec<&str> = which.split(',').map(str::trim).collect();
     let all = programs();
     if let Some(name) = chosen.iter().find(|n| **n != "1" && !all.contains(n)) {
-        panic!("`{name}` steht nicht in der Suite `beweiser`");
+        panic!("`{name}` steht weder in der Suite `beweiser` noch unter den Beispielen");
     }
     let picked: Vec<&str> = all.into_iter().filter(|n| which == "1" || chosen.contains(n)).collect();
     let one = |name: &str| -> Result<(), String> {
@@ -537,8 +541,8 @@ fn classify_unreached(depths: &str) {
 
 /// **Die Pfade und Beweise des Solvers passen zum Korpus.** Jede
 /// Beweisdatei ist an ihre Quelle gebunden, jeder Pfad erreicht sein Ziel,
-/// und nichts unter `corpus-try/paths` gehoert zu einem Programm ausserhalb
-/// der Suite `beweiser`.
+/// und Pfade des Solvers hat nur ein Programm der Suite `beweiser` oder ein
+/// Beispiel.
 #[test]
 fn the_stored_solver_paths_still_hold() {
     if let Ok(which) = std::env::var("UPDATE_PATHS") {
@@ -575,11 +579,11 @@ fn the_stored_solver_paths_still_hold() {
         }
     }
     // Pfade aus dem langen Lauf hat jedes Programm des Vergleichs, Pfade des
-    // Solvers nur eines der Suite `beweiser`.
+    // Solvers nur eines der Suite `beweiser` oder ein Beispiel.
     for name in compared().into_iter().filter(|n| !programs().contains(n)) {
         for path in paths::load(name).into_iter().filter(|p| !p.from_run()) {
             failed.push(format!(
-                "{name}: `{}` ist ein Pfad des Solvers, das Programm steht nicht in `beweiser`",
+                "{name}: `{}` ist ein Pfad des Solvers, das Programm steht nicht in `beweiser`, ist kein Beispiel",
                 path.label
             ));
         }

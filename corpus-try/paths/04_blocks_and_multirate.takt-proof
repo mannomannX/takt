@@ -1,0 +1,7 @@
+takt-proof 2
+program e843f07cd2ec6b2a77bb656881ca3e315e6a6041a85d4ccf39a0a73c8632cb97
+solver z3 4.13.4
+site 1636 1643 valid k=1
+site 1684 1717 fin k=1
+site 1745 1761 fin k=1
+site 1776 1783 valid k=1

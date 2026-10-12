@@ -353,6 +353,30 @@ So arbeitet jeder Strang, als wäre er allein:
   gegen Wirtsrahmen und erzeugten Code, und der MCU-Rahmen mit einer Falle
   für jeden Überlauf. Die 3 Stellen der Gruppe `Zeitschranke` bleiben
   erreichbar: Hinter der Grenze faultet `now + d`.
+- **Stand nach Schritt 4 (2026-10-12, Zweig `b4-step4`):**
+  - Die Pfade des Solvers fragen 60 s je Anfrage wie die Einordnung: Mit
+    10 s fiel auf einem Runner ein Beweis aus `71_places` weg, und einer
+    aus `46_matrices` kam nicht. Die Beispiele `sim/12_7` und `sim/14_7`
+    bekommen Pfade und Beweise wie die Suite `beweiser`.
+  - Erzeugt mit `solver.yml`, Art `pfade`, in vier Läufen: 38275739496
+    (`11_foc_drive`, 1:25 h), 38275744284 (`46_matrices`, 36 min),
+    38275748127 (`sim/14_7`, 55 min), 38275754060 (`sim/12_7`, 04, 36, 71,
+    80, 87, 98; 1:41 h). Kein neuer Pfad.
+  - Von den 54 Stellen der Gruppe „bewiesen“ führen die Beweisdateien jetzt
+    47, dazu 18 weitere, die die Einordnung nicht entschied (13 in
+    `11_foc_drive`). `sim/12_7` hat bewiesen nie genommene Übergänge.
+    Übrig bleiben 7:
+    - 4 nicht nachgerechnet (`36_int_units` `ovf`, `46_matrices` `fin`,
+      `87_fault_kinds` `ovf`, `98_last_fault` `range`): Die Einordnung bewies
+      sie mit Tiefe 10 oder Spacer und 6 GB, die Pfade des Solvers (Tiefe 5,
+      60 s, 4 GB) nicht.
+    - 2 außerhalb der Suite `beweiser` (`124_port_test`, Manifest).
+    - 1 explizites `check` in `sim/12_7`: Die Beweisdatei führt nur
+      implizite Prüfungen (13.3).
+  - `UNREACHED`: Übergänge 102 → 101, nie bestanden 72 → 56, nie verletzt
+    337 → 286, Programme 97. Der Vergleich der drei Ausführer bestätigt
+    jeden neuen Beweis: Der Codegen lässt die Prüfung aus, der Interpreter
+    prüft weiter, und kein Lauf weicht ab.
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
