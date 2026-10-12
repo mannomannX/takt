@@ -547,7 +547,7 @@ fn apply_stimulus(
                     return Err(Trap::Bug(format!("Stimulus: Channel `{channel}` gibt es nicht")));
                 };
                 let c = &program.channels[id.index()];
-                if c.dir != Direction::Output || c.owner == only {
+                if c.dir != Direction::Output || only.is_some_and(|m| program.owns(m, id)) {
                     return Err(Trap::Bug(format!("Stimulus: `out {channel}` ist kein fremder Output")));
                 }
                 if matches!(program.types.list.get(c.ty.index()), Some(Type::Stream(_))) {
@@ -663,9 +663,9 @@ fn apply_stimulus(
                     "Node" => RuntimeKind::Node,
                     other => return Err(Trap::Bug(format!("Stimulus: Runtime-Fault `{other}` gibt es nicht"))),
                 };
-                let owner = match (kind, output) {
+                let output = match (kind, output) {
                     (RuntimeKind::Driver, Some(o)) => match channel_by_name(program, o) {
-                        Some(c) => program.channels[c.index()].owner,
+                        Some(c) => Some(c),
                         None => return Err(Trap::Bug(format!("Stimulus: Output `{o}` gibt es nicht"))),
                     },
                     (RuntimeKind::Driver, None) => {
@@ -673,7 +673,7 @@ fn apply_stimulus(
                     }
                     _ => None,
                 };
-                pend_runtime(sim, kind, owner, tick);
+                pend_runtime(sim, kind, output, tick);
             }
             _ => {}
         }
@@ -684,10 +684,12 @@ fn apply_stimulus(
 /// Merkt einen Runtime-Fault vor (5.3, 5.4): fuer den Besitzer eines
 /// Outputs oder, ohne ihn, fuer jede Maschine; einen vorgemerkten Abort
 /// verdraengt er nicht, eine Maschine in `FAULTED` bekommt ihn nicht.
-fn pend_runtime(sim: &mut Sim<'_>, kind: takt_mir::machine::RuntimeKind, owner: Option<MachineId>, tick: u64) {
+fn pend_runtime(sim: &mut Sim<'_>, kind: takt_mir::machine::RuntimeKind, output: Option<ChannelId>, tick: u64) {
     use takt_mir::machine::FaultKind;
+    let program = sim.loaded.program;
     for (i, state) in sim.states.iter_mut().enumerate() {
-        let meant = owner.is_none_or(|o| o.index() == i);
+        // `Driver` trifft, wer den Output im Lauf besitzt (FB-602).
+        let meant = output.is_none_or(|c| program.owns(MachineId(i as u32), c));
         let abort_waits = state.pending.as_ref().is_some_and(|f| f.kind == FaultKind::Abort);
         if meant && !state.faulted && !abort_waits {
             state.pending = Some(crate::value::Fault::new(
@@ -979,7 +981,7 @@ fn check_line(p: &Program, kind: &LineKind, only: Option<MachineId>) -> Result<(
         LineKind::Output { channel, value } if only.is_some() => {
             let id = channel_by_name(p, channel).ok_or_else(|| format!("Channel `{channel}` gibt es nicht"))?;
             let c = &p.channels[id.index()];
-            if c.dir != Direction::Output || c.owner == only {
+            if c.dir != Direction::Output || only.is_some_and(|m| p.owns(m, id)) {
                 return Err(format!("`out {channel}` ist kein fremder Output"));
             }
             if matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_))) {

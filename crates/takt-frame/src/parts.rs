@@ -778,8 +778,9 @@ fn safe_outputs_of(s: &mut String, p: &Program, layout: &Layout, machine: &str, 
         return;
     };
     for slot in &layout.outputs {
-        let Some(c) = p.channels.iter().find(|c| c.name == slot.name) else { continue };
-        if c.owner != Some(id) {
+        let Some(i) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
+        let c = &p.channels[i];
+        if !p.owns(id, takt_mir::ChannelId(i as u32)) {
             continue;
         }
         let Some(safe) = c.attrs.safe.as_ref().and_then(|e| literal(p, e)) else { continue };

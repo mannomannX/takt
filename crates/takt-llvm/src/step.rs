@@ -565,7 +565,7 @@ fn safe_outputs(ctx: &mut Ctx<'_>, m: &mut Module) -> Result<(), NotYet> {
         .channels
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.owner == Some(takt_mir::MachineId(ctx.machine_index)))
+        .filter(|(i, _)| ctx.program.owns(takt_mir::MachineId(ctx.machine_index), takt_mir::ChannelId(*i as u32)))
         .filter_map(|(i, c)| c.attrs.safe.clone().map(|e| (takt_mir::ChannelId(i as u32), e)))
         .collect();
     for (c, safe) in eigene {

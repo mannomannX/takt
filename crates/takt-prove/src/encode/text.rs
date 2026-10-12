@@ -82,9 +82,10 @@ pub(super) fn text_shape(cap: u32, line: bool) -> Shape {
 }
 
 impl Text {
-    /// Der Text eines Werts mit Textgestalt (oder einer Bytefolge).
+    /// Der Text eines Werts mit Textgestalt (oder einer Bytefolge); Bytes
+    /// in einem Array Platz fuer Platz.
     pub(super) fn of(v: V, span: Span) -> R<Text> {
-        let V::Node(parts) = v else { return no("Text", span) };
+        let V::Node(parts) = v.flat_at(span)? else { return no("Text", span) };
         let mut it = parts.into_iter();
         let Some(len) = it.next() else { return no("Text", span) };
         let len = len.leaf(span)?;

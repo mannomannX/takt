@@ -708,7 +708,8 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
         when cmd == NONE: -> IDLE
 
     # Lesen ab jeder Adresse: die Chunks ab `addr / 256`, dann der
-    # Ausschnitt ab `addr % 256`.
+    # Ausschnitt ab `addr % 256`, hoechstens 4096 Byte. Die Seite reicht
+    # immer bis zu seinem Ende: 17 Chunks fassen 255 + 4096 Byte.
     state READING:
         enter:
             status = BUSY
@@ -717,9 +718,7 @@ machine flash_model(cmd: output FlashCmd, data: output stream<u8>, status: outpu
                 if page.len < addr % 256 + size:
                     ok = page.append(mem.get(addr / 256 + i).or(flash_blank()))
             out = default
-            for i in range(4096):
-                if i < size:
-                    out.push(page[addr % 256 + i])
+            out.append(page[addr % 256..addr % 256 + min(size, 4096)])
             send rx, out
         when true: -> DONE_WAIT
 

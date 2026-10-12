@@ -6,11 +6,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasherDefault, Hasher};
+use std::rc::Rc;
 
 use crate::term::{Fun, Node, Op, Rounding, Sort, Term};
 
 /// Ein konkreter Wert.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Val {
     /// `Bool`
     Bool(bool),
@@ -20,39 +21,104 @@ pub enum Val {
     F32(f32),
     /// `float` in f64.
     F64(f64),
+    /// Ein Array der SMT-Theorie.
+    Arr(Array),
 }
 
 impl Val {
-    /// Der Nullwert einer Sorte.
+    /// Der Nullwert einer Sorte; ein Array traegt ihn an jedem Index.
     pub fn zero(sort: Sort) -> Val {
         match sort {
             Sort::Bool => Val::Bool(false),
             Sort::Int => Val::Int(0),
             Sort::F32 => Val::F32(0.0),
             Sort::F64 => Val::F64(0.0),
+            Sort::Array(_) | Sort::Array2(_) => Val::Arr(Array::new(Val::zero(sort.element().unwrap_or(Sort::Int)))),
         }
     }
 
-    fn as_bool(self) -> bool {
+    /// Die Sorte des Werts.
+    pub fn sort(&self) -> Sort {
+        match self {
+            Val::Bool(_) => Sort::Bool,
+            Val::Int(_) => Sort::Int,
+            Val::F32(_) => Sort::F32,
+            Val::F64(_) => Sort::F64,
+            Val::Arr(a) => a.fill.sort().array_of().unwrap_or(Sort::Int),
+        }
+    }
+
+    fn as_bool(&self) -> bool {
         matches!(self, Val::Bool(true))
     }
 
-    fn as_int(self) -> i64 {
+    fn as_int(&self) -> i64 {
         match self {
-            Val::Int(i) => i,
-            Val::Bool(b) => i64::from(b),
-            Val::F32(f) => f as i64,
-            Val::F64(f) => f as i64,
+            Val::Int(i) => *i,
+            Val::Bool(b) => i64::from(*b),
+            Val::F32(f) => *f as i64,
+            Val::F64(f) => *f as i64,
+            Val::Arr(_) => 0,
         }
     }
 
-    fn as_f64(self) -> f64 {
+    fn as_f64(&self) -> f64 {
         match self {
-            Val::F64(f) => f,
-            Val::F32(f) => f64::from(f),
-            Val::Int(i) => i as f64,
-            Val::Bool(b) => f64::from(u8::from(b)),
+            Val::F64(f) => *f,
+            Val::F32(f) => f64::from(*f),
+            Val::Int(i) => *i as f64,
+            Val::Bool(b) => f64::from(u8::from(*b)),
+            Val::Arr(_) => 0.0,
         }
+    }
+}
+
+/// Plaetze eines Blocks von [`Array`].
+const BLOCK: i64 = 64;
+
+/// Ein Array als Wert, wie die SMT-Theorie es kennt: an jedem Index ein
+/// Element, ohne eigenen Eintrag der Fuellwert. Die Eintraege liegen in
+/// Bloecken zu [`BLOCK`] Plaetzen, die sich die Fassungen eines Arrays teilen:
+/// `store` kopiert einen Block und die Liste der Bloecke, nicht das Array.
+#[derive(Clone, Debug)]
+pub struct Array {
+    fill: Rc<Val>,
+    blocks: Rc<BTreeMap<i64, Rc<Vec<Val>>>>,
+}
+
+impl Array {
+    /// Das Array mit `fill` an jedem Index.
+    pub fn new(fill: Val) -> Array {
+        Array { fill: Rc::new(fill), blocks: Rc::new(BTreeMap::new()) }
+    }
+
+    /// Das Element am Index `i`.
+    pub fn get(&self, i: i64) -> Val {
+        match self.blocks.get(&i.div_euclid(BLOCK)) {
+            Some(b) => b[i.rem_euclid(BLOCK) as usize].clone(),
+            None => (*self.fill).clone(),
+        }
+    }
+
+    /// Das Array mit `x` am Index `i`.
+    pub fn set(&self, i: i64, x: Val) -> Array {
+        let mut blocks = (*self.blocks).clone();
+        let at = i.div_euclid(BLOCK);
+        let mut block = blocks.get(&at).map_or_else(|| vec![(*self.fill).clone(); BLOCK as usize], |b| (**b).clone());
+        block[i.rem_euclid(BLOCK) as usize] = x;
+        blocks.insert(at, Rc::new(block));
+        Array { fill: self.fill.clone(), blocks: Rc::new(blocks) }
+    }
+}
+
+/// Gleich an jedem Index, wie `=` ueber Arrays in SMT-LIB.
+impl PartialEq for Array {
+    fn eq(&self, other: &Array) -> bool {
+        if !same(&self.fill, &other.fill) {
+            return false;
+        }
+        let keys: std::collections::BTreeSet<i64> = self.blocks.keys().chain(other.blocks.keys()).copied().collect();
+        keys.into_iter().all(|k| (k * BLOCK..(k + 1) * BLOCK).all(|i| same(&self.get(i), &other.get(i))))
     }
 }
 
@@ -114,7 +180,7 @@ fn eval_in(t: &Term, env: &Env, memo: &mut Keys<Val>) -> Val {
             memo.insert(n.key(), v);
         }
     }
-    memo[&t.key()]
+    memo[&t.key()].clone()
 }
 
 /// Der Wert von `t`, wenn seine Argumente bekannt sind; sonst legt er sich
@@ -122,7 +188,7 @@ fn eval_in(t: &Term, env: &Env, memo: &mut Keys<Val>) -> Val {
 /// und `or` das erste noch ungepruefte Argument.
 fn visit(t: &Term, from: usize, env: &Env, memo: &Keys<Val>, stack: &mut Vec<(Term, usize)>) -> Option<Val> {
     let Node::App(op, args) = &*t.0 else { return Some(leaf(t, env)) };
-    let known = |a: &Term| memo.get(&a.key()).copied();
+    let known = |a: &Term| memo.get(&a.key()).cloned();
     let mut wait = |a: &Term, from: usize| {
         stack.push((t.clone(), from));
         stack.push((a.clone(), 0));
@@ -145,9 +211,9 @@ fn visit(t: &Term, from: usize, env: &Env, memo: &Keys<Val>, stack: &mut Vec<(Te
             }
             Some(Val::Bool(!decisive))
         }
-        _ => match args.iter().find(|a| known(a).is_none()) {
+        _ => match args.iter().find(|a| !memo.contains_key(&a.key())) {
             Some(a) => wait(a, 0),
-            None => Some(apply(*op, args.len(), |i| memo[&args[i].key()])),
+            None => Some(apply(*op, args.len(), |i| memo[&args[i].key()].clone())),
         },
     }
 }
@@ -158,7 +224,7 @@ fn leaf(t: &Term, env: &Env) -> Val {
         Node::Int(i) => Val::Int(*i),
         Node::F32(f) => Val::F32(*f),
         Node::F64(f) => Val::F64(*f),
-        Node::Var(name, sort) => env.get(name).copied().unwrap_or(Val::zero(*sort)),
+        Node::Var(name, sort) => env.get(name).cloned().unwrap_or_else(|| Val::zero(*sort)),
         Node::App(..) => unreachable!("kein Blatt"),
     }
 }
@@ -276,7 +342,7 @@ impl Plan {
         for i in 0..self.roots.len() {
             self.force(self.roots[i], vars, &mut stack);
         }
-        self.roots.iter().map(|&r| self.vals[r as usize]).collect()
+        self.roots.iter().map(|&r| self.vals[r as usize].clone()).collect()
     }
 
     /// Ein Stapel statt Rekursion, wie [`eval`]: Ein Knoten, dem Argumente
@@ -289,10 +355,11 @@ impl Plan {
                 continue;
             }
             let (stamp, vals, epoch) = (&self.stamp, &self.vals, self.epoch);
-            let known = |a: u32| (stamp[a as usize] == epoch).then(|| vals[a as usize]);
+            let ready = |a: u32| stamp[a as usize] == epoch;
+            let known = |a: u32| ready(a).then(|| &vals[a as usize]);
             let v = match self.items[i] {
-                Item::Leaf(c) => self.consts[c as usize],
-                Item::Var(slot) => vars[slot as usize],
+                Item::Leaf(c) => self.consts[c as usize].clone(),
+                Item::Var(slot) => vars[slot as usize].clone(),
                 Item::App { op, start, len } => {
                     let op = self.ops[op as usize];
                     let args = &self.args[start as usize..(start + len) as usize];
@@ -304,7 +371,7 @@ impl Plan {
                             };
                             let pick = args[if c.as_bool() { 1 } else { 2 }];
                             match known(pick) {
-                                Some(v) => v,
+                                Some(v) => v.clone(),
                                 None => {
                                     stack.extend([(n, 0), (pick, 0)]);
                                     continue;
@@ -334,12 +401,12 @@ impl Plan {
                             }
                             v
                         }
-                        _ if args.iter().any(|&a| known(a).is_none()) => {
+                        _ if args.iter().any(|&a| !ready(a)) => {
                             stack.push((n, 0));
-                            stack.extend(args.iter().filter(|&&a| known(a).is_none()).map(|&a| (a, 0)));
+                            stack.extend(args.iter().filter(|&&a| !ready(a)).map(|&a| (a, 0)));
                             continue;
                         }
-                        _ => apply(op, args.len(), |k| vals[args[k] as usize]),
+                        _ => apply(op, args.len(), |k| vals[args[k] as usize].clone()),
                     }
                 }
             };
@@ -354,7 +421,7 @@ fn apply(op: Op, n: usize, a: impl Fn(usize) -> Val) -> Val {
     match op {
         Op::Ite | Op::And | Op::Or => unreachable!("im Stapel ausgewertet"),
         Op::Not => Val::Bool(!a(0).as_bool()),
-        Op::Eq => Val::Bool(same(a(0), a(1))),
+        Op::Eq => Val::Bool(same(&a(0), &a(1))),
         Op::Neg => Val::Int(a(0).as_int().wrapping_neg()),
         Op::Add => Val::Int(a(0).as_int().wrapping_add(a(1).as_int())),
         Op::Sub => Val::Int(a(0).as_int().wrapping_sub(a(1).as_int())),
@@ -442,6 +509,15 @@ fn apply(op: Op, n: usize, a: impl Fn(usize) -> Val) -> Val {
         Op::Native { f, part, .. } => native(f, part, &(0..n).map(a).collect::<Vec<_>>()),
         Op::Mat { f, n: rows, k, part } => matrix(f, rows, k, part, &(0..n).map(a).collect::<Vec<_>>()),
         Op::FloatToInt => Val::Int(a(0).as_f64() as i64),
+        Op::Select => match a(0) {
+            Val::Arr(arr) => arr.get(a(1).as_int()),
+            other => other,
+        },
+        Op::Store => match a(0) {
+            Val::Arr(arr) => Val::Arr(arr.set(a(1).as_int(), a(2))),
+            other => other,
+        },
+        Op::ConstArray => Val::Arr(Array::new(a(0))),
     }
 }
 
@@ -670,13 +746,14 @@ fn wrap(x: i64, bits: u32, signed: bool) -> i64 {
     if signed { (x << shift) >> shift } else { ((x as u64) << shift >> shift) as i64 }
 }
 
-/// `=` wie in SMT-LIB: Fliesskomma gleicht aufs Bit, `+0` nicht `-0`, und
-/// es gibt nur ein NaN.
-fn same(a: Val, b: Val) -> bool {
+/// `=` wie in SMT-LIB: Fliesskomma gleicht aufs Bit, `+0` nicht `-0`, es
+/// gibt nur ein NaN, und Arrays gleichen sich an jedem Index.
+fn same(a: &Val, b: &Val) -> bool {
     match (a, b) {
         (Val::Bool(x), Val::Bool(y)) => x == y,
         (Val::Int(x), Val::Int(y)) => x == y,
         (Val::F32(x), Val::F32(y)) => (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits(),
+        (Val::Arr(x), Val::Arr(y)) => x == y,
         (x, y) => {
             let (x, y) = (x.as_f64(), y.as_f64());
             (x.is_nan() && y.is_nan()) || x.to_bits() == y.to_bits()

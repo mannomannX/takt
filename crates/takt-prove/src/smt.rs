@@ -17,7 +17,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
 
 use crate::encode::{Goal, Model, StateVar};
-use crate::term::{Fun, Node, Op, Rounding, Sort, Term, post_order};
+use crate::term::{Elem, Fun, Node, Op, Rounding, Sort, Term, post_order};
 
 fn sort_text(s: Sort) -> &'static str {
     match s {
@@ -25,6 +25,14 @@ fn sort_text(s: Sort) -> &'static str {
         Sort::Int => "(_ BitVec 64)",
         Sort::F32 => "Float32",
         Sort::F64 => "Float64",
+        Sort::Array(Elem::Bool) => "(Array (_ BitVec 64) Bool)",
+        Sort::Array(Elem::Int) => "(Array (_ BitVec 64) (_ BitVec 64))",
+        Sort::Array(Elem::F32) => "(Array (_ BitVec 64) Float32)",
+        Sort::Array(Elem::F64) => "(Array (_ BitVec 64) Float64)",
+        Sort::Array2(Elem::Bool) => "(Array (_ BitVec 64) (Array (_ BitVec 64) Bool))",
+        Sort::Array2(Elem::Int) => "(Array (_ BitVec 64) (Array (_ BitVec 64) (_ BitVec 64)))",
+        Sort::Array2(Elem::F32) => "(Array (_ BitVec 64) (Array (_ BitVec 64) Float32))",
+        Sort::Array2(Elem::F64) => "(Array (_ BitVec 64) (Array (_ BitVec 64) Float64))",
     }
 }
 
@@ -125,6 +133,7 @@ impl Printer<'_> {
                 }
                 format!("({fun} {})", parts.join(" "))
             }
+            Op::ConstArray => format!("((as const {}) {})", sort_text(sort), parts[0]),
             _ => app_text(*op, &parts),
         };
         let n = format!("|d{}{}|", self.tag, self.next);
@@ -250,8 +259,12 @@ fn app_text(op: Op, a: &[String]) -> String {
             format!("(fp.roundToIntegral {mode} {})", a[0])
         }
         Op::FloatToInt => format!("((_ fp.to_sbv 64) RTZ {})", a[0]),
-        // Beide schreibt der Drucker selbst: Sie brauchen die Sorte.
-        Op::Scale { .. } | Op::Math(_) | Op::Native { .. } | Op::Mat { .. } => unreachable!("im Drucker behandelt"),
+        Op::Select => format!("(select {} {})", a[0], a[1]),
+        Op::Store => format!("(store {} {} {})", a[0], a[1], a[2]),
+        // Sie schreibt der Drucker selbst: Sie brauchen die Sorte.
+        Op::Scale { .. } | Op::Math(_) | Op::Native { .. } | Op::Mat { .. } | Op::ConstArray => {
+            unreachable!("im Drucker behandelt")
+        }
     }
 }
 
@@ -284,11 +297,10 @@ fn cone<'a>(
     invariants: &[&'a Term],
 ) -> (BTreeSet<String>, Vec<&'a Term>, Vec<&'a Term>) {
     let mut inside: BTreeSet<String> = roots.iter().flat_map(|t| vars(t)).collect();
-    let state: Vec<(&str, BTreeSet<String>)> = model
-        .state
-        .iter()
-        .map(|v| (v.name.as_str(), vars(&v.init).into_iter().chain(vars(&v.next)).collect()))
-        .collect();
+    let deps = model.deps.get_or_init(|| {
+        std::rc::Rc::new(model.state.iter().map(|v| vars(&v.init).into_iter().chain(vars(&v.next)).collect()).collect())
+    });
+    let state: Vec<(&str, &BTreeSet<String>)> = model.state.iter().map(|v| v.name.as_str()).zip(deps.iter()).collect();
     let bound: Vec<BTreeSet<String>> = constraints.iter().map(|t| vars(t)).collect();
     loop {
         let before = inside.len();
@@ -545,6 +557,42 @@ pub fn contract_query(goal: &crate::encode::ContractGoal) -> String {
 /// Die Grenzen von `i64` als ganze Zahlen.
 const I64: (&str, &str) = ("(- 9223372036854775808)", "9223372036854775807");
 
+/// Was eine Sorte ausserhalb der Invariantensuche ist.
+fn outside_sort(s: Sort) -> &'static str {
+    match s {
+        Sort::Array(_) | Sort::Array2(_) => "ein Array aus Fliesskommazahlen",
+        _ => "Fliesskomma",
+    }
+}
+
+/// Was eine Operation ausserhalb der Invariantensuche ist.
+fn outside_op(op: Op) -> &'static str {
+    match op {
+        Op::BitAnd | Op::BitOr | Op::BitXor => "eine Bitoperation",
+        Op::Shl | Op::Shr | Op::LShr => "eine Schiebung",
+        Op::ULt | Op::ULe | Op::UGt | Op::UGe | Op::UDiv | Op::URem | Op::UMulOverflows => {
+            "eine Rechnung ohne Vorzeichen (`u64`)"
+        }
+        Op::Wrap { .. } => "die Wickelung in eine Breite",
+        Op::Native { .. } | Op::Mat { .. } => "eine uninterpretierte Funktion",
+        _ => "Fliesskomma",
+    }
+}
+
+/// Eine Sorte der Invariantensuche: ganze Zahlen statt Bitvektoren, ein
+/// Array mit ganzzahligem Index; `None` fuer Fliesskomma (FB-375, FB-497).
+fn lia_sort(s: Sort) -> Option<&'static str> {
+    match s {
+        Sort::Bool => Some("Bool"),
+        Sort::Int => Some("Int"),
+        Sort::Array(Elem::Bool) => Some("(Array Int Bool)"),
+        Sort::Array(Elem::Int) => Some("(Array Int Int)"),
+        Sort::Array2(Elem::Bool) => Some("(Array Int (Array Int Bool))"),
+        Sort::Array2(Elem::Int) => Some("(Array Int (Array Int Int))"),
+        Sort::F32 | Sort::F64 | Sort::Array(Elem::F32 | Elem::F64) | Sort::Array2(Elem::F32 | Elem::F64) => None,
+    }
+}
+
 /// Eine Operation ueber ganzen Zahlen (LIA) fuer die Invariantensuche;
 /// `None` ausserhalb dieses Fragments. Jede Rechnung eines Programms ist
 /// ueberlaufgeprueft, auf einem lebendigen Pfad rechnen ganze Zahlen also
@@ -572,6 +620,10 @@ fn lia_text(op: Op, a: &[String]) -> Option<String> {
         Op::AddOverflows => outside(format!("(+ {} {})", a[0], a[1])),
         Op::SubOverflows => outside(format!("(- {} {})", a[0], a[1])),
         Op::MulOverflows => outside(format!("(* {} {})", a[0], a[1])),
+        // Ein Array ueber ganzen Zahlen: Spacer kennt die Theorie (FB-497).
+        Op::Select | Op::Store => app_text(op, a),
+        // Braucht die Sorte; `LetPrinter::name` schreibt es.
+        Op::ConstArray => return None,
         Op::BitAnd
         | Op::BitOr
         | Op::BitXor
@@ -616,8 +668,8 @@ fn lia_text(op: Op, a: &[String]) -> Option<String> {
 /// Ein Term ueber ganzen Zahlen mit `let` statt `define-fun`: In einer
 /// Horn-Klausel sind die Variablen gebunden, und eine Definition auf
 /// oberster Ebene saehe sie nicht. Jeder geteilte Knoten bekommt eine
-/// Bindung, der Text bleibt linear in der Groesse des Graphen; `None`, wenn
-/// ein Knoten ausserhalb des Fragments liegt.
+/// Bindung, der Text bleibt linear in der Groesse des Graphen; `Err` nennt
+/// den ersten Knoten ausserhalb des Fragments.
 struct LetPrinter {
     tag: &'static str,
     binds: Vec<(String, String)>,
@@ -630,24 +682,32 @@ impl LetPrinter {
     }
 
     /// Der Name eines Terms; innere Knoten bekommen eine Bindung, jeder
-    /// nach seinen Argumenten ([`post_order`]). `None` ausserhalb des
+    /// nach seinen Argumenten ([`post_order`]). `Err` ausserhalb des
     /// Fragments.
-    fn name(&mut self, t: &Term, state: u32, input: u32) -> Option<String> {
+    fn name(&mut self, t: &Term, state: u32, input: u32) -> Result<String, String> {
         for n in post_order(t, |n| self.names.contains_key(&(n.key(), state, input))) {
             let Node::App(op, args) = &*n.0 else { continue };
-            let parts: Vec<String> = args.iter().map(|a| self.atom(a, state, input)).collect::<Option<_>>()?;
+            let parts: Vec<String> = args.iter().map(|a| self.atom(a, state, input)).collect::<Result<_, _>>()?;
             let name = format!("|l{}{}|", self.tag, self.binds.len());
-            self.binds.push((name.clone(), lia_text(*op, &parts)?));
+            let text = match op {
+                Op::ConstArray => match lia_sort(n.sort()) {
+                    Some(sort) => format!("((as const {sort}) {})", parts[0]),
+                    None => return Err(outside_sort(n.sort()).to_string()),
+                },
+                _ => lia_text(*op, &parts).ok_or_else(|| outside_op(*op).to_string())?,
+            };
+            self.binds.push((name.clone(), text));
             self.names.insert((n.key(), state, input), name);
         }
         self.atom(t, state, input)
     }
 
     /// Der Name eines Blatts oder eines schon gebundenen Knotens.
-    fn atom(&self, t: &Term, state: u32, input: u32) -> Option<String> {
-        Some(match &*t.0 {
+    fn atom(&self, t: &Term, state: u32, input: u32) -> Result<String, String> {
+        Ok(match &*t.0 {
             Node::App(..) => self.names.get(&(t.key(), state, input)).cloned().expect("vor dem Knoten gebunden"),
-            Node::Var(_, Sort::F32 | Sort::F64) | Node::F32(_) | Node::F64(_) => return None,
+            Node::Var(_, sort) if lia_sort(*sort).is_none() => return Err(outside_sort(*sort).to_string()),
+            Node::F32(_) | Node::F64(_) => return Err(outside_sort(Sort::F64).to_string()),
             Node::Var(v, _) if v.starts_with("i.") => at(v, input, self.tag),
             Node::Var(v, _) => at(v, state, self.tag),
             Node::Bool(b) => b.to_string(),
@@ -657,7 +717,7 @@ impl LetPrinter {
     }
 
     /// Alle `terms` in einer Konjunktion.
-    fn all(&mut self, terms: &[&Term], state: u32, input: u32) -> Option<Vec<String>> {
+    fn all(&mut self, terms: &[&Term], state: u32, input: u32) -> Result<Vec<String>, String> {
         terms.iter().map(|t| self.name(t, state, input)).collect()
     }
 
@@ -671,18 +731,19 @@ impl LetPrinter {
 /// Horn-Klauseln ueber ganzen Zahlen. `Inv(s, i)` heisst: Zustand `s` ist
 /// erreichbar, mit den Eingaben `i` des Ticks, der ihn ergab. z3 sucht mit
 /// Spacer (PDR) eine induktive Invariante — `sat` heisst, das Ziel gilt in
-/// jeder Tiefe. `None`, wenn der Kegel des Ziels ausserhalb des Fragments
-/// liegt (Fliesskomma, Bitoperationen, Schieben).
-pub fn horn(model: &Model, target: Target) -> Option<String> {
+/// jeder Tiefe. Arrays aus ganzen Zahlen und Wahrheitswerten traegt Spacer
+/// mit (FB-497). `Err` nennt, was im Kegel des Ziels ausserhalb des
+/// Fragments liegt (Fliesskomma, auch in Arrays, Bitoperationen, Schieben).
+pub fn horn(model: &Model, target: Target) -> Result<String, String> {
     let Scope { state, inputs, constraints, invariants, .. } = scope(model, &[target], true);
     let before: Vec<&Term> = constraints.iter().chain(&invariants).copied().collect();
-    let lia = |s: Sort| match s {
-        Sort::Bool => Some("Bool"),
-        Sort::Int => Some("Int"),
-        Sort::F32 | Sort::F64 => None,
-    };
-    let sorts: Vec<&str> =
-        state.iter().map(|v| lia(v.sort)).chain(inputs.iter().map(|(_, s)| lia(*s))).collect::<Option<_>>()?;
+    let lia = lia_sort;
+    let sorts: Vec<&str> = state
+        .iter()
+        .map(|v| (v.name.as_str(), v.sort))
+        .chain(inputs.iter().map(|(n, s)| (n.as_str(), *s)))
+        .map(|(n, s)| lia(s).ok_or_else(|| format!("`{n}` ist {}", outside_sort(s))))
+        .collect::<Result<_, _>>()?;
     let tag = "h";
     let args = |k: u32| -> String {
         state
@@ -709,23 +770,23 @@ pub fn horn(model: &Model, target: Target) -> Option<String> {
     let _ = writeln!(out, "(set-option :fp.spacer.q3.use_qgen true)");
     let _ = writeln!(out, "(declare-fun Inv ({}) Bool)", sorts.join(" "));
     // Der erste Tick: der Anfangszustand aus den Eingaben des Ticks 0.
-    let start = |lp: &mut LetPrinter| -> Option<Vec<String>> {
+    let start = |lp: &mut LetPrinter| -> Result<Vec<String>, String> {
         let mut body = Vec::new();
         for v in &state {
             body.push(format!("(= {} {})", at(&v.name, 1, tag), lp.name(&v.init, 1, 1)?));
         }
         body.extend(lp.all(&constraints, 1, 1)?);
-        Some(body)
+        Ok(body)
     };
     // Ein Tick aus einem erreichbaren Zustand mit neuen Eingaben.
-    let step = |lp: &mut LetPrinter| -> Option<Vec<String>> {
+    let step = |lp: &mut LetPrinter| -> Result<Vec<String>, String> {
         let mut body = vec![format!("(Inv {})", args(0))];
         body.extend(lp.all(&before, 0, 0)?);
         for v in &state {
             body.push(format!("(= {} {})", at(&v.name, 1, tag), lp.name(&v.next, 0, 1)?));
         }
         body.extend(lp.all(&constraints, 1, 1)?);
-        Some(body)
+        Ok(body)
     };
     let mut lp = LetPrinter::new(tag);
     let body = start(&mut lp)?;
@@ -750,7 +811,7 @@ pub fn horn(model: &Model, target: Target) -> Option<String> {
             let _ = writeln!(out, "{}", rule(binders(&[0]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
         }
         Target::Check(_) | Target::Transition(_) => {
-            let site = target.site(model)?;
+            let Some(site) = target.site(model) else { return Err("keine Pruefstelle".to_string()) };
             let mut lp = LetPrinter::new(tag);
             let mut body = start(&mut lp)?;
             body.push(lp.name(&site.init, 1, 1)?);
@@ -763,7 +824,7 @@ pub fn horn(model: &Model, target: Target) -> Option<String> {
         }
     }
     let _ = writeln!(out, "(check-sat)");
-    Some(out)
+    Ok(out)
 }
 
 /// Eine Pruefrunde nach Houdini (FB-375): `step = false` fragt je Kandidat,

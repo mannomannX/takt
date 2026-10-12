@@ -41,6 +41,7 @@ impl Enc<'_> {
         match self.value(e, cx, env, flow)? {
             V::Node(parts) => parts.into_iter().map(|p| p.leaf(e.span)).collect(),
             V::Leaf(t) => Ok(vec![t]),
+            V::Seq(..) => no("Matrix aus Arrays", e.span),
         }
     }
 

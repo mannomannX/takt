@@ -2,12 +2,12 @@
 //! aktuellen Bereich elaborieren, Formatangaben gegen den Typ pruefen,
 //! Hoechstlaenge bestimmen.
 
-use takt_diag::Span;
+use takt_diag::{Diagnostic, Span};
 use takt_mir::pattern::{Format, FormatPiece};
 use takt_mir::types::{Const, FloatWidth, IntWidth, Range, Type};
 use takt_syntax::ast::StrLit;
 use takt_syntax::subtext::{self, FormatPiece as Piece};
-use takt_syntax::{parse_expr, tokenize_in};
+use takt_syntax::{parse_expr, tokenize_at};
 
 use super::Lowerer;
 
@@ -42,29 +42,24 @@ impl Lowerer<'_> {
                         },
                         _ => None,
                     };
-                    let edition = self.edition;
-                    let toks = tokenize_in(&text, edition);
+                    // Der Platzhalter zaehlt ab seiner Stelle in der Datei: hinter
+                    // dem oeffnenden Anfuehrungszeichen des Literals. So zeigen
+                    // Diagnosen (FB-31) und die Knoten des Ausdrucks, auch seine
+                    // Pruefstellen (FB-605), dorthin.
+                    let base = lit.span.start + 1 + at;
+                    let toks = tokenize_at(&text, self.edition, lit.span.file, base);
                     if let Some(e) = toks.errors.first() {
-                        self.diags.push(shift(e.clone(), lit.span, at));
+                        self.diags.push(Diagnostic { code: SC16, ..e.clone() });
                         return None;
                     }
                     let ast = match parse_expr(&toks) {
                         Ok(e) => e,
                         Err(d) => {
-                            self.diags.push(shift(d, lit.span, at));
+                            self.diags.push(Diagnostic { code: SC16, ..d });
                             return None;
                         }
                     };
-                    // Die Spans des Teilausdrucks zaehlen ab dem Anfang des
-                    // Platzhalters, nicht ab dem Dateianfang. Ohne Verschiebung
-                    // landet jede Diagnose aus `expr` auf 1:1 (FB-31).
-                    let first = self.diags.len();
-                    let expr = self.expr(&ast, None);
-                    for d in &mut self.diags[first..] {
-                        d.span = shift_span(d.span, lit.span, at);
-                    }
-                    let mut expr = expr?;
-                    expr.span = lit.span;
+                    let expr = self.expr(&ast, None)?;
                     let width = self.placeholder_width(expr.ty, spec.as_deref(), lit.span)?;
                     len_max += width;
                     out.push(FormatPiece::Expr { expr, spec });

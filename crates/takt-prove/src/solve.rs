@@ -21,22 +21,34 @@ use crate::eval::Val;
 use crate::smt::{Query, Target, assumptions_of, at, contract_query, horn, houdini, query};
 use crate::term::Term;
 
-/// Der gefundene Solver.
+/// Der gefundene Solver: sein Pfad, der Cache seiner entschiedenen
+/// Antworten ([`Solver::cached`]) und die Speichergrenze je Anfrage.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Solver {
-    /// Sein Pfad.
-    At(PathBuf),
-    /// Keiner gefunden.
-    Missing,
+pub struct Solver {
+    /// Der Pfad; keiner, wenn kein Solver gefunden ist.
+    path: Option<PathBuf>,
+    /// Das Verzeichnis der Antworten, dazu Name und Version
+    /// ([`Solver::identity`]), Teil jedes Schluessels.
+    cache: Option<(PathBuf, String)>,
+    /// Die Speichergrenze je Anfrage in MB ([`MEMORY_MB`]).
+    memory_mb: u64,
 }
+
+/// Wie viel Speicher z3 je Anfrage hoechstens nimmt, in MB. Die langen
+/// Laeufe (`solver_paths`) fragen in zwei Faeden; zweimal 4 GB und der
+/// Testprozess bleiben unter der Commit-Grenze des Rechners (31 GB, im
+/// Leerlauf 14 GB belegt). Ohne Grenze nahm ein z3 6 GB, und der Rechner
+/// fror ein (FB-607). Darueber antwortet z3 `(error "out of memory")`, und
+/// das Urteil bleibt offen.
+pub const MEMORY_MB: u64 = 4096;
 
 /// Sucht `TAKT_SOLVER`, dann `z3` und `cvc5`, je auf dem PATH oder unter
 /// `~/.takt/bin`.
 pub fn find() -> Solver {
     let given = std::env::var("TAKT_SOLVER").ok().map(PathBuf::from).filter(|p| answers(p));
     match given {
-        Some(p) => Solver::At(p),
-        None => ["z3", "cvc5"].into_iter().map(named).find(Solver::works).unwrap_or(Solver::Missing),
+        Some(p) => Solver::at(p),
+        None => ["z3", "cvc5"].into_iter().map(named).find(Solver::works).unwrap_or_else(Solver::missing),
     }
 }
 
@@ -47,7 +59,7 @@ pub fn named(name: &str) -> Solver {
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
         candidates.push(PathBuf::from(home).join(".takt").join("bin").join(name));
     }
-    candidates.into_iter().find(|p| answers(p)).map_or(Solver::Missing, Solver::At)
+    candidates.into_iter().find(|p| answers(p)).map_or_else(Solver::missing, Solver::at)
 }
 
 /// Antwortet das Werkzeug unter `path` auf `--version`?
@@ -56,12 +68,43 @@ fn answers(path: &Path) -> bool {
 }
 
 impl Solver {
+    /// Der Solver unter `path`, ohne Cache, mit [`MEMORY_MB`].
+    pub fn at(path: impl Into<PathBuf>) -> Solver {
+        Solver { path: Some(path.into()), cache: None, memory_mb: MEMORY_MB }
+    }
+
+    /// Kein Solver.
+    pub fn missing() -> Solver {
+        Solver { path: None, cache: None, memory_mb: MEMORY_MB }
+    }
+
+    /// Fehlt der Solver?
+    pub fn is_missing(&self) -> bool {
+        self.path.is_none()
+    }
+
+    /// Derselbe Solver mit einer anderen Speichergrenze je Anfrage, in MB.
+    pub fn with_memory(self, memory_mb: u64) -> Solver {
+        Solver { memory_mb, ..self }
+    }
+
     /// Der Pfad, wenn gefunden.
     pub fn path(&self) -> Option<&Path> {
-        match self {
-            Solver::At(p) => Some(p),
-            Solver::Missing => None,
+        self.path.as_deref()
+    }
+
+    /// Derselbe Solver, der entschiedene Antworten in `dir` ablegt und dort
+    /// wiederfindet (M11 B2 Schritt 0): Schluessel ist der SHA-256 aus Name
+    /// und Version des Solvers, Zeitlimit und Anfrage. Nur eine Ausgabe, in
+    /// der jede Anfrage `sat` oder `unsat` bekam, kommt hinein; ein
+    /// Zeitlimit, `unknown` oder die Speichergrenze haengt an der Last des
+    /// Rechners und wird neu gefragt.
+    pub fn cached(self, dir: impl Into<PathBuf>) -> Solver {
+        if self.is_missing() {
+            return self;
         }
+        let identity = self.identity().unwrap_or_default();
+        Solver { cache: Some((dir.into(), identity)), ..self }
     }
 
     /// Antwortet der Solver auf `--version`?
@@ -72,6 +115,9 @@ impl Solver {
     /// Name und Version, wie Bericht und Beweisdatei sie fuehren (FB-380):
     /// `z3 4.13.4`, `cvc5 1.2.0`. Eine andere Version kann anders urteilen.
     pub fn identity(&self) -> Option<String> {
+        if let Some((_, identity)) = &self.cache {
+            return Some(identity.clone());
+        }
         let path = self.path()?;
         let out = Command::new(path).arg("--version").output().ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
@@ -86,14 +132,41 @@ impl Solver {
         self.path().and_then(|p| p.file_stem()).and_then(|s| s.to_str()).is_some_and(|s| s.starts_with("cvc5"))
     }
 
-    /// Fuehrt ein Skript aus und liefert die Ausgabe.
+    /// Fuehrt ein Skript aus und liefert die Ausgabe; mit Cache eine
+    /// entschiedene Antwort von frueher, ohne den Solver zu fragen.
     fn run(&self, script: &str, timeout_s: u64, tag: &str) -> Result<String, String> {
-        let path = self.path().ok_or("kein Solver")?;
-        let dir = std::env::temp_dir().join(format!("takt-prove-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         // Eindeutig je Aufruf: Tests laufen nebenlaeufig im selben Prozess.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let cache = self.cache.as_ref().map(|(dir, identity)| (dir, cache_key(identity, timeout_s, script)));
+        if let Some((dir, key)) = &cache
+            && let Ok(text) = std::fs::read_to_string(dir.join(format!("{key}.out")))
+        {
+            return Ok(text);
+        }
+        let text = self.ask(script, timeout_s, tag, n)?;
+        if let Some((dir, key)) = cache
+            && decided(script, &text)
+        {
+            // Erst ganz geschrieben, dann unter dem Schluessel: Ein Leser
+            // nebenan sieht nie eine halbe Antwort. Scheitert es, fragt der
+            // naechste Lauf den Solver wieder.
+            let part = dir.join(format!("{key}.{}.{n}.part", std::process::id()));
+            if std::fs::create_dir_all(dir).is_ok()
+                && std::fs::write(&part, &text).is_ok()
+                && std::fs::rename(&part, dir.join(format!("{key}.out"))).is_err()
+            {
+                let _ = std::fs::remove_file(&part);
+            }
+        }
+        Ok(text)
+    }
+
+    /// Fragt den Solver: das Skript als Datei, die Ausgabe als Text.
+    fn ask(&self, script: &str, timeout_s: u64, tag: &str, n: usize) -> Result<String, String> {
+        let path = self.path().ok_or("kein Solver")?;
+        let dir = std::env::temp_dir().join(format!("takt-prove-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let file = dir.join(format!("{tag}-{n}.smt2"));
         std::fs::write(&file, script).map_err(|e| e.to_string())?;
         let mut cmd = Command::new(path);
@@ -103,18 +176,44 @@ impl Solver {
             let limit = format!("--tlimit={}", timeout_s * 1000);
             cmd.args(["--lang=smt2", "--incremental", "--produce-models", &limit]);
         } else {
-            cmd.args(["-smt2", &format!("-T:{timeout_s}")]);
+            // Ueber der Grenze antwortet z3 `(error "out of memory")` (FB-607).
+            cmd.args(["-smt2", &format!("-T:{timeout_s}"), &format!("-memory:{}", self.memory_mb)]);
         }
         let out = cmd.arg(&file).output().map_err(|e| format!("{}: {e}", path.display()))?;
         let _ = std::fs::remove_file(&file);
         // Leer erst nach dem letzten nebenlaeufigen Aufruf; bis dahin scheitert es still.
         let _ = std::fs::remove_dir(&dir);
+        // Die Speichergrenze meldet z3 auf stderr (FB-607). Was er davor auf
+        // stdout schrieb, gilt nicht: Ein `sat` haette keine Belegung.
+        if String::from_utf8_lossy(&out.stderr).contains("out of memory") {
+            return Ok("(error \"out of memory\")\n".to_string());
+        }
         let text = String::from_utf8_lossy(&out.stdout).to_string();
         if text.trim().is_empty() {
             return Err(format!("{}: keine Ausgabe\n{}", path.display(), String::from_utf8_lossy(&out.stderr)));
         }
         Ok(text)
     }
+}
+
+/// Der Schluessel einer Antwort im Cache: SHA-256 ueber Solver mit Version,
+/// Zeitlimit und Anfrage, hexadezimal.
+fn cache_key(identity: &str, timeout_s: u64, script: &str) -> String {
+    let mut ctx = takt_native::sha256::Ctx::new();
+    ctx.update(format!("{identity}\n{timeout_s}\n").as_bytes());
+    ctx.update(script.as_bytes());
+    ctx.finish().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Hat der Solver entschieden? Jedes `(check-sat)` des Skripts bekam `sat`
+/// oder `unsat`. Ein Fehler zaehlt nicht dagegen: `get-value` nach `unsat`
+/// ist einer, und ein Abbruch laesst Antworten fehlen. Die Speichergrenze
+/// aber schon: Traf sie erst das `get-value` nach `sat`, fehlte dem Pfad
+/// seine Belegung (FB-607).
+fn decided(script: &str, text: &str) -> bool {
+    let asked = script.matches("(check-sat)").count();
+    let answered = text.lines().map(str::trim).filter(|l| *l == "sat" || *l == "unsat").count();
+    asked > 0 && answered == asked && !text.contains("out of memory")
 }
 
 /// Das Urteil ueber eine Eigenschaft.
@@ -268,6 +367,20 @@ pub fn classify_compositional(
     solver: &Solver,
     timeout_s: u64,
 ) -> Result<(Vec<CheckReport>, Vec<String>), String> {
+    classify_sites(program, whole, depth, solver, timeout_s, &|_| true)
+}
+
+/// Wie [`classify_compositional`], nur ueber die Pruefstellen, die `keep`
+/// nennt (FB-511): Was ein Lauf schon erreicht, fragt der Solver nicht, und
+/// eine Maschine ohne solche Stelle bekommt keine Lemmata.
+pub fn classify_sites(
+    program: &Program,
+    whole: Option<&Model>,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+    keep: &dyn Fn(&crate::encode::CheckSite) -> bool,
+) -> Result<(Vec<CheckReport>, Vec<String>), String> {
     let whole = whole.map(|w| strengthened(w, solver, timeout_s)).transpose()?;
     let whole = whole.as_ref();
     let mut out = Vec::new();
@@ -280,11 +393,13 @@ pub fn classify_compositional(
     for id in takt_mir::analysis::schedule::runnable(program) {
         let machine = &program.machines[id.index()];
         let model = match crate::encode::encode_machine(program, id) {
+            Ok(m) if !m.checks.iter().any(keep) => continue,
             Ok(m) => strengthened(&m, solver, timeout_s)?,
             Err(e) => {
                 notes.push(format!("`{}` nicht kodierbar: {}", machine.name, e.what));
                 if let Some(w) = whole {
-                    for (j, site) in w.checks.iter().enumerate().filter(|(_, s)| s.machine == machine.name) {
+                    let mine = w.checks.iter().enumerate().filter(|(_, s)| s.machine == machine.name && keep(s));
+                    for (j, site) in mine {
                         out.push(report(site, classify_site(w, program, j, depth, solver, timeout_s)?));
                     }
                 }
@@ -292,7 +407,7 @@ pub fn classify_compositional(
             }
         };
         notes.extend(model.notes.iter().cloned());
-        for (j, site) in model.checks.iter().enumerate() {
+        for (j, site) in model.checks.iter().enumerate().filter(|(_, s)| keep(s)) {
             let bmc = solver.run(&query(&model, depth, Target::Check(j), Query::Bmc), timeout_s, "check-bmc")?;
             let verdict = match answer(&bmc) {
                 "unsat" => induction_verdict(&model, j, depth, solver, timeout_s)?,
@@ -366,9 +481,9 @@ pub fn classify_transitions(
                 match answer(&ind) {
                     "unsat" => CheckVerdict::Unreachable { k: depth },
                     "sat" => match invariant(model, target, solver, timeout_s)? {
-                        Some(true) => CheckVerdict::Unreachable { k: 0 },
+                        Search::Invariant => CheckVerdict::Unreachable { k: 0 },
                         found => CheckVerdict::Undecided {
-                            reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, found)),
+                            reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
                         },
                     },
                     other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
@@ -436,19 +551,37 @@ fn classify_site(
 /// wenn es einen Pfad ueber jede Tiefe hinaus gibt, `None` ohne Urteil —
 /// auch ausserhalb des ganzzahligen Fragments und mit cvc5, das keine
 /// Horn-Klauseln liest.
-fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> Result<Option<bool>, String> {
-    let Some(q) = horn(model, target).filter(|_| !solver.is_cvc5()) else { return Ok(None) };
+fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> Result<Search, String> {
+    if solver.is_cvc5() {
+        return Ok(Search::Outside("cvc5 sucht keine induktive Invariante (Spacer ist ein Teil von z3)".into()));
+    }
+    let q = match horn(model, target) {
+        Ok(q) => q,
+        Err(why) => return Ok(Search::Outside(why)),
+    };
     let text = solver.run(&q, timeout_s, "horn")?;
     Ok(match answer(&text) {
-        "sat" => Some(true),
-        "unsat" => Some(false),
-        _ => None,
+        "sat" => Search::Invariant,
+        "unsat" => Search::Path,
+        _ => Search::Open,
     })
 }
 
+/// Was die Invariantensuche (Spacer) ergab.
+enum Search {
+    /// Eine induktive Invariante: Das Ziel gilt in jeder Tiefe.
+    Invariant,
+    /// Ein Pfad zur Verletzung, tiefer als die Anfrage.
+    Path,
+    /// Weder noch, etwa im Zeitlimit.
+    Open,
+    /// Nicht gesucht: Der Kegel des Ziels liegt ausserhalb des Fragments.
+    Outside(String),
+}
+
 /// Warum ein Induktionsschritt offen bleibt, und was er braucht.
-fn open(model: &Model, depth: u32, found: Option<bool>) -> String {
-    if found == Some(false) {
+fn open(model: &Model, depth: u32, search: &Search) -> String {
+    if let Search::Path = search {
         return format!(
             "die Invariantensuche findet einen Pfad ueber Tiefe {depth} hinaus; eine groessere Tiefe zeigt ihn"
         );
@@ -458,7 +591,11 @@ fn open(model: &Model, depth: u32, found: Option<bool>) -> String {
     } else {
         format!("; die laengste Frist braucht k = {} (`--depth auto`)", model.horizon + 1)
     };
-    format!("Induktionsschritt offen (k = {depth}){deadline}")
+    let outside = match search {
+        Search::Outside(why) => format!("; keine Invariantensuche, ausserhalb ihres Fragments: {why}"),
+        _ => String::new(),
+    };
+    format!("Induktionsschritt offen (k = {depth}){deadline}{outside}")
 }
 
 fn induction_verdict(
@@ -472,9 +609,9 @@ fn induction_verdict(
     Ok(match answer(&ind) {
         "unsat" => CheckVerdict::Unreachable { k: depth },
         "sat" => match invariant(model, Target::Check(i), solver, timeout_s)? {
-            Some(true) => CheckVerdict::Unreachable { k: 0 },
+            Search::Invariant => CheckVerdict::Unreachable { k: 0 },
             found => CheckVerdict::Undecided {
-                reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, found)),
+                reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
             },
         },
         other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
@@ -533,7 +670,7 @@ pub fn verify_contracts(model: &Model, solver: &Solver, timeout_s: u64) -> Resul
                     .vars
                     .iter()
                     .filter_map(|(n, _)| {
-                        values.get(n).map(|v| format!("{} = {}", n.trim_start_matches("c."), val_text(*v)))
+                        values.get(n).map(|v| format!("{} = {}", n.trim_start_matches("c."), val_text(v)))
                     })
                     .collect();
                 ContractVerdict::Violated { values: shown.join(", ") }
@@ -545,12 +682,13 @@ pub fn verify_contracts(model: &Model, solver: &Solver, timeout_s: u64) -> Resul
     Ok(out)
 }
 
-fn val_text(v: Val) -> String {
+fn val_text(v: &Val) -> String {
     match v {
         Val::Bool(b) => b.to_string(),
         Val::Int(i) => i.to_string(),
         Val::F32(f) => format!("{f:?}"),
         Val::F64(f) => format!("{f:?}"),
+        Val::Arr(a) => format!("{a:?}"),
     }
 }
 
@@ -580,11 +718,11 @@ fn confirm_requires(
     values: &BTreeMap<(u32, String), Val>,
     depth: u32,
 ) -> Option<u64> {
-    let states = model.simulate(u64::from(depth), &|k, n| values.get(&(k as u32, n.to_string())).copied());
+    let states = model.simulate(u64::from(depth), &|k, n| values.get(&(k as u32, n.to_string())).cloned());
     let mut env: crate::eval::Env = BTreeMap::new();
     for (name, _) in &model.inputs {
         if let Some(v) = values.get(&(0, name.clone())) {
-            env.insert(name.clone(), *v);
+            env.insert(name.clone(), v.clone());
         }
     }
     if crate::eval::eval(&site.init, &env) == Val::Bool(true) {
@@ -594,7 +732,7 @@ fn confirm_requires(
         let mut env = states[k as usize].clone();
         for (name, _) in &model.inputs {
             if let Some(v) = values.get(&(k + 1, name.clone())) {
-                env.insert(name.clone(), *v);
+                env.insert(name.clone(), v.clone());
             }
         }
         if crate::eval::eval(&site.fires, &env) == Val::Bool(true) {
@@ -699,9 +837,11 @@ pub fn prove(
                 match answer(&ind) {
                     "unsat" => Verdict::Proven { k: depth, assumptions: assumptions_of(model, Target::Property(i)) },
                     "sat" => match invariant(model, Target::Property(i), solver, timeout_s)? {
-                        Some(true) => Verdict::Proven { k: 0, assumptions: assumptions_of(model, Target::Property(i)) },
+                        Search::Invariant => {
+                            Verdict::Proven { k: 0, assumptions: assumptions_of(model, Target::Property(i)) }
+                        }
                         found => Verdict::Unproven {
-                            reason: format!("kein Gegenbeispiel bis Tiefe {depth}, {}", open(model, depth, found)),
+                            reason: format!("kein Gegenbeispiel bis Tiefe {depth}, {}", open(model, depth, &found)),
                         },
                     },
                     other => Verdict::Unproven { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
@@ -822,6 +962,39 @@ fn parse_sx(tokens: &[String], pos: &mut usize) -> Option<Sx> {
 
 /// Ein Wert der Solver-Ausgabe.
 fn value_of(sx: &Sx) -> Option<Val> {
+    value_in(sx, &BTreeMap::new())
+}
+
+/// Ein Wert der Solver-Ausgabe unter den Bindungen `bound`: z3 schreibt
+/// lange Ketten von `store` mit `let`.
+fn value_in(sx: &Sx, bound: &BTreeMap<String, Val>) -> Option<Val> {
+    match sx {
+        Sx::Atom(a) if bound.contains_key(a) => bound.get(a).cloned(),
+        Sx::List(items) if matches!(items.first(), Some(Sx::Atom(a)) if a == "let") => {
+            let [_, Sx::List(binds), body] = items.as_slice() else { return None };
+            let mut inner = bound.clone();
+            for b in binds {
+                let Sx::List(pair) = b else { return None };
+                let [Sx::Atom(name), value] = pair.as_slice() else { return None };
+                let v = value_in(value, bound)?;
+                inner.insert(name.clone(), v);
+            }
+            value_in(body, &inner)
+        }
+        // Ein Array (FB-497): z3 und cvc5 schreiben `store` ueber einem
+        // konstanten Array.
+        Sx::List(items) if matches!(items.first(), Some(Sx::Atom(a)) if a == "store") => {
+            let [_, a, i, x] = items.as_slice() else { return None };
+            let (Val::Arr(a), Val::Int(i)) = (value_in(a, bound)?, value_in(i, bound)?) else { return None };
+            Some(Val::Arr(a.set(i, value_in(x, bound)?)))
+        }
+        _ => value_flat(sx),
+    }
+}
+
+/// Ein Wert ohne Bindungen: Wahrheitswert, Bitvektor, Fliesskommazahl,
+/// konstantes Array.
+fn value_flat(sx: &Sx) -> Option<Val> {
     match sx {
         Sx::Atom(a) => match a.as_str() {
             "true" => Some(Val::Bool(true)),
@@ -836,6 +1009,11 @@ fn value_of(sx: &Sx) -> Option<Val> {
                 None
             }
         },
+        Sx::List(items) if matches!(items.first(), Some(Sx::List(head)) if matches!(head.as_slice(), [Sx::Atom(a), Sx::Atom(c), _] if a == "as" && c == "const")) =>
+        {
+            let [_, x] = items.as_slice() else { return None };
+            Some(Val::Arr(crate::eval::Array::new(value_of(x)?)))
+        }
         Sx::List(items) => {
             let atoms: Vec<&str> = items.iter().map(|i| if let Sx::Atom(a) = i { a.as_str() } else { "" }).collect();
             match atoms.as_slice() {
@@ -939,16 +1117,17 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 continue;
             }
             let passed = values.get(&(k, format!("i.{}.pass", c.name))) == Some(&Val::Bool(true));
-            let delivered = values.get(&(k, format!("i.{}.d", c.name))).copied().unwrap_or(*v);
+            let delivered = values.get(&(k, format!("i.{}.d", c.name))).cloned().unwrap_or_else(|| v.clone());
             let line = match q {
                 quality::SUSPECT | quality::STALE if passed => {
+                    let text = value_text(program, c.ty, &delivered);
                     (*last, *since) = (Some(delivered), -1);
                     let flag = if q == quality::SUSPECT { "suspect" } else { "stale" };
-                    format!("{} {flag}", value_text(program, c.ty, &delivered))
+                    format!("{text} {flag}")
                 }
                 quality::SUSPECT => {
                     let edge = edges.iter().find(|e| e.name == c.name);
-                    let wrong = edge.and_then(|e| e.violation(last.as_ref(), *since)).unwrap_or(*v);
+                    let wrong = edge.and_then(|e| e.violation(last.as_ref(), *since)).unwrap_or_else(|| v.clone());
                     value_text(program, c.ty, &wrong)
                 }
                 quality::STALE => "stale".to_string(),
@@ -957,7 +1136,7 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                     format!("{} bad", value_text(program, c.ty, v))
                 }
                 _ => {
-                    (*last, *since) = (Some(*v), -1);
+                    (*last, *since) = (Some(v.clone()), -1);
                     value_text(program, c.ty, v)
                 }
             };
@@ -983,7 +1162,7 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
                 } else if let Some(wire) = record_wire(program, *elem, &format!("{base}.v"), values, k) {
                     wire
                 } else {
-                    element_text(program, *elem, &format!("{base}.v"), &|at| values.get(&(k, at.to_string())).copied())
+                    element_text(program, *elem, &format!("{base}.v"), &|at| lookup(values, k, at))
                 };
                 let _ = writeln!(out, "t={k} in {} {text} t={t}", c.name);
             }
@@ -1019,6 +1198,41 @@ pub fn stimulus(values: &BTreeMap<(u32, String), Val>, program: &Program, depth:
     out
 }
 
+/// Ein Blatt der Belegung im Schritt `k`. Steht es in einem Array (FB-497),
+/// heisst sein Ort dort `…[*]…`: Die Indizes `[i]` von links werden zu
+/// `[*]`, bis das Array gefunden ist, und waehlen dann in dieser Folge.
+fn lookup(values: &BTreeMap<(u32, String), Val>, k: u32, at: &str) -> Option<Val> {
+    if let Some(v) = values.get(&(k, at.to_string())) {
+        return Some(v.clone());
+    }
+    let mut name = at.to_string();
+    let mut indices = Vec::new();
+    while let Some((start, end, i)) = first_index(&name) {
+        name.replace_range(start..end, "[*]");
+        indices.push(i);
+        if let Some(found) = values.get(&(k, name.clone())) {
+            return indices.iter().try_fold(found.clone(), |v, i| match v {
+                Val::Arr(a) => Some(a.get(*i)),
+                _ => None,
+            });
+        }
+    }
+    None
+}
+
+/// Das erste `[i]` mit einer Zahl in einem Ort: Anfang, Ende, Zahl.
+fn first_index(name: &str) -> Option<(usize, usize, i64)> {
+    let mut from = 0;
+    while let Some(open) = name[from..].find('[').map(|o| o + from) {
+        let close = open + name[open..].find(']')?;
+        if let Ok(i) = name[open + 1..close].parse::<i64>() {
+            return Some((open, close + 1, i));
+        }
+        from = close + 1;
+    }
+    None
+}
+
 /// Hat ein Input einen zusammengesetzten Wert (`Enc::composite`)?
 fn composite_type(program: &Program, ty: takt_mir::TypeId) -> bool {
     match program.types.get(ty) {
@@ -1037,7 +1251,7 @@ fn composite_line(
     c: &takt_mir::program::Channel,
     out: &mut String,
 ) {
-    let get = |at: &str| values.get(&(k, at.to_string())).copied();
+    let get = |at: &str| lookup(values, k, at);
     let Some(Val::Int(q)) = get(&format!("i.{}.q", c.name)) else { return };
     if get(&format!("i.{}.held", c.name)) == Some(Val::Bool(true)) {
         return;
@@ -1065,19 +1279,20 @@ fn samples_line(
     len: u32,
     out: &mut String,
 ) {
-    let get = |at: String| values.get(&(k, at)).copied();
+    let get = |at: String| lookup(values, k, &at);
     let Some(Val::Int(q)) = get(format!("i.{name}.q")) else { return };
     if get(format!("i.{name}.held")) == Some(Val::Bool(true)) {
         return;
     }
     let zero = if matches!(program.types.get(elem), Type::Float { .. }) { Val::F64(0.0) } else { Val::Int(0) };
-    let delivered: Vec<Val> = (0..len).map(|j| get(format!("i.{name}.d[{j}]")).unwrap_or(zero)).collect();
+    let delivered: Vec<Val> =
+        (0..len).map(|j| get(format!("i.{name}.d[{j}]")).unwrap_or_else(|| zero.clone())).collect();
     let items: Vec<String> = delivered.iter().map(|d| value_text(program, elem, d)).collect();
     let checked = get(format!("i.{name}.pass")) == Some(Val::Bool(true));
     // Zeigt das Array die Lieferung selbst, liess der Rand sie durch: Ein
     // `Suspect` des Rands haelt das letzte gute, das die Lieferung nicht ist.
     let shown = get(format!("i.{name}.v")) == Some(Val::Bool(true))
-        && delivered.iter().enumerate().all(|(j, d)| get(format!("i.{name}[{j}]")) == Some(*d));
+        && delivered.iter().enumerate().all(|(j, d)| get(format!("i.{name}[{j}]")).as_ref() == Some(d));
     let line = match q {
         crate::encode::quality::SUSPECT if shown => format!("[{}] suspect", items.join(", ")),
         crate::encode::quality::STALE if checked => format!("[{}] stale", items.join(", ")),
@@ -1140,7 +1355,7 @@ fn record_wire(
     let env: crate::eval::Env = values
         .range((k, base.to_string())..(k + 1, String::new()))
         .filter(|((_, name), _)| name.starts_with(base))
-        .map(|((_, name), v)| (name.clone(), *v))
+        .map(|((_, name), v)| (name.clone(), v.clone()))
         .collect();
     let v = crate::encode::value_at(program, ty, base, &env)?;
     let bytes = takt_interp::bytes::encode(program, &v, ty).ok()?;
@@ -1167,13 +1382,20 @@ fn variable_length(program: &Program, ty: takt_mir::TypeId) -> bool {
 /// Bytes als `0x…`; ein fehlendes Blatt ist null.
 fn element_text(program: &Program, ty: takt_mir::TypeId, base: &str, get: &dyn Fn(&str) -> Option<Val>) -> String {
     let leaf = |at: &str| get(at).unwrap_or(Val::Int(0));
+    // Die Bytes als Blaetter oder, bei einer grossen Kapazitaet, als Array
+    // (FB-497).
     let bytes = |at: &str| {
         let len = match leaf(&format!("{at}.len")) {
             Val::Int(n) => usize::try_from(n).unwrap_or(0),
             _ => 0,
         };
+        let array = get(&format!("{at}[*]"));
         (0..len)
-            .map(|i| match leaf(&format!("{at}[{i}]")) {
+            .map(|i| match &array {
+                Some(Val::Arr(a)) => a.get(i as i64),
+                _ => leaf(&format!("{at}[{i}]")),
+            })
+            .map(|b| match b {
                 Val::Int(b) => u8::try_from(b).unwrap_or(0),
                 _ => 0,
             })
@@ -1267,6 +1489,8 @@ fn value_text(program: &Program, ty: takt_mir::TypeId, v: &Val) -> String {
         (_, Val::F64(f)) => format!("{f:?}"),
         (_, Val::F32(f)) => format!("{f:?}"),
         (_, Val::Bool(b)) => b.to_string(),
+        // Ein Array ist kein Wert eines Inputs; die Elemente schreibt `element_text`.
+        (_, Val::Arr(a)) => format!("{a:?}"),
     }
 }
 

@@ -28,6 +28,14 @@ pub(super) struct Cause {
     line: i64,
 }
 
+impl Cause {
+    /// Hinterlassen beide dasselbe? Gleiche Art und Zeile, keine Meldung —
+    /// eine Meldung ist ein Text ueber dem Zustand und zaehlt nie als gleich.
+    pub(super) fn same(&self, other: &Cause) -> bool {
+        self.kind == other.kind && self.line == other.line && self.message.is_none() && other.message.is_none()
+    }
+}
+
 impl Enc<'_> {
     /// Die Ursache eines Faults an `span`.
     pub(super) fn cause(&self, kind: FaultKind, span: Span) -> Cause {

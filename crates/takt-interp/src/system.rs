@@ -135,7 +135,7 @@ impl<'a, 'p> MachineEnv<'a, 'p> {
             .channels
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.owner == Some(self.id))
+            .filter(|(i, _)| loaded.program.owns(self.id, ChannelId(*i as u32)))
             .map(|(i, c)| (ChannelId(i as u32), c.attrs.safe.clone()))
             .collect();
         for (c, safe) in owned {
@@ -361,8 +361,7 @@ impl Outer for MachineEnv<'_, '_> {
     fn output(&self, c: ChannelId) -> EvalResult<&Value> {
         // Die besitzende Maschine liest ihren Latch, jede andere den
         // committeten Wert des vorigen Ticks (Unit-Delay, 8.3).
-        let owner = self.loaded.program.channels[c.index()].owner;
-        if owner == Some(self.id) { Ok(self.image.output(c)) } else { Ok(self.image.committed_output(c)) }
+        if self.loaded.program.owns(self.id, c) { Ok(self.image.output(c)) } else { Ok(self.image.committed_output(c)) }
     }
 
     fn output_mut(&mut self, c: ChannelId) -> EvalResult<&mut Value> {

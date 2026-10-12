@@ -53,7 +53,7 @@ pub fn tokenize_in(src: &str, edition: Edition) -> Tokens<'_> {
         line_start: 0,
     };
     lexer.run();
-    Tokens { src, tokens: lexer.tokens, trivia: lexer.trivia, errors: lexer.errors, file: FileId(0) }
+    Tokens { src, tokens: lexer.tokens, trivia: lexer.trivia, errors: lexer.errors, file: FileId(0), base: 0 }
 }
 
 /// Wie [`tokenize_in`], fuer eine weitere Datei: Fehler und die Positionen,
@@ -62,6 +62,19 @@ pub fn tokenize_file(src: &str, edition: Edition, file: FileId) -> Tokens<'_> {
     let mut toks = tokenize_in(src, edition);
     toks.errors = toks.errors.into_iter().map(|d| d.in_file(file)).collect();
     toks.file = file;
+    toks
+}
+
+/// Wie [`tokenize_file`], fuer einen Ausschnitt, der in `file` bei `base`
+/// beginnt (der Platzhalter eines Formatstrings, 3.9): Fehler und die
+/// Positionen des Parsers zeigen dorthin, nicht in den Ausschnitt (FB-605).
+pub fn tokenize_at(src: &str, edition: Edition, file: FileId, base: u32) -> Tokens<'_> {
+    let mut toks = tokenize_file(src, edition, file);
+    for d in &mut toks.errors {
+        d.span.start += base;
+        d.span.end += base;
+    }
+    toks.base = base;
     toks
 }
 
