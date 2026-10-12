@@ -104,8 +104,9 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 extern "C" fn rust_eh_personality() {}
 
 /// Die Fassung der Schnittstelle (`TAKT_SDK_ABI`); eine Tabelle anderer
-/// Fassung nimmt [`takt_core_init`] nicht an.
-pub const ABI: u32 = 1;
+/// Fassung nimmt [`takt_core_init`] nicht an. Fassung 2: Der Wirt nennt
+/// seinen Watchdog bei `takt_core_init` (12.11).
+pub const ABI: u32 = 2;
 
 /// So viele Byte haelt `takt_core` fuer den Kern (`TAKT_CORE_BYTES`).
 pub const CORE_BYTES: usize = 1024;
@@ -126,6 +127,10 @@ pub mod status {
     /// Ein Puffer ist zu klein: Die des Journals fassen die Nutzlast des
     /// Programms nicht, oder der Ring der Leitung ist leer.
     pub const BOUND: i32 = -5;
+    /// Keine Leitung gebunden ([`takt_line_init`](super::takt_line_init)):
+    /// Die Senke der Telemetrie stellt der Wirt ausdruecklich (12.11), einen
+    /// Trace, der still verloren geht, gibt es nicht.
+    pub const LINE: i32 = -6;
 }
 
 /// Die Einstiege einer Programmbibliothek, wie `P_ops` sie fuellt
@@ -690,11 +695,27 @@ impl Clock for HostClock {
     }
 }
 
-/// Den Watchdog fuettert der Wirt (12.11, Wem was gehoert).
-struct HostWatchdog;
+/// Der Watchdog des Wirts (`struct takt_watchdog`, 12.3, 12.11): Der Kern
+/// meldet ihm nach jedem Schritt und an jeder Tickgrenze im Schlaf, dass er
+/// lebt. Ein Wirt ohne Watchdog gibt ausdruecklich einen `kick`, der nichts
+/// tut.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WatchdogOps {
+    /// Der Zeiger des Wirts fuer seinen Rueckruf.
+    pub ctx: *mut c_void,
+    /// Meldet, dass der Kern lebt.
+    pub kick: unsafe extern "C" fn(ctx: *mut c_void),
+}
+
+/// Der Watchdog hinter seiner Tabelle (12.11, Wem was gehoert).
+struct HostWatchdog(WatchdogOps);
 
 impl Watchdog for HostWatchdog {
-    fn kick(&mut self) {}
+    fn kick(&mut self) {
+        // SAFETY: Der Wirt sagt zu, dass der Rueckruf so lange gilt wie der Kern.
+        unsafe { (self.0.kick)(self.0.ctx) }
+    }
 }
 
 /// Der Trace des Wirts (12.5): der Anfangszustand ganz, danach je Tick die
@@ -783,18 +804,22 @@ pub struct Core {
     bytes: [MaybeUninit<u8>; CORE_BYTES],
 }
 
-/// Prueft, was beide Einstiege brauchen, und nennt Profil und Politik.
+/// Prueft, was beide Einstiege brauchen, und nennt Profil, Politik und den
+/// Watchdog. Die Fassung zuerst: Ein Wirt der Fassung 1 ruft mit einem
+/// Argument weniger, und `watchdog` liest erst, wer die Fassung bestand.
 ///
 /// # Safety
 ///
-/// `ops` ist null oder zeigt auf eine gueltige Tabelle.
+/// `ops` ist null oder zeigt auf eine gueltige Tabelle; `watchdog` ist null
+/// oder zeigt auf eine gueltige Tabelle.
 unsafe fn prepare(
     core: *mut Core,
     ops: *const Ops,
     arena: *mut c_void,
     profile: i32,
     persisting: bool,
-) -> Result<(Profile, Policy), i32> {
+    watchdog: *const WatchdogOps,
+) -> Result<(Profile, Policy, HostWatchdog), i32> {
     if core.is_null() || ops.is_null() || arena.is_null() {
         return Err(status::NULL);
     }
@@ -802,6 +827,11 @@ unsafe fn prepare(
     let o = unsafe { &*ops };
     if o.abi != ABI {
         return Err(status::ABI);
+    }
+    // SAFETY: null oder gueltig, siehe oben.
+    let Some(watchdog) = (unsafe { watchdog.as_ref() }).copied() else { return Err(status::NULL) };
+    if line().is_none() {
+        return Err(status::LINE);
     }
     if (o.persists != 0) != persisting {
         return Err(status::MEMORY);
@@ -812,18 +842,19 @@ unsafe fn prepare(
         2 => Profile::LINUX_RT,
         _ => return Err(status::PROFILE),
     };
-    Ok((profile, if o.overrun_alert != 0 { Policy::Alert } else { Policy::Fault }))
+    Ok((profile, if o.overrun_alert != 0 { Policy::Alert } else { Policy::Fault }, HostWatchdog(watchdog)))
 }
 
 /// Baut den Kern eines Programms ohne `persist` in `core`: `ops` sind seine
 /// Einstiege (`P_ops`), `arena` seine Arena, `user` das Treiberobjekt,
 /// `profile` das Laufzeitprofil (12.8: 0 `baremetal`, 1 `shared`, 2
-/// `linux_rt`). Das Programm steht danach in Tick 0 (9.4).
+/// `linux_rt`), `watchdog` der Watchdog des Wirts. Die Leitung ist schon
+/// gebunden ([`takt_line_init`]). Das Programm steht danach in Tick 0 (9.4).
 ///
 /// # Safety
 ///
-/// `core`, `ops` und `arena` zeigen auf gueltigen Speicher, der so lange lebt
-/// wie der Kern; `arena` ist die Arena des Programms von `ops`.
+/// `core`, `ops`, `arena` und `watchdog` zeigen auf gueltigen Speicher, der so
+/// lange lebt wie der Kern; `arena` ist die Arena des Programms von `ops`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_core_init(
     core: *mut Core,
@@ -831,9 +862,10 @@ pub unsafe extern "C" fn takt_core_init(
     arena: *mut c_void,
     user: *mut c_void,
     profile: i32,
+    watchdog: *const WatchdogOps,
 ) -> i32 {
     // SAFETY: siehe oben.
-    let (profile, policy) = match unsafe { prepare(core, ops, arena, profile, false) } {
+    let (profile, policy, watchdog) = match unsafe { prepare(core, ops, arena, profile, false, watchdog) } {
         Ok(p) => p,
         Err(code) => return code,
     };
@@ -841,7 +873,7 @@ pub unsafe extern "C" fn takt_core_init(
     let tick_ns = unsafe { (*ops).tick_ns };
     let mut program = CProgram::new(ops, arena, user);
     program.ensure_init();
-    let rt = Runtime::new(program, HostClock(0), HostWatchdog, host_sink(tick_ns), profile, tick_ns, policy);
+    let rt = Runtime::new(program, HostClock(0), watchdog, host_sink(tick_ns), profile, tick_ns, policy);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(Parts { ops, arena, engine: Engine::Volatile(rt) }) };
     status::OK
@@ -866,13 +898,14 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     arena: *mut c_void,
     user: *mut c_void,
     profile: i32,
+    watchdog: *const WatchdogOps,
     nvm: *const NvmOps,
     current: *mut u8,
     stored: *mut u8,
     bound: u32,
 ) -> i32 {
     // SAFETY: siehe oben.
-    let (profile, policy) = match unsafe { prepare(core, ops, arena, profile, true) } {
+    let (profile, policy, watchdog) = match unsafe { prepare(core, ops, arena, profile, true, watchdog) } {
         Ok(p) => p,
         Err(code) => return code,
     };
@@ -897,7 +930,7 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     let (persist, _, _) = Unloaded::new(journal, current, stored).load(&mut program);
     program.ensure_init();
     let sink = host_sink(o.tick_ns);
-    let rt = Runtime::journaled(program, persist, HostClock(0), HostWatchdog, sink, profile, o.tick_ns, policy);
+    let rt = Runtime::journaled(program, persist, HostClock(0), watchdog, sink, profile, o.tick_ns, policy);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(Parts { ops, arena, engine: Engine::Persisting(rt) }) };
     status::OK
@@ -987,7 +1020,7 @@ mod tests {
     use std::string::String;
     use std::vec::Vec;
 
-    use super::{ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, StackDepths, nvm, status};
+    use super::{ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, StackDepths, WatchdogOps, nvm, status};
 
     const HEADER: &str = include_str!("../include/takt_sdk.h");
 
@@ -1079,6 +1112,8 @@ mod tests {
             ("flush", offset_of!(LineOps, flush)),
         ]);
         assert_eq!(fields("struct takt_line {"), line);
+        let watchdog = in_order(vec![("ctx", offset_of!(WatchdogOps, ctx)), ("kick", offset_of!(WatchdogOps, kick))]);
+        assert_eq!(fields("struct takt_watchdog {"), watchdog);
         let stacks = in_order(vec![
             ("tick", offset_of!(StackDepths, tick)),
             ("tick_bound", offset_of!(StackDepths, tick_bound)),
@@ -1099,6 +1134,7 @@ mod tests {
             ("TAKT_ERR_MEMORY", status::MEMORY),
             ("TAKT_ERR_PROFILE", status::PROFILE),
             ("TAKT_ERR_BOUND", status::BOUND),
+            ("TAKT_ERR_LINE", status::LINE),
             ("TAKT_NVM_IDLE", nvm::IDLE),
             ("TAKT_NVM_BUSY", nvm::BUSY),
             ("TAKT_NVM_DONE", nvm::DONE),
@@ -1116,6 +1152,7 @@ mod tests {
 /// Journals und die Leitung hinter dem `static`.
 #[cfg(test)]
 mod core_abi {
+    use core::cell::Cell;
     use core::ffi::c_void;
     use core::mem::MaybeUninit;
     use core::ops::Range;
@@ -1125,7 +1162,7 @@ mod core_abi {
     use std::vec::Vec;
 
     use super::{
-        ABI, Core, LineOps, NvmOps, Ops, nvm, status, takt_board_trace, takt_core_finish, takt_core_init,
+        ABI, Core, LineOps, NvmOps, Ops, WatchdogOps, nvm, status, takt_board_trace, takt_core_finish, takt_core_init,
         takt_core_init_journaled, takt_core_job_work, takt_core_report, takt_core_service, takt_line_init,
     };
 
@@ -1370,12 +1407,31 @@ mod core_abi {
         }
     }
 
+    /// Der Watchdog des Tests: zaehlt, wie oft der Kern meldet, dass er lebt.
+    unsafe extern "C" fn kick(ctx: *mut c_void) {
+        // SAFETY: `ctx` ist der Zaehler des Tests, der ihn ueberlebt.
+        let kicks = unsafe { &*ctx.cast::<Cell<u64>>() };
+        kicks.set(kicks.get() + 1);
+    }
+
     /// **Ein Kern laeuft durch die C-Schnittstelle** (12.11): ohne Journal,
     /// dann zweimal mit Journal auf demselben Flash — der zweite Lauf
-    /// beginnt mit dem Stand des ersten —, und die Bilanz geht ueber die
-    /// Leitung.
+    /// beginnt mit dem Stand des ersten —, die Bilanz geht ueber die
+    /// Leitung, und der Kern meldet dem Watchdog des Wirts, dass er lebt.
+    /// Ohne Leitung und ohne Watchdog nimmt er nicht an: Beide stellt der
+    /// Wirt ausdruecklich, einen stillen Vorgabewert gibt es nicht.
     #[test]
     fn a_core_runs_through_the_c_interface() {
+        let kicks = Cell::new(0u64);
+        let watchdog = WatchdogOps { ctx: core::ptr::from_ref(&kicks).cast_mut().cast(), kick };
+        let plain = ops(false);
+        let mut arena = Counter::default();
+        let mut core = MaybeUninit::<Core>::uninit();
+        // SAFETY: Kern, Tabelle, Arena und Watchdog leben bis zum Ende des Tests.
+        let unbound =
+            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0, &watchdog) };
+        assert_eq!(unbound, status::LINE, "ohne Leitung");
+
         // Leitung und Ring leben so lange wie der Prozess, wie in einem C-Wirt.
         let sink: *mut Vec<u8> = Box::into_raw(Box::default());
         let ring: &'static mut [u8] = Box::leak(std::vec![0u8; 512].into_boxed_slice());
@@ -1384,11 +1440,13 @@ mod core_abi {
         // SAFETY: Tabelle und Ring gelten so lange wie der Prozess; kein Schritt laeuft.
         assert_eq!(unsafe { takt_line_init(&line, ring.as_mut_ptr(), len) }, status::OK);
 
-        let plain = ops(false);
-        let mut arena = Counter::default();
-        let mut core = MaybeUninit::<Core>::uninit();
-        // SAFETY: Kern, Tabelle und Arena leben bis zum Ende des Tests.
-        let rc = unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0) };
+        // SAFETY: wie oben, ohne Watchdog.
+        let blind =
+            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0, null()) };
+        assert_eq!(blind, status::NULL, "ohne Watchdog");
+        // SAFETY: wie oben.
+        let rc =
+            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0, &watchdog) };
         assert_eq!(rc, status::OK);
         // SAFETY: der Kern von eben; danach die Bilanz, waehrend kein Schritt laeuft.
         unsafe {
@@ -1396,6 +1454,7 @@ mod core_abi {
             takt_core_report(core.as_mut_ptr(), null(), null());
         }
         assert!(arena.tick > 1 && arena.starts == 1, "Tick {}, Anfaenge {}", arena.tick, arena.starts);
+        assert!(kicks.get() > 0, "der Kern meldete dem Watchdog nie");
 
         let journaled = ops(true);
         let mut flash = Flash { slots: [[0xff; SLOT]; 2], pending: nvm::IDLE };
@@ -1422,6 +1481,7 @@ mod core_abi {
                     (&raw mut arena).cast(),
                     null_mut(),
                     0,
+                    &watchdog,
                     &device,
                     current.as_mut_ptr(),
                     stored.as_mut_ptr(),

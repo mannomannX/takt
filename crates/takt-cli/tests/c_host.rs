@@ -134,10 +134,13 @@ uint8_t persist_alive_o(void *user, int64_t now) { (void)user; (void)now; return
 "#;
 
 /// Was jeder C-Wirt dieser Tests stellt, der ein Journal hat: die Leitung
-/// nach stdout und ein Flash im Speicher mit zwei Slots, jeder Vorgang
-/// sofort fertig (5.9).
+/// nach stdout, einen Watchdog, dessen Meldung nirgendwohin geht (12.11),
+/// und ein Flash im Speicher mit zwei Slots, jeder Vorgang sofort fertig
+/// (5.9).
 const RAM_FLASH: &str = r#"
 static uint8_t put(void *ctx, uint8_t byte) { return fputc(byte, (FILE *)ctx) != EOF; }
+static void kick(void *ctx) { (void)ctx; }
+static const struct takt_watchdog watchdog = {NULL, kick};
 static uint8_t ring[4096];
 
 #define SLOT 4096u
@@ -188,7 +191,7 @@ static struct persist_arena arena;
 static takt_core core;
 
 static int run(long long ticks) {
-    int32_t status = takt_core_init_journaled(&core, &persist_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &nvm,
+    int32_t status = takt_core_init_journaled(&core, &persist_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm,
                                               current, stored, PERSIST_PERSIST_BOUND);
     if (status != TAKT_OK) {
         fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
@@ -272,7 +275,7 @@ int main(int argc, char **argv) {
     const struct takt_line line = {stdout, put, NULL};
     memset(slots, 0xff, sizeof slots);
     if (takt_line_init(&line, ring, sizeof ring) != TAKT_OK ||
-        takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &nvm, current, stored,
+        takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm, current, stored,
                                  PORT_TEST_PERSIST_BOUND) != TAKT_OK) {
         return 2;
     }

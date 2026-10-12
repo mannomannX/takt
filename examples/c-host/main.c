@@ -35,6 +35,11 @@ uint8_t valve_alive_tank(void *user, int64_t now) {
     return 1u;
 }
 
+/* Der Watchdog des Wirts (12.11): Ein Wirt auf dem Rechner hat keinen. Der
+ * Kern meldet trotzdem, dass er lebt, und die Meldung geht ausdruecklich
+ * nirgendwohin. */
+static void kick(void *ctx) { (void)ctx; }
+
 /* Die Leitung des Traces (12.5): stdout. Den Trace schreibt der Rahmen ueber
  * das SDK; dieses nimmt jedes Byte, das `fputc` annimmt. */
 static uint8_t put(void *ctx, uint8_t byte) {
@@ -84,9 +89,10 @@ int main(int argc, char **argv) {
         static takt_core core;
         struct tank tank = {0u};
         const struct takt_line line = {stdout, put, NULL};
+        const struct takt_watchdog watchdog = {NULL, kick};
         int32_t status = takt_line_init(&line, ring, sizeof ring);
         if (status == TAKT_OK) {
-            status = takt_core_init(&core, &valve_ops, &arena, &tank, TAKT_PROFILE_BAREMETAL);
+            status = takt_core_init(&core, &valve_ops, &arena, &tank, TAKT_PROFILE_BAREMETAL, &watchdog);
         }
         if (status != TAKT_OK) {
             (void)fprintf(stderr, "takt: Leitung oder Kern: %d\n", (int)status);

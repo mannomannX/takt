@@ -35,6 +35,10 @@ struct out {
     size_t len;
 };
 
+/* Der Watchdog des Wirts (12.11): Dieses Beispiel hat keinen. Ein Wirt unter
+ * Linux meldete hier etwa `WATCHDOG=1` an systemd. */
+static void kick(void *ctx) { (void)ctx; }
+
 static uint8_t put(void *ctx, uint8_t byte) {
     struct out *o = ctx;
     uint8_t taken = 0u;
@@ -166,6 +170,7 @@ static int run(uint64_t ticks) {
     static struct port_test_arena arena;
     static takt_core core;
     static const struct takt_nvm nvm = {NULL, SLOT, -1, erase, program, poll_nvm, read_nvm};
+    static const struct takt_watchdog watchdog = {NULL, kick};
     const struct takt_line line = {&out, put, flush};
     int rc = 2;
     int32_t status = takt_line_init(&line, ring, sizeof ring);
@@ -175,8 +180,8 @@ static int run(uint64_t ticks) {
         takt_board_trace("takt auf posix\n");
         takt_line_mark();
         (void)memset(slots, 0xff, sizeof slots);
-        status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &nvm, current,
-                                          stored, PORT_TEST_PERSIST_BOUND);
+        status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
+                                          current, stored, PORT_TEST_PERSIST_BOUND);
         if (status != TAKT_OK) {
             (void)fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
         } else {

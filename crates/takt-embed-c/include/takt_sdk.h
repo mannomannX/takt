@@ -30,8 +30,8 @@ extern "C" {
 #endif
 
 /* Die Fassung dieser Schnittstelle; eine Tabelle anderer Fassung nimmt
- * `takt_core_init` nicht an. */
-#define TAKT_SDK_ABI 1u
+ * `takt_core_init` nicht an. Fassung 2: Der Wirt nennt seinen Watchdog. */
+#define TAKT_SDK_ABI 2u
 
 /* So viele Byte haelt `takt_core`; das Archiv prueft beim Bau, dass sein
  * Kern hineinpasst. */
@@ -106,6 +106,7 @@ typedef struct takt_core {
 #define TAKT_ERR_MEMORY (-3) /* mit `persist` der Einstieg mit Journal, ohne der andere (5.9) */
 #define TAKT_ERR_PROFILE (-4)
 #define TAKT_ERR_BOUND (-5) /* ein Puffer ist zu klein: `P_PERSIST_BOUND`, ein leerer Ring */
+#define TAKT_ERR_LINE (-6)  /* keine Leitung gebunden (`takt_line_init`) */
 
 /* Das Ende eines Laufs (12.7) in `takt_next.ended`; 0, solange er geht. */
 #define TAKT_NEXT_NOW 1
@@ -121,17 +122,28 @@ typedef struct takt_next {
     uint8_t jobs;              /* ein Job wartet: `takt_core_job_work` */
 } takt_next;
 
+/* Der Watchdog des Wirts (12.3, 12.11): Der Kern meldet ihm nach jedem
+ * Schritt und an jeder Tickgrenze im Schlaf, dass er lebt. Ein Wirt ohne
+ * Watchdog gibt ausdruecklich einen `kick`, der nichts tut. */
+struct takt_watchdog {
+    void *ctx;
+    void (*kick)(void *ctx);
+};
+
 /* Baut den Kern eines Programms ohne `persist`: `ops` seine Einstiege
  * (`P_ops`), `arena` seine Arena, `user` das Treiberobjekt, `profile`
- * TAKT_PROFILE_*. Danach steht das Programm in Tick 0 (9.4). */
-int32_t takt_core_init(takt_core *core, const struct takt_ops *ops, void *arena, void *user, int32_t profile);
+ * TAKT_PROFILE_*, `watchdog` der Watchdog des Wirts. Die Leitung ist schon
+ * gebunden (`takt_line_init`), sonst TAKT_ERR_LINE: Die Senke stellt der
+ * Wirt ausdruecklich (12.11). Danach steht das Programm in Tick 0 (9.4). */
+int32_t takt_core_init(takt_core *core, const struct takt_ops *ops, void *arena, void *user, int32_t profile,
+                       const struct takt_watchdog *watchdog);
 
 /* Wie `takt_core_init`, fuer ein Programm mit `persist`: Es beginnt ueber
  * sein Journal auf `nvm`, mit zwei Puffern von je `bound` Byte
  * (`P_PERSIST_BOUND`), die nur der Kern benutzt (5.9). */
 int32_t takt_core_init_journaled(takt_core *core, const struct takt_ops *ops, void *arena, void *user,
-                                 int32_t profile, const struct takt_nvm *nvm, uint8_t *current, uint8_t *stored,
-                                 uint32_t bound);
+                                 int32_t profile, const struct takt_watchdog *watchdog, const struct takt_nvm *nvm,
+                                 uint8_t *current, uint8_t *stored, uint32_t bound);
 
 /* Rechnet alle Tickgrenzen bis `now_ns` (12.1). */
 takt_next takt_core_service(takt_core *core, int64_t now_ns);
