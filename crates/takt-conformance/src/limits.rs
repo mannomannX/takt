@@ -74,16 +74,17 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Pruefstellen und Uebergaenge, die weder ein Lauf erreicht noch der Solver ausschliesst",
-        warum: "`UNREACHED` (`differential.rs`) haelt 102 Uebergaenge, 72 nie bestandene und 337 nie verletzte \
+        warum: "`UNREACHED` (`differential.rs`) haelt 101 Uebergaenge, 56 nie bestandene und 286 nie verletzte \
                 Pruefstellen in 97 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
                 bis Tiefe 5 in 60 s keinen Pfad, k-Induktion beweist sie nicht unerreichbar, und der lange Lauf \
                 ohne Stimulus ueber `MAX_TICKS` (`paths::from_run`) faultet dort nicht. Die nie verletzten stehen \
-                je Programm mit ihrer Gruppe als Grund (`GROUPS`): Speicher 99, Frist 82, ohne Teilmodell 70 \
-                (FB-604), bewiesen ohne Beweisdatei 54, nicht k-induktiv 12, Fragment 12, ohne Urteil 3, \
-                Zeitschranke 3 (FB-614), jenseits `MAX_TICKS` 2. Dazu 186 Stellen, die nie faulten \
-                koennen (13.2: 167 `proven`, 10 `message`, 9 `observe`).",
-        wann: "M11 Schritt 29, Nachtrag (Strang B2): Beweisdateien (Schritt 4), induktive Invarianten je Stelle \
-               (Schritt 2), Gruppen auch fuer Uebergaenge und nie bestandene Stellen (Schritt 5).",
+                je Programm mit ihrer Gruppe als Grund (`GROUPS`): Speicher 97, Frist 80, ohne Teilmodell 70 \
+                (FB-604), nicht k-induktiv 12, Fragment 12, bewiesen und nicht nachgerechnet 4, ohne Urteil 3, \
+                Zeitschranke 3 (FB-614), jenseits `MAX_TICKS` 2, ausserhalb der Suite `beweiser` 2, ein \
+                bewiesener `check` 1. Dazu 186 Stellen, die nie faulten koennen (13.2: 167 `proven`, 10 \
+                `message`, 9 `observe`).",
+        wann: "M11 Schritt 29, Nachtrag (Strang B2): induktive Invarianten je Stelle (Schritt 2), Gruppen auch \
+               fuer Uebergaenge und nie bestandene Stellen (Schritt 5).",
         row: "FB-511",
     },
     Limit {
