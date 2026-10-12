@@ -32,6 +32,12 @@ Auch die Suiten selbst kommen aus dem Lauf, als nextest-Archiv vom
 Windows-Runner (M11 Schritt 34e): Hier laeuft dann kein Compiler, und
 `TAKT_ROOT` nennt den Testprozessen den Worktree als Quelle.
 
+`-Bench` misst statt der Suiten: `takt bench --board <board>` je Board, die
+Protokolle unter `<Logs>\<zeit>-<stand>-bench-<board>`. Bericht und
+Hardware-Konfiguration (`corpus-try/hw/<board>.report`, `.hw`) schreibt der
+Bench in den Hauptbaum, zum Pruefen und Committen. Mit `-FromCi` kommen die
+Abbilder und `takt` aus dem Lauf von boards.yml, ohne lokalen Bau.
+
 `-AllowMissing` nennt, was an diesem Rechner fehlen darf (`TAKT_ALLOW_MISSING`);
 der Test dazu meldet sich als uebersprungen, und die Zusammenfassung sagt es.
 Vorgabe ist die Bruecke an UART0 des C6, die nicht angesteckt ist.
@@ -49,6 +55,7 @@ pwsh -NoProfile -File tools/board-run.ps1
 pwsh -NoProfile -File tools/board-run.ps1 -Rev e6093b4 -Boards esp32c6
 pwsh -NoProfile -File tools/board-run.ps1 -Boards esp32c6 -Filter 'test(=the_board_agrees_with_the_interpreter)'
 pwsh -NoProfile -File tools/board-run.ps1 -FromCi 18423456789
+pwsh -NoProfile -File tools/board-run.ps1 -FromCi 18423456789 -Bench -Boards stm32f401
 #>
 param(
     [string]$Rev = 'HEAD',
@@ -60,7 +67,8 @@ param(
     [string]$F401Port = 'COM7',
     [string]$AllowMissing = 'uart-bridge',
     [string]$Filter = '',
-    [string]$FromCi = ''
+    [string]$FromCi = '',
+    [switch]$Bench
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,7 +122,9 @@ function Import-CiImages([string]$Run) {
     }
     $archive = Join-Path $tests 'board-tests.tar.zst'
     if (-not (Test-Path $archive)) { throw "Lauf $Run brachte kein Archiv der Board-Suiten" }
-    [pscustomobject]@{ Commit = $commits[0]; Stands = @($stands); Archive = $archive }
+    $takt = Join-Path $tests 'release\takt.exe'
+    if ($Bench -and -not (Test-Path $takt)) { throw "Lauf $Run brachte kein takt fuer den Bench" }
+    [pscustomobject]@{ Commit = $commits[0]; Stands = @($stands); Archive = $archive; Takt = $takt }
 }
 
 try {
@@ -162,6 +172,14 @@ try {
         }
         foreach ($b in $suites) {
             if ($cli -ne 0) { $results[$b] = 'nicht gelaufen: der Bau von takt scheiterte'; continue }
+            if ($Bench) {
+                $takt = if ($FromCi) { $ci.Takt } else { Join-Path $Target 'release\takt.exe' }
+                $hw = Join-Path $repo "corpus-try\hw\$b"
+                & $takt bench --board $b --logs (Join-Path $Logs "$name-bench-$b") `
+                    --hardware "$hw.hw" --conformance "$hw.report" *>> $log
+                $results[$b] = '{0} (Bench)' -f $(if ($LASTEXITCODE -eq 0) { 'bestanden' } else { 'gescheitert' })
+                continue
+            }
             if ($FromCi) {
                 $expr = if ($Filter) { "binary(=board_$b) & ($Filter)" } else { "binary(=board_$b)" }
                 cargo nextest run --archive-file $ci.Archive --workspace-remap $Worktree `

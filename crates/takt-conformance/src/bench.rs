@@ -898,54 +898,89 @@ pub fn import(logs: &Logs) -> Result<Outcome, String> {
     })
 }
 
+/// Was ein Abbild des Bench misst.
+enum Image {
+    /// Das Messprogramm in einer Lage des Boards.
+    Bench(u32),
+    /// Der leere Kern in der Tickschleife.
+    Loop,
+    /// Der Lastkern in einer Form.
+    Load,
+    /// Die Natives und die Mathematik.
+    Natives,
+}
+
+/// Die Abbilder eines Laufs in seiner Reihenfolge: je Abbild, was es misst,
+/// sein Programm und seine Optionen.
+fn images(board: &dyn Board, runs: u64) -> Result<Vec<(Image, PathBuf, Options)>, String> {
+    let frame = write_kernel("frame", &frame_kernel())?;
+    let load = write_kernel("load", LOAD_KERNEL)?;
+    let mut images: Vec<(Image, PathBuf, Options)> = board
+        .placements()
+        .iter()
+        .map(|&shift| (Image::Bench(shift), frame.clone(), Options::bench(runs, shift)))
+        .collect();
+    images.push((Image::Loop, frame.clone(), Options::timed(LOOP_TICKS).calibrating()));
+    images.extend(load_runs(board.forms()).into_iter().map(|options| (Image::Load, load.clone(), options)));
+    images.push((Image::Natives, frame, Options::natives()));
+    Ok(images)
+}
+
 /// Misst auf dem Board: das Messprogramm in jeder Lage des Boards, den leeren
 /// Kern und den Lastkern in der Tickschleife und die Natives; liefert die
 /// Protokolle, aus denen [`import`] rechnet.
 ///
 /// `log` bekommt je Abbild eine Zeile, damit ein langer Lauf zeigt, wo er
-/// steht.
+/// steht. Im Lauf, der nur baut ([`crate::board::build_only`]), baut es
+/// jedes Abbild und endet mit [`crate::board::BUILT_ONLY`].
 pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Result<Logs, String> {
-    let frame = write_kernel("frame", &frame_kernel())?;
+    let images = images(board, runs)?;
+    if crate::board::build_only() {
+        for (_, program, options) in &images {
+            board.build(program, options)?;
+        }
+        return Err(crate::board::BUILT_ONLY.into());
+    }
     let mut logs = Logs::default();
-    for &shift in board.placements() {
-        let options = Options::bench(runs, shift);
-        let elf = board.build(&frame, &options)?;
+    for (image, program, options) in images {
+        let elf = board.build(&program, &options)?;
         let text = board.run(&elf, &options)?;
-        let n = log::runs(&text)?.first().map_or(0, |r| r.takt.len());
-        log(&format!("Messprogramm in Lage {shift}: {n} Kerne"));
-        logs.bench.push(text);
+        match image {
+            Image::Bench(shift) => {
+                let n = log::runs(&text)?.first().map_or(0, |r| r.takt.len());
+                log(&format!("Messprogramm in Lage {shift}: {n} Kerne"));
+                logs.bench.push(text);
+            }
+            Image::Loop => {
+                log(&format!(
+                    "Tickschleife: Stack {:?} Byte, Jitter {:?} ns",
+                    crate::board::counter(&text, "stack"),
+                    tick_jitter(&text)
+                ));
+                logs.looped = Some(text);
+            }
+            Image::Load => {
+                log(&format!(
+                    "Lastkern{}{}: Stack {:?} Byte, davon Programm {:?}",
+                    match options.form {
+                        Form::Own => "",
+                        Form::Interrupt => " in der Interruptform",
+                        Form::Poll => " in der Pollform",
+                        Form::Rtos => " unter RTOS",
+                        Form::Embassy => " unter Embassy",
+                    },
+                    if options.timed { " in Echtzeit" } else { " in logischer Zeit" },
+                    crate::board::counter(&text, "stack"),
+                    crate::board::counter(&text, "programm")
+                ));
+                logs.loads.push(text);
+            }
+            Image::Natives => {
+                log("Natives und Mathematik gerechnet");
+                logs.natives = Some(text);
+            }
+        }
     }
-    let options = Options::timed(LOOP_TICKS).calibrating();
-    let elf = board.build(&frame, &options)?;
-    let looped = board.run(&elf, &options)?;
-    log(&format!(
-        "Tickschleife: Stack {:?} Byte, Jitter {:?} ns",
-        crate::board::counter(&looped, "stack"),
-        tick_jitter(&looped)
-    ));
-    logs.looped = Some(looped);
-    let load = write_kernel("load", LOAD_KERNEL)?;
-    for options in load_runs(board.forms()) {
-        let elf = board.build(&load, &options)?;
-        let text = board.run(&elf, &options)?;
-        log(&format!(
-            "Lastkern{}{}: Stack {:?} Byte, davon Programm {:?}",
-            match options.form {
-                Form::Own => "",
-                Form::Interrupt => " in der Interruptform",
-                Form::Poll => " in der Pollform",
-                Form::Rtos => " unter RTOS",
-                Form::Embassy => " unter Embassy",
-            },
-            if options.timed { " in Echtzeit" } else { " in logischer Zeit" },
-            crate::board::counter(&text, "stack"),
-            crate::board::counter(&text, "programm")
-        ));
-        logs.loads.push(text);
-    }
-    let natives = natives_text(board, &frame)?;
-    log("Natives und Mathematik gerechnet");
-    logs.natives = Some(natives);
     Ok(logs)
 }
 

@@ -66,6 +66,12 @@ jobs:
         run: >-
           cargo nextest run -p takt-conformance --test board_${{ matrix.board }}
           --run-ignored all --no-fail-fast --profile ci
+      # Die Abbilder des Bench (13.8) ebenso: `takt bench` baut jedes und endet
+      # vor dem Board (`tools/board-run.ps1 -FromCi … -Bench`).
+      - name: Bench-Abbilder bauen
+        env:
+          TAKT_BOARD_BUILD_ONLY: "1"
+        run: target/release/takt bench --board ${{ matrix.board }}
       - name: Stand nennen
         if: always()
         shell: bash
@@ -106,9 +112,14 @@ jobs:
         run: >-
           cargo nextest archive -p takt-conformance --test board_esp32c6 --test board_stm32f401
           --archive-file target/board-tests.tar.zst
+      # `takt bench` am Board, mit den Abbildern aus `images`.
+      - name: takt
+        run: cargo build --release -p takt-cli
       - uses: actions/upload-artifact@v4
         with:
           name: board-tests-windows
-          path: target/board-tests.tar.zst
+          path: |
+            target/board-tests.tar.zst
+            target/release/takt.exe
           if-no-files-found: error
           retention-days: 14

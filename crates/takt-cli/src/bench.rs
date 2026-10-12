@@ -254,6 +254,11 @@ fn on_board(args: &Args) -> bool {
     let measured = suite::run(board.as_mut(), runs, |line| eprintln!("  {line}"));
     let logs = match measured {
         Ok(logs) => logs,
+        // Der Lauf, der nur baut (boards.yml): Die Abbilder liegen im Cache.
+        Err(e) if e == takt_conformance::board::BUILT_ONLY => {
+            println!("takt bench: {e}");
+            return true;
+        }
         Err(e) => {
             eprintln!("takt bench: {e}");
             return false;
