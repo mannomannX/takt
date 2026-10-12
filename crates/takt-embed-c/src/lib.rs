@@ -72,6 +72,7 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void};
 use core::marker::PhantomData;
 use core::mem::{MaybeUninit, align_of, size_of};
+use core::ptr::null;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use takt_rt_baremetal::{Cadence, JournalStats, Port, Stacks, Telemetry, Trace};
@@ -684,6 +685,9 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
 
 /// Die Zeit des Wirts: der Augenblick, den er `takt_core_service` nennt, und
 /// sein Weckereignis aus [`takt_core_wake`], das im Speicher des Kerns liegt.
+/// Den Zeiger auf das Flag setzt jeder Aufruf aus dem Zeiger des Wirts neu und
+/// loescht ihn danach: Der Kern traegt keinen Zeiger auf sich selbst und darf
+/// zwischen zwei Aufrufen woanders liegen.
 struct HostClock {
     now: i64,
     wake: *const AtomicBool,
@@ -701,8 +705,8 @@ impl Clock for HostClock {
 
     /// Ein Weckereignis des Wirts seit dem letzten Aufruf (9.9).
     fn woken(&mut self) -> bool {
-        // SAFETY: Das Flag liegt im Speicher des Kerns, der so lange lebt wie er.
-        unsafe { (*self.wake).swap(false, Ordering::SeqCst) }
+        // SAFETY: null oder das Flag des Kerns, den der laufende Aufruf haelt.
+        unsafe { self.wake.as_ref() }.is_some_and(|wake| wake.swap(false, Ordering::SeqCst))
     }
 }
 
@@ -799,15 +803,24 @@ enum Engine {
 }
 
 impl Engine {
-    fn service(&mut self, now: i64, tunables: Option<&mut dyn Tunables>) -> takt_rt_core::Next {
+    fn service(
+        &mut self,
+        now: i64,
+        wake: *const AtomicBool,
+        tunables: Option<&mut dyn Tunables>,
+    ) -> takt_rt_core::Next {
         match self {
             Engine::Volatile(rt) => {
-                rt.clock.now = now;
-                rt.service_with(tunables)
+                rt.clock = HostClock { now, wake };
+                let next = rt.service_with(tunables);
+                rt.clock.wake = null();
+                next
             }
             Engine::Persisting(rt) => {
-                rt.clock.now = now;
-                rt.service_with(tunables)
+                rt.clock = HostClock { now, wake };
+                let next = rt.service_with(tunables);
+                rt.clock.wake = null();
+                next
             }
         }
     }
@@ -851,10 +864,9 @@ struct Parts {
     engine: Engine,
 }
 
-/// Die Uhr eines Kerns in `core`, mit dem Weckereignis im Speicher des Kerns.
-fn host_clock(core: *mut Core) -> HostClock {
-    // SAFETY: nur die Adresse des Felds, ohne Referenz; `Parts` steht danach dort.
-    HostClock { now: 0, wake: unsafe { &raw const (*core.cast::<Parts>()).wake } }
+/// Die Uhr eines neuen Kerns; das Weckereignis reicht erst `takt_core_service`.
+const fn host_clock() -> HostClock {
+    HostClock { now: 0, wake: null() }
 }
 
 const _: () = assert!(size_of::<Parts>() <= CORE_BYTES && align_of::<Parts>() <= 8, "`CORE_BYTES` zu klein");
@@ -935,7 +947,7 @@ pub unsafe extern "C" fn takt_core_init(
     let tick_ns = unsafe { (*ops).tick_ns };
     let mut program = CProgram::new(ops, arena, user);
     program.ensure_init();
-    let rt = Runtime::new(program, host_clock(core), watchdog, host_sink(tick_ns), profile, tick_ns, policy);
+    let rt = Runtime::new(program, host_clock(), watchdog, host_sink(tick_ns), profile, tick_ns, policy);
     let wake = AtomicBool::new(false);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, engine: Engine::Volatile(rt) }) };
@@ -993,7 +1005,7 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     let (persist, _, _) = Unloaded::new(journal, current, stored).load(&mut program);
     program.ensure_init();
     let sink = host_sink(o.tick_ns);
-    let rt = Runtime::journaled(program, persist, host_clock(core), watchdog, sink, profile, o.tick_ns, policy);
+    let rt = Runtime::journaled(program, persist, host_clock(), watchdog, sink, profile, o.tick_ns, policy);
     let wake = AtomicBool::new(false);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, engine: Engine::Persisting(rt) }) };
@@ -1030,13 +1042,16 @@ pub unsafe extern "C" fn takt_core_service_with(
 ) -> NextStep {
     // SAFETY: null oder gueltig, siehe oben.
     let mut source = unsafe { tunables.as_ref() }.copied().map(HostTunables);
+    let parts = core.cast::<Parts>();
+    // SAFETY: nur die Adresse des Flags, ohne Referenz; andere Kontexte setzen es.
+    let wake = unsafe { &raw const (*parts).wake };
     // SAFETY: nur der Kern, nicht Tabelle, Arena und Flag, die andere Kontexte lesen.
-    let engine = unsafe { &mut (*core.cast::<Parts>()).engine };
+    let engine = unsafe { &mut (*parts).engine };
     let source: Option<&mut dyn Tunables> = match source.as_mut() {
         Some(s) => Some(s),
         None => None,
     };
-    engine.service(now_ns, source).into()
+    engine.service(now_ns, wake, source).into()
 }
 
 /// Ein Weckereignis des Wirts (9.9): Schlaeft der Kern, endet der Schlaf an
