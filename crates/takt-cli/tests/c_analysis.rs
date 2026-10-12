@@ -369,6 +369,13 @@ const F401_DEFINES: &[&str] =
 const FREERTOS_DEFINES: &[&str] =
     &["-DTAKT_TICKS=2000u", "-DTAKT_LOGICAL=0", "-DTAKT_FRESH_JOURNAL=1", "-DTAKT_TICK_STACK_PROGRAM=0u"];
 
+/// Was der Bau unter FreeRTOS ohne MPU dazu setzt (M11 Schritt 20).
+const FREERTOS_PLAIN: &[&str] = &["-DTAKT_FREERTOS_MPU=0"];
+
+/// Was er unter FreeRTOS-MPU dazu setzt (Schritt 20b): mit der Probe im
+/// Lauf, die jeden Zweig des Wirts nimmt.
+const FREERTOS_MPU: &[&str] = &["-DTAKT_FREERTOS_MPU=1", "-DTAKT_PROBE_NS=20000000"];
+
 /// Das Ziel des C-Wirts der Black Pill fuer clang-tidy.
 const F401_TARGET: &[&str] = &[
     "--target=thumbv7em-none-eabihf",
@@ -424,31 +431,36 @@ fn deliveries(out: &Path) -> Vec<Link> {
         }
         links.push(link);
     }
-    links.extend(freertos(out));
+    links.extend(freertos(out, "ARM_CM4F", FREERTOS_PLAIN, &[]));
+    links.extend(freertos(out, "ARM_CM4_MPU", FREERTOS_MPU, &["freertos_mpu.c"]));
     links
 }
 
 /// Der C-Wirt der Black Pill unter FreeRTOS (M11 Schritt 20): der Port mit
 /// Faeden, sein Adapter `ports/freertos`, der Wirt `freertos.c` und
 /// `FreeRTOSConfig.h`, gegen den Kern V11.3.1 (`FREERTOS_KERNEL_PATH`, auf CI
-/// aus der Setup-Aktion). Der Kern selbst gehoert nicht zum C-Teil: Er bringt
-/// seine eigene Dokumentation nach MISRA C mit (`MISRA.md` im Kern), und was
-/// die Werkzeuge in seinen Koepfen finden, zaehlt nicht. Die Lieferform ist
-/// die von `app`: Rahmen und Kopf des Programms zaehlen dort einmal.
-fn freertos(out: &Path) -> Option<Link> {
+/// aus der Setup-Aktion) mit dem Port `port` von FreeRTOS, den Werten
+/// `variant` und den Einheiten `extra` des Wirts (ohne MPU, oder FreeRTOS-MPU
+/// mit dem Handler der Partition aus Schritt 20b). Der Kern selbst
+/// gehoert nicht zum C-Teil: Er bringt seine eigene Dokumentation nach MISRA C
+/// mit (`MISRA.md` im Kern), und was die Werkzeuge in seinen Koepfen finden,
+/// zaehlt nicht. Die Lieferform ist die von `app`: Rahmen und Kopf des
+/// Programms zaehlen dort einmal.
+fn freertos(out: &Path, port: &str, variant: &[&str], extra: &[&str]) -> Option<Link> {
     let hint = "`FREERTOS_KERNEL_PATH` auf den Kern V11.3.1 setzen (auf CI die Setup-Aktion)";
     let kernel = takt_testkit::require("freertos", std::env::var_os("FREERTOS_KERNEL_PATH"), hint)?;
     let kernel = std::fs::canonicalize(PathBuf::from(kernel)).expect("der Kern von FreeRTOS");
     let root = root();
     let ports = root.join("crates/takt-embed-c/ports");
     let board = root.join("examples/boards/stm32f401");
-    let units = vec![
+    let mut units = vec![
         ports.join("rtos/takt_rtos.c"),
         ports.join("freertos/takt_os.c"),
         board.join("startup.c"),
         board.join("board.c"),
         board.join("freertos.c"),
     ];
+    units.extend(extra.iter().map(|unit| board.join(unit)));
     let include = vec![
         out.join("app"),
         ports.join("rtos"),
@@ -456,10 +468,10 @@ fn freertos(out: &Path) -> Option<Link> {
         board.join("libc"),
         board,
         kernel.join("include"),
-        kernel.join("portable/GCC/ARM_CM4F"),
+        kernel.join("portable/GCC").join(port),
     ];
     let mut link = Link::host(units, include);
-    link.defines = FREERTOS_DEFINES.iter().map(|d| (*d).to_string()).collect();
+    link.defines = FREERTOS_DEFINES.iter().chain(variant).map(|d| (*d).to_string()).collect();
     link.target = F401_TARGET.iter().map(|t| (*t).to_string()).collect();
     link.platform = "unix32";
     link.external = vec![kernel];

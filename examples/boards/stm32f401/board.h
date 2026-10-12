@@ -60,6 +60,12 @@ void board_led(int on);
 /* Der Waechter unter dem Stack (12.3): eine Region der MPU ohne Zugriff. */
 void board_protect_stack(void);
 
+/* Derselbe Waechter ohne Region, wenn die MPU einem RTOS gehoert (12.11):
+ * ein Watchpoint der DWT auf jedes Lesen und Schreiben darin. Ein Treffer
+ * loest DebugMonitor aus, und das Board haelt an; ohne Komparator haelt es
+ * gleich an. */
+void board_watch_stack(void);
+
 /* Bemalt den Stack vom Waechter bis kurz unter den Stackzeiger (12.3). */
 void board_paint_stack(void);
 

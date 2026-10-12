@@ -8,9 +8,9 @@
 //! ueber USART1 an den Adapter.
 //!
 //! **Zwei Wirte, ein Board.** Das Bring-up in Rust ([`Stm32f401`]) und der
-//! C-Wirt ([`Stm32f401C`], [`C_HOST`], M11 Schritt 18b) teilen Flash,
-//! Sprungbrett, Leitung und Rueckweg; verschieden ist nur, wie das Abbild
-//! entsteht.
+//! C-Wirt ([`Stm32f401C`], [`C_HOST`], M11 Schritt 18b; unter FreeRTOS-MPU
+//! [`C_HOST_MPU`], Schritt 20b) teilen Flash, Sprungbrett, Leitung und
+//! Rueckweg; verschieden ist nur, wie das Abbild entsteht.
 //!
 //! **Das Flash** (FB-385): Sektor 0 haelt der HID-Bootloader von WeAct und
 //! wird nie geschrieben. Er springt nach Sektor 1, ins Sprungbrett
@@ -66,7 +66,38 @@ const FREERTOS: Kernel = Kernel {
     marker: ("include/task.h", "#define tskKERNEL_VERSION_NUMBER"),
     sources: &["tasks.c", "queue.c", "list.c", "portable/GCC/ARM_CM4F/port.c"],
     include: &["include", "portable/GCC/ARM_CM4F"],
+    cflags: &[],
 };
+
+/// Derselbe Kern als FreeRTOS-MPU (M11 Schritt 20b): der Port `ARM_CM4_MPU`
+/// mit den Huellern der Systemaufrufe (Fassung 2). Die Hueller klammern
+/// jeden Vergleich, wie MISRA C es will (12.1); clang hielte die Klammern
+/// um einen Vergleich fuer einen Tippfehler.
+const FREERTOS_MPU: Kernel = Kernel {
+    sources: &[
+        "tasks.c",
+        "queue.c",
+        "list.c",
+        "portable/GCC/ARM_CM4_MPU/port.c",
+        "portable/GCC/ARM_CM4_MPU/mpu_wrappers_v2_asm.c",
+        "portable/Common/mpu_wrappers_v2.c",
+    ],
+    include: &["include", "portable/GCC/ARM_CM4_MPU"],
+    cflags: &["-Wno-parentheses-equality"],
+    ..FREERTOS
+};
+
+/// Was der Port mit Faeden unter FreeRTOS bindet; unter FreeRTOS-MPU dazu
+/// der Handler der Partition (`freertos_mpu.c`).
+const RTOS_SOURCES: &[&str] =
+    &["crates/takt-embed-c/ports/rtos/takt_rtos.c", "crates/takt-embed-c/ports/freertos/takt_os.c"];
+const MPU_SOURCES: &[&str] = &[
+    "crates/takt-embed-c/ports/rtos/takt_rtos.c",
+    "crates/takt-embed-c/ports/freertos/takt_os.c",
+    "examples/boards/stm32f401/freertos_mpu.c",
+];
+const RTOS_INCLUDE: &[&str] =
+    &["crates/takt-embed-c/ports/rtos", "crates/takt-embed-c/ports/freertos", "examples/boards/stm32f401/libc"];
 
 /// Der C-Wirt der Black Pill (12.11, M11 Schritte 18b und 20): Start, Takt,
 /// Leitung und Journal in `examples/boards/stm32f401`; in der Interruptform
@@ -74,6 +105,7 @@ const FREERTOS: Kernel = Kernel {
 /// unter FreeRTOS mit dem Port mit Faeden `ports/rtos` und seinem Adapter
 /// `ports/freertos`.
 pub const C_HOST: CHost = CHost {
+    name: "f401",
     dir: "examples/boards/stm32f401",
     triple: "thumbv7em-none-eabihf",
     target: "thumbv7em",
@@ -92,6 +124,7 @@ pub const C_HOST: CHost = CHost {
                 "crates/takt-embed-c/ports/irq/stm32f4/takt_irq_chip.c",
             ],
             include: &["crates/takt-embed-c/ports/irq"],
+            defines: &[],
             interrupt_stack: None,
             kernel: None,
         },
@@ -100,16 +133,51 @@ pub const C_HOST: CHost = CHost {
         Binding {
             form: Form::Rtos,
             main: "freertos.c",
-            sources: &["crates/takt-embed-c/ports/rtos/takt_rtos.c", "crates/takt-embed-c/ports/freertos/takt_os.c"],
-            include: &[
-                "crates/takt-embed-c/ports/rtos",
-                "crates/takt-embed-c/ports/freertos",
-                "examples/boards/stm32f401/libc",
-            ],
+            sources: RTOS_SOURCES,
+            include: RTOS_INCLUDE,
+            defines: &["TAKT_FREERTOS_MPU=0"],
             interrupt_stack: Some(2048),
             kernel: Some(FREERTOS),
         },
     ],
+};
+
+/// Der C-Wirt unter FreeRTOS-MPU (12.11, M11 Schritt 20b): Die Regionen der
+/// MPU gehoeren FreeRTOS (`stm32f401-mpu.ld`), Schritt und Jobs sind
+/// privilegierte Aufgaben, die fremde Last rechnet ohne Privileg neben der
+/// Arena (`Schutz: Partition`), und der Kopf nennt, dass die MPU ihren
+/// Schreibzugriff abwies.
+pub const C_HOST_MPU: CHost = CHost {
+    name: "f401-mpu",
+    script: "stm32f401-mpu.ld",
+    bindings: &[Binding {
+        form: Form::Rtos,
+        main: "freertos.c",
+        sources: MPU_SOURCES,
+        include: RTOS_INCLUDE,
+        defines: &["TAKT_FREERTOS_MPU=1"],
+        interrupt_stack: Some(2048),
+        kernel: Some(FREERTOS_MPU),
+    }],
+    ..C_HOST
+};
+
+/// Der C-Wirt unter FreeRTOS-MPU mit Probe (12.3): Die fremde Aufgabe
+/// schreibt 20 ms nach dem Start ihrer Last in die Arena, und der Kern muss
+/// die Verletzung im naechsten Tick allen Maschinen als `Runtime(Hardware)`
+/// zustellen.
+pub const C_HOST_MPU_PROBE: CHost = CHost {
+    name: "f401-mpu-probe",
+    bindings: &[Binding {
+        form: Form::Rtos,
+        main: "freertos.c",
+        sources: MPU_SOURCES,
+        include: RTOS_INCLUDE,
+        defines: &["TAKT_FREERTOS_MPU=1", "TAKT_PROBE_NS=20000000"],
+        interrupt_stack: Some(2048),
+        kernel: Some(FREERTOS_MPU),
+    }],
+    ..C_HOST_MPU
 };
 
 /// Das Sprungbrett im Stand des Bring-ups.
@@ -336,23 +404,38 @@ impl Board for Stm32f401 {
     }
 }
 
-/// Board 1 mit dem C-Wirt ([`C_HOST`]): geschrieben, gestartet und gelesen
-/// wie das Bring-up in Rust ([`Stm32f401`]), gebaut als C-Projekt.
+/// Board 1 mit einem C-Wirt ([`C_HOST`], [`C_HOST_MPU`],
+/// [`C_HOST_MPU_PROBE`]): geschrieben, gestartet und gelesen wie das
+/// Bring-up in Rust ([`Stm32f401`]), gebaut als C-Projekt.
 #[derive(Clone, Debug)]
 pub struct Stm32f401C {
     board: Stm32f401,
+    host: &'static CHost,
+    name: &'static str,
+    forms: &'static [Form],
 }
 
 impl Stm32f401C {
-    /// Das Board `board` mit dem C-Wirt.
+    /// Das Board `board` mit dem C-Wirt: Interruptform und FreeRTOS.
     pub fn on(board: Stm32f401) -> Stm32f401C {
-        Stm32f401C { board }
+        Stm32f401C { board, host: &C_HOST, name: "stm32f401-c", forms: &[Form::Interrupt, Form::Rtos] }
+    }
+
+    /// Das Board `board` mit dem C-Wirt unter FreeRTOS-MPU.
+    pub fn mpu(board: Stm32f401) -> Stm32f401C {
+        Stm32f401C { board, host: &C_HOST_MPU, name: "stm32f401-c-mpu", forms: &[Form::Rtos] }
+    }
+
+    /// Das Board `board` mit dem C-Wirt unter FreeRTOS-MPU, dessen fremde
+    /// Aufgabe im Lauf in die Arena schreibt.
+    pub fn mpu_probe(board: Stm32f401) -> Stm32f401C {
+        Stm32f401C { board, host: &C_HOST_MPU_PROBE, name: "stm32f401-c-mpu-probe", forms: &[Form::Rtos] }
     }
 }
 
 impl Board for Stm32f401C {
     fn name(&self) -> &'static str {
-        "stm32f401-c"
+        self.name
     }
 
     fn target(&self) -> &'static str {
@@ -362,7 +445,8 @@ impl Board for Stm32f401C {
     /// Ein C-Wirt baut ohne Cargo in ein Verzeichnis je Prozess: Jeder
     /// Bauplatz baut gleich.
     fn builder(&self, _slot: usize) -> Builder {
-        Box::new(|program, options| C_HOST.build(program, options))
+        let host = self.host;
+        Box::new(move |program, options| host.build(program, options))
     }
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
@@ -370,7 +454,7 @@ impl Board for Stm32f401C {
     }
 
     fn forms(&self) -> &'static [Form] {
-        &[Form::Interrupt, Form::Rtos]
+        self.forms
     }
 }
 

@@ -329,11 +329,13 @@ den Rand, und noch einmal `124_port_test.takt` für `thumbv7em` mit dem Port
 der Interruptform und dem C-Wirt der Black Pill (M11 Schritt 18b); die
 Lieferform für `thumbv7em` bindet er auch an den Wirt der Black Pill unter
 FreeRTOS mit dem Kern V11.3.1 aus der Setup-Aktion (`FREERTOS_KERNEL_PATH`,
-M11 Schritt 20). Jede Bindung, also die Quellen eines Programms des Wirts,
-prüft er mit beiden Werkzeugen. Die Bindungen für `thumbv7em` prüft
-clang-tidy für ihr Ziel (`--target=thumbv7em-none-eabihf`, freistehend) und
-cppcheck mit der Plattform `unix32`, beide mit den Werten, die ihr Bau
-setzt; so sehen sie auch den Zweig des Rahmens für die FPU des Cortex-M4.
+M11 Schritt 20), einmal ohne MPU und einmal als FreeRTOS-MPU mit dem
+Handler der Partition (`freertos_mpu.c`, Schritt 20b). Jede Bindung, also
+die Quellen eines Programms des Wirts, prüft er mit beiden Werkzeugen. Die
+Bindungen für `thumbv7em` prüft clang-tidy für ihr Ziel
+(`--target=thumbv7em-none-eabihf`, freistehend) und cppcheck mit der
+Plattform `unix32`, beide mit den Werten, die ihr Bau setzt; so sehen sie
+auch den Zweig des Rahmens für die FPU des Cortex-M4.
 Der Test liest Aufruf und Abweichungen aus diesem Abschnitt; er läuft unter
 Linux (die Kopfdateien von POSIX), auf CI in
 `.github/workflows/analysis.yml` bei jedem Push.
@@ -401,16 +403,17 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-2.7` | Port | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `takt_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
 | `misra-c2012-8.7` | Port | 2 | MISRA C:2012 8.7 (A) | Die Vorgaben `takt_rtos_paint` und `takt_rtos_depth` (`takt_os.h`) rufen die Adapter, die den Stack selbst bemalen und messen, aus ihrer Einheit; der Adapter für FreeRTOS misst mit FreeRTOS (`uxTaskGetStackHighWaterMark2`), und in seiner Bindung ruft sie niemand |
 | `cert-dcl37-c` | Beispiele | 1 | CERT C DCL37-C | wie im Port: `_POSIX_C_SOURCE` |
-| `misra-c2012-1.4` | Beispiele | 2 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack |
+| `misra-c2012-1.4` | Beispiele | 4 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack. Unter FreeRTOS-MPU ist eine Region der MPU an ihrer Größe ausgerichtet: der Stack der fremden Aufgabe und ihr Austauschblock |
 | `misra-c2012-11.5` | Beispiele | 4 | MISRA C:2012 11.5 (A) | Die Rückrufe der Leitung und der Treiber bekommen den Zeiger des Wirts als `void *` (`takt_sdk.h`); nur der Wirt weiß, was dahinter liegt |
-| `misra-c2012-17.3` | Beispiele | 6 | MISRA C:2012 17.3 (M) | Fehlmeldung: `fcntl` ist in `<fcntl.h>` deklariert; `posix.cfg` kennt die Form mit drei Argumenten nicht. Im C-Wirt der Black Pill hält das Addon `__asm__ volatile(…)` für Aufrufe: PRIMASK, Barrieren und `wfi`, je in einer Funktion oder einer Zeile des Starts gekapselt (D.4.3) |
+| `misra-c2012-17.3` | Beispiele | 7 | MISRA C:2012 17.3 (M) | Fehlmeldung: `fcntl` ist in `<fcntl.h>` deklariert; `posix.cfg` kennt die Form mit drei Argumenten nicht. Im C-Wirt der Black Pill hält das Addon `__asm__ volatile(…)` für Aufrufe: PRIMASK, Barrieren, `wfi` und der Einstieg von MemManage unter FreeRTOS-MPU, je in einer Funktion oder einer Zeile des Starts gekapselt (D.4.3) |
 | `misra-c2012-21.1` | Beispiele | 1 | MISRA C:2012 21.1 (R) | wie im Port: `_POSIX_C_SOURCE` |
 | `misra-c2012-21.6` | Beispiele | 9 | MISRA C:2012 21.6 (R) | Ein Wirt auf dem Rechner schreibt den Trace nach stdout und Fehler nach stderr; auf einem Ziel ist die Leitung ein UART (`struct takt_line`). Die Ein- und Ausgabe gehört zum Beispiel, nicht zum SDK |
-| `misra-c2012-11.4` | Beispiele | 5 | MISRA C:2012 11.4 (A) | Der C-Wirt der Black Pill (`examples/boards/stm32f401`) liest und schreibt Register an ihrer Adresse aus dem Referenzhandbuch, kopiert `.data`, nullt `.bss`, bemalt den Stack und legt den Wächter der MPU an Adressen aus dem Linker-Skript. Je Datei wird die Zahl an einer Stelle zum Zeiger (`board_reg`, `board_reg8`, `board_word`) und die Adresse an einer Stelle zur Zahl (`board_address`, `board_start_address`) |
+| `misra-c2012-11.4` | Beispiele | 7 | MISRA C:2012 11.4 (A) | Der C-Wirt der Black Pill (`examples/boards/stm32f401`) liest und schreibt Register an ihrer Adresse aus dem Referenzhandbuch, kopiert `.data`, nullt `.bss`, bemalt den Stack und legt den Wächter an Adressen aus dem Linker-Skript; unter FreeRTOS-MPU liest der Handler von MemManage den Befehl am gestapelten PC. Die Zahl wird nur in Helfern zum Zeiger (`board_reg`, `board_reg8`, `board_word`, `mpu_reg`, `mpu_halfword`) und die Adresse nur in Helfern zur Zahl (`board_address`, `board_start_address`) |
+| `misra-c2012-11.6` | Beispiele | 1 | MISRA C:2012 11.6 (R) | Unter FreeRTOS-MPU vergleicht der Handler von MemManage die Adresse aus MMFAR, eine Zahl, mit der Arena: `mpu_arena` macht ihre Adresse einmal zur Zahl. Den Typ der Arena kennt nur das Programm (`app.h`) |
 | `misra-c2012-2.7` | Beispiele | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `board_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
 | `misra-c2012-21.2` | Beispiele | 3 | MISRA C:2012 21.2 (R) | `abort` im C-Wirt der Black Pill: Die Panik des SDK-Archivs ruft `abort` der C-Laufzeit, und ein Wirt ohne C-Bibliothek stellt sie mit der Signatur des Standards. Sie hält das Board an und lässt es für `TAKT` erreichbar. Unter FreeRTOS deklariert `libc/string.h` `memcpy` und `memset`, die der Kern ruft, mit der Signatur des Standards; ihren Code stellt das SDK-Archiv |
-| `misra-c2012-8.7` | Beispiele | 4 | MISRA C:2012 8.7 (A) | `abort` ruft das SDK-Archiv und `vApplicationStackOverflowHook` der Kern von FreeRTOS, beide außerhalb der Analyse; ohne externe Bindung bänden sie nicht. `board_paint_stack` und `board_stack_depth` ruft der Wirt der Interruptform (`irq.c`); unter FreeRTOS misst der Kern die Stacks, und niemand ruft sie |
-| `misra-c2012-2.5` | Beispiele | 6 | MISRA C:2012 2.5 (A) | Die Einstellungen in `FreeRTOSConfig.h`, die nur der Port des Kerns liest (`port.c`, außerhalb der Analyse: Takt, Priorität des Kerns, die Namen der Handler); `BOARD_TIMER_HZ` braucht nur die Interruptform |
+| `misra-c2012-8.7` | Beispiele | 7 | MISRA C:2012 8.7 (A) | `abort` ruft das SDK-Archiv, `vApplicationStackOverflowHook` und `vApplicationGetIdleTaskMemory` der Kern von FreeRTOS, alle außerhalb der Analyse; ohne externe Bindung bänden sie nicht. `board_paint_stack` und `board_stack_depth` ruft der Wirt der Interruptform (`irq.c`); unter FreeRTOS misst der Kern die Stacks, und niemand ruft sie. Den Wächter unter dem Stack der Interrupts legt ohne FreeRTOS-MPU `board_protect_stack` an, mit ihm `board_watch_stack`; jede Bindung ruft eine der beiden |
+| `misra-c2012-2.5` | Beispiele | 10 | MISRA C:2012 2.5 (A) | Die Einstellungen in `FreeRTOSConfig.h`, die nur die Quellen des Kerns lesen (außerhalb der Analyse: Takt, Priorität des Kerns, die Namen der Handler, unter FreeRTOS-MPU der Vorrat an Objekten und die kritischen Abschnitte); das Addon zählt die Einstellungen von FreeRTOS-MPU auch in der Bindung ohne MPU, die sie nicht übersetzt. `BOARD_TIMER_HZ` braucht nur die Interruptform |
 | `clang-analyzer-security.ArrayBound` | Rahmen | 2 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |
 | `constParameterPointer` | Rahmen | 63 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
 | `knownConditionTrueFalse` | Rahmen | 10 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |

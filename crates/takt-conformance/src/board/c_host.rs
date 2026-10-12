@@ -12,11 +12,13 @@
 //! Vorgabewert, der still an ihre Stelle tritt, gibt es nicht (12.11).
 //!
 //! **Zwischengespeichert wie die Bring-ups** (FB-270): Der Stand heisst
-//! `c-<tripel>-<stand>` unter [`super::IMAGES`], neben dem des Bring-ups
-//! desselben Tripels, und haengt an den Quellen des Wirts, den Ports, dem SDK
-//! und allen Crates; der Schluessel eines Abbilds ist der der Bring-ups
-//! ([`super::image_key`]). So baut `.github/workflows/boards.yml` die Abbilder
-//! der C-Wirte mit, und `tools/board-run.ps1 -FromCi` findet sie.
+//! `c-<name>-<tripel>-<stand>` unter [`super::IMAGES`], neben dem des
+//! Bring-ups desselben Tripels, und haengt an den Quellen des Wirts, den
+//! Ports, dem SDK und allen Crates; der Schluessel eines Abbilds ist der der
+//! Bring-ups ([`super::image_key`]). Der Name trennt Wirte, die aus
+//! denselben Quellen anders bauen (mit FreeRTOS-MPU, mit Probe). So baut
+//! `.github/workflows/boards.yml` die Abbilder der C-Wirte mit, und
+//! `tools/board-run.ps1 -FromCi` findet sie.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,6 +43,8 @@ pub struct Binding {
     pub sources: &'static [&'static str],
     /// Die Kopfpfade des Ports, relativ zur Wurzel.
     pub include: &'static [&'static str],
+    /// Was der Wirt in dieser Bindung ausserdem definiert (`NAME=WERT`).
+    pub defines: &'static [&'static str],
     /// Der Stack der Interrupts in Byte, gegen den das Linker-Skript prueft
     /// (`board_stack_bytes`). `None`: Schritt und Jobs rechnen auf ihm, wie in
     /// der Interruptform, und er braucht `P_TICK_STACK_BYTES +
@@ -66,6 +70,8 @@ pub struct Kernel {
     pub sources: &'static [&'static str],
     /// Die Kopfpfade, relativ zum Kern.
     pub include: &'static [&'static str],
+    /// Was der Kern ausser den Flags des Wirts verlangt.
+    pub cflags: &'static [&'static str],
 }
 
 impl Kernel {
@@ -96,6 +102,9 @@ impl Kernel {
 /// Ein C-Wirt eines Boards.
 #[derive(Clone, Copy, Debug)]
 pub struct CHost {
+    /// Der Name des Wirts im Stand: Wirte aus demselben Verzeichnis bauen
+    /// verschieden und brauchen je einen eigenen.
+    pub name: &'static str,
     /// Das Verzeichnis des Wirts, relativ zur Wurzel.
     pub dir: &'static str,
     /// Das Zieltripel.
@@ -145,10 +154,10 @@ const TREES: &[&str] = &["crates/takt-embed-c/ports", "crates/takt-embed-c/inclu
 const FILES: &[&str] = &["crates/takt-embed-c/Cargo.lock"];
 
 impl CHost {
-    /// Die Art des Stands im Zwischenspeicher: `c-<tripel>`, neben dem
+    /// Die Art des Stands im Zwischenspeicher: `c-<name>-<tripel>`, neben dem
     /// Bring-up desselben Tripels.
     fn kind(&self) -> String {
-        format!("c-{}", self.triple)
+        format!("c-{}-{}", self.name, self.triple)
     }
 
     /// Das Verzeichnis des Stands im Zwischenspeicher.
@@ -272,11 +281,12 @@ impl CHost {
         for include in binding.include {
             cc.arg("-I").arg(root.join(include));
         }
+        cc.args(binding.defines.iter().map(|define| format!("-D{define}")));
         if let Some((k, kernel_dir)) = &kernel {
             for include in k.include {
                 cc.arg("-I").arg(kernel_dir.join(include));
             }
-            cc.args(k.sources.iter().map(|file| kernel_dir.join(file)));
+            cc.args(k.cflags).args(k.sources.iter().map(|file| kernel_dir.join(file)));
         }
         let interrupt_stack = binding.interrupt_stack.unwrap_or(tick_stack + job_stack);
         cc.args(self.board.iter().map(|file| dir.join(file)))
@@ -369,6 +379,7 @@ mod tests {
             marker: ("include/task.h", "#define tskKERNEL_VERSION_NUMBER"),
             sources: &[],
             include: &[],
+            cflags: &[],
         };
         let dir = crate::target_dir().join("tmp").join("takt-kernel-version");
         let header = dir.join("include");

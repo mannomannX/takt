@@ -2,7 +2,9 @@
  * Schritt 20): die Uhr als 64-Bit-Erweiterung des Tickzaehlers, je Ereignis
  * ein binaeres Semaphor, je Faden seine Aufgabe mit statischem
  * Kontrollblock. Fuer jeden Port von FreeRTOS, der die FPU-Register jeder
- * Aufgabe sichert (auf Cortex-M4F `ARM_CM4F`); geprueft auf dem F401.
+ * Aufgabe sichert (auf Cortex-M4F `ARM_CM4F`, mit FreeRTOS-MPU
+ * `ARM_CM4_MPU`); geprueft auf dem F401. Unter FreeRTOS-MPU sind beide
+ * Faeden privilegiert (M11 Schritt 20b).
  *
  * **Die Konfiguration** (`FreeRTOSConfig.h`) verlangt statische Aufgaben und
  * Semaphore (`configSUPPORT_STATIC_ALLOCATION`), `vTaskDelete` fuer das Ende

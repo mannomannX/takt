@@ -136,7 +136,10 @@ static void takt_os_run(void *thread) {
 }
 
 /* Der Port von FreeRTOS sichert die FPU-Register jeder Aufgabe, die sie
- * benutzt (auf Cortex-M4F `ARM_CM4F`, 12.11). */
+ * benutzt (auf Cortex-M4F `ARM_CM4F` und `ARM_CM4_MPU`, 12.11). Schritt und
+ * Jobs beschreiben die Arena: Unter FreeRTOS-MPU sind sie privilegiert, und
+ * die Arena liegt in keiner Region einer Aufgabe ohne Privileg (12.11,
+ * `Schutz: Partition`); ohne MPU ist `portPRIVILEGE_BIT` 0. */
 int takt_os_spawn(struct takt_os *os, int which, void (*body)(void *arg), void *arg, void *stack, size_t bytes,
                   int priority) {
     struct takt_os_thread *t = &os->threads[which];
@@ -147,8 +150,8 @@ int takt_os_spawn(struct takt_os *os, int which, void (*body)(void *arg), void *
         t->arg = arg;
         t->over = 0;
         t->task = xTaskCreateStatic(takt_os_run, (which == TAKT_OS_STEP) ? "takt-step" : "takt-job",
-                                    (configSTACK_DEPTH_TYPE)(bytes / sizeof(StackType_t)), t, level,
-                                    (StackType_t *)stack, &t->tcb);
+                                    (configSTACK_DEPTH_TYPE)(bytes / sizeof(StackType_t)), t,
+                                    level | (UBaseType_t)portPRIVILEGE_BIT, (StackType_t *)stack, &t->tcb);
         rc = (t->task != NULL) ? 0 : TAKT_OS_FAILED;
     }
     return rc;

@@ -145,6 +145,19 @@ void abort(void);
 #define MPU_CTRL_ON 0x00000005u      /* ENABLE, PRIVDEFENA */
 #define MPU_RASR_GUARD 0x10000009u   /* XN, kein Zugriff, 32 Byte, ENABLE */
 
+/* DWT und Debug-Monitor des Cortex-M4: der Komparator 0 als Watchpoint. */
+#define SCB_SHPR3 0xE000ED20u        /* Byte 0: Prioritaet von DebugMonitor */
+#define DEMCR 0xE000EDFCu
+#define DEMCR_TRCENA 0x01000000u
+#define DEMCR_MON_EN 0x00010000u
+#define DWT_CTRL 0xE0001000u
+#define DWT_CTRL_NUMCOMP_SHIFT 28u
+#define DWT_COMP0 0xE0001020u
+#define DWT_MASK0 0xE0001024u
+#define DWT_FUNCTION0 0xE0001028u
+#define DWT_MASK_GUARD 5u            /* die unteren 5 Bit: 32 Byte */
+#define DWT_FUNCTION_ACCESS 7u       /* Watchpoint auf Lesen oder Schreiben */
+
 _Static_assert(BOARD_LINE_PRIORITY < BOARD_STEP_PRIORITY, "die Leitung liegt ueber dem Schritt");
 
 /* So oft fragt eine Schleife hoechstens ab: einige Millisekunden beim Start
@@ -551,6 +564,22 @@ void board_protect_stack(void) {
     *board_reg(MPU_RASR) = MPU_RASR_GUARD;
     *board_reg(SCB_SHCSR) |= SCB_SHCSR_MEMFAULTENA;
     *board_reg(MPU_CTRL) = MPU_CTRL_ON;
+    board_barrier();
+}
+
+/* DebugMonitor bekommt die hoechste Prioritaet; ohne Debugger, der anhaelt,
+ * fuehrt ein Treffer dorthin (`DebugMon_Handler`, der Halt in `startup.c`). */
+void board_watch_stack(void) {
+    *board_reg(DEMCR) |= DEMCR_TRCENA;
+    board_barrier();
+    if ((*board_reg(DWT_CTRL) >> DWT_CTRL_NUMCOMP_SHIFT) == 0u) {
+        board_halt();
+    }
+    *board_reg8(SCB_SHPR3) = 0u;
+    *board_reg(DWT_COMP0) = (uint32_t)board_address(&board_stack_guard);
+    *board_reg(DWT_MASK0) = DWT_MASK_GUARD;
+    *board_reg(DWT_FUNCTION0) = DWT_FUNCTION_ACCESS;
+    *board_reg(DEMCR) |= DEMCR_MON_EN;
     board_barrier();
 }
 
