@@ -270,7 +270,7 @@ static mut PERSIST_STORED: [u8; PERSIST_BOUND] = [0; PERSIST_BOUND];
 /// nennt. `main` richtet die Peripherie ein; die Geraete erreichen sie ueber
 /// die Statics oben.
 #[allow(dead_code, reason = "ein Vorrat fuer jedes Programm; welche Geraete eines braucht, nennt sein Pruefstand")]
-mod devices {
+pub mod devices {
     use core::sync::atomic::Ordering;
 
     use takt_embed::{Device, Input, Output, Quality, Sample};
@@ -280,7 +280,7 @@ mod devices {
     /// Ein Geraet, das fest am Board sitzt: Es lebt, solange das Board
     /// laeuft (12.4).
     #[derive(Debug, Default)]
-    pub(crate) struct Fixed;
+    pub struct Fixed;
 
     impl Device for Fixed {
         fn alive(&mut self, _now: i64) -> bool {
@@ -290,7 +290,7 @@ mod devices {
 
     /// `ui/led`: die RGB-LED an IO8.
     #[derive(Debug, Default)]
-    pub(crate) struct UiLed;
+    pub struct UiLed;
 
     impl Output<bool> for UiLed {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -309,7 +309,7 @@ mod devices {
     /// Ein wackelnder Kontakt meldet `Suspect` statt `Good`: Der Wert ist
     /// da, aber noch nicht stabil (12.6).
     #[derive(Debug, Default)]
-    pub(crate) struct UiButton;
+    pub struct UiButton;
 
     impl Input<bool> for UiButton {
         fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
@@ -321,7 +321,7 @@ mod devices {
 
     /// `gpio/loop_out`: GPIO7, ueber die Bruecke an GPIO17 (13.8).
     #[derive(Debug, Default)]
-    pub(crate) struct GpioLoopOut;
+    pub struct GpioLoopOut;
 
     impl Output<bool> for GpioLoopOut {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -333,7 +333,7 @@ mod devices {
 
     /// `gpio/loop_in`: GPIO17, das Ende der Bruecke (13.8).
     #[derive(Debug, Default)]
-    pub(crate) struct GpioLoopIn;
+    pub struct GpioLoopIn;
 
     impl Input<bool> for GpioLoopIn {
         fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
@@ -343,7 +343,7 @@ mod devices {
 
     /// `sys/previous_run` (12.7): wie der vorige Lauf endete.
     #[derive(Debug, Default)]
-    pub(crate) struct SysPreviousRun;
+    pub struct SysPreviousRun;
 
     impl Input<u32> for SysPreviousRun {
         fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
@@ -354,7 +354,7 @@ mod devices {
     /// `test/guard_write` (12.3): Der naechste Leerlauf schreibt in den
     /// Waechter unter dem Hauptstack.
     #[derive(Debug, Default)]
-    pub(crate) struct TestGuardWrite;
+    pub struct TestGuardWrite;
 
     impl Output<bool> for TestGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -368,7 +368,7 @@ mod devices {
     /// `test/job_guard_write` (12.3): Der naechste Leerlauf schreibt in den
     /// Waechter unter dem Job-Stack.
     #[derive(Debug, Default)]
-    pub(crate) struct TestJobGuardWrite;
+    pub struct TestJobGuardWrite;
 
     impl Output<bool> for TestJobGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -382,7 +382,7 @@ mod devices {
     /// `test/tick_stretch`, das Pruefgeraet fuer 12.6 Zeile 7: streckt die
     /// Periode des Alarms um den geschriebenen Prozentsatz.
     #[derive(Debug, Default)]
-    pub(crate) struct TestTickStretch;
+    pub struct TestTickStretch;
 
     impl Output<u8> for TestTickStretch {
         fn write(&mut self, percent: u8, _now: i64) -> bool {
@@ -652,6 +652,7 @@ fn own_core(mut program: app::Program<'static>, journal: Journaled, timer: Systi
 }
 
 /// Haelt den Kern an, wenn das Board nicht weiter kann.
+#[cfg(any(form = "own", form = "embassy"))]
 fn halt() -> ! {
     loop {
         core::hint::spin_loop();
@@ -829,10 +830,10 @@ mod embassy_form {
 
     /// Beginnt den Lauf und gibt den Kern an die Hauptschleife des Wirts.
     pub(crate) fn run(mut program: app::Program<'static>, journal: Journaled, alarm: SystimerAlarm) -> ! {
-        let slot = &raw mut JOBS;
+        let jobs = &raw mut JOBS;
         // SAFETY: einmal je Lauf, bevor der erste Schritt rechnet; danach
         // rechnet nur der Job-Interrupt mit dem Griff.
-        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { slot.as_mut() }) {
+        if let (Some(j), Some(slot)) = (program.jobs(), unsafe { jobs.as_mut() }) {
             *slot = Some(j);
         }
         // Gemalt nach `init` und vor der Uhr des Laufs, wie in der
@@ -840,10 +841,10 @@ mod embassy_form {
         takt_board_esp32c6::stack::paint();
         let clock = if LOGICAL { Time::Logical(0) } else { Time::Board(alarm) };
         let rt = runtime(clock, Profile::SHARED, program, journal);
-        let slot = &raw mut EXECUTOR;
+        let place = &raw mut EXECUTOR;
         // SAFETY: einmal, bevor der Software-Interrupt zum ersten Mal ansteht;
         // danach liest nur seine ISR.
-        let executor = unsafe { &mut *slot }.insert(Executor::new(core::ptr::null_mut()));
+        let executor = unsafe { &mut *place }.insert(Executor::new(core::ptr::null_mut()));
         // Die Takt-Aufgabe gibt es einmal, und sie startet hier.
         let Ok(task) = takt(rt) else { super::halt() };
         executor.spawner().spawn(task);

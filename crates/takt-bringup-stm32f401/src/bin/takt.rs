@@ -388,7 +388,7 @@ fn hand_over_jobs(program: &mut app::Program<'static>) -> Option<&'static mut dy
 /// nennt. `setup` richtet die Peripherie ein; die Geraete erreichen sie
 /// ueber die Statics oben.
 #[allow(dead_code, reason = "ein Vorrat fuer jedes Programm; welche Geraete eines braucht, nennt sein Pruefstand")]
-mod devices {
+pub mod devices {
     use core::sync::atomic::Ordering;
 
     use stm32f4::stm32f401::{Interrupt, NVIC};
@@ -399,7 +399,7 @@ mod devices {
     /// Ein Geraet, das fest am Board sitzt: Es lebt, solange das Board
     /// laeuft (12.4).
     #[derive(Debug, Default)]
-    pub(crate) struct Fixed;
+    pub struct Fixed;
 
     impl Device for Fixed {
         fn alive(&mut self, _now: i64) -> bool {
@@ -410,7 +410,7 @@ mod devices {
     /// `ui/led`: die LED der Black Pill an PC13, gegen 3V3 — was `true`
     /// elektrisch heisst, weiss nur dieses Geraet.
     #[derive(Debug, Default)]
-    pub(crate) struct UiLed;
+    pub struct UiLed;
 
     impl Output<bool> for UiLed {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -426,7 +426,7 @@ mod devices {
 
     /// `gpio/loop_out`: PA0, ueber die Bruecke an PA1 (13.8).
     #[derive(Debug, Default)]
-    pub(crate) struct GpioLoopOut;
+    pub struct GpioLoopOut;
 
     impl Output<bool> for GpioLoopOut {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -438,7 +438,7 @@ mod devices {
 
     /// `gpio/loop_in`: PA1, das Ende der Bruecke (13.8).
     #[derive(Debug, Default)]
-    pub(crate) struct GpioLoopIn;
+    pub struct GpioLoopIn;
 
     impl Input<bool> for GpioLoopIn {
         fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
@@ -448,7 +448,7 @@ mod devices {
 
     /// `sys/previous_run` (12.7): wie der vorige Lauf endete.
     #[derive(Debug, Default)]
-    pub(crate) struct SysPreviousRun;
+    pub struct SysPreviousRun;
 
     impl Input<u32> for SysPreviousRun {
         fn sample(&mut self, now: i64) -> Option<Sample<u32>> {
@@ -466,7 +466,7 @@ mod devices {
 
     /// `test/tcb_write` (12.3): Der naechste Leerlauf schreibt in den Programmzustand.
     #[derive(Debug, Default)]
-    pub(crate) struct TestTcbWrite;
+    pub struct TestTcbWrite;
 
     impl Output<bool> for TestTcbWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -476,7 +476,7 @@ mod devices {
 
     /// `test/guard_write` (12.3): Der naechste Leerlauf schreibt in den Waechter.
     #[derive(Debug, Default)]
-    pub(crate) struct TestGuardWrite;
+    pub struct TestGuardWrite;
 
     impl Output<bool> for TestGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -487,7 +487,7 @@ mod devices {
     /// `test/job_guard_write` (12.3): Der naechste Leerlauf schreibt in den
     /// Waechter unter dem Job-Stack.
     #[derive(Debug, Default)]
-    pub(crate) struct TestJobGuardWrite;
+    pub struct TestJobGuardWrite;
 
     impl Output<bool> for TestJobGuardWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -498,7 +498,7 @@ mod devices {
     /// `test/isr_write` (12.3): Im naechsten Programmschritt schreibt die
     /// Pruef-ISR in den Programmzustand (`test/in_step`).
     #[derive(Debug, Default)]
-    pub(crate) struct TestIsrWrite;
+    pub struct TestIsrWrite;
 
     impl Output<bool> for TestIsrWrite {
         fn write(&mut self, value: bool, _now: i64) -> bool {
@@ -510,7 +510,7 @@ mod devices {
     /// Programmzustand. Ist die Pruef-ISR angefordert, loest das Geraet sie
     /// hier aus, und sie unterbricht den Schritt.
     #[derive(Debug, Default)]
-    pub(crate) struct TestInStep;
+    pub struct TestInStep;
 
     impl Input<bool> for TestInStep {
         fn sample(&mut self, now: i64) -> Option<Sample<bool>> {
@@ -528,7 +528,7 @@ mod devices {
     /// Pollform laeuft TIM2 frei und hat keine Periode: Das Geraet schreibt
     /// nicht.
     #[derive(Debug, Default)]
-    pub(crate) struct TestTickStretch;
+    pub struct TestTickStretch;
 
     impl Output<u8> for TestTickStretch {
         #[cfg(timer = "periodic")]
