@@ -299,7 +299,15 @@ So arbeitet jeder Strang, als wäre er allein:
     `takt_prove::DEEPEST` = `MAX_TICKS`, die Frist im Verhältnis der Tiefen
     (13.3): `99_exit_fault` faultet nach elf Faults von außen im Tick 72
     (BMC der Tiefe 80 in 106 s; `UPDATE_PATHS` für das Programm 145 s im
-    Debug-Bau).
+    Debug-Bau). Im Vergleich der drei Ausführer fand dieser Pfad FB-615: Das
+    Modell meldete von zwei Faults einer Maschine in einem Tick — ein Fault
+    von außen, dann einer in `enter:` des Ziels — nur den letzten; es führt
+    sie jetzt hintereinander.
+  - `UPDATE_PATHS` läuft als Opt-in-Lauf auf CI (`solver.yml`, Art
+    `pfade`, Artefakt `pfade`); lokal reicht der Speicher für z3 nicht mehr.
+    Für 03_sequences_and_faults, 06_test_harness und 120_port_writes in
+    4 min (Lauf 38255550331): die drei Stellen, für die die Einordnung einen
+    Pfad fand, haben jetzt einen, die Beweise dieselben Stellen mit k = 1.
   - Die `ovf`-Stellen an `now + d`: 3 laufen erst nach 2^63 ns über (Gruppe
     `Zeitschranke`); ein Beweis über die Zeitschranke wäre eine Annahme, und
     eine Prüfstelle steht unter keiner (13.3). Die 6 in `87_fault_kinds`
@@ -310,7 +318,7 @@ So arbeitet jeder Strang, als wäre er allein:
     `UNREACHED` teilt ihre nie verletzten Stellen nach Gruppen auf
     (`GROUPS`, Test `every_never_failed_site_has_a_group`), aus den
     Einordnungen 38188098609 und 38199208294 und den Befunden dieses
-    Schritts. Spalte drei 352 → 340, Programme 99 → 97:
+    Schritts. Spalte drei 352 → 337, Programme 99 → 97:
 
     | Gruppe | Stellen |
     |---|---|
@@ -320,16 +328,14 @@ So arbeitet jeder Strang, als wäre er allein:
     | bewiesen, ohne Beweisdatei | 54 |
     | nicht k-induktiv | 12 |
     | Fragment | 12 |
-    | erreichbar, Pfad nicht gespeichert | 3 |
     | ohne Urteil | 3 |
     | Zeitschranke | 3 |
     | jenseits `MAX_TICKS` | 2 |
 
   - Weiter: Schritt 4 (die 54 bewiesenen Stellen in die Beweisdateien,
-    dazu `UPDATE_PATHS` als Opt-in-Lauf auf CI, lokal reicht der Speicher
-    nicht; die 3 erreichbaren bekommen dabei ihren Pfad), Schritt 2 für
-    `nicht k-induktiv` und `Fragment`, Gruppen auch für Übergänge und nie
-    bestandene Stellen (Schritt 5).
+    mit `solver.yml`, Art `pfade`), Schritt 2 für `nicht k-induktiv` und
+    `Fragment`, Gruppen auch für Übergänge und nie bestandene Stellen
+    (Schritt 5), FB-614 (Sprachentscheidung).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
