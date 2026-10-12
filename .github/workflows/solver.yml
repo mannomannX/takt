@@ -5,7 +5,8 @@
 #
 # `art: einordnen`: Der Test `the_stored_solver_paths_still_hold`
 # (takt-conformance, solver_paths.rs) ordnet unter `CLASSIFY_UNREACHED` die
-# offenen Programme ein; `CLASSIFY_SHARD=i/n` gibt jedem Job jedes n-te. Ein
+# offenen Programme ein (`CLASSIFY_WHAT`: Stellen ohne Fault, Uebergaenge,
+# Bestehen); `CLASSIFY_SHARD=i/n` gibt jedem Job jedes n-te. Ein
 # Sammeljob fuehrt die TSV je Tiefe und die Antworten des Solvers zusammen.
 #
 # `art: pfade`: derselbe Test unter `UPDATE_PATHS` (M11 Strang B2, Schritt
@@ -45,6 +46,10 @@ on:
         description: Optional nur diese Programme (CLASSIFY_PROGRAMS bzw. UPDATE_PATHS, durch Komma getrennt)
         required: false
         default: ""
+      what:
+        description: Was eingeordnet wird (CLASSIFY_WHAT; stellen, uebergaenge, bestehen)
+        required: true
+        default: "stellen,uebergaenge,bestehen"
 
 permissions:
   contents: read
@@ -97,6 +102,7 @@ jobs:
           CLASSIFY_MEMORY_MB: ${{ inputs.memory_mb }}
           CLASSIFY_WORKERS: ${{ inputs.workers }}
           CLASSIFY_PROGRAMS_INPUT: ${{ inputs.programs }}
+          CLASSIFY_WHAT: ${{ inputs.what }}
         run: |
           if [ -n "$CLASSIFY_PROGRAMS_INPUT" ]; then export CLASSIFY_PROGRAMS="$CLASSIFY_PROGRAMS_INPUT"; fi
           cargo test --release -p takt-conformance --test solver_paths -- --nocapture

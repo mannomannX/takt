@@ -254,12 +254,26 @@ const CLASSIFY_TIMEOUT_S: u64 = 60;
 /// (FB-604): Jede Anfrage ginge ans Gesamtmodell, das er nicht entscheidet.
 const WITHOUT_PARTS: &[&str] = &["45_journal_cut.takt", "110_journal_log.takt"];
 
-/// Die Stellen eines Programms, an denen kein Lauf einen Fault sah und die
-/// seine Beweisdatei nicht fuehrt (Spalte drei von `UNREACHED`): explizite
-/// Pruefungen als (Maschine, Art, Anfang), implizite als (Anfang, Ende, Art).
-type Open = (Vec<(String, String, u32)>, Vec<(u32, u32, String)>);
+/// Was in den Laeufen eines Programms offen bleibt (die Spalten eins bis
+/// drei von `UNREACHED`): nie genommene Uebergaenge, die `.unfired` nicht
+/// fuehrt, als (Maschine, Schluessel); nie bestandene Stellen als (Anfang,
+/// Ende, Art); nie verletzte Stellen, die die Beweisdatei nicht fuehrt —
+/// explizite als (Maschine, Art, Anfang), implizite als (Anfang, Ende, Art).
+#[derive(Default)]
+struct Open {
+    transitions: Vec<(String, String)>,
+    passes: Vec<(u32, u32, String)>,
+    checks: Vec<(String, String, u32)>,
+    sites: Vec<(u32, u32, String)>,
+}
 
-fn never_failed(name: &str, p: &Program) -> Open {
+impl Open {
+    fn is_empty(&self) -> bool {
+        self.transitions.is_empty() && self.passes.is_empty() && self.checks.is_empty() && self.sites.is_empty()
+    }
+}
+
+fn open_items(name: &str, p: &Program) -> Open {
     let mut coverage = Coverage::default();
     for case in takt_conformance::cases::cases(name, p) {
         let Ok(stimulus) = takt_interp::Trace::parse(&case.stimulus) else { continue };
@@ -269,24 +283,52 @@ fn never_failed(name: &str, p: &Program) -> Open {
         }
     }
     let proven = paths::proof(name).map(|pr| pr.tags()).unwrap_or_default();
-    let mut out: Open = Default::default();
+    let unfired = paths::unfired(name).map(|u| u.transitions).unwrap_or_default();
+    let mut out = Open::default();
     for item in takt_interp::coverage::items(p) {
         let kind = item.key.split(' ').next().unwrap_or("").to_string();
         match item.kind {
-            CoverKind::Check if kind != "verify" && !coverage.has(CoverKind::CheckFailed, &item) => {
-                let start = item.key.rsplit_once('@').and_then(|(_, s)| s.parse().ok()).expect("check @<anfang>");
-                out.0.push((item.machine.clone(), kind, start));
+            CoverKind::Transition
+                if !coverage.has(CoverKind::Transition, &item)
+                    && !unfired.iter().any(|(m, k)| *m == item.machine && *k == item.key) =>
+            {
+                out.transitions.push((item.machine.clone(), item.key.clone()));
             }
-            CoverKind::Site if item.silent.is_none() && !coverage.has(CoverKind::SiteFailed, &item) => {
-                let tag = takt_mir::analysis::walk::tag_of_name(&kind);
-                if !tag.is_some_and(|t| proven.contains(&(item.span.start, item.span.end, t))) {
-                    out.1.push((item.span.start, item.span.end, kind));
+            CoverKind::Check => {
+                if !coverage.has(CoverKind::Check, &item) {
+                    out.passes.push((item.span.start, item.span.end, kind.clone()));
+                }
+                if kind != "verify" && !coverage.has(CoverKind::CheckFailed, &item) {
+                    let start = item.key.rsplit_once('@').and_then(|(_, s)| s.parse().ok()).expect("check @<anfang>");
+                    out.checks.push((item.machine.clone(), kind, start));
+                }
+            }
+            CoverKind::Site => {
+                if !coverage.has(CoverKind::Site, &item) {
+                    out.passes.push((item.span.start, item.span.end, kind.clone()));
+                }
+                if item.silent.is_none() && !coverage.has(CoverKind::SiteFailed, &item) {
+                    let tag = takt_mir::analysis::walk::tag_of_name(&kind);
+                    if !tag.is_some_and(|t| proven.contains(&(item.span.start, item.span.end, t))) {
+                        out.sites.push((item.span.start, item.span.end, kind));
+                    }
                 }
             }
             _ => {}
         }
     }
     out
+}
+
+/// Die Art einer Zeile fuer das Bestehen einer Stelle (Spalte zwei).
+const PASS: &str = "besteht ";
+
+/// Die Art einer Zeile fuer einen Uebergang (Spalte eins).
+const TRANSITION: &str = "uebergang";
+
+/// Der Anfang eines Uebergangs aus seinem Schluessel (`VON->NACH @<anfang>`).
+fn transition_start(key: &str) -> u32 {
+    key.rsplit_once('@').and_then(|(_, s)| s.parse().ok()).expect("Uebergang @<anfang>")
 }
 
 /// Die Gruppe eines Urteils (FB-511 Schritt 1): erreichbar (auch tiefer,
@@ -308,7 +350,8 @@ fn group(verdict: &CheckVerdict) -> &'static str {
 }
 
 /// Eine Zeile des Protokolls (`fb511-<tiefe>.tsv`): Programm, Maschine, Art,
-/// Anfang der Anweisung, Spanne, Gruppe, Urteil.
+/// Anfang der Anweisung, Spanne, Gruppe, Urteil. Ein Uebergang hat die Art
+/// [`TRANSITION`], das Bestehen einer Stelle die Art mit [`PASS`] davor.
 #[derive(Clone)]
 struct Row {
     name: String,
@@ -332,6 +375,19 @@ impl Row {
             group: group(&r.verdict).to_string(),
             why,
         }
+    }
+
+    /// Ein Uebergang als Zeile: Anfang und Spanne aus seinem Schluessel.
+    fn of_transition(name: &str, r: &takt_prove::TransitionReport) -> Row {
+        let start = transition_start(&r.key);
+        let report = CheckReport {
+            start,
+            span: takt_diag::Span::new(start, start),
+            machine: r.machine.clone(),
+            kind: TRANSITION.to_string(),
+            verdict: r.verdict.clone(),
+        };
+        Row { why: format!("{} {}", r.key, report.text().lines().next().unwrap_or_default()), ..Row::of(name, &report) }
     }
 
     fn line(&self) -> String {
@@ -363,11 +419,142 @@ impl Row {
     }
 }
 
-/// **FB-511 Schritt 1: die unerreichten Stellen einordnen.** Je Tiefe aus
-/// `depths` (`10,20`) fragt der Solver mit [`CLASSIFY_TIMEOUT_S`] je Anfrage
-/// die Stellen ohne Fault, die die vorige Tiefe nicht entschied; das
-/// Ergebnis steht je Stelle in `CARGO_TARGET_TMPDIR/fb511-<tiefe>.tsv` und
-/// gezaehlt im Protokoll. Eine entschiedene Antwort nimmt der Cache. Im
+/// Was eine Einordnung fragt (`CLASSIFY_WHAT`, Vorgabe alles): die nie
+/// verletzten Stellen (`stellen`), die nie genommenen Uebergaenge
+/// (`uebergaenge`), die nie bestandenen Stellen (`bestehen`; Schritt 5).
+struct What {
+    sites: bool,
+    transitions: bool,
+    passes: bool,
+}
+
+impl What {
+    fn from_env() -> What {
+        let v = std::env::var("CLASSIFY_WHAT").unwrap_or_else(|_| "stellen,uebergaenge,bestehen".into());
+        let has = |w: &str| v.split(',').any(|x| x.trim() == w);
+        let what = What { sites: has("stellen"), transitions: has("uebergaenge"), passes: has("bestehen") };
+        assert!(what.sites || what.transitions || what.passes, "CLASSIFY_WHAT: `{v}` nennt nichts");
+        what
+    }
+}
+
+/// Die Stellen ohne Fault eines Programms (Spalte drei) als Zeilen.
+fn site_rows(
+    name: &str,
+    p: &Program,
+    open: &Open,
+    whole: Option<&takt_prove::Model>,
+    depth: u32,
+    solver: &Solver,
+) -> Result<Vec<Row>, String> {
+    let (checks, sites) = (&open.checks, &open.sites);
+    let keep = |c: &takt_prove::CheckSite| {
+        checks.iter().any(|(m, k, s)| *m == c.machine && *k == c.kind && *s == c.start)
+            || sites.iter().any(|(a, b, k)| *a == c.span.start && *b == c.span.end && *k == c.kind)
+    };
+    let (reports, notes) = takt_prove::classify_sites(p, whole, depth, solver, CLASSIFY_TIMEOUT_S, &keep)?;
+    // Eine Stelle ohne Urteil: Kein Modell fuehrt sie.
+    let none = |kind: &str, machine: &str, start: u32, end: u32| CheckReport {
+        start,
+        span: takt_diag::Span::new(start, end),
+        machine: machine.to_string(),
+        kind: kind.to_string(),
+        verdict: CheckVerdict::Undecided { reason: format!("ohne Urteil; {}", notes.join("; ")) },
+    };
+    let mut missing: Vec<CheckReport> = checks
+        .iter()
+        .filter(|(m, k, s)| !reports.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s))
+        .map(|(m, k, s)| none(k, m, *s, *s))
+        .collect();
+    missing.extend(
+        sites
+            .iter()
+            .filter(|(a, b, k)| !reports.iter().any(|r| r.span.start == *a && r.span.end == *b && r.kind == *k))
+            .map(|(a, b, k)| none(k, "", *a, *b)),
+    );
+    Ok(reports.iter().chain(&missing).map(|r| Row::of(name, r)).collect())
+}
+
+/// Die nie genommenen Uebergaenge und nie bestandenen Stellen eines
+/// Programms (Spalten eins und zwei, FB-511 Schritt 5) als Zeilen: am
+/// Gesamtmodell, ohne es an den Modellen der Maschinen. Was kein Modell
+/// fuehrt, steht ohne Urteil.
+fn transition_and_pass_rows(
+    name: &str,
+    p: &Program,
+    open: &Open,
+    whole: Option<&takt_prove::Model>,
+    what: &What,
+    depth: u32,
+    solver: &Solver,
+) -> Result<Vec<Row>, String> {
+    let models: Vec<takt_prove::Model> = match whole {
+        Some(w) => vec![w.clone()],
+        None => takt_mir::analysis::schedule::runnable(p)
+            .into_iter()
+            .filter_map(|id| takt_prove::encode_machine(p, id).ok())
+            .collect(),
+    };
+    let mut rows = Vec::new();
+    for model in &models {
+        if what.transitions && !open.transitions.is_empty() {
+            let reports =
+                takt_prove::classify_transitions(model, p, &open.transitions, depth, solver, CLASSIFY_TIMEOUT_S)?;
+            rows.extend(reports.iter().map(|r| Row::of_transition(name, r)));
+        }
+        if what.passes && !open.passes.is_empty() {
+            let reports = takt_prove::classify_passes(model, p, &open.passes, depth, solver, CLASSIFY_TIMEOUT_S)?;
+            rows.extend(reports.iter().map(|r| Row { kind: format!("{PASS}{}", r.kind), ..Row::of(name, r) }));
+        }
+    }
+    // Eine Stelle in einer Funktion steht in jedem Maschinenmodell, das sie
+    // ruft: erreichbar, wenn eines sie erreicht, bewiesen nur, wenn alle es
+    // beweisen.
+    let rank = |r: &Row| match r.group.as_str() {
+        "erreichbar" => 0,
+        "bewiesen" => 2,
+        _ => 1,
+    };
+    let key = |r: &Row| {
+        let machine = if r.kind == TRANSITION { r.machine.clone() } else { String::new() };
+        (r.kind.clone(), machine, r.span)
+    };
+    rows.sort_by_key(|r| (key(r), rank(r)));
+    rows.dedup_by(|b, a| key(a) == key(b));
+    let none = |machine: &str, kind: String, start: u32, end: u32, why: String| Row {
+        name: name.to_string(),
+        machine: machine.to_string(),
+        kind,
+        start,
+        span: (start, end),
+        group: "ohne Urteil".into(),
+        why,
+    };
+    if what.transitions {
+        for (m, key) in &open.transitions {
+            let start = transition_start(key);
+            if !rows.iter().any(|r| r.kind == TRANSITION && r.machine == *m && r.start == start) {
+                rows.push(none(m, TRANSITION.into(), start, start, format!("{key} unentschieden: kein Modell")));
+            }
+        }
+    }
+    if what.passes {
+        for (a, b, k) in &open.passes {
+            let kind = format!("{PASS}{k}");
+            if !rows.iter().any(|r| r.kind == kind && r.span == (*a, *b)) {
+                rows.push(none("", kind, *a, *b, "unentschieden: kein Modell".into()));
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// **FB-511 Schritte 1 und 5: das Unerreichte einordnen.** Je Tiefe aus
+/// `depths` (`10,20`) fragt der Solver mit [`CLASSIFY_TIMEOUT_S`] je Anfrage,
+/// was die vorige Tiefe nicht entschied — die Stellen ohne Fault, die nie
+/// genommenen Uebergaenge und die nie bestandenen Stellen (`CLASSIFY_WHAT`);
+/// das Ergebnis steht je Stelle in `CARGO_TARGET_TMPDIR/fb511-<tiefe>.tsv`
+/// und gezaehlt im Protokoll. Eine entschiedene Antwort nimmt der Cache. Im
 /// Release-Bau, wie `UPDATE_PATHS`.
 ///
 /// Weitere Variablen: `CLASSIFY_PROGRAMS=<datei>,<datei>` beschraenkt den
@@ -391,6 +578,7 @@ fn classify_unreached(depths: &str) {
     let memory = number("CLASSIFY_MEMORY_MB", 2048);
     let solver =
         solver.cached(std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("solver-cache")).with_memory(memory);
+    let what = What::from_env();
     let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
     let workers = number("CLASSIFY_WORKERS", ((cores - 1) / 2).max(1) as u64).max(1) as usize;
     let shard = std::env::var("CLASSIFY_SHARD").ok().map(|v| {
@@ -414,9 +602,18 @@ fn classify_unreached(depths: &str) {
     for name in &names {
         let src = source(name);
         let p = compile(name, &src, paths::proof(name).as_ref());
-        let sites = never_failed(name, &p);
-        if !sites.0.is_empty() || !sites.1.is_empty() {
-            open.insert(name, sites);
+        let mut items = open_items(name, &p);
+        if !what.sites {
+            (items.checks, items.sites) = (Vec::new(), Vec::new());
+        }
+        if !what.transitions {
+            items.transitions.clear();
+        }
+        if !what.passes {
+            items.passes.clear();
+        }
+        if !items.is_empty() {
+            open.insert(name, items);
         }
     }
     let all = open.len();
@@ -446,7 +643,9 @@ fn classify_unreached(depths: &str) {
             }
         };
         let done: Vec<&str> = resumed.iter().map(|r| r.name.as_str()).collect();
-        let queue = std::sync::Mutex::new(open.keys().copied().filter(|n| !done.contains(n)).collect::<Vec<_>>());
+        let queue = std::sync::Mutex::new(
+            open.iter().filter(|(n, o)| !done.contains(n) && !o.is_empty()).map(|(n, _)| *n).collect::<Vec<_>>(),
+        );
         let rows = std::sync::Mutex::new(resumed.clone());
         std::thread::scope(|scope| {
             for _ in 0..workers {
@@ -454,67 +653,42 @@ fn classify_unreached(depths: &str) {
                     loop {
                         let next = queue.lock().expect("Warteschlange").pop();
                         let Some(name) = next else { break };
-                        let (checks, sites) = &open[name];
+                        let items = &open[name];
                         let src = source(name);
                         let p = compile(name, &src, paths::proof(name).as_ref());
                         let whole = takt_prove::encode(&p).ok();
-                        let keep = |c: &takt_prove::CheckSite| {
-                            checks.iter().any(|(m, k, s)| *m == c.machine && *k == c.kind && *s == c.start)
-                                || sites.iter().any(|(a, b, k)| *a == c.span.start && *b == c.span.end && *k == c.kind)
-                        };
-                        match takt_prove::classify_sites(&p, whole.as_ref(), depth, &solver, CLASSIFY_TIMEOUT_S, &keep)
-                        {
-                            Ok((reports, notes)) => {
-                                // Eine Stelle ohne Urteil: Kein Modell fuehrt sie.
-                                let none = |kind: &str, machine: &str, start: u32, end: u32| CheckReport {
-                                    start,
-                                    span: takt_diag::Span::new(start, end),
-                                    machine: machine.to_string(),
-                                    kind: kind.to_string(),
-                                    verdict: CheckVerdict::Undecided {
-                                        reason: format!("ohne Urteil; {}", notes.join("; ")),
-                                    },
-                                };
-                                let mut missing: Vec<CheckReport> = checks
-                                    .iter()
-                                    .filter(|(m, k, s)| {
-                                        !reports.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s)
-                                    })
-                                    .map(|(m, k, s)| none(k, m, *s, *s))
-                                    .collect();
-                                missing.extend(
-                                    sites
-                                        .iter()
-                                        .filter(|(a, b, k)| {
-                                            !reports
-                                                .iter()
-                                                .any(|r| r.span.start == *a && r.span.end == *b && r.kind == *k)
-                                        })
-                                        .map(|(a, b, k)| none(k, "", *a, *b)),
-                                );
-                                // Je Programm gleich ins Protokoll: Ein abgebrochener Lauf
-                                // verliert so nur das laufende.
-                                let mine: Vec<Row> = reports.iter().chain(&missing).map(|r| Row::of(name, r)).collect();
-                                let lines: String = mine.iter().map(Row::line).collect();
-                                let mut rows = rows.lock().expect("Zeilen");
-                                let appended = std::fs::OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open(&progress)
-                                    .and_then(|mut f| std::io::Write::write_all(&mut f, lines.as_bytes()));
-                                appended.unwrap_or_else(|e| panic!("{}: {e}", progress.display()));
-                                eprintln!("{name}: {} Stellen nach {:.0?}", mine.len(), started.elapsed());
-                                rows.extend(mine);
+                        let mut mine = Vec::new();
+                        if !items.checks.is_empty() || !items.sites.is_empty() {
+                            match site_rows(name, &p, items, whole.as_ref(), depth, &solver) {
+                                Ok(r) => mine.extend(r),
+                                Err(e) => eprintln!("{name}: {e}"),
                             }
-                            Err(e) => eprintln!("{name}: {e}"),
                         }
+                        if !items.transitions.is_empty() || !items.passes.is_empty() {
+                            match transition_and_pass_rows(name, &p, items, whole.as_ref(), &what, depth, &solver) {
+                                Ok(r) => mine.extend(r),
+                                Err(e) => eprintln!("{name}: {e}"),
+                            }
+                        }
+                        // Je Programm gleich ins Protokoll: Ein abgebrochener Lauf
+                        // verliert so nur das laufende.
+                        let lines: String = mine.iter().map(Row::line).collect();
+                        let mut rows = rows.lock().expect("Zeilen");
+                        let appended = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&progress)
+                            .and_then(|mut f| std::io::Write::write_all(&mut f, lines.as_bytes()));
+                        appended.unwrap_or_else(|e| panic!("{}: {e}", progress.display()));
+                        eprintln!("{name}: {} Zeilen nach {:.0?}", mine.len(), started.elapsed());
+                        rows.extend(mine);
                     }
                 };
                 std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(scope, worker).expect("Faden");
             }
         });
         let mut rows = rows.into_inner().expect("Zeilen");
-        rows.sort_by(|a, b| (&a.name, a.start).cmp(&(&b.name, b.start)));
+        rows.sort_by(|a, b| (&a.name, a.start, &a.kind).cmp(&(&b.name, b.start, &b.kind)));
         let mut text = String::new();
         let mut tally: BTreeMap<(&str, &str), usize> = BTreeMap::new();
         for r in &rows {
@@ -523,18 +697,23 @@ fn classify_unreached(depths: &str) {
         }
         let file = tmp.join(format!("fb511-{depth}{suffix}.tsv"));
         std::fs::write(&file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-        eprintln!("Tiefe {depth}: {} Stellen in {:.0?}, {}", rows.len(), started.elapsed(), file.display());
+        eprintln!("Tiefe {depth}: {} Zeilen in {:.0?}, {}", rows.len(), started.elapsed(), file.display());
         let mut by_group: BTreeMap<&str, usize> = BTreeMap::new();
         for ((g, kind), n) in &tally {
             *by_group.entry(g).or_default() += n;
-            eprintln!("  {g:<20} {kind:<10} {n}");
+            eprintln!("  {g:<20} {kind:<16} {n}");
         }
         eprintln!("  {by_group:?}");
         // Tiefer gefragt wird nur, was diese Tiefe offen liess.
-        for (name, (checks, sites)) in open.iter_mut() {
+        for (name, items) in open.iter_mut() {
             let mine: Vec<&Row> = rows.iter().filter(|r| r.name == *name && r.decided()).collect();
-            checks.retain(|(m, k, s)| !mine.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s));
-            sites.retain(|(a, b, k)| !mine.iter().any(|r| r.span == (*a, *b) && r.kind == *k));
+            items.checks.retain(|(m, k, s)| !mine.iter().any(|r| r.machine == *m && r.kind == *k && r.start == *s));
+            items.sites.retain(|(a, b, k)| !mine.iter().any(|r| r.span == (*a, *b) && r.kind == *k));
+            items.transitions.retain(|(m, key)| {
+                let start = transition_start(key);
+                !mine.iter().any(|r| r.kind == TRANSITION && r.machine == *m && r.start == start)
+            });
+            items.passes.retain(|(a, b, k)| !mine.iter().any(|r| r.span == (*a, *b) && r.kind == format!("{PASS}{k}")));
         }
     }
 }

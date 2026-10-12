@@ -510,6 +510,88 @@ pub fn classify_transitions(
     Ok(out)
 }
 
+/// Klassifiziert das Bestehen der Pruefstellen `which` (Anfang, Ende, Art;
+/// FB-511 Schritt 5), wie die Coverage es zaehlt (13.2): ein Pfad, auf dem
+/// die Stelle besteht, bewiesen nie bestehend — nie erreicht oder stets
+/// verletzt — oder unentschieden. Erst Tiefe 1, dann `depth`, wie bei den
+/// Pruefstellen; den Pfad bestaetigt der Interpreter an seiner Coverage.
+pub fn classify_passes(
+    model: &Model,
+    program: &Program,
+    which: &[(u32, u32, String)],
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+) -> Result<Vec<CheckReport>, String> {
+    let model = &strengthened(model, solver, timeout_s)?;
+    let mut out = Vec::new();
+    for (i, goal) in model.passes.iter().enumerate() {
+        if !which.iter().any(|(a, b, k)| *a == goal.span.start && *b == goal.span.end && *k == goal.kind) {
+            continue;
+        }
+        let target = Target::Pass(i);
+        let mut verdict = None;
+        for d in [1, depth.max(1)] {
+            let bmc = solver.run(&query(model, d, target, Query::Bmc), timeout_s, "pass-bmc")?;
+            let found = match answer(&bmc) {
+                "sat" => {
+                    let values = parse_values(&bmc, "@");
+                    let stimulus = stimulus(&values, program, d);
+                    Some(match passed_at(program, goal, &stimulus, d) {
+                        Some(at) => CheckVerdict::Reachable { at, stimulus },
+                        None => CheckVerdict::Undecided {
+                            reason: format!(
+                                "der Solver fand einen Pfad bis Tiefe {d}, der Interpreter bestaetigt ihn nicht — {}",
+                                unconfirmed(model)
+                            ),
+                        },
+                    })
+                }
+                "unsat" => {
+                    let ind = solver.run(&query(model, d, target, Query::Induction), timeout_s, "pass-ind")?;
+                    match answer(&ind) {
+                        "unsat" => Some(CheckVerdict::Unreachable { k: d }),
+                        "sat" if d < depth => None,
+                        "sat" => Some(match invariant(model, target, solver, timeout_s)? {
+                            Search::Invariant => CheckVerdict::Unreachable { k: 0 },
+                            found => CheckVerdict::Undecided {
+                                reason: format!("kein Pfad bis Tiefe {d}, {}", open(model, d, &found)),
+                            },
+                        }),
+                        other => Some(CheckVerdict::Undecided {
+                            reason: format!("Induktionsschritt: Solver sagt `{other}`"),
+                        }),
+                    }
+                }
+                other => Some(CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") }),
+            };
+            if found.is_some() {
+                verdict = found;
+                break;
+            }
+        }
+        let verdict = verdict.unwrap_or_else(|| CheckVerdict::Undecided { reason: "ohne Urteil".into() });
+        out.push(report(goal, verdict));
+    }
+    Ok(out)
+}
+
+/// Der erste Tick bis `depth`, nach dem der Interpreter mit `stimulus` die
+/// Stelle `site` bestehen sah: ein `check` ausgewertet, eine implizite
+/// Pruefung bestanden (13.2).
+fn passed_at(program: &Program, site: &crate::encode::CheckSite, stimulus: &str, depth: u32) -> Option<u64> {
+    use takt_interp::CoverKind;
+    let key = match site.kind.as_str() {
+        "check" | "expect" => (CoverKind::Check, site.machine.clone(), format!("{} @{}", site.kind, site.span.start)),
+        kind => (CoverKind::Site, String::new(), format!("{kind} @{}-{}", site.span.start, site.span.end)),
+    };
+    let stim = Trace::parse(stimulus).ok()?;
+    (0..=u64::from(depth)).find(|&ticks| {
+        let options = RunOptions { ticks, ..Default::default() };
+        run(program, &stim, &options).is_ok_and(|r| r.coverage.hits.contains_key(&key))
+    })
+}
+
 /// Der erste Tick bis `depth`, nach dem der Interpreter mit `stimulus` den
 /// Uebergang `key` der Maschine `machine` genommen hat.
 pub fn taken_at(program: &Program, machine: &str, key: &str, stimulus: &str, depth: u32) -> Option<u64> {

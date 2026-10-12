@@ -195,6 +195,10 @@ pub struct Model {
     /// der Coverage (`VON->NACH @<anfang>`), `fires` die Bedingung, unter der
     /// sie im Tick genommen werden und ihre Aktionen ohne Fault enden.
     pub transitions: Vec<CheckSite>,
+    /// Pruefstellen als Ziele ihres Bestehens (13.2, FB-511 Schritt 5): je
+    /// Stelle aus [`Model::checks`] ohne `requires`, `fires` die Bedingung,
+    /// unter der sie besteht, wie die Coverage es zaehlt.
+    pub passes: Vec<CheckSite>,
     /// Block-Vertraege als Beweisziele (B2).
     pub contracts: Vec<ContractGoal>,
     /// Was die Kodierung annimmt oder auslaesst.
@@ -540,17 +544,22 @@ struct Called {
 
 /// Wann eine Pruefstelle an einer Stelle des Pfads feuert: `fires`, und ihre
 /// Fehlerbedingung allein, `fail` — ohne die Bedingung, dass die Ausfuehrung
-/// dorthin kommt. `fires` impliziert `fail`.
+/// dorthin kommt. `fires` impliziert `fail`. `passes`: wann sie besteht, wie
+/// die Coverage es zaehlt (13.2) — eine implizite Pruefung, die erreicht
+/// wird und nicht faultet, ein `check`, der ausgewertet wird (FB-511
+/// Schritt 5).
 #[derive(Clone, Debug)]
 struct Fire {
     fires: Term,
     fail: Term,
+    passes: Term,
 }
 
 impl Fire {
-    /// Eine Stelle, deren Fehlerbedingung sich nicht vom Pfad trennen laesst.
-    fn whole(fires: Term) -> Fire {
-        Fire { fail: fires.clone(), fires }
+    /// Eine Stelle, deren Fehlerbedingung sich nicht vom Pfad trennen laesst;
+    /// sie besteht, wo der Pfad danach weiterlaeuft.
+    fn whole(fires: Term, passes: Term) -> Fire {
+        Fire { fail: fires.clone(), fires, passes }
     }
 }
 
@@ -748,6 +757,25 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
             fail: either(&tick_sites, key, |f| &f.fail),
         })
         .collect();
+    let passes: Vec<CheckSite> = enc
+        .site_info
+        .iter()
+        .filter(|(key, _)| key.2 != "requires")
+        .map(|(key, (span, machine))| {
+            let fires = either(&tick_sites, key, |f| &f.passes);
+            let init = either(&init_sites, key, |f| &f.passes);
+            CheckSite {
+                start: span.start,
+                span: *span,
+                machine: machine.clone(),
+                kind: key.2.clone(),
+                init_fail: init.clone(),
+                init,
+                fail: fires.clone(),
+                fires,
+            }
+        })
+        .collect();
     let transitions = std::mem::take(&mut enc.transitions)
         .into_iter()
         .map(|((machine, key), (span, takes))| {
@@ -841,6 +869,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
         properties,
         checks,
         transitions,
+        passes,
         contracts,
         notes,
         leaves,
@@ -2091,14 +2120,15 @@ impl Enc<'_> {
                 let first = flow.exits.len();
                 let x = self.expr(inner, cx, env, flow)?;
                 let fires = Term::or(flow.exits[first..].iter().map(|x| x.cond.clone()).collect());
-                self.site(kind, span, Fire::whole(fires), cx);
+                self.site(kind, span, Fire::whole(fires, flow.alive.clone()), cx);
                 return Ok(x);
             }
             CheckedKind::Index { len } => return self.index_access(inner, *len, span, kind, cx, env, flow)?.leaf(span),
             CheckedKind::Missing => return self.unwrap(inner, span, kind, cx, env, flow)?.leaf(span),
         };
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
-        self.site(kind, span, Fire { fires: cond.clone(), fail: fail.clone() }, cx);
+        let passes = Term::and(vec![flow.alive.clone(), fail.clone().not()]);
+        self.site(kind, span, Fire { fires: cond.clone(), fail: fail.clone(), passes }, cx);
         flow.exits.push(Exit { cond, kind: ExitKind::Fault(None, self.cause(kind.fault(), span)) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
         Ok(value)
@@ -2247,12 +2277,13 @@ impl Enc<'_> {
     /// des Rumpfs unter der Bedingung des Aufrufers; nur Faults beenden ihn.
     fn returned(&mut self, done: Called, cx: &Cx<'_>, flow: &mut Flow) -> V {
         let alive = flow.alive.clone();
-        for (key, Fire { fires, fail }) in done.sites {
+        for (key, Fire { fires, fail, passes }) in done.sites {
             if let Some(m) = cx.m {
                 let span = Span::new(key.0, key.1);
                 self.site_info.insert(key.clone(), (span, self.machine(m).name.clone()));
             }
-            self.sites.entry(key).or_default().push(Fire { fires: Term::and(vec![alive.clone(), fires]), fail });
+            let (fires, passes) = (Term::and(vec![alive.clone(), fires]), Term::and(vec![alive.clone(), passes]));
+            self.sites.entry(key).or_default().push(Fire { fires, fail, passes });
         }
         let mut faults = Vec::new();
         for mut x in done.exits {
@@ -2487,7 +2518,13 @@ impl Enc<'_> {
                     let fail = Term::and(vec![flow.alive.clone(), failed.clone()]);
                     let word = if *kind == takt_mir::stmt::CheckKind::Check { "check" } else { "expect" };
                     let key = (span.start, span.end, word.to_string());
-                    self.sites.entry(key.clone()).or_default().push(Fire { fires: fail.clone(), fail: failed.clone() });
+                    // Die Coverage zaehlt einen `check`, sobald er ausgewertet wird.
+                    let passes = flow.alive.clone();
+                    self.sites.entry(key.clone()).or_default().push(Fire {
+                        fires: fail.clone(),
+                        fail: failed.clone(),
+                        passes,
+                    });
                     self.site_info.insert(key, (span, self.machine(m).name.clone()));
                     let fault = if *kind == takt_mir::stmt::CheckKind::Check {
                         FaultKind::CheckFailed
@@ -2824,7 +2861,11 @@ impl Enc<'_> {
                 let c = self.expr(r, &rcx, env, &mut rflow)?;
                 let fail = Term::and(vec![call_alive.clone(), c.clone().not()]);
                 let key = (span.start, span.end, "requires".to_string());
-                self.sites.entry(key.clone()).or_default().push(Fire { fires: fail, fail: !c });
+                self.sites.entry(key.clone()).or_default().push(Fire {
+                    fires: fail,
+                    fail: !c,
+                    passes: call_alive.clone(),
+                });
                 self.site_info.insert(key, (span, self.machine(m).name.clone()));
             }
         }
