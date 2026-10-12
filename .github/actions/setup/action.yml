@@ -52,7 +52,7 @@ runs:
         cd "$RUNNER_TEMP"
         wget -q https://github.com/Z3Prover/z3/releases/download/z3-4.13.4/z3-4.13.4-x64-glibc-2.35.zip
         unzip -q z3-4.13.4-x64-glibc-2.35.zip
-        cp z3-4.13.4-x64-glibc-2.35/bin/* "$HOME/.takt/bin/"
+        find z3-4.13.4-x64-glibc-2.35/bin -maxdepth 1 -type f -exec cp {} "$HOME/.takt/bin/" \;
         wget -q https://github.com/cvc5/cvc5/releases/download/cvc5-1.2.0/cvc5-Linux-x86_64-static.zip
         unzip -q cvc5-Linux-x86_64-static.zip
         cp cvc5-Linux-x86_64-static/bin/cvc5 "$HOME/.takt/bin/"
