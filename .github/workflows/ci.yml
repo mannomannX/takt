@@ -63,4 +63,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.os }}
+      # Tests bauen eigene Workspaces mit `--offline` (embed_cmd, die Harness
+      # des Wirts); ihre Abhaengigkeiten holt das, was lokal der Cache traegt.
+      - name: Abhaengigkeiten der eigenen Workspaces
+        shell: bash
+        run: |
+          for m in examples/rust-host crates/takt-embed crates/takt-embed-c crates/takt-native-abi crates/takt-bringup-host; do
+            cargo fetch --manifest-path "$m/Cargo.toml"
+          done
       - run: cargo nextest run --workspace --profile ci
