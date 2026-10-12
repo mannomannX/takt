@@ -2471,3 +2471,15 @@ fn a_sim_stream_of_two_scenarios_belongs_to_the_one_that_runs() {
         agree_scenario("SHARED_SIM", &p, scenario, "", 8);
     }
 }
+
+/// **Zwei Faults einer Maschine in einem Tick** (M11 Strang B2, Schritt 3):
+/// Ein Fault von aussen fuehrt `99_exit_fault` nach `RECOVER`; nach elf
+/// davon faultet dessen `enter:` selbst (`next = next - 1` unter null), und
+/// der Fault-Pfad der Maschine uebernimmt. Der Interpreter meldet im Tick 78
+/// beide, das Modell meldete nur den letzten — gefunden am Pfad des Solvers
+/// jenseits der Tiefe.
+#[test]
+fn two_faults_of_one_machine_in_one_tick_are_both_reported() {
+    let stimulus: String = (0..11).map(|i| format!("t={} runtime Overrun\n", 8 + 7 * i)).collect();
+    agree_program("99_exit_fault.takt", &corpus("99_exit_fault.takt"), &stimulus, 80);
+}

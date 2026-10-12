@@ -22,7 +22,7 @@ use takt_mir::program::{Channel, Direction};
 use takt_mir::types::Type;
 use takt_mir::{MachineId, Program};
 
-use crate::encode::{Model, Position, fault_kind, leaves_at, quality, value_at};
+use crate::encode::{Model, Position, fault_kinds, leaves_at, quality, value_at};
 use crate::eval::{self, Env, Plan, Val};
 use crate::term::{Sort, Term};
 
@@ -675,8 +675,8 @@ impl<'a> Writer<'a> {
         for &m in &self.machines.clone() {
             let def = &p.machines[m.index()];
             let code = int(s, &format!("s.{}.fault", def.name), k)?;
-            if code != 0 {
-                let kind: FaultKind = fault_kind(code).ok_or_else(|| missing(k, "die Art eines Faults"))?;
+            let kinds: Vec<FaultKind> = fault_kinds(code).ok_or_else(|| missing(k, "die Art eines Faults"))?;
+            for kind in kinds {
                 let target = self.path(m, s, k)?;
                 let kind = kind.name();
                 self.push(k, LineKind::Fault { machine: def.name.clone(), kind, message: String::new(), target });
