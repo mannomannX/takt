@@ -31,20 +31,16 @@ pub struct Limit {
 /// wird, ist schlechter als keine, weil ihr jemand glaubt.
 pub const LIMITS: &[Limit] = &[
     Limit {
-        was: "Record-Ausgaenge mit `bytes`-Feld",
-        warum: "Der Wirtsrahmen schreibt einen Record-Ausgang Feld fuer Feld; ein Feld `bytes<N>` \
-                hat dort keine Schreibweise, und der Vergleich sieht den Ausgang nicht.",
-        wann: "M11 Schritt 9.",
-        row: "FB-402",
+        was: "Laeufe, deren Stimulus an einen Eingang ohne `hw`-Bindung liefert",
+        warum: "Im Produkt hat nur ein `hw`-gebundener Eingang einen Treiber; einen Eingang mit                 `sim(...)` oder ohne Bindung treibt im Sim-Build allein der Interpreter mit dem                 Stimulus (8.3), und die Referenz kennt `sim(...)` nur an Outputs (8.1). Die Spalte                 `nativ` faellt fuer diese Laeufe aus (`GAPS` in `differential.rs`).",
+        wann: "M11: Klaerung der Referenz und ein Weg im Sim-Build des Produkts (FB-688).",
+        row: "FB-688",
     },
     Limit {
-        was: "Die Maschine von `log`, `measure`, `verify` und `verdict`",
-        warum: "`compare` haelt diese Beobachtungen je Tick nach Art und Ausgang gegeneinander; \
-                der Rahmen nennt ihre Maschine mit der Nummer, nicht mit dem Namen. `job` und \
-                `signal` tragen Maschine und Namen (FB-432), `persist` schreibt nur der \
-                Wirtsrahmen (`persist_native.rs`).",
-        wann: "M11 Schritt 9: Der Produktrahmen schreibt die Beobachtungen mit dem Namen der Maschine.",
-        row: "FB-391",
+        was: "`runtime Node` im erzeugten Code",
+        warum: "Einen Knotenausfall meldet im Produkt kein Weg des Wirts; die Laeufe der Pfade, die                 ihn brauchen, rechnet nur der Interpreter (`GAPS` in `differential.rs`).",
+        wann: "M9: Der Knotenbuild meldet den Ausfall eines Knotens (FB-689).",
+        row: "FB-689",
     },
     Limit {
         was: "Das Profil `shared` auf dem ESP32-C6",
@@ -55,14 +51,14 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Fehler, die alle Ausfuehrer teilen, ausserhalb der Relationen",
-        warum: "Interpreter, Wirtsrahmen und Boards teilen Sema, MIR, den Kern des Treiberrands \
+        warum: "Interpreter, Produktrahmen und Boards teilen Sema, MIR, den Kern des Treiberrands \
                 (`takt-hal`) und die Natives. Was dort falsch ist, sehen nur die Relationen \
                 (`relations.rs`: Schrittordnung, Schlaf, `sim` gegen `hw`) und die Golden-Traces \
                 der Referenzprogramme — wenn es eine Relation bricht oder einen Golden-Trace \
-                aendert. IEEE-Umgebung (`embed.rs`) sowie Praefix und Instanzen \
-                (`several_programs.rs`) laufen nur ueber den Korpus ohne Eingaben.",
-        wann: "M11 Schritt 9: IEEE-Umgebung, Praefix und Instanzen ueber den erzeugten Eingaben, \
-               sobald der Produktrahmen den Stimulus treibt.",
+                aendert. IEEE-Umgebung, Praefix und eine gefuellte Arena laufen ueber jeden Fall \
+                der Suite `ieee` (`embed.rs`), mehrere Instanzen im SDK nur ueber den Korpus ohne \
+                Eingaben (`several_programs.rs`): Das SDK hat eine Leitung je Prozess.",
+        wann: "M11: zwei Instanzen im Testwirt, sobald das SDK eine Leitung je Kern hat (FB-691).",
         row: "FB-382",
     },
     Limit {
@@ -157,7 +153,7 @@ mod tests {
     /// eine fehlende Zeile.
     #[test]
     fn the_status_comes_from_the_plan() {
-        assert!(status("FB-402").is_some_and(|s| s.starts_with("offen")));
+        assert!(status("FB-501").is_some_and(|s| s.starts_with("offen")));
         assert!(status("FB-361").is_some_and(|s| s.starts_with("behoben")));
         assert_eq!(status("FB-99999"), None);
     }

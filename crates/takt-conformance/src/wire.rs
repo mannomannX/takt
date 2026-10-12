@@ -8,7 +8,7 @@
 //! Inputs in der Hardware-Konfiguration (8.10).
 //!
 //! **Was nicht gemessen wird.** Die Rahmen wenden geplante Ausgaben zu
-//! Tickbeginn an (9.8, `harness::scheduled`); ein `at T` faellt auf den
+//! Tickbeginn an (9.8, `takt_frame::parts::scheduled`); ein `at T` faellt auf den
 //! Tick, der `T` enthaelt. Das ist eine Eigenschaft des Rahmens, keine
 //! Messgroesse, und steht als `tick_granular = true` am Output (7.5).
 

@@ -22,8 +22,9 @@ use crate::drivers::Driver;
 
 /// Die Version der Schnittstelle zwischen Bibliothek und Huelle (12.11):
 /// Sie steht im Symbol `P_abi_<n>` und im Manifest. Fassung 5: Grund und
-/// Alter je Abtastung, Eingaenge zusammengesetzten Typs, Commands des Wirts,
-/// `P_abort` (M11 Schritt 9).
+/// Alter je Abtastung und eine Abtastung ohne Wert (Rueckgabe 2),
+/// Eingaenge zusammengesetzten Typs, Commands des Wirts, `P_operator_abort`
+/// (M11 Schritt 9).
 pub const ABI: u32 = 5;
 
 /// Was das Modul braucht.
@@ -114,7 +115,7 @@ fn ffi(x: &Prefix, logic: &str) -> String {
         format!("pub(super) fn {x}_end(a: *mut c_void);"),
         format!("pub(super) fn {x}_overrun(a: *mut c_void);"),
         format!("pub(super) fn {x}_hardware(a: *mut c_void);"),
-        format!("pub(super) fn {x}_abort(a: *mut c_void);"),
+        format!("pub(super) fn {x}_operator_abort(a: *mut c_void);"),
         format!("pub(super) fn {x}_tolerance(ns: *mut i64, runs: *mut u32);"),
         format!("pub(super) fn {x}_output_timing() -> u8;"),
         format!("pub(super) fn {x}_job_dispatch(a: *mut c_void) -> i32;"),
@@ -217,7 +218,7 @@ pub fn c_ops(x: &Prefix) -> String {
         ("void", "end", "void *a", "A(a)"),
         ("void", "overrun", "void *a", "A(a)"),
         ("void", "hardware", "void *a", "A(a)"),
-        ("void", "abort", "void *a", "A(a)"),
+        ("void", "operator_abort", "void *a", "A(a)"),
         ("int32_t", "job_dispatch", "void *a", "A(a)"),
         ("void", "job_work", "void *a", "A(a)"),
     ];
@@ -472,7 +473,7 @@ impl takt_embed::rt::Program for Program<'_> {{
     fn raise_abort(&mut self) {{
         self.ensure_init();
         // SAFETY: wie oben.
-        unsafe {{ ffi::{x}_abort(self.arena) }}
+        unsafe {{ ffi::{x}_operator_abort(self.arena) }}
     }}
 
     fn tick_tolerance(&self) -> Option<takt_embed::rt::Tolerance> {{

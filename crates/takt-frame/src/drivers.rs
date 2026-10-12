@@ -26,7 +26,10 @@
 //!
 //! **Eine Abtastung traegt, was 12.6 vom Treiber verlangt:** Wert,
 //! Qualitaet, Grund, Alter und Zeitstempel — dieselben Felder wie eine
-//! `in`-Zeile des Stimulus (`grammar/trace.md`). Ein Eingang
+//! `in`-Zeile des Stimulus (`grammar/trace.md`). Der Treiber eines Eingangs
+//! liefert 0 (nichts in diesem Tick), 1 (eine Abtastung mit Wert) oder 2
+//! (eine ohne Wert: `Bad`, oder `Stale` ohne Wert); ob Qualitaet und Wert
+//! zusammenpassen, prueft der Rand (3.5, 12.6 Zeile 2). Ein Eingang
 //! zusammengesetzten Typs (Record, Feld, `samples`, Enum mit Feldern) kommt
 //! in seiner Speicherform als Bytes ([`Kind::Block`]).
 //!
@@ -191,7 +194,9 @@ pub fn method(kind: Kind, ident: &str) -> String {
 }
 
 /// Die Treiber eines Programms: die gebundenen Eingaenge und Eingabestroeme
-/// ohne die, die ein Modell speist (8.3), die aufgezeichneten Inputs (8.2),
+/// — auch die, die im Sim-Build ein Modell speist: Was ihr Treiber in einem
+/// Tick liefert, gilt dort statt des Modells, wie ein Stimulus im
+/// Interpreter (8.3) —, die aufgezeichneten Inputs (8.2),
 /// die gebundenen Ausgaenge und Ausgabestroeme und je Geraet eines
 /// Ausgangs der Heartbeat (12.4). Am Ende stehen die Commands (8.5) und die
 /// Eingaenge des Geraets `sys` als [`Kind::Command`] und [`Kind::Sys`]:
@@ -199,12 +204,11 @@ pub fn method(kind: Kind, ident: &str) -> String {
 pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
     let mut out = Vec::new();
     let mut sys = Vec::new();
-    let fed = crate::parts::sim_fed_inputs(p);
     for slot in &layout.inputs {
         let Some(channel) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
         let Some(addr) = slot.address.as_ref() else { continue };
         // Was der Kern selbst stellt, hat keinen Treiber (13.3).
-        if fed.contains(&channel) || takt_mir::sys::channel(&addr.text()).is_some_and(|s| s.core) {
+        if takt_mir::sys::channel(&addr.text()).is_some_and(|s| s.core) {
             continue;
         }
         let Some(value) = value_of(&slot.ty, slot.signed) else {
@@ -248,10 +252,10 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
             doc: format!("Eingang `{}`{}", slot.name, contract(p, &p.channels[channel])),
         });
     }
-    for (channel, c) in p.channels.iter().enumerate() {
+    for c in &p.channels {
         let Binding::Hw(addr) = &c.binding else { continue };
         let stream = matches!(p.types.list.get(c.ty.index()), Some(Type::Stream(_)));
-        if stream && c.dir == Direction::Input && !crate::streams::coupled_input(p, channel) {
+        if stream && c.dir == Direction::Input {
             out.push(Driver {
                 kind: Kind::Poll,
                 method: method(Kind::Poll, &addr.ident()),
@@ -483,6 +487,8 @@ pub fn c_prototypes(drivers: &[Driver], x: &Prefix) -> String {
         s,
         "/* Die Treiber (8.10, 12.6): stark gebunden, je mit dem Zeiger des Wirts und der Zeit des Ticks. */"
     );
+    let _ =
+        writeln!(s, "/* Ein Eingang liefert 0 (nichts), 1 (mit Wert) oder 2 (ohne Wert: `Bad`, `Stale` ohne Wert). */");
     if drivers.is_empty() {
         let _ = writeln!(s, "/*   keine — nichts ist an Hardware gebunden */");
     }
@@ -639,12 +645,12 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
                 // `DRIVER` (12.6 Zeile 2), jede Abtastung das Alter 0.
                 // TODO(FB-686): Grund und Alter in `takt_embed::Sample`, wenn
                 // die Bring-ups mitziehen.
-                let _ = writeln!(s, "    let (code, reason) = match sample.quality {{");
+                let _ = writeln!(s, "    let (code, why) = match sample.quality {{");
                 for (name, code, reason) in [("Good", 0, 0), ("Suspect", 1, 0), ("Stale", 2, 0), ("Bad", 3, 3)] {
                     let _ = writeln!(s, "        takt_embed::Quality::{name} => ({code}, {reason}),");
                 }
                 let _ = writeln!(s, "    }};");
-                let mut places = vec![("quality", "code"), ("reason", "reason"), ("age", "0"), ("t", "sample.t")];
+                let mut places = vec![("quality", "code"), ("reason", "why"), ("age", "0"), ("t", "sample.t")];
                 if d.kind != Kind::Block {
                     places.insert(0, ("value", conv));
                 }
@@ -652,7 +658,8 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
                     let _ = writeln!(s, "    // SAFETY: siehe oben.");
                     let _ = writeln!(s, "    unsafe {{ *{place} = {from} }};");
                 }
-                let _ = writeln!(s, "    1");
+                // `Bad` kommt ohne Wert (3.5); jede andere Abtastung mit.
+                let _ = writeln!(s, "    if code == 3 {{ 2 }} else {{ 1 }}");
             }
             Kind::Command => {
                 let _ = writeln!(s, "    u8::from({call}(drivers, now))");

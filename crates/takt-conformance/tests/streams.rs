@@ -1,15 +1,16 @@
 //! Die Eingabestroeme des Rahmens gegen die Regeln aus 8.6 und 12.6.
 //!
 //! Jeder Eingabestrom hat einen Ring; seine Elemente bringt der
-//! Treiberrand, auf dem Wirt aus dem Stimulus. Die Textpruefungen gelten
-//! immer — sie lesen den erzeugten C-Text. Der Lauf gegen den Interpreter
-//! braucht clang und ueberspringt sich ohne.
+//! Treiberrand, auf dem Wirt der Treiber des Testwirts aus dem Stimulus
+//! ([`takt_conformance::testhost`]). Die Textpruefungen gelten immer — sie
+//! lesen den erzeugten C-Text von Rahmen und Wirt. Der Lauf gegen den
+//! Interpreter braucht clang und ueberspringt sich ohne.
 
 mod common;
 
-use takt_conformance::harness;
 use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
+use takt_conformance::testhost::{Run, host_triple, sources};
 use takt_mir::program::Program;
 
 fn program_of(src: &str) -> Program {
@@ -38,35 +39,35 @@ fn with_bounds(attrs: &str) -> Program {
     ))
 }
 
-fn harness_of(p: &Program, stimulus: &[Stimulus]) -> String {
-    harness::build_with(p, "m", 10, stimulus).source
+/// Rahmen und `host.c` des Testwirts fuer `p` mit `stimulus`.
+fn sources_of(p: &Program, stimulus: &[Stimulus]) -> Result<(String, String), String> {
+    let run = Run { ticks: 10, stimulus, ..Run::default() };
+    let files = sources(p, &run, host_triple(), false)?.files;
+    let file = |name: &str| files.iter().find(|(f, _)| f == name).map(|(_, text)| text.clone()).unwrap_or_default();
+    Ok((file("app_frame.c"), file("host.c")))
 }
 
-/// Der Teil des Rahmens, der den Stimulus an den Rand gibt.
-fn feed(c: &str) -> &str {
-    let start = c.find("static void takt_edge_stimulus").expect("Lieferfunktion");
-    let end = c[start..].find("takt_edge_commit(a, tick);").map_or(c.len(), |e| start + e);
-    &c[start..end]
-}
-
-/// Ohne Stimulus gibt es keine Lieferung; das Fenster fragt nur den Ring.
+/// Ohne Stimulus liefert der Treiber nichts; das Fenster fragt nur den Ring.
 #[test]
 fn without_elements_the_window_stays_empty() {
     let p = with_bounds("");
-    let c = harness_of(&p, &[]);
-    assert!(c.contains("return k >= 0 ? takt_int_count(a, k, cur) : 0;"), "{c}");
-    assert!(!feed(&c).contains("takt_edge_element("), "keine Lieferung:\n{}", feed(&c));
+    let (frame, host) = sources_of(&p, &[]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(frame.contains("return k >= 0 ? takt_int_count(a, k, cur) : 0;"), "{frame}");
+    assert!(!host.contains("g_app_poll_u_rx"), "keine Lieferung:\n{host}");
 }
 
-/// Ein Element geht mit Zeitstempel und Folgenummer an den Rand: ohne
-/// Angabe die Tickgrenze und die lueckenlose Folge ab null (12.6).
+/// Ein Element kommt vom Treiber an den Rand: Zeitstempel ohne Angabe die
+/// Tickgrenze, und die Folgenummer zaehlt der Rahmen lueckenlos ab null
+/// (12.6).
 #[test]
 fn elements_reach_the_edge_with_their_numbering() {
     let p = with_bounds("");
-    let c = harness_of(&p, &[Stimulus::element(2, "rx", "AB"), Stimulus::element(5, "rx", "C")]);
-    let f = feed(&c);
-    assert!(f.contains("\"\\x41\\x42\", 2, 20000000LL, 0LL)"), "erstes Element fehlt:\n{f}");
-    assert!(f.contains("\"\\x43\", 1, 50000000LL, 1LL)"), "zweites Element fehlt:\n{f}");
+    let stimulus = [Stimulus::element(2, "rx", "AB"), Stimulus::element(5, "rx", "C")];
+    let (frame, host) = sources_of(&p, &stimulus).unwrap_or_else(|e| panic!("{e}"));
+    assert!(host.contains("{ 20000000LL, (const uint8_t[]){ 65, 66 }, 2, 20000000LL, 0LL, 0 }"), "erstes:\n{host}");
+    assert!(host.contains("{ 50000000LL, (const uint8_t[]){ 67 }, 1, 50000000LL, 0LL, 0 }"), "zweites:\n{host}");
+    assert!(frame.contains("long long next = last == (-9223372036854775807LL - 1) ? 0 : last + 1;"), "{frame}");
+    assert!(frame.contains("int64_t t = now, seq = next;"), "{frame}");
 }
 
 /// 3.9: Der Rand begrenzt die Laenge; was darueber steht, ist
@@ -74,12 +75,13 @@ fn elements_reach_the_edge_with_their_numbering() {
 #[test]
 fn an_overlong_element_is_truncated_not_dropped() {
     let p = with_bounds("");
-    let c = harness_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]);
-    let f = feed(&c);
-    // Wie auf dem Board kommt die ganze Zeile an den Rand; er kuerzt auf
-    // `line<16>` und merkt es fuer `.truncated` (KON2-028).
-    assert!(f.contains("\\x58\\x58\\x58\\x58\", 20, 10000000LL, "), "ungekuerzt an den Rand:\n{f}");
-    assert!(c.contains("_Bool cut = v->len > 16;"), "der Rand kuerzt auf `line<16>`");
+    let (frame, host) =
+        sources_of(&p, &[Stimulus::element(1, "rx", "0123456789ABCDEFXXXX")]).unwrap_or_else(|e| panic!("{e}"));
+    // Wie auf dem Board liefert der Treiber die ganze Zeile, so weit sein
+    // Platz reicht; der Rand kuerzt auf `line<16>` und merkt es fuer
+    // `.truncated` (KON2-028).
+    assert!(host.contains("88, 88, 88, 88 }, 20, 10000000LL, "), "ungekuerzt an den Treiber:\n{host}");
+    assert!(frame.contains("_Bool cut = v->len > 16;"), "der Rand kuerzt auf `line<16>`");
 }
 
 /// Ein Programm mit einem Textstrom `line<16>`, dessen Handler `body`
@@ -139,17 +141,20 @@ fn the_truncation_of_a_line_element_reaches_the_handler() {
 #[test]
 fn the_bounds_reach_the_ring() {
     let p = with_bounds(", capacity = 4, capacity_bytes = 64");
-    let c = harness_of(&p, &[]);
-    assert!(c.contains("static const int g_int_cap[1] = { 4 };"), "{c}");
-    assert!(c.contains("static const int g_int_capb[1] = { 64 };"), "{c}");
+    let (frame, _) = sources_of(&p, &[]).unwrap_or_else(|e| panic!("{e}"));
+    assert!(frame.contains("static const int g_int_cap[1] = { 4 };"), "{frame}");
+    assert!(frame.contains("static const int g_int_capb[1] = { 64 };"), "{frame}");
 }
 
-/// Ein Stimulus fuer einen anderen Kanal beruehrt den Strom nicht.
+/// Ein Stimulus fuer einen Kanal oder ein Command, das das Programm nicht
+/// hat, hat keinen Weg: ein Fehler mit Grund, kein stilles Weglassen.
 #[test]
-fn a_stimulus_for_another_channel_is_ignored() {
+fn a_stimulus_for_another_channel_has_no_path() {
     let p = with_bounds("");
-    let c = harness_of(&p, &[Stimulus::element(1, "andere", "A"), Stimulus::cmd(1, "go")]);
-    assert!(!feed(&c).contains("takt_edge_element("), "kein Element fuer `rx`:\n{}", feed(&c));
+    let e = sources_of(&p, &[Stimulus::element(1, "andere", "A")]).expect_err("ein fremder Kanal");
+    assert!(e.contains("kein Eingang `andere`"), "{e}");
+    let e = sources_of(&p, &[Stimulus::cmd(1, "go")]).expect_err("ein fremdes Command");
+    assert!(e.contains("kein Command `go`"), "{e}");
 }
 
 /// 8.6, 9.6: Ein Leser, der zurueckfaellt, laesst den Ring volllaufen —

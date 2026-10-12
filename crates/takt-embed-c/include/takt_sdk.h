@@ -31,7 +31,7 @@ extern "C" {
 
 /* Die Fassung dieser Schnittstelle; eine Tabelle anderer Fassung nimmt
  * `takt_core_init` nicht an. Fassung 2: Der Wirt nennt seinen Watchdog.
- * Fassung 3: Die Tabelle traegt `abort` (`takt_core_abort`). */
+ * Fassung 3: Die Tabelle traegt `operator_abort` (`takt_core_abort`). */
 #define TAKT_SDK_ABI 3u
 
 /* So viele Byte haelt `takt_core`; das Archiv prueft beim Bau, dass sein
@@ -65,7 +65,7 @@ struct takt_ops {
     void (*end)(void *arena);
     void (*overrun)(void *arena);
     void (*hardware)(void *arena);
-    void (*abort)(void *arena);
+    void (*operator_abort)(void *arena);
     void (*tolerance)(int64_t *ns, uint32_t *runs);
     uint8_t (*output_timing)(void);
     int32_t (*job_dispatch)(void *arena);
@@ -175,6 +175,14 @@ void takt_core_wake(takt_core *core);
  * schlaeft er, endet der Schlaf dort (9.9). Aus jedem Kontext, auch aus einer
  * ISR oder waehrend eines Schritts. */
 void takt_core_abort(takt_core *core);
+
+/* Eine Schutzverletzung (12.3): Die Schutzeinheit hat einen Zugriff der TCB
+ * auf den Programmzustand abgewiesen. Der Kern meldet `Runtime(Hardware)`
+ * vor dem Schritt der naechsten Grenze, die `takt_core_service` erreicht,
+ * allen Maschinen; schlaeft er, endet der Schlaf dort (9.9). Aus jedem
+ * Kontext, auch aus einem Fault-Handler oder einer ISR und waehrend eines
+ * Schritts. */
+void takt_core_hardware_fault(takt_core *core);
 
 /* Rechnet die verteilten Jobs (4.5), unterbrechbar durch `takt_core_service`. */
 void takt_core_job_work(takt_core *core);

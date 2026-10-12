@@ -185,46 +185,57 @@ fn the_same_ir_yields_the_same_object() {
     assert!(!text.contains("4711"), "der Dateiname steht im Objekt");
 }
 
+/// Die Quellen des Testwirts fuer `p` und `triple` in `dir`: IR, Rahmen,
+/// Tabelle und Wirt ([`takt_conformance::testhost`]); geliefert die Dateien
+/// zum Uebersetzen.
+fn product_sources(p: &Program, triple: &str, dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let run = takt_conformance::testhost::Run { ticks: 4, ..Default::default() };
+    let sources = takt_conformance::testhost::sources(p, &run, triple, false).unwrap_or_else(|e| panic!("{e}"));
+    std::fs::create_dir_all(dir).expect("Verzeichnis");
+    let mut out = Vec::new();
+    for (name, text) in &sources.files {
+        std::fs::write(dir.join(name), text).expect("Quelle");
+        if name.ends_with(".ll") || name.ends_with(".c") {
+            out.push(dir.join(name));
+        }
+    }
+    out
+}
+
 /// **Stufe 3**: Zwei vollstaendige Uebersetzungen ergeben dasselbe
 /// Binary.
 ///
 /// Das ist die Zusage, wie 11.3 sie formuliert. Sie schliesst den Linker
 /// ein, und der ist die Stelle, an der eine ungeordnete Symboltabelle
-/// sichtbar wuerde.
+/// sichtbar wuerde. Gebunden wird, was das Differential faehrt: der
+/// Produktrahmen mit dem Kern des SDK (M11 Schritt 9).
 #[test]
 fn the_same_source_yields_the_same_binary() {
     let Some(path) = common::clang_path() else { return };
     let p = corpus(NAME);
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
-    let ir = common::ir_of(&p);
-    let harness = takt_conformance::harness::build_with(&p, &machine, 4, &[]).source;
 
-    // Selbst uebersetzen statt ueber `run_native`: Der Test bestimmt
+    // Selbst uebersetzen statt ueber `run_product`: Der Test bestimmt
     // dann, wo die Dateien liegen und was mit ihnen geschieht — ein
     // Helfer, der sein Verzeichnis aufraeumt, waere hier eine
     // Abhaengigkeit von einem Nebeneffekt.
     let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-repro-bin");
     let _ = std::fs::remove_dir_all(&root);
-    // Die Runtime-Einstiege, die jeder Rahmen ruft (Natives, Treiberrand).
-    let natives = takt_conformance::harness::native_library().unwrap_or_else(|e| panic!("{e}"));
+    let sdk = common::sdk().unwrap_or_else(|e| panic!("{e}"));
     let mut binaries = Vec::new();
     for lauf in 0..2 {
         if lauf == 1 {
             std::thread::sleep(std::time::Duration::from_millis(1100));
         }
         let dir = root.join(format!("lauf{lauf}"));
-        std::fs::create_dir_all(&dir).expect("Verzeichnis");
-        let ll = dir.join("programm.ll");
-        let c = dir.join("rahmen.c");
+        let files = product_sources(&p, takt_conformance::testhost::host_triple(), &dir);
         let exe = dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" });
-        std::fs::write(&ll, &ir).expect("IR");
-        std::fs::write(&c, &harness).expect("Rahmen");
         let mut cmd = std::process::Command::new(&path);
         let out = Clang::deterministic(&mut cmd)
-            .args(["-Wno-override-module", "-O1"])
-            .arg(&ll)
-            .arg(&c)
-            .arg(&natives)
+            .args(["-Wno-override-module", "-O1", "-I"])
+            .arg(&dir)
+            .args(&files)
+            .arg(&sdk)
+            .args(Clang::HOST_LIBS)
             .arg("-o")
             .arg(&exe)
             .output()
@@ -273,39 +284,46 @@ fn every_target_builds_reproducibly() {
     let Some(path) = common::clang_path() else { return };
     assert!(cross_available(), "die aarch64-Werkzeugkette fehlt; tools/Dockerfile.linux baut sie");
     let p = corpus(NAME);
-    let machine = p.machines.first().map(|m| m.name.clone()).expect("Maschine");
-    let harness = takt_conformance::harness::build(&p, &machine, 4).source;
 
     let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-repro-ziel");
     let _ = std::fs::remove_dir_all(&root);
     let mut geprueft = 0;
     for target in [Target::X86_64_LINUX, Target::AARCH64_LINUX] {
-        let ir = common::ir_for(&p, target.triple);
+        let cross = (target == Target::AARCH64_LINUX).then_some(target.triple);
+        let sdk = takt_conformance::harness::sdk_library_with(&takt_conformance::testhost::SDK_FEATURES, cross)
+            .unwrap_or_else(|e| panic!("{}: {e}", target.name));
         let mut binaries = Vec::new();
         for lauf in 0..2 {
             let dir = root.join(format!("{}-{lauf}", target.name));
-            std::fs::create_dir_all(&dir).expect("Verzeichnis");
-            let ll = dir.join("programm.ll");
-            let c = dir.join("rahmen.c");
-            let obj = dir.join("programm.o");
+            let files = product_sources(&p, target.triple, &dir);
+            let (ll, c): (Vec<_>, Vec<_>) = files.iter().partition(|f| f.extension().is_some_and(|e| e == "ll"));
+            let obj = dir.join("app.o");
             let exe = dir.join("lauf");
-            std::fs::write(&ll, &ir).expect("IR");
-            std::fs::write(&c, &harness).expect("Rahmen");
 
             let mut cmd = std::process::Command::new(&path);
             let out = Clang::deterministic(&mut cmd)
                 .args(["-Wno-override-module", "-O1", "-c"])
                 .arg(format!("--target={}", target.triple))
-                .arg(&ll)
+                .args(&ll)
                 .arg("-o")
                 .arg(&obj)
                 .output()
                 .expect("clang");
             assert!(out.status.success(), "{}: {}", target.name, String::from_utf8_lossy(&out.stderr));
 
-            let linker = if target == Target::AARCH64_LINUX { "aarch64-linux-gnu-gcc" } else { "cc" };
+            let linker = if cross.is_some() { "aarch64-linux-gnu-gcc" } else { "cc" };
             let mut cmd = std::process::Command::new(linker);
-            let out = Clang::deterministic(&mut cmd).arg(&c).arg(&obj).arg("-o").arg(&exe).output().expect("Linker");
+            let out = Clang::deterministic(&mut cmd)
+                .arg("-I")
+                .arg(&dir)
+                .args(&c)
+                .arg(&obj)
+                .arg(&sdk)
+                .args(["-lpthread", "-ldl", "-lm"])
+                .arg("-o")
+                .arg(&exe)
+                .output()
+                .expect("Linker");
             assert!(out.status.success(), "{}: {}", target.name, String::from_utf8_lossy(&out.stderr));
             binaries.push(std::fs::read(&exe).expect("Binary"));
         }

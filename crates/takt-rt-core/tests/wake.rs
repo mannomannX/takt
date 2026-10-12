@@ -51,11 +51,13 @@ struct Idle<'a> {
     log: Vec<String>,
     /// Der Kern hat einen Operator-Abort gemeldet (5.4).
     aborted: bool,
+    /// Der Kern hat eine Schutzverletzung gemeldet (12.3).
+    hardware: bool,
 }
 
 impl<'a> Idle<'a> {
     fn new(clock: &'a RefCell<Fake>) -> Idle<'a> {
-        Idle { clock, idle: true, in_state: 0, gain: 0, log: Vec::new(), aborted: false }
+        Idle { clock, idle: true, in_state: 0, gain: 0, log: Vec::new(), aborted: false, hardware: false }
     }
 }
 
@@ -66,6 +68,10 @@ impl Program for Idle<'_> {
         if core::mem::take(&mut self.aborted) {
             self.idle = false;
             self.log.push(format!("t={k} abort"));
+        }
+        if core::mem::take(&mut self.hardware) {
+            self.idle = false;
+            self.log.push(format!("t={k} hardware"));
         }
         if !self.idle {
             return;
@@ -105,6 +111,10 @@ impl Program for Idle<'_> {
 
     fn raise_abort(&mut self) {
         self.aborted = true;
+    }
+
+    fn raise_hardware(&mut self) {
+        self.hardware = true;
     }
 }
 
@@ -312,6 +322,24 @@ fn an_operator_abort_ends_the_sleep_and_acts_at_the_next_boundary() {
     rt.abort();
     rt.step();
     assert_eq!(rt.program.log, ["t=5 abort"]);
+}
+
+/// **Eine Schutzverletzung, die der Port meldet, wirkt wie ein Abort** (12.3,
+/// 9.9; M11 Schritt 9): an der naechsten Grenze, auch aus dem Schlaf, als
+/// `Runtime(Hardware)` vor dem Schritt.
+#[test]
+fn a_hardware_fault_of_the_port_ends_the_sleep_at_the_next_boundary() {
+    let clock = RefCell::new(Fake::default());
+    let mut rt =
+        Runtime::new(Idle::new(&clock), Shared(&clock), Quiet, Slept::default(), Profile::BAREMETAL, T0, Policy::Fault);
+    assert_eq!(rt.service().deadline, 49 * T0);
+    clock.borrow_mut().now = 20 * T0 + 1;
+    rt.hardware_fault();
+    assert_eq!(rt.service().deadline, 21 * T0, "die Meldung zieht die Frist vor");
+    clock.borrow_mut().now = 21 * T0;
+    rt.service();
+    assert_eq!(rt.program.log, ["t=21 hardware"]);
+    assert_eq!(rt.sink.0, 20);
 }
 
 /// **Ruft der Port erst an der Frist, findet `service` die Grenze der

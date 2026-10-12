@@ -17,9 +17,10 @@
 //!
 //! **Warum sie einen eigenen Test brauchen.** Die meisten haben ein
 //! Plant-Modell (8.3) — eine zweite Maschine, die `sim`-Outputs auf
-//! dieselben Adressen schreibt, von denen das Programm liest.
-//! `harness::build_scenario` fuehrt darum alle Maschinen samt dem Szenario,
-//! jede nach ihrer Periode, mit der Bindung `sim` -> `hw` am Ende des Ticks.
+//! dieselben Adressen schreibt, von denen das Programm liest. Der
+//! Produktrahmen fuehrt darum alle Maschinen samt dem Szenario, jede nach
+//! ihrer Periode, mit der Bindung `sim` -> `hw` im Commit; der Stimulus des
+//! Szenarios kommt ueber die Treiber ([`takt_conformance::testhost`]).
 //!
 //! **Unter AddressSanitizer** laufen dieselben Faelle ein zweites Mal
 //! (FB-461): Ein Zugriff neben einen Platz faellt dem Vergleich erst auf,
@@ -28,6 +29,7 @@
 use takt_conformance::harness;
 use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
+use takt_conformance::testhost::Run;
 use takt_diag::Policy;
 use takt_interp::{RunOptions, Trace, run};
 use takt_mir::machine::MachineKind;
@@ -36,15 +38,16 @@ use takt_sema::{Build, Options};
 
 mod common;
 
-/// Bekannte Luecken des Wirtsrahmens: Beispiel, Ausgang, Grund. Jede muss
+/// Bekannte Luecken des Produktrahmens: Beispiel, Ausgang, Grund. Jede muss
 /// noch auftreten — schliesst sich eine, scheitert der Test, bis sie hier
 /// verschwindet; eine neue Abweichung faellt nie hinein.
-const GAPS: &[(&str, &str, &str)] = &[(
-    "14_8",
-    "keys_sim",
-    "FB-402: Der Wirtsrahmen schreibt keinen Record-Ausgang mit `bytes`-Feld. \
-     TODO(M11 Schritt 9): mit dem Produktrahmen",
-)];
+const GAPS: &[(&str, &str, &str)] = &[];
+
+/// Faelle, deren Stimulus im Produkt keinen Weg hat (`differential.rs`,
+/// `GAPS`): Beispiel/Szenario und Grund. Eine Ratsche wie [`GAPS`]: Laeuft
+/// ein Fall wieder, scheitert der Test, bis er hier verschwindet.
+const NO_PATH: &[(&str, &str)] =
+    &[("63_scoped_instances/switch", "der Stimulus liefert an einen Eingang mit `sim`-Bindung (FB-688)")];
 
 /// Was das Modell an einem Beispiel nicht kodiert (FB-497): Beispiel, die
 /// Meldung von `takt_prove::encode` oder `Model::run` und was dahinter
@@ -188,9 +191,15 @@ fn the_reference_examples_agree_on_both_paths() {
             Some(s) => common::run_native_scenario_with(&clang, p, &name, s, case.ticks, &inputs),
             None => common::run_native_all_with(&clang, p, &name, case.ticks, &inputs),
         };
-        let native = match native {
-            Ok(t) => t,
-            Err(e) => {
+        let no_path = NO_PATH.iter().find(|(l, _)| *l == label);
+        let native = match (native, no_path) {
+            (Ok(_), Some((_, why))) => {
+                failed.push(format!("{label}: laeuft im Produkt; den Eintrag in `NO_PATH` entfernen ({why})"));
+                continue;
+            }
+            (Ok(t), None) => t,
+            (Err(_), Some(_)) => continue,
+            (Err(e), None) => {
                 failed.push(format!("{label}: kein nativer Lauf:\n{e}"));
                 continue;
             }
@@ -283,12 +292,12 @@ fn the_reference_examples_run_clean_under_address_sanitizer() {
         let scenario = scenario_machine(&p, &case.scenario);
         let profiled = case.profiled(&p);
         let p = profiled.as_ref().unwrap_or(&p);
-        let h = match &scenario {
-            Some(s) => harness::build_scenario(p, s, case.ticks, &inputs),
-            None => harness::build_restoring(p, None, case.ticks, &inputs, &[]),
-        };
+        if NO_PATH.iter().any(|(l, _)| *l == case.label()) {
+            continue;
+        }
+        let run = Run { ticks: case.ticks, stimulus: &inputs, scenario: scenario.as_deref(), ..Run::default() };
         let name = format!("asan_{}_{}", case.example, case.scenario);
-        if let Err(e) = common::run_native_sanitized(&clang, p, &name, case.ticks, h, &search) {
+        if let Err(e) = common::run_native_sanitized(&clang, p, &name, &run, &search) {
             failed.push(format!("{}:\n{e}", case.label()));
         }
     }

@@ -9,18 +9,12 @@
 //! die Zaehler der Stroeme (8.6, FB-361) und die Beobachtungen `log`,
 //! `measure`, `verify`, `verdict`, `property` und `end` (13.5, 13.3, 12.7).
 //!
-//! **Was nicht verglichen wird, und warum das dasteht.** Der Testrahmen
-//! ist keine Runtime (siehe `harness`): Er hat keine Treiber, also keine
-//! Eingaben; keine Uhr, also keine Zeitquelle; keine Fault-Behandlung,
-//! also keine Abort-Phase. Ein Lauf ohne Eingaben prueft damit den
-//! *Anfangszustand und seine Fortschreibung* — das ist weniger, als die
-//! Abnahme am Ende verlangt, und es steht hier, damit niemand die Zahl
-//! fuer mehr haelt, als sie ist.
-//!
-//! Was er schon prueft, ist nicht wenig: Jede Zuweisung, jeder `check`,
-//! jeder Uebergang und jede Kennlinie eines Programms ohne Eingaben laeuft
-//! durch beide Implementierungen, und ihre Outputs muessen Zeichen fuer
-//! Zeichen gleich sein.
+//! **Was nicht verglichen wird, und warum das dasteht.** Die Metazeilen
+//! `time` und `rec` (12.5: ausserhalb der Semantik), `persist` (die Boards
+//! schreiben sie nicht) und was `observations` auslaesst; was die Abnahme
+//! sonst nicht prueft, fuehrt [`crate::limits`]. Der erzeugte Code laeuft
+//! dafuer im Produktrahmen mit dem Kern des SDK, und der Stimulus kommt
+//! ueber dessen Treiber ([`crate::testhost`]).
 
 use std::collections::BTreeMap;
 
@@ -45,6 +39,11 @@ impl std::fmt::Display for Difference {
 
 /// Die Zeilen `t=<tick> out <name> <wert>`, je Tick und Output in der
 /// Reihenfolge des Traces.
+///
+/// Der Wert ohne Leerraum vor `,`, `)` und `]`: Der Produktrahmen schreibt
+/// jede Zahl mit einem Leerzeichen dahinter (`takt_board_trace_i64`), auch
+/// in einem Record oder einer Liste (`Timing(90 min, 0 )`, FB-690). Das ist
+/// Schreibweise, kein Wert; verglichen wird Zeichen fuer Zeichen danach.
 fn outputs(text: &str) -> BTreeMap<(u64, String), Vec<String>> {
     let mut out = BTreeMap::new();
     for line in text.lines() {
@@ -56,8 +55,8 @@ fn outputs(text: &str) -> BTreeMap<(u64, String), Vec<String>> {
             continue;
         }
         let Some(name) = w.next() else { continue };
-        let value: Vec<&str> = w.collect();
-        out.entry((t, name.to_string())).or_insert_with(Vec::new).push(value.join(" "));
+        let value = w.collect::<Vec<&str>>().join(" ").replace(" ,", ",").replace(" )", ")").replace(" ]", "]");
+        out.entry((t, name.to_string())).or_insert_with(Vec::new).push(value);
     }
     out
 }
@@ -92,8 +91,8 @@ pub fn f32_outputs(p: &takt_mir::Program) -> std::collections::BTreeSet<String> 
 /// Code sie schreibt: als ihren Wert in `f64`.
 ///
 /// Der Interpreter schreibt ein `f32` in seiner kuerzesten Form, der
-/// Wirtsrahmen nach `(double)` mit 17 Stellen und die Boards in der
-/// kuerzesten Form des `f64`; [`compare`] liest alle als `f64` und
+/// Produktrahmen in der kuerzesten Form des `f64`; [`compare`] liest beide
+/// als `f64` und
 /// vergliche sonst Schreibweisen statt Bits. Nur die genannten Outputs: Fuer
 /// einen `f64`-Output waere dieselbe Lesart eine Lockerung.
 pub fn widen_f32(trace: &str, outputs: &std::collections::BTreeSet<String>) -> String {
@@ -149,8 +148,8 @@ pub fn recorded_inputs(native: &str) -> String {
 /// schreibt, jeder Output, den beide schon gemeldet haben. Schreiben beide
 /// einen Output mehrmals im selben Tick — den Wert vor und nach dem Ende
 /// eines Laufs (12.7) —, zaehlt die Folge ihrer Aenderungen und nicht nur
-/// ihr letzter Wert; ein Wert gleich dem geltenden ist keine Aenderung,
-/// weil der Wirtsrahmen jeden Output je Abzug schreibt.
+/// ihr letzter Wert; ein Wert gleich dem geltenden ist keine Aenderung
+/// (9.3), wie oft ein Rahmen ihn auch schreibt.
 ///
 /// **Ein Vergleich besteht nicht leer** (FB-391). Zeigt nur eine Seite
 /// Beobachtbares — ein Lauf, der nicht startete, ein Interpreter, der
@@ -274,13 +273,16 @@ fn observed(trace: &str) -> bool {
 }
 
 /// Die Beobachtungszeilen eines Traces (5.6, 12.7, 13.3, 13.5): je Tick
-/// Art und Ausgang, sortiert.
+/// Art, Maschine und Ausgang, sortiert.
 ///
-/// Der Interpreter nennt Maschine und Text, der erzeugte Code Nummer der
-/// Maschine und Stelle (`log <m> <stelle>`); gemeinsam ist beiden, was im
-/// Tick geschah: wie viele `log`, welche `measure`-Werte, welche `verify`
-/// und `verdict` mit welchem Ausgang, welche Verletzung an welcher Position
-/// (`property`, `assumption`) und welches Ende eines Laufs (`end`).
+/// Beide Seiten nennen die Maschine beim Namen (FB-391); danach schreibt der
+/// Interpreter Text, Urteil oder Namen der Messung, der erzeugte Code die
+/// Nummer der Stelle (`log <maschine> <stelle>`). Gemeinsam ist beiden, was
+/// im Tick in welcher Maschine geschah: wie viele `log`, welche
+/// `measure`-Werte, welche `verify` und `verdict` mit welchem Ausgang,
+/// welche Verletzung welcher Eigenschaft an welcher Position (`property`,
+/// `assumption`, beide Seiten gleich geschrieben) und welches Ende eines
+/// Laufs (`end`).
 ///
 /// Nicht verglichen werden `end scenario` (das Ende waehlt der Interpreter,
 /// der Rahmen laeuft die Ticks zu Ende), `abort` (der Interpreter schreibt
@@ -295,33 +297,33 @@ fn observations(trace: &str) -> BTreeMap<u64, Vec<String>> {
         let Some((tick, rest)) = rest.split_once(' ') else { continue };
         let Ok(tick) = tick.parse::<u64>() else { continue };
         let words: Vec<&str> = rest.split_whitespace().collect();
-        // Eine Maschine nennt der erzeugte Code mit ihrer Nummer, der
-        // Interpreter mit ihrem Namen, und der beginnt nie mit einer Ziffer.
-        let native = words.get(1).is_some_and(|m| m.parse::<i64>().is_ok());
+        // Die Stelle schreibt nur der erzeugte Code, als Zahl; der
+        // Interpreter schreibt dort Text in Anfuehrungszeichen, ein Urteil
+        // oder den Namen der Messung.
+        let native = words.get(2).is_some_and(|s| s.parse::<i64>().is_ok());
         let key = match words.as_slice() {
-            ["log", ..] => "log".to_string(),
-            ["verify", _, _, ok] if native => format!("verify {}", if *ok == "1" { "ok" } else { "fail" }),
-            ["verify", _, ok, ..] => format!("verify {ok}"),
-            ["verdict", _, _, pass] if native => format!("verdict {}", if *pass == "1" { "pass" } else { "fail" }),
-            ["verdict", _, pass, ..] => format!("verdict {pass}"),
-            ["measure", _, _, "bits", bits] if native => {
+            ["log", m, ..] => format!("log {m}"),
+            ["verify", m, _, ok] if native => format!("verify {m} {}", if *ok == "1" { "ok" } else { "fail" }),
+            ["verify", m, ok, ..] => format!("verify {m} {ok}"),
+            ["verdict", m, _, pass] if native => format!("verdict {m} {}", if *pass == "1" { "pass" } else { "fail" }),
+            ["verdict", m, pass, ..] => format!("verdict {m} {pass}"),
+            ["measure", m, _, "bits", bits] if native => {
                 format!(
-                    "measure {}",
+                    "measure {m} {}",
                     bits.parse::<i64>().map_or_else(|_| bits.to_string(), |b| measured(f64::from_bits(b as u64)))
                 )
             }
-            ["measure", _, _, value, unit] if !native => match nanoseconds(value, unit) {
-                Some(ns) => format!("measure {}", measured(ns as f64)),
-                None => format!("measure {}", value.parse::<f64>().map_or_else(|_| value.to_string(), measured)),
+            ["measure", m, _, value, unit] if !native => match nanoseconds(value, unit) {
+                Some(ns) => format!("measure {m} {}", measured(ns as f64)),
+                None => format!("measure {m} {}", value.parse::<f64>().map_or_else(|_| value.to_string(), measured)),
             },
-            ["measure", _, _, value, ..] => {
-                format!("measure {}", value.parse::<f64>().map_or_else(|_| value.to_string(), measured))
+            ["measure", m, _, value, ..] => {
+                format!("measure {m} {}", value.parse::<f64>().map_or_else(|_| value.to_string(), measured))
             }
-            ["property", _, at] if native => format!("property {at}"),
             // 5.8, 4.5 (FB-432): Beide Rahmen nennen Maschine, Signal und Handle beim Namen.
             ["signal", machine, name] => format!("signal {machine} {name}"),
             ["job", machine, handle, event, start] => format!("job {machine} {handle} {event} {start}"),
-            ["property" | "assumption", _, "violated", at] => format!("property {at}"),
+            [kind @ ("property" | "assumption"), name, "violated", at] => format!("{kind} {name} {at}"),
             ["end", "scenario"] => continue,
             ["end", word] => format!("end {word}"),
             _ => continue,
@@ -354,8 +356,8 @@ fn nanoseconds(value: &str, unit: &str) -> Option<i64> {
 }
 
 /// Ein gemessener Wert als sein Bitmuster: Der Interpreter schreibt ihn in
-/// seiner kuerzesten Form mit Einheit, der Wirtsrahmen mit `%.17g`, die
-/// Boards als Bits (Satz 9.4.4 verlangt dasselbe Bit).
+/// seiner kuerzesten Form mit Einheit, der Produktrahmen als Bits (Satz
+/// 9.4.4 verlangt dasselbe Bit).
 fn measured(v: f64) -> String {
     format!("{:#018x}", v.to_bits())
 }
@@ -596,8 +598,8 @@ mod tests {
         assert_eq!(compare(want, "t=5 out r NONE\n").len(), 1);
     }
 
-    /// Der Wirtsrahmen schreibt jeden Output je Abzug; ein Wert, der den
-    /// geltenden nur wiederholt, ist keine Aenderung (9.3).
+    /// Ein Wert, der den geltenden nur wiederholt, ist keine Aenderung
+    /// (9.3), wie oft ein Rahmen ihn auch schreibt.
     #[test]
     fn a_repeated_value_is_no_change() {
         assert!(compare("t=5 out led false\n", "t=5 out led 0\nt=5 out led 0\n").is_empty());
@@ -664,27 +666,33 @@ mod tests {
         assert_eq!(compare(want, "t=0 out a 1\nt=4 out a 1\n").len(), 1);
     }
 
-    /// Jede Beobachtung vergleicht sich je Tick nach Art und Ausgang
-    /// (13.5, 13.3, 12.7): der Interpreter mit Maschine und Text, der
-    /// Wirtsrahmen und die Boards mit Nummern und Stelle.
+    /// Jede Beobachtung vergleicht sich je Tick nach Art, Maschine und
+    /// Ausgang (13.5, 13.3, 12.7; FB-391): der Interpreter mit Text, der
+    /// Produktrahmen mit der Stelle.
     #[test]
-    fn every_observation_compares_by_tick_kind_and_outcome() {
+    fn every_observation_compares_by_tick_kind_machine_and_outcome() {
         let base = "t=0 out a 1\nt=9 out a 2\n";
         for (interpreted, native, other) in [
-            ("t=2 log m \"hallo welt\"", "t=2 log 0 7", "t=3 log 0 7"),
-            ("t=2 verify m ok \"p > 0\"", "t=2 verify 0 3 1", "t=2 verify 0 3 0"),
-            ("t=2 verify m fail \"p > 0\"", "t=2 verify 1 3 0", "t=2 verify 1 3 1"),
-            ("t=2 verdict s pass", "t=2 verdict 2 0 1", "t=2 verdict 2 0 0"),
-            ("t=2 verdict s fail \"zu spaet\"", "t=2 verdict 2 0 0", "t=2 verdict 2 0 1"),
-            ("t=2 measure m level 0.5 bar", "t=2 measure 0 1 0.5", "t=2 measure 0 1 0.25"),
-            ("t=2 measure m level 0.5 bar", "t=2 measure 0 1 bits 4602678819172646912", "t=2 measure 0 1 bits 0"),
-            ("t=2 measure m level <invalid>", "t=2 measure 0 1 <invalid>", "t=2 measure 0 1 0"),
+            ("t=2 log m \"hallo welt\"", "t=2 log m 7 ", "t=3 log m 7 "),
+            ("t=2 log m \"hallo welt\"", "t=2 log m 7 ", "t=2 log n 7 "),
+            ("t=2 verify m ok \"p > 0\"", "t=2 verify m 3 1 ", "t=2 verify m 3 0 "),
+            ("t=2 verify m ok \"p > 0\"", "t=2 verify m 3 1 ", "t=2 verify n 3 1 "),
+            ("t=2 verify m fail \"p > 0\"", "t=2 verify m 3 0 ", "t=2 verify m 3 1 "),
+            ("t=2 verdict s pass", "t=2 verdict s 0 1 ", "t=2 verdict s 0 0 "),
+            ("t=2 verdict s pass", "t=2 verdict s 0 1 ", "t=2 verdict m 0 1 "),
+            ("t=2 verdict s fail \"zu spaet\"", "t=2 verdict s 0 0 ", "t=2 verdict s 0 1 "),
+            ("t=2 measure m level 0.5 bar", "t=2 measure m 1 bits 4602678819172646912 ", "t=2 measure m 1 bits 0 "),
+            (
+                "t=2 measure m level 0.5 bar",
+                "t=2 measure m 1 bits 4602678819172646912 ",
+                "t=2 measure n 1 bits 4602678819172646912 ",
+            ),
+            ("t=2 measure m level <invalid>", "t=2 measure m 1 <invalid>", "t=2 measure m 1 bits 0 "),
             // Eine Dauer schreibt der Interpreter mit Einheit, der Rahmen in ns.
-            ("t=2 measure m wait 82 ms", "t=2 measure 0 1 82000000", "t=2 measure 0 1 82"),
-            ("t=2 measure m wait 82 ms", "t=2 measure 0 1 bits 4725275336332279808", "t=2 measure 0 1 bits 0"),
-            ("t=2 measure m wait -3 s", "t=2 measure 0 1 -3000000000", "t=2 measure 0 1 -3"),
-            ("t=7 property disarms violated 2", "t=7 property 0 2", "t=7 property 0 3"),
-            ("t=7 assumption rare violated 7", "t=7 property 1 7", "t=8 property 1 7"),
+            ("t=2 measure m wait 82 ms", "t=2 measure m 1 bits 4725275336332279808 ", "t=2 measure m 1 bits 0 "),
+            ("t=7 property disarms violated 2", "t=7 property disarms violated 2 ", "t=7 property disarms violated 3 "),
+            ("t=7 property disarms violated 2", "t=7 property disarms violated 2 ", "t=7 property other violated 2 "),
+            ("t=7 assumption rare violated 7", "t=7 assumption rare violated 7 ", "t=7 property rare violated 7 "),
             ("t=5 end deep_sleep", "t=5 end deep_sleep", "t=5 end restart"),
         ] {
             let want = format!("{base}{interpreted}\n");
@@ -696,6 +704,15 @@ mod tests {
             let d = compare(base, &format!("{base}{native}\n"));
             assert!(d.iter().any(|d| d.output == "observation"), "{native} nur nativ: {d:?}");
         }
+    }
+
+    /// Leerraum vor `,`, `)` und `]` ist Schreibweise des Produktrahmens,
+    /// kein Wert (FB-690); ein anderer Wert bleibt eine Abweichung.
+    #[test]
+    fn spaces_inside_a_composite_value_are_no_value() {
+        let want = "t=1 out r UartData(0, [0, 0, 0])\n";
+        assert!(compare(want, "t=1 out r UartData(0 , [0 , 0 , 0 ]) \n").is_empty());
+        assert_eq!(compare(want, "t=1 out r UartData(0 , [0 , 1 , 0 ]) \n").len(), 1);
     }
 
     /// Das Ende eines Szenarios waehlt der Interpreter (13.6); der Rahmen

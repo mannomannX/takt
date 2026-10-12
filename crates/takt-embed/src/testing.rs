@@ -314,8 +314,9 @@ pub fn same_as_interpreter(source: impl AsRef<Path>, ticks: u64, trace: &str) ->
 /// Wie [`same_as_interpreter`], und der Interpreter sieht `stimulus` in
 /// der Form eines Traces (`grammar/trace.md`: `in`, `cmd`, `runtime`, …):
 /// dieselben Eingaben, die die Treiber des Tests zu denselben Ticks liefern.
-/// Beide Seiten haelt der Test von Hand gleich. TODO(M11 Schritt 9): der
-/// Stimulus als Testtreiber, eine Quelle fuer beide Seiten.
+/// Beide Seiten haelt der Test von Hand gleich. TODO(FB-692): der Stimulus
+/// als Testtreiber der Rust-Huelle, eine Quelle fuer beide Seiten, wie der
+/// Testwirt des Differentials (`takt_conformance::testhost`).
 ///
 /// # Errors
 ///

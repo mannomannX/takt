@@ -45,7 +45,7 @@ fn corpus(name: &str) -> takt_mir::Program {
 /// kein `printf` (12.3) — und keine Funktion der ABI, die der Rahmen selbst
 /// stellen muss.
 fn board_provides(symbol: &str) -> bool {
-    const PREFIXES: [&str; 12] = [
+    const PREFIXES: [&str; 13] = [
         "app_in_",
         "app_sys_",
         "app_out_",
@@ -53,6 +53,7 @@ fn board_provides(symbol: &str) -> bool {
         "app_free_",
         "app_idle_",
         "app_alive_",
+        "app_cmd_",
         "takt_board_",
         "takt_edge_",
         "takt_native_",
@@ -240,7 +241,7 @@ fn the_jitter_of_an_output_comes_from_the_configuration() {
 
 /// **Ein `sim`-gespeister Eingang hat schon in Tick 0 seine Quelle**
 /// (8.3, FB-348): `init` bindet nach den `safe`-Werten und vor dem ersten
-/// `enter:`, wie der Wirtsrahmen und `Sim::new`.
+/// `enter:`, wie `Sim::new`.
 #[test]
 fn a_simulated_input_is_fed_before_tick_0() {
     let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
@@ -571,9 +572,12 @@ fn every_observation_line_carries_its_tick() {
     for (name, p, kinds) in cases {
         let src = takt_frame::mcu::build(&p).source;
         for kind in kinds {
+            // Eine Verletzung schreibt der Rahmen mit ihrem Namen aus einer
+            // Tabelle (FB-391).
             let at = src
                 .find(&format!("takt_board_trace(\"{kind} "))
                 .or_else(|| src.find(&format!("takt_board_trace(\"{kind}\\n")))
+                .or_else(|| (*kind == "property").then(|| src.find("takt_board_trace(names[i]);")).flatten())
                 .unwrap_or_else(|| panic!("{name}: `{kind}` fehlt im Rahmen"));
             // Die beiden Aufrufe davor schreiben `t=` und den Tick.
             let before: Vec<&str> = src[..at].lines().rev().skip(1).take(2).map(str::trim).collect();

@@ -76,10 +76,12 @@ fn the_hardware_build_reads_the_sensor_and_links_no_model() {
     let manifest = read(&hw, "plant.manifest");
     assert!(manifest.contains("plant_in_daq1_ai0"), "kein Treiber fuer den Sensor:\n{manifest}");
 
-    // Im Sim-Build speist das Modell den Eingang, und es laeuft mit.
+    // Im Sim-Build speist das Modell den Eingang, und es laeuft mit. Sein
+    // Treiber darf ihn in einem Tick treiben wie ein Stimulus (8.3, M11
+    // Schritt 9); liefert er nichts, gilt das Modell.
     let sim = deliver("sensor_sim", "sim", &[]);
     assert!(read(&sim, "plant_frame.c").contains("plant_model_step"), "das Modell fehlt im Sim-Build");
-    assert!(!read(&sim, "plant.manifest").contains("plant_in_daq1_ai0"), "der Sim-Build hat einen Sensortreiber");
+    assert!(read(&sim, "plant.manifest").contains("plant_in_daq1_ai0"), "kein Treiber neben dem Modell");
 }
 
 #[test]

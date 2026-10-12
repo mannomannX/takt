@@ -15,10 +15,13 @@
 //!
 //! **Wie der erzeugte Code laeuft.** Er braucht eine Umgebung: das
 //! Prozessabbild, den Parametervektor, den Latch und die Runtime-Aufrufe
-//! (`takt-llvm/src/abi.rs`, `image.rs`, `stream.rs`). `harness` erzeugt
-//! sie als C, weil C dieselbe ABI spricht wie der erzeugte Code und weil
-//! clang beides in einem Zug uebersetzt — ein Rust-Gegenstueck braeuchte
-//! `unsafe` und `extern "C"`, was der Workspace verbietet.
+//! (`takt-llvm/src/abi.rs`, `image.rs`, `stream.rs`). Auf dem Wirt stellt
+//! sie derselbe Produktrahmen wie auf jedem Board (`takt_frame::mcu`), mit
+//! dem Kern des SDK; `testhost` erzeugt dazu den Wirt in C, dessen Treiber
+//! den Stimulus liefern (M11 Schritt 9). C, weil C dieselbe ABI spricht wie
+//! der erzeugte Code und clang alles in einem Zug uebersetzt — ein
+//! Rust-Gegenstueck braeuchte `unsafe` und `extern "C"`, was der Workspace
+//! verbietet.
 
 #![cfg_attr(
     not(test),
@@ -57,10 +60,10 @@ pub mod report;
 pub mod run;
 pub mod stimulus;
 pub mod suites;
+pub mod testhost;
 pub mod wire;
 pub mod zephyr;
 
-pub use harness::Harness;
 pub use limits::LIMITS;
 pub use run::{Difference, compare};
 pub use stimulus::Stimulus;

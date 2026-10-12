@@ -209,12 +209,11 @@ fn generated_machines_agree() {
             rejected += 1;
             continue;
         };
-        let machine = match p.machines.first().map(|m| m.name.clone()) {
-            Some(m) => m,
-            None => continue,
-        };
+        if p.machines.is_empty() {
+            continue;
+        }
         let name = format!("fuzzm{round}");
-        let native = match common::run_native(&clang, &p, &name, &machine, TICKS) {
+        let native = match common::run_native_all(&clang, &p, &name, TICKS) {
             Ok(t) => t,
             Err(e) => {
                 // Jedes Programm, das die Sema annimmt, senkt der Codegen ganz

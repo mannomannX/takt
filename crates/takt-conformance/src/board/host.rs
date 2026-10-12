@@ -237,7 +237,7 @@ impl Board for Host {
 }
 
 impl Host {
-    /// Das Programm mit dem Wirtsrahmen als ausfuehrbare Datei, aus dem
+    /// Das Programm mit seinem Rahmen als ausfuehrbare Datei, aus dem
     /// Zwischenspeicher oder frisch gebaut ([`Board::build`]).
     fn image(&self, program: &Path, options: &Options) -> Result<PathBuf, String> {
         if options.bin != Bin::Takt

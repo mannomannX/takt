@@ -1,11 +1,11 @@
 //! Der Rahmen, der ein Takt-Programm auf einer MCU ausfuehrt (12.1, 12.3).
 //!
-//! **Dieselbe Konstruktion wie der Wirtsrahmen, ein anderes Ziel.** Der
-//! erzeugte Code spricht die C-ABI, und der Workspace verbietet
-//! `extern "C"` (13.4) — also erzeugen beide Rahmen C, aus denselben
-//! Bausteinen ([`crate::parts`]). Was diesen Rahmen vom Wirtsrahmen des
-//! Differentials (`takt-conformance`) unterscheidet, sind drei Dinge, und
-//! jedes folgt aus 12.3:
+//! **Ein Rahmen fuer jedes Ziel** (M11 Schritt 9). Der erzeugte Code
+//! spricht die C-ABI, und der Workspace verbietet `extern "C"` (13.4) —
+//! also ist der Rahmen C, aus den Bausteinen in [`crate::parts`]. Boards,
+//! C- und Rust-Wirte binden ihn, und das Differential faehrt ihn auf dem
+//! Wirt mit dem Kern des SDK (`takt_conformance::testhost`). Drei Dinge
+//! folgen dabei aus 12.3:
 //!
 //! 1. **Keine `stdio`.** Auf der MCU gibt es keine libc; die Telemetrie
 //!    geht ueber USART, und das Board stellt die Funktion.
@@ -133,7 +133,7 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     crate::parts::natives(&mut t.code, p);
     // Die Stroeme wie im Linux-Rahmen, ohne Stimulus; ihre Trace-Zeilen
     // gehen an das Board.
-    crate::streams::emit(&mut t, p, crate::streams::Trace::Board, x);
+    crate::streams::emit(&mut t, p, x);
     // 9.8: die geplanten Schreibvorgaenge, hinter dem Latch, weil
     // `apply_scheduled` ihn schreibt.
     crate::parts::scheduled(&mut t, p, &layout, hw, x);
@@ -150,7 +150,7 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
         t.code.push_str(&crate::drivers::c_stubs(&drivers, x));
     }
     // 12.6: der Treiberrand vor dem Abtasten, das ihn speist.
-    crate::edge::emit(&mut t, p, &layout, &driven, deliveries(p, &layout, x), crate::streams::Trace::Board, x);
+    crate::edge::emit(&mut t, p, &layout, &driven, deliveries(p, &layout, x), x);
     init(&mut t.code, p, &layout, &driven, x);
     tick(&mut t, p, &layout, &driven, x);
     telemetry(&mut t, p, &layout, &driven, diagnostics, x);
@@ -203,7 +203,7 @@ pub fn tick_path(x: &Prefix) -> Vec<String> {
         "hardware",
         "tolerance",
         "output_timing",
-        "abort",
+        "operator_abort",
         "job_dispatch",
         "jobs_busy",
         "persist_snapshot",
@@ -238,7 +238,7 @@ fn entry_prototypes(x: &Prefix, logic: &str) -> String {
         format!("int64_t {x}_output({a}, int32_t index);"),
         format!("void {x}_overrun({a});"),
         format!("void {x}_hardware({a});"),
-        format!("void {x}_abort({a});"),
+        format!("void {x}_operator_abort({a});"),
         format!("void {x}_tolerance(int64_t *ns, uint32_t *runs);"),
         format!("uint8_t {x}_output_timing(void);"),
         format!("int32_t {x}_job_dispatch({a});"),
@@ -516,7 +516,8 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
         let _ = writeln!(s, "    takt_board_trace(\"t=\");");
         let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
         let _ = writeln!(s, "    takt_board_trace(\"{kind} \");");
-        let _ = writeln!(s, "    takt_board_trace_i64(m);");
+        let _ = writeln!(s, "    takt_board_trace(takt_machine_name(m));");
+        let _ = writeln!(s, "    takt_board_trace(\" \");");
         let _ = writeln!(s, "    takt_board_trace_i64(site);");
         for f in flags {
             let _ = writeln!(s, "    takt_board_trace_i64({f} ? 1 : 0);");
@@ -531,7 +532,8 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
     let _ = writeln!(s, "    takt_board_trace(\"abort \");");
-    let _ = writeln!(s, "    takt_board_trace_i64(m);");
+    let _ = writeln!(s, "    takt_board_trace(takt_machine_name(m));");
+    let _ = writeln!(s, "    takt_board_trace(\" \");");
     let _ = writeln!(s, "    takt_board_trace_i64(site);");
     let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "    memset(a->raised, 1, sizeof a->raised);");
@@ -573,7 +575,8 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    takt_board_trace(\"t=\");");
     let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
     let _ = writeln!(s, "    takt_board_trace(\"measure \");");
-    let _ = writeln!(s, "    takt_board_trace_i64(m);");
+    let _ = writeln!(s, "    takt_board_trace(takt_machine_name(m));");
+    let _ = writeln!(s, "    takt_board_trace(\" \");");
     let _ = writeln!(s, "    takt_board_trace_i64(site);");
     let _ = writeln!(s, "    if (invalid) {{");
     let _ = writeln!(s, "        takt_board_trace(\"<invalid>\\n\");");
@@ -584,14 +587,28 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
     let _ = writeln!(s, "}}\n");
 
-    // 13.3: Ein Monitor meldet Index und Position, wie im Linux-Rahmen.
+    // 13.3: Ein Monitor meldet die Verletzung mit Art und Namen der
+    // Eigenschaft und ihrer Position, wie der Interpreter (FB-391).
+    let names: Vec<String> = p
+        .properties
+        .iter()
+        .map(|q| format!("\"{} {} violated \"", if q.assumption { "assumption" } else { "property" }, q.name))
+        .collect();
     let _ = writeln!(s, "void {x}_property(struct {x}_arena *a, int i, long long at) {{");
-    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
-    let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
-    let _ = writeln!(s, "    takt_board_trace(\"property \");");
-    let _ = writeln!(s, "    takt_board_trace_i64(i);");
-    let _ = writeln!(s, "    takt_board_trace_i64(at);");
-    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    if names.is_empty() {
+        // Ohne Eigenschaft ruft kein Monitor.
+        let _ = writeln!(s, "    (void)a; (void)i; (void)at;");
+    } else {
+        let _ = writeln!(s, "    static const char *const names[{}] = {{ {} }};", names.len(), names.join(", "));
+        let _ = writeln!(s, "    if ((i < 0) || (i >= {})) {{", names.len());
+        let _ = writeln!(s, "        return;");
+        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "    takt_board_trace(\"t=\");");
+        let _ = writeln!(s, "    takt_board_trace_i64(a->tick);");
+        let _ = writeln!(s, "    takt_board_trace(names[i]);");
+        let _ = writeln!(s, "    takt_board_trace_i64(at);");
+        let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    }
     let _ = writeln!(s, "}}\n");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "void {x}_monitor_{i}(struct {x}_arena *a, long long tick);");
@@ -886,7 +903,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
         let _ = writeln!(s, "    takt_jobs_init(a);");
     }
     // 9.4: Der Lauf beginnt mit den Outputs auf `safe`, vor jedem Init —
-    // wie `Sim::new` und der Wirtsrahmen. Danach bindet die Simulation,
+    // wie `Sim::new`. Danach bindet die Simulation,
     // damit Tick 0 die `safe`-Werte eines Modells liest (8.3).
     crate::parts::safe_outputs(s, p, layout);
     crate::parts::sim_bindings(s, p, "    ");
@@ -927,7 +944,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 
 /// `P_tick`: ein Tick, von der Schleife gerufen.
 fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
-    let _ = writeln!(t.fields, "    _Bool overrun, hardware, abort;");
+    let _ = writeln!(t.fields, "    _Bool overrun, hardware, operator_abort;");
     // 12.11: die Eintrittssperre ([`locked`]).
     let _ = writeln!(t.fields, "    unsigned int entered;");
     let _ = writeln!(t.fields, "    _Bool driver_fault[{}];", driver_outputs(p, layout).len().max(1));
@@ -943,7 +960,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(s, "void {x}_hardware(struct {x}_arena *a) {{ a->hardware = 1; }}");
     // 5.4, 9.4: Der Bediener bricht ab; der Kern meldet es vor dem naechsten
     // Tick wie einen Ueberlauf, und die Zeile `abort` zeichnet es auf (12.5).
-    let _ = writeln!(s, "void {x}_abort(struct {x}_arena *a) {{ a->abort = 1; }}");
+    let _ = writeln!(s, "void {x}_operator_abort(struct {x}_arena *a) {{ a->operator_abort = 1; }}");
     // 7.1, 12.6 Zeile 7: die Toleranz der Tickquelle fuer die Schleife.
     let (ns, runs) = p.config.tolerance();
     let _ = writeln!(s, "void {x}_tolerance(int64_t *ns, uint32_t *runs) {{ *ns = {ns}LL; *runs = {runs}u; }}");
@@ -981,8 +998,8 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
         takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Hardware))
     );
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    if (a->abort) {{");
-    let _ = writeln!(s, "        a->abort = 0;");
+    let _ = writeln!(s, "    if (a->operator_abort) {{");
+    let _ = writeln!(s, "        a->operator_abort = 0;");
     let _ = writeln!(s, "        takt_board_trace(\"t=\");");
     let _ = writeln!(s, "        takt_board_trace_i64(k);");
     let _ = writeln!(s, "        takt_board_trace(\"abort\\n\");");
@@ -1021,7 +1038,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(s, "    takt_sim_streams(a, takt_ticks_ns(k));");
     crate::parts::steps(s, p, layout, driven, "    ", "k", x);
     crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
-    crate::parts::signal_lines(s, p, driven, "    ", "k", crate::streams::Trace::Board);
+    crate::parts::signal_lines(s, p, driven, "    ", "k");
     crate::parts::idle_drops(s, p, driven, "    ", x);
     crate::parts::commit_sequence(s, p, driven, "    ", "k");
     crate::ports::sample(s, p, "    ");
@@ -1089,15 +1106,14 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let same = match b.ct {
             Some(ct) => {
                 let _ = writeln!(s, "        {ct} v = 0;");
-                let _ =
-                    writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t) ? 1 : 0;", b.function);
+                let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
                 format!("memcmp(&v, a->wake_v[{w}], sizeof v)")
             }
             None => {
                 let buf = format!("a->edge_in{}", b.channel);
                 let _ = writeln!(
                     s,
-                    "        uint8_t got = {}(a->user, now, {buf}, {}, &q, &r, &age, &t) ? 1 : 0;",
+                    "        uint8_t got = {}(a->user, now, {buf}, {}, &q, &r, &age, &t);",
                     b.function, b.size
                 );
                 format!("memcmp({buf}, a->wake_b{w}, {})", b.size)
@@ -1106,7 +1122,7 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "        if (got != a->wake_got[{w}]) return 1;");
         let _ = writeln!(
             s,
-            "        if (got && (q != a->wake_q[{w}] || r != a->wake_r[{w}] || age != a->wake_age[{w}] || {same})) return 1;"
+            "        if (got != 0 && (q != a->wake_q[{w}] || r != a->wake_r[{w}] || age != a->wake_age[{w}] || (got == 1 && {same}))) return 1;"
         );
         let name = &p.channels[b.channel].name;
         let aged = (
@@ -1116,7 +1132,7 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         );
         if let (Some(max), Some(age), Some(q)) = aged {
             // Wie `aging` an dieser Grenze: alle Ticks seit dem letzten.
-            let _ = writeln!(s, "        if (!got && a->image[{q}] != 2 && a->image[{q}] != 3) {{");
+            let _ = writeln!(s, "        if (got == 0 && a->image[{q}] != 2 && a->image[{q}] != 3) {{");
             let _ = writeln!(s, "            long long at; __builtin_memcpy(&at, a->image + {age}, sizeof at);");
             let _ = writeln!(s, "            long long d = takt_ticks_ns(k - a->tick);");
             let _ = writeln!(s, "            if (at > {}LL - d || at + d > {max}LL) return 1;", i64::MAX);
@@ -1168,7 +1184,7 @@ fn next_run_code(end: takt_mir::sys::NextRun) -> i32 {
 }
 
 /// `P_next_run` und `P_end`: das Ende des Laufs (12.7), wie im
-/// Wirtsrahmen — die Zeile `end`, dann alle Ausgaenge auf `safe`. Was
+/// Interpreter — die Zeile `end`, dann alle Ausgaenge auf `safe`. Was
 /// zwischen zwei Laeufen geschieht, fuehrt das Board aus.
 fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     let next = crate::parts::next_run_slot(p, layout);
@@ -1376,7 +1392,7 @@ fn telemetry(
     let _ = writeln!(s, "struct takt_variant;");
     let _ = writeln!(
         s,
-        "struct takt_field {{ const struct takt_variant *names; unsigned short off; unsigned char kind, n_names; }};"
+        "struct takt_field {{ const struct takt_variant *names; unsigned short off; unsigned char kind; unsigned int n; }};"
     );
     let _ = writeln!(
         s,
@@ -1472,6 +1488,9 @@ fn telemetry(
         rows.push("    { \"\", 0, 0, 0, 0, 0, 0 },".to_string());
     }
     let _ = writeln!(s, "static const struct takt_out g_outs[] = {{\n{}\n}};", rows.join("\n"));
+    let bytes = kinds.contains(&BYTES);
+    let arrays = named.iter().any(|n| n.starts_with("g_arr"));
+    kinds.retain(|k| *k != BYTES);
     let _ = writeln!(s, "static int takt_same(const unsigned char *x, const unsigned char *y, unsigned n) {{");
     let _ = writeln!(s, "    while (n--) if (*x++ != *y++) return 0;");
     let _ = writeln!(s, "    return 1;");
@@ -1485,12 +1504,43 @@ fn telemetry(
     let _ = writeln!(s, "    default: return 0;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "}}");
+    if bytes {
+        // `bytes<N>` liegt als Laenge (`i32`) und `N` Bytes ab Versatz 4
+        // (`takt_llvm::ty::lower`); geschrieben wie `value_text` (9.3).
+        let _ = writeln!(s, "static void takt_dump_bytes(const unsigned char *at, unsigned int cap) {{");
+        let _ = writeln!(s, "    int len;");
+        let _ = writeln!(s, "    __builtin_memcpy(&len, at, sizeof len);");
+        let _ = writeln!(s, "    unsigned int n = len < 0 ? 0u : (unsigned int)len;");
+        let _ = writeln!(s, "    if (n > cap) n = cap;");
+        let _ = writeln!(s, "    takt_board_trace(\"[\");");
+        let _ = writeln!(s, "    for (unsigned int i = 0; i < n; i++) {{");
+        let _ = writeln!(s, "        if (i) takt_board_trace(\", \");");
+        let _ = writeln!(s, "        takt_board_trace_hex8(at[4 + i]);");
+        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "    takt_board_trace(\"]\");");
+        let _ = writeln!(s, "}}");
+    }
     let _ = writeln!(s, "static void takt_dump_fields(const struct takt_variant *x, const unsigned char *at);");
     let _ = writeln!(s, "static void takt_dump_field(const struct takt_field *f, const unsigned char *at) {{");
     let _ = writeln!(s, "    if (f->kind == {RECORD}) {{ takt_dump_fields(f->names, at); return; }}");
+    if bytes {
+        let _ = writeln!(s, "    if (f->kind == {BYTES}) {{ takt_dump_bytes(at, f->n); return; }}");
+    }
+    if arrays {
+        let _ = writeln!(s, "    if (f->kind == {ARRAY}) {{");
+        let _ = writeln!(s, "        const struct takt_field *e = &f->names->fields[0];");
+        let _ = writeln!(s, "        takt_board_trace(\"[\");");
+        let _ = writeln!(s, "        for (unsigned int i = 0; i < f->n; i++) {{");
+        let _ = writeln!(s, "            if (i) takt_board_trace(\", \");");
+        let _ = writeln!(s, "            takt_dump_field(e, at + (size_t)i * e->off);");
+        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "        takt_board_trace(\"]\");");
+        let _ = writeln!(s, "        return;");
+        let _ = writeln!(s, "    }}");
+    }
     let _ = writeln!(s, "    long long v = takt_load(f->kind, at);");
     let _ = writeln!(s, "    if (f->names) {{");
-    let _ = writeln!(s, "        for (unsigned i = 0; i < f->n_names; i++)");
+    let _ = writeln!(s, "        for (unsigned i = 0; i < f->n; i++)");
     let _ = writeln!(s, "            if (f->names[i].d == v) {{ takt_board_trace(f->names[i].name); return; }}");
     let _ = writeln!(s, "        takt_board_trace(\"?\");");
     let _ = writeln!(s, "    }} else if (f->kind == {BOOL}) takt_board_trace(v ? \"true\" : \"false\");");
@@ -1625,6 +1675,15 @@ const DURATION: u8 = 0x28;
 /// Variante, auf die `names` zeigt. `takt_load` liefert fuer ihn null.
 const RECORD: u8 = 0x10;
 
+/// Ein Feld `bytes<N>` (FB-402): Laenge und Bytes, geschrieben als Liste
+/// wie im Interpreter; `n` der Feldbeschreibung ist `N`.
+const BYTES: u8 = 0x12;
+
+/// Ein Feld `[N] T`: `N` Elemente als Liste wie im Interpreter. Die
+/// Variante, auf die `names` zeigt, beschreibt das Element in ihrem einzigen
+/// Feld; dessen Versatz ist der Abstand der Elemente, `n` ist `N`.
+const ARRAY: u8 = 0x13;
+
 /// Ein Wahrheitswert als Feld: ein Byte, geschrieben als `true`/`false`
 /// wie im Interpreter. Als Ausgang bleibt er `0x41` und erscheint als
 /// Zahl, die `compare` gleich liest.
@@ -1700,9 +1759,9 @@ fn payload_variants(p: &Program, name: &str) -> Option<Vec<Vec<(u8, Option<(Stri
 
 /// Die Variante eines Record-Typs fuer die Ausgabetabelle (FB-312):
 /// Name, Felder an ihren Versaetzen im Struct, ein Record-Feld als Zeiger
-/// auf seine eigene Variante. Derselbe Umfang wie `field_text` im
-/// Wirtsrahmen; `None` fuer alles andere, dann faellt der Ausgang aus der
-/// Tabelle wie dort. Jeder Record-Typ steht einmal in der Tabelle.
+/// auf seine eigene Variante, ein Feld `bytes<N>` mit seiner Kapazitaet
+/// (FB-402). `None` fuer alles andere, dann faellt der Ausgang aus der
+/// Tabelle. Jeder Record-Typ steht einmal in der Tabelle.
 fn record_variant(
     s: &mut String,
     p: &Program,
@@ -1723,34 +1782,8 @@ fn record_variant(
     let mut items = Vec::with_capacity(def.fields.len());
     for (i, f) in def.fields.iter().enumerate() {
         let (part, off) = (parts.get(i)?, llvm.field_offset(i));
-        let (names, kind, n_names) = match (p.types.get(f.ty), part) {
-            (Type::Record(_), _) => (record_variant(s, p, f.ty, part, named, kinds)?, RECORD, 1),
-            (Type::Bool, LlvmType::Int(1)) => ("0".to_string(), BOOL, 0),
-            (Type::Duration { .. }, LlvmType::Int(64)) => ("0".to_string(), DURATION, 0),
-            (Type::Enum(e), LlvmType::Int(_)) => {
-                let edef = p.enums.get(e.index())?;
-                if edef.variants.iter().any(|v| !v.fields.is_empty()) {
-                    return None;
-                }
-                let table = format!("g_enum_{}", edef.name);
-                if named.insert(edef.name.clone()) {
-                    let rows: Vec<String> = edef
-                        .variants
-                        .iter()
-                        .map(|w| format!("{{ {}LL, \"{}\", 0, 0 }}", w.discriminant, w.name))
-                        .collect();
-                    let _ = writeln!(s, "static const struct takt_variant {table}[] = {{ {} }};", rows.join(", "));
-                }
-                (table, value_kind(part, true)?, edef.variants.len())
-            }
-            (Type::Int { width, .. }, LlvmType::Int(_)) => ("0".to_string(), value_kind(part, width.signed())?, 0),
-            (Type::Float { .. }, LlvmType::F32 | LlvmType::F64) => ("0".to_string(), value_kind(part, true)?, 0),
-            _ => return None,
-        };
-        if kind != RECORD {
-            kinds.push(kind);
-        }
-        items.push(format!("{{ {names}, {off}, {kind}, {n_names} }}"));
+        let (names, kind, n) = field_entry(s, p, f.ty, part, named, kinds)?;
+        items.push(format!("{{ {names}, {off}, {kind}, {n} }}"));
     }
     let _ = writeln!(s, "static const struct takt_field {symbol}_f[] = {{ {} }};", items.join(", "));
     let _ = writeln!(
@@ -1761,6 +1794,60 @@ fn record_variant(
     );
     named.insert(symbol.clone());
     Some(symbol)
+}
+
+/// Ein Feld eines Records in der Ausgabetabelle: Tabelle, Art und `n` wie
+/// in `struct takt_field`. Ein Feld `[N] T` zeigt auf eine Variante mit dem
+/// Element als einzigem Feld, dessen Versatz der Abstand der Elemente ist
+/// ([`ARRAY`]). `None` fuer einen Typ ohne Schreibweise in der Tabelle.
+fn field_entry(
+    s: &mut String,
+    p: &Program,
+    ty: takt_mir::TypeId,
+    part: &takt_llvm::ty::LlvmType,
+    named: &mut std::collections::BTreeSet<String>,
+    kinds: &mut Vec<u8>,
+) -> Option<(String, u8, usize)> {
+    use takt_llvm::ty::LlvmType;
+    use takt_mir::types::Type;
+    let entry = match (p.types.get(ty), part) {
+        (Type::Record(_), _) => (record_variant(s, p, ty, part, named, kinds)?, RECORD, 1),
+        (Type::Array { elem, .. }, LlvmType::Array(inner, len)) => {
+            let (names, kind, n) = field_entry(s, p, *elem, inner, named, kinds)?;
+            let symbol = format!("g_arr{}", named.len());
+            let _ = writeln!(
+                s,
+                "static const struct takt_field {symbol}_f[] = {{ {{ {names}, {}, {kind}, {n} }} }};",
+                inner.aligned_size()
+            );
+            let _ = writeln!(s, "static const struct takt_variant {symbol}[] = {{ {{ 0LL, \"\", {symbol}_f, 1 }} }};");
+            named.insert(symbol.clone());
+            (symbol, ARRAY, usize::try_from(*len).ok()?)
+        }
+        (Type::Bytes { cap }, LlvmType::Struct(_)) => ("0".to_string(), BYTES, *cap as usize),
+        (Type::Bool, LlvmType::Int(1)) => ("0".to_string(), BOOL, 0),
+        (Type::Duration { .. }, LlvmType::Int(64)) => ("0".to_string(), DURATION, 0),
+        (Type::Enum(e), LlvmType::Int(_)) => {
+            let edef = p.enums.get(e.index())?;
+            if edef.variants.iter().any(|v| !v.fields.is_empty()) {
+                return None;
+            }
+            let table = format!("g_enum_{}", edef.name);
+            if named.insert(edef.name.clone()) {
+                let rows: Vec<String> =
+                    edef.variants.iter().map(|w| format!("{{ {}LL, \"{}\", 0, 0 }}", w.discriminant, w.name)).collect();
+                let _ = writeln!(s, "static const struct takt_variant {table}[] = {{ {} }};", rows.join(", "));
+            }
+            (table, value_kind(part, true)?, edef.variants.len())
+        }
+        (Type::Int { width, .. }, LlvmType::Int(_)) => ("0".to_string(), value_kind(part, width.signed())?, 0),
+        (Type::Float { .. }, LlvmType::F32 | LlvmType::F64) => ("0".to_string(), value_kind(part, true)?, 0),
+        _ => return None,
+    };
+    if entry.1 != RECORD && entry.1 != ARRAY {
+        kinds.push(entry.1);
+    }
+    Some(entry)
 }
 
 /// Die Varianten eines Enum-Ausgangs mit ihren Diskriminanten.
@@ -1797,10 +1884,11 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// bis zum Abgleich des Rands haelt (`edge_in<kanal>`). Je Command fragt der
 /// Rahmen den Wirt, ob es in diesem Tick anliegt (8.5).
 ///
-/// Eingaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf, und
-/// ebenso keiner, den ein `sim`-Output derselben Adresse speist: Im
-/// Sim-Build ist das Modell seine Quelle, und ein Treiber, der zu
-/// Tickbeginn laese, ueberschriebe es (8.3).
+/// Eingaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf. Einen
+/// Eingang, den im Sim-Build ein `sim`-Output derselben Adresse speist,
+/// fragt der Rahmen nach der Kopplung im Commit: Liefert sein Treiber in
+/// diesem Tick, gilt die Lieferung statt des Modells, wie ein Stimulus im
+/// Interpreter (8.3); liefert er nichts, bleibt der Wert des Modells.
 fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     let scalars = bound_scalars(p, layout, x);
     let streams = bound_streams(p, x);
@@ -1835,13 +1923,13 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let value = match b.ct {
             Some(ct) => {
                 let _ = writeln!(s, "        {ct} v = 0;");
-                let _ = writeln!(s, "        _Bool got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
+                let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
                 "&v, (int)sizeof v".to_string()
             }
             None => {
                 let _ = writeln!(
                     s,
-                    "        _Bool got = {}(a->user, now, {buf}, {}, &q, &r, &age, &t);",
+                    "        uint8_t got = {}(a->user, now, {buf}, {}, &q, &r, &age, &t);",
                     b.function, b.size
                 );
                 format!("{buf}, {}", b.size)
@@ -1849,7 +1937,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         };
         let _ = writeln!(
             s,
-            "        if (got) takt_edge_reading(a, {}, {value}, {}, q, r, q != 3, t, age);",
+            "        if (got != 0) takt_edge_reading(a, {}, {value}, {}, q, r, got == 1, t, age);",
             b.channel, b.number
         );
         // 9.9: Was dieser Tick las, vergleicht `P_woken` im Schlaf.
@@ -2135,19 +2223,20 @@ struct BoundScalar {
     wake: Option<usize>,
 }
 
-/// Die an Hardware gebundenen Eingaenge mit Platz im Abbild, ohne die, die
-/// ein `sim`-Output derselben Adresse speist (8.3) — dieselben wie in
-/// [`crate::drivers::of`].
+/// Die an Hardware gebundenen Eingaenge mit Platz im Abbild — dieselben wie
+/// in [`crate::drivers::of`]. Speist im Sim-Build ein Modell den Eingang,
+/// fragt der Rand nach der Kopplung den Treiber: Was er liefert, gilt in
+/// diesem Tick statt des Modells, wie ein Stimulus im Interpreter (8.3,
+/// `Image::apply_sim_bindings`).
 fn bound_scalars(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundScalar> {
     use takt_mir::types::Type;
-    let fed = crate::parts::sim_fed_inputs(p);
     let mut out: Vec<BoundScalar> = layout
         .inputs
         .iter()
         .filter_map(|slot| {
             let channel = p.channels.iter().position(|c| c.name == slot.name)?;
             // `sys/outer_fault` stellt der Kern (`parts::outer_fault`).
-            if fed.contains(&channel) || takt_mir::sys::outer_fault(p) == Some(channel) {
+            if takt_mir::sys::outer_fault(p) == Some(channel) {
                 return None;
             }
             let address = slot.address.as_ref()?;
@@ -2238,7 +2327,9 @@ struct BoundStream {
     wake: Option<usize>,
 }
 
-/// Die an Hardware gebundenen Eingabestroeme, ohne die gekoppelten (8.3).
+/// Die an Hardware gebundenen Eingabestroeme; in einen gekoppelten liefert
+/// der Treiber vor den Elementen des Modells, wie der Stimulus im
+/// Interpreter (8.3).
 fn bound_streams(p: &Program, x: &Prefix) -> Vec<BoundStream> {
     use takt_mir::program::{Binding, Direction};
     use takt_mir::types::Type;
@@ -2249,7 +2340,7 @@ fn bound_streams(p: &Program, x: &Prefix) -> Vec<BoundStream> {
         .filter_map(|(channel, c)| {
             let Some(Type::Stream(elem)) = p.types.list.get(c.ty.index()) else { return None };
             let Binding::Hw(addr) = &c.binding else { return None };
-            if c.dir != Direction::Input || crate::streams::coupled_input(p, channel) {
+            if c.dir != Direction::Input {
                 return None;
             }
             let n = crate::streams::payload_cap(p, *elem);

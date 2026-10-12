@@ -5,6 +5,8 @@ mod common;
 
 use takt_conformance::harness;
 use takt_conformance::run::{compare, f32_outputs, widen_f32};
+use takt_conformance::stimulus::Stimulus;
+use takt_conformance::testhost::Run;
 use takt_frame::mcu::Frame;
 use takt_llvm::symbols::Prefix;
 use takt_llvm::toolchain::Clang;
@@ -64,84 +66,86 @@ fn run_frame_with(
     Ok(String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"))
 }
 
-/// **Der Wirt verstellt die Fliesskomma-Umgebung, und Takt rechnet wie der
-/// Interpreter** (4.2, 12.11). Ein `main` setzt MXCSR auf einen der Werte
-/// aus [`HOSTILE`] und ruft die Einstiege des MCU-Rahmens wie eine Schleife:
-/// `init` mit dem Journal, `tick`, den Schlaf (`idle`, `deadline`,
-/// `advance`), `commit`, `job_work` und `persist_snapshot`/`persist_restore`.
-/// Nach jedem muss MXCSR wieder sein eigenes sein, und der Trace gleicht dem
-/// des Interpreters bitgenau.
+/// Programme ausserhalb der Suite `ieee`, deren Rahmen mit Stroemen,
+/// geplanten Ausgaben, Monitoren und Schlaf mehr Felder der Arena fuehrt.
+const AROUND: [&str; 4] = ["13_framing.takt", "28_scheduled.takt", "47_monitors.takt", "56_idle_timer.takt"];
+
+/// **Der Wirt verstellt seine Umgebung, und Takt rechnet wie der
+/// Interpreter** (4.2, 12.11; FB-382). Jeder Lauf der Programme der Suite
+/// `ieee` und aus [`AROUND`] — still, mit Stimulus, mit den erzeugten
+/// Eingaben und auf den Pfaden des Solvers ([`takt_conformance::cases`]) —
+/// laeuft im Produktrahmen mit dem Kern des SDK (M11 Schritt 9) unter einem
+/// eigenen Praefix, mit MXCSR aus [`HOSTILE`] reihum und der Arena vor
+/// `init` mit 0xA5 gefuellt. Nach jedem Aufruf des SDK ist MXCSR wieder der
+/// des Wirts, und der Trace gleicht dem des Interpreters bitgenau: Ein
+/// Einstieg, der die Umgebung des Wirts erbt oder verstellt, oder ein Feld,
+/// das `init` nicht setzt, fiele hier auf. Was im Produkt keinen Weg hat,
+/// faehrt auch diese Probe nicht; `GAPS` in `differential.rs` fuehrt es.
 #[test]
-#[cfg_attr(not(target_arch = "x86_64"), ignore = "die Pruefung setzt MXCSR, das es nur auf x86-64 gibt")]
-fn a_hostile_floating_point_environment_changes_nothing() {
-    let Some(clang) = common::clang_path() else { return };
-    let mut failed = Vec::new();
-    for name in takt_conformance::suites::programs("ieee") {
-        let p = common::board::corpus(name);
-        // Ein `f32` schreibt der Rahmen als seinen Wert in `f64` (4.2, FB-356).
-        let interpreted = widen_f32(&common::board::run_interpreted(&p), &f32_outputs(&p));
-        for (mode, mxcsr) in HOSTILE {
-            let label = format!("{}-{mode}", name.replace('.', "_"));
-            let native = match run_frame(&clang, &p, &label, &main_c(common::board::TICKS, p.config.tick, mxcsr, 0x00))
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    failed.push(format!("{name} {mode}: {e}"));
-                    continue;
+#[cfg_attr(not(target_arch = "x86_64"), ignore = "die Probe setzt MXCSR, das es nur auf x86-64 gibt")]
+fn a_hostile_host_environment_changes_nothing() {
+    let Some(clang) = common::clang() else { return };
+    let queue =
+        std::sync::Mutex::new(takt_conformance::suites::programs("ieee").into_iter().chain(AROUND).collect::<Vec<_>>());
+    let failed = std::sync::Mutex::new(Vec::new());
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    std::thread::scope(|scope| {
+        for _ in 0..(cores - 1).clamp(1, 4) {
+            scope.spawn(|| {
+                loop {
+                    let next = queue.lock().expect("Warteschlange").pop();
+                    let Some(name) = next else { break };
+                    failed.lock().expect("Befunde").extend(hostile_runs(&clang, name));
                 }
-            };
-            let diffs = compare(&interpreted, &native);
-            if !diffs.is_empty() || !native.lines().any(|l| l.contains(" out ")) {
-                let shown: Vec<String> = diffs.iter().take(6).map(ToString::to_string).collect();
-                failed.push(format!("{name} {mode}: {} Abweichungen\n{}", diffs.len(), shown.join("\n")));
-            }
+            });
         }
-    }
+    });
+    let failed = failed.into_inner().expect("Befunde");
     assert!(failed.is_empty(), "{}", failed.join("\n\n"));
 }
 
-/// **`init` beschreibt die Arena ganz** (12.11, GEN-040): Der Wirt legt sie,
-/// wo er will — in `.bss` genullt, auf einem Stack oder in einem
-/// `.noinit`-Abschnitt mit altem Inhalt. Vor `init` mit 0x00 und mit 0xA5
-/// gefuellt, liefert jedes Programm denselben Trace, und der ist der des
-/// Interpreters: Ein Feld, das `init` nicht setzt und der erste Tick liest,
-/// fiele hier auf.
-#[test]
-#[cfg_attr(not(target_arch = "x86_64"), ignore = "das `main` setzt MXCSR, das es nur auf x86-64 gibt")]
-fn the_arena_needs_no_zeroed_memory() {
-    let Some(clang) = common::clang_path() else { return };
+/// Die Laeufe eines Programms unter verstellter Umgebung; je Abweichung eine
+/// Meldung.
+fn hostile_runs(clang: &Clang, name: &str) -> Vec<String> {
+    let p = common::board::corpus(name);
+    let f32s = f32_outputs(&p);
     let mut failed = Vec::new();
-    for name in takt_conformance::suites::programs("ieee").into_iter().chain([
-        "13_framing.takt",
-        "28_scheduled.takt",
-        "47_monitors.takt",
-        "56_idle_timer.takt",
-    ]) {
-        let p = common::board::corpus(name);
-        let interpreted = widen_f32(&common::board::run_interpreted(&p), &f32_outputs(&p));
-        let mut traces = Vec::new();
-        for fill in [0x00u8, 0xA5] {
-            let label = format!("{}-fill{fill:02x}", name.replace('.', "_"));
-            match run_frame(&clang, &p, &label, &main_c(common::board::TICKS, p.config.tick, 0x1F80, fill)) {
-                Ok(t) => traces.push(t),
-                Err(e) => failed.push(format!("{name} {fill:#04x}: {e}")),
+    for (i, case) in takt_conformance::cases::cases(name, &p).iter().enumerate() {
+        let (mode, mxcsr) = HOSTILE[i % HOSTILE.len()];
+        let label = format!("{name} ({}, {mode})", case.label);
+        let stimulus = takt_interp::Trace::parse(&case.stimulus).expect("Stimulus");
+        let Ok(inputs) = Stimulus::from_trace(&stimulus) else { continue };
+        let run = Run {
+            ticks: case.ticks,
+            stimulus: &inputs,
+            prefix: Some("wirt"),
+            mxcsr: Some(mxcsr),
+            fill: 0xA5,
+            ..Run::default()
+        };
+        if takt_conformance::testhost::sources(&p, &run, takt_conformance::testhost::host_triple(), false).is_err() {
+            continue;
+        }
+        let options = takt_interp::RunOptions { ticks: case.ticks, inputs: true, ..Default::default() };
+        let interpreted = match takt_interp::run(&p, &stimulus, &options) {
+            Ok(r) => widen_f32(&r.trace.render(), &f32s),
+            Err(e) => {
+                failed.push(format!("{label}: der Interpreter bricht ab: {e:?}"));
+                continue;
             }
-        }
-        let [zero, pattern] = traces.as_slice() else { continue };
-        if zero != pattern {
-            let line = zero.lines().zip(pattern.lines()).position(|(a, b)| a != b).unwrap_or(0);
-            failed.push(format!(
-                "{name}: 0x00 und 0xA5 weichen ab, zuerst Zeile {line}:\n  {}\n  {}",
-                zero.lines().nth(line).unwrap_or(""),
-                pattern.lines().nth(line).unwrap_or("")
-            ));
-        }
-        let diffs = compare(&interpreted, pattern);
-        if !diffs.is_empty() {
-            failed.push(format!("{name} 0xA5: {:?}", &diffs[..diffs.len().min(4)]));
+        };
+        match common::run_product(clang, &p, name, &run) {
+            Ok(native) => {
+                let diffs = compare(&interpreted, &native);
+                if !diffs.is_empty() {
+                    let shown: Vec<String> = diffs.iter().take(6).map(ToString::to_string).collect();
+                    failed.push(format!("{label}: {} Abweichungen\n{}", diffs.len(), shown.join("\n")));
+                }
+            }
+            Err(e) => failed.push(format!("{label}: {e}")),
         }
     }
-    assert!(failed.is_empty(), "{}", failed.join("\n\n"));
+    failed
 }
 
 /// **Ein Ausgangstreiber bekommt die Grenze des Ticks, den er stellt, auch

@@ -1,9 +1,10 @@
 //! Interpreter gegen erzeugten Code an kleinen Programmen (Satz 9.4.4): der
-//! ganze Lauf im Wirtsrahmen der Abnahme (`takt_conformance::harness`),
-//! verglichen Tick fuer Tick und bitgenau (`takt_conformance::run::compare`).
+//! ganze Lauf im Produktrahmen auf dem Testwirt der Abnahme
+//! (`takt_conformance::testhost`), verglichen Tick fuer Tick und bitgenau
+//! (`takt_conformance::run::compare`).
 
 use takt_interp::{RunOptions, Trace, run};
-use takt_llvm::toolchain::{Clang, find};
+use takt_llvm::toolchain::find;
 use takt_mir::Program;
 
 fn compile(src: &str) -> Program {
@@ -18,36 +19,19 @@ fn compile(src: &str) -> Program {
 /// Ticks; `None` ohne clang (`takt_testkit::require` laesst das nur mit
 /// `TAKT_ALLOW_MISSING` durch).
 fn both(name: &str, p: &Program, ticks: u64) -> Option<(String, String)> {
+    static SDK: std::sync::OnceLock<Result<std::path::PathBuf, String>> = std::sync::OnceLock::new();
     let clang = takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")?;
     let interpreted =
         run(p, &Trace::default(), &RunOptions { ticks, ..Default::default() }).expect("Lauf").trace.render();
-    let host = if cfg!(windows) { "x86_64-pc-windows-msvc" } else { "x86_64-unknown-linux-gnu" };
-    let low = takt_llvm::lower::program(p, host, &takt_llvm::symbols::Prefix::default());
-    assert!(low.skipped.is_empty(), "{name}: {:?}", low.skipped);
-    let frame = takt_conformance::harness::build_all(p, ticks, &[]);
+    let sdk = SDK
+        .get_or_init(|| takt_conformance::harness::sdk_library_with(&takt_conformance::testhost::SDK_FEATURES, None))
+        .clone()
+        .expect("SDK-Archiv");
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-prove-native-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("Verzeichnis");
-    let (ll, c, exe) =
-        (dir.join("programm.ll"), dir.join("rahmen.c"), dir.join(if cfg!(windows) { "lauf.exe" } else { "lauf" }));
-    std::fs::write(&ll, &low.ir).expect("IR");
-    std::fs::write(&c, &frame.source).expect("Rahmen");
-    let natives = takt_conformance::harness::native_library().expect("Bibliothek der Natives");
-    let mut cmd = std::process::Command::new(&clang);
-    let build = Clang::deterministic(&mut cmd)
-        .args(["-Wno-override-module", "-O1"])
-        .arg(&ll)
-        .arg(&c)
-        .arg(&natives)
-        .arg("-o")
-        .arg(&exe)
-        .output()
-        .expect("clang");
-    assert!(build.status.success(), "{name}: {}", String::from_utf8_lossy(&build.stderr));
-    let out = std::process::Command::new(&exe).output().expect("Lauf");
-    assert!(out.status.success(), "{name}: der Lauf brach ab ({})", out.status);
-    let native = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
-    assert!(native.contains(&format!("takt end {}", ticks + 1)), "{name}: der Lauf endete vorher:\n{native}");
+    let product = takt_conformance::testhost::Run { ticks, ..Default::default() };
+    let native = takt_conformance::testhost::run(&clang, &sdk, p, &product, &dir, None)
+        .unwrap_or_else(|e| panic!("{name}: {e}"));
     Some((interpreted, native))
 }
 
