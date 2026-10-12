@@ -417,13 +417,13 @@ mod tests {
     /// Ein Lauf, wie ihn ein Port schreibt, der jede Pflicht erfuellt: der
     /// Interpreter, dessen 20 Jobs je drei Ticks nach ihrem Start fertig
     /// werden, mit einer Zeitzeile je Tick, der Zeile der fremden Last und der
-    /// Bilanz. `FILL` braucht 16 Ticks, und jeder Job startet elf Ticks nach
+    /// Bilanz. `FILL` braucht 64 Ticks, und jeder Job startet elf Ticks nach
     /// der Fertigstellung seines Vorgaengers (`wait 10 ms`).
     fn port_log() -> &'static str {
         static LOG: OnceLock<String> = OnceLock::new();
         LOG.get_or_init(|| {
             let mut stimulus = String::new();
-            let mut start = 15;
+            let mut start = 63;
             for _ in 0..20 {
                 stimulus.push_str(&format!("t={} job hasher v done start={start}\n", start + 3));
                 start += 14;
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn a_port_that_keeps_every_duty_passes() {
         let log = port_log();
-        assert!(log.contains("t=18 job hasher v done start=15\n"), "die Jobs enden drei Ticks nach dem Start");
+        assert!(log.contains("t=66 job hasher v done start=63\n"), "die Jobs enden drei Ticks nach dem Start");
         let v = judge(log, PROGRAM);
         assert!(v.passed(), "{v}");
         assert_eq!(v.longest_job, Some(3));
