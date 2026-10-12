@@ -43,7 +43,6 @@
 #define INCLUDE_uxTaskGetStackHighWaterMark2 1
 
 /* Die Prioritaeten im NVIC des STM32F4: vier Bit, oben im Byte. */
-#define configPRIO_BITS 4
 #define configKERNEL_INTERRUPT_PRIORITY 0xF0
 #define configMAX_SYSCALL_INTERRUPT_PRIORITY 0x20
 

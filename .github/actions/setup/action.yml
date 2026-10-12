@@ -190,18 +190,19 @@ runs:
 
     # Der Kern von FreeRTOS fuer den C-Wirt der Black Pill unter FreeRTOS (M11
     # Schritt 20), dieselbe Fassung wie unter `D:\takt-tools`; die Harness
-    # prueft die Fassung am Kern (`board::c_host::Kernel`). `--force-local`:
-    # Unter Windows liest GNU tar `D:` sonst als entfernten Rechner.
+    # prueft die Fassung am Kern (`board::c_host::Kernel`). tar bekommt nur
+    # relative Pfade: Unter Windows liest GNU tar `D:` sonst als entfernten
+    # Rechner.
     - name: FreeRTOS-Kernel V11.3.1
       shell: bash
       run: |
-        dest="$RUNNER_TEMP/freertos-kernel"
-        archive="$RUNNER_TEMP/FreeRTOS-Kernel-V11.3.1.tar.gz"
+        cd "$RUNNER_TEMP"
+        archive=FreeRTOS-Kernel-V11.3.1.tar.gz
         curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$archive" \
           https://github.com/FreeRTOS/FreeRTOS-Kernel/archive/refs/tags/V11.3.1.tar.gz
         echo "da9c9567368db9b2f1d053a344e7892587af6ee50398f0f14fba53405cc7c041  $archive" | sha256sum -c -
-        mkdir -p "$dest"
-        tar --force-local -xzf "$archive" -C "$dest" --strip-components=1
+        mkdir -p freertos-kernel
+        tar -xzf "$archive" -C freertos-kernel --strip-components=1
         rm "$archive"
-        echo "FREERTOS_KERNEL_PATH=$dest" >> "$GITHUB_ENV"
-        grep "#define tskKERNEL_VERSION_NUMBER" "$dest/include/task.h"
+        echo "FREERTOS_KERNEL_PATH=$RUNNER_TEMP/freertos-kernel" >> "$GITHUB_ENV"
+        grep "#define tskKERNEL_VERSION_NUMBER" freertos-kernel/include/task.h
