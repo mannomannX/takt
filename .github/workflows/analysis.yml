@@ -1,11 +1,14 @@
 # Die Pruefungen des eigenen Codes, die eigene Werkzeuge brauchen (M11
 # Schritt 33b und 33c, plan/cert.md Abschnitt 6): der C-Teil mit
 # clang-tidy und cppcheck nach CERT C und MISRA C, die Crates mit `unsafe`
-# unter Miri. Bei jedem Push, auf main wie auf einem Zweig, und von Hand.
+# unter Miri. Bei jedem Push, auf main wie auf einem Zweig, und von Hand;
+# dazu bei jedem Pull Request auf dem Ergebnis des Merges, denn die Zahlen
+# des Katalogs (plan/cert.md) stimmen erst, wenn beide Seiten zusammen sind.
 name: Analyse
 
 on:
   push:
+  pull_request:
   workflow_dispatch:
 
 permissions:

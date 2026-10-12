@@ -134,8 +134,16 @@ So arbeitet jeder Strang, als wäre er allein:
    - jede Prüfung mit ihrem Ergebnis,
    - Änderungen in Kern-Crates,
    - offene Punkte.
-7. **Merge.** Die Koordination rebased den Zweig auf `main`, fährt die volle
-   Suite und merged. Der andere Strang zieht `main` beim nächsten Halt nach.
+7. **Merge über einen Pull Request** (seit 2026-10-13). Die Koordination
+   öffnet zum Antrag einen Pull Request gegen `main`. `ci.yml` und
+   `analysis.yml` prüfen dort das Ergebnis des Merges, also den Zweig samt
+   dem aktuellen `main`: Suite, Clippy, rustfmt und die Zahlen des
+   C-Katalogs. Meldet der Pull Request einen Konflikt oder eine falsche Zahl,
+   zieht der Strang `main` in seinen Zweig nach und behebt es dort. Ändert
+   der Zweig Abbilder, fährt die Koordination die Board-Tests vor dem Merge.
+   Gemergt wird bei Grün mit einem Merge-Commit; der Text der Statuszeile
+   kommt im selben Zug in `plan/m11.md`. Die anderen Stränge ziehen `main`
+   beim nächsten Halt nach.
 
 ## Prüfmatrix
 
