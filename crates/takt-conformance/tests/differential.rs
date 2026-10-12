@@ -117,7 +117,6 @@ const UNREACHED: &[(&str, usize, usize, usize, usize, usize, usize)] = &[
     ("96_record_outputs.takt", 0, 0, 0, 1, 0, 0),
     ("97_fast_math.takt", 0, 0, 2, 3, 0, 0),
     ("98_last_fault.takt", 0, 5, 2, 2, 0, 0),
-    ("99_exit_fault.takt", 0, 0, 1, 0, 0, 0),
     ("100_dispatch.takt", 0, 0, 1, 7, 0, 0),
     ("101_correct_math.takt", 0, 0, 2, 3, 0, 0),
     ("102_correct_math_f32.takt", 0, 0, 2, 3, 0, 0),

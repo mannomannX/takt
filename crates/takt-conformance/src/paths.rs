@@ -268,11 +268,19 @@ pub fn render_path(path: &Path, solver: &str) -> String {
         Target::Property { name, at } => format!("property {name} {at}"),
         Target::Transition { machine, key, at } => format!("uebergang {machine} {at} {key}"),
     };
+    let at = match &path.target {
+        Target::Check { at, .. } | Target::Property { at, .. } | Target::Transition { at, .. } => *at,
+    };
     let head = if path.from_run() {
         format!(
             "Pfad aus dem langen Lauf (Interpreter ohne Stimulus, bis {} Ticks), erzeugt mit `UPDATE_RUN_PATHS` \
              (M11 Strang B2, Schritt 3)",
             crate::cases::MAX_TICKS
+        )
+    } else if at > u64::from(DEPTH) {
+        format!(
+            "Pfad des Solvers ({solver}, Tiefe {DEPTH}, vertieft bis {at}), erzeugt mit `UPDATE_PATHS` \
+             (M11 Strang B2, Schritt 3)"
         )
     } else {
         format!("Pfad des Solvers ({solver}, Tiefe {DEPTH}), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)")

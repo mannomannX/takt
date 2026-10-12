@@ -42,6 +42,12 @@ pub struct Solver {
 /// das Urteil bleibt offen.
 pub const MEMORY_MB: u64 = 4096;
 
+/// So tief folgt die Suche einem Pfad, den die Invariantensuche jenseits der
+/// Tiefe sieht ([`deeper`]; M11 Strang B2, Schritt 3): so tief, wie die
+/// Abnahme ein Programm hoechstens laufen laesst (`cases::MAX_TICKS` in
+/// `takt-conformance`).
+pub const DEEPEST: u32 = 2000;
+
 /// Sucht `TAKT_SOLVER`, dann `z3` und `cvc5`, je auf dem PATH oder unter
 /// `~/.takt/bin`.
 pub fn find() -> Solver {
@@ -418,7 +424,7 @@ pub fn classify_sites(
             }
             let bmc = solver.run(&query(&model, depth, Target::Check(j), Query::Bmc), timeout_s, "check-bmc")?;
             let verdict = match answer(&bmc) {
-                "unsat" => induction_verdict(&model, j, depth, solver, timeout_s)?,
+                "unsat" => induction_verdict(&model, program, j, depth, solver, timeout_s, path)?,
                 "sat" => match (whole, in_whole(site)) {
                     (Some(w), Some(k)) => classify_site(w, program, k, depth, solver, timeout_s)?,
                     _ => CheckVerdict::Undecided {
@@ -552,7 +558,7 @@ fn classify_site(
                 },
             }
         }
-        "unsat" => induction_verdict(model, i, depth, solver, timeout_s)?,
+        "unsat" => induction_verdict(model, program, i, depth, solver, timeout_s, PathOn::Here)?,
         other => CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") },
     })
 }
@@ -689,22 +695,66 @@ fn open(model: &Model, depth: u32, search: &Search) -> String {
 
 fn induction_verdict(
     model: &Model,
+    program: &Program,
     i: usize,
     depth: u32,
     solver: &Solver,
     timeout_s: u64,
+    path: PathOn<'_>,
 ) -> Result<CheckVerdict, String> {
     let ind = solver.run(&query(model, depth, Target::Check(i), Query::Induction), timeout_s, "check-ind")?;
     Ok(match answer(&ind) {
         "unsat" => CheckVerdict::Unreachable { k: depth },
         "sat" => match invariant(model, Target::Check(i), solver, timeout_s)? {
             Search::Invariant => CheckVerdict::Unreachable { k: 0 },
-            found => CheckVerdict::Undecided {
-                reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
-            },
+            found => {
+                let deep = match found {
+                    Search::Path => deeper(model, program, i, depth, solver, timeout_s, path)?,
+                    _ => None,
+                };
+                deep.unwrap_or_else(|| CheckVerdict::Undecided {
+                    reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
+                })
+            }
         },
         other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
     })
+}
+
+/// Der Pfad, den die Invariantensuche jenseits der Tiefe `depth` sieht (M11
+/// Strang B2, Schritt 3): BMC mit jeweils doppelter Tiefe bis [`DEEPEST`],
+/// am Modell oder — fuer ein Maschinenmodell — am Gesamtmodell; der erste
+/// Pfad, den der Interpreter bestaetigt. Die Frist waechst mit der Tiefe:
+/// BMC rollt den Tick so oft aus, wie die Tiefe sagt (`99_exit_fault`, ein
+/// Pfad bei t = 72: Tiefe 40 in 18 s, Tiefe 80 in 106 s). Eine Frist, der
+/// Speicher oder ein Pfad, den der Interpreter nicht geht, beenden die
+/// Suche: tiefer wird keine Anfrage kleiner.
+fn deeper(
+    model: &Model,
+    program: &Program,
+    i: usize,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+    path: PathOn<'_>,
+) -> Result<Option<CheckVerdict>, String> {
+    let (model, i) = match path {
+        PathOn::Here => (model, i),
+        PathOn::Whole(w, k) => (w, k),
+        PathOn::Nowhere => return Ok(None),
+    };
+    let mut d = depth.max(1);
+    while d < DEEPEST {
+        d = d.saturating_mul(2).min(DEEPEST);
+        let budget = timeout_s.saturating_mul(u64::from(d / depth.max(1)));
+        let bmc = solver.run(&query(model, d, Target::Check(i), Query::Bmc), budget, "check-bmc")?;
+        match answer(&bmc) {
+            "unsat" => {}
+            "sat" => return Ok(confirmed(model, program, i, &bmc, d)),
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
 }
 
 /// Das Urteil ueber einen Block-Vertrag (5.7, B2).

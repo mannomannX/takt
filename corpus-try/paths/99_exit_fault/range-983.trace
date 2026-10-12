@@ -1,0 +1,19 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5, vertieft bis 72), erzeugt mit `UPDATE_PATHS` (M11 Strang B2, Schritt 3)
+# ziel check range m 983 998 72
+# ticks 74
+t=9 runtime Node
+t=15 runtime Node
+t=19 abort
+t=21 abort
+t=23 runtime Node
+t=37 runtime Node
+t=41 runtime Node
+t=56 runtime Overrun
+t=60 abort
+t=61 abort
+t=64 runtime Node
+t=68 abort
+t=70 abort
+t=72 runtime Node
+t=80 abort
+t=80 runtime Driver place

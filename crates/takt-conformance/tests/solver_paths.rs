@@ -119,6 +119,8 @@ fn generate(name: &str, src: &str, p: &Program, solver: &Solver) -> Result<Found
                 });
                 if let Some((c, at, stimulus)) = reachable.filter(|(c, _, _)| !failed_without_path(&reached, c)) {
                     let target = Target::Check { kind: kind.clone(), machine: c.machine.clone(), start, end, at };
+                    // Einen Pfad jenseits der Tiefe fand die Vertiefung (`takt_prove::DEEPEST`).
+                    let ticks = ticks.max(at + 2);
                     found.push(Path { label: label(&kind, &start.to_string()), target, stimulus, ticks });
                 }
             }
@@ -590,6 +592,15 @@ fn the_stored_solver_paths_still_hold() {
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Kein Pfad ist tiefer, als der Vergleich laeuft**: Der Solver vertieft
+/// einen Pfad bis `takt_prove::DEEPEST`, der lange Lauf geht bis
+/// `cases::MAX_TICKS` (M11 Strang B2, Schritt 3). Der Beweiser kennt diese
+/// Crate nicht; die beiden Zahlen haelt dieser Test gleich.
+#[test]
+fn the_deepest_path_fits_the_comparison() {
+    assert_eq!(u64::from(takt_prove::DEEPEST), takt_conformance::cases::MAX_TICKS);
 }
 
 /// Die Programme des Vergleichs (`differential.rs`): die Suite `vergleich`
