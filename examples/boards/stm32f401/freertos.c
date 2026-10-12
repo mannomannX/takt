@@ -116,9 +116,29 @@ static _Alignas(EXCHANGE_BYTES) struct exchange exchange;
 static void kick(void *ctx) { (void)ctx; }
 
 #if TAKT_FREERTOS_MPU
+/* Ob der Watchpoint unter dem Stack der Interrupts wirkt (`board_watch_stack`);
+ * `main` setzt es vor FreeRTOS, der Kopf nennt es. */
+static int guard_state = BOARD_WATCH_NO_COMPARATOR;
+
 /* Ein Byte in die Arena, das die MPU einer Aufgabe ohne Privileg abweisen
  * muss (12.11, freertos_mpu.h). */
 static void probe(const struct exchange *x) { *x->target = 0xA5u; }
+
+/* Die Kopfzeile des Waechters: Wirkt er nicht, sagt sie warum, statt ihn
+ * still zu verlieren (12.3). */
+static const char *guard_line(int state) {
+    const char *line = "takt waechter fehlt: kein Komparator der DWT\r\n";
+    if (state == BOARD_WATCH_ARMED) {
+        line = "takt waechter watchpoint\r\n";
+    } else if (state == BOARD_WATCH_DEBUGGER) {
+        line = "takt waechter fehlt: ein Debugger haelt an (DHCSR.C_DEBUGEN)\r\n";
+    } else if (state == BOARD_WATCH_NO_MONITOR) {
+        line = "takt waechter fehlt: der Debug-Monitor laesst sich nicht einschalten\r\n";
+    } else {
+        /* kein Komparator */
+    }
+    return line;
+}
 #endif
 
 /* Der Kopf des Laufs, dann die Marke, ab der die Bilanz zaehlt. */
@@ -129,6 +149,7 @@ static void banner(void) {
     takt_board_trace_i64(APP_TICK_NS);
     takt_board_trace("ns\r\n  Form rtos\r\n\r\n");
 #if TAKT_FREERTOS_MPU
+    takt_board_trace(guard_line(guard_state));
     takt_board_trace((mpu_refused() != 0) ? "takt schutz partition verweigert\r\n" : "takt schutz partition offen\r\n");
 #endif
     takt_line_mark();
@@ -308,7 +329,7 @@ int main(void) {
          * FreeRTOS-MPU ein Watchpoint, denn die Regionen gehoeren FreeRTOS,
          * sonst eine Region des Wirts. */
 #if TAKT_FREERTOS_MPU
-        board_watch_stack();
+        guard_state = board_watch_stack();
 #else
         board_protect_stack();
 #endif

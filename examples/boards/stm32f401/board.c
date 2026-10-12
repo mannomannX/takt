@@ -147,6 +147,8 @@ void abort(void);
 
 /* DWT und Debug-Monitor des Cortex-M4: der Komparator 0 als Watchpoint. */
 #define SCB_SHPR3 0xE000ED20u        /* Byte 0: Prioritaet von DebugMonitor */
+#define DHCSR 0xE000EDF0u
+#define DHCSR_C_DEBUGEN 0x00000001u  /* ein Debugger haelt bei einem Treffer an */
 #define DEMCR 0xE000EDFCu
 #define DEMCR_TRCENA 0x01000000u
 #define DEMCR_MON_EN 0x00010000u
@@ -568,19 +570,28 @@ void board_protect_stack(void) {
 }
 
 /* DebugMonitor bekommt die hoechste Prioritaet; ohne Debugger, der anhaelt,
- * fuehrt ein Treffer dorthin (`DebugMon_Handler`, der Halt in `startup.c`). */
-void board_watch_stack(void) {
+ * fuehrt ein Treffer dorthin (`DebugMon_Handler`, der Halt in `startup.c`).
+ * Danach liest der Wirt zurueck, ob der Monitor wirken kann. */
+int board_watch_stack(void) {
+    int rc = BOARD_WATCH_NO_COMPARATOR;
     *board_reg(DEMCR) |= DEMCR_TRCENA;
     board_barrier();
-    if ((*board_reg(DWT_CTRL) >> DWT_CTRL_NUMCOMP_SHIFT) == 0u) {
-        board_halt();
+    if ((*board_reg(DWT_CTRL) >> DWT_CTRL_NUMCOMP_SHIFT) != 0u) {
+        *board_reg8(SCB_SHPR3) = 0u;
+        *board_reg(DWT_COMP0) = (uint32_t)board_address(&board_stack_guard);
+        *board_reg(DWT_MASK0) = DWT_MASK_GUARD;
+        *board_reg(DWT_FUNCTION0) = DWT_FUNCTION_ACCESS;
+        *board_reg(DEMCR) |= DEMCR_MON_EN;
+        board_barrier();
+        if ((*board_reg(DEMCR) & DEMCR_MON_EN) == 0u) {
+            rc = BOARD_WATCH_NO_MONITOR;
+        } else if ((*board_reg(DHCSR) & DHCSR_C_DEBUGEN) != 0u) {
+            rc = BOARD_WATCH_DEBUGGER;
+        } else {
+            rc = BOARD_WATCH_ARMED;
+        }
     }
-    *board_reg8(SCB_SHPR3) = 0u;
-    *board_reg(DWT_COMP0) = (uint32_t)board_address(&board_stack_guard);
-    *board_reg(DWT_MASK0) = DWT_MASK_GUARD;
-    *board_reg(DWT_FUNCTION0) = DWT_FUNCTION_ACCESS;
-    *board_reg(DEMCR) |= DEMCR_MON_EN;
-    board_barrier();
+    return rc;
 }
 
 void board_paint_stack(void) {

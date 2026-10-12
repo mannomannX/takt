@@ -62,9 +62,15 @@ void board_protect_stack(void);
 
 /* Derselbe Waechter ohne Region, wenn die MPU einem RTOS gehoert (12.11):
  * ein Watchpoint der DWT auf jedes Lesen und Schreiben darin. Ein Treffer
- * loest DebugMonitor aus, und das Board haelt an; ohne Komparator haelt es
- * gleich an. */
-void board_watch_stack(void);
+ * loest DebugMonitor aus, und das Board haelt an. Der Monitor wirkt nur,
+ * solange kein Debugger das Halten eingeschaltet hat (DHCSR.C_DEBUGEN):
+ * Sonst hielte ein Treffer den Kern an, statt den Handler zu rufen. Was
+ * gilt, sagt der Wert, und der Wirt nennt es im Kopf (12.3). */
+#define BOARD_WATCH_ARMED 0
+#define BOARD_WATCH_NO_COMPARATOR (-1)
+#define BOARD_WATCH_NO_MONITOR (-2)
+#define BOARD_WATCH_DEBUGGER (-3)
+int board_watch_stack(void);
 
 /* Bemalt den Stack vom Waechter bis kurz unter den Stackzeiger (12.3). */
 void board_paint_stack(void);

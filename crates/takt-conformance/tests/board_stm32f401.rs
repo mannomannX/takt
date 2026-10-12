@@ -15,12 +15,13 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, agreement, agreement_with,
-    binds_no_driver, driver_edge_agrees, fits_the_poll_form, journal_costs_time_but_not_semantics,
-    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, persistence_survives, ran, runs_shared, simultaneous_jobs_finish_on_time,
-    the_flawed_port_fails, the_form_keeps_its_deadline, the_poll_form_keeps_its_round, the_port_passes,
-    the_port_passes_behind_a_partition, verdict, zephyr_image, zephyr_persistence_survives, zephyr_verdict,
+    Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, a_foreign_write_becomes_runtime_hardware,
+    a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
+    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict, zephyr_image,
+    zephyr_persistence_survives, zephyr_verdict,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -517,12 +518,17 @@ fn the_freertos_port_passes_the_port_test() {
 /// Partition** (12.11, 13.8; M11 Schritt 20b): derselbe Wirt mit dem Port
 /// `ARM_CM4_MPU`. Schritt und Jobs sind privilegierte Aufgaben, die fremde
 /// Last rechnet ohne Privileg, und vor dem Lauf wies die MPU ihren
-/// Schreibzugriff auf die Arena ab (`takt schutz partition verweigert`).
+/// Schreibzugriff auf die Arena ab (`takt schutz partition verweigert`). Den
+/// Stack der Interrupts bewacht ein Watchpoint, und kein Debugger haelt bei
+/// einem Treffer an (`takt waechter watchpoint`); haelt einer an (die Probe
+/// am SWD hat DHCSR.C_DEBUGEN gesetzt), faellt der Test, bis das Board ohne
+/// Strom war.
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_freertos_mpu_port_passes_the_port_test() {
     let Some((board, _guard)) = board() else { return };
-    let failed = the_port_passes_behind_a_partition(&mut Stm32f401C::mpu(board), Form::Rtos);
+    let header = [PARTITION_REFUSED, GUARD_WATCHPOINT];
+    let failed = the_port_passes_with_header(&mut Stm32f401C::mpu(board), Form::Rtos, &header);
     verdict(&failed);
 }
 

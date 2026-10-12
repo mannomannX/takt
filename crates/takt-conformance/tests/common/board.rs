@@ -704,15 +704,15 @@ pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
     }
 }
 
-/// **Der Port besteht die Portpruefung hinter einer Partition** (12.11,
-/// 13.8; M11 Schritt 20b): wie [`the_port_passes`], und vor der Marke steht
-/// die Kopfzeile, mit der die Partition der Arena den Schreibzugriff einer
-/// Aufgabe ohne Privileg abwies.
-pub fn the_port_passes_behind_a_partition(board: &mut dyn Board, form: Form) -> Vec<String> {
+/// **Der Port besteht die Portpruefung, und der Kopf nennt seinen Schutz**
+/// (12.3, 12.11, 13.8; M11 Schritt 20b): wie [`the_port_passes`], und vor der
+/// Marke steht jede der Zeilen `lines`, etwa [`PARTITION_REFUSED`] und
+/// [`GUARD_WATCHPOINT`].
+pub fn the_port_passes_with_header(board: &mut dyn Board, form: Form, lines: &[&str]) -> Vec<String> {
     match port_run(board, form, None) {
         Ok((v, text)) => {
             let mut failed = if v.passed() { Vec::new() } else { vec![format!("{form:?}: {v}")] };
-            failed.extend(partition_refused(&text));
+            failed.extend(header_has(&text, lines));
             failed
         }
         Err(e) => vec![format!("{form:?}: kein Lauf: {e}")],
@@ -732,7 +732,7 @@ pub fn a_foreign_write_becomes_runtime_hardware(board: &mut dyn Board) -> Vec<St
         Ok(text) => text,
         Err(e) => return vec![format!("kein Lauf: {e}")],
     };
-    let mut failed = partition_refused(&text);
+    let mut failed = header_has(&text, &[PARTITION_REFUSED]);
     let tick = text.lines().find_map(|l| l.strip_prefix("t=")?.strip_suffix(" runtime Hardware"));
     match tick {
         Some(t) if t != "0" => {
@@ -750,16 +750,16 @@ pub fn a_foreign_write_becomes_runtime_hardware(board: &mut dyn Board) -> Vec<St
     failed
 }
 
-/// Die Kopfzeile vor der Marke, mit der die Partition der Arena den
-/// Schreibzugriff abwies; sonst der Befund mit dem, was dort steht.
-fn partition_refused(text: &str) -> Vec<String> {
+/// Die Kopfzeilen `lines` vor der Marke; je fehlende ein Befund mit den
+/// Zeilen des Kopfs, die mit `takt ` beginnen.
+fn header_has(text: &str, lines: &[&str]) -> Vec<String> {
     let header = text.find(board::MARK).map_or(text, |at| &text[..at]);
-    if header.lines().any(|l| l.trim_end() == PARTITION_REFUSED) {
-        Vec::new()
-    } else {
-        let seen: Vec<&str> = header.lines().filter(|l| l.starts_with("takt schutz")).collect();
-        vec![format!("keine Zeile `{PARTITION_REFUSED}` vor der Marke, gesehen {seen:?}")]
-    }
+    let seen: Vec<&str> = header.lines().map(str::trim_end).filter(|l| l.starts_with("takt ")).collect();
+    lines
+        .iter()
+        .filter(|line| !seen.contains(*line))
+        .map(|line| format!("keine Zeile `{line}` vor der Marke, gesehen {seen:?}"))
+        .collect()
 }
 
 /// Das Abbild von `examples/<example>` fuer `zephyr` (M11 Schritt 19,
@@ -846,7 +846,7 @@ pub fn zephyr_verdict(name: &str, example: &str, partition: bool, run: Result<St
     eprintln!("{name}-{example}: {}{verdict}", log.display());
     let mut failed = if verdict.passed() { Vec::new() } else { vec![format!("{example}: {verdict}")] };
     if partition {
-        failed.extend(partition_refused(&text).into_iter().map(|f| format!("{example}: {f}")));
+        failed.extend(header_has(&text, &[PARTITION_REFUSED]).into_iter().map(|f| format!("{example}: {f}")));
     }
     failed
 }
@@ -854,7 +854,12 @@ pub fn zephyr_verdict(name: &str, example: &str, partition: bool, run: Result<St
 /// Die Kopfzeile eines Wirts, wenn die Partition der Arena den
 /// Schreibzugriff eines Fadens im Benutzermodus abwies (`examples/zephyr`,
 /// der C-Wirt der Black Pill unter FreeRTOS-MPU).
-const PARTITION_REFUSED: &str = "takt schutz partition verweigert";
+pub const PARTITION_REFUSED: &str = "takt schutz partition verweigert";
+
+/// Die Kopfzeile des C-Wirts der Black Pill unter FreeRTOS-MPU, wenn der
+/// Watchpoint unter dem Stack der Interrupts wirkt: kein Debugger, der bei
+/// einem Treffer anhielte (12.3).
+pub const GUARD_WATCHPOINT: &str = "takt waechter watchpoint";
 
 /// **Ein absichtlich falscher Port faellt durch, und zwar an der Pflicht,
 /// die er verletzt** (M11 Schritt 15): Das Urteil verwirft ihn, jeder Grund
