@@ -7,12 +7,18 @@
  * `takt_core_init_journaled` mit Geraet und Puffern) und ruft dann
  * `takt_core_service` zu jeder Frist, die der Kern nennt; wartet ein Job,
  * ruft ein Kontext niedrigerer Prioritaet `takt_core_job_work` und danach
- * der Schrittkontext `takt_core_service` erneut (12.11). Den Trace schreibt
- * der Rahmen ueber `takt_board_trace*`, die der Wirt definiert (12.5).
+ * der Schrittkontext `takt_core_service` erneut (12.11).
+ *
+ * Den Trace schreibt der Rahmen ueber `takt_board_trace*` (12.5); sie
+ * stellt das Archiv, mit einem Ring vor der Leitung, die der Wirt mit
+ * `takt_line_init` bindet. Ueber dieselbe Leitung gehen je Tick die
+ * Zeitzeile, die Marke (`takt_line_mark`) und am Ende die Bilanz
+ * (`takt_core_report`), die `takt port-test --judge` liest.
  *
  * Der Kern wartet nie und nimmt keinen Heap; `takt_core_service` laeuft nie
  * zweimal zugleich. `ops`, Arena und Treiberobjekt leben so lange wie der
- * Kern.
+ * Kern. Die Leitung ist eine fuer alle Kerne: Nie schreiben zwei Kontexte
+ * zugleich auf sie.
  */
 #ifndef TAKT_SDK_H
 #define TAKT_SDK_H
@@ -99,7 +105,7 @@ typedef struct takt_core {
 #define TAKT_ERR_ABI (-2)
 #define TAKT_ERR_MEMORY (-3) /* mit `persist` der Einstieg mit Journal, ohne der andere (5.9) */
 #define TAKT_ERR_PROFILE (-4)
-#define TAKT_ERR_BOUND (-5) /* die Puffer fassen `P_PERSIST_BOUND` nicht */
+#define TAKT_ERR_BOUND (-5) /* ein Puffer ist zu klein: `P_PERSIST_BOUND`, ein leerer Ring */
 
 /* Das Ende eines Laufs (12.7) in `takt_next.ended`; 0, solange er geht. */
 #define TAKT_NEXT_NOW 1
@@ -136,6 +142,51 @@ void takt_core_job_work(takt_core *core);
 /* Beendet den Lauf an einer Grenze des Wirts (12.7): das Journal synchron,
  * und ein Schlaf ueber das Ende gibt die Zeile des Ticks davor frei (9.9). */
 void takt_core_finish(takt_core *core);
+
+/* Die Leitung des Wirts (12.2, 12.5): `try_write` nimmt ein Byte, wenn Platz
+ * ist, und wartet nie (0: kein Platz); `flush` schickt ab, was sie
+ * gesammelt hat, und darf NULL sein. `ctx` geht an jeden Rueckruf. */
+struct takt_line {
+    void *ctx;
+    uint8_t (*try_write)(void *ctx, uint8_t byte);
+    void (*flush)(void *ctx);
+};
+
+/* Bindet die Leitung, eine fuer alle Kerne; `ring` haelt `len` Byte
+ * zwischen Schritt und Leitung. Ist er voll und nimmt die Leitung nichts,
+ * wird verworfen und gezaehlt (12.2). Vor dem ersten Schritt. */
+int32_t takt_line_init(const struct takt_line *line, uint8_t *ring, uint32_t len);
+
+/* Die Marke `takt trace`, ab der die Bilanz die gesendeten Byte zaehlt;
+ * davor darf ein Kopf stehen (`takt_board_trace`). Kein Schritt laeuft. */
+void takt_line_mark(void);
+
+/* Die Stacks eines Laufs (12.3), wie der Port sie misst: die Tiefe unter
+ * Last und die Schranke des Programms (`P_TICK_STACK_BYTES`,
+ * `P_JOB_STACK_BYTES`); 0 heisst nicht gemessen. */
+struct takt_stacks {
+    uint32_t tick;
+    uint32_t tick_bound;
+    uint32_t tick_program;
+    uint32_t job;
+    uint32_t job_bound;
+    uint8_t job_shared; /* die Jobs rechnen auf dem Schritt-Stack */
+};
+
+/* Die fremde Last der Portpruefung (12.11, 13.8): Der Wirt ruft
+ * `takt_foreign_round` in seiner fremden Aufgabe, so oft er kann. Rechnet
+ * eine Runde falsch, hat der Port die FPU-Register nicht gesichert. */
+typedef struct takt_foreign {
+    uint64_t rounds;
+    uint64_t errors;
+} takt_foreign;
+
+void takt_foreign_round(takt_foreign *foreign);
+
+/* Beendet den Lauf wie `takt_core_finish` und schreibt die Bilanz (13.8),
+ * davor die Zeile der fremden Last, wenn `foreign` nicht NULL ist, danach
+ * `takt end`; leert den Ring. Kein Schritt laeuft; `stacks` darf NULL sein. */
+void takt_core_report(takt_core *core, const struct takt_stacks *stacks, const takt_foreign *foreign);
 
 #ifdef __cplusplus
 }

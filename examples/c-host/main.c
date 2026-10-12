@@ -33,22 +33,24 @@ uint8_t valve_alive_tank(void *user, int64_t now) {
     return 1;
 }
 
-/* Die Leitung des Traces (12.5): Der Rahmen schreibt ueber sie. */
-void takt_board_trace(const char *line) { fputs(line, stdout); }
-void takt_board_trace_i64(long long value) { printf("%lld ", value); }
-void takt_board_trace_u64(unsigned long long value) { printf("%llu ", value); }
-void takt_board_trace_f64(double value) { printf("%.17g ", value); }
-void takt_board_trace_hex8(unsigned char value) { printf("0x%02x", value); }
+/* Die Leitung des Traces (12.5): stdout. Den Trace schreibt der Rahmen ueber
+ * das SDK; dieses nimmt jedes Byte, das `fputc` annimmt. */
+static uint8_t put(void *ctx, uint8_t byte) { return fputc(byte, (FILE *)ctx) != EOF; }
 
+static uint8_t ring[4096];
 static struct valve_arena arena;
 static takt_core core;
 
 int main(int argc, char **argv) {
     long long ticks = argc > 1 ? strtoll(argv[1], NULL, 10) : 1000;
     struct tank tank = {0};
-    int32_t status = takt_core_init(&core, &valve_ops, &arena, &tank, TAKT_PROFILE_BAREMETAL);
+    const struct takt_line line = {stdout, put, NULL};
+    int32_t status = takt_line_init(&line, ring, sizeof ring);
+    if (status == TAKT_OK) {
+        status = takt_core_init(&core, &valve_ops, &arena, &tank, TAKT_PROFILE_BAREMETAL);
+    }
     if (status != TAKT_OK) {
-        fprintf(stderr, "takt_core_init: %d\n", (int)status);
+        fprintf(stderr, "takt: Leitung oder Kern: %d\n", (int)status);
         return 2;
     }
     /* Logische Zeit (12.11): Die Uhr springt zu jeder Frist, die der Kern
@@ -66,6 +68,6 @@ int main(int argc, char **argv) {
         }
         now = next.deadline_ns;
     }
-    takt_core_finish(&core);
+    takt_core_report(&core, NULL, NULL);
     return 0;
 }

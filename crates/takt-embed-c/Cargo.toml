@@ -19,6 +19,8 @@ name = "takt_sdk"
 [dependencies]
 # Der Kern ohne Warten (12.11).
 takt-rt-core = { path = "../takt-rt-core" }
+# Die Telemetrie der Bring-ups (12.2, 12.5): Ring, Zeitzeile, Bilanz.
+takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 # Was der erzeugte Code ruft: Natives, korrekt gerundete Mathematik, Rand
 # (4.5, 4.2, 12.6); ihre C-Symbole gehen mit ins Archiv.
 takt-native-abi = { path = "../takt-native-abi" }

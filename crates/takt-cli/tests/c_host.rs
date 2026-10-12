@@ -130,11 +130,8 @@ uint8_t persist_out_o_code(void *user, int64_t now, int64_t value) { (void)user;
 uint8_t persist_out_o_first(void *user, int64_t now, int64_t value) { (void)user; (void)now; (void)value; return 1; }
 uint8_t persist_alive_o(void *user, int64_t now) { (void)user; (void)now; return 1; }
 
-void takt_board_trace(const char *line) { fputs(line, stdout); }
-void takt_board_trace_i64(long long value) { printf("%lld ", value); }
-void takt_board_trace_u64(unsigned long long value) { printf("%llu ", value); }
-void takt_board_trace_f64(double value) { printf("%.17g ", value); }
-void takt_board_trace_hex8(unsigned char value) { printf("0x%02x", value); }
+static uint8_t put(void *ctx, uint8_t byte) { return fputc(byte, (FILE *)ctx) != EOF; }
+static uint8_t ring[4096];
 
 #define SLOT 4096u
 static uint8_t slots[2][SLOT];
@@ -195,12 +192,16 @@ static int run(long long ticks) {
         }
         now = next.deadline_ns;
     }
-    takt_core_finish(&core);
+    takt_core_report(&core, NULL, NULL);
     return 0;
 }
 
 int main(int argc, char **argv) {
     long long ticks = argc > 1 ? strtoll(argv[1], NULL, 10) : 60;
+    const struct takt_line line = {stdout, put, NULL};
+    if (takt_line_init(&line, ring, sizeof ring) != TAKT_OK) {
+        return 2;
+    }
     memset(slots, 0xff, sizeof slots);
     if (run(ticks) != 0) {
         return 2;

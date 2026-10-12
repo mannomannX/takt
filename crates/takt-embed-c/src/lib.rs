@@ -19,8 +19,16 @@
 //! **Was der Wirt zusagt.** `ops`, Arena, Treiberobjekt, Geraet und Puffer
 //! leben so lange wie der Kern; `takt_core_service` laeuft nie zweimal
 //! zugleich; der Job-Kontext ruft `takt_core_job_work` mit niedrigerer
-//! Prioritaet. Der Trace geht ueber die Funktionen `takt_board_trace*`, die
-//! der Rahmen ruft und der Wirt stellt (12.5).
+//! Prioritaet.
+//!
+//! **Die Leitung.** Der Rahmen schreibt den Trace ueber `takt_board_trace*`
+//! (12.5); diese Funktionen stellt das Archiv, mit derselben Telemetrie wie
+//! die Bring-ups (`takt_rt_baremetal`): ein Ring vor der Leitung des Wirts,
+//! je Tick die Zeitzeile, die Marke `takt trace` und am Ende die Bilanz
+//! ([`takt_core_report`]). Der Wirt bindet nur seine Leitung
+//! ([`takt_line_init`]). So rechnet kein C-Wirt Fliesskommazahlen selbst in
+//! Dezimalziffern um (4.2), und jeder C-Port schreibt, was die Portpruefung
+//! liest.
 
 #![cfg_attr(
     not(test),
@@ -60,12 +68,15 @@
     )
 )]
 
-use core::ffi::c_void;
+use core::cell::UnsafeCell;
+use core::ffi::{c_char, c_void};
 use core::marker::PhantomData;
 use core::mem::{MaybeUninit, align_of, size_of};
 
+use takt_rt_baremetal::{Cadence, JournalStats, Port, Stacks, Telemetry, Trace};
+use takt_rt_core::port_test::{self, ForeignLoad};
 use takt_rt_core::{
-    Clock, Journal, Memory, NextRun, Nvm, NvmState, Outputs, Persist, Persisting, Policy, Profile, Runtime, Sink, Tick,
+    Clock, Journal, Memory, NextRun, Nvm, NvmState, Outputs, Persist, Persisting, Policy, Profile, Runtime, Store,
     Tolerance, Unloaded, Volatile, Watchdog,
 };
 
@@ -112,7 +123,8 @@ pub mod status {
     pub const MEMORY: i32 = -3;
     /// Kein Profil dieses Namens (12.8).
     pub const PROFILE: i32 = -4;
-    /// Die Puffer des Journals fassen die Nutzlast des Programms nicht.
+    /// Ein Puffer ist zu klein: Die des Journals fassen die Nutzlast des
+    /// Programms nicht, oder der Ring der Leitung ist leer.
     pub const BOUND: i32 = -5;
 }
 
@@ -252,6 +264,214 @@ impl Nvm for HostNvm {
 
     fn blocking_ns(&self) -> Option<i64> {
         (self.0.blocking_ns >= 0).then_some(self.0.blocking_ns)
+    }
+}
+
+/// Die Leitung des Wirts (`struct takt_line`, 12.2, 12.5): `try_write` nimmt
+/// ein Byte, wenn Platz ist, und wartet nie; `flush` schickt ab, was sie
+/// gesammelt hat. `ctx` geht an jeden Rueckruf.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct LineOps {
+    /// Der Zeiger des Wirts fuer seine Rueckrufe.
+    pub ctx: *mut c_void,
+    /// Nimmt ein Byte an; 0, wenn kein Platz ist.
+    pub try_write: unsafe extern "C" fn(ctx: *mut c_void, byte: u8) -> u8,
+    /// Schickt ab, was die Leitung gesammelt hat; null, wenn sie nichts sammelt.
+    pub flush: Option<unsafe extern "C" fn(ctx: *mut c_void)>,
+}
+
+/// Die Leitung hinter ihrer Tabelle.
+struct HostLine(LineOps);
+
+impl Port for HostLine {
+    fn try_write(&mut self, b: u8) -> bool {
+        // SAFETY: Der Wirt sagt zu, dass die Leitung so lange lebt wie der Prozess.
+        unsafe { (self.0.try_write)(self.0.ctx, b) != 0 }
+    }
+
+    fn flush(&mut self) {
+        if let Some(flush) = self.0.flush {
+            // SAFETY: wie oben.
+            unsafe { flush(self.0.ctx) }
+        }
+    }
+}
+
+/// Die Leitung mit ihrem Ring, eine fuer alle Kerne des Wirts: Der Rahmen
+/// ruft `takt_board_trace*` ohne Kern (12.5).
+struct Shared(UnsafeCell<Option<Telemetry<HostLine>>>);
+
+// SAFETY: Der Wirt sagt zu, dass nie zwei Kontexte zugleich auf die Leitung
+// schreiben (`takt_sdk.h`): der Schrittkontext in `takt_core_service` und
+// `takt_core_finish`, der Wirt in `takt_line_init`, `takt_line_mark` und
+// `takt_core_report`, waehrend kein Schritt laeuft.
+unsafe impl Sync for Shared {}
+
+static LINE: Shared = Shared(UnsafeCell::new(None));
+
+/// Die Leitung, wenn der Wirt eine gebunden hat.
+fn line() -> Option<&'static mut Telemetry<HostLine>> {
+    // SAFETY: siehe `Shared`; jeder Griff endet, bevor der naechste beginnt.
+    unsafe { (*LINE.0.get()).as_mut() }
+}
+
+/// Bindet die Leitung des Wirts (12.5), eine fuer alle Kerne: Ueber sie gehen
+/// der Trace des Rahmens, je Tick die Zeitzeile, die Marke und die Bilanz.
+/// `ring` haelt `len` Byte zwischen Schritt und Leitung (12.2): Ist er voll
+/// und nimmt die Leitung nichts, wird verworfen und gezaehlt.
+///
+/// # Safety
+///
+/// `line_ops` zeigt auf eine gueltige Tabelle, deren Rueckrufe so lange
+/// gelten wie der Prozess, `ring` auf `len` beschreibbare Byte, die nur das
+/// Archiv benutzt; kein Schritt laeuft.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_line_init(line_ops: *const LineOps, ring: *mut u8, len: u32) -> i32 {
+    if line_ops.is_null() || ring.is_null() {
+        return status::NULL;
+    }
+    let Ok(len) = usize::try_from(len) else { return status::BOUND };
+    if len == 0 {
+        return status::BOUND;
+    }
+    // SAFETY: nicht null; der Wirt stellt eine gueltige Tabelle.
+    let ops = unsafe { *line_ops };
+    // SAFETY: `len` Byte an `ring`, die nur das Archiv benutzt und die so
+    // lange leben wie der Prozess.
+    let ring = unsafe { core::slice::from_raw_parts_mut(ring, len) };
+    // SAFETY: siehe `Shared`; kein Schritt laeuft.
+    unsafe { *LINE.0.get() = Some(Telemetry::new(HostLine(ops), ring)) };
+    status::OK
+}
+
+/// Schreibt die Marke `takt trace`, ab der die Bilanz zaehlt, was gesendet
+/// wurde (FB-304); davor darf der Wirt einen Kopf schreiben.
+///
+/// # Safety
+///
+/// Kein Schritt laeuft.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_line_mark() {
+    if let Some(t) = line() {
+        t.mark();
+    }
+}
+
+/// Vom Rahmen gerufen: ein Text im Trace (12.5).
+///
+/// # Safety
+///
+/// `text` ist null oder nullterminiert; der Rahmen uebergibt nur Literale
+/// und Namen aus seinen Tabellen.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_board_trace(text: *const c_char) {
+    let Some(t) = line() else { return };
+    if text.is_null() {
+        return;
+    }
+    // SAFETY: siehe oben.
+    let text = unsafe { core::ffi::CStr::from_ptr(text) };
+    for &b in text.to_bytes() {
+        t.write_byte(b);
+    }
+}
+
+/// Vom Rahmen gerufen: eine Zahl im Trace.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_i64(value: i64) {
+    if let Some(t) = line() {
+        t.write_i64(value);
+        t.write_byte(b' ');
+    }
+}
+
+/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_u64(value: u64) {
+    if let Some(t) = line() {
+        t.write_u64(value);
+        t.write_byte(b' ');
+    }
+}
+
+/// Vom Rahmen gerufen: eine Fliesskommazahl als kuerzeste eindeutige
+/// Ziffernfolge (4.2), wie in den Bring-ups.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_f64(value: f64) {
+    use core::fmt::Write as _;
+    if let Some(t) = line() {
+        let _ = write!(t, "{value:?} ");
+    }
+}
+
+/// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
+#[unsafe(no_mangle)]
+pub extern "C" fn takt_board_trace_hex8(value: u8) {
+    if let Some(t) = line() {
+        t.write_hex8(value);
+    }
+}
+
+/// Die fremde Last der Portpruefung (`takt_foreign`, 12.11, 13.8):
+/// gerechnete Runden und die falschen darunter.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Foreign {
+    /// Gerechnete Runden.
+    pub rounds: u64,
+    /// Runden mit falschem Ergebnis.
+    pub errors: u64,
+}
+
+/// Eine Runde der fremden Last (`takt_rt_core::port_test`): Der Wirt ruft
+/// sie in seiner fremden Aufgabe, so oft er kann. Rechnet eine falsch, hat
+/// der Port die FPU-Register des unterbrochenen Codes nicht gesichert.
+///
+/// # Safety
+///
+/// `foreign` ist null oder zeigt auf Zaehler, die nur dieser Kontext schreibt.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_foreign_round(foreign: *mut Foreign) {
+    // SAFETY: siehe oben.
+    let Some(f) = (unsafe { foreign.as_mut() }) else { return };
+    let mut load = ForeignLoad::new();
+    load.round();
+    f.rounds = f.rounds.wrapping_add(load.rounds());
+    f.errors = f.errors.wrapping_add(load.errors());
+}
+
+/// Die Stacks eines Laufs, wie der Port sie misst (`struct takt_stacks`,
+/// 12.3): die Tiefe unter Last und die Schranke des Programms
+/// (`P_TICK_STACK_BYTES`, `P_JOB_STACK_BYTES`); 0 heisst nicht gemessen.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StackDepths {
+    /// Die Tiefe des Schritt-Stacks in Byte.
+    pub tick: u32,
+    /// `P_TICK_STACK_BYTES`.
+    pub tick_bound: u32,
+    /// Der Anteil des Programms an der Tiefe.
+    pub tick_program: u32,
+    /// Die Tiefe des Job-Stacks in Byte.
+    pub job: u32,
+    /// `P_JOB_STACK_BYTES`.
+    pub job_bound: u32,
+    /// Die Jobs rechnen auf dem Schritt-Stack (FB-459).
+    pub job_shared: u8,
+}
+
+impl From<StackDepths> for Stacks {
+    fn from(s: StackDepths) -> Stacks {
+        let measured = |n: u32| (n != 0).then_some(n);
+        Stacks {
+            tick: measured(s.tick),
+            tick_bound: measured(s.tick_bound),
+            tick_program: measured(s.tick_program),
+            job: measured(s.job),
+            job_bound: measured(s.job_bound),
+            job_shared: s.job_shared != 0,
+        }
     }
 }
 
@@ -477,16 +697,24 @@ impl Watchdog for HostWatchdog {
     fn kick(&mut self) {}
 }
 
-/// Der Trace des Wirts: der Anfangszustand ganz, danach je Tick die
-/// Aenderungen (9.3), ueber die Leitung `takt_board_trace*`.
-struct HostSink;
+/// Der Trace des Wirts (12.5): der Anfangszustand ganz, danach je Tick die
+/// Aenderungen (9.3) und die Zeitzeile, ueber die Leitung aus
+/// [`takt_line_init`]; ohne Leitung nichts.
+type HostSink = Trace<fn() -> Option<&'static mut Telemetry<HostLine>>, Telemetry<HostLine>>;
 
-impl Sink for HostSink {
-    fn outputs(&mut self, tick: Option<&Tick>) -> Outputs {
-        if tick.is_some() { Outputs::Changed } else { Outputs::All }
-    }
+fn host_sink(tick_ns: i64) -> HostSink {
+    let lead: fn() -> Option<&'static mut Telemetry<HostLine>> = line;
+    // Die Grenze des Laufs setzt der Wirt, nicht die Senke.
+    Trace::new(Cadence::of(0, 1), tick_ns, lead)
+}
 
-    fn record(&mut self, _tick: &Tick) {}
+/// Was die Bilanz vom Journal nennt (5.9).
+fn journal_stats<J: Store>(store: &J) -> JournalStats {
+    store.persist().map_or_else(JournalStats::default, |p| JournalStats {
+        writes: p.journal().writes(),
+        failures: p.journal().failures(),
+        ..JournalStats::default()
+    })
 }
 
 /// Der Kern eines Programms ohne und mit Journal (5.9): Welches er hat,
@@ -515,6 +743,25 @@ impl Engine {
             Engine::Volatile(rt) => rt.finish(),
             Engine::Persisting(rt) => rt.finish(),
         };
+    }
+
+    /// Die Bilanz ueber die Leitung, davor die Zeile der fremden Last.
+    fn report(&mut self, stacks: &Stacks, foreign: Option<Foreign>) {
+        // Erst der Abschluss, der noch Trace schreiben kann (12.7, 9.9), dann
+        // ein Griff auf die Leitung fuer die Bilanz.
+        let (stats, overrun, journal) = match self {
+            Engine::Volatile(rt) => (takt_rt_baremetal::stats(rt), *rt.overrun(), journal_stats(rt.journal())),
+            Engine::Persisting(rt) => (takt_rt_baremetal::stats(rt), *rt.overrun(), journal_stats(rt.journal())),
+        };
+        let Some(t) = line() else { return };
+        if let Some(f) = foreign {
+            t.write(port_test::LINE);
+            t.write_u64(f.rounds);
+            t.write(port_test::ERRORS);
+            t.write_u64(f.errors);
+            t.newline();
+        }
+        takt_rt_baremetal::report(t, &overrun, &stats, &journal, stacks);
     }
 }
 
@@ -594,7 +841,7 @@ pub unsafe extern "C" fn takt_core_init(
     let tick_ns = unsafe { (*ops).tick_ns };
     let mut program = CProgram::new(ops, arena, user);
     program.ensure_init();
-    let rt = Runtime::new(program, HostClock(0), HostWatchdog, HostSink, profile, tick_ns, policy);
+    let rt = Runtime::new(program, HostClock(0), HostWatchdog, host_sink(tick_ns), profile, tick_ns, policy);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(Parts { ops, arena, engine: Engine::Volatile(rt) }) };
     status::OK
@@ -649,7 +896,8 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     let mut program = CProgram::new(ops, arena, user);
     let (persist, _, _) = Unloaded::new(journal, current, stored).load(&mut program);
     program.ensure_init();
-    let rt = Runtime::journaled(program, persist, HostClock(0), HostWatchdog, HostSink, profile, o.tick_ns, policy);
+    let sink = host_sink(o.tick_ns);
+    let rt = Runtime::journaled(program, persist, HostClock(0), HostWatchdog, sink, profile, o.tick_ns, policy);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(Parts { ops, arena, engine: Engine::Persisting(rt) }) };
     status::OK
@@ -685,6 +933,27 @@ pub unsafe extern "C" fn takt_core_finish(core: *mut Core) {
     engine.finish();
 }
 
+/// Beendet den Lauf wie [`takt_core_finish`] und schreibt die Bilanz als
+/// letzte Zeile ueber die Leitung (13.8): Schlaf, Ueberlaeufe, Rueckstand,
+/// verworfene und gesendete Byte, das Journal und die Stacks `stacks`; davor
+/// die Zeile der fremden Last `foreign`, wenn sie nicht null ist, danach
+/// `takt end`. Leert den Ring.
+///
+/// # Safety
+///
+/// Wie [`takt_core_service`], und kein Schritt laeuft; `stacks` und
+/// `foreign` sind null oder gueltig.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_core_report(core: *mut Core, stacks: *const StackDepths, foreign: *const Foreign) {
+    // SAFETY: wie in `takt_core_service`.
+    let engine = unsafe { &mut (*core.cast::<Parts>()).engine };
+    // SAFETY: null oder gueltig.
+    let stacks = unsafe { stacks.as_ref() }.copied().unwrap_or_default();
+    // SAFETY: ebenso.
+    let foreign = unsafe { foreign.as_ref() }.copied();
+    engine.report(&Stacks::from(stacks), foreign);
+}
+
 /// Rechnet die Jobs, die der Kern verteilt hat (4.5); unterbrechbar durch
 /// [`takt_core_service`].
 ///
@@ -718,7 +987,7 @@ mod tests {
     use std::string::String;
     use std::vec::Vec;
 
-    use super::{ABI, CORE_BYTES, NextStep, NvmOps, Ops, nvm, status};
+    use super::{ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, StackDepths, nvm, status};
 
     const HEADER: &str = include_str!("../include/takt_sdk.h");
 
@@ -804,6 +1073,23 @@ mod tests {
             ("jobs", offset_of!(NextStep, jobs)),
         ]);
         assert_eq!(fields("typedef struct takt_next {"), next);
+        let line = in_order(vec![
+            ("ctx", offset_of!(LineOps, ctx)),
+            ("try_write", offset_of!(LineOps, try_write)),
+            ("flush", offset_of!(LineOps, flush)),
+        ]);
+        assert_eq!(fields("struct takt_line {"), line);
+        let stacks = in_order(vec![
+            ("tick", offset_of!(StackDepths, tick)),
+            ("tick_bound", offset_of!(StackDepths, tick_bound)),
+            ("tick_program", offset_of!(StackDepths, tick_program)),
+            ("job", offset_of!(StackDepths, job)),
+            ("job_bound", offset_of!(StackDepths, job_bound)),
+            ("job_shared", offset_of!(StackDepths, job_shared)),
+        ]);
+        assert_eq!(fields("struct takt_stacks {"), stacks);
+        let foreign = in_order(vec![("rounds", offset_of!(Foreign, rounds)), ("errors", offset_of!(Foreign, errors))]);
+        assert_eq!(fields("typedef struct takt_foreign {"), foreign);
         assert_eq!(define("TAKT_SDK_ABI"), i64::from(ABI));
         assert_eq!(define("TAKT_CORE_BYTES"), CORE_BYTES as i64);
         for (name, value) in [

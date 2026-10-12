@@ -1,0 +1,14 @@
+# takt-hw 17 edition 1 compiler 0.1.0
+# Linux auf x86-64 unter dem POSIX-Port (`crates/takt-embed-c/ports/posix`,
+# M11 Schritt 18c): nur die Stack-Reserven, die `takt port-test --emit
+# embed --form rtos` in `P_TICK_STACK_BYTES` und `P_JOB_STACK_BYTES`
+# einrechnet (12.3). Jeder Faden traegt ueber dem Programm den Kern des
+# SDK, die Leitung, die libc und oben den Fadenkopf von glibc (TCB und
+# statisches TLS), denn der Port gibt den Stack selbst vor.
+#
+# TODO(18c): vorlaeufig; der erste Lauf von `a_posix_port_passes_the_port_test`
+# auf ubuntu-24.04 misst die Tiefen, und hier steht dann die gemessene Reserve.
+
+[target.x86_64]
+stack_reserve_rtos = 16384
+job_stack_reserve = 16384

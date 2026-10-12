@@ -44,3 +44,10 @@ filter = """
     | test(=the_rust_example_builds_with_one_call_and_agrees_with_the_interpreter)
 """
 test-group = "memory"
+
+[[profile.default.overrides]]
+# Der POSIX-Port in Echtzeit (M11 Schritt 18c): Seine Faeden brauchen freie
+# Kerne, sonst verspaetet ein voller Rechner den Tick, und die Portpruefung
+# verlangt null verspaetete Ticks.
+filter = "test(=a_posix_port_passes_the_port_test)"
+threads-required = "num-cpus"
