@@ -43,6 +43,18 @@ config TAKT_PORT_CMSIS_RTOS2
 
 endchoice
 
+config TAKT_JOURNAL_FLASH
+	bool "Das Journal im Flash (ports/zephyr-nvm)"
+	select FLASH
+	select FLASH_MAP
+	help
+	  Das Geraet des Journals (5.9, `struct takt_nvm`) ueber `flash_area`
+	  auf einer Partition des Devicetree, die der Wirt nennt: zwei Slots,
+	  je die Haelfte der Partition auf einer Grenze des Loeschblocks.
+	  `persist` ueberlebt damit einen Neustart. Loeschen und Schreiben
+	  halten den Schrittfaden so lange an, wie die Hardware-Konfiguration
+	  es nennt (`nvm_blocking`, Pruefung 32).
+
 config TAKT_TARGET
 	string "Tripel des Ziels"
 	default "thumbv7em-none-eabihf" if CPU_CORTEX_M4 && FPU && FP_HARDABI

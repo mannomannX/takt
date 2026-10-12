@@ -1,5 +1,8 @@
 /* Board 1: die Leitung auf USART1 (PA9/PA10) mit der Rate aller
- * F401-Programme, die der Host ohne Wissen um das laufende erreicht. */
+ * F401-Programme, die der Host ohne Wissen um das laufende erreicht. Das
+ * Journal in Sektor 2 und 3 (je 16 KiB ab 0x0800_8000), wo es auch die
+ * Bring-ups halten: zwischen Sprungbrett und Anwendung, und kein Abbild
+ * schreibt dorthin. */
 / {
 	chosen {
 		takt,line = &usart1;
@@ -8,4 +11,13 @@
 
 &usart1 {
 	current-speed = <921600>;
+};
+
+&flash0 {
+	partitions {
+		takt_journal: partition@8000 {
+			label = "takt-journal";
+			reg = <0x00008000 0x00008000>;
+		};
+	};
 };

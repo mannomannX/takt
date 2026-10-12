@@ -33,16 +33,24 @@ struct Expect {
     partition: bool,
 }
 
-/// Die Tabelle des Programms, der Kern des SDK, der Port mit Faeden und
-/// sein Adapter: ohne sie faehrt kein Abbild das Pruefprogramm.
-const PORT: &[&str] = &["port_test_ops", "takt_core_init_journaled", "takt_core_service", "takt_rtos_start", "main"];
+/// Die Tabelle des Programms, der Kern des SDK, der Port mit Faeden und das
+/// Geraet des Journals im Flash (FB-732): ohne sie faehrt kein Abbild das
+/// Pruefprogramm.
+const PORT: &[&str] = &[
+    "port_test_ops",
+    "takt_core_init_journaled",
+    "takt_core_service",
+    "takt_rtos_start",
+    "takt_zephyr_nvm_open",
+    "main",
+];
 
 /// `examples/zephyr`: der Adapter auf den Faeden des Zephyr-Kerns, die
 /// Probe der Partition und der Benutzermodus, gegen den sie schuetzt.
 const ZEPHYR_EXPECT: Expect = Expect {
     example: ZEPHYR,
     linked: &["takt_os_spawn", "partition_probe"],
-    config: &[("TAKT", "y"), ("TAKT_PORT_ZEPHYR", "y"), ("USERSPACE", "y")],
+    config: &[("TAKT", "y"), ("TAKT_PORT_ZEPHYR", "y"), ("USERSPACE", "y"), ("TAKT_JOURNAL_FLASH", "y")],
     partition: true,
 };
 
@@ -51,7 +59,7 @@ const ZEPHYR_EXPECT: Expect = Expect {
 const CMSIS_EXPECT: Expect = Expect {
     example: CMSIS_RTOS2,
     linked: &["takt_os_spawn", "osThreadNew", "osSemaphoreAcquire", "osThreadGetStackSpace"],
-    config: &[("TAKT", "y"), ("TAKT_PORT_CMSIS_RTOS2", "y"), ("CMSIS_RTOS_V2", "y")],
+    config: &[("TAKT", "y"), ("TAKT_PORT_CMSIS_RTOS2", "y"), ("CMSIS_RTOS_V2", "y"), ("TAKT_JOURNAL_FLASH", "y")],
     partition: false,
 };
 
@@ -131,7 +139,7 @@ fn builds(expect: &Expect, boards: &[Board]) -> Vec<String> {
     let mut failed = Vec::new();
     for &board in boards {
         let dir = scratch(&format!("takt-{}-{}", expect.example, board.triple));
-        match zephyr::build(&west, expect.example, board, &dir, takt) {
+        match zephyr::build(&west, expect.example, board, false, &dir, takt) {
             Ok(image) => {
                 failed.extend(configured(expect, board, &image));
                 failed.extend(linked(expect, board, &image));

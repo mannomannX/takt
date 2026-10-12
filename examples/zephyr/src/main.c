@@ -11,7 +11,6 @@
  * --judge` urteilt ueber alles, was ueber die Leitung kam.
  */
 #include <stdint.h>
-#include <string.h>
 
 #include <zephyr/kernel.h>
 
@@ -21,6 +20,7 @@
 #include "port_test.h"
 #include "takt_rtos.h"
 #include "takt_sdk.h"
+#include "takt_zephyr_nvm.h"
 
 /* So viele Ticks faehrt der Port: `takt_conformance::port::TICKS`. */
 #define TICKS 2000U
@@ -32,45 +32,21 @@ static void kick(void *ctx) {
     ARG_UNUSED(ctx);
 }
 
-/* Das Geraet des Journals (5.9): ein Flash im RAM, zwei Slots, jeder Vorgang
- * sofort fertig. */
-#define SLOT 1024U
-static uint8_t slots[2][SLOT];
-static int32_t pending = TAKT_NVM_IDLE;
+/* Das Geraet des Journals (5.9): zwei Slots im Flash, in der Partition
+ * `takt_journal` des Devicetree (`ports/zephyr-nvm`, FB-732). Ein Bau mit
+ * `TAKT_FRESH_JOURNAL` loescht sie vor dem Lauf: Die Portpruefung vergleicht
+ * mit dem Interpreter ohne gespeicherte Werte; ohne ueberlebt `persist`
+ * einen Neustart. */
+static struct takt_zephyr_nvm journal;
 
-static uint8_t erase(void *ctx, uint8_t slot) {
-    ARG_UNUSED(ctx);
-    (void)memset(slots[slot & 1U], 0xff, SLOT);
-    pending = TAKT_NVM_DONE;
-    return 1U;
-}
-
-static uint8_t program(void *ctx, uint8_t slot, uint32_t offset, const uint8_t *bytes, uint32_t len) {
-    ARG_UNUSED(ctx);
-    if ((offset > SLOT) || (len > (SLOT - offset))) {
-        pending = TAKT_NVM_FAILED;
-    } else {
-        (void)memcpy(&slots[slot & 1U][offset], bytes, len);
-        pending = TAKT_NVM_DONE;
+/* Oeffnet das Journal und loescht es, wenn der Bau ein frisches verlangt;
+ * 0 oder -errno. */
+static int journal_open(struct takt_nvm *nvm) {
+    int rc = takt_zephyr_nvm_open(&journal, PARTITION_ID(takt_journal), PORT_TEST_NVM_BLOCKING_NS, nvm);
+    if ((rc == 0) && (TAKT_FRESH_JOURNAL != 0)) {
+        rc = takt_zephyr_nvm_clear(&journal);
     }
-    return 1U;
-}
-
-static int32_t poll_nvm(void *ctx) {
-    const int32_t state = pending;
-    ARG_UNUSED(ctx);
-    pending = TAKT_NVM_IDLE;
-    return state;
-}
-
-static uint8_t read_nvm(void *ctx, uint8_t slot, uint32_t offset, uint8_t *into, uint32_t len) {
-    uint8_t ok = 0U;
-    ARG_UNUSED(ctx);
-    if ((offset <= SLOT) && (len <= (SLOT - offset))) {
-        (void)memcpy(into, &slots[slot & 1U][offset], len);
-        ok = 1U;
-    }
-    return ok;
+    return rc;
 }
 
 /* Die Stacks beider Faeden, Kernel-Stacks fuer Supervisor-Faeden
@@ -140,16 +116,16 @@ int main(void) {
     static uint8_t current[PORT_TEST_PERSIST_BOUND];
     static uint8_t stored[PORT_TEST_PERSIST_BOUND];
     static takt_core core;
-    static const struct takt_nvm nvm = {NULL, SLOT, -1, erase, program, poll_nvm, read_nvm};
+    static struct takt_nvm nvm;
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
         takt_board_trace("takt auf zephyr\n");
         takt_board_trace(protection());
         takt_line_mark();
-        (void)memset(slots, 0xff, sizeof slots);
-        if (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm, current,
-                                     stored, PORT_TEST_PERSIST_BOUND) == TAKT_OK) {
+        if ((journal_open(&nvm) == 0) &&
+            (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
+                                      current, stored, PORT_TEST_PERSIST_BOUND) == TAKT_OK)) {
             drive(&core);
         }
     }

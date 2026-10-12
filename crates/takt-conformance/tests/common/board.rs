@@ -702,13 +702,15 @@ pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
 /// Das Abbild von `examples/<example>` fuer `zephyr` (M11 Schritt 19,
 /// [`takt_conformance::zephyr`]), gebaut mit dem Werkzeug, mit dem der Harness
 /// die Bring-ups baut (`<target>/release/takt`), unter
-/// `<target>/takt-zephyr/<board>-<example>`. Zephyr und sein SDK liegen
-/// ausserhalb des Baums: Im Lauf, der nur baut, ohne `TAKT_WEST` (der Runner
-/// von GitHub), baut erst der Lauf am Board, und der Test endet dort.
+/// `<target>/takt-zephyr/<board>-<example>[-fresh]`; mit `fresh` loescht das
+/// Abbild sein Journal vor dem Lauf. Zephyr und sein SDK liegen ausserhalb
+/// des Baums: Im Lauf, der nur baut, ohne `TAKT_WEST` (der Runner von
+/// GitHub), baut erst der Lauf am Board, und der Test endet dort.
 pub fn zephyr_image(
     name: &str,
     example: &str,
     zephyr: takt_conformance::zephyr::Board,
+    fresh: bool,
 ) -> Result<takt_conformance::zephyr::Image, String> {
     let Some(west) = takt_conformance::zephyr::west() else {
         return Err(if board::build_only() {
@@ -719,8 +721,47 @@ pub fn zephyr_image(
     };
     let target = takt_conformance::target_dir();
     let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
-    let dir = target.join("takt-zephyr").join(format!("{name}-{example}"));
-    takt_conformance::zephyr::build(&west, example, zephyr, &dir, &tool)
+    let dir = target.join("takt-zephyr").join(format!("{name}-{example}{}", if fresh { "-fresh" } else { "" }));
+    takt_conformance::zephyr::build(&west, example, zephyr, fresh, &dir, &tool)
+}
+
+/// **`persist` ueberlebt unter Zephyr einen Neustart** (5.9, 12.11; M11
+/// Schritt 19, FB-732): `examples/<example>` mit dem Journal im Flash und
+/// ohne frisches Journal, zweimal; `again` faehrt dasselbe Abbild noch
+/// einmal. Das Pruefprogramm zaehlt in `keeper` die Laeufe (`persist var
+/// runs`) und zeigt sie bei t=0 als `kept`: Der zweite Lauf beginnt mit dem
+/// Stand des ersten plus eins, gleich, was davor im Journal stand.
+pub fn zephyr_persistence_survives<B: Board>(
+    board: &mut B,
+    image: &takt_conformance::zephyr::Image,
+    first: impl FnOnce(&mut B, &takt_conformance::zephyr::Image) -> Result<String, String>,
+    again: impl FnOnce(&mut B, &takt_conformance::zephyr::Image) -> Result<String, String>,
+) -> Vec<String> {
+    let kept = |text: &str| -> Option<u64> {
+        text.lines().find_map(|l| l.trim_end().strip_prefix("t=0 out kept ")).and_then(|v| v.trim().parse().ok())
+    };
+    let first = match first(board, image) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("erster Lauf: {e}")],
+    };
+    let Some(before) = kept(&first) else { return vec![format!("kein `kept` bei t=0 im ersten Lauf:\n{first}")] };
+    if !board::counter(&first, "journal geschrieben").is_some_and(|n| n >= 1) {
+        return vec![format!("der erste Lauf schrieb das Journal nicht:\n{first}")];
+    }
+    let second = match again(board, image) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("zweiter Lauf: {e}")],
+    };
+    match kept(&second) {
+        Some(after) if after == before + 1 => Vec::new(),
+        Some(after) => {
+            vec![format!(
+                "der zweite Lauf beginnt mit `kept` {after}, nicht mit dem Stand des ersten plus eins ({}):\n{second}",
+                before + 1
+            )]
+        }
+        None => vec![format!("kein `kept` bei t=0 im zweiten Lauf:\n{second}")],
+    }
 }
 
 /// **Ein Port unter Zephyr besteht die Portpruefung** (12.11, 13.8; M11
