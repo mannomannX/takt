@@ -1,0 +1,17 @@
+# Dependabot haelt die Actions aktuell: Jede steht mit ihrem vollen
+# Commit-SHA und der Fassung als Kommentar (SonarCloud S7637), und ein
+# Pull Request hebt beide zusammen. Die Workflows liegen unter `/`, die
+# zusammengesetzten Aktionen je in ihrem Verzeichnis.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - "/"
+      - "/.github/actions/setup"
+      - "/.github/actions/zephyr"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
