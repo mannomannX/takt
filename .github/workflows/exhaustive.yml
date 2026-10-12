@@ -1,0 +1,46 @@
+# Der erschoepfende Lauf von libtaktm (INT-028) auf einem Runner von GitHub,
+# von Hand gestartet: jede f32-Eingabe der zehn Funktionen gegen das Orakel,
+# rund eine Stunde auf vier Kernen. Er traegt den Fingerabdruck der
+# Implementierung in `crates/libtaktm/tests/exhaustive_runs.txt` ein; die
+# Datei kommt als Artefakt zurueck und wird von Hand committet, wie lokal.
+name: Erschoepfender Lauf
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Zweig oder Commit
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  exhaustive:
+    name: libtaktm, jede f32-Eingabe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Rust 1.98.0
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal
+          rustup default 1.98.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: exhaustive
+      - run: cargo test -p libtaktm --release --test exhaustive -- --ignored --test-threads=1
+      - name: Ratsche sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exhaustive-runs
+          path: crates/libtaktm/tests/exhaustive_runs.txt
+          retention-days: 30

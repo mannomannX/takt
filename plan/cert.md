@@ -222,7 +222,7 @@ Lint noch Test, nur das Review.
 | R.10.5 (A), R.10.8 (A), R.11.1 (R), R.11.3 (R), R.11.4 (R), R.11.8 (R) | alle | Umwandlungen in ungeeignete Typen, zwischen Zeigern, zwischen Zeigern und Zahlen, ohne `const` | Stufe 2: `as_conversions`, `fn_to_numeric_cast_any`; `From` und `TryFrom` statt `as`. Im Werkzeug Review | `tests/rule_catalog.rs` |
 | R.11.11 (R) | alle | Zeiger nicht implizit gegen null vergleichen | rustc: Rust vergleicht nie implizit | — |
 | R.12.1 (A) | alle | der Vorrang der Operatoren ist ausdrücklich | Clippy `precedence` (in `clippy::all`) | Clippy ohne Warnung |
-| R.12.2 (A) | alle | die Schiebeweite liegt im Bereich des Typs | rustc `arithmetic_overflow` für Konstanten; Stufe 2: `arithmetic_side_effects` | `tests/rule_catalog.rs` |
+| R.12.2 (A) | alle | die Schiebeweite liegt im Bereich des Typs | rustc `arithmetic_overflow` für konstante Weiten. Variable Weiten hält kein Lint — Clippy überlässt Schiebeoperationen der Konstantenauswertung (Lücke): im Review, in Stufe 2 durch Masken wie `% 64` oder feste Grenzen | — |
 | R.13.1 (A) | alle | Initialisierer ohne bleibende Seiteneffekte | Sprache: Rust wertet strikt von links nach rechts aus | — |
 | R.13.5 (A) | alle | die rechte Seite von `&&` und `||` ohne bleibende Seiteneffekte | Review (Lücke) | — |
 | R.14.1 (R) | alle | kein Schleifenzähler in Gleitkomma | Review; `while_float` steht nur in Clippys `nursery` (Lücke) | — |
