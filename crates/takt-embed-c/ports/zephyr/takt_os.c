@@ -76,11 +76,11 @@ int takt_os_spawn(struct takt_os *os, int which, void (*body)(void *arg), void *
     struct takt_os_thread *t = &os->threads[which];
     const int zephyr = takt_os_zephyr_priority(priority);
     int rc = -EINVAL;
-    if ((bytes > K_THREAD_STACK_RESERVED) && (zephyr >= K_HIGHEST_THREAD_PRIO) &&
+    if ((bytes > K_KERNEL_STACK_RESERVED) && (zephyr >= K_HIGHEST_THREAD_PRIO) &&
         (zephyr <= K_LOWEST_APPLICATION_THREAD_PRIO) && ((which != TAKT_OS_JOB) || (zephyr >= 0))) {
         t->body = body;
         t->arg = arg;
-        (void)k_thread_create(&t->thread, (k_thread_stack_t *)stack, bytes - K_THREAD_STACK_RESERVED, takt_os_run, t,
+        (void)k_thread_create(&t->thread, (k_thread_stack_t *)stack, bytes - K_KERNEL_STACK_RESERVED, takt_os_run, t,
                               NULL, NULL, zephyr, K_FP_REGS, K_NO_WAIT);
         rc = 0;
     }

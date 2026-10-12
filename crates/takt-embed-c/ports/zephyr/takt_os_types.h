@@ -4,12 +4,19 @@
  * an der Wurzel von Takt) baut den Adapter mit `ports/rtos/takt_rtos.c`,
  * wenn `CONFIG_TAKT` gesetzt ist.
  *
- * **Die Stacks** definiert der Wirt mit `K_THREAD_STACK_DEFINE` und gibt
- * dem Port das ganze Objekt: `stack` ist das Symbol, `bytes` seine Groesse
- * (`sizeof`), samt dem Bereich, den der Zephyr-Kern unten fuer den
- * Stackwaechter haelt (`K_THREAD_STACK_RESERVED`). So bemalt und misst der
- * Port den Stack bis zu seinem oberen Ende; den Faden legt der Adapter mit
- * `K_THREAD_STACK_SIZEOF` an. Was der Zephyr-Kern oben im Stack fuer sich
+ * **Die Faeden** sind Supervisor-Faeden: Mit `CONFIG_USERSPACE` erreicht ein
+ * Faden im Benutzermodus die Arena nicht, wenn sie in einer eigenen
+ * Partition liegt, die keine seiner Domaenen enthaelt (12.11, `Schutz:
+ * Partition`); gegen privilegierten Code schuetzt sie nicht.
+ *
+ * **Die Stacks** definiert der Wirt darum als Kernel-Stacks mit
+ * `K_KERNEL_STACK_DEFINE` (ohne die Zweierpotenzen, die eine MPU fuer Stacks
+ * im Benutzermodus verlangt) und gibt dem Port das ganze Objekt: `stack` ist
+ * das Symbol, `bytes` seine Groesse (`sizeof`), samt dem Bereich, den der
+ * Zephyr-Kern unten fuer den Stackwaechter haelt
+ * (`K_KERNEL_STACK_RESERVED`). So bemalt und misst der Port den Stack bis zu
+ * seinem oberen Ende; den Faden legt der Adapter mit
+ * `K_KERNEL_STACK_SIZEOF` an. Was der Zephyr-Kern oben im Stack fuer sich
  * nimmt (TLS, `CONFIG_STACK_POINTER_RANDOM`), zaehlt als Tiefe mit: eine
  * Ueberschaetzung, die sichere Richtung. Der Zephyr-Kern darf den Stack beim
  * Anlegen nicht selbst bemalen (`CONFIG_INIT_STACKS`,

@@ -735,8 +735,20 @@ pub fn zephyr_verdict(name: &str, run: Result<String, String>) -> Vec<String> {
     }
     let verdict = port::judge(&text, port::PROGRAM);
     eprintln!("{name}-zephyr: {}{verdict}", log.display());
-    if verdict.passed() { Vec::new() } else { vec![format!("Zephyr: {verdict}")] }
+    let mut failed = if verdict.passed() { Vec::new() } else { vec![format!("Zephyr: {verdict}")] };
+    // Die Partition verweigert dem Faden im Benutzermodus die Arena (12.11,
+    // M11 Schritt 19b): die Kopfzeile der Probe vor der Marke.
+    let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
+    if !header.lines().any(|l| l.trim_end() == ZEPHYR_PARTITION_REFUSED) {
+        let seen: Vec<&str> = header.lines().filter(|l| l.starts_with("takt schutz")).collect();
+        failed.push(format!("Zephyr: keine Zeile `{ZEPHYR_PARTITION_REFUSED}` vor der Marke, gesehen {seen:?}"));
+    }
+    failed
 }
+
+/// Die Kopfzeile von `examples/zephyr`, wenn die Partition der Arena den
+/// Schreibzugriff eines Fadens im Benutzermodus abwies.
+const ZEPHYR_PARTITION_REFUSED: &str = "takt schutz partition verweigert";
 
 /// **Ein absichtlich falscher Port faellt durch, und zwar an der Pflicht,
 /// die er verletzt** (M11 Schritt 15): Das Urteil verwirft ihn, jeder Grund
