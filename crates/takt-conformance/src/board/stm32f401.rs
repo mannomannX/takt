@@ -65,7 +65,9 @@ pub const C_HOST: CHost = CHost {
     triple: "thumbv7em-none-eabihf",
     target: "thumbv7em",
     hardware: "corpus-try/hw/stm32f401.hw",
-    cflags: &["-mcpu=cortex-m4", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-mthumb"],
+    // Enums wie die Plattform und der Rahmen (FB-730,
+    // `takt_llvm::toolchain::short_enums`).
+    cflags: &["-mcpu=cortex-m4", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-mthumb", "-fshort-enums"],
     board: &["startup.c", "board.c"],
     script: "stm32f401.ld",
     bindings: &[Binding {

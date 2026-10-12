@@ -727,3 +727,76 @@ fn the_ldgen_fragment_parses_with_esp_idf() {
     assert!(text.starts_with("Mapping takt_valve libvalve.a"), "{text}");
     assert!(text.contains("noflash"), "{text}");
 }
+
+/// `Tag_ABI_enum_size` (26) in den Attributen eines ARM-Objekts (ELF32,
+/// Abschnitt `.ARM.attributes`): 1 heisst so klein wie die Werte, 2 `int`;
+/// `None` ohne den Abschnitt oder das Attribut, etwa in einem Objekt fuer
+/// x86-64.
+fn enum_size(object: &Path) -> Option<u64> {
+    let elf = std::fs::read(object).expect("Objekt");
+    let u16_at = |at: usize| Some(usize::from(u16::from_le_bytes(elf.get(at..at + 2)?.try_into().ok()?)));
+    let u32_at = |at: usize| usize::try_from(u32::from_le_bytes(elf.get(at..at + 4)?.try_into().ok()?)).ok();
+    // ELF32, Little Endian.
+    if elf.get(..6)? != b"\x7fELF\x01\x01" {
+        return None;
+    }
+    let (table, size, count) = (u32_at(0x20)?, u16_at(0x2e)?, u16_at(0x30)?);
+    let attributes = (0..count).map(|i| table + i * size).find(|&h| u32_at(h + 4) == Some(0x7000_0003))?;
+    let (offset, length) = (u32_at(attributes + 0x10)?, u32_at(attributes + 0x14)?);
+    let bytes = elf.get(offset..offset + length)?;
+    // `A`, dann der Abschnitt des Herstellers `aeabi` mit dem Teil `File` (1):
+    // Paare aus Kennung und Wert, beide ULEB128; die Kennungen 4, 5 und 67
+    // tragen eine Zeichenkette, 32 eine Zahl und eine Zeichenkette.
+    let start = bytes.windows(6).position(|w| w == b"aeabi\0")? + 6;
+    let mut at = start + 5;
+    let uleb = |at: &mut usize| -> Option<u64> {
+        let mut value = 0u64;
+        for shift in (0..64).step_by(7) {
+            let b = *bytes.get(*at)?;
+            *at += 1;
+            value |= u64::from(b & 0x7f) << shift;
+            if b & 0x80 == 0 {
+                return Some(value);
+            }
+        }
+        None
+    };
+    let string = |at: &mut usize| -> Option<()> {
+        *at += bytes.get(*at..)?.iter().position(|&b| b == 0)? + 1;
+        Some(())
+    };
+    while at < bytes.len() {
+        let tag = uleb(&mut at)?;
+        match tag {
+            4 | 5 | 67 => string(&mut at)?,
+            32 => {
+                uleb(&mut at)?;
+                string(&mut at)?;
+            }
+            26 => return uleb(&mut at),
+            _ => {
+                uleb(&mut at)?;
+            }
+        }
+    }
+    None
+}
+
+/// **Der Rahmen legt Enums an wie die Plattform** (FB-730): Unter
+/// `thumbv7em` tragen `valve_frame.o` und `valve_ops.o` `Tag_ABI_enum_size`
+/// „klein“, wie die GCC eines Wirts fuer Cortex-M nach AAPCS
+/// (`-fshort-enums`); ld.bfd warnt dann nicht, und seine Pruefung bleibt
+/// an. Unter dem Tripel des Wirts traegt kein Objekt das Attribut.
+#[test]
+#[cfg_attr(not(target_arch = "x86_64"), ignore = "das Tripel des Wirts ist hier x86-64")]
+fn the_frame_takes_the_enum_size_of_the_platform() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    for (triple, want) in [("thumbv7em-none-eabihf", Some(1)), (host_triple(), None)] {
+        let dir = deliver(&format!("takt-embed-enums-{triple}"), triple, "logical");
+        for object in ["valve_frame.o", "valve_ops.o"] {
+            assert_eq!(enum_size(&dir.join(object)), want, "{triple}: {object}");
+        }
+    }
+}
