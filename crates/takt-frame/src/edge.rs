@@ -293,7 +293,7 @@ fn degrade(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(
             s,
             "    if (a->edge_devices[g_edge_device_of[{c}]].degraded) {{ takt_edge_driver_bad(&a->edge_gates[{c}]); \
-             a->image[{}] = 3; a->image[{}] = 3; *(long long *)(a->image + {}) = 0; }} /* {} */",
+             a->image[{}] = 3; a->image[{}] = 3; __builtin_memcpy(a->image + {}, &(long long){{ 0 }}, sizeof(long long)); }} /* {} */",
             e.quality, e.reason, e.age, slot.name
         );
     }
@@ -339,7 +339,7 @@ fn apply(s: &mut String, p: &Program, layout: &Layout, driven: &[&Machine], deli
             e.quality, e.reason
         );
         let _ = writeln!(s, "        }}");
-        let _ = writeln!(s, "        *(long long *)(a->image + {}) = v->age;", e.age);
+        let _ = writeln!(s, "        __builtin_memcpy(a->image + {}, &v->age, sizeof v->age);", e.age);
         let _ = writeln!(s, "        break;");
         let _ = writeln!(s, "    }}");
     }
@@ -431,7 +431,7 @@ fn composite(s: &mut String, p: &Program, slot: &crate::layout::Slot, c: usize, 
     let Some((ct, stride, float, len)) = samples else {
         let _ = writeln!(s, "        if (v->has_value) memcpy(a->image + {}, src, {});", slot.offset, slot.size);
         let _ = writeln!(s, "        a->image[{}] = v->quality; a->image[{}] = v->reason;", e.quality, e.reason);
-        let _ = writeln!(s, "        *(long long *)(a->image + {}) = v->age;", e.age);
+        let _ = writeln!(s, "        __builtin_memcpy(a->image + {}, &v->age, sizeof v->age);", e.age);
         let _ = writeln!(s, "        break;");
         let _ = writeln!(s, "    }}");
         return;
@@ -458,7 +458,7 @@ fn composite(s: &mut String, p: &Program, slot: &crate::layout::Slot, c: usize, 
         e.quality, e.reason
     );
     let _ = writeln!(s, "        }}");
-    let _ = writeln!(s, "        *(long long *)(a->image + {}) = v->age;", e.age);
+    let _ = writeln!(s, "        __builtin_memcpy(a->image + {}, &v->age, sizeof v->age);", e.age);
     let _ = writeln!(s, "        break;");
     let _ = writeln!(s, "    }}");
 }

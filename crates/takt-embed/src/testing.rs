@@ -428,6 +428,10 @@ mod tests {
     /// selbst besteht; ein Lauf ohne Zeilen, ein falscher Wert und ein
     /// fehlender Ausgang scheitern und nennen, was fehlt.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "uebersetzt eine Quelle und faehrt den Interpreter: unter Miri ueber zehn Minuten, ohne `unsafe`"
+    )]
     fn the_comparison_rejects_what_differs() {
         let good = interpreted(Path::new(VALVE), 1000, &Default::default()).expect("Interpreter") + "takt end 1000\n";
         assert!(good.contains("t=300 out valve true"), "{good}");
@@ -452,6 +456,10 @@ mod tests {
     /// nach Tick 500 von 1000, mit oder ohne Angabe, wie weit er kam,
     /// scheitert er, obwohl jede Zeile, die er hat, stimmt.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "uebersetzt eine Quelle und faehrt den Interpreter: unter Miri ueber zehn Minuten, ohne `unsafe`"
+    )]
     fn a_run_that_stops_early_fails() {
         let full = interpreted(Path::new(VALVE), 1000, &Default::default()).expect("Interpreter");
         let tick = |l: &str| l.strip_prefix("t=").and_then(|r| r.split_whitespace().next()?.parse::<u64>().ok());
@@ -468,6 +476,10 @@ mod tests {
     /// Zeile scheitert, ein Ende, das der Interpreter nicht kennt, ebenso.
     /// Mit dem Ende auf beiden Seiten genuegt es, bis dorthin zu reichen.
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "uebersetzt eine Quelle und faehrt den Interpreter: unter Miri ueber zehn Minuten, ohne `unsafe`"
+    )]
     fn an_end_on_one_side_only_fails() {
         let theirs = interpreted(Path::new(LIFECYCLE), 60, &Default::default()).expect("Interpreter");
         assert!(theirs.contains("t=34 end after"), "{theirs}");

@@ -107,7 +107,7 @@ pub fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout)
                 let Some(text) = literal(p, item) else { continue };
                 let _ = writeln!(
                     s,
-                    "    (({ct} *)(a->latch + {}))[{k}] = {text}; /* {}[{k}] auf safe */",
+                    "    __builtin_memcpy(a->latch + {} + {k} * sizeof({ct}), &({ct}){{ {text} }}, sizeof({ct})); /* {}[{k}] auf safe */",
                     slot.offset, slot.name
                 );
             }
@@ -115,7 +115,11 @@ pub fn safe_outputs(s: &mut String, p: &Program, layout: &crate::layout::Layout)
         }
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         let Some(text) = literal(p, safe) else { continue };
-        let _ = writeln!(s, "    *({ct} *)(a->latch + {}) = {text}; /* {} auf safe (5.3) */", slot.offset, slot.name);
+        let _ = writeln!(
+            s,
+            "    __builtin_memcpy(a->latch + {}, &({ct}){{ {text} }}, sizeof({ct})); /* {} auf safe (5.3) */",
+            slot.offset, slot.name
+        );
     }
 }
 
@@ -132,7 +136,7 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
     let mut s = format!("    memset(a->latch + {}, 0, {});\n", slot.offset, slot.size);
     let _ = writeln!(
         s,
-        "    *(int *)(a->latch + {}) = {}; /* {} auf safe (5.3) */",
+        "    __builtin_memcpy(a->latch + {}, &(int){{ {} }}, sizeof(int)); /* {} auf safe (5.3) */",
         slot.offset, v.discriminant, slot.name
     );
     for (k, field) in fields.iter().enumerate() {
@@ -142,7 +146,8 @@ fn safe_payload(p: &Program, slot: &crate::layout::Slot, safe: &takt_mir::expr::
             LlvmType::F64 => "double",
             _ => "long long",
         };
-        let _ = writeln!(s, "    *({ct} *)(a->latch + {at}) = {};", literal(p, field)?);
+        let _ =
+            writeln!(s, "    __builtin_memcpy(a->latch + {at}, &({ct}){{ {} }}, sizeof({ct}));", literal(p, field)?);
     }
     Some(s)
 }
@@ -281,9 +286,13 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
         // Ein `double` traegt dieselben Bits, eine Ganzzahl wird
         // verengt — beides genau die Umkehrung von `at` im Codegen.
         let back = if slot.ty.is_float() {
-            format!("*({ct} *)(a->latch + {}) = ({ct})(*(double *)&best_v);", slot.offset)
+            format!(
+                "{{ double d; __builtin_memcpy(&d, &best_v, sizeof d); \
+                 __builtin_memcpy(a->latch + {}, &({ct}){{ ({ct})d }}, sizeof({ct})); }}",
+                slot.offset
+            )
         } else {
-            format!("*({ct} *)(a->latch + {}) = ({ct})best_v;", slot.offset)
+            format!("__builtin_memcpy(a->latch + {}, &({ct}){{ ({ct})best_v }}, sizeof({ct}));", slot.offset)
         };
         let _ = writeln!(s, "        case {q}: {back} break; /* {name} */");
     }
@@ -335,7 +344,7 @@ pub fn outer_fault(s: &mut String, p: &Program, indent: &str) {
     };
     let _ = writeln!(s, "{indent}a->image[{at}] = a->outer; a->image[{q}] = 0; /* {name} */");
     if let Some(age) = age_offset(p, name) {
-        let _ = writeln!(s, "{indent}*(long long *)(a->image + {age}) = 0;");
+        let _ = writeln!(s, "{indent}__builtin_memcpy(a->image + {age}, &(long long){{ 0 }}, sizeof(long long));");
     }
     let _ = writeln!(s, "{indent}a->outer = 0;");
 }
@@ -513,13 +522,13 @@ pub fn sim_bindings(s: &mut String, p: &Program, indent: &str) {
         // bleibt hier aussen vor (LIMITS).
         let Some(q) = quality_offset(p, &inp.name) else { continue };
         if let Some(age) = age_offset(p, &inp.name) {
-            let _ = writeln!(s, "{indent}*(long long *)(a->image + {age}) = 0;");
+            let _ = writeln!(s, "{indent}__builtin_memcpy(a->image + {age}, &(long long){{ 0 }}, sizeof(long long));");
         }
         match range_check(p, inp.ty) {
             Some((ct, lo, hi)) => {
                 let _ = writeln!(
                     s,
-                    "{indent}{{ {ct} v = *({ct} *)(a->image + {dst}); a->image[{q}] = (v < {lo} || v > {hi}) ? 3 : 0; }}"
+                    "{indent}{{ {ct} v; __builtin_memcpy(&v, a->image + {dst}, sizeof v); a->image[{q}] = (v < {lo} || v > {hi}) ? 3 : 0; }}"
                 );
             }
             None => {
@@ -785,8 +794,11 @@ fn safe_outputs_of(s: &mut String, p: &Program, layout: &Layout, machine: &str, 
         }
         let Some(safe) = c.attrs.safe.as_ref().and_then(|e| literal(p, e)) else { continue };
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ =
-            writeln!(s, "{indent}*({ct} *)(a->latch + {}) = {safe}; /* {} auf safe (5.11) */", slot.offset, slot.name);
+        let _ = writeln!(
+            s,
+            "{indent}__builtin_memcpy(a->latch + {}, &({ct}){{ {safe} }}, sizeof({ct})); /* {} auf safe (5.11) */",
+            slot.offset, slot.name
+        );
     }
 }
 
@@ -835,12 +847,13 @@ pub fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
             continue;
         };
         let dst = bank + off;
-        // Ein Skalar als Zuweisung: `memcpy` unbekannter Ausrichtung wird auf RV32 ein Aufruf je Byte.
+        // Ein Skalar ueber `__builtin_memcpy` (FB-650): Die Ausrichtung kennt clang aus der Arena, es wird
+        // ein Laden und ein Speichern; `memcpy` waere unter `-ffreestanding` ein Aufruf, auf RV32 je Byte.
         let _ = match c_type(&ty, false) {
             Some(ct) => {
                 writeln!(
                     s,
-                    "{indent}*({ct} *)(a->image + {dst}) = *(const {ct} *)(a->latch + {src}); /* Psi {} */",
+                    "{indent}__builtin_memcpy(a->image + {dst}, a->latch + {src}, sizeof({ct})); /* Psi {} */",
                     c.name
                 )
             }
@@ -852,8 +865,8 @@ pub fn psi_commit(s: &mut String, p: &Program, driven: &[&takt_mir::machine::Mac
     // Bank und Regionen sind 8-ausgerichtet (psi.rs); die Byte-Schleife kostete auf RV32 rund 10 us je Tick.
     let _ = writeln!(
         s,
-        "{indent}for (unsigned i = 0; i < {}; i++) ((unsigned long long *)(a->image + {first}))[i] = ((const unsigned long long *)(a->image + {next}))[i]; /* Psi */",
-        bank_size(p) / 8
+        "{indent}__builtin_memcpy(a->image + {first}, a->image + {next}, {}); /* Psi */",
+        bank_size(p) / 8 * 8
     );
     for m in driven {
         let Some(id) = p.machines.iter().position(|x| x.name == m.name) else { continue };
@@ -994,7 +1007,7 @@ pub fn tune(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
                 let _ = writeln!(s, "        if (len != 8) return 0;");
                 let _ = writeln!(s, "        memcpy(&d, &raw, 8);");
                 let _ = writeln!(s, "        if (!({})) return 0;", known.join(" || "));
-                let _ = writeln!(s, "        *({ct} *)(a->params + {off}) = ({ct})d;");
+                let _ = writeln!(s, "        __builtin_memcpy(a->params + {off}, &({ct}){{ ({ct})d }}, sizeof({ct}));");
                 let _ = writeln!(s, "        return 1;");
                 let _ = writeln!(s, "    }}");
                 continue;
@@ -1008,7 +1021,7 @@ pub fn tune(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "        if (len != {bytes}) return 0;");
         let _ = writeln!(s, "        memcpy(&x, &u, {bytes});");
         let _ = writeln!(s, "        if (!({check})) return 0;");
-        let _ = writeln!(s, "        *({ct} *)(a->params + {off}) = x;");
+        let _ = writeln!(s, "        __builtin_memcpy(a->params + {off}, &x, sizeof x);");
         let _ = writeln!(s, "        return 1;");
         let _ = writeln!(s, "    }}");
     }
@@ -1156,14 +1169,15 @@ fn age_by(s: &mut String, p: &Program, layout: &Layout, indent: &str, ticks: &st
         };
         let stale = match p.channels.iter().find(|c| c.name == slot.name).and_then(|c| c.attrs.max_age) {
             Some(max) => {
-                format!(" if (*at > {max}LL && a->image[{q}] != 3) {{ a->image[{q}] = 2; a->image[{reason}] = 0; }}")
+                format!(" if (at > {max}LL && a->image[{q}] != 3) {{ a->image[{q}] = 2; a->image[{reason}] = 0; }}")
             }
             None => String::new(),
         };
         let _ = writeln!(
             s,
-            "{indent}{{ long long *at = (long long *)(a->image + {age}); long long d = ({ticks}) > {}LL ? {max}LL : \
-             ({ticks}) * {tick}LL; *at = *at > {max}LL - d ? {max}LL : *at + d;{stale} }}",
+            "{indent}{{ long long at; long long d = ({ticks}) > {}LL ? {max}LL : ({ticks}) * {tick}LL; \
+             __builtin_memcpy(&at, a->image + {age}, sizeof at); at = at > {max}LL - d ? {max}LL : at + d; \
+             __builtin_memcpy(a->image + {age}, &at, sizeof at);{stale} }}",
             i64::MAX / tick.max(1),
             max = i64::MAX
         );

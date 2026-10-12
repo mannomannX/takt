@@ -861,7 +861,11 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     for (i, slot) in layout.parameters.iter().enumerate() {
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
         let Some(value) = crate::parts::param_literal(p, i) else { continue };
-        let _ = writeln!(s, "    *({ct} *)(a->params + {}) = {value}; /* {} */", slot.offset, slot.name);
+        let _ = writeln!(
+            s,
+            "    __builtin_memcpy(a->params + {}, &({ct}){{ {value} }}, sizeof({ct})); /* {} */",
+            slot.offset, slot.name
+        );
     }
     if !crate::parts::job_slots(p).is_empty() {
         let _ = writeln!(s, "    takt_jobs_init(a);");
@@ -1056,7 +1060,7 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         if let (Some(max), Some(age), Some(q)) = aged {
             // Wie `aging` an dieser Grenze: alle Ticks seit dem letzten.
             let _ = writeln!(s, "        if (!got && a->image[{q}] != 2 && a->image[{q}] != 3) {{");
-            let _ = writeln!(s, "            long long at = *(long long *)(a->image + {age});");
+            let _ = writeln!(s, "            long long at; __builtin_memcpy(&at, a->image + {age}, sizeof at);");
             let _ = writeln!(
                 s,
                 "            long long d = k - a->tick > {}LL ? {max}LL : (k - a->tick) * {tick}LL;",
@@ -1120,12 +1124,16 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "int32_t {x}_next_run(struct {x}_arena *a, int64_t *delay) {{");
     let _ = writeln!(s, "    *delay = -1;");
     if let Some(n) = &next {
-        let _ = writeln!(s, "    switch (*({} *)(a->latch + {})) {{", n.ct, n.slot.offset);
+        let _ = writeln!(s, "    {} which;", n.ct);
+        let _ = writeln!(s, "    __builtin_memcpy(&which, a->latch + {}, sizeof which);", n.slot.offset);
+        let _ = writeln!(s, "    switch (which) {{");
         for (d, end) in &n.ends {
             let code = next_run_code(*end);
             // `AFTER(delay)`: die Dauer im ersten Fach hinter der Diskriminante (11.2).
             let delay = match end {
-                takt_mir::sys::NextRun::After => format!("*delay = *(long long *)(a->latch + {}); ", n.slot.offset + 8),
+                takt_mir::sys::NextRun::After => {
+                    format!("__builtin_memcpy(delay, a->latch + {}, sizeof *delay); ", n.slot.offset + 8)
+                }
                 _ => String::new(),
             };
             let _ = writeln!(s, "    case {d}: {delay}return {code};");
@@ -1420,7 +1428,7 @@ fn telemetry(
     let _ = writeln!(s, "    switch (kind) {{");
     for kind in kinds.iter().filter(|k| *k & 0x80 == 0) {
         let ct = kind_c_type(*kind);
-        let _ = writeln!(s, "    case {kind}: {{ {ct} x; memcpy(&x, v, sizeof x); return (long long)x; }}");
+        let _ = writeln!(s, "    case {kind}: {{ {ct} x; __builtin_memcpy(&x, v, sizeof x); return (long long)x; }}");
     }
     let _ = writeln!(s, "    default: return 0;");
     let _ = writeln!(s, "    }}");
@@ -1436,10 +1444,12 @@ fn telemetry(
     let _ = writeln!(s, "    }} else if (f->kind == {BOOL}) takt_board_trace(v ? \"true\" : \"false\");");
     let _ = writeln!(
         s,
-        "    else if (f->kind == 0x84) {{ float x; memcpy(&x, at, sizeof x); takt_board_trace_f64((double)x); }}"
+        "    else if (f->kind == 0x84) {{ float x; __builtin_memcpy(&x, at, sizeof x); takt_board_trace_f64((double)x); }}"
     );
-    let _ =
-        writeln!(s, "    else if (f->kind == 0x88) {{ double x; memcpy(&x, at, sizeof x); takt_board_trace_f64(x); }}");
+    let _ = writeln!(
+        s,
+        "    else if (f->kind == 0x88) {{ double x; __builtin_memcpy(&x, at, sizeof x); takt_board_trace_f64(x); }}"
+    );
     let _ = writeln!(
         s,
         "    else if (f->kind == {DURATION}) {{ takt_board_trace_i64(takt_dur_value(v)); takt_board_trace(takt_dur_unit(v)); }}"
@@ -1474,7 +1484,7 @@ fn telemetry(
         let ct = kind_c_type(*kind);
         let _ = writeln!(
             s,
-            "    if (o->kind == {kind}) {{ {ct} x; memcpy(&x, v, sizeof x); takt_board_trace_f64((double)x); return; }}"
+            "    if (o->kind == {kind}) {{ {ct} x; __builtin_memcpy(&x, v, sizeof x); takt_board_trace_f64((double)x); return; }}"
         );
     }
     if kinds.contains(&DURATION) {
@@ -1542,14 +1552,15 @@ fn program_counters(t: &mut Text, p: &Program, driven: &[&takt_mir::machine::Mac
     let _ = writeln!(s, "    (void)a; (void)all;");
     for (i, (name, at)) in counters.iter().enumerate() {
         let state = takt_llvm::arena::state_name(name);
-        let _ = writeln!(s, "    if (all || *(int32_t *)(a->{state} + {at}) != a->pc_shown[{i}]) {{");
-        let _ = writeln!(s, "        a->pc_shown[{i}] = *(int32_t *)(a->{state} + {at});");
+        let _ = writeln!(s, "    {{ int32_t pc; __builtin_memcpy(&pc, a->{state} + {at}, sizeof pc);");
+        let _ = writeln!(s, "    if (all || pc != a->pc_shown[{i}]) {{");
+        let _ = writeln!(s, "        a->pc_shown[{i}] = pc;");
         let _ = writeln!(s, "        takt_board_trace(\"t=\");");
         let _ = writeln!(s, "        takt_board_trace_i64(a->done);");
         let _ = writeln!(s, "        takt_board_trace(\"pc {name} \");");
         let _ = writeln!(s, "        takt_board_trace_i64(a->pc_shown[{i}]);");
         let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
-        let _ = writeln!(s, "    }}");
+        let _ = writeln!(s, "    }} }}");
     }
     let _ = writeln!(s, "}}\n");
 }
@@ -2230,7 +2241,7 @@ fn commit(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         let device = takt_mir::pattern::Address::simple(&outputs[i].device).ident();
         let _ = writeln!(
             s,
-            "    if (takt_edge_output({fname}(a->user, now, *({ct} *)(a->latch + {})), alive_{device}, -1, -1, -1)) a->driver_fault[{i}] = 1;",
+            "    {{ {ct} v; __builtin_memcpy(&v, a->latch + {}, sizeof v); if (takt_edge_output({fname}(a->user, now, v), alive_{device}, -1, -1, -1)) a->driver_fault[{i}] = 1; }}",
             slot.offset
         );
     }
@@ -2278,7 +2289,11 @@ fn outputs(s: &mut String, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "    switch (index) {{");
     for (i, slot) in layout.outputs.iter().enumerate() {
         let Some(ct) = c_type(&slot.ty, slot.signed) else { continue };
-        let _ = writeln!(s, "    case {i}: return (long long)*({ct} *)(a->latch + {});", slot.offset);
+        let _ = writeln!(
+            s,
+            "    case {i}: {{ {ct} v; __builtin_memcpy(&v, a->latch + {}, sizeof v); return (long long)v; }}",
+            slot.offset
+        );
     }
     // Ein unbekannter Index ist kein Absturz: Der Aufrufer bekommt eine
     // Null und der Lauf geht weiter. 4.1 verlangt Totalitaet, und ein

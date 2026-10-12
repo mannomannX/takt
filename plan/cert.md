@@ -338,11 +338,12 @@ Interpreter (Satz 9.4.4: `tests/differential.rs`, die Board-Suiten). Regeln,
 die gegen Fehler beim Schreiben und Ändern von Hand schützen — Form,
 Klammern, ein Ausgang je Funktion —, hält für ihn der Generator; so sieht
 MISRA automatisch erzeugten Code (MISRA AC AGC). Was ein Werkzeug als
-Fehler im Ablauf meldet, ist behoben: `memcpy` statt Zeiger-Casts im Trace
-(CERT C EXP39-C), kein ungelesenes `now`, `NULL` statt `0`, ausdrücklich
-breite Multiplikationen vor einem Versatz. Offen, ohne dass ein Werkzeug
-es meldet: Der Rahmen schreibt und liest die Arena sonst über Zeiger-Casts
-auf ihr Byte-Feld, ohne `-fno-strict-aliasing` (CERT C EXP39-C, FB-650).
+Fehler im Ablauf meldet, ist behoben: kein ungelesenes `now`, `NULL` statt
+`0`, ausdrücklich breite Multiplikationen vor einem Versatz. Die Byte-Felder
+der Arena (`latch`, `image`, `params`, die Zustände) liest und schreibt der
+Rahmen nur über `__builtin_memcpy`, nie über einen Zeiger-Cast (CERT C
+EXP39-C, FB-650); die Ausrichtung kennt clang aus der Struktur der Arena,
+und es bleibt ein Laden und Speichern je Wort.
 
 **Abweichungen.** Jeder Befund steht hier mit Teil und genauer Zahl;
 `tests/c_analysis.rs` verlangt genau diese Zahlen. Ein neuer Befund
@@ -387,7 +388,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-16.6` | Rahmen | 10 | MISRA C:2012 16.6 (R) | Ein `switch` über die Kanäle eines Programms hat für ein Programm ohne solche Kanäle nur `default` |
 | `misra-c2012-17.2` | Rahmen | 6 | MISRA C:2012 17.2 (R) | wie `misc-no-recursion`: der Abstieg des Traces in die Felder eines Records, so tief wie die Typen des Programms |
 | `misra-c2012-17.3` | Rahmen | 28 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für die Gleitkomma-Umgebung (4.2), gekapselt in je zwei Funktionen (D.4.3) |
-| `misra-c2012-17.7` | Rahmen | 71 | MISRA C:2012 17.7 (R) | `memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
+| `misra-c2012-17.7` | Rahmen | 71 | MISRA C:2012 17.7 (R) | `memcpy`, `__builtin_memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
 | `misra-c2012-17.8` | Rahmen | 10 | MISRA C:2012 17.8 (A) | Parameter als Zähler in erzeugten Schleifen |
 | `misra-c2012-18.4` | Rahmen | 25 | MISRA C:2012 18.4 (A) | Zeiger in die Arena als Basis plus Versatz, die Versätze aus dem Layout (`takt-frame::layout`) |
 | `misra-c2012-2.2` | Rahmen | 20 | MISRA C:2012 2.2 (R) | `+ 0` und `* 1`: Der Generator schreibt jeden Zugriff in derselben Form (Basis plus Versatz), auch beim Versatz 0; der Übersetzer faltet die Konstante |
