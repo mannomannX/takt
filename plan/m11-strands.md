@@ -86,7 +86,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | frei |
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt, der Watchdog als Dienst (Fassung 2 des SDK, 33f64ed1), Tunables und Weckereignis (3e1460c0), die Vorlage `c-port` als Adapter des gemeinsamen Ports mit Fäden (`ports/rtos`); 18b (Interruptform in C auf dem F401) Strang G (Helfer, seit 2026-10-12, Zweig `g-18b-c-irq`) |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | Strang D (Helfer, seit 2026-10-12, Zweig `d-9-one-frame`) |
-| 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`); danach 19b |
+| 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards, gemergt cea0c88c; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`). 19b: Partition umgesetzt bis auf den Board-Lauf, Format des Devicetree-Adapters in der Referenz (FB-734); der Erzeuger `P_zephyr.c` nach Schritt 9 (Strang D) |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G nach 18b, als Adapter `ports/freertos` hinter `ports/rtos/takt_os.h` auf dem C-Wirt aus 18b |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
@@ -522,6 +522,28 @@ So arbeitet jeder Strang, als wäre er allein:
     Link), FB-731 (der Adapter fehlt in der Prüfung des C-Teils), FB-732
     (Journal im RAM), FB-733 (Zeitgeber ist der Systemtick, nicht die
     `counter`-API des Entwurfs).
+- **Stand 19b (Strang F, 2026-10-12):**
+  - **Partition:** `CONFIG_USERSPACE` im Beispiel; Schritt- und Jobfaden
+    bleiben Supervisor-Fäden auf Kernel-Stacks (`K_KERNEL_STACK_DEFINE`,
+    der Adapter legt sie mit `K_KERNEL_STACK_RESERVED` an), die Arena liegt
+    in der eigenen Partition `takt_arena` (`K_APP_BMEM`), die keine Domäne
+    eines Fadens im Benutzermodus enthält. Vor `takt_core_init` schreibt
+    eine Probe im Benutzermodus in die Arena; `k_sys_fatal_error_handler`
+    hält die Verweigerung fest und lässt nur die Probe beenden, jeden anderen
+    Fehler hält er an. Die Kopfzeile vor der Marke sagt
+    `takt schutz partition verweigert`, `offen` oder `ungeprüft`; der
+    Board-Test verlangt `verweigert`. F401: Partition 16 KiB an
+    0x2000_0000 (Zweierpotenz für die MPU), RAM 52,5 von 64 KiB. Die
+    Kopfzeile `Schutz: Partition` im Lauf-Header gehört zu Schritt 23.
+  - **gperf** für `CONFIG_USERSPACE`: 3.1 aus den GNU-Quellen nach
+    `D:\takt-tools\gperf` gebaut (Prüfsumme und Signatur geprüft, README
+    und Aktivierung nachgezogen); auf CI per apt.
+  - **Devicetree-Adapter:** Format und Entscheidung in der Referenz (8.10
+    „Treiber aus dem Devicetree“, Prüfung 60, Entscheidungslog, Anhang A;
+    FB-734): `driver = "zephyr-gpio"`, `port` als Label, Prüfung und
+    Erzeuger nur mit `--zephyr`. UART mit dem Ring aus Schritt 22, ADC
+    nach einer Entscheidung über die Skalierung (FB-735). Der Erzeuger
+    `P_zephyr.c` folgt nach Schritt 9 (Strang D berührt dieselben Dateien).
 
 ### 15, 16, 18, 9, 19 bis 23
 

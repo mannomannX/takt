@@ -25,15 +25,23 @@ fn scratch(name: &str) -> PathBuf {
 
 /// Die Symbole, ohne die das Abbild das Pruefprogramm nicht ueber den Port
 /// faehrt: die Tabelle des Programms, der Kern des SDK, der Port mit Faeden
-/// und sein Adapter.
-const LINKED: &[&str] =
-    &["port_test_ops", "takt_core_init_journaled", "takt_core_service", "takt_rtos_start", "takt_os_spawn", "main"];
+/// und sein Adapter, die Probe der Partition.
+const LINKED: &[&str] = &[
+    "port_test_ops",
+    "takt_core_init_journaled",
+    "takt_core_service",
+    "takt_rtos_start",
+    "takt_os_spawn",
+    "partition_probe",
+    "main",
+];
 
 /// Was die Konfiguration eines Boards aufgeloest haben muss: das Modul, das
-/// Tripel des SDK-Archivs und die Bedingungen des Ports.
+/// Tripel des SDK-Archivs, die Bedingungen des Ports und der Benutzermodus,
+/// gegen den die Partition der Arena schuetzt.
 fn configured(board: Board, image: &Image) -> Vec<String> {
     let triple = format!("\"{}\"", board.triple);
-    let mut want = vec![("TAKT", "y"), ("TAKT_TARGET", triple.as_str())];
+    let mut want = vec![("TAKT", "y"), ("TAKT_TARGET", triple.as_str()), ("USERSPACE", "y")];
     if board == STM32F401 {
         // Die FPU-Register jedes Fadens gesichert (12.11), die ABI des Tripels,
         // die Anwendung ab Sektor 4 hinter dem Sprungbrett.
@@ -51,11 +59,22 @@ fn linked(board: Board, image: &Image) -> Vec<String> {
     let Some(symbols) = Binutils::best_for(target).symbols(&image.elf) else {
         return vec![format!("{}: `nm` liest {} nicht", board.west, image.elf.display())];
     };
-    LINKED
+    let at = |name: &str| symbols.iter().find(|s| s.name == name).map(|s| s.address);
+    let mut failed: Vec<String> = LINKED
         .iter()
-        .filter(|name| !symbols.iter().any(|s| s.name == **name))
+        .filter(|name| at(name).is_none())
         .map(|name| format!("{}: `{name}` fehlt im Abbild", board.west))
-        .collect()
+        .collect();
+    // Die Arena liegt in ihrer Partition (12.11, `examples/zephyr/src/partition.h`).
+    let partition = (at("z_data_smem_takt_arena_part_start"), at("z_data_smem_takt_arena_part_end"), at("arena"));
+    match partition {
+        (Some(start), Some(end), Some(arena)) if (start..end).contains(&arena) => {}
+        (start, end, arena) => failed.push(format!(
+            "{}: die Arena ({arena:x?}) liegt nicht in der Partition `takt_arena` ({start:x?}..{end:x?})",
+            board.west
+        )),
+    }
+    failed
 }
 
 /// Das Rohabbild startet, wo das Board es sucht: Auf dem F401 beginnt es mit

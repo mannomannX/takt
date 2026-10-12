@@ -32,7 +32,7 @@ endif()
 # gehen ohne Treiber in den Trace.
 takt_add_program(port_test SOURCE ${TAKT_ROOT}/corpus-try/124_port_test.takt HARDWARE ${hardware} BUILD sim)
 
-target_sources(app PRIVATE src/main.c src/line.c src/handback.c)
+target_sources(app PRIVATE src/main.c src/line.c src/handback.c src/partition.c)
 if(BOARD STREQUAL "blackpill_f401cc")
   target_sources(app PRIVATE src/handback_stm32f401.c)
 else()

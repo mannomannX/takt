@@ -4,7 +4,9 @@
  * `takt_add_program` liefert `port_test` (Bibliothek, `port_test.h`,
  * `takt_sdk.h`), das SDK-Archiv bringt den Kern, das Modul den Port. Diese
  * Anwendung stellt, was der Wirt stellt (12.11): die Leitung, den Watchdog,
- * das Geraet des Journals und beide Stacks. Waehrend des Laufs rechnet
+ * das Geraet des Journals, beide Stacks und die Arena in ihrer Partition.
+ * Vor dem Lauf belegt eine Probe im Benutzermodus, dass die Partition sie
+ * abweist (Kopfzeile `takt schutz partition …`). Waehrend des Laufs rechnet
  * `main` die fremde Last, danach schreibt es die Bilanz, und `takt port-test
  * --judge` urteilt ueber alles, was ueber die Leitung kam.
  */
@@ -15,6 +17,7 @@
 
 #include "handback.h"
 #include "line.h"
+#include "partition.h"
 #include "port_test.h"
 #include "takt_rtos.h"
 #include "takt_sdk.h"
@@ -70,12 +73,31 @@ static uint8_t read_nvm(void *ctx, uint8_t slot, uint32_t offset, uint8_t *into,
     return ok;
 }
 
-/* Die Stacks beider Faeden: die Schranke des Programms und darueber Luft,
- * damit eine tiefere Messung im Urteil steht, statt dass der Stackwaechter
- * sie als Fault meldet (12.3). */
+/* Die Stacks beider Faeden, Kernel-Stacks fuer Supervisor-Faeden
+ * (`ports/zephyr/takt_os_types.h`): die Schranke des Programms und darueber
+ * Luft, damit eine tiefere Messung im Urteil steht, statt dass der
+ * Stackwaechter sie als Fault meldet (12.3). */
 #define STACK_SLACK 1024U
-K_THREAD_STACK_DEFINE(tick_stack, PORT_TEST_TICK_STACK_BYTES + STACK_SLACK);
-K_THREAD_STACK_DEFINE(job_stack, PORT_TEST_JOB_STACK_BYTES + STACK_SLACK);
+K_KERNEL_STACK_DEFINE(tick_stack, PORT_TEST_TICK_STACK_BYTES + STACK_SLACK);
+K_KERNEL_STACK_DEFINE(job_stack, PORT_TEST_JOB_STACK_BYTES + STACK_SLACK);
+
+/* Die Arena in ihrer Partition (12.11): `init` beschreibt sie ganz, darum
+ * im Abschnitt ohne Anfangswerte. */
+K_APP_BMEM(takt_arena) static struct port_test_arena arena;
+
+/* Was die Probe der Partition sah, als Kopfzeile vor der Marke. */
+static const char *protection(void) {
+    const int seen = partition_probe(&arena);
+    const char *line = "takt schutz partition ungeprueft\n";
+    if (seen == PARTITION_REFUSED) {
+        line = "takt schutz partition verweigert\n";
+    } else if (seen == PARTITION_OPEN) {
+        line = "takt schutz partition offen\n";
+    } else {
+        /* Die Probe endete nicht: kein Urteil. */
+    }
+    return line;
+}
 
 /* Faehrt den Kern `core` ueber den Port, waehrend `main` die fremde Last
  * rechnet, und schreibt die Bilanz. Verlangt der Host das Board zurueck,
@@ -117,13 +139,13 @@ int main(void) {
     static uint8_t ring[4096];
     static uint8_t current[PORT_TEST_PERSIST_BOUND];
     static uint8_t stored[PORT_TEST_PERSIST_BOUND];
-    static struct port_test_arena arena;
     static takt_core core;
     static const struct takt_nvm nvm = {NULL, SLOT, -1, erase, program, poll_nvm, read_nvm};
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
         takt_board_trace("takt auf zephyr\n");
+        takt_board_trace(protection());
         takt_line_mark();
         (void)memset(slots, 0xff, sizeof slots);
         if (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm, current,
