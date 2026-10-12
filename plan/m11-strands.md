@@ -622,6 +622,15 @@ So arbeitet jeder Strang, als wäre er allein:
     `the_zephyr_journal_survives_a_reset` (C6) und
     `the_zephyr_journal_survives_a_reset_and_a_new_image` (F401): Der zweite
     Lauf beginnt mit `kept` des ersten plus eins.
+- **Stand 19e (Strang F, 2026-10-12, Zweig `f-19e-cppcheck`):**
+  - **C-Teil unter Zephyr, cppcheck (FB-731 (B)):** `c_analysis.rs` bindet
+    `port_test` zweimal wie die Beispiele unter Zephyr (Zephyr-Adapter und
+    CMSIS-RTOS2, je mit `zephyr-nvm`), nur cppcheck, `unix32`, mit
+    `tools/c-analysis/zephyr.cfg` statt der Köpfe; im Katalog der Teil
+    „Zephyr“. Behoben, was es fand: Stacks, Ring und Gerät ohne externe
+    Bindung, in der Funktion, die sie braucht (8.4, 8.7, 8.9), Casts
+    zusammengesetzter Ausdrücke (10.8). `handback_stm32f401.c` und clang-tidy
+    über die echten Köpfe kommen mit (A), dem CI-Job „Zephyr“.
 
 ### 15, 16, 18, 9, 19 bis 23
 

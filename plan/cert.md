@@ -310,12 +310,10 @@ mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
 Adapter für STM32F4 (`ports/irq/stm32f4`) und die Beispiele
 (`examples/c-host/main.c`, `examples/posix/main.c`, der C-Wirt der Black
 Pill in `examples/boards/stm32f401`). Für ihn gelten CERT C und MISRA
-C:2012 unmittelbar (FB-524). Die Adapter für Zephyr und
+C:2012 unmittelbar (FB-524). Dazu gehören die Adapter für Zephyr und
 CMSIS-RTOS2 (`ports/zephyr`, `ports/cmsis-rtos2`), das Gerät des Journals
 im Flash unter Zephyr (`ports/zephyr-nvm`) und ihre Beispiele
-(`examples/zephyr`, `examples/cmsis-rtos2`) gehören dazu, stehen aber noch
-nicht in der Prüfung: Ihre Köpfe entstehen erst in einem Bau unter Zephyr
-(FB-731).
+(`examples/zephyr`, `examples/cmsis-rtos2`), im Katalog der Teil „Zephyr“.
 
 `crates/takt-cli/tests/c_analysis.rs` erzeugt den Rahmen für vier
 Lieferformen — `examples/c-host/takt/valve.takt` mit dem Beispiel `c-host`,
@@ -332,16 +330,39 @@ Aufruf und Abweichungen aus diesem Abschnitt; er läuft unter Linux (die
 Kopfdateien von POSIX), auf CI in `.github/workflows/analysis.yml` bei
 jedem Push.
 
+**Unter Zephyr** bindet der Test `port_test` noch zweimal, wie die
+Beispiele es bauen: mit dem Zephyr-Adapter und `examples/zephyr`, mit dem
+Adapter für CMSIS-RTOS2 und `examples/cmsis-rtos2`, beide mit dem Gerät des
+Journals (FB-731). Diese Bindungen prüft nur cppcheck, mit der Plattform
+`unix32` (beide Ziele haben 32 Bit) und mit `tools/c-analysis/zephyr.cfg`
+statt der Köpfe von Zephyr: Die entstehen erst in einem Bau unter Zephyr,
+und cppcheck liest sie nicht (sie lesen Register über `register … __asm__`).
+Die Typen des Zephyr-Kerns (`struct k_sem`, `k_timeout_t`, `struct
+flash_area`) bleiben ihm darum undurchsichtig und die Aufzählungen von
+CMSIS-RTOS2 einfache Zahlen; die Regeln der wesentlichen Typen (10.x) prüft
+er dort schwächer als im übrigen C-Teil. clang-tidy über die echten Köpfe,
+im CI-Job „Zephyr“ über die `compile_commands.json` beider Beispiele,
+ergänzt es (FB-731 (A)). Die Rückgabe des Boards an den Bootloader des F401
+(`examples/zephyr/src/handback_stm32f401.c`) fehlt hier: Sie schreibt die
+Register über die Strukturen aus dem Kopf des Chips, und ohne ihn kennt
+cppcheck keines. Die Bindung nimmt stattdessen den Neustart des C6
+(`handback_reboot.c`).
+
 | Werkzeug | Fassung | Aufruf |
 |---|---|---|
 | clang-tidy | LLVM 22.1.8 | `--checks=-*,cert-*,bugprone-*,clang-analyzer-*,concurrency-*,misc-no-recursion,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-optin.performance.Padding,-clang-analyzer-core.FixedAddressDereference` |
 | cppcheck | 2.22.0 | `--enable=warning,style,performance,portability` `--addon=misra` `--library=posix` `--library=tools/c-analysis/takt.cfg` `--suppress=unusedStructMember` |
+| cppcheck unter Zephyr | 2.22.0 | `--library=tools/c-analysis/zephyr.cfg` |
 
 Das MISRA-Addon von cppcheck prüft einen Teil von MISRA C:2012 und läuft
 ohne die Regeltexte: Es nennt nur die Nummer. `tools/c-analysis/takt.cfg`
 macht ihm die Builtins des Rahmens (`__atomic_*`, `__builtin_ia32_*`) und
 die POSIX-Namen bekannt, die `posix.cfg` nicht führt; ohne sie wäre jeder
-Aufruf eine Funktion ohne Deklaration (17.3). Volle Konformität zu MISRA C
+Aufruf eine Funktion ohne Deklaration (17.3). `tools/c-analysis/zephyr.cfg`
+sagt ihm für die Bindungen unter Zephyr, was er sonst aus den Köpfen von
+Zephyr und CMSIS-RTOS2 läse: die gerufenen Funktionen mit der Zahl ihrer
+Argumente und dem Typ ihres Werts, die Makros mit dem, was sie im Bau der
+Beispiele für den F401 werden, und die Werte aus Kconfig. Volle Konformität zu MISRA C
 verlangt einen qualifizierten Prüfer; das entscheidet die Zertifizierung.
 
 **Ausgeschaltet.** Prüfungen, die keine Regel tragen oder etwas verlangen,
@@ -393,6 +414,8 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-11.4` | Port | 2 | MISRA C:2012 11.4 (A) | Der Adapter für STM32F4 (`ports/irq/stm32f4`) liest und schreibt die Register von TIM2, NVIC, SCB und FPU an ihrer Adresse aus dem Referenzhandbuch; die Zahl wird nur in `takt_reg` und `takt_reg8` zum Zeiger |
 | `misra-c2012-17.3` | Port | 2 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für PRIMASK im Adapter für STM32F4 (`takt_lock`, `takt_unlock`), gekapselt in je einer Funktion (D.4.3). Ein Builtin von clang an seiner Stelle übersetzte ein fremdes Projekt mit GCC nicht |
 | `misra-c2012-2.7` | Port | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `takt_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
+| `compareValueOutOfTypeRangeError` | Port | 1 | MISRA C:2012 14.3 (R) | `takt_rtos_depth` begrenzt die Tiefe aus `size_t` auf `uint32_t`; derselbe Text gilt auf dem Wirt mit 64 Bit, wo die Grenze greift. Unter Zephyr (32 Bit) ist der Vergleich stets falsch, und der Übersetzer entfernt ihn |
+| `misra-c2012-8.7` | Port | 2 | MISRA C:2012 8.7 (A) | `takt_rtos_paint` und `takt_rtos_depth` sind die Vorgabe des Ports für jeden Adapter (`takt_rtos.h`); der Adapter für CMSIS-RTOS2 ruft sie nicht: Die Implementierung füllt den Stack selbst, und er misst über `osThreadGetStackSpace` |
 | `cert-dcl37-c` | Beispiele | 1 | CERT C DCL37-C | wie im Port: `_POSIX_C_SOURCE` |
 | `misra-c2012-1.4` | Beispiele | 2 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack |
 | `misra-c2012-11.5` | Beispiele | 4 | MISRA C:2012 11.5 (A) | Die Rückrufe der Leitung und der Treiber bekommen den Zeiger des Wirts als `void *` (`takt_sdk.h`); nur der Wirt weiß, was dahinter liegt |
@@ -403,6 +426,12 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-2.7` | Beispiele | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `board_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
 | `misra-c2012-21.2` | Beispiele | 1 | MISRA C:2012 21.2 (R) | `abort` im C-Wirt der Black Pill: Die Panik des SDK-Archivs ruft `abort` der C-Laufzeit, und ein Wirt ohne C-Bibliothek stellt sie mit der Signatur des Standards. Sie hält das Board an und lässt es für `TAKT` erreichbar |
 | `misra-c2012-8.7` | Beispiele | 1 | MISRA C:2012 8.7 (A) | Fehlmeldung: `abort` ruft das SDK-Archiv, das außerhalb der Analyse liegt; ohne externe Bindung bände es nicht |
+| `misra-c2012-11.5` | Zephyr | 7 | MISRA C:2012 11.5 (A) | Was ein Rückruf bekommt, kommt als `void *`: das Gerät des Journals an seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`), der Faden an den Einstieg des Adapters (`k_thread_create`, `osThreadNew`) und das Ziel an die Probe der Partition |
+| `constParameterCallback` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt der Rückrufe ist vorgegeben: der Einstieg eines Fadens (`k_thread_entry_t`, `osThreadFunc_t`) und `read` des Geräts (`struct takt_nvm`) |
+| `constParameterPointer` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Der Vertrag `takt_os.h` gilt jedem Adapter: `takt_os_now` des Zephyr-Adapters liest den Zustand nur, der für CMSIS-RTOS2 erweitert darin die Uhr; `takt_os_give` und `takt_os_depth` für CMSIS-RTOS2 gehen über Kennungen, der Zephyr-Adapter gibt in das Semaphor in seinem Zustand |
+| `compareValueOutOfTypeRangeError` | Zephyr | 1 | MISRA C:2012 14.3 (R) | wie im Port, in `takt_os_depth` des Adapters für CMSIS-RTOS2: Der Text gilt jeder Implementierung, auch einer mit 64-Bit-`size_t` |
+| `misra-c2012-8.9` | Zephyr | 1 | MISRA C:2012 8.9 (A) | Der Stack der Probe (`probe_stack`) gehört einem Faden im Benutzermodus, und `k_thread_create` verlangt für ihn einen Stack, den der Zephyr-Kern in seiner Tabelle der Objekte findet (`z_stack_is_user_capable`); dorthin kommt nur ein Objekt auf Dateiebene („Object Placement“ in der Dokumentation von Zephyr) |
+| `misra-c2012-8.4` | Zephyr | 1 | MISRA C:2012 8.4 (R) | Fehlmeldung: `k_sys_fatal_error_handler` ist in `<zephyr/fatal.h>` deklariert, das die Probe einbindet; ohne die Köpfe von Zephyr sieht cppcheck die Deklaration nicht |
 | `clang-analyzer-security.ArrayBound` | Rahmen | 2 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |
 | `constParameterPointer` | Rahmen | 63 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
 | `knownConditionTrueFalse` | Rahmen | 10 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |

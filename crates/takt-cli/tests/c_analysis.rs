@@ -2,8 +2,9 @@
 //! C-Teil“; M11 Schritt 33b, FB-524): `clang-tidy` und `cppcheck` mit dem
 //! MISRA-Addon ueber den Rahmen, den `takt build --emit embed` fuer einige
 //! Programme schreibt, den Kopf des SDK, die Ports und die Beispiele: auf dem
-//! Wirt, und fuer `thumbv7em` der C-Wirt der Black Pill mit dem Port der
-//! Interruptform.
+//! Wirt, fuer `thumbv7em` der C-Wirt der Black Pill mit dem Port der
+//! Interruptform, und die Adapter und Beispiele unter Zephyr, diese nur mit
+//! cppcheck und ohne die Koepfe von Zephyr (FB-731).
 //!
 //! **Der Katalog ist die Quelle.** Wie die Werkzeuge gerufen werden und
 //! welche Befunde als Abweichung stehen, liest dieser Test aus
@@ -84,6 +85,8 @@ struct Deviation {
 struct Catalog {
     tidy: Tool,
     cppcheck: Tool,
+    /// Was cppcheck fuer eine Bindung unter Zephyr dazu bekommt.
+    zephyr: Tool,
     /// Die ausgeschalteten Pruefungen von clang-tidy mit ihrer Regel.
     off: BTreeMap<String, String>,
     deviations: BTreeMap<(String, String), Deviation>,
@@ -107,7 +110,13 @@ fn catalog() -> Catalog {
         let deviation = Deviation { count, rule: row[3].clone(), reason: row[4].clone() };
         assert!(deviations.insert(key.clone(), deviation).is_none(), "{key:?} steht zweimal im Katalog");
     }
-    Catalog { tidy: tool("clang-tidy"), cppcheck: tool("cppcheck"), off, deviations }
+    Catalog {
+        tidy: tool("clang-tidy"),
+        cppcheck: tool("cppcheck"),
+        zephyr: tool("cppcheck unter Zephyr"),
+        off,
+        deviations,
+    }
 }
 
 /// Eine Regel, wie der Katalog sie nennt: `MISRA C:2012 15.5 (A)`,
@@ -174,20 +183,27 @@ struct Link {
     target: Vec<String>,
     /// Die Plattform fuer cppcheck: Breite von Zeigern und Ganzzahlen.
     platform: &'static str,
+    /// Eine Bindung unter Zephyr: Seine Koepfe entstehen erst in einem Bau
+    /// unter Zephyr, darum prueft sie nur cppcheck, mit dem, was der Katalog
+    /// ihm ueber Zephyr sagt (`cppcheck unter Zephyr`).
+    zephyr: bool,
 }
 
 impl Link {
     /// Eine Bindung auf dem Wirt.
     fn host(units: Vec<PathBuf>, include: Vec<PathBuf>) -> Link {
-        Link { units, include, defines: Vec::new(), target: Vec::new(), platform: "unix64" }
+        Link { units, include, defines: Vec::new(), target: Vec::new(), platform: "unix64", zephyr: false }
     }
 }
 
 /// Der Teil des C-Teils, dem eine Datei gehoert; `out` ist das Verzeichnis
 /// der erzeugten Lieferformen.
 fn part(path: &str, out: &Path) -> &'static str {
+    const ZEPHYR: [&str; 4] = ["/ports/zephyr", "/ports/cmsis-rtos2/", "/examples/zephyr/", "/examples/cmsis-rtos2/"];
     if path.ends_with("/takt_sdk.h") {
         "SDK"
+    } else if ZEPHYR.iter().any(|dir| path.contains(dir)) {
+        "Zephyr"
     } else if path.contains("/ports/") {
         "Port"
     } else if path.contains("/examples/") {
@@ -283,9 +299,14 @@ fn analyse(catalog: &Catalog, links: &[Link], out: &Path) -> Option<BTreeSet<Fin
     check_version(&cpp, &catalog.cppcheck.version);
     let mut found = BTreeSet::new();
     for (i, link) in links.iter().enumerate() {
-        found.extend(run_tidy(&tidy, &catalog.tidy.args, link, out));
+        let mut args = catalog.cppcheck.args.clone();
+        if link.zephyr {
+            args.extend(catalog.zephyr.args.iter().cloned());
+        } else {
+            found.extend(run_tidy(&tidy, &catalog.tidy.args, link, out));
+        }
         let report = out.join(format!("cppcheck-{i}.txt"));
-        found.extend(run_cppcheck(&cpp, &catalog.cppcheck.args, link, out, &report));
+        found.extend(run_cppcheck(&cpp, &args, link, out, &report));
     }
     Some(found)
 }
@@ -362,11 +383,16 @@ const F401_TARGET: &[&str] = &[
     "-fshort-enums",
 ];
 
+/// Was der Bau der Beispiele unter Zephyr setzt: das frische Journal der
+/// Portpruefung (`examples/zephyr/CMakeLists.txt`).
+const ZEPHYR_DEFINES: &[&str] = &["-DTAKT_FRESH_JOURNAL=1"];
+
 /// Schreibt die Lieferformen nach `out` und nennt die Bindungen: je
 /// Programm sein Rahmen, bei `valve` mit `examples/c-host`, bei `port_test`
 /// mit dem Port fuer Faeden, seinem POSIX-Adapter und `examples/posix`, bei
 /// `app` mit dem Port der Interruptform, seinem Adapter fuer STM32F4 und dem
-/// C-Wirt `examples/boards/stm32f401`, fuer dessen Ziel.
+/// C-Wirt `examples/boards/stm32f401`, fuer dessen Ziel. Dazu `port_test`
+/// noch zweimal, wie die Beispiele unter Zephyr es binden (`zephyr`).
 fn deliveries(out: &Path) -> Vec<Link> {
     let root = root();
     let ports = root.join("crates/takt-embed-c/ports");
@@ -406,7 +432,48 @@ fn deliveries(out: &Path) -> Vec<Link> {
         }
         links.push(link);
     }
+    links.extend(zephyr(out));
     links
+}
+
+/// Die Bindungen unter Zephyr, beide mit dem Rahmen von `port_test` und dem
+/// Geraet des Journals: `examples/zephyr` mit dem Zephyr-Adapter und
+/// `examples/cmsis-rtos2` mit dem Adapter fuer CMSIS-RTOS2. Die Rueckgabe des
+/// Boards an den Bootloader des F401 (`handback_stm32f401.c`) fehlt: Sie
+/// schreibt die Register ueber die Strukturen aus dem Kopf des Chips, und
+/// ohne ihn kennt cppcheck keines; die Bindung nimmt den Neustart des C6.
+fn zephyr(out: &Path) -> Vec<Link> {
+    let root = root();
+    let ports = root.join("crates/takt-embed-c/ports");
+    let shared = root.join("examples/zephyr/src");
+    let dir = out.join("port_test");
+    let frame = [dir.join("port_test_frame.c"), dir.join("port_test_ops.c")];
+    let link = |adapter: &str, sources: Vec<PathBuf>| {
+        let mut units = frame.to_vec();
+        units.extend([
+            ports.join("rtos/takt_rtos.c"),
+            ports.join(adapter).join("takt_os.c"),
+            ports.join("zephyr-nvm/takt_zephyr_nvm.c"),
+        ]);
+        units.extend(sources);
+        Link {
+            units,
+            include: vec![
+                dir.clone(),
+                ports.join("rtos"),
+                ports.join(adapter),
+                ports.join("zephyr-nvm"),
+                shared.clone(),
+            ],
+            defines: ZEPHYR_DEFINES.iter().map(|d| (*d).to_string()).collect(),
+            target: Vec::new(),
+            platform: "unix32",
+            zephyr: true,
+        }
+    };
+    let native = ["main.c", "line.c", "handback.c", "partition.c", "handback_reboot.c"].map(|s| shared.join(s));
+    let cmsis = vec![root.join("examples/cmsis-rtos2/src/main.c"), shared.join("line.c"), shared.join("handback.c")];
+    vec![link("zephyr", native.to_vec()), link("cmsis-rtos2", cmsis)]
 }
 
 // --- Die Tests --------------------------------------------------------------
@@ -473,7 +540,7 @@ fn every_deviation_of_the_c_part_names_its_rule() {
                 "{id}: von einer Regel der Kategorie Mandatory weicht nichts ab"
             );
         }
-        assert!(["Rahmen", "SDK", "Port", "Beispiele"].contains(&part.as_str()), "{id}: Teil `{part}`");
+        assert!(["Rahmen", "SDK", "Port", "Beispiele", "Zephyr"].contains(&part.as_str()), "{id}: Teil `{part}`");
         assert!(d.count > 0 && !d.reason.is_empty(), "{id} ({part}): Zahl und Grund");
     }
     let checks = catalog.tidy.args.iter().find_map(|a| a.strip_prefix("--checks=")).expect("--checks=");
