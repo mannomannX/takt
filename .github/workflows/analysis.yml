@@ -1,13 +1,11 @@
 # Die Pruefungen des eigenen Codes, die eigene Werkzeuge brauchen (M11
 # Schritt 33b und 33c, plan/cert.md Abschnitt 6): der C-Teil mit
 # clang-tidy und cppcheck nach CERT C und MISRA C, die Crates mit `unsafe`
-# unter Miri. Bei jedem Push auf main, fuer Pull Requests und von Hand.
+# unter Miri. Bei jedem Push, auf main wie auf einem Zweig, und von Hand.
 name: Analyse
 
 on:
   push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -77,12 +75,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Die Testhilfe von takt-embed liest Programme aus dem Baum.
           - krate: takt-embed
             features: --all-features
+            miriflags: -Zmiri-disable-isolation
           - krate: takt-embed-c
             features: ""
+            miriflags: ""
           - krate: takt-native-abi
             features: ""
+            miriflags: ""
     env:
       # Ein Nightly mit Miri, fest: Ein anderes urteilt anders.
       NIGHTLY: nightly-2026-10-01
@@ -100,4 +102,6 @@ jobs:
           workspaces: crates/${{ matrix.krate }} -> target
       - name: Miri
         shell: bash
+        env:
+          MIRIFLAGS: ${{ matrix.miriflags }}
         run: cargo "+$NIGHTLY" miri test --manifest-path "crates/${{ matrix.krate }}/Cargo.toml" ${{ matrix.features }}
