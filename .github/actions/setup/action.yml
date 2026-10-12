@@ -49,14 +49,16 @@ runs:
     # Projekts: Ein Abbild, das ein Runner baut, findet der lokale Lauf nur
     # mit derselben Version von clang wieder (M11 Schritt 34d). Das Archiv
     # hat 1,9 GB; der Cache haelt nur, was Takt braucht: clang mit seinen
-    # Kopfdateien, `ld.lld`, `llvm-ar` und die Bibliotheken, die sie laden.
+    # Kopfdateien und Laufzeiten (ASan), die Werkzeuge, die Takt neben clang
+    # sucht (`ld.lld`, `llvm-ar`, `llvm-nm`, `llvm-size`), und die
+    # Bibliotheken, die sie laden.
     - name: LLVM 22.1.8 aus dem Cache
       id: llvm
       if: runner.os == 'Linux'
       uses: actions/cache@v4
       with:
         path: ~/llvm-22.1.8
-        key: llvm-22.1.8-linux-x64-1
+        key: llvm-22.1.8-linux-x64-2
 
     - name: LLVM 22.1.8 laden
       if: runner.os == 'Linux' && steps.llvm.outputs.cache-hit != 'true'
@@ -66,13 +68,13 @@ runs:
         name=LLVM-22.1.8-Linux-X64
         curl -fsSLo "$name.tar.xz" "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/$name.tar.xz"
         echo "df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384  $name.tar.xz" | sha256sum -c -
-        tar -xJf "$name.tar.xz" --wildcards "$name/bin/*" "$name/lib/clang/*/include/*" "$name/lib/*.so*"
+        tar -xJf "$name.tar.xz" --wildcards "$name/bin/*" "$name/lib/clang/*" "$name/lib/*.so*"
         rm "$name.tar.xz"
         dest="$HOME/llvm-22.1.8"
         mkdir -p "$dest/bin" "$dest/lib"
         # Je Werkzeug die Datei selbst, nicht der Verweis: Der Name waehlt,
         # was `clang` und `lld` sind (`ld.lld` ist der ELF-Linker).
-        tools="$name/bin/clang $name/bin/ld.lld $name/bin/llvm-ar"
+        tools="$name/bin/clang $name/bin/ld.lld $name/bin/llvm-ar $name/bin/llvm-nm $name/bin/llvm-size"
         for tool in $tools; do
           cp -L "$tool" "$dest/bin/"
         done
@@ -81,11 +83,8 @@ runs:
         for lib in $(ldd $tools | awk -v tree="$name/" 'index($3, tree) { print $3 }' | sort -u); do
           cp -L "$lib" "$dest/lib/"
         done
-        for include in "$name"/lib/clang/*/include; do
-          version="$(basename "$(dirname "$include")")"
-          mkdir -p "$dest/lib/clang/$version"
-          cp -r "$include" "$dest/lib/clang/$version/"
-        done
+        # Kopfdateien und Laufzeiten, die clang neben sich erwartet.
+        cp -r "$name/lib/clang" "$dest/lib/"
         rm -rf "$name"
         ls -la "$dest/bin" "$dest/lib"
         du -sh "$dest"
@@ -99,6 +98,8 @@ runs:
         "$HOME/llvm-22.1.8/bin/clang" --version
         "$HOME/llvm-22.1.8/bin/ld.lld" --version
         "$HOME/llvm-22.1.8/bin/llvm-ar" --version | head -2
+        "$HOME/llvm-22.1.8/bin/llvm-nm" --version
+        "$HOME/llvm-22.1.8/bin/llvm-size" --version
 
     - name: z3 4.13.4 und cvc5 1.2.0
       if: runner.os == 'Linux'
