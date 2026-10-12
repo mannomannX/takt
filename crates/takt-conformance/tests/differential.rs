@@ -357,6 +357,80 @@ fn a_full_wake_window_keeps_the_native_system_awake() {
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
 
+/// `now` an der Grenze von `Duration` (3.3, FB-614): `now` und
+/// `time_in_state` in einer Maschine, in einer zweiten `now + 1 ns` an der
+/// Grenze und ein Fault-Ziel, das `last_fault.tick` ausgibt, dazu ein
+/// Laufzeitmonitor ueber `now`. Die Sema laesst Ticks bis 1 s
+/// zu (1.3); damit laege die Grenze nach 9,2 · 10^9 Ticks. Der Test setzt T0
+/// darum in der MIR auf 30 000 Tage ([`LIMIT_TICK_NS`]): Im Tick 4 laege die
+/// Dauer seit dem Start ueber 2^63 − 1 ns. Kein `after` und kein `every`,
+/// nichts also, was die Sema aus T0 vorausgerechnet haette.
+const AT_THE_LIMIT: &str = "system:
+    language = 1
+    tick     = 1 s
+
+output clock : Duration @ hw(\"o/clock\") with safe = 0 s
+output since : Duration @ hw(\"o/since\") with safe = 0 s
+output stamp : int @ hw(\"o/stamp\") with safe = 0
+output late  : Duration @ hw(\"o/late\") with safe = 0 s
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            clock = now
+            since = time_in_state
+
+machine n:
+    fault -> REPORT
+    initial RUN
+
+    state RUN:
+        loop:
+            if now > 100000 d:
+                late = now + 1 ns
+
+    state REPORT:
+        enter:
+            stamp = last_fault.tick
+
+property forward: never(now < 0 s) with monitor = true
+";
+
+/// 30 000 Tage in Nanosekunden.
+const LIMIT_TICK_NS: i64 = 30_000 * 86_400 * 1_000_000_000;
+
+/// **`now` bleibt an der Grenze von `Duration` stehen, auch im erzeugten
+/// Code** (3.3, FB-614): Der Rahmen saettigt `now`, der erzeugte Code
+/// `time_in_state` und das `now` des Monitors, und `now + 1 ns` faultet im
+/// selben Tick wie im Interpreter. Vorher rechnete der Rahmen `tick * T0`
+/// als `long long`, ein Ueberlauf und in C undefiniert, und der Monitor sah
+/// eine negative Zeit.
+#[test]
+fn now_stops_at_the_largest_duration_in_the_generated_code() {
+    let Some(clang) = common::clang() else { return };
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(AT_THE_LIMIT, &options);
+    let mut p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    p.config.tick = LIMIT_TICK_NS;
+    let options = takt_interp::RunOptions { ticks: 7, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    for line in [
+        "t=4 out clock 9223372036854775807 ns",
+        "t=4 out since 9223372036854775807 ns",
+        "t=4 fault n Arithmetic(Overflow)",
+        "t=4 out stamp 4",
+    ] {
+        assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
+    }
+    assert!(!interpreted.contains("violated"), "{interpreted}");
+    let native = common::run_native_all_with(&clang, &p, "at_the_limit", 7, &[]).unwrap_or_else(|e| panic!("{e}"));
+    if let Some(e) = disagreement("AT_THE_LIMIT", "Interpreter", &interpreted, "nativ", &native) {
+        panic!("{e}");
+    }
+}
+
 /// **Ein laufender Job haelt auch den erzeugten Code wach** (9.9 Konjunkt
 /// 5, 4.5): Der Job startet in Tick 0 und laeuft weiter, als die Maschine
 /// in den `idle`-Zustand wechselt; fertig ist er in Tick 3. Sein Handle ist

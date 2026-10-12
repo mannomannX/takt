@@ -956,6 +956,16 @@ pub(crate) fn from_slot(slot: &str, want: &LlvmType, m: &mut Module) -> String {
     }
 }
 
+/// Eine Zeit aus Ticks (3.3): `ticks` mal `per` Nanosekunden, gesaettigt bei
+/// der groessten `Duration` wie im Interpreter (FB-614). `ticks` zaehlt und
+/// ist nie negativ.
+pub(crate) fn ticks_ns(ticks: &str, per: i64, m: &mut Module) -> String {
+    let per = per.max(1);
+    let product = m.inst(&format!("mul i64 {ticks}, {per}"));
+    let beyond = m.inst(&format!("icmp sgt i64 {ticks}, {}", i64::MAX / per));
+    m.inst(&format!("select i1 {beyond}, i64 {}, i64 {product}", i64::MAX)).to_string()
+}
+
 /// Gleichheit zweier Enums mit Feldern: Diskriminante und jedes Fach.
 fn enum_equal(a: &Lowered, b: &Lowered, m: &mut Module) -> Result<Lowered, NotYet> {
     let LlvmType::Struct(parts) = &a.ty else { return Err(NotYet { what: "Enumvergleich ohne Struct" }) };

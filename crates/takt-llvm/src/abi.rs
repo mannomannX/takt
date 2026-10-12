@@ -67,6 +67,12 @@ impl Abi {
     /// eine zweite Quelle fuer dieselbe Zahl.
     pub const NOW: &'static str = "now";
 
+    /// Die Nummer des laufenden Ticks (12.1), fuer `last_fault.tick` (5.3)
+    /// und die Lage einer Maschine im Raster (7.2). Aus [`NOW`](Self::NOW)
+    /// liesse sie sich nur bis zur groessten `Duration` zurueckrechnen: Dort
+    /// bleibt `now` stehen, der Tick zaehlt weiter (3.3, FB-614).
+    pub const TICK_COUNT: &'static str = "tick_count";
+
     /// Wohin die Argumente eines Jobs gehen (4.5): `(machine, slot) -> ptr`,
     /// der Eingang seines Slots in der Arena. Der erzeugte Code kodiert sie
     /// dorthin, ohne Puffer auf dem Stack (11.2, FB-455).
@@ -164,6 +170,10 @@ impl Abi {
         m.declare(&format!(
             "declare i64 @{}(ptr readnone) nounwind willreturn memory(inaccessiblemem: read)",
             m.runtime(Abi::NOW)
+        ));
+        m.declare(&format!(
+            "declare i64 @{}(ptr readnone) nounwind willreturn memory(inaccessiblemem: read)",
+            m.runtime(Abi::TICK_COUNT)
         ));
         m.declare(&format!("declare void @{}(ptr readnone, i32, i32, i1) {RT}", m.runtime(Abi::VERDICT)));
         m.declare(&format!("declare void @{}(ptr readnone, i32, i64) {RT}", m.runtime(Abi::PROPERTY)));

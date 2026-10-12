@@ -208,7 +208,7 @@ fn a_scheduled_output_carries_its_guard() {
     let with =
         takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { hardware: Some(&hw), ..Default::default() }).source;
     assert!(with.contains("static const long long g_guard[1] = { 4338LL };"), "{with}");
-    assert!(with.contains("if (t <= a->tick * 1000000LL + g_guard[q]) return"), "{with}");
+    assert!(with.contains("if (t <= takt_add_ns(takt_ticks_ns(a->tick), g_guard[q])) return"), "{with}");
     let without = takt_frame::mcu::build(&p).source;
     assert!(without.contains("static const long long g_guard[1] = { 0LL };"), "{without}");
 }
@@ -648,7 +648,15 @@ fn an_idle_state_reports_its_deadline() {
 fn the_deadline_is_absolute_nanoseconds() {
     let p = corpus("30_idle.takt");
     let src = takt_frame::mcu::build(&p).source;
-    assert!(src.contains("return app_now(a) + best * 10000000LL;"), "Ticks mal Periode, auf `app_now` bezogen:\n{src}");
+    assert!(
+        src.contains("return takt_add_ns(app_now(a), takt_ticks_ns(best));"),
+        "Ticks mal Periode, auf `app_now` bezogen:\n{src}"
+    );
+    // FB-614: Ticks mal Periode saettigt bei der groessten `Duration`, ohne Ueberlauf in C.
+    assert!(
+        src.contains("return k > 922337203685LL ? 9223372036854775807LL : k * 10000000LL;"),
+        "gesaettigt wie der Interpreter:\n{src}"
+    );
     assert!(src.contains("if (best < 0) return -1;"), "keine Frist bleibt keine Frist");
 }
 
@@ -658,8 +666,10 @@ fn the_deadline_is_absolute_nanoseconds() {
 /// `t_in_state` zaehlt also Aktivierungen. Eine erste Fassung teilte nur
 /// durch `T0` und war bei `period = 5` fuenfmal zu gross. Zurueck kommt
 /// die Zahl in Basis-Ticks ab jetzt, weil die Runtime darin springt: bis zur
-/// naechsten Aktivierung (`now / T0` modulo Periode), dann je verbleibender
-/// Aktivierung eine Periode (FB-429).
+/// naechsten Aktivierung (der Tick der Runtime modulo Periode), dann je
+/// verbleibender Aktivierung eine Periode (FB-429). Den Tick fragt sie
+/// `app_tick_count`, nicht `now / T0`: `now` bleibt an der Grenze von
+/// `Duration` stehen (FB-614).
 #[test]
 fn a_multirate_deadline_counts_activations() {
     let p = corpus("31_idle_multirate.takt");
@@ -672,7 +682,7 @@ fn a_multirate_deadline_counts_activations() {
     let at = ir.find("define internal i64 @m_deadline(").expect("Fristabfrage");
     let dl = &ir[at..ir[at..].find("\n}").map_or(ir.len(), |e| at + e)];
     let with_period = |op: &str| dl.lines().any(|l| l.contains(&format!(" = {op} i64 ")) && l.ends_with(", 5"));
-    assert!(dl.contains("@app_now(") && with_period("urem"), "ab jetzt bis zur naechsten Aktivierung:\n{dl}");
+    assert!(dl.contains("@app_tick_count(") && with_period("urem"), "ab jetzt bis zur naechsten Aktivierung:\n{dl}");
     assert!(with_period("mul"), "je Aktivierung eine Periode in Basis-Ticks:\n{dl}");
 }
 
@@ -1036,6 +1046,78 @@ fn every_entry_computes_in_the_ieee_environment() {
             assert!(!asm.contains("frrm") && !asm.contains("fsrm"), "{triple} {march}: FPU-Register ohne FPU");
         }
     }
+}
+
+/// **`now` saettigt im MCU-Rahmen ohne Ueberlauf** (3.3, FB-614): `app_now`
+/// an der Grenze von `Duration`, uebersetzt mit einer Falle fuer jeden
+/// vorzeichenbehafteten Ueberlauf (CERT C INT32-C). Die Sema laesst Ticks
+/// bis 1 s zu; der Test setzt T0 in der MIR auf 30 000 Tage, damit Tick 4
+/// die Grenze ueberschreitet. Vorher rechnete der Rahmen `a->tick * T0`, und
+/// die Falle schlug zu. `app_tick_count` gibt den Tick selbst, auch dort.
+#[test]
+fn now_saturates_in_the_mcu_frame_without_overflow() {
+    let Some(clang) = common::clang_path() else { return };
+    let mut p = program(
+        "system:\n    language = 1\n    tick = 1 s\n\n\
+         output clock : Duration @ hw(\"o/clock\") with safe = 0 s\n\n\
+         machine m:\n    initial RUN\n    state RUN:\n        loop:\n            clock = now\n",
+    );
+    let tick: i64 = 30_000 * 86_400 * 1_000_000_000;
+    p.config.tick = tick;
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("takt-mcuh-now-limit");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("Verzeichnis");
+    let host = if cfg!(windows) { Target::X86_64_WINDOWS } else { Target::X86_64_LINUX };
+    let ll = dir.join("programm.ll");
+    std::fs::write(&ll, common::ir_for(&p, host.triple)).expect("IR");
+    let built = takt_frame::mcu::build_with(&p, takt_frame::mcu::Frame { stubs: true, ..Default::default() });
+    std::fs::write(dir.join("app.h"), built.header).expect("Kopf");
+    let c = dir.join("rahmen.c");
+    std::fs::write(&c, built.source).expect("Rahmen");
+    let ticks = [0, 1, 3, 4, 5, i64::MAX];
+    let list: Vec<String> = ticks.iter().map(|k| format!("{k}LL")).collect();
+    let main = dir.join("main.c");
+    std::fs::write(
+        &main,
+        format!(
+            "#include <stdio.h>\n#include \"app.h\"\n\
+             void takt_board_trace(const char *line) {{ (void)line; }}\n\
+             void takt_board_trace_i64(long long v) {{ (void)v; }}\n\
+             void takt_board_trace_u64(unsigned long long v) {{ (void)v; }}\n\
+             void takt_board_trace_f64(double v) {{ (void)v; }}\n\
+             void takt_board_trace_hex8(unsigned char v) {{ (void)v; }}\n\
+             long long app_now(struct app_arena *a);\n\
+             long long app_tick_count(struct app_arena *a);\n\
+             static struct app_arena arena;\n\
+             int main(void) {{\n\
+             \x20   static const long long ticks[] = {{ {} }};\n\
+             \x20   for (unsigned i = 0; i < sizeof ticks / sizeof ticks[0]; i++) {{\n\
+             \x20       arena.tick = ticks[i];\n\
+             \x20       printf(\"%lld %lld\\n\", app_now(&arena), app_tick_count(&arena));\n\
+             \x20   }}\n\
+             \x20   return 0;\n\
+             }}\n",
+            list.join(", ")
+        ),
+    )
+    .expect("main");
+    let natives = takt_conformance::harness::native_library().expect("Natives");
+    let exe = dir.join(format!("lauf{}", std::env::consts::EXE_SUFFIX));
+    let mut cmd = std::process::Command::new(&clang);
+    let out = Clang::deterministic(&mut cmd)
+        .args(["-Wno-override-module", "-O1"])
+        .args(["-fsanitize=signed-integer-overflow", "-fsanitize-trap=signed-integer-overflow"])
+        .args([&ll, &c, &main, &natives])
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("clang");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let run = std::process::Command::new(&exe).output().expect("Lauf");
+    assert!(run.status.success(), "die Falle schlug zu: {}", run.status);
+    // Wie `Builtin::Now` im Interpreter: Tick mal T0, gesaettigt.
+    let want: String = ticks.iter().map(|k| format!("{} {k}\n", k.saturating_mul(tick))).collect();
+    assert_eq!(String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"), want);
 }
 
 /// Ein Programm aus Quelltext, fuer die Rahmenpruefungen oben.

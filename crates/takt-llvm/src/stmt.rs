@@ -477,8 +477,8 @@ impl Vars for StateVars<'_> {
                 // Der Zaehler zaehlt Aktivierungen; die Zeit ist ihre
                 // Zahl mal der Periode (7.2), wie in `after`.
                 let per = i64::from(self.machine.period.max(1)).saturating_mul(p.config.tick);
-                let ns = m.inst(&format!("mul i64 {ticks}, {per}"));
-                Some(Lowered { value: ns.to_string(), ty: dur })
+                let ns = crate::expr::ticks_ns(&ticks.to_string(), per, m);
+                Some(Lowered { value: ns, ty: dur })
             }
             B::LastFault => {
                 let at = self.last_fault_at(m)?;
@@ -930,7 +930,7 @@ fn time_in_state_ns(ctx: &Ctx<'_>, m: &mut Module) -> Result<String, NotYet> {
         .ok_or(NotYet { what: "t_in_state im Zustand" })?;
     let ticks = m.inst(&format!("load i64, ptr {cell}"));
     let period_ns = i64::from(ctx.machine.period.max(1)).saturating_mul(ctx.program.config.tick);
-    Ok(m.inst(&format!("mul i64 {ticks}, {period_ns}")).to_string())
+    Ok(crate::expr::ticks_ns(&ticks.to_string(), period_ns, m))
 }
 
 /// `at T: o = v` (9.8): geplante Schreibvorgaenge.

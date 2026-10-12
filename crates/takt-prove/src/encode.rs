@@ -479,6 +479,8 @@ struct Enc<'p> {
     confirms: Vec<(String, i64)>,
     /// `now` des Ticks, der gerade kodiert wird.
     now: Term,
+    /// Seine Nummer, wo eine Maschine `last_fault` liest ([`TICKS`]).
+    ticks: Term,
     /// Die Stroeme des Modells (8.6).
     streams: Vec<stream::Stream>,
     /// Die Ausgabestroeme der kodierten Maschinen (8.8).
@@ -884,6 +886,7 @@ impl<'p> Enc<'p> {
             monitors: Vec::new(),
             confirms: Vec::new(),
             now: Term::int(0),
+            ticks: Term::int(0),
             streams: Vec::new(),
             txs: Vec::new(),
             port_takes: BTreeMap::new(),
@@ -1184,6 +1187,14 @@ impl Enc<'_> {
     /// Timer des Blatts, dessen Zweig entsteht, oder ohne ein solches der
     /// des Blatts, in dem die Maschine steht. Ohne Blatt (eine inaktive
     /// gescopte Instanz) null.
+    /// Eine Zeit aus Ticks (3.3): `ticks` mal `per` Nanosekunden, gesaettigt
+    /// bei der groessten `Duration` wie im Interpreter (FB-614).
+    fn ticks_ns(ticks: Term, per: i64) -> Term {
+        let per = per.max(1);
+        let beyond = Term::bin(Op::Gt, ticks.clone(), Term::int(i64::MAX / per));
+        Term::ite(beyond, Term::int(i64::MAX), Term::bin(Op::Mul, ticks, Term::int(per)))
+    }
+
     fn leaf_ticks(&self, m: MachineId, cx: &Cx<'_>, env: &Env) -> Term {
         if let Some(leaf) = cx.leaf {
             return env.get(&self.loc_timer(m, leaf)).cloned().expect("Timer");
@@ -1376,7 +1387,7 @@ impl Enc<'_> {
                 Builtin::TimeInState => {
                     let Some(m) = cx.m else { return no("`time_in_state`", span) };
                     let period = i64::from(self.machine(m).period.max(1)).saturating_mul(self.p.config.tick);
-                    Term::bin(Op::Mul, self.leaf_ticks(m, cx, env), Term::int(period))
+                    Enc::ticks_ns(self.leaf_ticks(m, cx, env), period)
                 }
                 other @ (Builtin::LastFault | Builtin::Event) => return no(format!("`{other:?}`"), span),
             },
@@ -2495,7 +2506,7 @@ impl Enc<'_> {
                     let clock = match site.state {
                         Some(_) => {
                             let ticks = i64::from(machine_period(self.machine(m))).saturating_mul(self.p.config.tick);
-                            Term::bin(Op::Mul, self.leaf_ticks(m, cx, env), Term::int(ticks))
+                            Enc::ticks_ns(self.leaf_ticks(m, cx, env), ticks)
                         }
                         None => self.now.clone(),
                     };
@@ -3731,8 +3742,16 @@ impl Enc<'_> {
     /// laeuft keine Maschine mehr, und die Outputs stehen auf `safe`.
     fn tick(&mut self, pre: &Env) -> R<Env> {
         let mut cur = pre.clone();
-        self.now = Term::bin(Op::Add, pre[NOW].clone(), Term::int(self.p.config.tick));
+        // 3.3: `now` bleibt bei der groessten `Duration` stehen (FB-614).
+        let tick = self.p.config.tick.max(1);
+        let beyond = Term::bin(Op::Gt, pre[NOW].clone(), Term::int(i64::MAX - tick));
+        let next = Term::bin(Op::Add, pre[NOW].clone(), Term::int(tick));
+        self.now = Term::ite(beyond, Term::int(i64::MAX), next);
         cur.insert(NOW.into(), self.now.clone());
+        if !self.last_fault.is_empty() {
+            self.ticks = Term::bin(Op::Add, pre[TICKS].clone(), Term::int(1));
+            cur.insert(TICKS.into(), self.ticks.clone());
+        }
         for &m in &self.order.clone() {
             for i in 0..self.machine(m).signals.len() {
                 cur.insert(self.loc_sig(m, i), Term::bool(false));
@@ -3808,6 +3827,10 @@ impl Enc<'_> {
         // `now` ist Tick mal Tickdauer, im Tick 0 also null.
         self.now = Term::int(0);
         env.insert(NOW.into(), self.now.clone());
+        if !self.last_fault.is_empty() {
+            self.ticks = Term::int(0);
+            env.insert(TICKS.into(), self.ticks.clone());
+        }
         self.faults_cleared(&mut env);
         self.edges_initial(&mut env)?;
         self.streams_initial(&mut env)?;
@@ -4726,6 +4749,10 @@ fn machine_period(m: &Machine) -> u32 {
 
 /// `now` des Ticks, der den Zustand ergab, in Nanosekunden.
 const NOW: &str = "s.now";
+
+/// Die Zahl der Ticks seit dem Start, fuer `last_fault.tick` (5.3): `now`
+/// steht an der Grenze von `Duration` still (3.3), der Tick zaehlt weiter.
+const TICKS: &str = "s.ticks";
 
 /// Hat der Lauf geendet (12.7), in diesem Tick oder davor?
 const ENDED: &str = "s.run.ended";

@@ -131,7 +131,7 @@ pub fn state(
 /// Der Fault-Pfad schreibt `last_fault` (5.3): die Art `code`, die Zeile
 /// der Stelle, den Tick und die Nachricht — die der Anweisung, sonst den
 /// Namen der Art.
-pub fn record(at: &Reg, code: &str, tick_ns: i64, m: &mut Module) {
+pub fn record(at: &Reg, code: &str, m: &mut Module) {
     let ty = field_type();
     let text = text_type();
     let field = |i: u32, m: &mut Module| m.inst(&format!("getelementptr inbounds {ty}, ptr {at}, i32 0, i32 {i}"));
@@ -140,8 +140,7 @@ pub fn record(at: &Reg, code: &str, tick_ns: i64, m: &mut Module) {
     let line = m.inst(&format!("load i32, ptr {}", crate::arena::PARAM));
     let line_ptr = field(1, m);
     m.void_inst(&format!("store i32 {line}, ptr {line_ptr}"));
-    let now = m.inst(&format!("call i64 @{}(ptr %arena)", m.runtime(crate::abi::Abi::NOW)));
-    let tick = m.inst(&format!("sdiv i64 {now}, {tick_ns}"));
+    let tick = m.inst(&format!("call i64 @{}(ptr %arena)", m.runtime(crate::abi::Abi::TICK_COUNT)));
     let tick_ptr = field(2, m);
     m.void_inst(&format!("store i64 {tick}, ptr {tick_ptr}"));
     let dst = field(3, m);

@@ -28,6 +28,25 @@ static inline int takt_dur_index(long long ns) {
 static inline long long takt_dur_value(long long ns) { return ns / takt_dur_factor[takt_dur_index(ns)]; }
 static inline const char *takt_dur_unit(long long ns) { return takt_dur_name[takt_dur_index(ns)]; }";
 
+/// `now` und die Zeit aus Ticks (3.3): Tickzahl mal T0, gesaettigt bei der
+/// groessten `Duration` wie im Interpreter (FB-614). Beide Rahmen rechnen
+/// jede Zeit aus Ticks mit `takt_ticks_ns` und addieren eine Dauer ab null
+/// mit `takt_add_ns` — ohne vorzeichenbehafteten Ueberlauf, der in C
+/// undefiniert waere (CERT C INT32-C). Eine Tickzahl ist nie negativ.
+pub fn now(s: &mut String, p: &Program, x: &Prefix) {
+    let (tick, max) = (p.config.tick.max(1), i64::MAX);
+    let _ = writeln!(s, "static inline long long takt_ticks_ns(long long k) {{");
+    let _ = writeln!(s, "    if (k <= 0) return 0;");
+    let _ = writeln!(s, "    return k > {}LL ? {max}LL : k * {tick}LL;", max / tick);
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "static inline long long takt_add_ns(long long t, long long d) {{");
+    let _ = writeln!(s, "    return (d > 0 && t > {max}LL - d) ? {max}LL : t + d;");
+    let _ = writeln!(s, "}}");
+    let _ = writeln!(s, "long long {x}_now(struct {x}_arena *a) {{ return takt_ticks_ns(a->tick); }}");
+    // Der Tick selbst, wo `now` an der Grenze stehen bleibt (`last_fault.tick`, 7.2).
+    let _ = writeln!(s, "long long {x}_tick_count(struct {x}_arena *a) {{ return a->tick; }}\n");
+}
+
 /// Die nativen Funktionen (4.5) liegen in der Runtime: `takt-native-abi`
 /// liefert ihre C-Einstiege, fuer den Wirtsrahmen als statische
 /// Bibliothek ([`native_library`]), fuer ein Board ueber `takt-embed`
@@ -238,7 +257,7 @@ pub fn scheduled(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mi
     let _ = writeln!(s, "    int q = takt_sched_slot(o);");
     let _ = writeln!(s, "    if (q < 0) return {overflow};");
     // 7.5, 9.8: `T <= now + guard(o)` ist ein `TimingFault`.
-    let _ = writeln!(s, "    if (t <= a->tick * {}LL + g_guard[q]) return {timing};", p.config.tick);
+    let _ = writeln!(s, "    if (t <= takt_add_ns(takt_ticks_ns(a->tick), g_guard[q])) return {timing};");
     let _ = writeln!(s, "    return takt_sched_put(a, q, t, v);");
     let _ = writeln!(s, "}}");
     // 7.5: Die Ausgabe eines Triggers gilt gegen seine Reaktion
@@ -818,7 +837,7 @@ pub fn commit_sequence(s: &mut String, p: &Program, driven: &[&takt_mir::machine
     // Eine andere Maschine liest den Ausgang im naechsten Tick so, wie er
     // committet wurde (`committed_output` im Interpreter), samt Plan.
     if !queued_outputs(p).is_empty() {
-        let _ = writeln!(s, "{indent}takt_apply_scheduled(a, {tick} * {}LL);", p.config.tick);
+        let _ = writeln!(s, "{indent}takt_apply_scheduled(a, takt_ticks_ns({tick}));");
     }
     psi_commit(s, p, driven, indent);
     sim_bindings(s, p, indent);
@@ -1155,7 +1174,6 @@ pub fn aging_slept(s: &mut String, p: &Program, layout: &Layout, indent: &str) {
 
 /// Das Altern um `ticks` Ticks, einen C-Ausdruck, ohne die Kanaele in `fed`.
 fn age_by(s: &mut String, p: &Program, layout: &Layout, indent: &str, ticks: &str, fed: &[usize]) {
-    let tick = p.config.tick;
     for slot in &layout.inputs {
         if p.channels.iter().position(|c| c.name == slot.name).is_some_and(|i| fed.contains(&i)) {
             continue;
@@ -1175,11 +1193,9 @@ fn age_by(s: &mut String, p: &Program, layout: &Layout, indent: &str, ticks: &st
         };
         let _ = writeln!(
             s,
-            "{indent}{{ long long at; long long d = ({ticks}) > {}LL ? {max}LL : ({ticks}) * {tick}LL; \
-             __builtin_memcpy(&at, a->image + {age}, sizeof at); at = at > {max}LL - d ? {max}LL : at + d; \
-             __builtin_memcpy(a->image + {age}, &at, sizeof at);{stale} }}",
-            i64::MAX / tick.max(1),
-            max = i64::MAX
+            "{indent}{{ long long at; long long d = takt_ticks_ns({ticks}); \
+             __builtin_memcpy(&at, a->image + {age}, sizeof at); at = takt_add_ns(at, d); \
+             __builtin_memcpy(a->image + {age}, &at, sizeof at);{stale} }}"
         );
     }
 }
