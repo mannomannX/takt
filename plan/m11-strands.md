@@ -276,6 +276,69 @@ So arbeitet jeder Strang, als wäre er allein:
   - Weiter: tiefe Pfade (Schritt 3); für die Speicherfälle Rechnungen
     verschiedener Blätter teilen oder ein Solver mit kleinerem
     Bit-Blasting (FB-612).
+- **Stand nach Schritt 3 (2026-10-12, Zweig `b3-fb511-step3`):**
+  - Der lange Lauf ohne Stimulus ist eine eigene Quelle für Pfade
+    (`paths::from_run`): Der Interpreter rechnet jedes Programm des
+    Vergleichs über `cases::MAX_TICKS` Ticks; was dort zum ersten Mal
+    faultet oder genommen wird und kein Lauf ohne Pfad erreicht, bekommt
+    einen Pfad `lauf-…` bis zwei Ticks danach. Ohne Solver und
+    deterministisch: `the_stored_run_paths_are_current` rechnet sie in jedem
+    Lauf der Suite neu (8 s im Debug-Bau) und hält sie gegen die
+    gespeicherten, `UPDATE_RUN_PATHS` schreibt sie. Ein eigener Opt-in-Lauf
+    ist dafür nicht nötig.
+  - Elf Stellen bekamen so einen Pfad: 27_every, 37_follows, 41_tunables,
+    50_clause_words und 76_stream_views aus FB-613, dazu 42_map,
+    52_padding_fields, 53_stream_kinds, 55_frames_with_bytes, 97_fast_math
+    und 120_port_writes (Fault bei t = 100 bis 1471).
+  - `--depth auto` für die Pfade des Solvers ist nicht übernommen: Die
+    Einordnung bei Tiefe 10 und 20 (die Fristen der meisten Programme
+    brauchen k = 11) fand nur eine Stelle tiefer, in den großen Programmen
+    scheitert schon Tiefe 10 am Speicher (FB-612), und `after 3 s` bei
+    50 µs hieße Tiefe 2000. Stattdessen folgt der Solver einem Pfad, den
+    Spacer jenseits der Tiefe sieht, mit BMC in doppelter Tiefe bis
+    `takt_prove::DEEPEST` = `MAX_TICKS`, die Frist im Verhältnis der Tiefen
+    (13.3): `99_exit_fault` faultet nach elf Faults von außen im Tick 72
+    (BMC der Tiefe 80 in 106 s; `UPDATE_PATHS` für das Programm 145 s im
+    Debug-Bau). Im Vergleich der drei Ausführer fand dieser Pfad FB-615: Das
+    Modell meldete von zwei Faults einer Maschine in einem Tick — ein Fault
+    von außen, dann einer in `enter:` des Ziels — nur den letzten; es führt
+    sie jetzt hintereinander.
+  - `UPDATE_PATHS` läuft als Opt-in-Lauf auf CI (`solver.yml`, Art
+    `pfade`, Artefakt `pfade`); lokal reicht der Speicher für z3 nicht mehr.
+    Für 03_sequences_and_faults, 06_test_harness und 120_port_writes in
+    4 min (Lauf 38255550331): die drei Stellen, für die die Einordnung einen
+    Pfad fand, haben jetzt einen, die Beweise dieselben Stellen mit k = 1.
+    An zwei der neuen Pfade fand der Vergleich FB-616: Der Lauf des Modells
+    gab einer gehaltenen `Stale`-Lieferung den Wert des Interpreters, den
+    das Modell null hält.
+  - Die `ovf`-Stellen an `now + d`: 3 laufen erst nach 2^63 ns über (Gruppe
+    `Zeitschranke`); ein Beweis über die Zeitschranke wäre eine Annahme, und
+    eine Prüfstelle steht unter keiner (13.3). Die 6 in `87_fault_kinds`
+    sind unerreichbar, aber nicht k-induktiv. Was `now` nach 2^63 ns ist,
+    sagt die Definition nicht, und Interpreter, Modell und Rahmen rechnen es
+    verschieden (FB-614, Sprachentscheidung offen).
+  - Gruppen als Grund, für Spalte drei (Schritt 5): Jede Zeile von
+    `UNREACHED` teilt ihre nie verletzten Stellen nach Gruppen auf
+    (`GROUPS`, Test `every_never_failed_site_has_a_group`), aus den
+    Einordnungen 38188098609 und 38199208294 und den Befunden dieses
+    Schritts. Spalte drei 352 → 337, Programme 99 → 97:
+
+    | Gruppe | Stellen |
+    |---|---|
+    | Speicher | 99 |
+    | Frist | 82 |
+    | ohne Teilmodell (FB-604) | 70 |
+    | bewiesen, ohne Beweisdatei | 54 |
+    | nicht k-induktiv | 12 |
+    | Fragment | 12 |
+    | ohne Urteil | 3 |
+    | Zeitschranke | 3 |
+    | jenseits `MAX_TICKS` | 2 |
+
+  - Weiter: Schritt 4 (die 54 bewiesenen Stellen in die Beweisdateien,
+    mit `solver.yml`, Art `pfade`), Schritt 2 für `nicht k-induktiv` und
+    `Fragment`, Gruppen auch für Übergänge und nie bestandene Stellen
+    (Schritt 5), FB-614 (Sprachentscheidung).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.

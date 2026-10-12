@@ -1,14 +1,20 @@
 # Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)
-# ziel uebergang hotfire 5 SAFE->IDLE @2561
+# ziel uebergang hotfire 2 SAFE->IDLE @2561
 # ticks 7
-t=0 in chamber_p 252.0
-t=0 in supply_p 1.69759663277e-313
-t=1 in chamber_p 2.0
-t=1 in supply_p stale
-t=2 in chamber_p 2.0000000000000004
-t=4 in chamber_p stale
-t=4 in supply_p 0.0 bad
-t=4 cmd abort_run
-t=5 in chamber_p 2.225073858507202e-308
-t=5 in supply_p 5e-324
-t=5 cmd reset
+t=0 in chamber_p 1.4916681462400417e-154 suspect
+t=0 in supply_p 100.0 stale
+t=1 in chamber_p 300.0 stale
+t=1 in supply_p 100.0
+t=2 in chamber_p 0.0 suspect
+t=2 in supply_p 1.7800590868057615e-307 suspect
+t=2 cmd reset
+t=3 in chamber_p -0.0
+t=3 in supply_p 100.0
+t=3 cmd start
+t=4 in chamber_p 300.0 stale
+t=4 in supply_p 68.0
+t=4 abort
+t=4 runtime Node
+t=5 in chamber_p 64.00000000000001
+t=5 in supply_p 100.0 stale
+t=5 cmd abort_run

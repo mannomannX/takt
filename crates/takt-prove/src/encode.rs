@@ -64,7 +64,7 @@ mod tx;
 mod value;
 mod wire;
 use fault::Cause;
-pub use fault::kind_of as fault_kind;
+pub use fault::kinds_of as fault_kinds;
 use monitor::Monitor;
 pub use read::{leaves_at, value_at};
 use value::V;

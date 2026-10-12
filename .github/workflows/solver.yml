@@ -1,11 +1,16 @@
-# Die Einordnung der unerreichten Pruefstellen (FB-511) auf Runnern von
-# GitHub, von Hand gestartet. Lokal sprengte z3 neben anderen Projekten den
-# Speicher; hier hat jeder Job 16 GB.
+# Die Einordnung der unerreichten Pruefstellen (FB-511) und das Neuerzeugen
+# der Pfade und Beweisdateien des Solvers auf Runnern von GitHub, von Hand
+# gestartet. Lokal sprengte z3 neben anderen Projekten den Speicher; hier
+# hat jeder Job 16 GB.
 #
-# Der Test `the_stored_solver_paths_still_hold` (takt-conformance,
-# solver_paths.rs) ordnet unter `CLASSIFY_UNREACHED` die offenen Programme
-# ein; `CLASSIFY_SHARD=i/n` gibt jedem Job jedes n-te. Ein Sammeljob fuehrt
-# die TSV je Tiefe und die Antworten des Solvers zusammen.
+# `art: einordnen`: Der Test `the_stored_solver_paths_still_hold`
+# (takt-conformance, solver_paths.rs) ordnet unter `CLASSIFY_UNREACHED` die
+# offenen Programme ein; `CLASSIFY_SHARD=i/n` gibt jedem Job jedes n-te. Ein
+# Sammeljob fuehrt die TSV je Tiefe und die Antworten des Solvers zusammen.
+#
+# `art: pfade`: derselbe Test unter `UPDATE_PATHS` (M11 Strang B2, Schritt
+# 3): die Programme aus `programs`, ohne sie alle; das Artefakt `pfade`
+# traegt `corpus-try/paths`, wie der Lauf es hinterliess.
 name: Solver-Einordnung
 
 on:
@@ -15,6 +20,11 @@ on:
         description: Zweig oder Commit, der eingeordnet wird
         required: true
         default: main
+      art:
+        description: Einordnen (CLASSIFY_UNREACHED) oder Pfade neu erzeugen (UPDATE_PATHS)
+        type: choice
+        options: [einordnen, pfade]
+        default: einordnen
       depths:
         description: Tiefen (CLASSIFY_UNREACHED)
         required: true
@@ -32,7 +42,7 @@ on:
         required: true
         default: "2"
       programs:
-        description: Optional nur diese Programme (CLASSIFY_PROGRAMS, durch Komma getrennt)
+        description: Optional nur diese Programme (CLASSIFY_PROGRAMS bzw. UPDATE_PATHS, durch Komma getrennt)
         required: false
         default: ""
 
@@ -46,6 +56,7 @@ env:
 jobs:
   plan:
     name: Teile
+    if: inputs.art == 'einordnen'
     runs-on: ubuntu-24.04
     outputs:
       shards: ${{ steps.shards.outputs.list }}
@@ -103,7 +114,7 @@ jobs:
   collect:
     name: Zusammenfuehren
     needs: classify
-    if: always()
+    if: always() && inputs.art == 'einordnen'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -135,3 +146,33 @@ jobs:
           name: fb511-ergebnis
           path: ergebnis/
           retention-days: 90
+
+  paths:
+    name: Pfade neu
+    if: inputs.art == 'pfade'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          path: src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src -> target
+          shared-key: solver
+      - name: Pfade und Beweisdateien
+        working-directory: src
+        env:
+          UPDATE_PATHS: ${{ inputs.programs || '1' }}
+        run: cargo test --release -p takt-conformance --test solver_paths -- --nocapture the_stored_solver_paths_still_hold
+      - name: Ergebnis sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pfade
+          path: src/corpus-try/paths/
+          if-no-files-found: error
+          retention-days: 30

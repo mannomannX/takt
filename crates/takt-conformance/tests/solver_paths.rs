@@ -15,10 +15,15 @@
 //! `UPDATE_PATHS=<datei>,<datei>` nur fuer diese Programme. Im Release-Bau
 //! (`cargo nextest run --release`): Die Modelle der grossen Programme baut
 //! ein Debug-Bau um ein Vielfaches langsamer.
+//!
+//! Die Pfade aus dem langen Lauf (`takt_conformance::paths::from_run`,
+//! M11 Strang B2 Schritt 3) brauchen keinen Solver: Der Test rechnet sie je
+//! Programm des Vergleichs neu und haelt sie gegen die gespeicherten;
+//! `UPDATE_RUN_PATHS=1` (oder `=<datei>,<datei>`) schreibt sie.
 
 use std::collections::BTreeMap;
 
-use takt_conformance::paths::{self, DEPTH, Found, Path, TIMEOUT_S, Target};
+use takt_conformance::paths::{self, DEPTH, Found, Path, TIMEOUT_S, Target, label};
 use takt_interp::{CoverKind, Coverage};
 use takt_mir::Program;
 use takt_mir::analysis::proof::{Proof, Site};
@@ -42,8 +47,9 @@ fn programs() -> Vec<&'static str> {
     takt_conformance::suites::programs("beweiser")
 }
 
-/// Was die Laeufe ohne Pfad erreichen: die Coverage von `still`, dem
-/// geschriebenen Stimulus und den erzeugten Eingaben.
+/// Was die Laeufe ohne Pfad des Solvers erreichen: die Coverage von `still`,
+/// dem geschriebenen Stimulus, den erzeugten Eingaben und den Pfaden aus dem
+/// langen Lauf.
 fn reached(name: &str, p: &Program) -> Coverage {
     let mut all = Coverage::default();
     for case in takt_conformance::cases::cases(name, p).into_iter().filter(|c| !c.label.starts_with("pfad")) {
@@ -63,11 +69,6 @@ fn failed_without_path(reached: &Coverage, c: &CheckReport) -> bool {
         "check" | "expect" => hit(CoverKind::CheckFailed, &c.machine, format!("{} @{}", c.kind, c.start)),
         kind => hit(CoverKind::SiteFailed, "", format!("{kind} @{}-{}", c.span.start, c.span.end)),
     }
-}
-
-/// Ein Name fuer eine Pfaddatei: was nicht Buchstabe oder Ziffer ist, wird `_`.
-fn label(head: &str, tail: &str) -> String {
-    format!("{head}-{}", tail.replace(|ch: char| !ch.is_ascii_alphanumeric(), "_"))
 }
 
 /// Fragt den Solver wie `takt prove` nach dem, was die Laeufe ohne Pfad nicht
@@ -118,6 +119,8 @@ fn generate(name: &str, src: &str, p: &Program, solver: &Solver) -> Result<Found
                 });
                 if let Some((c, at, stimulus)) = reachable.filter(|(c, _, _)| !failed_without_path(&reached, c)) {
                     let target = Target::Check { kind: kind.clone(), machine: c.machine.clone(), start, end, at };
+                    // Einen Pfad jenseits der Tiefe fand die Vertiefung (`takt_prove::DEEPEST`).
+                    let ticks = ticks.max(at + 2);
                     found.push(Path { label: label(&kind, &start.to_string()), target, stimulus, ticks });
                 }
             }
@@ -571,11 +574,95 @@ fn the_stored_solver_paths_still_hold() {
             known.push(f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
         }
     }
+    // Pfade aus dem langen Lauf hat jedes Programm des Vergleichs, Pfade des
+    // Solvers nur eines der Suite `beweiser`.
+    for name in compared().into_iter().filter(|n| !programs().contains(n)) {
+        for path in paths::load(name).into_iter().filter(|p| !p.from_run()) {
+            failed.push(format!(
+                "{name}: `{}` ist ein Pfad des Solvers, das Programm steht nicht in `beweiser`",
+                path.label
+            ));
+        }
+        known.push(paths::paths_dir(name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+    }
     for entry in std::fs::read_dir(paths::dir()).into_iter().flatten().flatten() {
         let n = entry.file_name().to_string_lossy().into_owned();
         if !known.contains(&n) {
-            failed.push(format!("`corpus-try/paths/{n}` gehoert zu keinem Programm der Suite `beweiser`"));
+            failed.push(format!("`corpus-try/paths/{n}` gehoert zu keinem Programm des Vergleichs"));
         }
     }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Kein Pfad ist tiefer, als der Vergleich laeuft**: Der Solver vertieft
+/// einen Pfad bis `takt_prove::DEEPEST`, der lange Lauf geht bis
+/// `cases::MAX_TICKS` (M11 Strang B2, Schritt 3). Der Beweiser kennt diese
+/// Crate nicht; die beiden Zahlen haelt dieser Test gleich.
+#[test]
+fn the_deepest_path_fits_the_comparison() {
+    assert_eq!(u64::from(takt_prove::DEEPEST), takt_conformance::cases::MAX_TICKS);
+}
+
+/// Die Programme des Vergleichs (`differential.rs`): die Suite `vergleich`
+/// und die Beispiele.
+fn compared() -> Vec<&'static str> {
+    let mut out = takt_conformance::suites::programs("vergleich");
+    out.extend(takt_conformance::suites::EXAMPLES);
+    out
+}
+
+/// **Die Pfade aus dem langen Lauf sind die, die er heute findet** (M11
+/// Strang B2, Schritt 3; FB-613). Je Programm des Vergleichs rechnet der
+/// Interpreter den Lauf ohne Stimulus neu (`paths::from_run`); jeder
+/// gespeicherte Pfad dieser Quelle muss herauskommen und jeder gefundene
+/// gespeichert sein. Ein Programm, dessen langer Lauf eine neue Stelle
+/// erreicht oder eine alte nicht mehr, faellt so auf, auch wenn die Zahlen
+/// von `UNREACHED` gleich blieben. `UPDATE_RUN_PATHS=1` schreibt sie neu,
+/// `=<datei>,<datei>` nur fuer diese Programme.
+#[test]
+fn the_stored_run_paths_are_current() {
+    let which = std::env::var("UPDATE_RUN_PATHS").ok();
+    let chosen: Vec<String> = which.iter().flat_map(|w| w.split(',')).map(|n| n.trim().to_string()).collect();
+    let all = compared();
+    if let Some(name) = chosen.iter().find(|n| *n != "1" && !all.contains(&n.as_str())) {
+        panic!("`{name}` steht nicht im Vergleich");
+    }
+    let update = |name: &str| chosen.iter().any(|n| n == "1" || n == name);
+    let hint = "`UPDATE_RUN_PATHS=<datei> cargo nextest run -p takt-conformance --test solver_paths` schreibt sie neu";
+    let queue = std::sync::Mutex::new(all);
+    let failed = std::sync::Mutex::new(Vec::new());
+    let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
+    std::thread::scope(|scope| {
+        for _ in 0..(cores - 1).max(1) {
+            let worker = || {
+                loop {
+                    let next = queue.lock().expect("Warteschlange").pop();
+                    let Some(name) = next else { break };
+                    let src = source(name);
+                    let p = compile(name, &src, paths::proof(name).as_ref());
+                    let found = paths::from_run(name, &p);
+                    if update(name) {
+                        paths::store_run(name, &found).unwrap_or_else(|e| panic!("{name}: {e}"));
+                        if !found.is_empty() {
+                            eprintln!("{name}: {} Pfade aus dem langen Lauf", found.len());
+                        }
+                        continue;
+                    }
+                    let stored: Vec<Path> = paths::load(name).into_iter().filter(Path::from_run).collect();
+                    let mut out = failed.lock().expect("Fehlschlaege");
+                    for p in found.iter().filter(|p| !stored.contains(p)) {
+                        out.push(format!("{name}: `{}` ({:?}) fehlt; {hint}", p.label, p.target));
+                    }
+                    for p in stored.iter().filter(|p| !found.contains(p)) {
+                        out.push(format!("{name}: `{}` findet der lange Lauf nicht mehr; {hint}", p.label));
+                    }
+                }
+            };
+            // Sema und Interpreter gehen tief: 64 MiB Stapel je Faden.
+            std::thread::Builder::new().stack_size(64 << 20).spawn_scoped(scope, worker).expect("Faden");
+        }
+    });
+    let mut failed = failed.into_inner().expect("Fehlschlaege");
+    failed.sort();
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }

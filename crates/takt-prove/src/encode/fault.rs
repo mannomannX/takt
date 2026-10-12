@@ -1,8 +1,9 @@
-//! Faults im Modell (5.3): Jeder Fault-Ausgang traegt seine Ursache. Die Art
-//! steht je Maschine fuer den laufenden Tick im Zustand — die Zeile `fault`
-//! eines Laufs (`Model::run`); Art, Meldung, Zeile und Tick des letzten
-//! Faults (`last_fault`, `system::last_fault_value`) fuehrt nur eine
-//! Maschine, die `last_fault` liest.
+//! Faults im Modell (5.3): Jeder Fault-Ausgang traegt seine Ursache. Die
+//! Arten stehen je Maschine fuer den laufenden Tick im Zustand, in ihrer
+//! Folge — die Zeilen `fault` eines Laufs (`Model::run`); Art, Meldung,
+//! Zeile und Tick des letzten Faults (`last_fault`,
+//! `system::last_fault_value`) fuehrt nur eine Maschine, die `last_fault`
+//! liest.
 
 use takt_diag::Span;
 use takt_mir::machine::FaultKind;
@@ -17,6 +18,12 @@ use crate::term::{Op, Term};
 
 /// So viele Byte fasst `LastFault.message` (Prelude, `str<128>`).
 const MESSAGE: i64 = 128;
+
+/// Die Basis, zu der die Faults eines Ticks hintereinander stehen
+/// ([`Enc::record_fault`]): eine Stelle je Fault, groesser als jede Nummer
+/// einer Art ([`code`]). In 64 Bit passen zwoelf Faults einer Maschine in
+/// einen Tick; mehr gaebe ein Fault-Wald mit zwoelf Ebenen (Lemma 9.3.1).
+const BASE: i64 = 32;
 
 /// Was ein Fault in `last_fault` hinterlaesst: seine Art, die Meldung einer
 /// Anweisung (`check`, `expect`, `abort`) — ohne sie den Namen der Art —
@@ -95,7 +102,7 @@ impl Enc<'_> {
         self.last_fault.contains(&m)
     }
 
-    /// Die Art des Faults der Maschine in diesem Tick als Nummer ([`code`]).
+    /// Die Arten der Faults der Maschine in diesem Tick ([`kinds_of`]).
     pub(super) fn loc_fault(&self, m: MachineId) -> String {
         format!("s.{}.fault", self.machine(m).name)
     }
@@ -127,9 +134,15 @@ impl Enc<'_> {
         self.init_loc(env, &self.loc_last_fault(m), ty, zero, Span::default())
     }
 
-    /// Haelt in `out` fest, was der Fault `cause` hinterlaesst.
+    /// Haelt in `out` fest, was der Fault `cause` hinterlaesst: Seine Art
+    /// kommt hinter die Faults, die die Maschine in diesem Tick schon nahm.
+    /// Ein Fault im Fault-Pfad — in `enter:` des Ziels — ist der zweite
+    /// desselben Ticks, und der Interpreter meldet beide (5.3, 9.3).
     pub(super) fn record_fault(&self, m: MachineId, cause: &Cause, out: &mut Env) -> R<()> {
-        out.insert(self.loc_fault(m), Term::int(code(cause.kind)));
+        let loc = self.loc_fault(m);
+        let before = out.get(&loc).cloned().unwrap_or_else(|| Term::int(0));
+        let shifted = Term::bin(Op::Mul, before, Term::int(BASE));
+        out.insert(loc, Term::bin(Op::Add, shifted, Term::int(code(cause.kind))));
         if !self.reads_last_fault(m) {
             return Ok(());
         }
@@ -193,6 +206,35 @@ fn code(kind: FaultKind) -> i64 {
 }
 
 /// Die Art zu einer Nummer im Zustand.
-pub fn kind_of(code: i64) -> Option<FaultKind> {
+fn kind_of(code: i64) -> Option<FaultKind> {
     FaultKind::all().get(usize::try_from(code).ok()?.checked_sub(1)?).copied()
+}
+
+/// Die Faults eines Ticks aus dem Zustand ([`Enc::record_fault`]), der
+/// erste zuerst; `None`, wo eine Stelle keine Art nennt.
+pub fn kinds_of(mut faults: i64) -> Option<Vec<FaultKind>> {
+    let mut out = Vec::new();
+    while faults != 0 {
+        out.push(kind_of(faults.checked_rem(BASE)?)?);
+        faults /= BASE;
+    }
+    out.reverse();
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Jede Art hat eine Stelle zur Basis, und die Folge kommt zurueck, wie
+    /// sie hineinging — auch dieselbe Art zweimal.
+    #[test]
+    fn the_faults_of_a_tick_come_back_in_their_order() {
+        assert!(FaultKind::all().len() < BASE as usize);
+        let kinds = [FaultKind::Runtime(takt_mir::machine::RuntimeKind::Node), FaultKind::Range, FaultKind::Range];
+        let state = kinds.iter().fold(0, |acc, k| acc * BASE + code(*k));
+        assert_eq!(kinds_of(state), Some(kinds.to_vec()));
+        assert_eq!(kinds_of(0), Some(Vec::new()));
+        assert_eq!(kinds_of(BASE), None, "eine Stelle ohne Art");
+    }
 }

@@ -328,6 +328,38 @@ machine f:
     assert_eq!(at("200 / x", "div"), CheckVerdict::Unreachable { k: 1 });
 }
 
+/// **Ein Pfad jenseits der Tiefe** (M11 Strang B2, Schritt 3): Der Zaehler
+/// laeuft im Tick 20 ueber seine Range. Bis Tiefe 3 gibt es keinen Pfad, der
+/// Induktionsschritt bleibt offen, und die Invariantensuche sieht den Pfad
+/// dahinter. Die Vertiefung findet ihn mit BMC der Tiefe 24 am Gesamtmodell,
+/// und der Interpreter bestaetigt ihn.
+#[test]
+fn a_path_beyond_the_depth_is_found_by_deepening() {
+    let Some(solver) = solver() else { return };
+    let src = "system:
+    language = 1
+    tick     = 10 ms
+
+output o : int @ hw(\"o/o\") with safe = 0
+
+machine m:
+    var c : int in 0..20 = 0
+    initial RUN
+    state RUN:
+        loop:
+            c = c + 1
+            o = c
+";
+    let p = compile(src);
+    let whole = encode(&p).expect("kodierbar");
+    let (sites, _) = classify_compositional(&p, Some(&whole), 3, &solver, 60).expect("Solver laeuft");
+    let start = src.find("c = c + 1").expect("im Quelltext") as u32;
+    let site = sites.iter().find(|s| s.kind == "range" && s.span.start == start);
+    let site = site.unwrap_or_else(|| panic!("keine Stelle `range` an `c = c + 1`: {sites:?}"));
+    let CheckVerdict::Reachable { at, stimulus } = &site.verdict else { panic!("{site:?}") };
+    assert_eq!(*at, 20, "{stimulus}");
+}
+
 /// B2: das `ensures` des Begrenzers haelt aus jedem typkonformen Zustand;
 /// sein `requires` kann an der Aufrufstelle verletzt sein — der Pfad kommt
 /// aus dem Modell, weil der Interpreter Vertraege nicht prueft.

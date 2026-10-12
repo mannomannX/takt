@@ -1,0 +1,5 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)
+# ziel check index drv 1857 1866 1
+# ticks 7
+t=0 in dev_w 0x t=-9999999
+t=0 in dev_w 0x01010101 t=0

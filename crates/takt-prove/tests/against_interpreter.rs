@@ -2471,3 +2471,28 @@ fn a_sim_stream_of_two_scenarios_belongs_to_the_one_that_runs() {
         agree_scenario("SHARED_SIM", &p, scenario, "", 8);
     }
 }
+
+/// **Zwei Faults einer Maschine in einem Tick** (M11 Strang B2, Schritt 3):
+/// Ein Fault von aussen fuehrt `99_exit_fault` nach `RECOVER`; nach elf
+/// davon faultet dessen `enter:` selbst (`next = next - 1` unter null), und
+/// der Fault-Pfad der Maschine uebernimmt. Der Interpreter meldet im Tick 78
+/// beide, das Modell meldete nur den letzten — gefunden am Pfad des Solvers
+/// jenseits der Tiefe.
+#[test]
+fn two_faults_of_one_machine_in_one_tick_are_both_reported() {
+    let stimulus: String = (0..11).map(|i| format!("t={} runtime Overrun\n", 8 + 7 * i)).collect();
+    agree_program("99_exit_fault.takt", &corpus("99_exit_fault.takt"), &stimulus, 80);
+}
+
+/// **Eine gehaltene `Stale`-Lieferung behaelt ihren verborgenen Wert** (3.5,
+/// M11 Strang B2, Schritt 3): Der Treiber meldet `supply_p` in Tick 1
+/// `Stale` mit Wert, in Tick 2 kommt nichts, und die Abtastung bleibt. Den
+/// Wert sehen die Maschinen in keinem der beiden Ticks; im Modell ist er
+/// null und bleibt es. Der Lauf des Modells gab ihm im gehaltenen Tick den
+/// Wert des Interpreters und verletzte so die Annahme `gehalten => x = x.prev`
+/// — gefunden an einem neuen Pfad des Solvers zu `03_sequences_and_faults`.
+#[test]
+fn a_held_stale_delivery_keeps_its_hidden_value() {
+    let stimulus = "t=0 in chamber_p 1.0\nt=1 in chamber_p 1.0\nt=1 in supply_p 100.0 stale\n";
+    agree_program("03_sequences_and_faults.takt", &corpus("03_sequences_and_faults.takt"), stimulus, 7);
+}
