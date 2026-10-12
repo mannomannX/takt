@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use takt_conformance::zephyr::{self, Board, CMSIS_RTOS2, ESP32C6, Image, STM32F401, ZEPHYR, ZEPHYR_GPIO};
+use takt_conformance::zephyr::{self, Board, CMSIS_RTOS2, ESP32C6, Image, STM32F401, Variant, ZEPHYR, ZEPHYR_GPIO};
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
@@ -33,6 +33,8 @@ struct Expect {
     linked: &'static [&'static str],
     config: &'static [(&'static str, &'static str)],
     partition: bool,
+    /// Die Spielart des Baus; die Boards bauen die uebrigen.
+    variant: Variant,
 }
 
 /// Der Kern des SDK und der Port mit Faeden: ohne sie faehrt kein Abbild ein
@@ -40,12 +42,14 @@ struct Expect {
 const PORT: &[&str] = &["takt_core_service", "takt_rtos_start", "main"];
 
 /// `examples/zephyr`: der Adapter auf den Faeden des Zephyr-Kerns, die
-/// Probe der Partition und der Benutzermodus, gegen den sie schuetzt.
+/// Probe der Partition und der Benutzermodus, gegen den sie schuetzt; mit
+/// der Probe im Lauf, deren Zweig sonst nur die Board-Abbilder uebersetzten.
 const ZEPHYR_EXPECT: Expect = Expect {
     example: ZEPHYR,
     linked: &["takt_os_spawn", "partition_probe", "port_test_ops", "takt_core_init_journaled", "takt_zephyr_nvm_open"],
     config: &[("TAKT", "y"), ("TAKT_PORT_ZEPHYR", "y"), ("USERSPACE", "y"), ("TAKT_JOURNAL_FLASH", "y")],
     partition: true,
+    variant: Variant::PROBE_IN_RUN,
 };
 
 /// `examples/cmsis-rtos2`: der Adapter auf CMSIS-RTOS2 unter Zephyrs
@@ -63,6 +67,7 @@ const CMSIS_EXPECT: Expect = Expect {
     ],
     config: &[("TAKT", "y"), ("TAKT_PORT_CMSIS_RTOS2", "y"), ("CMSIS_RTOS_V2", "y"), ("TAKT_JOURNAL_FLASH", "y")],
     partition: false,
+    variant: Variant::KEPT,
 };
 
 /// `examples/zephyr-gpio`: die Treiber beider Pins und der Heartbeat ihres
@@ -80,6 +85,7 @@ const GPIO_EXPECT: Expect = Expect {
     ],
     config: &[("TAKT", "y"), ("TAKT_PORT_ZEPHYR", "y"), ("GPIO", "y")],
     partition: false,
+    variant: Variant::KEPT,
 };
 
 /// Was die Konfiguration aufgeloest haben muss: was das Beispiel verlangt,
@@ -158,7 +164,7 @@ fn builds(expect: &Expect, boards: &[Board]) -> Vec<String> {
     let mut failed = Vec::new();
     for &board in boards {
         let dir = scratch(&format!("takt-{}-{}", expect.example, board.triple));
-        match zephyr::build(&west, expect.example, board, false, &dir, takt) {
+        match zephyr::build(&west, expect.example, board, expect.variant, &dir, takt) {
             Ok(image) => {
                 failed.extend(configured(expect, board, &image));
                 failed.extend(linked(expect, board, &image));

@@ -702,21 +702,21 @@ pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
 /// Das Abbild von `examples/<example>` fuer `zephyr` (M11 Schritt 19,
 /// [`takt_conformance::zephyr`]), gebaut mit dem Werkzeug, mit dem der Harness
 /// die Bring-ups baut (`<target>/release/takt`), unter
-/// `<target>/takt-zephyr/<board>-<example>[-fresh]`; mit `fresh` loescht das
-/// Abbild sein Journal vor dem Lauf. Ein Abbild aus dem Zwischenspeicher
+/// `<target>/takt-zephyr/<board>-<example><spielart>`, in der Spielart
+/// `variant` ([`takt_conformance::zephyr::Variant`]). Ein Abbild aus dem Zwischenspeicher
 /// ([`takt_conformance::zephyr::image`]) braucht kein Zephyr: So faehrt der
 /// Rechner am Board die Abbilder aus CI (`tools/board-run.ps1 -FromCi`).
 pub fn zephyr_image(
     name: &str,
     example: &str,
     zephyr: takt_conformance::zephyr::Board,
-    fresh: bool,
+    variant: takt_conformance::zephyr::Variant,
 ) -> Result<takt_conformance::zephyr::Image, String> {
     let target = takt_conformance::target_dir();
     let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
-    let dir = target.join("takt-zephyr").join(format!("{name}-{example}{}", if fresh { "-fresh" } else { "" }));
+    let dir = target.join("takt-zephyr").join(format!("{name}-{example}{}", variant.suffix()));
     let west = takt_conformance::zephyr::west();
-    takt_conformance::zephyr::image(west.as_deref(), example, zephyr, fresh, &dir, &tool)
+    takt_conformance::zephyr::image(west.as_deref(), example, zephyr, variant, &dir, &tool)
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart** (5.9, 12.11; M11
@@ -1324,5 +1324,41 @@ pub fn zephyr_wire_follows(name: &str, run: Result<String, String>) -> Vec<Strin
         ));
     }
     eprintln!("{name}-zephyr-gpio: {}", log.display());
+    failed
+}
+
+/// **Eine Schutzverletzung im Lauf wird zum Fault des Kerns** (12.3; M11
+/// Schritt 19): das Urteil ueber den Lauf `run` von `examples/zephyr` mit
+/// `TAKT_PROBE_IN_RUN` auf dem Board `name`. Vor dem Lauf weist die
+/// Partition die Probe ab wie in der Portpruefung; die zweite Probe im Lauf
+/// trifft dieselbe Schutzeinheit, und der Fault-Handler meldet sie dem Kern
+/// (`partition_guard`, `takt_core_hardware_fault`): genau eine Zeile
+/// `runtime Hardware`, und der Lauf reicht danach bis zu seinem letzten
+/// Tick. Der Lauf steht unter `<target>/port-test/<name>-zephyr-probe.log`.
+pub fn zephyr_access_in_the_run_faults(name: &str, run: Result<String, String>) -> Vec<String> {
+    let text = match run {
+        Ok(text) => text,
+        Err(e) => return vec![format!("zephyr-probe: kein Lauf: {e}")],
+    };
+    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-zephyr-probe.log"));
+    if let Err(e) = log.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&log, &text)) {
+        return vec![format!("{}: {e}", log.display())];
+    }
+    eprintln!("{name}-zephyr-probe: {}", log.display());
+    let mut failed = Vec::new();
+    let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
+    if !header.lines().any(|l| l.trim_end() == ZEPHYR_PARTITION_REFUSED) {
+        failed.push(format!("zephyr-probe: keine Zeile `{ZEPHYR_PARTITION_REFUSED}` vor der Marke"));
+    }
+    let trace = text.find(board::MARK).map_or("", |at| &text[at..]);
+    let faults: Vec<&str> =
+        trace.lines().map(str::trim_end).filter(|l| l.split_whitespace().nth(1) == Some("runtime")).collect();
+    if faults.len() != 1 || !faults.iter().all(|l| l.ends_with(" runtime Hardware")) {
+        failed.push(format!("zephyr-probe: verlangt genau `runtime Hardware`, gesehen {faults:?}"));
+    }
+    let last = port::TICKS - 1;
+    if !trace.lines().any(|l| l.starts_with(&format!("t={last} "))) {
+        failed.push(format!("zephyr-probe: der Trace reicht nicht bis Tick {last}"));
+    }
     failed
 }

@@ -477,8 +477,8 @@ const F401_TARGET: &[&str] = &[
 ];
 
 /// Was der Bau der Beispiele unter Zephyr setzt: das frische Journal der
-/// Portpruefung (`examples/zephyr/CMakeLists.txt`).
-const ZEPHYR_DEFINES: &[&str] = &["-DTAKT_FRESH_JOURNAL=1"];
+/// Portpruefung, ohne Probe im Lauf (`examples/zephyr/CMakeLists.txt`).
+const ZEPHYR_DEFINES: &[&str] = &["-DTAKT_FRESH_JOURNAL=1", "-DTAKT_PROBE_IN_RUN=0"];
 
 /// Schreibt die Lieferformen nach `out` und nennt die Bindungen: je
 /// Programm sein Rahmen, bei `valve` mit `examples/c-host`, bei `port_test`

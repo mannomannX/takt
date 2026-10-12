@@ -72,13 +72,46 @@ pub const CMSIS_RTOS2: &str = "cmsis-rtos2";
 /// Messschleife auf der Drahtbruecke (`examples/zephyr-gpio`, 8.10).
 pub const ZEPHYR_GPIO: &str = "zephyr-gpio";
 
+/// Was ein Bau eines Beispiels ueber CMake waehlt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Variant {
+    /// Das Journal vor dem Lauf loeschen (`TAKT_FRESH_JOURNAL`): Die
+    /// Portpruefung vergleicht mit dem Interpreter ohne gespeicherte Werte.
+    pub fresh: bool,
+    /// Die Partition auch im Lauf proben (`TAKT_PROBE_IN_RUN`,
+    /// `examples/zephyr`): Der Kern meldet die Schutzverletzung als
+    /// `Runtime(Hardware)` (12.3).
+    pub probe_in_run: bool,
+}
+
+impl Variant {
+    /// Der Bau, der das Journal behaelt.
+    pub const KEPT: Variant = Variant { fresh: false, probe_in_run: false };
+
+    /// Der Bau der Portpruefung: ein frisches Journal.
+    pub const FRESH: Variant = Variant { fresh: true, probe_in_run: false };
+
+    /// Der Bau, der die Partition im Lauf probt, mit frischem Journal.
+    pub const PROBE_IN_RUN: Variant = Variant { fresh: true, probe_in_run: true };
+
+    /// Die Endung des Bauverzeichnisses: leer, `-fresh`, `-fresh-probe`.
+    pub fn suffix(self) -> String {
+        format!("{}{}", if self.fresh { "-fresh" } else { "" }, if self.probe_in_run { "-probe" } else { "" })
+    }
+}
+
 /// Baut `examples/<example>` fuer `board` in `dir`, mit dem Werkzeug `takt`
-/// und dem SDK-Archiv fuer das Tripel des Boards. Mit `fresh` loescht das
-/// Abbild sein Journal vor dem Lauf (`TAKT_FRESH_JOURNAL`): Die
-/// Portpruefung vergleicht mit dem Interpreter ohne gespeicherte Werte. Mit
-/// zwei Jobs: Ein Zephyr-Bau ist klein, und der Rechner neben ihm baut oft
-/// Rust.
-pub fn build(west: &Path, example: &str, board: Board, fresh: bool, dir: &Path, takt: &Path) -> Result<Image, String> {
+/// und dem SDK-Archiv fuer das Tripel des Boards, in der Spielart `variant`.
+/// Mit zwei Jobs: Ein Zephyr-Bau ist klein, und der Rechner neben ihm baut
+/// oft Rust.
+pub fn build(
+    west: &Path,
+    example: &str,
+    board: Board,
+    variant: Variant,
+    dir: &Path,
+    takt: &Path,
+) -> Result<Image, String> {
     let sdk = crate::harness::sdk_library_for(Some(board.triple))?;
     // CMake liest `\` in einem Pfad als Escape.
     let cmake_path = |p: &Path| p.display().to_string().replace('\\', "/");
@@ -90,7 +123,8 @@ pub fn build(west: &Path, example: &str, board: Board, fresh: bool, dir: &Path, 
         .arg("--")
         .arg(format!("-DTAKT_EXECUTABLE={}", cmake_path(takt)))
         .arg(format!("-DTAKT_SDK_LIBRARY={}", cmake_path(&sdk)))
-        .arg(format!("-DTAKT_FRESH_JOURNAL={}", if fresh { "ON" } else { "OFF" }))
+        .arg(format!("-DTAKT_FRESH_JOURNAL={}", if variant.fresh { "ON" } else { "OFF" }))
+        .arg(format!("-DTAKT_PROBE_IN_RUN={}", if variant.probe_in_run { "ON" } else { "OFF" }))
         .output()
         .map_err(|e| format!("{}: {e}", west.display()))?;
     if !out.status.success() {
@@ -175,14 +209,15 @@ fn stand(board: Board) -> Result<PathBuf, String> {
     Ok(crate::board::images().join(format!("{}-{:016x}", kind(board), f.finish())))
 }
 
-/// Der Schluessel eines Abbilds in seinem Stand: Beispiel, Board und ob es
-/// sein Journal loescht.
+/// Der Schluessel eines Abbilds in seinem Stand: Beispiel, Board und
+/// Spielart.
 #[cfg(feature = "board")]
-fn key(example: &str, board: Board, fresh: bool) -> String {
+fn key(example: &str, board: Board, variant: Variant) -> String {
     let mut f = crate::board::Fingerprint::new();
     f.str(example);
     f.str(board.west);
-    f.u64(u64::from(fresh));
+    f.u64(u64::from(variant.fresh));
+    f.u64(u64::from(variant.probe_in_run));
     format!("{:016x}", f.finish())
 }
 
@@ -197,12 +232,12 @@ pub fn image(
     west: Option<&Path>,
     example: &str,
     board: Board,
-    fresh: bool,
+    variant: Variant,
     dir: &Path,
     takt: &Path,
 ) -> Result<Image, String> {
     let stand = stand(board)?;
-    let key = key(example, board, fresh);
+    let key = key(example, board, variant);
     let cached = |ext: &str| stand.join(format!("{key}.{ext}"));
     let elf = cached("elf");
     if elf.is_file() {
@@ -217,7 +252,7 @@ pub fn image(
         ));
     };
     crate::board::missed(&stand, &elf, &format!("examples/{example} {}", board.west))?;
-    let built = build(west, example, board, fresh, dir, takt)?;
+    let built = build(west, example, board, variant, dir, takt)?;
     crate::board::enter_stand(&kind(board), &stand)?;
     let config = dir.join("zephyr").join(".config");
     // Das ELF zuletzt: Wer es findet, findet auch die anderen beiden.
