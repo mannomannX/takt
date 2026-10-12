@@ -173,7 +173,7 @@ struct Link {
 fn part(path: &str, out: &Path) -> &'static str {
     if path.ends_with("/takt_sdk.h") {
         "SDK"
-    } else if path.contains("/ports/posix/") {
+    } else if path.contains("/ports/") {
         "Port"
     } else if path.contains("/examples/") {
         "Beispiele"
@@ -311,10 +311,10 @@ const PROGRAMS: &[(&str, &str, &[&str])] = &[
 
 /// Schreibt die Lieferformen nach `out` und nennt die Bindungen: je
 /// Programm sein Rahmen, bei `valve` mit `examples/c-host`, bei `port_test`
-/// mit dem POSIX-Port und `examples/posix`.
+/// mit dem Port fuer Faeden, seinem POSIX-Adapter und `examples/posix`.
 fn deliveries(out: &Path) -> Vec<Link> {
     let root = root();
-    let posix = root.join("crates/takt-embed-c/ports/posix");
+    let ports = root.join("crates/takt-embed-c/ports");
     let mut links = Vec::new();
     for &(prefix, source, extra) in PROGRAMS {
         let dir = out.join(prefix);
@@ -326,8 +326,12 @@ fn deliveries(out: &Path) -> Vec<Link> {
         match prefix {
             "valve" => units.push(root.join("examples/c-host/main.c")),
             "port_test" => {
-                units.extend([posix.join("takt_posix.c"), root.join("examples/posix/main.c")]);
-                include.push(posix.clone());
+                units.extend([
+                    ports.join("rtos/takt_rtos.c"),
+                    ports.join("posix/takt_os.c"),
+                    root.join("examples/posix/main.c"),
+                ]);
+                include.extend([ports.join("rtos"), ports.join("posix")]);
             }
             _ => {}
         }

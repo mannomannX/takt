@@ -1,6 +1,7 @@
-//! Der POSIX-Port (12.11, M11 Schritt 18c): `examples/posix` faehrt das
-//! Pruefprogramm ueber `crates/takt-embed-c/ports/posix` in Echtzeit, und
-//! das Urteil der Portpruefung nimmt den Lauf an.
+//! Der Port fuer Systeme mit Faeden (12.11, M11 Schritte 18, 18c):
+//! `examples/posix` faehrt das Pruefprogramm ueber `ports/rtos` und den
+//! POSIX-Adapter in Echtzeit, und das Urteil der Portpruefung nimmt den Lauf
+//! an. Die Vorlage `c-port` (`ports/template`) uebersetzt mit demselben Kern.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -51,16 +52,19 @@ fn a_posix_port_passes_the_port_test() {
     let run = takt(&["port-test", "--emit", "embed", "--form", "rtos", "--hardware", hardware, "--out", out]);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let sdk = takt_conformance::harness::sdk_library_for(None).unwrap_or_else(|e| panic!("SDK-Archiv: {e}"));
-    let port = root().join("crates/takt-embed-c/ports/posix");
+    let ports = root().join("crates/takt-embed-c/ports");
     let exe = dir.join("posix_port");
     let build = Command::new(clang)
         .args(["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-pthread"])
         .arg("-I")
         .arg(&embed)
         .arg("-I")
-        .arg(&port)
+        .arg(ports.join("rtos"))
+        .arg("-I")
+        .arg(ports.join("posix"))
         .arg(root().join("examples/posix/main.c"))
-        .arg(port.join("takt_posix.c"))
+        .arg(ports.join("rtos/takt_rtos.c"))
+        .arg(ports.join("posix/takt_os.c"))
         .arg(embed.join("libport_test.a"))
         .arg(&sdk)
         .args(takt_llvm::toolchain::Clang::HOST_LIBS)
@@ -77,6 +81,33 @@ fn a_posix_port_passes_the_port_test() {
     // Die gemessenen Tiefen sind die Reserven der Hardware-Konfiguration.
     eprintln!("{verdict}");
     assert!(verdict.passed(), "{verdict}\n{}{}", String::from_utf8_lossy(&run.stdout), excerpt(&log));
+}
+
+/// **Die Vorlage `c-port` passt zum Port** (12.11, 2.9): `ports/template`
+/// mit `ports/rtos/takt_rtos.c` und dem Kopf des SDK uebersetzt ohne
+/// Warnung. Aendert sich `takt_os.h`, faellt dieser Test, bis die Vorlage
+/// folgt.
+#[test]
+fn the_port_template_compiles_with_the_thread_port() {
+    let Some(clang) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
+        return;
+    };
+    let ports = root().join("crates/takt-embed-c/ports");
+    let check = Command::new(clang)
+        .args(["-fsyntax-only", "-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg("-I")
+        .arg(ports.join("rtos"))
+        .arg("-I")
+        .arg(ports.join("template"))
+        .arg("-I")
+        .arg(root().join("crates/takt-embed-c/include"))
+        .arg(ports.join("rtos/takt_rtos.c"))
+        .arg(ports.join("template/takt_os.c"))
+        .output()
+        .expect("clang startet");
+    assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
 }
 
 /// Was ein Lauf, der durchfiel, vom Port zeigt: der Kopf, die Zeilen der

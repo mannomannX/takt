@@ -304,8 +304,9 @@ im Katalog:
 
 Der C-Teil ist, was ein C-Wirt übersetzt: der Rahmen, den `takt build
 --emit embed` je Programm schreibt (`P_frame.c`, `P_ops.c`, `P.h`; erzeugt
-von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der POSIX-Port
-(`crates/takt-embed-c/ports/posix`) und die Beispiele
+von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der Port für Systeme
+mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
+(`ports/posix`) und die Beispiele
 (`examples/c-host/main.c`, `examples/posix/main.c`). Für ihn gelten CERT C
 und MISRA C:2012 unmittelbar (FB-524).
 

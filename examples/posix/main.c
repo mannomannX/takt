@@ -4,14 +4,15 @@
  * `takt port-test --emit embed --form rtos --hardware HW --out DIR` liefert
  * `port_test` (Bibliothek, `port_test.h`, `takt_sdk.h`), auf einem Wirt mit
  * einer Nachricht je Job, die laenger als ein Tick rechnet. Das SDK-Archiv
- * bringt den Kern, `ports/posix` den Port: einen Schrittfaden und einen
- * Jobfaden. Dieses Programm stellt, was der Wirt stellt: die Leitung, das
- * Geraet des Journals und beide Stacks. Waehrend des Laufs rechnet es die
+ * bringt den Kern, `ports/rtos` den Port fuer Systeme mit Faeden (einen
+ * Schrittfaden und einen Jobfaden), `ports/posix` seinen Adapter fuer POSIX.
+ * Dieses Programm stellt, was der Wirt stellt: die Leitung, das Geraet des
+ * Journals und beide Stacks. Waehrend des Laufs rechnet es die
  * fremde Last. Es faehrt so viele Ticks, wie das erste Argument sagt (ohne:
  * 2000), und schreibt den Lauf auf stdout; `takt port-test --judge` urteilt.
  *
- *     clang -std=c11 -O2 -pthread -I DIR -I ports/posix main.c \
- *         ports/posix/takt_posix.c DIR/libport_test.a libtakt_sdk.a -lm
+ *     clang -std=c11 -O2 -pthread -I DIR -I ports/rtos -I ports/posix main.c \
+ *         ports/rtos/takt_rtos.c ports/posix/takt_os.c DIR/libport_test.a libtakt_sdk.a -lm
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -24,7 +25,7 @@
 #include <unistd.h>
 
 #include "port_test.h"
-#include "takt_posix.h"
+#include "takt_rtos.h"
 #include "takt_sdk.h"
 
 /* Die Leitung (12.2): sammelt in einem Puffer, den `flush` ohne zu warten
@@ -126,10 +127,10 @@ static int ticks_of(const char *text, uint64_t *ticks) {
 /* Faehrt den Kern `core` ueber den Port, waehrend dieser Faden die fremde
  * Last rechnet, und schreibt die Bilanz; 0 oder 2. */
 static int drive(takt_core *core, uint64_t ticks) {
-    static struct takt_posix posix;
+    static struct takt_rtos port;
     static _Alignas(64) uint8_t tick_stack[STACK_BYTES];
     static _Alignas(64) uint8_t job_stack[STACK_BYTES];
-    const struct takt_posix_config config = {
+    const struct takt_rtos_config config = {
         .ticks = ticks,
         .tick_ns = PORT_TEST_TICK_NS,
         .tick_stack = tick_stack,
@@ -139,19 +140,19 @@ static int drive(takt_core *core, uint64_t ticks) {
         .step_priority = 0,
         .job_priority = 0,
     };
-    int rc = takt_posix_start(&posix, core, &config);
+    int rc = takt_rtos_start(&port, core, &config);
     if (rc != 0) {
-        (void)fprintf(stderr, "takt_posix_start: %d\n", rc);
+        (void)fprintf(stderr, "takt_rtos_start: %d\n", rc);
     } else {
         /* Die fremde Aufgabe: rechnet mit der FPU, solange Takt laeuft. */
         takt_foreign foreign = {0u, 0u};
         struct takt_stacks stacks;
-        while (takt_posix_running(&posix) != 0) {
+        while (takt_rtos_running(&port) != 0) {
             takt_foreign_round(&foreign);
         }
-        rc = takt_posix_join(&posix, &stacks);
+        rc = takt_rtos_join(&port, &stacks);
         if (rc != 0) {
-            (void)fprintf(stderr, "takt_posix_join: %d\n", rc);
+            (void)fprintf(stderr, "takt_rtos_join: %d\n", rc);
         } else {
             stacks.tick_bound = PORT_TEST_TICK_STACK_BYTES;
             stacks.job_bound = PORT_TEST_JOB_STACK_BYTES;
