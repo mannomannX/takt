@@ -4,11 +4,18 @@
  *
  * **Die acht Regionen der MPU gehoeren FreeRTOS** (12.11). Fest: 7 die
  * Daten des Kerns (`privileged_data`, nur privilegiert), 6 sein Code mit
- * der Vektortabelle (`privileged_functions`, nur privilegiert), 5 der ganze
- * Flash (lesbar fuer jede Aufgabe), 4 die Peripherie. Je Aufgabe: 3 ihr
- * Stack, 0 bis 2 was der Wirt ihr gibt. Eine Region ist eine Zweierpotenz
- * gross und an ihrer Groesse ausgerichtet; die Groessen unten sind es, und
- * der Linker bricht ab, wenn der Inhalt nicht hineinpasst.
+ * der Vektortabelle (`privileged_functions`, nur privilegiert), 5 der Rest
+ * der Anwendung (lesbar fuer jede Aufgabe), 4 die Peripherie. Je Aufgabe: 3
+ * ihr Stack, 0 bis 2 was der Wirt ihr gibt. Eine Region ist eine
+ * Zweierpotenz gross und an ihrer Groesse ausgerichtet; die Groessen unten
+ * sind es, und der Linker bricht ab, wenn der Inhalt nicht hineinpasst.
+ *
+ * **Der Flash nach Sektoren:** Sektor 4 (64 KiB) ist Region 6, Sektor 5
+ * (128 KiB) Region 5. Sektor 0 bis 3 mit Bootloader, Sprungbrett und
+ * Journal liegen in keiner Region: Eine Region gilt auch fuer
+ * privilegierten Code, und eine lesbare ueber dem Journal verboete dem
+ * Wirt, es zu schreiben (5.9). Ohne Region schreibt er es ueber die
+ * Hintergrundkarte, und keine Aufgabe ohne Privileg erreicht es.
  *
  * Privilegierter Code schreibt ueberall, wo keine Region es verbietet
  * (PRIVDEFENA); eine Aufgabe ohne Privileg nur in ihre Regionen. Die Arena
@@ -27,8 +34,8 @@ MEMORY
 
 ENTRY(Reset_Handler)
 
-/* Region 6: Vektortabelle und Code des Kerns am Anfang der Anwendung. */
-board_privileged_flash_bytes = 32K;
+/* Region 6: Vektortabelle und Code des Kerns, Sektor 4. */
+board_privileged_flash_bytes = 64K;
 /* Region 7: die Daten des Kerns am Anfang des RAM. */
 board_privileged_ram_bytes = 1K;
 
@@ -37,9 +44,9 @@ __privileged_functions_end__ = ORIGIN(FLASH) + board_privileged_flash_bytes;
 __privileged_data_start__ = ORIGIN(RAM);
 __privileged_data_end__ = ORIGIN(RAM) + board_privileged_ram_bytes;
 
-/* Region 5: der ganze Flash des STM32F401CC, 256 KiB ab 0x08000000. */
-__FLASH_segment_start__ = 0x08000000;
-__FLASH_segment_end__ = 0x08040000;
+/* Region 5: der Rest der Anwendung, Sektor 5 bis zum Ende des Flash. */
+__FLASH_segment_start__ = ORIGIN(FLASH) + board_privileged_flash_bytes;
+__FLASH_segment_end__ = ORIGIN(FLASH) + LENGTH(FLASH);
 
 /* Region 3 einer Aufgabe ohne eigene Regionen: das ganze RAM. Solche
  * Aufgaben sind hier nur privilegierte (Leerlauf, Wirt, Schritt, Jobs). */
@@ -115,6 +122,8 @@ board_stack_top = ORIGIN(RAM) + LENGTH(RAM);
 ASSERT(ADDR(.privileged_functions) == __privileged_functions_start__ &&
        SIZEOF(.privileged_functions) == board_privileged_flash_bytes,
        "Vektortabelle und Code des Kerns passen nicht in Region 6");
+ASSERT(ADDR(.freertos_system_calls) == __FLASH_segment_start__,
+       "die Hueller der Systemaufrufe beginnen nicht an Region 5");
 ASSERT(ADDR(.data) == __privileged_data_start__ && board_privileged_data_end == __privileged_data_end__,
        "die Daten des Kerns passen nicht in Region 7");
 ASSERT(board_stack_top - board_stack_bottom >= board_stack_bytes,

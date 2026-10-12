@@ -87,4 +87,8 @@ void board_park(void);
  * `TAKT` erreichbar. Kehrt nicht zurueck. */
 void board_halt(void);
 
+/* Nach einer Ausnahme: nennt auf der Leitung Grund und Adresse (CFSR, HFSR,
+ * DFSR, MMFAR, BFAR), dann `board_halt`. Kehrt nicht zurueck. */
+void board_fault(void);
+
 #endif /* BOARD_H */

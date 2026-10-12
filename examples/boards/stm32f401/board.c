@@ -145,6 +145,13 @@ void abort(void);
 #define MPU_CTRL_ON 0x00000005u      /* ENABLE, PRIVDEFENA */
 #define MPU_RASR_GUARD 0x10000009u   /* XN, kein Zugriff, 32 Byte, ENABLE */
 
+/* Die Fehlerregister des SCB: Grund und Adresse einer Ausnahme. */
+#define SCB_CFSR 0xE000ED28u
+#define SCB_HFSR 0xE000ED2Cu
+#define SCB_DFSR 0xE000ED30u
+#define SCB_MMFAR 0xE000ED34u
+#define SCB_BFAR 0xE000ED38u
+
 /* DWT und Debug-Monitor des Cortex-M4: der Komparator 0 als Watchpoint. */
 #define SCB_SHPR3 0xE000ED20u        /* Byte 0: Prioritaet von DebugMonitor */
 #define DHCSR 0xE000EDF0u
@@ -626,13 +633,42 @@ static void board_put_polled(uint8_t byte) {
     }
 }
 
-void board_halt(void) {
-    static const char text[] = "\r\ntakt: angehalten\r\n";
+/* Eine Zeichenkette an die Leitung, ohne Interrupt. */
+static void board_put_text(const char *text) {
+    for (uint32_t i = 0u; text[i] != '\0'; i++) {
+        board_put_polled((uint8_t)text[i]);
+    }
+}
+
+/* Ein Wort als acht Hexziffern an die Leitung, ohne Interrupt. */
+static void board_put_hex(uint32_t value) {
+    static const char digits[] = "0123456789abcdef";
+    for (uint32_t shift = 32u; shift > 0u; shift -= 4u) {
+        board_put_polled((uint8_t)digits[(value >> (shift - 4u)) & 0xFu]);
+    }
+}
+
+void board_fault(void) {
     (void)board_lock();
     if (__atomic_load_n(&board_line_ready, __ATOMIC_SEQ_CST) != 0) {
-        for (uint32_t i = 0u; text[i] != '\0'; i++) {
-            board_put_polled((uint8_t)text[i]);
-        }
+        board_put_text("\r\ntakt: ausnahme cfsr ");
+        board_put_hex(*board_reg(SCB_CFSR));
+        board_put_text(" hfsr ");
+        board_put_hex(*board_reg(SCB_HFSR));
+        board_put_text(" dfsr ");
+        board_put_hex(*board_reg(SCB_DFSR));
+        board_put_text(" mmfar ");
+        board_put_hex(*board_reg(SCB_MMFAR));
+        board_put_text(" bfar ");
+        board_put_hex(*board_reg(SCB_BFAR));
+    }
+    board_halt();
+}
+
+void board_halt(void) {
+    (void)board_lock();
+    if (__atomic_load_n(&board_line_ready, __ATOMIC_SEQ_CST) != 0) {
+        board_put_text("\r\ntakt: angehalten\r\n");
         board_matched = 0u;
         for (;;) {
             if ((*board_reg(USART1_SR) & (USART_SR_RXNE | USART_SR_ORE)) != 0u) {

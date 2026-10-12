@@ -93,6 +93,10 @@ void vApplicationStackOverflowHook(TaskHandle_t task, char *name);
  * teilen sie sich den Kern Tick um Tick. */
 #define HOST_PRIORITY 1u
 
+/* So viele Ticks des Systems schlaeft der Wirt, bevor er wieder fragt, ob
+ * der Port noch laeuft: 10 ms. */
+#define HOST_POLL_TICKS 10u
+
 /* Der Austauschblock zwischen dem Wirt und der fremden Aufgabe, so gross wie
  * ihre Region 0 und an ihr ausgerichtet: Kein anderes Objekt teilt die
  * Region. */
@@ -271,6 +275,11 @@ static void drive(TaskHandle_t worker, takt_core *core, struct app_arena *arena)
 #endif
         __atomic_store_n(&exchange.running, 1, __ATOMIC_SEQ_CST);
         (void)xTaskNotifyGive(worker);
+        /* `takt_rtos_join` erst, wenn der Port nicht mehr laeuft
+         * (takt_rtos.h); bis dahin rechnet die fremde Aufgabe. */
+        while (takt_rtos_running(&port) != 0) {
+            vTaskDelay(HOST_POLL_TICKS);
+        }
         if (takt_rtos_join(&port, &stacks) != 0) {
             takt_board_trace("takt: die Faeden des Ports enden nicht sauber\r\n");
         }

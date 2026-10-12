@@ -64,7 +64,7 @@ __attribute__((used)) static void mpu_refuse(uint32_t *frame) {
         frame[6] = pc + ((((uint32_t)mpu_halfword((uintptr_t)pc) >> 11) >= 0x1Du) ? 4u : 2u);
         *mpu_reg(SCB_CFSR) = mmfsr;
     } else {
-        board_halt();
+        board_fault();
     }
 }
 
