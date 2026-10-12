@@ -24,6 +24,23 @@
 //! Trace mit dem Interpreter (13.1).
 
 #![no_std]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        clippy::undocumented_unsafe_blocks,
+        clippy::multiple_unsafe_ops_per_block,
+        unsafe_op_in_unsafe_fn,
+        reason = "Stufe 2 des Regelwerks, mit `unsafe` (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 #[cfg(any(feature = "build", feature = "testing"))]
 extern crate std;

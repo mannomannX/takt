@@ -208,6 +208,10 @@ impl<P: crate::Program, J: Store + Fits<P::Memory>> Stepper<P, J> {
     /// # Panics
     ///
     /// Wie [`Stepper::new`].
+    #[expect(
+        clippy::expect_used,
+        reason = "MISRA C:2025 D.4.1: die Testhilfe laeuft auf dem Wirt; ein Programm, dessen Job-Kontext schon vergeben ist, ist ein Fehler des Tests"
+    )]
     pub fn journaled(mut program: P, journal: J, tick_ns: i64, ticks: u64) -> Stepper<P, J> {
         let jobs = program.jobs().expect("der Job-Kontext gehoert der Testhilfe");
         let (clock, profile) = (Logical::default(), Profile::BAREMETAL);

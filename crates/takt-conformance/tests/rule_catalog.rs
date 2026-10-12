@@ -169,7 +169,6 @@ const PENDING: &[&str] = &[
     "takt-bringup-esp32c6",
     "takt-bringup-host",
     "takt-bringup-stm32f401",
-    "takt-embed",
     "takt-trampoline-stm32f401",
 ];
 
@@ -181,7 +180,6 @@ const PENDING_UNSAFE: &[&str] = &[
     "takt-bringup-esp32c6",
     "takt-bringup-host",
     "takt-bringup-stm32f401",
-    "takt-embed",
     "takt-trampoline-stm32f401",
 ];
 
@@ -322,6 +320,7 @@ fn every_crate_with_unsafe_carries_the_unsafe_lints() {
 /// Abweichungen je Crate und Regel. Die Zahl steht hier, damit eine neue
 /// Abweichung auffaellt und eine behobene die Ratsche senkt.
 const DEVIATIONS: &[(&str, &str, usize)] = &[
+    ("takt-embed", "D.4.1", 3),
     ("takt-hal", "R.10.5", 2),
     ("takt-native", "D.4.1", 1),
     ("takt-native", "R.10.5", 2),

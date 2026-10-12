@@ -148,6 +148,10 @@ impl Program {
     ///
     /// Wenn der Bau scheitert: Die Meldungen von `takt build` stehen davor
     /// als Warnungen.
+    #[expect(
+        clippy::expect_used,
+        reason = "MISRA C:2025 D.4.1: der Bauhelfer laeuft im Bauskript auf dem Wirt; ohne `OUT_DIR` und `TARGET` ist es kein Bauskript, und der Bau bricht ab, nie ein Abbild"
+    )]
     pub fn build(self) -> Built {
         let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR: nur aus einem Bauskript"));
         let triple = env::var("TARGET").expect("TARGET: nur aus einem Bauskript");
@@ -222,6 +226,10 @@ impl Bench {
     ///
     /// Wenn der Bau scheitert: Die Meldungen von `takt bench` stehen davor
     /// als Warnungen.
+    #[expect(
+        clippy::expect_used,
+        reason = "MISRA C:2025 D.4.1: der Bauhelfer laeuft im Bauskript auf dem Wirt; ohne `OUT_DIR` und `TARGET` ist es kein Bauskript, und der Bau bricht ab, nie ein Abbild"
+    )]
     pub fn build(self) -> Built {
         let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR: nur aus einem Bauskript"));
         let triple = env::var("TARGET").expect("TARGET: nur aus einem Bauskript");
