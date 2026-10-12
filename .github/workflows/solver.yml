@@ -1,0 +1,137 @@
+# Die Einordnung der unerreichten Pruefstellen (FB-511) auf Runnern von
+# GitHub, von Hand gestartet. Lokal sprengte z3 neben anderen Projekten den
+# Speicher; hier hat jeder Job 16 GB.
+#
+# Der Test `the_stored_solver_paths_still_hold` (takt-conformance,
+# solver_paths.rs) ordnet unter `CLASSIFY_UNREACHED` die offenen Programme
+# ein; `CLASSIFY_SHARD=i/n` gibt jedem Job jedes n-te. Ein Sammeljob fuehrt
+# die TSV je Tiefe und die Antworten des Solvers zusammen.
+name: Solver-Einordnung
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Zweig oder Commit, der eingeordnet wird
+        required: true
+        default: main
+      depths:
+        description: Tiefen (CLASSIFY_UNREACHED)
+        required: true
+        default: "10,20"
+      shards:
+        description: Zahl der Jobs
+        required: true
+        default: "8"
+      memory_mb:
+        description: Speichergrenze je z3 in MB (CLASSIFY_MEMORY_MB)
+        required: true
+        default: "6144"
+      workers:
+        description: Faeden je Job (CLASSIFY_WORKERS); Grenze mal Faeden bleibt unter 14 GB
+        required: true
+        default: "2"
+      programs:
+        description: Optional nur diese Programme (CLASSIFY_PROGRAMS, durch Komma getrennt)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  plan:
+    name: Teile
+    runs-on: ubuntu-24.04
+    outputs:
+      shards: ${{ steps.shards.outputs.list }}
+    steps:
+      - id: shards
+        env:
+          N: ${{ inputs.shards }}
+        run: |
+          case "$N" in ''|*[!0-9]*) echo "shards ist keine Zahl: $N"; exit 1;; esac
+          echo "list=$(python3 -c "import json, os; print(json.dumps(list(range(int(os.environ['N'])))))")" >> "$GITHUB_OUTPUT"
+
+  classify:
+    name: Teil ${{ matrix.shard }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+      # Die Setup-Aktion kommt von main, der eingeordnete Stand nach `src`.
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          path: src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src -> target
+          shared-key: solver
+      - name: Einordnen
+        working-directory: src
+        env:
+          CLASSIFY_UNREACHED: ${{ inputs.depths }}
+          CLASSIFY_SHARD: ${{ matrix.shard }}/${{ inputs.shards }}
+          CLASSIFY_MEMORY_MB: ${{ inputs.memory_mb }}
+          CLASSIFY_WORKERS: ${{ inputs.workers }}
+          CLASSIFY_PROGRAMS_INPUT: ${{ inputs.programs }}
+        run: |
+          if [ -n "$CLASSIFY_PROGRAMS_INPUT" ]; then export CLASSIFY_PROGRAMS="$CLASSIFY_PROGRAMS_INPUT"; fi
+          cargo test --release -p takt-conformance --test solver_paths -- --nocapture
+      - name: Ergebnisse sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fb511-teil-${{ matrix.shard }}
+          path: |
+            src/target/tmp/fb511-*.tsv
+            src/target/tmp/solver-cache/
+          if-no-files-found: warn
+          retention-days: 30
+
+  collect:
+    name: Zusammenfuehren
+    needs: classify
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: fb511-teil-*
+          path: teile
+      - name: Je Tiefe eine Datei, ein Cache
+        run: |
+          mkdir -p ergebnis/solver-cache
+          for f in teile/*/fb511-*-s*von*.tsv; do
+            [ -e "$f" ] || continue
+            case "$f" in *.laufend.tsv) continue;; esac
+            tiefe=$(basename "$f" | sed -E 's/^fb511-([0-9]+)-s.*/\1/')
+            cat "$f" >> "ergebnis/fb511-$tiefe.unsortiert.tsv"
+          done
+          for f in ergebnis/fb511-*.unsortiert.tsv; do
+            [ -e "$f" ] || continue
+            sort "$f" > "${f%.unsortiert.tsv}.tsv"
+            rm "$f"
+          done
+          find teile -path '*/solver-cache/*' -type f -exec cp -n {} ergebnis/solver-cache/ \;
+          for f in ergebnis/fb511-*.tsv; do
+            [ -e "$f" ] || continue
+            echo "== $f: $(wc -l < "$f") Stellen"
+            cut -f6 "$f" | sort | uniq -c | sort -rn
+          done | tee ergebnis/uebersicht.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fb511-ergebnis
+          path: ergebnis/
+          retention-days: 90
