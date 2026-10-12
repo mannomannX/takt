@@ -270,7 +270,7 @@ fn build_inner(
     jitter(&mut t.code, p, None, x);
     // 12.10: Registerports lesen den Latch des Modells und schreiben in
     // die Ringe der Stroeme, also hinter beidem.
-    crate::ports::emit(&mut t, p, x);
+    takt_frame::ports::emit(&mut t, p, x);
     // 12.6: Der Treiberrand schreibt ins Abbild und in die Ringe; der
     // Stimulus liefert, was auf einem Board die Treiber liefern.
     let mut feed = String::new();
@@ -313,7 +313,7 @@ fn build_inner(
     // damit ein `enter:`-Block schon den sicheren Wert sieht.
     safe_outputs(&mut t.code, p, &layout);
     sim_bindings(&mut t.code, p, "    ");
-    crate::ports::sample(&mut t.code, p, "    ");
+    takt_frame::ports::sample(&mut t.code, p, "    ");
     // Die Lieferungen des Ticks 0 gehen vor jedem Init durch den Rand, wie
     // `Run::new` den Stimulus vor `Sim::init` einspeist.
     let _ = writeln!(t.code, "    takt_edge_stimulus(a, 0);");
@@ -338,7 +338,7 @@ fn build_inner(
     enter_machines(&mut t.code, p, &layout, &driven, "    ", x);
     // 8.8: Auch im Tick 0 holt der Treiber ab, was `enter` gesendet hat.
     commit_sequence(&mut t.code, p, &driven, "    ", "0");
-    crate::ports::sample(&mut t.code, p, "    ");
+    takt_frame::ports::sample(&mut t.code, p, "    ");
     let _ = writeln!(t.code, "    dump(a, 0);");
     for (i, _) in &monitors {
         let _ = writeln!(t.code, "    {x}_monitor_{i}(a, 0);");
@@ -389,7 +389,7 @@ fn build_inner(
     takt_frame::parts::signal_lines(&mut t.code, p, &driven, "        ", "a->tick", takt_frame::streams::Trace::Stdio);
     idle_drops(&mut t.code, p, &driven, "        ", x);
     commit_sequence(&mut t.code, p, &driven, "        ", "a->tick");
-    crate::ports::sample(&mut t.code, p, "        ");
+    takt_frame::ports::sample(&mut t.code, p, "        ");
     let _ = writeln!(t.code, "        dump(a, a->tick);");
     // 13.3: nach dem Commit, wie `observe_properties` im Interpreter.
     for (i, _) in &monitors {

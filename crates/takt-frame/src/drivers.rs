@@ -20,9 +20,19 @@
 //! erzeugten Text, mit dem Kanal benannt.
 //!
 //! **Die Schnittstelle hat feste Breiten** (12.11): `uint8_t` fuer
-//! Wahrheitswerte und Qualitaet, `int64_t` fuer Zeit, `int32_t` fuer
-//! Laengen; jeder Treiber bekommt vorn den Zeiger des Wirts und die Zeit
-//! des Ticks.
+//! Wahrheitswerte, Qualitaet und Grund, `int64_t` fuer Zeit und Alter,
+//! `int32_t` fuer Laengen; jeder Treiber bekommt vorn den Zeiger des Wirts
+//! und die Zeit des Ticks.
+//!
+//! **Eine Abtastung traegt, was 12.6 vom Treiber verlangt:** Wert,
+//! Qualitaet, Grund, Alter und Zeitstempel — dieselben Felder wie eine
+//! `in`-Zeile des Stimulus (`grammar/trace.md`). Ein Eingang
+//! zusammengesetzten Typs (Record, Feld, `samples`, Enum mit Feldern) kommt
+//! in seiner Speicherform als Bytes ([`Kind::Block`]).
+//!
+//! **Commands stellt der Wirt** (8.5): Je Command fragt der Rahmen in jedem
+//! Tick, ob es anliegt (`P_cmd_<name>`); in Rust stehen sie im Trait
+//! `Commands`, nicht in `Drivers`, denn kein Treiber-Crate bedient sie.
 
 use std::fmt::Write as _;
 
@@ -40,6 +50,10 @@ use crate::layout::Layout;
 pub enum Kind {
     /// Liefert die Abtastung eines skalaren Eingangs.
     Input,
+    /// Liefert die Abtastung eines Eingangs zusammengesetzten Typs als Bytes
+    /// in seiner Speicherform, wie der erzeugte Code sie im Abbild liest
+    /// (8.9, 11.2).
+    Block,
     /// Liefert ein Element eines Eingabestroms.
     Poll,
     /// Stellt einen skalaren Ausgang.
@@ -54,19 +68,24 @@ pub enum Kind {
     /// Liefert einen Eingang des eingebauten Geraets `sys` (12.7, 7.4):
     /// kein Treiber, sondern ein Eintrag, den der Wirt stellt (12.11).
     Sys,
+    /// Sagt, ob ein Command in diesem Tick anliegt (8.5): ein Eintrag des
+    /// Wirts wie [`Kind::Sys`], mit dem Namen des Commands statt einer
+    /// Adresse.
+    Command,
 }
 
 impl Kind {
-    /// Das Wort im Namen: `P_in_<adr>`, `P_alive_<geraet>`.
+    /// Das Wort im Namen: `P_in_<adr>`, `P_alive_<geraet>`, `P_cmd_<name>`.
     fn word(self) -> &'static str {
         match self {
-            Kind::Input => "in",
+            Kind::Input | Kind::Block => "in",
             Kind::Poll => "poll",
             Kind::Output => "out",
             Kind::Free => "free",
             Kind::Idle => "idle",
             Kind::Alive => "alive",
             Kind::Sys => "sys",
+            Kind::Command => "cmd",
         }
     }
 }
@@ -132,7 +151,8 @@ pub struct Driver {
     pub kind: Kind,
     /// Sein Name ohne Praefix, zugleich die Methode im Trait: `in_ui_button`.
     pub method: String,
-    /// Wo er sitzt: die Adresse eines Kanals, fuer `alive` das Geraet.
+    /// Wo er sitzt: die Adresse eines Kanals, fuer `alive` das Geraet, fuer
+    /// ein Command sein Name.
     pub address: String,
     /// Der Wert eines Skalars.
     pub value: Option<Value>,
@@ -173,19 +193,39 @@ pub fn method(kind: Kind, ident: &str) -> String {
 /// Die Treiber eines Programms: die gebundenen Eingaenge und Eingabestroeme
 /// ohne die, die ein Modell speist (8.3), die aufgezeichneten Inputs (8.2),
 /// die gebundenen Ausgaenge und Ausgabestroeme und je Geraet eines
-/// Ausgangs der Heartbeat (12.4). Am Ende stehen die Eingaenge des Geraets
-/// `sys` als [`Kind::Sys`]: keine Treiber, aber Eintraege derselben Gestalt.
+/// Ausgangs der Heartbeat (12.4). Am Ende stehen die Commands (8.5) und die
+/// Eingaenge des Geraets `sys` als [`Kind::Command`] und [`Kind::Sys`]:
+/// keine Treiber, aber Eintraege derselben Gestalt, die der Wirt stellt.
 pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
     let mut out = Vec::new();
     let mut sys = Vec::new();
     let fed = crate::parts::sim_fed_inputs(p);
     for slot in &layout.inputs {
         let Some(channel) = p.channels.iter().position(|c| c.name == slot.name) else { continue };
-        let (Some(addr), Some(value)) = (slot.address.as_ref(), value_of(&slot.ty, slot.signed)) else { continue };
+        let Some(addr) = slot.address.as_ref() else { continue };
         // Was der Kern selbst stellt, hat keinen Treiber (13.3).
         if fed.contains(&channel) || takt_mir::sys::channel(&addr.text()).is_some_and(|s| s.core) {
             continue;
         }
+        let Some(value) = value_of(&slot.ty, slot.signed) else {
+            // Ein Eingang zusammengesetzten Typs; ein Strom hat keinen Platz
+            // im Abbild und steht darum nicht unter den Eingaengen.
+            if sys_method(addr).is_none() {
+                out.push(Driver {
+                    kind: Kind::Block,
+                    method: method(Kind::Block, &addr.ident()),
+                    address: addr.text(),
+                    value: None,
+                    doc: format!(
+                        "Eingang `{}`, {} Byte in Speicherform{}",
+                        slot.name,
+                        slot.size,
+                        contract(p, &p.channels[channel])
+                    ),
+                });
+            }
+            continue;
+        };
         if let Some(method) = sys_method(addr) {
             sys.push(Driver {
                 kind: Kind::Sys,
@@ -285,6 +325,16 @@ pub fn of(p: &Program, layout: &Layout) -> Vec<Driver> {
             address: d.clone(),
             value: None,
             doc: format!("Heartbeat des Geraets `{d}` (12.4)"),
+        });
+    }
+    for c in &p.commands {
+        let wake = if c.wake { ", Wake-Quelle (5.10)" } else { "" };
+        out.push(Driver {
+            kind: Kind::Command,
+            method: method(Kind::Command, &c.name),
+            address: c.name.clone(),
+            value: None,
+            doc: format!("Command `{}` (8.5): liegt es in diesem Tick an{wake}?", c.name),
         });
     }
     out.append(&mut sys);
@@ -390,14 +440,22 @@ fn literal(e: &Expr) -> Option<String> {
     }
 }
 
+/// Was eine Abtastung neben dem Wert traegt (12.6 Zeile 2): Qualitaet und
+/// Grund in der Zahl des Prozessabbilds (`Quality`, `Reason` der Prelude),
+/// das Alter in Nanosekunden — wie lange vor `t` gemessen — und den
+/// Zeitstempel. Der Rahmen gibt `Good`, keinen Grund, Alter 0 und die
+/// Tickgrenze vor.
+const SAMPLE_PARAMS: &str = "uint8_t *quality, uint8_t *reason, int64_t *age, int64_t *t";
+
 /// Die Parameter eines Treibers in C, nach dem Zeiger des Wirts und `now`.
 fn c_params(d: &Driver) -> String {
     let value = d.value.map_or("uint8_t", |v| v.c);
     match d.kind {
-        Kind::Input | Kind::Sys => format!("{value} *value, uint8_t *quality, int64_t *t"),
+        Kind::Input | Kind::Sys => format!("{value} *value, {SAMPLE_PARAMS}"),
+        Kind::Block => format!("uint8_t *value, int32_t size, {SAMPLE_PARAMS}"),
         Kind::Poll => "uint8_t *buf, int32_t cap, int32_t *len, int64_t *t, int64_t *seq".to_string(),
         Kind::Output => format!("{value} value"),
-        Kind::Free | Kind::Idle | Kind::Alive => String::new(),
+        Kind::Free | Kind::Idle | Kind::Alive | Kind::Command => String::new(),
     }
 }
 
@@ -407,7 +465,7 @@ fn c_return(kind: Kind) -> &'static str {
     match kind {
         Kind::Free => "int32_t",
         Kind::Idle => "int8_t",
-        Kind::Input | Kind::Poll | Kind::Output | Kind::Alive | Kind::Sys => "uint8_t",
+        Kind::Input | Kind::Block | Kind::Poll | Kind::Output | Kind::Alive | Kind::Sys | Kind::Command => "uint8_t",
     }
 }
 
@@ -429,14 +487,17 @@ pub fn c_prototypes(drivers: &[Driver], x: &Prefix) -> String {
         let _ = writeln!(s, "/*   keine — nichts ist an Hardware gebunden */");
     }
     for d in drivers {
-        let _ = writeln!(s, "{}; /* {}, hw(\"{}\") */", c_signature(d, x), d.doc, d.address);
+        let _ = match d.kind {
+            Kind::Command => writeln!(s, "{}; /* {} */", c_signature(d, x), d.doc),
+            _ => writeln!(s, "{}; /* {}, hw(\"{}\") */", c_signature(d, x), d.doc, d.address),
+        };
     }
     s
 }
 
 /// Ausdrueckliche Stummel fuer alle Treiber: ein Eingang liefert nichts,
-/// ein Ausgang gilt als bestaetigt, ein Geraet als lebendig, ein
-/// Sendepuffer als unbekannt. Ein Sender ist fertig: Er nahm jedes Byte
+/// ein Command liegt nie an, ein Ausgang gilt als bestaetigt, ein Geraet
+/// als lebendig, ein Sendepuffer als unbekannt. Ein Sender ist fertig: Er nahm jedes Byte
 /// sofort an, und `tx.idle` haengt wie in der Simulation (8.8) nur am
 /// eigenen Puffer (FB-439). Fuer Tests, die einen Rahmen ohne Treiber
 /// binden.
@@ -445,10 +506,11 @@ pub fn c_stubs(drivers: &[Driver], x: &Prefix) -> String {
     let _ = writeln!(s, "/* Stummel, ausdruecklich verlangt: kein Treiber an diesen Kanaelen. */");
     for d in drivers {
         let names: Vec<&str> = match d.kind {
-            Kind::Input | Kind::Sys => vec!["value", "quality", "t"],
+            Kind::Input | Kind::Sys => vec!["value", "quality", "reason", "age", "t"],
+            Kind::Block => vec!["value", "size", "quality", "reason", "age", "t"],
             Kind::Poll => vec!["buf", "cap", "len", "t", "seq"],
             Kind::Output => vec!["value"],
-            Kind::Free | Kind::Idle | Kind::Alive => vec![],
+            Kind::Free | Kind::Idle | Kind::Alive | Kind::Command => vec![],
         };
         let unused: String = std::iter::once("user")
             .chain(std::iter::once("now"))
@@ -456,7 +518,7 @@ pub fn c_stubs(drivers: &[Driver], x: &Prefix) -> String {
             .map(|n| format!("(void){n}; "))
             .collect();
         let result = match d.kind {
-            Kind::Input | Kind::Poll | Kind::Sys => "0",
+            Kind::Input | Kind::Block | Kind::Poll | Kind::Sys | Kind::Command => "0",
             Kind::Output | Kind::Idle | Kind::Alive => "1",
             Kind::Free => "-1",
         };
@@ -472,22 +534,26 @@ fn rust_signature(d: &Driver) -> String {
         Kind::Input | Kind::Sys => {
             format!("fn {}(&mut self, now: i64) -> Option<takt_embed::Sample<{value}>>", d.method)
         }
+        Kind::Block => {
+            format!("fn {}(&mut self, value: &mut [u8], now: i64) -> Option<takt_embed::Sample<()>>", d.method)
+        }
         Kind::Poll => format!("fn {}(&mut self, buf: &mut [u8], now: i64) -> Option<takt_embed::Piece>", d.method),
         Kind::Output => format!("fn {}(&mut self, value: {value}, now: i64) -> bool", d.method),
         Kind::Free => format!("fn {}(&mut self, now: i64) -> Option<u32>", d.method),
         Kind::Idle => format!("fn {}(&mut self, now: i64) -> Option<bool>", d.method),
-        Kind::Alive => format!("fn {}(&mut self, now: i64) -> bool", d.method),
+        Kind::Alive | Kind::Command => format!("fn {}(&mut self, now: i64) -> bool", d.method),
     }
 }
 
 /// Der Trait `Drivers` des Programms: eine Methode je Treiber. Nutzt das
-/// Programm Eingaenge des Geraets `sys`, kommt der Trait `Sys` dazu.
+/// Programm Eingaenge des Geraets `sys` oder Commands, kommen die Traits
+/// `Sys` und `Commands` dazu.
 pub fn rust_trait(drivers: &[Driver]) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "/// Die Treiber des Programms (8.10, 12.6): eine Methode je gebundener Adresse");
     let _ = writeln!(s, "/// und je Geraet mit Heartbeat. `now` ist die Tickgrenze in Nanosekunden.");
     let _ = writeln!(s, "pub trait Drivers {{");
-    for d in drivers.iter().filter(|d| d.kind != Kind::Sys) {
+    for d in drivers.iter().filter(|d| trait_of(d) == "Drivers") {
         let _ = writeln!(s, "    /// {}, `hw(\"{}\")`.", d.doc, d.address);
         let _ = writeln!(s, "    {};", rust_signature(d));
     }
@@ -502,12 +568,26 @@ pub fn rust_trait(drivers: &[Driver]) -> String {
         }
         let _ = writeln!(s, "}}");
     }
+    if drivers.iter().any(|d| d.kind == Kind::Command) {
+        let _ = writeln!(s, "\n/// Die Commands des Programms (8.5): Der Wirt sagt je Tick, ob der Bediener sie");
+        let _ = writeln!(s, "/// gibt; ein Command gilt genau den Tick, an dessen Grenze `now` er wahr meldet.");
+        let _ = writeln!(s, "pub trait Commands {{");
+        for d in drivers.iter().filter(|d| d.kind == Kind::Command) {
+            let _ = writeln!(s, "    /// {}", d.doc);
+            let _ = writeln!(s, "    {};", rust_signature(d));
+        }
+        let _ = writeln!(s, "}}");
+    }
     s
 }
 
 /// Der Trait, in dem die Methode eines Eintrags steht.
 fn trait_of(d: &Driver) -> &'static str {
-    if d.kind == Kind::Sys { "Sys" } else { "Drivers" }
+    match d.kind {
+        Kind::Sys => "Sys",
+        Kind::Command => "Commands",
+        _ => "Drivers",
+    }
 }
 
 /// Der Kleber vom C-Aufruf des Rahmens zur Methode von `Drivers` auf dem
@@ -515,19 +595,21 @@ fn trait_of(d: &Driver) -> &'static str {
 /// generisch sein kann.
 pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
     let mut s = String::new();
+    let sample = "quality: *mut u8, reason: *mut u8, age: *mut i64, t: *mut i64";
     for d in drivers {
         let symbol = d.symbol(x);
         let value = d.value.map_or("u8", Value::abi);
         let params = match d.kind {
-            Kind::Input | Kind::Sys => format!(", value: *mut {value}, quality: *mut u8, t: *mut i64"),
+            Kind::Input | Kind::Sys => format!(", value: *mut {value}, {sample}"),
+            Kind::Block => format!(", value: *mut u8, size: i32, {sample}"),
             Kind::Poll => ", buf: *mut u8, cap: i32, len: *mut i32, t: *mut i64, seq: *mut i64".to_string(),
             Kind::Output => format!(", value: {value}"),
-            Kind::Free | Kind::Idle | Kind::Alive => String::new(),
+            Kind::Free | Kind::Idle | Kind::Alive | Kind::Command => String::new(),
         };
         let ret = match d.kind {
             Kind::Free => "i32",
             Kind::Idle => "i8",
-            Kind::Input | Kind::Poll | Kind::Output | Kind::Alive | Kind::Sys => "u8",
+            Kind::Input | Kind::Block | Kind::Poll | Kind::Output | Kind::Alive | Kind::Sys | Kind::Command => "u8",
         };
         let _ = writeln!(s, "/// `{symbol}`: der Kleber zu [`{}::{}`].", trait_of(d), d.method);
         let _ = writeln!(s, "///\n/// # Safety\n///");
@@ -542,20 +624,38 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
         let _ = writeln!(s, "    let drivers = unsafe {{ &mut *user.cast::<{host}>() }};");
         let call = format!("<{host} as {}>::{}", trait_of(d), d.method);
         match d.kind {
-            Kind::Input | Kind::Sys => {
+            Kind::Input | Kind::Sys | Kind::Block => {
                 let conv = if d.value.is_some_and(Value::is_bool) { "u8::from(sample.value)" } else { "sample.value" };
-                let _ = writeln!(s, "    let Some(sample) = {call}(drivers, now) else {{ return 0 }};");
-                // Die Zahl der Qualitaet im Prozessabbild (3.5).
-                let _ = writeln!(s, "    let code = match sample.quality {{");
-                for (name, code) in [("Good", 0), ("Suspect", 1), ("Stale", 2), ("Bad", 3)] {
-                    let _ = writeln!(s, "        takt_embed::Quality::{name} => {code},");
+                if d.kind == Kind::Block {
+                    let _ = writeln!(s, "    let size = usize::try_from(size).unwrap_or(0);");
+                    let _ = writeln!(s, "    // SAFETY: Der Rahmen reicht `size` schreibbare Bytes.");
+                    let _ = writeln!(s, "    let value = unsafe {{ core::slice::from_raw_parts_mut(value, size) }};");
+                    let _ = writeln!(s, "    let Some(sample) = {call}(drivers, value, now) else {{ return 0 }};");
+                } else {
+                    let _ = writeln!(s, "    let Some(sample) = {call}(drivers, now) else {{ return 0 }};");
+                }
+                // Die Zahl der Qualitaet im Prozessabbild (3.5). `Sample`
+                // traegt weder Grund noch Alter: `Bad` hat den Grund
+                // `DRIVER` (12.6 Zeile 2), jede Abtastung das Alter 0.
+                // TODO(FB-686): Grund und Alter in `takt_embed::Sample`, wenn
+                // die Bring-ups mitziehen.
+                let _ = writeln!(s, "    let (code, reason) = match sample.quality {{");
+                for (name, code, reason) in [("Good", 0, 0), ("Suspect", 1, 0), ("Stale", 2, 0), ("Bad", 3, 3)] {
+                    let _ = writeln!(s, "        takt_embed::Quality::{name} => ({code}, {reason}),");
                 }
                 let _ = writeln!(s, "    }};");
-                for (place, from) in [("value", conv), ("quality", "code"), ("t", "sample.t")] {
+                let mut places = vec![("quality", "code"), ("reason", "reason"), ("age", "0"), ("t", "sample.t")];
+                if d.kind != Kind::Block {
+                    places.insert(0, ("value", conv));
+                }
+                for (place, from) in places {
                     let _ = writeln!(s, "    // SAFETY: siehe oben.");
                     let _ = writeln!(s, "    unsafe {{ *{place} = {from} }};");
                 }
                 let _ = writeln!(s, "    1");
+            }
+            Kind::Command => {
+                let _ = writeln!(s, "    u8::from({call}(drivers, now))");
             }
             Kind::Poll => {
                 let _ = writeln!(s, "    let cap = usize::try_from(cap).unwrap_or(0);");
@@ -591,23 +691,30 @@ pub fn rust_glue(drivers: &[Driver], x: &Prefix, host: &str) -> String {
     s
 }
 
-/// Der Geraete-Trait, den ein Treiber dieser Art erfuellt, und der Aufruf darauf.
-fn device_call(d: &Driver, field: &str) -> String {
-    match d.kind {
+/// Der Geraete-Trait, den ein Treiber dieser Art erfuellt, und der Aufruf
+/// darauf; `None` fuer ein Command, das kein Geraet bedient (8.5).
+fn device_call(d: &Driver, field: &str) -> Option<String> {
+    Some(match d.kind {
         Kind::Input | Kind::Sys => format!("takt_embed::Input::sample(&mut self.{field}, now)"),
+        Kind::Block => format!("takt_embed::BlockInput::sample(&mut self.{field}, value, now)"),
         Kind::Poll => format!("takt_embed::StreamInput::poll(&mut self.{field}, buf, now)"),
         Kind::Output => format!("takt_embed::Output::write(&mut self.{field}, value, now)"),
         Kind::Free => format!("takt_embed::StreamOutput::free(&mut self.{field}, now)"),
         Kind::Idle => format!("takt_embed::StreamOutput::idle(&mut self.{field}, now)"),
         Kind::Alive => format!("takt_embed::Device::alive(&mut self.{field}, now)"),
-    }
+        Kind::Command => return None,
+    })
 }
 
 /// Ein Pruefstand `rig`: je verdrahteter Adresse ein Geraet aus `wiring`
 /// (Adresse oder Geraetename auf den Rust-Typ), fuer jede andere ein
-/// ausdruecklicher Stummel, den der Kopf des Textes nennt.
+/// ausdruecklicher Stummel, den der Kopf des Textes nennt. Ein Command
+/// verdrahtet niemand; auf dem Pruefstand liegt es nie an.
 pub fn rust_rig(drivers: &[Driver], rig: &str, wiring: &[(String, String)]) -> String {
-    let wired = |d: &Driver| wiring.iter().find(|(addr, _)| *addr == d.address).map(|(_, ty)| ty.as_str());
+    let wired = |d: &Driver| {
+        let found = wiring.iter().find(|(addr, _)| *addr == d.address).map(|(_, ty)| ty.as_str());
+        found.filter(|_| d.kind != Kind::Command)
+    };
     let stubs: Vec<String> =
         drivers.iter().filter(|d| wired(d).is_none()).map(|d| format!("`{}`", d.address)).collect();
     let mut s = String::new();
@@ -625,9 +732,9 @@ pub fn rust_rig(drivers: &[Driver], rig: &str, wiring: &[(String, String)]) -> S
         }
     }
     let _ = writeln!(s, "}}");
-    for name in ["Drivers", "Sys"] {
+    for name in ["Drivers", "Sys", "Commands"] {
         let entries: Vec<&Driver> = drivers.iter().filter(|d| trait_of(d) == name).collect();
-        if name == "Sys" && entries.is_empty() {
+        if name != "Drivers" && entries.is_empty() {
             continue;
         }
         let _ = writeln!(s, "\nimpl {name} for {rig} {{");
@@ -642,17 +749,18 @@ pub fn rust_rig(drivers: &[Driver], rig: &str, wiring: &[(String, String)]) -> S
 /// Eine Methode des Pruefstands: das verdrahtete Geraet oder der Stummel.
 fn rig_method(s: &mut String, d: &Driver, wired: bool) {
     let signature = rust_signature(d);
-    if wired {
+    if let Some(call) = device_call(d, &d.method).filter(|_| wired) {
         let _ = writeln!(s, "    {signature} {{");
-        let _ = writeln!(s, "        {}", device_call(d, &d.method));
+        let _ = writeln!(s, "        {call}");
     } else {
         // Die Parameter des Stummels sind unbenutzt.
         let signature =
             signature.replace("now: i64", "_now: i64").replace("buf: &mut", "_buf: &mut").replace("value:", "_value:");
         let result = match d.kind {
-            Kind::Input | Kind::Poll | Kind::Free | Kind::Sys => "None",
+            Kind::Input | Kind::Block | Kind::Poll | Kind::Free | Kind::Sys => "None",
             Kind::Idle => "Some(true)",
             Kind::Output | Kind::Alive => "true",
+            Kind::Command => "false",
         };
         let _ = writeln!(s, "    {signature} {{");
         let _ = writeln!(s, "        // Stummel: kein Geraet fuer `{}` auf diesem Pruefstand.", d.address);
@@ -706,7 +814,8 @@ fn uncommented(line: &str) -> &str {
 /// zugleich. Leer heisst vollstaendig und eindeutig.
 pub fn wiring_errors(drivers: &[Driver], wiring: &[(String, String)]) -> Vec<String> {
     let mut errors = Vec::new();
-    for d in drivers {
+    // Ein Command bedient kein Geraet (8.5): Es gibt nichts zu verdrahten.
+    for d in drivers.iter().filter(|d| d.kind != Kind::Command) {
         match wiring.iter().filter(|(addr, _)| *addr == d.address).count() {
             0 => errors.push(format!("`{}` ist nicht verdrahtet ({})", d.address, d.doc)),
             1 => {}

@@ -84,6 +84,9 @@ pub struct Frame<'a> {
     /// hinaus bekommt (`job_stack_reserve` der Hardware-Konfiguration, 8.10);
     /// ohne Angabe [`JOB_STACK_RESERVE`].
     pub job_stack_reserve: u32,
+    /// Das Szenario, das mit den laufenden Maschinen schreitet (13.6), wie
+    /// in `takt test`; ohne Angabe keines, wie in jedem Produktbau.
+    pub scenario: Option<&'a str>,
 }
 
 impl Default for Frame<'_> {
@@ -95,6 +98,7 @@ impl Default for Frame<'_> {
             prefix: Prefix::default(),
             stubs: false,
             job_stack_reserve: JOB_STACK_RESERVE,
+            scenario: None,
         }
     }
 }
@@ -103,9 +107,15 @@ impl Default for Frame<'_> {
 pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     let (diagnostics, hw, x) = (frame.diagnostics, frame.hardware, &frame.prefix);
     let layout = crate::layout::of(p);
-    // 7.2: in Schrittordnung, wie der Interpreter und der Testrahmen.
-    let driven: Vec<&takt_mir::machine::Machine> = takt_mir::analysis::schedule::order(p)
-        .unwrap_or_else(|_| takt_mir::analysis::schedule::runnable(p))
+    // 7.2: in Schrittordnung, wie der Interpreter; mit Szenario dieses dazu
+    // (13.6).
+    let chosen = frame
+        .scenario
+        .and_then(|name| p.machines.iter().position(|m| m.name == name))
+        .and_then(|i| u32::try_from(i).ok())
+        .map(takt_mir::MachineId);
+    let driven: Vec<&takt_mir::machine::Machine> = takt_mir::analysis::schedule::order_with(p, chosen)
+        .unwrap_or_else(|_| takt_mir::analysis::schedule::runnable_with(p, chosen))
         .into_iter()
         .map(|id| &p.machines[id.index()])
         .collect();
@@ -128,6 +138,9 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     // `apply_scheduled` ihn schreibt.
     crate::parts::scheduled(&mut t, p, &layout, hw, x);
     crate::parts::jitter(&mut t.code, p, hw, x);
+    // 12.10: Registerports lesen den Latch des Modells und schreiben in die
+    // Ringe der Stroeme, also hinter beidem.
+    crate::ports::emit(&mut t, p, x);
     jobs(&mut t, p, x);
     declarations(&mut t.code, p, &driven, x);
     // 8.10, 12.6: die Treiber, stark gebunden; Stummel nur ausdruecklich.
@@ -190,6 +203,7 @@ pub fn tick_path(x: &Prefix) -> Vec<String> {
         "hardware",
         "tolerance",
         "output_timing",
+        "abort",
         "job_dispatch",
         "jobs_busy",
         "persist_snapshot",
@@ -224,6 +238,7 @@ fn entry_prototypes(x: &Prefix, logic: &str) -> String {
         format!("int64_t {x}_output({a}, int32_t index);"),
         format!("void {x}_overrun({a});"),
         format!("void {x}_hardware({a});"),
+        format!("void {x}_abort({a});"),
         format!("void {x}_tolerance(int64_t *ns, uint32_t *runs);"),
         format!("uint8_t {x}_output_timing(void);"),
         format!("int32_t {x}_job_dispatch({a});"),
@@ -875,6 +890,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // damit Tick 0 die `safe`-Werte eines Modells liest (8.3).
     crate::parts::safe_outputs(s, p, layout);
     crate::parts::sim_bindings(s, p, "    ");
+    crate::ports::sample(s, p, "    ");
 
     // 5.9: Defaults, dann die geladenen Werte, dann erst enter: — wie
     // der Interpreter zwischen init_vars und machine::init laedt; nach
@@ -893,6 +909,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).
     crate::parts::commit_sequence(s, p, driven, "    ", "0");
+    crate::ports::sample(s, p, "    ");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    {x}_monitor_{i}(a, 0);");
     }
@@ -910,7 +927,7 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 
 /// `P_tick`: ein Tick, von der Schleife gerufen.
 fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
-    let _ = writeln!(t.fields, "    _Bool overrun, hardware;");
+    let _ = writeln!(t.fields, "    _Bool overrun, hardware, abort;");
     // 12.11: die Eintrittssperre ([`locked`]).
     let _ = writeln!(t.fields, "    unsigned int entered;");
     let _ = writeln!(t.fields, "    _Bool driver_fault[{}];", driver_outputs(p, layout).len().max(1));
@@ -924,6 +941,9 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(s, "void {x}_overrun(struct {x}_arena *a) {{ a->overrun = 1; }}");
     // 12.3: Der Speicherschutz hat einen Zugriff der TCB abgewiesen.
     let _ = writeln!(s, "void {x}_hardware(struct {x}_arena *a) {{ a->hardware = 1; }}");
+    // 5.4, 9.4: Der Bediener bricht ab; der Kern meldet es vor dem naechsten
+    // Tick wie einen Ueberlauf, und die Zeile `abort` zeichnet es auf (12.5).
+    let _ = writeln!(s, "void {x}_abort(struct {x}_arena *a) {{ a->abort = 1; }}");
     // 7.1, 12.6 Zeile 7: die Toleranz der Tickquelle fuer die Schleife.
     let (ns, runs) = p.config.tolerance();
     let _ = writeln!(s, "void {x}_tolerance(int64_t *ns, uint32_t *runs) {{ *ns = {ns}LL; *runs = {runs}u; }}");
@@ -961,6 +981,18 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
         takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Hardware))
     );
     let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    if (a->abort) {{");
+    let _ = writeln!(s, "        a->abort = 0;");
+    let _ = writeln!(s, "        takt_board_trace(\"t=\");");
+    let _ = writeln!(s, "        takt_board_trace_i64(k);");
+    let _ = writeln!(s, "        takt_board_trace(\"abort\\n\");");
+    let _ = writeln!(
+        s,
+        "        for (int m = 0; m < {}; m++) takt_pend(a, m, {});",
+        p.machines.len(),
+        takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Abort)
+    );
+    let _ = writeln!(s, "    }}");
     let driver =
         takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Driver));
     for (i, out) in driven_out.iter().enumerate() {
@@ -992,6 +1024,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     crate::parts::signal_lines(s, p, driven, "    ", "k", crate::streams::Trace::Board);
     crate::parts::idle_drops(s, p, driven, "    ", x);
     crate::parts::commit_sequence(s, p, driven, "    ", "k");
+    crate::ports::sample(s, p, "    ");
     for (i, _) in monitors(p) {
         let _ = writeln!(s, "    {x}_monitor_{i}(a, k);");
     }
@@ -1008,22 +1041,28 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
 /// Der Kern fragt an jeder geschlafenen Grenze, ob der Schritt dort etwas
 /// anderes saehe als der Tick vor dem Schlaf. Der Rahmen tastet dafuer die
 /// Wake-Quellen ueber ihre Treiber ab, wie `takt_sample` es an dieser
-/// Grenze taete: ein anliegendes Wake-Kommando; ein Skalar, dessen Treiber
-/// anders liefert als im letzten Tick (geliefert oder nicht, Wert,
-/// Qualitaet) oder dessen Abtastung ohne Lieferung veraltet (3.5); ein
-/// Strom, dessen Treiber ein Element bringt. Das Element haelt der Rahmen
-/// auf dem ersten Platz seines Stroms vor, und der Tick an dieser Grenze
-/// liefert es zuerst. Eine Uhr ohne diese Frage weckte erst an der Frist,
-/// und ein Taster wirkte Stunden spaeter (FB-388).
+/// Grenze taete: ein Wake-Command, das der Wirt meldet; ein Eingang, dessen
+/// Treiber anders liefert als im letzten Tick (geliefert oder nicht, Wert,
+/// Qualitaet, Grund, Alter) oder dessen Abtastung ohne Lieferung veraltet
+/// (3.5); ein Strom, dessen Treiber ein Element bringt. Das Command und das
+/// Element haelt der Rahmen vor, und der Tick an dieser Grenze liefert sie
+/// zuerst. Eine Uhr ohne diese Frage weckte erst an der Frist, und ein
+/// Taster wirkte Stunden spaeter (FB-388).
 fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     let scalars: Vec<BoundScalar> = bound_scalars(p, layout, x).into_iter().filter(|b| b.wake.is_some()).collect();
     let streams: Vec<BoundStream> = bound_streams(p, x).into_iter().filter(|b| b.wake.is_some()).collect();
-    let commands: Vec<&crate::layout::Slot> =
-        layout.commands.iter().filter(|slot| p.commands.iter().any(|c| c.name == slot.name && c.wake)).collect();
+    let commands: Vec<BoundCommand> = bound_commands(p, layout, x).into_iter().filter(|c| c.wake.is_some()).collect();
     if !scalars.is_empty() {
         let n = scalars.len();
         let _ = writeln!(t.fields, "    unsigned char wake_v[{n}][8];");
-        let _ = writeln!(t.fields, "    uint8_t wake_q[{n}], wake_got[{n}];");
+        let _ = writeln!(t.fields, "    uint8_t wake_q[{n}], wake_r[{n}], wake_got[{n}];");
+        let _ = writeln!(t.fields, "    int64_t wake_age[{n}];");
+        for b in scalars.iter().filter(|b| b.ct.is_none()) {
+            let _ = writeln!(t.fields, "    _Alignas(8) unsigned char wake_b{}[{}];", b.wake.unwrap_or(0), b.size);
+        }
+    }
+    if !commands.is_empty() {
+        let _ = writeln!(t.fields, "    _Bool cmd_held[{}];", commands.len());
     }
     if !streams.is_empty() {
         let n = streams.len();
@@ -1037,19 +1076,38 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "uint8_t {x}_wake_sources(void) {{ return {any}u; }}");
     let _ = writeln!(s, "static uint8_t takt_woken(struct {x}_arena *a, int64_t k) {{");
     let _ = writeln!(s, "    int64_t now = takt_ticks_ns(k);");
-    for slot in &commands {
-        let _ = writeln!(s, "    if (a->image[{}]) return 1; /* {} */", slot.offset, slot.name);
+    for c in &commands {
+        let w = c.wake.unwrap_or(0);
+        let _ = writeln!(s, "    if (!a->cmd_held[{w}] && {}(a->user, now)) a->cmd_held[{w}] = 1;", c.function);
+        let _ = writeln!(s, "    if (a->cmd_held[{w}]) return 1; /* {} */", c.name);
     }
     for b in &scalars {
         let w = b.wake.unwrap_or(0);
         let _ = writeln!(s, "    {{ /* {} */", b.name);
-        let _ = writeln!(s, "        {} v = 0;", b.ct);
-        let _ = writeln!(s, "        uint8_t q = 0;");
-        let _ = writeln!(s, "        int64_t t = now;");
-        let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &t) ? 1 : 0;", b.function);
+        let _ = writeln!(s, "        uint8_t q = 0, r = 0;");
+        let _ = writeln!(s, "        int64_t age = 0, t = now;");
+        let same = match b.ct {
+            Some(ct) => {
+                let _ = writeln!(s, "        {ct} v = 0;");
+                let _ =
+                    writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t) ? 1 : 0;", b.function);
+                format!("memcmp(&v, a->wake_v[{w}], sizeof v)")
+            }
+            None => {
+                let buf = format!("a->edge_in{}", b.channel);
+                let _ = writeln!(
+                    s,
+                    "        uint8_t got = {}(a->user, now, {buf}, {}, &q, &r, &age, &t) ? 1 : 0;",
+                    b.function, b.size
+                );
+                format!("memcmp({buf}, a->wake_b{w}, {})", b.size)
+            }
+        };
         let _ = writeln!(s, "        if (got != a->wake_got[{w}]) return 1;");
-        let _ =
-            writeln!(s, "        if (got && (q != a->wake_q[{w}] || memcmp(&v, a->wake_v[{w}], sizeof v))) return 1;");
+        let _ = writeln!(
+            s,
+            "        if (got && (q != a->wake_q[{w}] || r != a->wake_r[{w}] || age != a->wake_age[{w}] || {same})) return 1;"
+        );
         let name = &p.channels[b.channel].name;
         let aged = (
             p.channels[b.channel].attrs.max_age,
@@ -1720,17 +1778,24 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// `takt_sample`: die Treiber an das Abbild (12.1, Schritt 2).
 ///
 /// **Das Gegenstueck zu [`commit`], und aus demselben Grund ein Symbol.**
-/// Aus `hw("ui/button")` wird `P_in_ui_button(user, now, &value, &quality, &t)`; wer
-/// den Kanal bindet und keinen Treiber stellt, bekommt einen Linkfehler
-/// mit dem Namen darin. Eine Registrierung zur Laufzeit waere flexibler,
-/// aber ein nicht eingetragener Eingang fiele still aus — und ein
-/// Eingang, der still `Bad` bleibt, ist schlimmer als einer, der fehlt.
+/// Aus `hw("ui/button")` wird `P_in_ui_button(user, now, &value, &quality,
+/// &reason, &age, &t)`; wer den Kanal bindet und keinen Treiber stellt,
+/// bekommt einen Linkfehler mit dem Namen darin. Eine Registrierung zur
+/// Laufzeit waere flexibler, aber ein nicht eingetragener Eingang fiele still
+/// aus — und ein Eingang, der still `Bad` bleibt, ist schlimmer als einer,
+/// der fehlt.
 ///
-/// **Warum die Qualitaet mitkommt.** 12.6 laesst Eingaenge degradieren
-/// statt zu faulten: Ein Treiber, der nichts Frisches hat, sagt `Stale`,
-/// einer mit unplausiblem Wert `Suspect`. Ohne diesen Rueckweg koennte er
-/// nur luegen oder schweigen. Liefert er nichts, bleibt der Eintrag, wie
-/// `init` ihn gesetzt hat: `Bad` (3.5).
+/// **Warum Qualitaet, Grund und Alter mitkommen.** 12.6 laesst Eingaenge
+/// degradieren statt zu faulten: Ein Treiber, der nichts Frisches hat, sagt
+/// `Stale` mit dem Alter seines Werts, einer mit unplausiblem Wert `Suspect`
+/// oder `Bad` mit Grund; Zeile 2 prueft, dass der Messzeitpunkt `t - age`
+/// nicht faellt. Ohne diesen Rueckweg koennte er nur luegen oder schweigen.
+/// Liefert er nichts, bleibt der Eintrag, wie `init` ihn gesetzt hat: `Bad`
+/// (3.5).
+///
+/// Ein Eingang zusammengesetzten Typs liefert in einen Puffer der Arena, der
+/// bis zum Abgleich des Rands haelt (`edge_in<kanal>`). Je Command fragt der
+/// Rahmen den Wirt, ob es in diesem Tick anliegt (8.5).
 ///
 /// Eingaenge mit `sim(...)` oder ohne Bindung bekommen keinen Aufruf, und
 /// ebenso keiner, den ein `sim`-Output derselben Adresse speist: Im
@@ -1739,6 +1804,10 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     let scalars = bound_scalars(p, layout, x);
     let streams = bound_streams(p, x);
+    let commands = bound_commands(p, layout, x);
+    for b in scalars.iter().filter(|b| b.ct.is_none()) {
+        let _ = writeln!(t.fields, "    _Alignas(8) unsigned char edge_in{}[{}];", b.channel, b.size);
+    }
     // Ein Platz je Element, das ein Strom in einem Tick liefern darf, und
     // eines mehr, damit der Rand `MAXPT` pruefen kann (12.6 Zeile 2).
     let pool: u64 = streams.iter().map(|b| u64::from(b.polls) * u64::from(b.cap)).sum();
@@ -1759,21 +1828,39 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     let body = s.len();
     for b in &scalars {
         let _ = writeln!(s, "    {{ /* {} */", b.name);
-        let _ = writeln!(s, "        {} v = 0;", b.ct);
-        let _ = writeln!(s, "        uint8_t q = 0;");
-        let _ = writeln!(s, "        int64_t t = now;");
-        let _ = writeln!(s, "        _Bool got = {}(a->user, now, &v, &q, &t);", b.function);
-        // `Bad` kommt ohne Wert (12.6 Zeile 2); sein Grund ist der Treiber.
+        let _ = writeln!(s, "        uint8_t q = 0, r = 0;");
+        let _ = writeln!(s, "        int64_t age = 0, t = now;");
+        // `Bad` kommt ohne Wert (12.6 Zeile 2).
+        let buf = format!("a->edge_in{}", b.channel);
+        let value = match b.ct {
+            Some(ct) => {
+                let _ = writeln!(s, "        {ct} v = 0;");
+                let _ = writeln!(s, "        _Bool got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
+                "&v, (int)sizeof v".to_string()
+            }
+            None => {
+                let _ = writeln!(
+                    s,
+                    "        _Bool got = {}(a->user, now, {buf}, {}, &q, &r, &age, &t);",
+                    b.function, b.size
+                );
+                format!("{buf}, {}", b.size)
+            }
+        };
         let _ = writeln!(
             s,
-            "        if (got) takt_edge_reading(a, {}, &v, (int)sizeof v, {}, q, q == 3 ? 3 : 0, q != 3, t, 0LL);",
+            "        if (got) takt_edge_reading(a, {}, {value}, {}, q, r, q != 3, t, age);",
             b.channel, b.number
         );
         // 9.9: Was dieser Tick las, vergleicht `P_woken` im Schlaf.
         if let Some(w) = b.wake {
+            let kept = match b.ct {
+                Some(_) => format!("memcpy(a->wake_v[{w}], &v, sizeof v);"),
+                None => format!("memcpy(a->wake_b{w}, {buf}, {});", b.size),
+            };
             let _ = writeln!(
                 s,
-                "        a->wake_got[{w}] = got; a->wake_q[{w}] = q; memcpy(a->wake_v[{w}], &v, sizeof v);"
+                "        a->wake_got[{w}] = got; a->wake_q[{w}] = q; a->wake_r[{w}] = r; a->wake_age[{w}] = age; {kept}"
             );
         }
         let _ = writeln!(s, "    }}");
@@ -1842,6 +1929,19 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
     if !p.recorded.is_empty() {
         let _ = writeln!(s, "    takt_record(a, now);");
     }
+    // 8.5: Ein Command gilt genau den Tick, an dessen Grenze der Wirt es
+    // meldet; ein Wake-Command, das `P_woken` schon las, zuerst.
+    for c in &commands {
+        let asked = format!("{}(a->user, now)", c.function);
+        let _ = match c.wake {
+            Some(w) => writeln!(
+                s,
+                "    a->image[{}] = (a->cmd_held[{w}] || {asked}) ? 1 : 0; a->cmd_held[{w}] = 0; /* {} */",
+                c.offset, c.name
+            ),
+            None => writeln!(s, "    a->image[{}] = {asked} ? 1 : 0; /* {} */", c.offset, c.name),
+        };
+    }
     let _ = writeln!(s, "    takt_edge_commit(a, a->tick);");
     let _ = writeln!(s, "}}\n");
     with_now(s, body, "takt_ticks_ns(a->tick)");
@@ -1897,11 +1997,11 @@ fn record(s: &mut String, p: &Program, x: &Prefix) {
         let (f, ct) = (format!("{x}_in_{}", r.address.ident()), crate::drivers::recorded_value(r.value).c);
         let _ = writeln!(s, "    {{ /* {} */", r.name);
         let _ = writeln!(s, "        {ct} v = 0;");
-        let _ = writeln!(s, "        uint8_t q = 0;");
-        let _ = writeln!(s, "        int64_t t = now;");
+        let _ = writeln!(s, "        uint8_t q = 0, r = 0;");
+        let _ = writeln!(s, "        int64_t age = 0, t = now;");
         let _ = writeln!(
             s,
-            "        if ({f}(a->user, now, &v, &q, &t) && (!a->rec_seen_{i} || memcmp(&v, &a->rec_last_{i}, sizeof v) != 0 || q != a->rec_last_q_{i} || t != now)) {{"
+            "        if ({f}(a->user, now, &v, &q, &r, &age, &t) && (!a->rec_seen_{i} || memcmp(&v, &a->rec_last_{i}, sizeof v) != 0 || q != a->rec_last_q_{i} || t != now)) {{"
         );
         let _ = writeln!(s, "            a->rec_seen_{i} = 1; a->rec_last_{i} = v; a->rec_last_q_{i} = q;");
         let _ = writeln!(s, "            takt_board_trace(\"t=\");");
@@ -1909,7 +2009,11 @@ fn record(s: &mut String, p: &Program, x: &Prefix) {
         let _ = writeln!(s, "            takt_board_trace(\"rec {} \");", r.name);
         let _ = writeln!(s, "            if (q == 1) takt_board_trace(\"suspect \");");
         let _ = writeln!(s, "            else if (q == 2) takt_board_trace(\"stale \");");
-        let _ = writeln!(s, "            else if (q == 3) takt_board_trace(\"bad reason=Driver \");");
+        // Der Grund, den der Treiber nennt (`Reason` der Prelude); ohne ihn keiner.
+        let _ = writeln!(
+            s,
+            "            else if (q == 3) {{ static const char *const why[] = {{ \"bad \", \"bad reason=OutOfRange \", \"bad reason=Implausible \", \"bad reason=Driver \", \"bad reason=Node \" }}; takt_board_trace(r < 5 ? why[r] : \"bad \"); }}"
+        );
         let _ = writeln!(s, "            else {}", recorded_value(p, r));
         let _ = writeln!(s, "            if (t != now) {{ takt_board_trace(\"t=\"); takt_board_trace_i64(t); }}");
         let _ = writeln!(s, "            takt_board_trace(\"\\n\");");
@@ -2015,20 +2119,25 @@ fn recorded_value(p: &Program, r: &takt_mir::program::Recorded) -> String {
     }
 }
 
-/// Ein Skalar, den ein Treiber des Boards liefert.
+/// Ein Eingang mit Platz im Abbild, den ein Treiber des Boards liefert.
 struct BoundScalar {
     name: String,
     channel: usize,
     function: String,
-    ct: &'static str,
+    /// Der C-Typ des Werts; `None` fuer einen Eingang zusammengesetzten
+    /// Typs, der als Bytes in seiner Speicherform kommt (`drivers::Kind::Block`).
+    ct: Option<&'static str>,
+    /// Die Bytes des Werts.
+    size: u64,
     /// Art, `as_i64` und `as_f64` des Werts `v` fuer den Rand.
     number: String,
     /// Der Platz unter den Wake-Quellen (5.10), wenn der Kanal eine ist.
     wake: Option<usize>,
 }
 
-/// Die an Hardware gebundenen Skalare, ohne die, die ein `sim`-Output
-/// derselben Adresse speist (8.3).
+/// Die an Hardware gebundenen Eingaenge mit Platz im Abbild, ohne die, die
+/// ein `sim`-Output derselben Adresse speist (8.3) — dieselben wie in
+/// [`crate::drivers::of`].
 fn bound_scalars(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundScalar> {
     use takt_mir::types::Type;
     let fed = crate::parts::sim_fed_inputs(p);
@@ -2041,21 +2150,60 @@ fn bound_scalars(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundScalar> {
             if fed.contains(&channel) || takt_mir::sys::outer_fault(p) == Some(channel) {
                 return None;
             }
-            let function = crate::drivers::input_symbol(slot.address.as_ref()?, x);
-            let ct = c_type(&slot.ty, slot.signed)?;
-            let number = match p.types.list.get(p.channels[channel].ty.index())? {
-                Type::Int { width, .. } if !width.signed() && width.bits() == 64 => {
+            let address = slot.address.as_ref()?;
+            let function = crate::drivers::input_symbol(address, x);
+            let ct = c_type(&slot.ty, slot.signed);
+            // Das Geraet `sys` hat nur Skalare (12.7).
+            if ct.is_none() && takt_mir::sys::is_sys(&address.text()) {
+                return None;
+            }
+            let number = match (ct, p.types.list.get(p.channels[channel].ty.index())?) {
+                (None, _) => "0, 0LL, 0.0".to_string(),
+                (_, Type::Int { width, .. }) if !width.signed() && width.bits() == 64 => {
                     "v <= 9223372036854775807ULL ? 1 : 2, (long long)v, (double)v".to_string()
                 }
-                Type::Int { .. } | Type::Duration { .. } => "1, (long long)v, (double)v".to_string(),
-                Type::Float { .. } => "2, 0LL, (double)v".to_string(),
+                (_, Type::Int { .. } | Type::Duration { .. }) => "1, (long long)v, (double)v".to_string(),
+                (_, Type::Float { .. }) => "2, 0LL, (double)v".to_string(),
                 _ => "0, 0LL, 0.0".to_string(),
             };
-            Some(BoundScalar { name: slot.name.clone(), channel, function, ct, number, wake: None })
+            let name = slot.name.clone();
+            Some(BoundScalar { name, channel, function, ct, size: slot.size, number, wake: None })
         })
         .collect();
     number_wake(p, out.iter_mut().map(|b| (b.channel, &mut b.wake)));
     out
+}
+
+/// Ein Command, das der Wirt meldet (8.5).
+struct BoundCommand {
+    name: String,
+    function: String,
+    /// Sein Byte im Abbild.
+    offset: u64,
+    /// Der Platz unter den Wake-Commands (5.10), wenn es eines ist.
+    wake: Option<usize>,
+}
+
+/// Die Commands des Programms mit ihrem Eintrag des Wirts (`P_cmd_<name>`).
+fn bound_commands(p: &Program, layout: &Layout, x: &Prefix) -> Vec<BoundCommand> {
+    let mut n = 0;
+    layout
+        .commands
+        .iter()
+        .map(|slot| {
+            let woken = p.commands.iter().any(|c| c.name == slot.name && c.wake);
+            let wake = woken.then(|| {
+                n += 1;
+                n - 1
+            });
+            BoundCommand {
+                name: slot.name.clone(),
+                function: x.name(&crate::drivers::method(crate::drivers::Kind::Command, &slot.name)),
+                offset: slot.offset,
+                wake,
+            }
+        })
+        .collect()
 }
 
 /// Numeriert die Wake-Quellen unter `bound` in ihrer Reihenfolge.

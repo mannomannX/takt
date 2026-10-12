@@ -150,12 +150,19 @@ pub fn drivers(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) 
 
 /// Schreibt den Pruefstand `Rig` des Programms nach `file` (12.6): je Adresse
 /// das Geraet aus `wiring`, sonst ein Stummel, den die Dokumentation von
-/// `Rig` nennt. Die Traits `Drivers` und `Sys` und den Kleber dazu bringt das
-/// Modul der Lieferform (`P.rs`); hier steht er im Modul `crate::app`.
+/// `Rig` nennt. Die Traits `Drivers`, `Sys` und `Commands` und den Kleber
+/// dazu bringt das Modul der Lieferform (`P.rs`); hier steht er im Modul
+/// `crate::app`.
 pub fn rig(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) {
     use takt_frame::drivers::{Kind, of, rust_rig};
     let list = of(p, &takt_frame::layout::of(p));
-    let traits = if list.iter().any(|d| d.kind == Kind::Sys) { "{Drivers, Sys}" } else { "Drivers" };
+    let mut used = vec!["Drivers"];
+    for (kind, name) in [(Kind::Sys, "Sys"), (Kind::Command, "Commands")] {
+        if list.iter().any(|d| d.kind == kind) {
+            used.push(name);
+        }
+    }
+    let traits = if used.len() == 1 { "Drivers".to_string() } else { format!("{{{}}}", used.join(", ")) };
     let text = format!(
         "// Erzeugt von `takt_conformance::bringup::rig` (12.6).\n\nuse crate::app::{traits};\n\n{}",
         rust_rig(&list, "Rig", wiring)

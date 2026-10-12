@@ -1164,21 +1164,6 @@ fn ports(p: &takt_mir::Program, hw: &takt_mir::hardware::Hardware) -> Vec<(Strin
 /// braucht einen Index, und ein handgeschriebener Index ist dieselbe
 /// Fehlerquelle in kleiner: Er stimmt, bis jemand einen Ausgang davor
 /// einfuegt.
-/// Die Ausgaenge, die `P_output` des Rahmens kennt, in seiner Reihenfolge,
-/// als Bezeichner in Grossbuchstaben.
-pub(crate) fn output_names(p: &takt_mir::Program) -> Vec<String> {
-    p.channels
-        .iter()
-        .enumerate()
-        .filter(|(i, c)| {
-            c.dir != takt_mir::program::Direction::Input
-                && takt_llvm::image::latch_offset(takt_mir::ChannelId(*i as u32), p).is_some()
-                && takt_llvm::ty::lower(c.ty, p).is_some()
-        })
-        .map(|(_, c)| c.name.to_uppercase().replace(|ch: char| !ch.is_ascii_alphanumeric(), "_"))
-        .collect()
-}
-
 /// So lange haelt ein Journal-Vorgang den Kern hoechstens (12.3); 0 heisst
 /// nie. Ein Programm ohne `persist` schreibt kein Journal: Fuer es haelt
 /// nichts den Kern an, und die Frist des Watchdogs bleibt bei zwei Perioden.
@@ -1206,7 +1191,7 @@ fn constants_rust(p: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardwar
     ));
 
     // Die Ausgaenge in der Reihenfolge, die `P_output` des Rahmens erwartet.
-    let outputs = output_names(p);
+    let outputs = takt_frame::embed::output_names(p);
     for (index, name) in outputs.iter().enumerate() {
         s.push_str(&format!("/// Die Stellung des Ausgangs `{name}` fuer `P_output`.\n"));
         s.push_str(&format!("pub const OUT_{name}: i32 = {index};\n"));

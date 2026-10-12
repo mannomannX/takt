@@ -336,6 +336,10 @@ pub trait Program {
     /// wirkt im naechsten Schritt.
     fn raise_hardware(&mut self) {}
 
+    /// Meldet allen Maschinen einen Operator-Abort (5.4): Er wirkt im Tick,
+    /// vor dessen Schritt der Kern ihn meldet ([`Runtime::abort`]).
+    fn raise_abort(&mut self) {}
+
     /// `tick_tolerance` des Programms (7.1); `None` prueft die Periode nicht.
     fn tick_tolerance(&self) -> Option<Tolerance> {
         None
@@ -506,6 +510,8 @@ pub struct Runtime<P, C, W, S, J = NoJournal> {
     /// Im vorigen Tick ist die Periode uebergelaufen (7.3: der Fault wirkt
     /// im naechsten Tick).
     pending_overrun: bool,
+    /// Der Bediener hat abgebrochen (5.4); der naechste Tick meldet es.
+    pending_abort: bool,
     /// Der Latch des letzten Ticks wartet auf die naechste Grenze
     /// (`output_timing = boundary`, 1.4).
     held: bool,
@@ -576,6 +582,7 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store + Fits<P::Memory>> Run
             polled: 0,
             beat_from: start,
             pending_overrun: false,
+            pending_abort: false,
             held: false,
             period: takt_hal::contract::Period::default(),
             begun: false,
@@ -607,6 +614,17 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
     pub fn with_end_budget(mut self, ns: i64) -> Self {
         self.end_budget = Some(ns);
         self
+    }
+
+    /// Ein Operator-Abort (5.4): Er wirkt im naechsten Tick fuer alle
+    /// Maschinen ([`Program::raise_abort`] vor dessen Schritt). Schlaeft der
+    /// Kern, endet der Schlaf an der naechsten Grenze — ein Ereignis von
+    /// aussen weckt (9.9) —, und der Port ruft [`Runtime::service`] wie zu
+    /// jeder Frist.
+    pub fn abort(&mut self) {
+        self.pending_abort = true;
+        let next = self.boundary_at(self.clock.now());
+        self.wake_at(next);
     }
 
     /// Rechnet jede Tickgrenze bis jetzt nach 12.1 und nennt die naechste
@@ -891,6 +909,10 @@ impl<P: Program, C: Clock, W: Watchdog, S: Sink, J: Store> Runtime<P, C, W, S, J
         // Schritt, damit die Maschinen ihn in diesem Tick sehen.
         if core::mem::take(&mut self.pending_overrun) {
             self.program.raise_overrun();
+        }
+        // 5.4: Ein Operator-Abort seit dem vorigen Tick wirkt in diesem.
+        if core::mem::take(&mut self.pending_abort) {
+            self.program.raise_abort();
         }
         // 12.6 Zeile 7: die Periode, mit der die Tickquelle diesen Tick
         // gebracht hat, gegen `tick_tolerance`; die Regel ist die des Rands.

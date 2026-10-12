@@ -53,7 +53,6 @@ pub mod natives;
 pub mod paths;
 #[cfg(feature = "board")]
 pub mod port;
-mod ports;
 pub mod report;
 pub mod run;
 pub mod stimulus;

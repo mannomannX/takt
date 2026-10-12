@@ -124,6 +124,7 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
             prefix: x.clone(),
             stubs: false,
             job_stack_reserve,
+            scenario: None,
         },
     );
     let flags: Vec<String> =
@@ -143,7 +144,8 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
 
     let job_stack = frame.job_stack_bytes;
     let stacks = Stacks { tick: tick_stack.bytes(), job: job_stack };
-    write(&e.out.join(format!("{x}.h")), &header(&frame.header, e.program, x, e.nvm_blocking_ns, &stacks))?;
+    let header = takt_frame::embed::c_header(&frame.header, e.program, x, e.nvm_blocking_ns, stacks.tick, stacks.job);
+    write(&e.out.join(format!("{x}.h")), &header)?;
     // M11 Schritt 18a: die Einstiege als Tabelle fuer das C-SDK, mit dessen Kopf.
     write(&e.out.join(SDK_HEADER_NAME), SDK_HEADER)?;
     let (ops, obj_ops) = (e.out.join(format!("{x}_ops.c")), e.out.join(format!("{x}_ops.o")));
@@ -179,13 +181,15 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     let placement = Placement { bytes, align, tick_at: frame.tick_at, protect: memory.protect.zip(window) };
     let layout_lines = Layout { arena: &placement, tick_stack: &tick_stack, job_stack, xip };
     write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &layout_lines))?;
-    let sys = drivers.iter().filter(|d| d.kind == takt_frame::drivers::Kind::Sys).count();
+    let count = |kind| drivers.iter().filter(|d| d.kind == kind).count();
+    let (sys, commands) = (count(takt_frame::drivers::Kind::Sys), count(takt_frame::drivers::Kind::Command));
     println!(
-        "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}), {} Treiber, {sys} sys-Kanaele",
+        "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}), {} Treiber, {sys} sys-Kanaele, \
+         {commands} Commands",
         e.out.display(),
         e.triple,
         e.form.name(),
-        drivers.len() - sys
+        drivers.len() - sys - commands
     );
     Ok(())
 }
@@ -355,37 +359,6 @@ fn check_poll(p: &takt_mir::Program, host: takt_mir::hardware::Host, name: &str)
     Ok(())
 }
 
-/// Der Kopf `P.h`: der Kopf des Rahmens und die Konstanten des Programms,
-/// dieselben wie im Rust-Modul, mit dem Praefix.
-fn header(frame_header: &str, p: &takt_mir::Program, x: &Prefix, nvm_blocking_ns: i64, stacks: &Stacks) -> String {
-    let upper = x.as_str().to_uppercase();
-    let hash = takt_mir::hash::logic_hash(p);
-    let key = u64::from_le_bytes(hash.0[..8].try_into().unwrap_or_default());
-    let mut consts = String::new();
-    let _ = writeln!(consts, "/* Die Konstanten des Programms (5.9, 7.1, 7.3, 12.3). */");
-    let _ = writeln!(consts, "#define {upper}_TICK_NS {}LL", p.config.tick);
-    let _ = writeln!(consts, "#define {upper}_NVM_BLOCKING_NS {nvm_blocking_ns}LL");
-    let alert = u8::from(p.config.overrun == takt_mir::program::OverrunPolicy::Alert);
-    let _ = writeln!(consts, "#define {upper}_OVERRUN_ALERT {alert}");
-    let _ = writeln!(consts, "#define {upper}_LOGIC_HASH {key:#018x}ULL");
-    // 12.3, 12.11: Beide Stacks stellt der Wirt, den Job-Stack an 32 Byte ausgerichtet.
-    let _ = writeln!(consts, "#define {upper}_TICK_STACK_BYTES {}u", stacks.tick);
-    let _ = writeln!(consts, "#define {upper}_JOB_STACK_BYTES {}u", stacks.job);
-    let _ = writeln!(consts, "#define {upper}_PERSIST_BOUND {}u", takt_mir::persist::max_payload(p).unwrap_or(0));
-    let min = takt_mir::persist::min_interval_ns(p).unwrap_or(0);
-    let _ = writeln!(consts, "#define {upper}_PERSIST_MIN_INTERVAL_NS {min}LL\n");
-    let _ = writeln!(consts, "/* Die Ausgaenge in der Reihenfolge, die `{x}_output` erwartet. */");
-    let outputs = crate::output_names(p);
-    for (index, name) in outputs.iter().enumerate() {
-        let _ = writeln!(consts, "#define {upper}_OUT_{name} {index}");
-    }
-    let _ = writeln!(consts, "#define {upper}_OUTPUTS {}\n", outputs.len());
-    let _ = writeln!(consts, "/* Die Einstiege als Tabelle fuer das C-SDK (`takt_sdk.h`, `takt_core_init`). */");
-    let _ = writeln!(consts, "struct takt_ops;\nextern const struct takt_ops {x}_ops;\n");
-    let body = frame_header.trim_end().strip_suffix("#endif").unwrap_or(frame_header);
-    format!("{body}{consts}#endif\n")
-}
-
 /// Das Manifest `P.manifest` (12.11): was der Wirt in seinen Speicher- und
 /// Bauplan uebernimmt.
 fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layout<'_>) -> String {
@@ -451,11 +424,16 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
     let _ = writeln!(s, "services = {}", services.join(", "));
     // Die Kanaele des Geraets `sys` stellt der Wirt im Trait `Sys`; Treiber
     // sind sie nicht (12.7, 12.11).
-    let (sys, drivers): (Vec<_>, Vec<_>) = drivers.iter().partition(|d| d.kind == takt_frame::drivers::Kind::Sys);
+    use takt_frame::drivers::Kind;
+    let of = |kind: Option<Kind>| -> Vec<&takt_frame::drivers::Driver> {
+        drivers.iter().filter(|d| kind.map_or(!matches!(d.kind, Kind::Sys | Kind::Command), |k| d.kind == k)).collect()
+    };
     let symbols =
         |list: &[&takt_frame::drivers::Driver]| list.iter().map(|d| d.symbol(x)).collect::<Vec<_>>().join(", ");
-    let _ = writeln!(s, "drivers = {}", symbols(&drivers));
-    let _ = writeln!(s, "sys = {}", symbols(&sys));
+    let _ = writeln!(s, "drivers = {}", symbols(&of(None)));
+    let _ = writeln!(s, "sys = {}", symbols(&of(Some(Kind::Sys))));
+    // 8.5: Die Commands meldet der Wirt, kein Treiber.
+    let _ = writeln!(s, "commands = {}", symbols(&of(Some(Kind::Command))));
     // 12.3: Unter `xip_flash` liegt alles, was diese Einstiege rufen, im RAM.
     let _ = writeln!(s, "xip_flash = {}", plan.xip);
     let _ = writeln!(s, "tick_path = {}", takt_frame::mcu::tick_path(x).join(", "));

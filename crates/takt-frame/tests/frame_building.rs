@@ -84,9 +84,10 @@ fn a_frame_without_the_arena_constants_is_an_error() {
 }
 
 /// **Die Stummel sind ausdruecklich und eindeutig** (12.6): Ein Eingang
-/// liefert nichts, ein Strom nichts, ein Ausgang gilt als bestaetigt, ein
-/// Geraet als lebendig, ein Sendepuffer als unbekannt (-1). Sein Sender ist
-/// fertig, weil er jedes Byte sofort annahm (8.8, FB-439).
+/// liefert nichts, auch einer zusammengesetzten Typs, ein Strom nichts, ein
+/// Command liegt nie an, ein Ausgang gilt als bestaetigt, ein Geraet als
+/// lebendig, ein Sendepuffer als unbekannt (-1). Sein Sender ist fertig,
+/// weil er jedes Byte sofort annahm (8.8, FB-439).
 #[test]
 fn the_driver_stubs_answer_conservatively() {
     let value = Some(Value { c: "int32_t", rust: "i32" });
@@ -104,12 +105,16 @@ fn the_driver_stubs_answer_conservatively() {
         driver(Kind::Free, "free_dev_tx"),
         driver(Kind::Idle, "idle_dev_tx"),
         driver(Kind::Alive, "alive_dev"),
+        driver(Kind::Block, "in_dev_frame"),
+        driver(Kind::Command, "cmd_go"),
     ];
     let stubs = c_stubs(&drivers, &Prefix::default());
     let line =
         |method: &str| stubs.lines().find(|l| l.contains(method)).unwrap_or_else(|| panic!("{method}:\n{stubs}"));
     for (method, result) in [
         ("in_dev_ch", "return 0;"),
+        ("in_dev_frame", "return 0;"),
+        ("cmd_go", "return 0;"),
         ("poll_dev_rx", "return 0;"),
         ("out_dev_o", "return 1;"),
         ("free_dev_tx", "return -1;"),
