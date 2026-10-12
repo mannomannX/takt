@@ -44,22 +44,33 @@ runs:
         } >> "$GITHUB_ENV"
 
     # Dieselben Versionen wie auf dem Entwicklungsrechner: Der Cache der
-    # Solver-Antworten haengt an Name und Version (takt-prove).
+    # Solver-Antworten haengt an Name und Version (takt-prove). Die
+    # Pruefsummen sind beim Einrichten (2026-10-12) aus den Release-Dateien
+    # gerechnet; ein Solver, der ausgetauscht wurde, urteilte unbemerkt.
     - name: z3 4.13.4 und cvc5 1.2.0
       shell: bash
       run: |
         mkdir -p "$HOME/.takt/bin"
         cd "$RUNNER_TEMP"
         wget -q https://github.com/Z3Prover/z3/releases/download/z3-4.13.4/z3-4.13.4-x64-glibc-2.35.zip
+        wget -q https://github.com/cvc5/cvc5/releases/download/cvc5-1.2.0/cvc5-Linux-x86_64-static.zip
+        sha256sum -c - <<'SUMS'
+        93f91f9c6f4a00a041c19fc7a74adc1f441c8244ce70d486e19abcd89c6a014b  z3-4.13.4-x64-glibc-2.35.zip
+        d18f174ff9a11923c32c3f871f844ed16bd77a28f51050b8e7c8d821c98a1c2e  cvc5-Linux-x86_64-static.zip
+        SUMS
         unzip -q z3-4.13.4-x64-glibc-2.35.zip
         find z3-4.13.4-x64-glibc-2.35/bin -maxdepth 1 -type f -exec cp {} "$HOME/.takt/bin/" \;
-        wget -q https://github.com/cvc5/cvc5/releases/download/cvc5-1.2.0/cvc5-Linux-x86_64-static.zip
         unzip -q cvc5-Linux-x86_64-static.zip
         cp cvc5-Linux-x86_64-static/bin/cvc5 "$HOME/.takt/bin/"
         echo "$HOME/.takt/bin" >> "$GITHUB_PATH"
         "$HOME/.takt/bin/z3" --version
         "$HOME/.takt/bin/cvc5" --version | head -1
 
-    - name: cargo-nextest
+    # Dieselbe Version wie auf dem Entwicklungsrechner, mit Pruefsumme.
+    - name: cargo-nextest 0.9.146
       shell: bash
-      run: curl -LsSf https://get.nexte.st/latest/linux | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+      run: |
+        cd "$RUNNER_TEMP"
+        curl -LsSf -o nextest.tar.gz https://get.nexte.st/0.9.146/linux
+        echo "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428  nextest.tar.gz" | sha256sum -c -
+        tar zxf nextest.tar.gz -C "${CARGO_HOME:-$HOME/.cargo}/bin"
