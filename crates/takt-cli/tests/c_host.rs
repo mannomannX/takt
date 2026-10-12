@@ -83,6 +83,7 @@ fn c_host(program: &str, prefix: &str, main_c: &Path, dir: &Path) -> Option<Path
         .arg(main_c)
         .arg(&lib)
         .arg(&sdk)
+        .args(takt_llvm::toolchain::Clang::HOST_LIBS)
         .arg("-o")
         .arg(&exe)
         .output()

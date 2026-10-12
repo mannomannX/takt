@@ -108,6 +108,11 @@ pub fn frame_flags(triple: &str) -> Vec<&'static str> {
 }
 
 impl Clang {
+    /// Was ein Programm fuer den Wirt hinter seinen Objekten bindet: Der
+    /// erzeugte Code ruft `round`, `fma` und `fmaf`, die unter Windows in
+    /// der C-Laufzeit stehen und unter Linux in `libm` (FB-526).
+    pub const HOST_LIBS: &'static [&'static str] = if cfg!(windows) { &[] } else { &["-lm"] };
+
     /// Was jeder Aufruf mitbekommt, damit das Ergebnis reproduzierbar
     /// ist (11.3).
     ///

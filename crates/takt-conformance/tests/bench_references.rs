@@ -94,6 +94,7 @@ fn native(clang: &Clang, name: &str) -> Result<Vec<u64>, String> {
         .args(["-O2", "-ffp-contract=off", "-fno-math-errno", "-Wall", "-Wextra", "-Werror"])
         .arg(kernel_path(name, "c"))
         .arg(&main)
+        .args(Clang::HOST_LIBS)
         .arg("-o")
         .arg(&exe)
         .output()

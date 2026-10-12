@@ -85,10 +85,16 @@ function(takt_add_program name)
     COMMENT "takt build ${name} (${TAKT_FORM}, ${triple})"
     VERBATIM)
   add_custom_target(${name}_takt DEPENDS "${lib}")
+  # Der erzeugte Code ruft `round`, `fma` und `fmaf`: unter Linux aus
+  # `libm`, unter Windows aus der C-Laufzeit (FB-526).
+  set(libs Takt::sdk)
+  if(UNIX AND NOT APPLE)
+    list(APPEND libs m)
+  endif()
   add_library(${name} STATIC IMPORTED GLOBAL)
   set_target_properties(${name} PROPERTIES
     IMPORTED_LOCATION "${lib}"
     INTERFACE_INCLUDE_DIRECTORIES "${out}"
-    INTERFACE_LINK_LIBRARIES Takt::sdk)
+    INTERFACE_LINK_LIBRARIES "${libs}")
   add_dependencies(${name} ${name}_takt)
 endfunction()

@@ -27,8 +27,8 @@ void takt_board_trace(const char *text) {
     }
     fputs(text, stdout);
 }
-void takt_board_trace_i64(int64_t v) { printf("%lld ", (long long)v); }
-void takt_board_trace_u64(uint64_t v) { printf("%llu ", (unsigned long long)v); }
+void takt_board_trace_i64(long long v) { printf("%lld ", v); }
+void takt_board_trace_u64(unsigned long long v) { printf("%llu ", v); }
 void takt_board_trace_f64(double v) { printf("%g ", v); }
 void takt_board_trace_hex8(uint8_t v) { printf("%02x", v); }
 

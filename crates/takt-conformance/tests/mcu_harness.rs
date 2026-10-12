@@ -133,7 +133,11 @@ fn link_for(clang: &Clang, target: Target, p: &takt_mir::Program, name: &str) ->
     // dieses Tests — passen die Symbole? — ohne ein Linker-Skript zu
     // verlangen, das zum Board gehoert.
     let mut cmd = std::process::Command::new(path);
-    let cmd = Clang::deterministic(&mut cmd).args(["-r", "-nostdlib"]).arg(format!("--target={}", target.triple));
+    // `lld` ausdruecklich: Unter Linux naehme clang sonst den `ld` der
+    // Plattform, der nur deren Ziele kennt.
+    let cmd = Clang::deterministic(&mut cmd)
+        .args(["-r", "-nostdlib", "-fuse-ld=lld"])
+        .arg(format!("--target={}", target.triple));
     if !target.march.is_empty() {
         cmd.arg(format!("-march={}", target.march));
     }
