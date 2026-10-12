@@ -1083,6 +1083,7 @@ pub(crate) fn capture(
     let reader = std::thread::spawn({
         let stop = Arc::clone(&stop);
         move || {
+            raise_reader();
             let mut buf = [0u8; 4096];
             while !stop.load(Ordering::Relaxed) {
                 while let Ok(line) = lines.try_recv() {
@@ -1155,6 +1156,19 @@ pub(crate) fn capture(
         std::thread::sleep(Duration::from_millis(20));
     }
     result.map(|()| String::from_utf8_lossy(&raw).into_owned())
+}
+
+/// Hebt den Lesefaden auf die hoechste Prioritaet, die das System einem Faden
+/// ohne Sonderrechte gibt (unter Windows `TIME_CRITICAL`). Die Leitung wird in
+/// Echtzeit gelesen: Kam der Leser unter Last des Rechners zu spaet, lief der
+/// Puffer des Treibers voll, er sandte XOFF, und das Board verwarf Trace
+/// (FB-530). Der Faden wartet fast immer in `read` und nimmt niemandem Zeit.
+/// Verweigert das System die Prioritaet, liest er mit der ueblichen und sagt es.
+fn raise_reader() {
+    use thread_priority::{ThreadPriority, ThreadPriorityValue, set_current_thread_priority};
+    if let Err(e) = set_current_thread_priority(ThreadPriority::Crossplatform(ThreadPriorityValue::MAX)) {
+        eprintln!("Lesefaden der Leitung ohne erhoehte Prioritaet: {e:?}");
+    }
 }
 
 /// Verwirft, was der Leser bringt, bis eine Lesefrist lang nichts kommt —

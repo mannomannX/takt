@@ -49,6 +49,19 @@ const BAUD: u32 = 115_200;
 /// Frist fuer einen `probe-rs`-Aufruf.
 const PROBE_RS: Duration = Duration::from_secs(90);
 
+/// Der JTAG-Teil des C6 (USB-Serial-JTAG von Espressif). `probe-rs` waehlt
+/// ihn ausdruecklich: Steckt eine zweite Probe am Host, etwa ein ST-Link,
+/// fragte es sonst nach, und ohne Terminal scheitert die Frage.
+const PROBE: &str = "303a:1001";
+
+/// `probe-rs` mit der Probe des C6 hinter dem Unterbefehl.
+fn run_probe_rs(args: &[&str]) -> Result<String, Failure> {
+    let mut all: Vec<&str> = args.iter().take(1).copied().collect();
+    all.extend(["--probe", PROBE]);
+    all.extend(args.iter().skip(1));
+    run_bounded("probe-rs", &all, PROBE_RS)
+}
+
 /// Frist fuer den Trace nach dem Start.
 const TRACE: Duration = Duration::from_secs(30);
 
@@ -223,7 +236,7 @@ impl Esp32c6 {
     /// Chip-Reset ueber die Konsole und versucht es einmal neu.
     pub fn probe_rs(&self, args: &[&str]) -> Result<String, String> {
         self.port()?;
-        match run_bounded("probe-rs", args, PROBE_RS) {
+        match run_probe_rs(args) {
             Err(Failure::Timeout) => self.recover(args, "probe-rs kehrt nicht zurueck".to_string()),
             Err(Failure::Status(e)) if e.contains("DMI") => self.recover(args, e),
             r => r.map_err(|e| e.to_string()),
@@ -233,13 +246,13 @@ impl Esp32c6 {
     /// `probe-rs` ohne Genesung, fuer den Test der Genesung selbst.
     pub fn probe_rs_plain(&self, args: &[&str]) -> Result<String, String> {
         self.port()?;
-        run_bounded("probe-rs", args, PROBE_RS).map_err(|e| format!("probe-rs: {e}"))
+        run_probe_rs(args).map_err(|e| format!("probe-rs: {e}"))
     }
 
     fn recover(&self, args: &[&str], why: String) -> Result<String, String> {
         eprintln!("JTAG antwortet nicht ({}); Chip-Reset ueber die Konsole", why.lines().next().unwrap_or(""));
         self.reenumerate_via_console()?;
-        run_bounded("probe-rs", args, PROBE_RS).map_err(|e| format!("probe-rs nach dem Chip-Reset: {e}"))
+        run_probe_rs(args).map_err(|e| format!("probe-rs nach dem Chip-Reset: {e}"))
     }
 
     /// Laesst das Board sein USB-Geraet neu anmelden und wartet den Port ab.
