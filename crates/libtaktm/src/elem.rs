@@ -25,8 +25,9 @@
 //! sonst weit darunter.
 
 use core::cmp::Ordering;
+use core::num::{NonZeroU64, NonZeroU128};
 
-use crate::big::{Big, Class, Const, Format, MAX, classify};
+use crate::big::{Big, Class, Const, Format, MAX, classify, mul_add, word_at};
 use crate::table::{ATAN64, COS64, INV_FACT, INV_LN2, INV_ODD, LN2, LOG128, PI, SIN64, TWO_OVER_PI};
 
 /// Reihenlaengen je Wortzahl.
@@ -54,19 +55,31 @@ fn konst<const N: usize>(c: &Const) -> Big<N> {
     Big::from_const(c)
 }
 
-/// Eine Konstante mit wechselndem Vorzeichen fuer alternierende Reihen.
-fn signed<const N: usize>(c: &Const, neg: bool) -> Big<N> {
-    let b = Big::from_const(c);
-    if neg { b.neg() } else { b }
+/// Eintrag `k` einer Tabelle von Konstanten; jenseits der Tabelle null.
+fn entry<const N: usize>(table: &[Const], k: usize) -> Big<N> {
+    table.get(k).map_or(Big::ZERO, konst)
+}
+
+/// Eintrag `k` mit dem Vorzeichen des Glieds `i` einer alternierenden Reihe,
+/// das erste positiv.
+fn signed<const N: usize>(table: &[Const], k: usize, i: usize) -> Big<N> {
+    let b = entry(table, k);
+    if i % 2 == 1 { b.neg() } else { b }
 }
 
 /// Σ c(i) · w^i fuer i < len, nach Horner.
 fn horner<const N: usize>(w: &Big<N>, len: usize, c: impl Fn(usize) -> Big<N>) -> Big<N> {
-    let mut p = c(len - 1);
-    for i in (0..len - 1).rev() {
+    let top = len.saturating_sub(1);
+    let mut p = c(top);
+    for i in (0..top).rev() {
         p = p.mul(w).add(&c(i));
     }
     p
+}
+
+/// Die Bits in `n` Woertern.
+fn word_bits(n: usize) -> i32 {
+    i32::try_from(n).map_or(i32::MAX, |w| w.saturating_mul(64))
 }
 
 fn pi<const N: usize>() -> Big<N> {
@@ -81,14 +94,14 @@ fn pi<const N: usize>() -> Big<N> {
 /// achtmal quadriert. Der Fehler von k ln 2 ist absolut 2^(11 - 64 N), das
 /// Quadrieren verstaerkt den der Reihe um 2^8.
 fn exp_big<const N: usize>(x: &Big<N>) -> Big<N> {
-    let k = x.mul(&konst(&INV_LN2)).round_i64();
-    let r = x.sub(&konst::<N>(&LN2).mul(&Big::from_i64(k)));
+    let k = x.mul(&konst(&INV_LN2)).round_i32();
+    let r = x.sub(&konst::<N>(&LN2).mul(&Big::from_i64(i64::from(k))));
     let s = r.mul_pow2(-8);
-    let mut p = horner(&s, terms(N).exp + 1, |i| konst(&INV_FACT[i]));
+    let mut p = horner(&s, terms(N).exp.saturating_add(1), |i| entry(&INV_FACT, i));
     for _ in 0..8 {
         p = p.square();
     }
-    p.mul_pow2(k as i32)
+    p.mul_pow2(k)
 }
 
 pub(crate) fn exp<const N: usize>(bits: u64, f: Format) -> u64 {
@@ -120,17 +133,21 @@ pub(crate) fn exp<const N: usize>(bits: u64, f: Format) -> u64 {
 /// einen Faktor 2,4 aus, und fuer x nahe 1 ist e = j = 0.
 fn log_big<const N: usize>(mant: u64, exp: i32) -> Big<N> {
     let x = Big::<N>::from_parts(false, u128::from(mant), exp);
-    let top = x.m[N - 1];
-    let (e, m) = if top >= 3 << 62 { (x.exp, Big { exp: 0, ..x }) } else { (x.exp - 1, Big { exp: 1, ..x }) };
+    let Some(top) = NonZeroU64::new(x.top()) else { return Big::ZERO };
+    let (e, m) = if top.get() >= 3 << 62 {
+        (x.exp, Big { exp: 0, ..x })
+    } else {
+        (x.exp.saturating_sub(1), Big { exp: 1, ..x })
+    };
     // 128/m · 2^8 aus dem obersten Wort, j = round(128/m) - 128 in [-43, 43].
-    let q = (1u128 << (79 - m.exp)) / u128::from(top);
-    let j = (((q + 128) >> 8) as i64 - 128).clamp(-43, 43);
-    let c = Big::<N>::from_parts(false, (128 + j) as u128, -7);
+    let q = ((1u128 << 79) >> m.exp) / NonZeroU128::from(top);
+    let j = i64::try_from(q.saturating_add(128) >> 8).unwrap_or(i64::MAX).saturating_sub(128).clamp(-43, 43);
+    let c = Big::<N>::from_parts(false, u128::from(j.saturating_add(128).unsigned_abs()), -7);
     let u = m.mul(&c).sub(&Big::ONE);
     let t = u.div(&u.add(&Big::from_i64(2)));
-    let series = horner(&t.square(), terms(N).log, |i| konst(&INV_ODD[i]));
+    let series = horner(&t.square(), terms(N).log, |i| entry(&INV_ODD, i));
     let ln_z = t.mul(&series).mul_pow2(1);
-    let ln_c = konst::<N>(&LOG128[(j + 43) as usize]);
+    let ln_c = usize::try_from(j.saturating_add(43)).ok().and_then(|i| LOG128.get(i)).map_or(Big::ZERO, konst::<N>);
     let e_ln2 = konst::<N>(&LN2).mul(&Big::from_i64(i64::from(e)));
     e_ln2.sub(&ln_c).add(&ln_z)
 }
@@ -158,50 +175,58 @@ fn reduce<const N: usize>(mant: u64, exp: i32) -> (u32, Big<N>) {
     if x.cmp_abs(&pi::<N>().mul_pow2(-2)) == Ordering::Less {
         return (0, x);
     }
-    let len = N + 3;
-    let i0 = (exp - 2).div_euclid(64).max(0) as usize;
+    let len = N.saturating_add(3);
+    let i0 = usize::try_from(exp.saturating_sub(2).div_euclid(64)).unwrap_or(0);
+    // Die Woerter i0 bis i0 + len - 1 von 2/π, jenseits der Tabelle null; s
+    // ist mant mal sie, das niedrigste Wort zuerst.
+    let mut window = [0u64; MAX + 3];
+    for (slot, word) in window.iter_mut().zip(TWO_OVER_PI.iter().skip(i0)) {
+        *slot = *word;
+    }
     let mut s = [0u64; MAX + 4];
-    let mut carry = 0u128;
-    for (t, slot) in s.iter_mut().take(len).enumerate() {
-        let word = TWO_OVER_PI.get(i0 + len - 1 - t).copied().unwrap_or(0);
-        let v = u128::from(mant) * u128::from(word) + carry;
-        *slot = v as u64;
-        carry = v >> 64;
+    let mut carry = 0;
+    for (slot, word) in s.iter_mut().zip(window.iter().take(len).rev()) {
+        [*slot, carry] = mul_add(mant, *word, carry, 0);
     }
-    s[len] = carry as u64;
+    if let Some(slot) = s.get_mut(len) {
+        *slot = carry;
+    }
     // s · 2^-fbits ist x · 2/π ohne die Vielfachen von 4.
-    let fbits = (64 * (i0 + len) as i32 - exp) as u32;
-    let bit = |s: &[u64; MAX + 4], b: u32| (s[(b / 64) as usize] >> (b % 64)) & 1;
-    let mut k = (bit(&s, fbits) | (bit(&s, fbits + 1) << 1)) as u32;
-    let up = bit(&s, fbits - 1) == 1;
-    let (word, rest) = ((fbits / 64) as usize, fbits % 64);
+    let fbits = word_bits(i0.saturating_add(len)).saturating_sub(exp);
+    let bit = |b: i32| word_at(&s, b) & 1 == 1;
+    let mut k = u32::from(bit(fbits)) | (u32::from(bit(fbits.saturating_add(1))) << 1);
+    let up = bit(fbits.saturating_sub(1));
     // Nur der Nachkommateil bleibt.
-    for (i, w) in s.iter_mut().enumerate() {
-        if i > word || (i == word && rest == 0) {
-            *w = 0;
-        } else if i == word {
-            *w &= (1u64 << rest) - 1;
-        }
-    }
+    clear_from(&mut s, fbits);
     if up {
         // Zur naechsten ganzen Zahl: r = f - 1, der Betrag 2^fbits - s.
-        k = (k + 1) % 4;
+        k = k.wrapping_add(1) % 4;
         let mut borrow = true;
         for w in s.iter_mut() {
             let (v, b) = (!*w).overflowing_add(u64::from(borrow));
             *w = v;
             borrow = b;
         }
-        for (i, w) in s.iter_mut().enumerate() {
-            if i > word || (i == word && rest == 0) {
-                *w = 0;
-            } else if i == word {
-                *w &= (1u64 << rest) - 1;
-            }
-        }
+        clear_from(&mut s, fbits);
     }
-    let f = Big::<N>::from_words(up, &s[..=len], -(fbits as i32));
+    // Ab Bit fbits, also ueber Wort len, ist s null.
+    let f = Big::<N>::from_words(up, &s, fbits.saturating_neg());
     (k, f.mul(&pi()).mul_pow2(-1))
+}
+
+/// Loescht die Bits ab Bit `end` einer Ganzzahl aus Woertern, das
+/// niedrigste zuerst.
+fn clear_from(s: &mut [u64], end: i32) {
+    let mut start = 0i32;
+    for w in s.iter_mut() {
+        // Die Bits dieses Worts unter `end`: keins, einige oder alle.
+        *w = match end.saturating_sub(start) {
+            ..=0 => 0,
+            keep @ 1..=63 => *w & !(u64::MAX << keep),
+            _ => *w,
+        };
+        start = start.saturating_add(64);
+    }
 }
 
 /// sin r und cos r fuer |r| <= π/4.
@@ -211,17 +236,19 @@ fn reduce<const N: usize>(mant: u64, exp: i32) -> (u32, Big<N>) {
 /// doppelt so gross wie |cos(j/64) sin s|; die Summe loescht nicht aus.
 fn sin_cos<const N: usize>(r: &Big<N>) -> (Big<N>, Big<N>) {
     let a = r.abs();
-    let j = a.mul_pow2(6).round_i64().clamp(0, 50) as usize;
-    let s = a.sub(&Big::from_parts(false, j as u128, -6));
+    let j = a.mul_pow2(6).round_i32().clamp(0, 50);
+    let s = a.sub(&Big::from_parts(false, u128::from(j.unsigned_abs()), -6));
     let w = s.square();
     let t = terms(N);
-    let sin_s = s.mul(&horner(&w, t.sin, |i| signed(&INV_FACT[2 * i + 1], i % 2 == 1)));
-    let cos_s = horner(&w, t.cos, |i| signed(&INV_FACT[2 * i], i % 2 == 1));
-    let (sin_a, cos_a) = if j == 0 {
-        (sin_s, cos_s)
-    } else {
-        let (sj, cj) = (konst::<N>(&SIN64[j]), konst::<N>(&COS64[j]));
-        (sj.mul(&cos_s).add(&cj.mul(&sin_s)), cj.mul(&cos_s).sub(&sj.mul(&sin_s)))
+    let sin_s = s.mul(&horner(&w, t.sin, |i| signed(&INV_FACT, i.saturating_mul(2).saturating_add(1), i)));
+    let cos_s = horner(&w, t.cos, |i| signed(&INV_FACT, i.saturating_mul(2), i));
+    let table = usize::try_from(j).ok().filter(|i| *i != 0).and_then(|i| SIN64.get(i).zip(COS64.get(i)));
+    let (sin_a, cos_a) = match table {
+        None => (sin_s, cos_s),
+        Some((sj, cj)) => {
+            let (sj, cj) = (konst::<N>(sj), konst::<N>(cj));
+            (sj.mul(&cos_s).add(&cj.mul(&sin_s)), cj.mul(&cos_s).sub(&sj.mul(&sin_s)))
+        }
     };
     (if r.neg { sin_a.neg() } else { sin_a }, cos_a)
 }
@@ -283,15 +310,15 @@ fn trig_big<const N: usize>(fun: Trig, neg: bool, mant: u64, exp: i32) -> Big<N>
 /// |u| <= 1/128; fuer j >= 1 ist atan(j/64) mindestens doppelt so gross wie
 /// |atan u|.
 fn atan_unit<const N: usize>(t: &Big<N>) -> Big<N> {
-    let j = t.mul_pow2(6).round_i64().clamp(0, 64) as usize;
-    let u = if j == 0 {
-        *t
-    } else {
-        let c = Big::<N>::from_parts(false, j as u128, -6);
-        t.sub(&c).div(&Big::ONE.add(&t.mul(&c)))
-    };
-    let series = u.mul(&horner(&u.square(), terms(N).atan, |i| signed(&INV_ODD[i], i % 2 == 1)));
-    if j == 0 { series } else { konst::<N>(&ATAN64[j]).add(&series) }
+    let j = t.mul_pow2(6).round_i32().clamp(0, 64);
+    let series = |u: &Big<N>| u.mul(&horner(&u.square(), terms(N).atan, |i| signed(&INV_ODD, i, i)));
+    match usize::try_from(j).ok().filter(|i| *i != 0).and_then(|i| ATAN64.get(i)) {
+        None => series(t),
+        Some(atan_j) => {
+            let c = Big::<N>::from_parts(false, u128::from(j.unsigned_abs()), -6);
+            konst::<N>(atan_j).add(&series(&t.sub(&c).div(&Big::ONE.add(&t.mul(&c)))))
+        }
+    }
 }
 
 /// Der Winkel von (ax, ay) fuer positive Betraege, in [0, π/2].
@@ -458,24 +485,26 @@ fn parity(c: Class) -> Parity {
 fn pow_exact<const N: usize>(xm: u64, xe: i32, yneg: bool, ym: u64, ye: i32) -> Option<Big<N>> {
     if xm == 1 {
         // |x| = 2^xe: das Ergebnis 2^(xe · y), wenn der Exponent ganz ist.
-        let n = i128::from(xe) * i128::from(ym) * if yneg { -1 } else { 1 };
+        // |xe · ym| liegt unter 2^64, kein Schritt laeuft ueber.
+        let n = i128::from(xe).checked_mul(i128::from(ym))?;
+        let n = if yneg { n.checked_neg()? } else { n };
         let e = if ye >= 0 {
             if ye > 12 {
                 return None;
             }
             n << ye
         } else {
-            let k = (-ye) as u32;
-            if k >= 64 || n % (1i128 << k) != 0 {
+            let k = ye.unsigned_abs();
+            if k >= 64 || n.checked_rem(1i128 << k) != Some(0) {
                 return None;
             }
             n >> k
         };
         // Jenseits davon Ueberlauf oder null, das rechnet die Naeherung.
-        if e.abs() > 4096 {
+        if e.unsigned_abs() > 4096 {
             return None;
         }
-        return Some(Big::from_parts(false, 1, e as i32));
+        return Some(Big::from_parts(false, 1, i32::try_from(e).ok()?));
     }
     if yneg {
         return None;
@@ -486,7 +515,7 @@ fn pow_exact<const N: usize>(xm: u64, xe: i32, yneg: bool, ym: u64, ye: i32) -> 
         }
         (ym << ye, 0u32)
     } else {
-        (ym, (-ye) as u32)
+        (ym, ye.unsigned_abs())
     };
     if k > 5 || n > 128 {
         return None;
@@ -494,13 +523,13 @@ fn pow_exact<const N: usize>(xm: u64, xe: i32, yneg: bool, ym: u64, ye: i32) -> 
     let mut z = xm;
     for _ in 0..k {
         let r = z.isqrt();
-        if r * r != z {
+        if r.checked_mul(r) != Some(z) {
             return None;
         }
         z = r;
     }
-    let scaled = i64::from(xe) * n as i64;
-    if scaled % (1 << k) != 0 {
+    let scaled = i64::from(xe).checked_mul(i64::try_from(n).ok()?)?;
+    if scaled.checked_rem(1 << k) != Some(0) {
         return None;
     }
     // z^n durch Quadrieren, mit Pruefung auf 128 Bit.
@@ -514,7 +543,7 @@ fn pow_exact<const N: usize>(xm: u64, xe: i32, yneg: bool, ym: u64, ye: i32) -> 
             base = base.checked_mul(base)?;
         }
     }
-    Some(Big::from_parts(false, p, (scaled >> k) as i32))
+    Some(Big::from_parts(false, p, i32::try_from(scaled >> k).ok()?))
 }
 
 /// pow nach IEEE 754-2019 9.2.1: pow(x, ±0) = 1 und pow(+1, y) = 1 auch fuer
@@ -536,10 +565,11 @@ pub(crate) fn pow<const N: usize>(x_bits: u64, y_bits: u64, f: Format) -> u64 {
                 Class::Inf { .. } => Ordering::Greater,
                 Class::Zero { .. } => Ordering::Less,
                 Class::Finite { mant, exp, .. } => {
-                    let b = 64 - mant.leading_zeros() as i32;
+                    // Der Exponent der hoechsten Stelle plus eins.
+                    let lead = exp.saturating_add_unsigned(u64::BITS.saturating_sub(mant.leading_zeros()));
                     if mant == 1 && exp == 0 {
                         Ordering::Equal
-                    } else if b + exp <= 0 {
+                    } else if lead <= 0 {
                         Ordering::Less
                     } else {
                         Ordering::Greater

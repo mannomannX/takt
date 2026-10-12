@@ -37,10 +37,11 @@
 //! # Keine Panics
 //!
 //! 13.8 verlangt Panic-Freiheit unter Fuzzing. Keine Funktion dieses
-//! Crates allokiert oder rechnet mit `unwrap`; indiziert wird nur in Felder
-//! fester Laenge mit Grenzen aus der Konstruktion, und Tabellenindizes sind
-//! auf ihren Bereich geklemmt. Jede Funktion nimmt jedes Bitmuster entgegen,
-//! einschliesslich NaN und Unendlich. Die
+//! Crates allokiert oder rechnet mit `unwrap`; die Lints der Stufe 2
+//! schliessen Indizierung, `as` und Ganzzahlarithmetik aus, die ueberlaufen
+//! koennte, und Tabellenindizes sind auf ihren Bereich geklemmt. Jede
+//! Funktion nimmt jedes Bitmuster entgegen, einschliesslich NaN und
+//! Unendlich. Die
 //! Frage, ob ein Ergebnis endlich sein *muss*, beantwortet der Aufrufer
 //! (4.1: `ArithmeticFault(NonFinite)`), nicht die Bibliothek.
 
@@ -49,6 +50,20 @@
 // (plan/m4.md 2.3c). Mit dem Feature (Standard) nutzt es die
 // Hardwarebefehle, die 4.2 verlangt.
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::expect_used,
+        clippy::arithmetic_side_effects,
+        clippy::indexing_slicing,
+        clippy::as_conversions,
+        clippy::fn_to_numeric_cast_any,
+        clippy::shadow_unrelated,
+        clippy::else_if_without_else,
+        unreachable_pub,
+        reason = "Stufe 2 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
 
 mod big;
 mod elem;
@@ -58,7 +73,7 @@ pub mod mat;
 mod scale;
 mod table;
 
-use big::{F32, F64};
+use big::{F32, F64, to_f32};
 #[cfg(feature = "std")]
 pub use exact::{
     ceil_f32, ceil_f64, floor_f32, floor_f64, fma_f32, fma_f64, round_f32, round_f64, sqrt_f32, sqrt_f64, trunc_f32,
@@ -211,7 +226,7 @@ macro_rules! unary {
 
         $(#[$doc])*
         pub fn $f32(x: f32) -> f32 {
-            f32::from_bits(elem::$imp::<2>(u64::from(x.to_bits()), F32) as u32)
+            to_f32(elem::$imp::<2>(u64::from(x.to_bits()), F32))
         }
     };
 }
@@ -258,7 +273,7 @@ pub fn atan2_f64(y: f64, x: f64) -> f64 {
 /// Der Winkel von (x, y), korrekt gerundet; Nullen und Unendlichkeiten nach
 /// IEEE 754-2019 9.2.1.
 pub fn atan2_f32(y: f32, x: f32) -> f32 {
-    f32::from_bits(elem::atan2::<2>(u64::from(y.to_bits()), u64::from(x.to_bits()), F32) as u32)
+    to_f32(elem::atan2::<2>(u64::from(y.to_bits()), u64::from(x.to_bits()), F32))
 }
 
 /// x^y, korrekt gerundet, auch dort, wo das Ergebnis genau zwischen zwei
@@ -270,5 +285,5 @@ pub fn pow_f64(x: f64, y: f64) -> f64 {
 /// x^y, korrekt gerundet, auch dort, wo das Ergebnis genau zwischen zwei
 /// Gleitkommazahlen liegt; Sonderfaelle nach IEEE 754-2019 9.2.1.
 pub fn pow_f32(x: f32, y: f32) -> f32 {
-    f32::from_bits(elem::pow::<2>(u64::from(x.to_bits()), u64::from(y.to_bits()), F32) as u32)
+    to_f32(elem::pow::<2>(u64::from(x.to_bits()), u64::from(y.to_bits()), F32))
 }

@@ -162,7 +162,6 @@ fn catalog_lints() -> BTreeSet<String> {
 /// in Arbeit). Die Liste schrumpft nur: Wer den Kopf bekommt, faellt
 /// heraus, sonst scheitert der Test.
 const PENDING: &[&str] = &[
-    "libtaktm",
     "takt-board-esp32c6",
     "takt-board-stm32f401",
     "takt-bringup-esp32c6",
