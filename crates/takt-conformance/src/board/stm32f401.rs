@@ -1,10 +1,16 @@
 //! Board 1, STM32F401 (WeAct Black Pill V1.2), vom Host aus (plan/f401.md).
 //!
 //! Geschrieben wird ueber den DFU-Bootloader im ROM, und die Hand braucht
-//! es dafuer nicht: `TAKT` auf der Trace-Leitung laesst die laufende
-//! Anwendung in den Bootloader springen (FB-275), [`super::dfuse`] schreibt
-//! das Abbild nach Sektor 4, liest es zurueck und startet es. Der Trace
-//! kommt ueber USART1 an den Adapter.
+//! es dafuer nicht: Auf `TAKT` auf der Trace-Leitung merkt sich die laufende
+//! Anwendung den Wunsch und setzt den Chip zurueck, und das Sprungbrett gibt
+//! das Board an den Bootloader (FB-275); [`super::dfuse`] schreibt das
+//! Abbild nach Sektor 4, liest es zurueck und startet es. Der Trace kommt
+//! ueber USART1 an den Adapter.
+//!
+//! **Zwei Wirte, ein Board.** Das Bring-up in Rust ([`Stm32f401`]) und der
+//! C-Wirt ([`Stm32f401C`], [`C_HOST`], M11 Schritt 18b) teilen Flash,
+//! Sprungbrett, Leitung und Rueckweg; verschieden ist nur, wie das Abbild
+//! entsteht.
 //!
 //! **Das Flash** (FB-385): Sektor 0 haelt der HID-Bootloader von WeAct und
 //! wird nie geschrieben. Er springt nach Sektor 1, ins Sprungbrett
@@ -28,6 +34,7 @@ use std::time::{Duration, Instant};
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
+use super::c_host::{Binding, CHost};
 use super::dfuse::Dfuse;
 use super::{Board, Bringup, Builder, ConsoleLine, Form, Options, attached, capture, missed, publish_checked};
 
@@ -48,6 +55,25 @@ pub(super) const BRINGUP: Bringup = Bringup {
         "../takt-trampoline-stm32f401/memory.x",
     ],
     env: &[],
+};
+
+/// Der C-Wirt der Black Pill (12.11, M11 Schritt 18b): Start, Takt, Leitung
+/// und Journal in `examples/boards/stm32f401`, in der Interruptform mit dem
+/// Port `ports/irq` und seinem Adapter fuer STM32F4 (TIM2, PendSV).
+pub const C_HOST: CHost = CHost {
+    dir: "examples/boards/stm32f401",
+    triple: "thumbv7em-none-eabihf",
+    target: "thumbv7em",
+    hardware: "corpus-try/hw/stm32f401.hw",
+    cflags: &["-mcpu=cortex-m4", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-mthumb"],
+    board: &["startup.c", "board.c"],
+    script: "stm32f401.ld",
+    bindings: &[Binding {
+        form: Form::Interrupt,
+        main: "irq.c",
+        sources: &["crates/takt-embed-c/ports/irq/takt_irq.c", "crates/takt-embed-c/ports/irq/stm32f4/takt_irq_chip.c"],
+        include: &["crates/takt-embed-c/ports/irq"],
+    }],
 };
 
 /// Das Sprungbrett im Stand des Bring-ups.
@@ -240,6 +266,44 @@ impl Board for Stm32f401 {
     /// darueber Funk-ISR und Treiber-Aufgabe.
     fn forms(&self) -> &'static [Form] {
         &[Form::Own, Form::Interrupt, Form::Poll, Form::Rtos, Form::Embassy]
+    }
+}
+
+/// Board 1 mit dem C-Wirt ([`C_HOST`]): geschrieben, gestartet und gelesen
+/// wie das Bring-up in Rust ([`Stm32f401`]), gebaut als C-Projekt.
+#[derive(Clone, Debug)]
+pub struct Stm32f401C {
+    board: Stm32f401,
+}
+
+impl Stm32f401C {
+    /// Das Board `board` mit dem C-Wirt.
+    pub fn on(board: Stm32f401) -> Stm32f401C {
+        Stm32f401C { board }
+    }
+}
+
+impl Board for Stm32f401C {
+    fn name(&self) -> &'static str {
+        "stm32f401-c"
+    }
+
+    fn target(&self) -> &'static str {
+        "thumbv7em"
+    }
+
+    /// Ein C-Wirt baut ohne Cargo in ein Verzeichnis je Prozess: Jeder
+    /// Bauplatz baut gleich.
+    fn builder(&self, _slot: usize) -> Builder {
+        Box::new(|program, options| C_HOST.build(program, options))
+    }
+
+    fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
+        self.board.run(elf, options)
+    }
+
+    fn forms(&self) -> &'static [Form] {
+        &[Form::Interrupt]
     }
 }
 

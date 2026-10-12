@@ -13,8 +13,12 @@
 //! Backup-Register 4 und setzt den Chip zurueck. Nach dem Reset laeuft
 //! zuerst der HID-Bootloader von WeAct, der Takte und USB fuer sich
 //! einrichtet; das Backup-Register laesst er stehen, RAM haette keinen
-//! sicheren Platz. Der Start fragt den Wunsch als Erstes ab
-//! ([`enter_if_requested`], aus [`crate::init`]) und springt. Der Sprung
+//! sicheren Platz. Danach springt er ins Sprungbrett in Sektor 1
+//! (`takt-trampoline-stm32f401`), und das fragt den Wunsch als Erstes ab
+//! ([`enter_if_requested`]) und springt. So gibt jede Anwendung das Board
+//! auf demselben Weg zurueck, ob in Rust oder in C
+//! (`examples/boards/stm32f401`): Sie schreibt den Wunsch und setzt den Chip
+//! zurueck, den Rest tut das Sprungbrett. Der Sprung
 //! raeumt auf, was der HID-Bootloader hinterliess, wie ST es fuer den
 //! Sprung aus Anwendungscode beschreibt — Interrupts und SysTick aus, der
 //! Takt zurueck auf HSI, PLL und HSE aus —, und setzt jede Peripherie ueber
@@ -40,17 +44,24 @@ pub fn request() -> ! {
     SCB::sys_reset()
 }
 
-/// Gibt das Board an den Bootloader, wenn der vorige Lauf es verlangt
-/// hat; sonst kehrt sie zurueck. Als Erstes beim Start zu rufen.
+/// Gibt das Board an den Bootloader, wenn die Anwendung davor es verlangt
+/// hat; sonst kehrt sie zurueck und laesst den Takt von PWR, wie sie ihn
+/// fand. Das Sprungbrett ruft sie als Erstes.
 ///
 /// Die Reset-Ursache dieses Starts gilt dem Wunsch, nicht dem Programm,
 /// das danach kommt: Sie wird geloescht, und das naechste Programm beginnt
 /// wie nach dem Einschalten (12.7).
 pub fn enter_if_requested() {
+    // SAFETY: die Register des RCC; vor der Anwendung fasst sie niemand an.
+    let rcc = unsafe { &*RCC::ptr() };
+    let clocked = rcc.apb1enr().read().pwren().bit_is_set();
     if backup_read(WISH) == REQUESTED {
         backup(WISH, 0);
         crate::platform::previous_run();
         enter();
+    }
+    if !clocked {
+        rcc.apb1enr().modify(|_, w| w.pwren().clear_bit());
     }
 }
 

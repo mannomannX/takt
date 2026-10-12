@@ -352,6 +352,44 @@ pub unsafe extern "C" fn takt_line_init(line_ops: *const LineOps, ring: *mut u8,
     status::OK
 }
 
+/// Macht die gebundene Leitung verlustfrei (13.8): Ist der Ring voll, wartet
+/// der Schreibende, bis die Leitung ihn geleert hat, statt zu verwerfen —
+/// hoechstens [`takt_rt_baremetal::DRAIN_ROUNDS`] Anlaeufe lang. Nur fuer
+/// Laeufe in logischer Zeit, wie die Bring-ups sie fahren: Im Betrieb
+/// verbietet 12.2 das Warten. [`status::LINE`], wenn keine Leitung gebunden
+/// ist.
+///
+/// # Safety
+///
+/// Kein Schritt laeuft.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_line_lossless() -> i32 {
+    // SAFETY: siehe `Shared`; kein Schritt laeuft.
+    let slot = unsafe { &mut *LINE.0.get() };
+    match slot.take() {
+        Some(t) => {
+            *slot = Some(t.lossless());
+            status::OK
+        }
+        None => status::LINE,
+    }
+}
+
+/// Gibt an die Leitung, was der Ring haelt und sie ohne Warten nimmt: fuer
+/// Zeilen des Wirts, waehrend kein Schritt laeuft, etwa eine Meldung, dass
+/// der Kern nicht annahm. Waehrend des Laufs gibt der Kern den Ring nach
+/// jedem Tick ab.
+///
+/// # Safety
+///
+/// Kein Schritt laeuft.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_line_flush() {
+    if let Some(t) = line() {
+        t.flush();
+    }
+}
+
 /// Schreibt die Marke `takt trace`, ab der die Bilanz zaehlt, was gesendet
 /// wurde (FB-304); davor darf der Wirt einen Kopf schreiben.
 ///
@@ -1291,7 +1329,7 @@ mod core_abi {
     use super::{
         ABI, Core, LineOps, NvmOps, Ops, TunablesOps, WatchdogOps, nvm, status, takt_board_trace, takt_core_finish,
         takt_core_init, takt_core_init_journaled, takt_core_job_work, takt_core_report, takt_core_service,
-        takt_core_service_with, takt_core_wake, takt_line_init,
+        takt_core_service_with, takt_core_wake, takt_line_flush, takt_line_init, takt_line_lossless,
     };
 
     const TICK_NS: i64 = 1_000_000;
@@ -1530,6 +1568,73 @@ mod core_abi {
         1
     }
 
+    /// Eine langsame Leitung: Sie nimmt nur jedes vierte angebotene Byte.
+    struct Slow {
+        bytes: Vec<u8>,
+        offered: u32,
+    }
+
+    unsafe extern "C" fn slow(ctx: *mut c_void, byte: u8) -> u8 {
+        // SAFETY: die Leitung des Tests; nur sie schreibt in ihn.
+        let s = unsafe { &mut *ctx.cast::<Slow>() };
+        s.offered += 1;
+        if s.offered % 4 != 0 {
+            return 0;
+        }
+        s.bytes.push(byte);
+        1
+    }
+
+    /// Eine gebundene Leitung des Tests mit ihrem Ring.
+    struct Bound {
+        line: *mut Slow,
+        ring: *mut [u8],
+    }
+
+    impl Bound {
+        /// Gibt Leitung und Ring frei.
+        ///
+        /// # Safety
+        ///
+        /// Eine andere Leitung ist gebunden; diese benutzt niemand mehr.
+        unsafe fn release(self) {
+            // SAFETY: siehe oben; beide kamen aus `Box::into_raw`.
+            drop(unsafe { Box::from_raw(self.line) });
+            // SAFETY: ebenso.
+            drop(unsafe { Box::from_raw(self.ring) });
+        }
+    }
+
+    /// Bindet eine langsame Leitung mit einem Ring von vier Byte, auf Wunsch
+    /// verlustfrei, schreibt 16 Byte und gibt den Ring ab, bis er leer ist
+    /// ([`takt_line_flush`]); liefert, was ankam, und die Leitung, die
+    /// gebunden bleibt, bis eine andere sie abloest.
+    ///
+    /// # Safety
+    ///
+    /// Kein Kern laeuft; die Leitung des Prozesses ist danach diese.
+    unsafe fn through_a_slow_line(lossless: bool) -> (Vec<u8>, Bound) {
+        let line: *mut Slow = Box::into_raw(Box::new(Slow { bytes: Vec::new(), offered: 0 }));
+        let ring: *mut [u8] = Box::into_raw(std::vec![0u8; 4].into_boxed_slice());
+        let ops = LineOps { ctx: line.cast(), try_write: slow, flush: None };
+        // SAFETY: Tabelle und Ring gelten, bis eine andere Leitung gebunden ist; kein Schritt laeuft.
+        assert_eq!(unsafe { takt_line_init(&ops, ring.cast(), 4) }, status::OK);
+        if lossless {
+            // SAFETY: wie oben.
+            assert_eq!(unsafe { takt_line_lossless() }, status::OK);
+        }
+        // SAFETY: wie oben; der Text ist nullterminiert.
+        unsafe { takt_board_trace(c"0123456789abcdef".as_ptr()) };
+        // Ein Abgeben nimmt hoechstens ein Byte: Die Leitung lehnt danach ab.
+        for _ in 0..64 {
+            // SAFETY: wie oben.
+            unsafe { takt_line_flush() };
+        }
+        // SAFETY: Die Leitung schreibt nicht mehr; ihr Puffer gehoert wieder dem Test.
+        let bytes = unsafe { (*line).bytes.clone() };
+        (bytes, Bound { line, ring })
+    }
+
     /// Faehrt `core` wie ein C-Wirt in logischer Zeit ueber [`TICKS`] Ticks:
     /// die Uhr zu jeder Frist, jeder Job zu Ende vor dem naechsten Schritt.
     ///
@@ -1623,6 +1728,21 @@ mod core_abi {
         let unbound =
             unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0, &watchdog) };
         assert_eq!(unbound, status::LINE, "ohne Leitung");
+        // SAFETY: Kein Schritt laeuft.
+        assert_eq!(unsafe { takt_line_lossless() }, status::LINE, "verlustfrei ohne Leitung");
+
+        // Eine Leitung, die langsamer nimmt, als geschrieben wird: Im Betrieb
+        // verwirft der volle Ring (12.2), verlustfrei wartet der Schreibende
+        // (13.8), und alles kommt in seiner Reihenfolge an. Jede Leitung geht,
+        // sobald die naechste gebunden ist.
+        // SAFETY: Kein Kern laeuft.
+        let (dropping, first) = unsafe { through_a_slow_line(false) };
+        // SAFETY: wie oben.
+        let (lossless, second) = unsafe { through_a_slow_line(true) };
+        // SAFETY: Die zweite Leitung loeste die erste ab.
+        unsafe { first.release() };
+        assert!(dropping.len() < 16, "ohne Warten verwirft ein voller Ring: {dropping:?}");
+        assert_eq!(lossless, b"0123456789abcdef");
 
         // Leitung und Ring leben so lange wie der Prozess, wie in einem C-Wirt.
         let sink: *mut Vec<u8> = Box::into_raw(Box::default());
@@ -1631,6 +1751,8 @@ mod core_abi {
         let len = u32::try_from(ring.len()).expect("Ring");
         // SAFETY: Tabelle und Ring gelten so lange wie der Prozess; kein Schritt laeuft.
         assert_eq!(unsafe { takt_line_init(&line, ring.as_mut_ptr(), len) }, status::OK);
+        // SAFETY: Diese Leitung loeste die zweite langsame ab.
+        unsafe { second.release() };
 
         // SAFETY: wie oben, ohne Watchdog.
         let blind =

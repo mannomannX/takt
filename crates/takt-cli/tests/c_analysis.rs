@@ -1,7 +1,9 @@
 //! Der C-Teil nach CERT C und MISRA C (plan/cert.md Abschnitt 6, „Der
 //! C-Teil“; M11 Schritt 33b, FB-524): `clang-tidy` und `cppcheck` mit dem
 //! MISRA-Addon ueber den Rahmen, den `takt build --emit embed` fuer einige
-//! Programme schreibt, den Kopf des SDK, den POSIX-Port und die Beispiele.
+//! Programme schreibt, den Kopf des SDK, die Ports und die Beispiele: auf dem
+//! Wirt, und fuer `thumbv7em` der C-Wirt der Black Pill mit dem Port der
+//! Interruptform.
 //!
 //! **Der Katalog ist die Quelle.** Wie die Werkzeuge gerufen werden und
 //! welche Befunde als Abweichung stehen, liest dieser Test aus
@@ -166,6 +168,19 @@ struct Finding {
 struct Link {
     units: Vec<PathBuf>,
     include: Vec<PathBuf>,
+    /// Was der Bau des Wirts setzt; beide Werkzeuge pruefen mit diesen Werten.
+    defines: Vec<String>,
+    /// Das Ziel fuer clang-tidy; leer heisst der Wirt.
+    target: Vec<String>,
+    /// Die Plattform fuer cppcheck: Breite von Zeigern und Ganzzahlen.
+    platform: &'static str,
+}
+
+impl Link {
+    /// Eine Bindung auf dem Wirt.
+    fn host(units: Vec<PathBuf>, include: Vec<PathBuf>) -> Link {
+        Link { units, include, defines: Vec::new(), target: Vec::new(), platform: "unix64" }
+    }
 }
 
 /// Der Teil des C-Teils, dem eine Datei gehoert; `out` ist das Verzeichnis
@@ -205,6 +220,8 @@ fn run_tidy(tool: &Path, args: &[String], link: &Link, out: &Path) -> Vec<Findin
             .args(["--quiet", "--header-filter=.*"])
             .arg(unit)
             .args(["--", "-std=c11"])
+            .args(&link.target)
+            .args(&link.defines)
             .args(includes(link))
             .output()
             .expect("clang-tidy startet");
@@ -236,9 +253,11 @@ fn run_cppcheck(tool: &Path, args: &[String], link: &Link, out: &Path, report: &
         .collect();
     let run = Command::new(tool)
         .args(&args)
-        .args(["--std=c11", "--language=c", "--platform=unix64", "--quiet"])
+        .args(["--std=c11", "--language=c", "--quiet"])
+        .arg(format!("--platform={}", link.platform))
         .arg("--template={file}:{line}:{column}: {severity}: {id}: {message}")
         .arg(format!("--output-file={}", report.display()))
+        .args(&link.defines)
         .args(includes(link))
         .args(&link.units)
         .output()
@@ -307,42 +326,79 @@ fn judge(found: &BTreeSet<Finding>, catalog: &Catalog) -> Result<(), String> {
 
 // --- Die Lieferformen -------------------------------------------------------
 
-/// Die Programme, deren Rahmen geprueft wird: Praefix, Quelle, Schalter.
-/// `valve` und `port_test` sind die der Beispiele; `streams` bringt die
-/// Stroeme, Records und Treiber des Randes dazu.
-const PROGRAMS: &[(&str, &str, &[&str])] = &[
-    ("valve", "examples/c-host/takt/valve.takt", &["--form", "logical"]),
-    ("port_test", "corpus-try/124_port_test.takt", &["--form", "rtos", "--hardware", "corpus-try/hw/linux-x86_64.hw"]),
-    ("streams", "corpus-try/05_streams_and_protocol.takt", &["--form", "logical"]),
+/// Die Programme, deren Rahmen geprueft wird: Praefix, Quelle, Tripel,
+/// Schalter. `valve` und `port_test` sind die der Beispiele auf dem Wirt;
+/// `streams` bringt die Stroeme, Records und Treiber des Randes dazu; `app`
+/// ist das Pruefprogramm im C-Wirt der Black Pill (M11 Schritt 18b).
+const PROGRAMS: &[(&str, &str, &str, &[&str])] = &[
+    ("valve", "examples/c-host/takt/valve.takt", "x86_64-unknown-linux-gnu", &["--form", "logical"]),
+    (
+        "port_test",
+        "corpus-try/124_port_test.takt",
+        "x86_64-unknown-linux-gnu",
+        &["--form", "rtos", "--hardware", "corpus-try/hw/linux-x86_64.hw"],
+    ),
+    ("streams", "corpus-try/05_streams_and_protocol.takt", "x86_64-unknown-linux-gnu", &["--form", "logical"]),
+    (
+        "app",
+        "corpus-try/124_port_test.takt",
+        "thumbv7em-none-eabihf",
+        &["--form", "interrupt", "--hardware", "corpus-try/hw/stm32f401.hw"],
+    ),
 ];
+
+/// Was der Bau des C-Wirts der Black Pill setzt (`takt_conformance::board::c_host`):
+/// ein Lauf in logischer Zeit mit leerem Journal, der jeden Zweig des Wirts nimmt.
+const F401_DEFINES: &[&str] =
+    &["-DTAKT_TICKS=2000u", "-DTAKT_LOGICAL=1", "-DTAKT_FRESH_JOURNAL=1", "-DTAKT_TICK_STACK_PROGRAM=0u"];
+
+/// Das Ziel des C-Wirts der Black Pill fuer clang-tidy.
+const F401_TARGET: &[&str] =
+    &["--target=thumbv7em-none-eabihf", "-mcpu=cortex-m4", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-ffreestanding"];
 
 /// Schreibt die Lieferformen nach `out` und nennt die Bindungen: je
 /// Programm sein Rahmen, bei `valve` mit `examples/c-host`, bei `port_test`
-/// mit dem Port fuer Faeden, seinem POSIX-Adapter und `examples/posix`.
+/// mit dem Port fuer Faeden, seinem POSIX-Adapter und `examples/posix`, bei
+/// `app` mit dem Port der Interruptform, seinem Adapter fuer STM32F4 und dem
+/// C-Wirt `examples/boards/stm32f401`, fuer dessen Ziel.
 fn deliveries(out: &Path) -> Vec<Link> {
     let root = root();
     let ports = root.join("crates/takt-embed-c/ports");
     let mut links = Vec::new();
-    for &(prefix, source, extra) in PROGRAMS {
+    for &(prefix, source, triple, extra) in PROGRAMS {
         let dir = out.join(prefix);
-        let target = ["--target", "x86_64-unknown-linux-gnu", "--prefix", prefix, "--out", dir.to_str().expect("Pfad")];
+        let target = ["--target", triple, "--prefix", prefix, "--out", dir.to_str().expect("Pfad")];
         let run = takt(&[&["build", source, "--emit", "embed"][..], extra, &target[..]].concat());
         assert!(run.status.success(), "{source}: {}", String::from_utf8_lossy(&run.stderr));
-        let mut units = vec![dir.join(format!("{prefix}_frame.c")), dir.join(format!("{prefix}_ops.c"))];
-        let mut include = vec![dir.clone()];
+        let units = vec![dir.join(format!("{prefix}_frame.c")), dir.join(format!("{prefix}_ops.c"))];
+        let mut link = Link::host(units, vec![dir.clone()]);
         match prefix {
-            "valve" => units.push(root.join("examples/c-host/main.c")),
+            "valve" => link.units.push(root.join("examples/c-host/main.c")),
             "port_test" => {
-                units.extend([
+                link.units.extend([
                     ports.join("rtos/takt_rtos.c"),
                     ports.join("posix/takt_os.c"),
                     root.join("examples/posix/main.c"),
                 ]);
-                include.extend([ports.join("rtos"), ports.join("posix")]);
+                link.include.extend([ports.join("rtos"), ports.join("posix")]);
+            }
+            "app" => {
+                let board = root.join("examples/boards/stm32f401");
+                link.units.extend([
+                    ports.join("irq/takt_irq.c"),
+                    ports.join("irq/stm32f4/takt_irq_chip.c"),
+                    board.join("startup.c"),
+                    board.join("board.c"),
+                    board.join("irq.c"),
+                ]);
+                link.include.extend([ports.join("irq"), board]);
+                link.defines = F401_DEFINES.iter().map(|d| (*d).to_string()).collect();
+                link.target = F401_TARGET.iter().map(|t| (*t).to_string()).collect();
+                link.platform = "unix32";
             }
             _ => {}
         }
-        links.push(Link { units, include });
+        links.push(link);
     }
     links
 }
@@ -381,7 +437,7 @@ fn a_planted_cert_c_violation_is_caught() {
     let text = "#include <stdlib.h>\n\nint takt_planted(const char *text);\n\n\
                 int takt_planted(const char *text) { return atoi(text); }\n";
     std::fs::write(&planted, text).expect("Datei");
-    let link = Link { units: vec![planted], include: Vec::new() };
+    let link = Link::host(vec![planted], Vec::new());
     let Some(found) = analyse(&catalog, &[link], &out) else { return };
     let ids: BTreeSet<&str> = found.iter().filter(|f| f.part == "Beispiele").map(|f| f.id.as_str()).collect();
     assert!(ids.contains("cert-err34-c"), "clang-tidy fand den Verstoss nicht: {found:?}");

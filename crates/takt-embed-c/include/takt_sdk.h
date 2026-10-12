@@ -189,6 +189,16 @@ struct takt_line {
  * wird verworfen und gezaehlt (12.2). Vor dem ersten Schritt. */
 int32_t takt_line_init(const struct takt_line *line, uint8_t *ring, uint32_t len);
 
+/* Verlustfrei (13.8): Ist der Ring voll, wartet der Schreibende, bis die
+ * Leitung ihn geleert hat, statt zu verwerfen. Nur fuer Laeufe in logischer
+ * Zeit; im Betrieb verbietet 12.2 das Warten. Nach `takt_line_init`, vor
+ * dem ersten Schritt; TAKT_ERR_LINE ohne Leitung. */
+int32_t takt_line_lossless(void);
+
+/* Gibt an die Leitung, was der Ring haelt und sie ohne Warten nimmt, fuer
+ * Zeilen des Wirts ausserhalb des Laufs. Kein Schritt laeuft. */
+void takt_line_flush(void);
+
 /* Die Marke `takt trace`, ab der die Bilanz die gesendeten Byte zaehlt;
  * davor darf ein Kopf stehen (`takt_board_trace`). Kein Schritt laeuft. */
 void takt_line_mark(void);

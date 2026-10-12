@@ -11,9 +11,13 @@
 //! | Board | Schreiben und Starten | Zurueck, wenn es nicht antwortet |
 //! |---|---|---|
 //! | ESP32-C6 ([`esp32c6`]) | `probe-rs` ueber USB-Serial-JTAG | Chip-Reset auf RTC-Ebene, ueber JTAG oder Konsole (FB-264, FB-266) |
-//! | STM32F401 ([`stm32f401`]) | DfuSe ueber den Bootloader im ROM ([`dfuse`]), zurueckgelesen | `TAKT` auf der Trace-Leitung: Die Anwendung springt in den Bootloader (FB-275) |
+//! | STM32F401 ([`stm32f401`]) | DfuSe ueber den Bootloader im ROM ([`dfuse`]), zurueckgelesen | `TAKT` auf der Trace-Leitung: Die Anwendung merkt sich den Wunsch, das Sprungbrett springt in den Bootloader (FB-275) |
 //! | Wirt ([`host`]) | ein Prozess, der MCU-Rahmen in logischer Zeit | entfaellt: Der Prozess endet |
+//!
+//! Ein Board traegt Bring-ups in Rust und C-Wirte ([`c_host`], M11 Schritt
+//! 18b): Geschrieben, gestartet und gelesen wird jedes Abbild gleich.
 
+pub mod c_host;
 pub mod dfuse;
 pub mod esp32c6;
 pub mod host;
@@ -636,18 +640,9 @@ impl Bringup {
         Ok(images().join(format!("{}-{:016x}", self.triple, self.sources()?)))
     }
 
-    /// Legt das Verzeichnis des Stands an. Ist es neu, gehen zuerst die
-    /// Abbilder frueherer Staende dieses Boards: Gegen sie baut niemand mehr.
+    /// Legt das Verzeichnis des Stands an ([`enter_stand`]).
     pub(crate) fn enter(&self, stand: &Path) -> Result<(), String> {
-        if !stand.is_dir() {
-            let prefix = format!("{}-", self.triple);
-            for entry in std::fs::read_dir(images()).into_iter().flatten().flatten() {
-                if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                    let _ = std::fs::remove_dir_all(entry.path());
-                }
-            }
-        }
-        std::fs::create_dir_all(stand).map_err(|e| format!("{}: {e}", stand.display()))
+        enter_stand(self.triple, stand)
     }
 
     /// Der Stand, gegen den gebaut wird: die Quellen und Verdrahtungen aller
@@ -659,56 +654,14 @@ impl Bringup {
             f.str(name);
             f.file_if_any(&dir.join(name));
         }
-        for (name, krate) in crate_dirs()? {
-            f.str(&name);
-            let src = krate.join("src");
-            if src.is_dir() {
-                hash_tree(&src, &mut f)?;
-            }
-            // Die Verdrahtung des Bring-ups und der Treiber-Crates (12.6).
-            f.file_if_any(&krate.join(crate::bringup::WIRING));
-        }
+        hash_crates(&mut f)?;
         hash_build_inputs(&dir, &mut f)?;
         Ok(f.finish())
     }
 
-    /// Der Schluessel eines Abbilds in seinem Stand: das Programm samt den
-    /// Konfigurationen, die es importiert, die Optionen und die C-Referenz.
-    /// Aendert sich nichts davon, ist das Abbild dasselbe.
+    /// Der Schluessel eines Abbilds in seinem Stand ([`image_key`]).
     fn key(&self, program: &Path, options: &Options) -> Result<u64, String> {
-        let mut f = Fingerprint::new();
-        hash_program(program, &mut f)?;
-        f.str(self.triple);
-        f.u64(options.ticks);
-        for flag in [options.fresh, options.timed, options.hostile_fpu, options.build == takt_sema::Build::Hw] {
-            f.u64(u64::from(flag));
-        }
-        f.str(options.form.feature().unwrap_or("own"));
-        f.str(options.flaw.map_or("", Flaw::name));
-        match &options.hardware {
-            Some(hw) => {
-                f.u64(1);
-                f.file(hw)?;
-            }
-            None => f.u64(0),
-        }
-        match &options.bin {
-            Bin::Takt => f.str("takt"),
-            // Die Kerne stehen ausserhalb von `src`; ihre Kennung deckt sie.
-            Bin::Bench { shift } => {
-                f.str("bench");
-                f.u64(u64::from(*shift));
-                f.str(&crate::bench::suite_id(&crate::bench::suite(), &crate::bench::math_vectors()?));
-            }
-            // Die Vektoren der Natives und der Mathematik, die das Bauskript
-            // liest, stehen in den Spezifikationen, nicht in `src`.
-            Bin::Natives => {
-                f.str("natives");
-                f.file(&crate::natives::spec_path())?;
-                f.file(&crate::math::spec_path())?;
-            }
-        }
-        Ok(f.finish())
+        image_key(self.triple, program, options)
     }
 
     /// `cargo build` des Bring-ups mit dem Programm; `key` landet als Symbol
@@ -771,6 +724,74 @@ impl Bringup {
         };
         built_executable(&mut cargo)
     }
+}
+
+/// Legt das Verzeichnis des Stands `stand` an. Ist es neu, gehen zuerst die
+/// Abbilder frueherer Staende derselben Art `kind` (`<kind>-<stand>`, das
+/// Tripel eines Bring-ups): Gegen sie baut niemand mehr.
+pub(crate) fn enter_stand(kind: &str, stand: &Path) -> Result<(), String> {
+    if !stand.is_dir() {
+        let prefix = format!("{kind}-");
+        for entry in std::fs::read_dir(images()).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    std::fs::create_dir_all(stand).map_err(|e| format!("{}: {e}", stand.display()))
+}
+
+/// Die Quellen aller Crates und die Verdrahtung des Bring-ups und der
+/// Treiber-Crates (12.6).
+pub(crate) fn hash_crates(f: &mut Fingerprint) -> Result<(), String> {
+    for (name, krate) in crate_dirs()? {
+        f.str(&name);
+        let src = krate.join("src");
+        if src.is_dir() {
+            hash_tree(&src, f)?;
+        }
+        f.file_if_any(&krate.join(crate::bringup::WIRING));
+    }
+    Ok(())
+}
+
+/// Der Schluessel eines Abbilds fuer `triple` in seinem Stand: das Programm
+/// samt den Konfigurationen, die es importiert, die Optionen und die
+/// C-Referenz. Aendert sich nichts davon, ist das Abbild dasselbe.
+pub(crate) fn image_key(triple: &str, program: &Path, options: &Options) -> Result<u64, String> {
+    let mut f = Fingerprint::new();
+    hash_program(program, &mut f)?;
+    f.str(triple);
+    f.u64(options.ticks);
+    for flag in [options.fresh, options.timed, options.hostile_fpu, options.build == takt_sema::Build::Hw] {
+        f.u64(u64::from(flag));
+    }
+    f.str(options.form.feature().unwrap_or("own"));
+    f.str(options.flaw.map_or("", Flaw::name));
+    match &options.hardware {
+        Some(hw) => {
+            f.u64(1);
+            f.file(hw)?;
+        }
+        None => f.u64(0),
+    }
+    match &options.bin {
+        Bin::Takt => f.str("takt"),
+        // Die Kerne stehen ausserhalb von `src`; ihre Kennung deckt sie.
+        Bin::Bench { shift } => {
+            f.str("bench");
+            f.u64(u64::from(*shift));
+            f.str(&crate::bench::suite_id(&crate::bench::suite(), &crate::bench::math_vectors()?));
+        }
+        // Die Vektoren der Natives und der Mathematik, die das Bauskript
+        // liest, stehen in den Spezifikationen, nicht in `src`.
+        Bin::Natives => {
+            f.str("natives");
+            f.file(&crate::natives::spec_path())?;
+            f.file(&crate::math::spec_path())?;
+        }
+    }
+    Ok(f.finish())
 }
 
 /// Fuehrt `cargo build --message-format=json-render-diagnostics` aus und

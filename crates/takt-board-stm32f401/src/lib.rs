@@ -208,9 +208,9 @@ pub enum InitError {
     UnsupportedCrystal,
 }
 
-/// Setzt Takte und Tickquelle auf und gibt die Board-Teile zurueck — oder
-/// das Board an den Bootloader, wenn der Host es verlangt hat
-/// ([`bootloader::enter_if_requested`]).
+/// Setzt Takte und Tickquelle auf und gibt die Board-Teile zurueck. Hat
+/// der Host das Board zurueckverlangt, kam der Start nicht bis hier: Das
+/// Sprungbrett gab es an den Bootloader ([`bootloader::enter_if_requested`]).
 ///
 /// `tick_ns` ist die Periode aus `system: tick`. Die Reihenfolge ist
 /// nicht beliebig: Erst der Takt, dann der Timer — ein Timer, der vor der
@@ -223,7 +223,6 @@ pub fn init(
     tim2: &stm32f4::stm32f401::TIM2,
     tick_ns: i64,
 ) -> Result<Tim2Tick, InitError> {
-    bootloader::enter_if_requested();
     let counts = takt_board_support::counts_for(TIMER_HZ, tick_ns).map_err(InitError::Period)?;
     let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
     let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
@@ -244,7 +243,6 @@ pub fn init_alarm(
     tim2: &stm32f4::stm32f401::TIM2,
     jobs: stm32f4::stm32f401::Interrupt,
 ) -> Result<alarm::Tim2Alarm, InitError> {
-    bootloader::enter_if_requested();
     let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
     let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
     clocks(rcc, flash, pwr, pllm)?;
