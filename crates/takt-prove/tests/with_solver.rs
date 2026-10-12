@@ -275,13 +275,14 @@ machine f:
     assert_eq!(reports[0].verdict, CheckVerdict::Unreachable { k: 1 }, "{:?}", reports[0]);
 }
 
-/// **Kleine Anfragen zuerst** (FB-511 Schritt 2): Die Divisionen in `RUN`
-/// erreicht erst ein Lauf ueber 500 Ticks. Die durch `n` entscheidet ihre
-/// Fehlerbedingung allein — `n` hat eine Range ohne null —, die durch `x`
-/// hinter `x != 0` nicht: Allein kann `x` null sein, auf dem Pfad nie, und
-/// die Induktion mit k = 1 beweist sie. Die Division in `WAIT` faultet im
-/// ersten Tick; ihren Pfad findet BMC mit Tiefe 1, und kein Beweis ohne
-/// Pfad spricht sie frei.
+/// **Kleine Anfragen zuerst** (FB-511 Schritt 2): `RUN` erreicht erst ein
+/// Lauf ueber 500 Ticks. Die Division durch `g + 1.0` dort ist endlich, weil
+/// `g` eine Range ab null hat; das entscheidet ihre Fehlerbedingung allein.
+/// Die Division durch `x` hinter `x != 0` nicht: Allein kann `x` null sein,
+/// auf dem Pfad nie, und die Induktion mit k = 1 beweist sie. Die Division
+/// in `WAIT` faultet im ersten Tick; ihren Pfad findet BMC mit Tiefe 1, und
+/// kein Beweis ohne Pfad spricht sie frei. Gefragt sind nur die Divisionen:
+/// Das Lesen von `x` in `RUN` faultet erst nach 500 Ticks.
 #[test]
 fn small_queries_decide_before_deep_ones() {
     let Some(solver) = solver() else { return };
@@ -290,34 +291,37 @@ fn small_queries_decide_before_deep_ones() {
     tick     = 10 ms
 
 input  x : int in -5..5 @ hw(\"i/x\")
-output r : int @ hw(\"o/r\") with safe = 0
+output w : int @ hw(\"o/w\") with safe = 0
+output r : float @ hw(\"o/r\") with safe = 0
 
 machine f:
-    var n : int in 1..9 = 1
+    var g : float in 0..10 = 1
     initial WAIT
     state WAIT:
         loop:
-            r = 100 / x
+            w = 100 / x
         after 5 s: -> RUN
     state RUN:
         loop:
-            n = n % 9 + 1
-            r = 100 / n
+            g = g + 0.5 if g < 9.0 else 0.0
+            r = 100.0 / (g + 1.0)
             if x != 0:
-                r = 200 / x
+                w = 200 / x
 ";
     let p = compile(src);
-    let model = encode(&p).expect("kodierbar");
-    let sites = classify(&model, &p, 3, &solver, 60).expect("Solver laeuft");
-    let at = |text: &str| {
+    let whole = encode(&p).expect("kodierbar");
+    let divisions = |c: &takt_prove::CheckSite| c.kind == "div" || c.kind == "fin";
+    let (sites, _) = classify_sites(&p, Some(&whole), 3, &solver, 60, &divisions).expect("Solver laeuft");
+    let at = |text: &str, kind: &str| {
         let start = src.find(text).expect("im Quelltext") as u32;
         let end = start + text.len() as u32;
-        let site = sites.iter().find(|s| s.kind == "div" && s.span.start >= start && s.span.end <= end);
-        site.unwrap_or_else(|| panic!("keine Division in `{text}`: {sites:?}")).verdict.clone()
+        let site = sites.iter().find(|s| s.kind == kind && s.span.start >= start && s.span.end <= end);
+        site.unwrap_or_else(|| panic!("keine Stelle `{kind}` in `{text}`: {sites:?}")).verdict.clone()
     };
-    assert!(matches!(at("100 / x"), CheckVerdict::Reachable { at, .. } if at <= 1), "{:?}", at("100 / x"));
-    assert_eq!(at("100 / n"), CheckVerdict::Unreachable { k: 1 });
-    assert_eq!(at("200 / x"), CheckVerdict::Unreachable { k: 1 });
+    let first = at("100 / x", "div");
+    assert!(matches!(first, CheckVerdict::Reachable { at, .. } if at <= 1), "{first:?}");
+    assert_eq!(at("100.0 / (g + 1.0)", "fin"), CheckVerdict::Unreachable { k: 1 });
+    assert_eq!(at("200 / x", "div"), CheckVerdict::Unreachable { k: 1 });
 }
 
 /// B2: das `ensures` des Begrenzers haelt aus jedem typkonformen Zustand;
