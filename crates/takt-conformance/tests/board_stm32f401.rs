@@ -15,13 +15,13 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, driver_edge_agrees, fits_the_poll_form,
-    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
-    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    Drift, TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver, driver_edge_agrees,
+    fits_the_poll_form, journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output,
+    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
     simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
     the_poll_form_keeps_its_round, the_port_passes, verdict, zephyr_image, zephyr_verdict,
 };
-use takt_conformance::board::stm32f401::Stm32f401;
+use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
 
 /// Was der F401 nicht fasst (Pruefung 39): `45_journal_cut` und
@@ -438,6 +438,36 @@ fn simultaneous_jobs_finish_on_time_on_the_board() {
         .into_iter()
         .flat_map(|f| simultaneous_jobs_finish_on_time(&mut board, f))
         .collect();
+    verdict(&failed);
+}
+
+/// **Der Port der Interruptform in C besteht die Portpruefung** (12.11,
+/// 13.8; M11 Schritt 18b): der C-Wirt der Black Pill mit dem SDK-Archiv,
+/// `ports/irq` und seinem Adapter fuer STM32F4. Den Schritt rechnet die ISR
+/// von TIM2, die Jobs PendSV, darunter rechnet die Hauptschleife die fremde
+/// Last mit der FPU.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_c_interrupt_port_passes_the_port_test() {
+    let Some((board, _guard)) = board() else { return };
+    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Interrupt);
+    verdict(&failed);
+}
+
+/// **Im Port der Interruptform in C rechnet die Korpusauswahl wie der
+/// Interpreter** (12.11, Satz 9.4.4; M11 Schritt 18b): jedes Programm des
+/// Board-Korpus, das unter `shared` laeuft und keinen Treiber bindet — der
+/// C-Wirt stellt keine —, in logischer Zeit hinter dem Tor der
+/// Hauptschleife und mit verlustfreier Leitung.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_c_interrupt_port_agrees_with_the_interpreter() {
+    let Some((board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_F401_ONLY").ok();
+    let names: Vec<&str> =
+        board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n) && binds_no_driver(n)).collect();
+    let options = Options::fresh(TICKS).in_form(Form::Interrupt);
+    let failed = agreement_with(&mut Stm32f401C::on(board), &names, only.as_deref(), &options);
     verdict(&failed);
 }
 

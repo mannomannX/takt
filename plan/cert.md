@@ -306,26 +306,34 @@ Der C-Teil ist, was ein C-Wirt übersetzt: der Rahmen, den `takt build
 --emit embed` je Programm schreibt (`P_frame.c`, `P_ops.c`, `P.h`; erzeugt
 von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der Port für Systeme
 mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
-(`ports/posix`) und die Beispiele
-(`examples/c-host/main.c`, `examples/posix/main.c`). Für ihn gelten CERT C
-und MISRA C:2012 unmittelbar (FB-524). Die Adapter für Zephyr und
+(`ports/posix`), der Port der Interruptform (`ports/irq`) mit seinem
+Adapter für STM32F4 (`ports/irq/stm32f4`) und die Beispiele
+(`examples/c-host/main.c`, `examples/posix/main.c`, der C-Wirt der Black
+Pill in `examples/boards/stm32f401`). Für ihn gelten CERT C und MISRA
+C:2012 unmittelbar (FB-524). Die Adapter für Zephyr und
 CMSIS-RTOS2 (`ports/zephyr`, `ports/cmsis-rtos2`) und ihre Beispiele
 (`examples/zephyr`, `examples/cmsis-rtos2`) gehören dazu, stehen aber noch
 nicht in der Prüfung: Ihre Köpfe entstehen erst in einem Bau unter Zephyr
 (FB-731).
 
-`crates/takt-cli/tests/c_analysis.rs` erzeugt den Rahmen für drei
-Programme — `examples/c-host/takt/valve.takt` mit dem Beispiel `c-host`,
-`corpus-try/124_port_test.takt` mit dem Port und dem Beispiel `posix`,
-`corpus-try/05_streams_and_protocol.takt` für Ströme, Records und den
-Rand — und prüft jede Bindung, also die Quellen eines Programms des Wirts,
-mit beiden Werkzeugen. Der Test liest Aufruf und Abweichungen aus diesem
-Abschnitt; er läuft unter Linux (die Kopfdateien von POSIX), auf CI in
-`.github/workflows/analysis.yml` bei jedem Push.
+`crates/takt-cli/tests/c_analysis.rs` erzeugt den Rahmen für vier
+Lieferformen — `examples/c-host/takt/valve.takt` mit dem Beispiel `c-host`,
+`corpus-try/124_port_test.takt` mit dem Port für Fäden und dem Beispiel
+`posix`, `corpus-try/05_streams_and_protocol.takt` für Ströme, Records und
+den Rand, und noch einmal `124_port_test.takt` für `thumbv7em` mit dem Port
+der Interruptform und dem C-Wirt der Black Pill (M11 Schritt 18b) — und
+prüft jede Bindung, also die Quellen eines Programms des Wirts, mit beiden
+Werkzeugen. Die Bindung für `thumbv7em` prüft clang-tidy für ihr Ziel
+(`--target=thumbv7em-none-eabihf`, freistehend) und cppcheck mit der
+Plattform `unix32`, beide mit den Werten, die ihr Bau setzt; so sehen sie
+auch den Zweig des Rahmens für die FPU des Cortex-M4. Der Test liest
+Aufruf und Abweichungen aus diesem Abschnitt; er läuft unter Linux (die
+Kopfdateien von POSIX), auf CI in `.github/workflows/analysis.yml` bei
+jedem Push.
 
 | Werkzeug | Fassung | Aufruf |
 |---|---|---|
-| clang-tidy | LLVM 22.1.8 | `--checks=-*,cert-*,bugprone-*,clang-analyzer-*,concurrency-*,misc-no-recursion,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-optin.performance.Padding` |
+| clang-tidy | LLVM 22.1.8 | `--checks=-*,cert-*,bugprone-*,clang-analyzer-*,concurrency-*,misc-no-recursion,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-optin.performance.Padding,-clang-analyzer-core.FixedAddressDereference` |
 | cppcheck | 2.22.0 | `--enable=warning,style,performance,portability` `--addon=misra` `--library=posix` `--library=tools/c-analysis/takt.cfg` `--suppress=unusedStructMember` |
 
 Das MISRA-Addon von cppcheck prüft einen Teil von MISRA C:2012 und läuft
@@ -343,6 +351,7 @@ das es im C-Teil nicht gibt:
 | `bugprone-easily-swappable-parameters` | — | eine Heuristik ohne Regel aus CERT C oder MISRA C; die Parameter der Einstiege und Treiber legt die C-ABI fest (`takt_sdk.h`, `P.h`) |
 | `clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling` | CERT C MSC24-C | verlangt die Funktionen aus Anhang K von C11 (`memcpy_s`, `fprintf_s`); Anhang K ist optional und fehlt in glibc wie in jeder freistehenden Umgebung des Rahmens. MSC24-C ist eine Empfehlung; die Längen prüft der Code selbst |
 | `clang-analyzer-optin.performance.Padding` | — | Die Lage der Strukturen gibt `takt-hal` vor, der Rahmen hält sie mit `_Static_assert` je Feld; Umordnen hieße die ABI ändern |
+| `clang-analyzer-core.FixedAddressDereference` | — | Ein Port ohne RTOS und ein C-Wirt auf dem Chip lesen und schreiben Register an ihrer Adresse aus dem Handbuch; jeder solche Zugriff wäre ein Befund. Die Zahl wird nur an einer Stelle je Datei zum Zeiger (`takt_reg`, `board_reg`), und diese Umwandlung steht als Abweichung von MISRA C:2012 11.4 hier |
 | `unusedStructMember` | — | keine Regel; die Typen des Randes teilt der Rahmen mit `takt-hal`, und ein Feld, das ein Programm nicht liest, liest die Bibliothek |
 
 **Der Rahmen ist erzeugter Code.** Er entsteht je Programm aus derselben

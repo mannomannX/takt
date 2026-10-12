@@ -1,6 +1,12 @@
 //! Das Sprungbrett der Black Pill (FB-385): Sektor 1, wohin der
 //! HID-Bootloader nach jedem Reset springt.
 //!
+//! Hat die Anwendung davor das Board an den Host zurueckgegeben (`TAKT` auf
+//! der Leitung, FB-275), steht der Wunsch im Backup-Register 4, und das
+//! Sprungbrett geht in den DFU-Bootloader des ROM
+//! (`bootloader::enter_if_requested`). Jede Anwendung, ob in Rust oder C,
+//! schreibt nur den Wunsch und setzt den Chip zurueck.
+//!
 //! Die Anwendung beginnt in Sektor 4, weil Sektor 2 und 3 das
 //! `persist`-Journal halten (`takt_board_stm32f401::nvm`). Das Sprungbrett
 //! prueft ihre Vektortabelle und startet sie; ist keine da — nach dem
@@ -65,6 +71,7 @@ const RAM: core::ops::RangeInclusive<u32> = 0x2000_0000..=0x2001_0000;
 
 #[entry]
 fn main() -> ! {
+    bootloader::enter_if_requested();
     let table = core::ptr::with_exposed_provenance::<u32>(takt_board_stm32f401::address(APP));
     // SAFETY: das erste Wort der Anwendung, im Flash, das immer lesbar
     // abgebildet ist; geloescht steht dort `0xFFFF_FFFF`.

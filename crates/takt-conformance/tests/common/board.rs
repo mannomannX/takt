@@ -834,6 +834,15 @@ pub fn runs_shared(name: &str) -> bool {
     p.config.runtime_profile().is_none_or(|profile| profile == takt_mir::program::RuntimeProfile::Shared)
 }
 
+/// Bindet das Programm im Sim-Build keinen Treiber, auch keinen Kanal `sys`
+/// (8.10, 12.6, 12.7)? Ein C-Wirt stellt keine: Sein Programm rechnet mit
+/// den Ausgaengen in den Trace und mit Plant-Modellen, die mitlaufen
+/// (`takt_conformance::board::c_host`).
+pub fn binds_no_driver(name: &str) -> bool {
+    let p = program(&board::corpus_path(name));
+    takt_frame::drivers::of(&p, &takt_frame::layout::of(&p)).is_empty()
+}
+
 /// **Ein Tick ueber seiner Periode faultet im naechsten jede Maschine**
 /// (7.3, 5.4, FB-332). `overrun.takt` laesst die Last wachsen, bis ein Tick
 /// laenger rechnet als seine Periode, aber weit unter der Frist des
