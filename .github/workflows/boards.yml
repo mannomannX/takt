@@ -15,6 +15,15 @@
 # Compiler mehr. Die Quellen nennt am Board `TAKT_ROOT`
 # (`takt_conformance::repo_root`), denn ein Pfad aus `env!` waere der des
 # Runners.
+#
+# Die Abbilder unter Zephyr baut derselbe Lauf mit (M11 Schritt 19, FB-731):
+# Mit Zephyr und seinem SDK (`.github/actions/zephyr`) bauen die Zephyr-Tests
+# der Suiten ihre Abbilder in denselben Zwischenspeicher
+# (`takt_conformance::zephyr::image`). Bei einem Push, der Adapter, Beispiele
+# oder Modul unter Zephyr aendert, laeuft nur der Job `zephyr`: Er baut alle
+# Beispiele fuer beide Boards mit den Pruefungen aus `zephyr_example.rs` und
+# faehrt clang-tidy ueber ihre `compile_commands.json` gegen den Katalog des
+# C-Teils (plan/cert.md).
 name: Board-Abbilder
 
 on:
@@ -24,6 +33,20 @@ on:
         description: Zweig oder Commit; leer heisst der Stand, von dem aus gestartet wird
         required: false
         default: ""
+  push:
+    paths:
+      - "crates/takt-embed-c/ports/zephyr*/**"
+      - "crates/takt-embed-c/ports/cmsis-rtos2/**"
+      - "examples/zephyr*/**"
+      - "examples/cmsis-rtos2/**"
+      - "zephyr/**"
+      - "tools/cmake/**"
+      - "tools/c-analysis/zephyr.cfg"
+      - "crates/takt-cli/tests/zephyr_example.rs"
+      - "crates/takt-cli/tests/c_analysis.rs"
+      - "plan/cert.md"
+      - ".github/actions/zephyr/**"
+      - ".github/workflows/boards.yml"
 
 permissions:
   contents: read
@@ -34,8 +57,31 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  zephyr:
+    name: Zephyr
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/zephyr
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: zephyr
+      # Die Beispiele bauen und pruefen; die Baue bleiben in `target/tmp`
+      # fuer clang-tidy liegen.
+      - name: Die Beispiele unter Zephyr
+        run: cargo nextest run -p takt-cli --test zephyr_example --run-ignored all --no-fail-fast --profile ci
+      - name: clang-tidy ueber die Baue gegen den Katalog
+        run: >-
+          cargo nextest run -p takt-cli --test c_analysis --run-ignored all --profile ci
+          -E 'test(=the_zephyr_build_deviates_only_as_the_catalog_says)'
+
   images:
     name: Abbilder ${{ matrix.board }}
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 340
     strategy:
@@ -49,6 +95,8 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup
+      # Die Zephyr-Tests der Suite bauen ihre Abbilder mit west.
+      - uses: ./.github/actions/zephyr
       # Nur die Registry: Ein Cache des Zielverzeichnisses truege den
       # Zwischenspeicher der Abbilder mit.
       - uses: Swatinem/rust-cache@v2
@@ -97,6 +145,7 @@ jobs:
 
   tests:
     name: Board-Suiten als Archiv
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     timeout-minutes: 120
     steps:

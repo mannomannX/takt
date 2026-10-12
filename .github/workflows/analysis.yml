@@ -71,10 +71,13 @@ jobs:
         with:
           shared-key: analysis
 
-      # Die Lieferformen baut `takt`; beide Tests der Pruefung sind
-      # ignoriert, weil sie die Werkzeuge brauchen.
+      # Die Lieferformen baut `takt`; die Tests der Pruefung sind ignoriert,
+      # weil sie die Werkzeuge brauchen. clang-tidy ueber die Baue unter
+      # Zephyr faehrt der Job `zephyr` von boards.yml nach ihnen.
       - name: Der C-Teil gegen den Katalog
-        run: cargo nextest run -p takt-cli --test c_analysis --run-ignored all --profile ci
+        run: >-
+          cargo nextest run -p takt-cli --test c_analysis --run-ignored all --profile ci
+          -E 'not test(=the_zephyr_build_deviates_only_as_the_catalog_says)'
 
   miri:
     name: Miri (${{ matrix.krate }})

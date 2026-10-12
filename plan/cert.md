@@ -340,19 +340,30 @@ und cppcheck liest sie nicht (sie lesen Register über `register … __asm__`).
 Die Typen des Zephyr-Kerns (`struct k_sem`, `k_timeout_t`, `struct
 flash_area`) bleiben ihm darum undurchsichtig und die Aufzählungen von
 CMSIS-RTOS2 einfache Zahlen; die Regeln der wesentlichen Typen (10.x) prüft
-er dort schwächer als im übrigen C-Teil. clang-tidy über die echten Köpfe,
-im CI-Job „Zephyr“ über die `compile_commands.json` beider Beispiele,
-ergänzt es (FB-731 (A)). Die Rückgabe des Boards an den Bootloader des F401
-(`examples/zephyr/src/handback_stm32f401.c`) fehlt hier: Sie schreibt die
-Register über die Strukturen aus dem Kopf des Chips, und ohne ihn kennt
-cppcheck keines. Die Bindung nimmt stattdessen den Neustart des C6
-(`handback_reboot.c`).
+er dort schwächer als im übrigen C-Teil. Die Rückgabe des Boards an den
+Bootloader des F401 (`examples/zephyr/src/handback_stm32f401.c`) fehlt hier:
+Sie schreibt die Register über die Strukturen aus dem Kopf des Chips, und
+ohne ihn kennt cppcheck keines. Die Bindung nimmt stattdessen den Neustart
+des C6 (`handback_reboot.c`).
+
+**clang-tidy über die Baue unter Zephyr** ergänzt es mit den echten Köpfen
+(FB-731 (A)): `zephyr_example.rs` baut jedes Beispiel für seine Boards, und
+`the_zephyr_build_deviates_only_as_the_catalog_says` fährt clang-tidy über
+die eigenen Quellen jedes Baus — Ports, Beispiele samt
+`handback_stm32f401.c` und was der Bau unter `takt/` erzeugt — mit den
+Aufrufen seiner `compile_commands.json`. Was clang von den Schaltern der GCC
+nicht kennt, nimmt die Zeile „clang-tidy unter Zephyr“ heraus. Beide laufen
+im Job `zephyr` von `.github/workflows/boards.yml`, bei jedem Push, der
+Adapter, Beispiele oder Modul unter Zephyr ändert. Ihre Befunde zählen unter
+dem Teil „Zephyr-Bau“, gleich in welcher Datei sie stehen: Diese Zeilen
+urteilt nur dieser Test, die übrigen nur `the_c_part_deviates_only_as_the_catalog_says`.
 
 | Werkzeug | Fassung | Aufruf |
 |---|---|---|
 | clang-tidy | LLVM 22.1.8 | `--checks=-*,cert-*,bugprone-*,clang-analyzer-*,concurrency-*,misc-no-recursion,-bugprone-easily-swappable-parameters,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-clang-analyzer-optin.performance.Padding,-clang-analyzer-core.FixedAddressDereference` |
 | cppcheck | 2.22.0 | `--enable=warning,style,performance,portability` `--addon=misra` `--library=posix` `--library=tools/c-analysis/takt.cfg` `--suppress=unusedStructMember` |
 | cppcheck unter Zephyr | 2.22.0 | `--library=tools/c-analysis/zephyr.cfg` |
+| clang-tidy unter Zephyr | LLVM 22.1.8 | `--removed-arg=-fno-reorder-functions` `--removed-arg=-mfp16-format=ieee` `--removed-arg=-fno-printf-return-value` `--removed-arg=-fstrict-volatile-bitfields` |
 
 Das MISRA-Addon von cppcheck prüft einen Teil von MISRA C:2012 und läuft
 ohne die Regeltexte: Es nennt nur die Nummer. `tools/c-analysis/takt.cfg`
@@ -432,6 +443,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `compareValueOutOfTypeRangeError` | Zephyr | 1 | MISRA C:2012 14.3 (R) | wie im Port, in `takt_os_depth` des Adapters für CMSIS-RTOS2: Der Text gilt jeder Implementierung, auch einer mit 64-Bit-`size_t` |
 | `misra-c2012-8.9` | Zephyr | 1 | MISRA C:2012 8.9 (A) | Der Stack der Probe (`probe_stack`) gehört einem Faden im Benutzermodus, und `k_thread_create` verlangt für ihn einen Stack, den der Zephyr-Kern in seiner Tabelle der Objekte findet (`z_stack_is_user_capable`); dorthin kommt nur ein Objekt auf Dateiebene („Object Placement“ in der Dokumentation von Zephyr) |
 | `misra-c2012-8.4` | Zephyr | 1 | MISRA C:2012 8.4 (R) | Fehlmeldung: `k_sys_fatal_error_handler` ist in `<zephyr/fatal.h>` deklariert, das die Probe einbindet; ohne die Köpfe von Zephyr sieht cppcheck die Deklaration nicht |
+| `bugprone-branch-clone` | Zephyr-Bau | 4 | CERT C MSC12-C | Fehlmeldung: `K_KERNEL_STACK_DEFINE` und `K_THREAD_STACK_DEFINE` von Zephyr nehmen für Ausrichtung und Größe das Größere zweier Werte, die auf dem F401 gleich sind (`MAX(128, 128)`); der Ausdruck steht im Kopf von Zephyr, nicht in den Beispielen |
 | `clang-analyzer-security.ArrayBound` | Rahmen | 2 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |
 | `constParameterPointer` | Rahmen | 63 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
 | `knownConditionTrueFalse` | Rahmen | 10 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |

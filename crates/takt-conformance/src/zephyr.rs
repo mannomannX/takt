@@ -9,6 +9,12 @@
 //! was `D:\takt-tools\activate.ps1` setzt — `ZEPHYR_BASE`,
 //! `ZEPHYR_SDK_INSTALL_DIR`, CMake, Ninja und die Toolchains im PATH. Die
 //! Tests, die bauen, laufen darum nur mit `--ignored`.
+//!
+//! **Zwischengespeichert wie die Bring-ups** (FB-270, M11 Schritt 34d):
+//! [`image`] legt jedes Abbild unter `zephyr-<tripel>-<stand>` in den
+//! Zwischenspeicher der Abbilder ([`crate::board::IMAGES`]). Der Job der
+//! Board-Abbilder baut sie dort mit (`.github/workflows/boards.yml`), und
+//! `tools/board-run.ps1 -FromCi` faehrt sie ohne `west`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,6 +100,127 @@ pub fn build(west: &Path, example: &str, board: Board, fresh: bool, dir: &Path, 
     let zephyr = dir.join("zephyr");
     let config = std::fs::read_to_string(zephyr.join(".config")).map_err(|e| format!("{}: {e}", zephyr.display()))?;
     Ok(Image { elf: zephyr.join("zephyr.elf"), bin: zephyr.join("zephyr.bin"), config })
+}
+
+/// Die Fassung von Zephyr, gegen die jedes Beispiel baut: dieselbe in
+/// `D:\takt-tools` und im Job `zephyr` von `.github/workflows/boards.yml`.
+/// Sie geht in den Stand der Abbilder ein; welche Fassung wirklich baut,
+/// prueft der Bau nicht.
+pub const ZEPHYR_VERSION: &str = "v4.4.2";
+
+/// Die Fassung des Zephyr-SDK, ebenso.
+pub const SDK_VERSION: &str = "1.0.1";
+
+/// Was ausser den Crates in den Stand eingeht: das Modul, das CMake-Paket,
+/// die Ports, der Kopf des SDK und die Beispiele unter Zephyr.
+#[cfg(feature = "board")]
+const TREES: &[&str] = &[
+    "zephyr",
+    "tools/cmake",
+    "crates/takt-embed-c/ports",
+    "crates/takt-embed-c/include",
+    "examples/zephyr",
+    "examples/cmsis-rtos2",
+    "examples/zephyr-gpio",
+];
+
+/// Die Dateien, die die Beispiele ausserhalb ihrer Verzeichnisse lesen: das
+/// Pruefprogramm, die Hardware-Konfigurationen der Boards und die Versionen
+/// des SDK-Archivs, das ein eigener Workspace ist.
+#[cfg(feature = "board")]
+const FILES: &[&str] = &[
+    "corpus-try/124_port_test.takt",
+    "corpus-try/hw/stm32f401.hw",
+    "corpus-try/hw/esp32c6.hw",
+    "crates/takt-embed-c/Cargo.lock",
+];
+
+/// Die Art des Stands eines Boards im Zwischenspeicher der Abbilder:
+/// `zephyr-<tripel>`, neben Bring-up und C-Wirt desselben Tripels.
+#[cfg(feature = "board")]
+fn kind(board: Board) -> String {
+    format!("zephyr-{}", board.triple)
+}
+
+/// Das Verzeichnis des Stands: `<art>-<stand>` unter
+/// [`crate::board::IMAGES`]. Der Stand haengt nur an Inhalten
+/// ([`crate::board::Fingerprint`]), so findet ein Lauf unter Windows das
+/// Abbild, das ein Runner unter Linux baute.
+#[cfg(feature = "board")]
+fn stand(board: Board) -> Result<PathBuf, String> {
+    let root = crate::repo_root();
+    let mut f = crate::board::Fingerprint::new();
+    f.str(ZEPHYR_VERSION);
+    f.str(SDK_VERSION);
+    for tree in TREES {
+        f.str(tree);
+        let dir = root.join(tree);
+        if dir.is_dir() {
+            f.u64(1);
+            crate::board::hash_tree(&dir, &mut f)?;
+        } else {
+            f.u64(0);
+        }
+    }
+    for file in FILES {
+        f.str(file);
+        f.file_if_any(&root.join(file));
+    }
+    crate::board::hash_crates(&mut f)?;
+    crate::board::hash_build_inputs(&root, &mut f)?;
+    Ok(crate::board::images().join(format!("{}-{:016x}", kind(board), f.finish())))
+}
+
+/// Der Schluessel eines Abbilds in seinem Stand: Beispiel, Board und ob es
+/// sein Journal loescht.
+#[cfg(feature = "board")]
+fn key(example: &str, board: Board, fresh: bool) -> String {
+    let mut f = crate::board::Fingerprint::new();
+    f.str(example);
+    f.str(board.west);
+    f.u64(u64::from(fresh));
+    format!("{:016x}", f.finish())
+}
+
+/// Das Abbild von `examples/<example>` fuer `board`, aus dem Zwischenspeicher
+/// der Abbilder (`<stand>/<schluessel>.elf`, `.bin`, `.config`) oder mit
+/// `west` frisch gebaut in `dir` ([`build`]) und dort abgelegt. Ohne `west`
+/// und ohne Abbild im Zwischenspeicher sagt der Fehler, was fehlt; `west`
+/// ist `None`, wo Zephyr nicht eingerichtet ist, etwa am Rechner der Boards
+/// mit den Abbildern aus CI (`tools/board-run.ps1 -FromCi`).
+#[cfg(feature = "board")]
+pub fn image(
+    west: Option<&Path>,
+    example: &str,
+    board: Board,
+    fresh: bool,
+    dir: &Path,
+    takt: &Path,
+) -> Result<Image, String> {
+    let stand = stand(board)?;
+    let key = key(example, board, fresh);
+    let cached = |ext: &str| stand.join(format!("{key}.{ext}"));
+    let elf = cached("elf");
+    if elf.is_file() {
+        let config = std::fs::read_to_string(cached("config")).map_err(|e| format!("{}: {e}", stand.display()))?;
+        return Ok(Image { elf, bin: cached("bin"), config });
+    }
+    let Some(west) = west else {
+        return Err(format!(
+            "examples/{example} fuer {}: kein Abbild im Zwischenspeicher ({}) und kein west (TAKT_WEST)",
+            board.west,
+            elf.display()
+        ));
+    };
+    crate::board::missed(&stand, &elf, &format!("examples/{example} {}", board.west))?;
+    let built = build(west, example, board, fresh, dir, takt)?;
+    crate::board::enter_stand(&kind(board), &stand)?;
+    let config = dir.join("zephyr").join(".config");
+    // Das ELF zuletzt: Wer es findet, findet auch die anderen beiden.
+    for (from, to) in [(&config, cached("config")), (&built.bin, cached("bin")), (&built.elf, elf.clone())] {
+        crate::board::publish_checked(from, &to, |_| Ok(true))?;
+    }
+    Ok(Image { elf, bin: cached("bin"), config: built.config })
 }
 
 #[cfg(test)]

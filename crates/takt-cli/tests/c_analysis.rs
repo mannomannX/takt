@@ -3,8 +3,9 @@
 //! MISRA-Addon ueber den Rahmen, den `takt build --emit embed` fuer einige
 //! Programme schreibt, den Kopf des SDK, die Ports und die Beispiele: auf dem
 //! Wirt, fuer `thumbv7em` der C-Wirt der Black Pill mit dem Port der
-//! Interruptform, und die Adapter und Beispiele unter Zephyr, diese nur mit
-//! cppcheck und ohne die Koepfe von Zephyr (FB-731).
+//! Interruptform, und die Adapter und Beispiele unter Zephyr: mit cppcheck
+//! ohne die Koepfe von Zephyr (FB-731 (B)) und mit clang-tidy ueber die Baue
+//! von `zephyr_example.rs` (FB-731 (A), Teil [`ZEPHYR_BUILD`]).
 //!
 //! **Der Katalog ist die Quelle.** Wie die Werkzeuge gerufen werden und
 //! welche Befunde als Abweichung stehen, liest dieser Test aus
@@ -87,6 +88,8 @@ struct Catalog {
     cppcheck: Tool,
     /// Was cppcheck fuer eine Bindung unter Zephyr dazu bekommt.
     zephyr: Tool,
+    /// Was clang-tidy ueber einen Bau unter Zephyr dazu bekommt.
+    zephyr_tidy: Tool,
     /// Die ausgeschalteten Pruefungen von clang-tidy mit ihrer Regel.
     off: BTreeMap<String, String>,
     deviations: BTreeMap<(String, String), Deviation>,
@@ -114,6 +117,7 @@ fn catalog() -> Catalog {
         tidy: tool("clang-tidy"),
         cppcheck: tool("cppcheck"),
         zephyr: tool("cppcheck unter Zephyr"),
+        zephyr_tidy: tool("clang-tidy unter Zephyr"),
         off,
         deviations,
     }
@@ -241,18 +245,104 @@ fn run_tidy(tool: &Path, args: &[String], link: &Link, out: &Path) -> Vec<Findin
             .args(includes(link))
             .output()
             .expect("clang-tidy startet");
-        for line in String::from_utf8_lossy(&run.stdout).lines() {
-            let Some((place, rest)) = line.split_once(": warning: ").or_else(|| line.split_once(": error: ")) else {
-                continue;
-            };
-            let ids = rest.rsplit_once(" [").map_or("clang-diagnostic-error", |(_, id)| id.trim_end_matches(']'));
-            // Eine Stelle mit mehreren Namen (Aliase einer Pruefung) zaehlt
-            // unter dem aus CERT C, sonst unter dem ersten.
-            let cert = ids.split(',').find(|n| n.starts_with("cert-") && n.ends_with("-c"));
-            let id = cert.or_else(|| ids.split(',').next()).unwrap_or(ids);
-            let mut at = place.rsplitn(3, ':');
-            let (Some(column), Some(line), Some(file)) = (at.next(), at.next(), at.next()) else { continue };
+        for (id, file, line, column) in tidy_findings(&String::from_utf8_lossy(&run.stdout)) {
             found.push(finding(id, file, line, column, out));
+        }
+    }
+    found
+}
+
+/// Die Befunde aus der Ausgabe von `clang-tidy`: Kennung, Datei, Zeile und
+/// Spalte.
+fn tidy_findings(text: &str) -> Vec<(&str, &str, &str, &str)> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let Some((place, rest)) = line.split_once(": warning: ").or_else(|| line.split_once(": error: ")) else {
+            continue;
+        };
+        let ids = rest.rsplit_once(" [").map_or("clang-diagnostic-error", |(_, id)| id.trim_end_matches(']'));
+        // Eine Stelle mit mehreren Namen (Aliase einer Pruefung) zaehlt
+        // unter dem aus CERT C, sonst unter dem ersten.
+        let cert = ids.split(',').find(|n| n.starts_with("cert-") && n.ends_with("-c"));
+        let id = cert.or_else(|| ids.split(',').next()).unwrap_or(ids);
+        let mut at = place.rsplitn(3, ':');
+        let (Some(column), Some(line), Some(file)) = (at.next(), at.next(), at.next()) else { continue };
+        found.push((id, file, line, column));
+    }
+    found
+}
+
+/// Der Teil des Katalogs fuer clang-tidy ueber die Baue unter Zephyr
+/// (FB-731 (A)): Seine Zeilen urteilt nur
+/// [`the_zephyr_build_deviates_only_as_the_catalog_says`], gleich in welcher
+/// Datei des C-Teils ein Befund steht.
+const ZEPHYR_BUILD: &str = "Zephyr-Bau";
+
+/// Die Baue unter Zephyr, die `zephyr_example.rs` in `target/tmp` liegen
+/// laesst (`takt-<beispiel>-<tripel>`), je mit `compile_commands.json`.
+const ZEPHYR_BUILDS: &[&str] = &[
+    "takt-zephyr-thumbv7em-none-eabihf",
+    "takt-zephyr-riscv32imac-unknown-none-elf",
+    "takt-cmsis-rtos2-thumbv7em-none-eabihf",
+];
+
+/// Ein Pfad als regulaerer Ausdruck, der genau ihn trifft.
+fn escaped(path: &Path) -> String {
+    path.display().to_string().chars().fold(String::new(), |mut out, c| {
+        if "\\.+*?()|[]{}^$".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+        out
+    })
+}
+
+/// Die Quellen, die ein Bau unter Zephyr uebersetzt, aus seiner
+/// `compile_commands.json`, aufgeloest.
+fn compiled(build: &Path) -> Vec<PathBuf> {
+    let db = read(&build.join("compile_commands.json"));
+    let mut files: Vec<PathBuf> = db
+        .lines()
+        .filter_map(|l| l.trim().trim_end_matches(',').strip_prefix("\"file\": \"")?.strip_suffix('"'))
+        .map(|f| PathBuf::from(f.replace("\\\\", "/")))
+        .map(|f| std::fs::canonicalize(&f).unwrap_or(f))
+        .collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// `clang-tidy` ueber die eigenen Quellen des Baus `build` — Ports,
+/// Beispiele und was er unter `takt/` erzeugt —, mit den Aufrufen seiner
+/// `compile_commands.json`. Ein Befund zaehlt unter [`ZEPHYR_BUILD`], seine
+/// Stelle relativ zur Wurzel: Dieselbe Datei in zwei Bauen ist eine Stelle.
+fn run_tidy_build(tool: &Path, args: &[String], build: &Path) -> Vec<Finding> {
+    let root = root();
+    let generated = std::fs::canonicalize(build.join("takt")).unwrap_or_else(|_| build.join("takt"));
+    let ours = |f: &Path| {
+        f.starts_with(root.join("crates/takt-embed-c/ports"))
+            || f.starts_with(root.join("examples"))
+            || f.starts_with(&generated)
+    };
+    // Befunde in Koepfen nur aus denselben Verzeichnissen; der Bau legt
+    // die erzeugten Koepfe von Zephyr neben `takt/`.
+    let dirs = [root.join("crates/takt-embed-c"), root.join("examples"), generated.clone()];
+    let filter = dirs.iter().map(|d| escaped(d)).collect::<Vec<String>>().join("|");
+    let mut found = Vec::new();
+    for unit in compiled(build).into_iter().filter(|f| ours(f)) {
+        let run = Command::new(tool)
+            .args(args)
+            .arg("--quiet")
+            .arg(format!("--header-filter=^({filter})/.*"))
+            .arg("-p")
+            .arg(build)
+            .arg(&unit)
+            .output()
+            .expect("clang-tidy startet");
+        for (id, file, line, column) in tidy_findings(&String::from_utf8_lossy(&run.stdout)) {
+            let path = std::fs::canonicalize(file).unwrap_or_else(|_| PathBuf::from(file));
+            let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+            found.push(Finding { id: id.to_string(), part: ZEPHYR_BUILD, at: format!("{shown}:{line}:{column}") });
         }
     }
     found
@@ -312,9 +402,10 @@ fn analyse(catalog: &Catalog, links: &[Link], out: &Path) -> Option<BTreeSet<Fin
 }
 
 /// Die Befunde gegen den Katalog: je Befund und Teil genau die Zahl der
-/// Abweichung. Der Fehler nennt die Zeilen, die der Katalog braeuchte, und
-/// die Stellen jedes Befunds, dessen Zahl nicht stimmt.
-fn judge(found: &BTreeSet<Finding>, catalog: &Catalog) -> Result<(), String> {
+/// Abweichung, ueber die Zeilen der Teile, fuer die `own` gilt. Der Fehler
+/// nennt die Zeilen, die der Katalog braeuchte, und die Stellen jedes
+/// Befunds, dessen Zahl nicht stimmt.
+fn judge(found: &BTreeSet<Finding>, catalog: &Catalog, own: impl Fn(&str) -> bool) -> Result<(), String> {
     let mut counted: BTreeMap<(String, String), usize> = BTreeMap::new();
     for f in found {
         *counted.entry((f.id.clone(), f.part.to_string())).or_default() += 1;
@@ -337,7 +428,7 @@ fn judge(found: &BTreeSet<Finding>, catalog: &Catalog) -> Result<(), String> {
             None => problems.push(format!("| `{id}` | {part} | {n} | ? | … | neu, an {:?}", at())),
         }
     }
-    for ((id, part), d) in &catalog.deviations {
+    for ((id, part), d) in catalog.deviations.iter().filter(|((_, part), _)| own(part)) {
         if !counted.contains_key(&(id.clone(), part.clone())) {
             problems.push(format!("| `{id}` | {part} | 0 | {} | … | behoben: die Zeile faellt weg", d.rule));
         }
@@ -490,7 +581,37 @@ fn the_c_part_deviates_only_as_the_catalog_says() {
     let Some(found) = analyse(&catalog, &links, &out) else { return };
     let strangers: Vec<&Finding> = found.iter().filter(|f| f.part == "fremd").collect();
     assert!(strangers.is_empty(), "Befunde ausserhalb des C-Teils: {strangers:?}");
-    if let Err(rows) = judge(&found, &catalog) {
+    if let Err(rows) = judge(&found, &catalog, |part| part != ZEPHYR_BUILD) {
+        panic!("Befunde gegen den Katalog (plan/cert.md, „Der C-Teil“); die Zeilen, wie sie stehen muessten:\n{rows}");
+    }
+}
+
+/// **Die Baue unter Zephyr weichen nur ab, wie der Katalog sagt** (FB-731
+/// (A)): clang-tidy ueber die eigenen Quellen jedes Baus von
+/// `zephyr_example.rs`, mit den echten Koepfen von Zephyr und den Aufrufen
+/// aus `compile_commands.json`, dazu, was der Katalog fuer sie nennt
+/// (`clang-tidy unter Zephyr`: was clang von der GCC nicht kennt). Gegen die
+/// Zeilen des Teils [`ZEPHYR_BUILD`]. Laeuft nach `zephyr_example.rs` im Job
+/// `zephyr` von `.github/workflows/boards.yml`.
+#[test]
+#[ignore = "die Baue von zephyr_example.rs und clang-tidy: auf CI im Job `zephyr` von boards.yml"]
+fn the_zephyr_build_deviates_only_as_the_catalog_says() {
+    let catalog = catalog();
+    let Some(tidy) = clang_tidy() else { return };
+    check_version(&tidy, &catalog.tidy.version);
+    let args: Vec<String> = catalog.tidy.args.iter().chain(&catalog.zephyr_tidy.args).cloned().collect();
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let mut found = BTreeSet::new();
+    for name in ZEPHYR_BUILDS {
+        let build = tmp.join(name);
+        assert!(
+            build.join("compile_commands.json").is_file(),
+            "{}: kein Bau unter Zephyr; zuerst `zephyr_example.rs` mit --run-ignored all",
+            build.display()
+        );
+        found.extend(run_tidy_build(&tidy, &args, &build));
+    }
+    if let Err(rows) = judge(&found, &catalog, |part| part == ZEPHYR_BUILD) {
         panic!("Befunde gegen den Katalog (plan/cert.md, „Der C-Teil“); die Zeilen, wie sie stehen muessten:\n{rows}");
     }
 }
@@ -515,7 +636,8 @@ fn a_planted_cert_c_violation_is_caught() {
     let ids: BTreeSet<&str> = found.iter().filter(|f| f.part == "Beispiele").map(|f| f.id.as_str()).collect();
     assert!(ids.contains("cert-err34-c"), "clang-tidy fand den Verstoss nicht: {found:?}");
     assert!(ids.contains("misra-c2012-21.7"), "cppcheck fand den Verstoss nicht: {found:?}");
-    let verdict = judge(&found, &catalog).expect_err("der Katalog laesst den Verstoss nicht zu");
+    let verdict =
+        judge(&found, &catalog, |part| part != ZEPHYR_BUILD).expect_err("der Katalog laesst den Verstoss nicht zu");
     assert!(verdict.contains("| `cert-err34-c` | Beispiele | 1 |"), "{verdict}");
 }
 
@@ -540,7 +662,10 @@ fn every_deviation_of_the_c_part_names_its_rule() {
                 "{id}: von einer Regel der Kategorie Mandatory weicht nichts ab"
             );
         }
-        assert!(["Rahmen", "SDK", "Port", "Beispiele", "Zephyr"].contains(&part.as_str()), "{id}: Teil `{part}`");
+        assert!(
+            ["Rahmen", "SDK", "Port", "Beispiele", "Zephyr", ZEPHYR_BUILD].contains(&part.as_str()),
+            "{id}: Teil `{part}`"
+        );
         assert!(d.count > 0 && !d.reason.is_empty(), "{id} ({part}): Zahl und Grund");
     }
     let checks = catalog.tidy.args.iter().find_map(|a| a.strip_prefix("--checks=")).expect("--checks=");
