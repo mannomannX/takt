@@ -212,7 +212,11 @@ fn run_tidy(tool: &Path, args: &[String], link: &Link, out: &Path) -> Vec<Findin
             let Some((place, rest)) = line.split_once(": warning: ").or_else(|| line.split_once(": error: ")) else {
                 continue;
             };
-            let id = rest.rsplit_once(" [").map_or("clang-diagnostic-error", |(_, id)| id.trim_end_matches(']'));
+            let ids = rest.rsplit_once(" [").map_or("clang-diagnostic-error", |(_, id)| id.trim_end_matches(']'));
+            // Eine Stelle mit mehreren Namen (Aliase einer Pruefung) zaehlt
+            // unter dem aus CERT C, sonst unter dem ersten.
+            let cert = ids.split(',').find(|n| n.starts_with("cert-") && n.ends_with("-c"));
+            let id = cert.or_else(|| ids.split(',').next()).unwrap_or(ids);
             let mut at = place.rsplitn(3, ':');
             let (Some(column), Some(line), Some(file)) = (at.next(), at.next(), at.next()) else { continue };
             found.push(finding(id, file, line, column, out));

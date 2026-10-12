@@ -340,13 +340,16 @@ Klammern, ein Ausgang je Funktion —, hält für ihn der Generator; so sieht
 MISRA automatisch erzeugten Code (MISRA AC AGC). Was ein Werkzeug als
 Fehler im Ablauf meldet, ist behoben: `memcpy` statt Zeiger-Casts im Trace
 (CERT C EXP39-C), kein ungelesenes `now`, `NULL` statt `0`, ausdrücklich
-breite Multiplikationen vor einem Versatz.
+breite Multiplikationen vor einem Versatz. Offen, ohne dass ein Werkzeug
+es meldet: Der Rahmen schreibt und liest die Arena sonst über Zeiger-Casts
+auf ihr Byte-Feld, ohne `-fno-strict-aliasing` (CERT C EXP39-C, FB-650).
 
 **Abweichungen.** Jeder Befund steht hier mit Teil und genauer Zahl;
 `tests/c_analysis.rs` verlangt genau diese Zahlen. Ein neuer Befund
 scheitert wie ein behobener, und die Zahl fällt nur. Der Grund einer
 Fehlmeldung beginnt mit „Fehlmeldung“; von einer Regel der Kategorie
-Mandatory (M) weicht nichts ab.
+Mandatory (M) weicht nichts ab. Trägt eine Stelle bei clang-tidy mehrere
+Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 
 | Befund | Teil | Zahl | Regel | Grund |
 |---|---|---|---|---|
@@ -354,9 +357,11 @@ Mandatory (M) weicht nichts ab.
 | `misra-c2012-2.5` | SDK | 17 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
 | `constParameterPointer` | Port | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: `pthread_attr_setstack` nimmt den Stack als `void *`, und der Faden schreibt hinein; `const` brauchte einen Cast, der es wieder entfernt (11.8) |
 | `misra-c2012-11.5` | Port | 3 | MISRA C:2012 11.5 (A) | `pthread_create` reicht den Port als `void *` an den Faden, der Wirt den Stack als `void *` (`takt_posix_config`) |
+| `cert-dcl37-c` | Port | 1 | CERT C DCL37-C | `#define _POSIX_C_SOURCE` ist das Feature Test Macro, mit dem POSIX die Schnittstelle wählen lässt; der Name gehört der Umgebung, die ihn liest |
 | `misra-c2012-2.5` | Port | 1 | MISRA C:2012 2.5 (A) | `_POSIX_C_SOURCE` liest nur die C-Bibliothek: Es macht `clock_gettime` und `pthread_condattr_setclock` sichtbar |
 | `misra-c2012-21.1` | Port | 1 | MISRA C:2012 21.1 (R) | `#define _POSIX_C_SOURCE` wählt die Schnittstelle, wie POSIX es vorschreibt (Feature Test Macro); kein Bezeichner der Bibliothek ändert sich |
 | `misra-c2012-21.10` | Port | 1 | MISRA C:2012 21.10 (R) | Der Port ist die Uhr des Wirts: `CLOCK_MONOTONIC` und `struct timespec` aus `<time.h>`; Datum und Ortszeit benutzt er nicht |
+| `cert-dcl37-c` | Beispiele | 1 | CERT C DCL37-C | wie im Port: `_POSIX_C_SOURCE` |
 | `misra-c2012-1.4` | Beispiele | 2 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack |
 | `misra-c2012-11.5` | Beispiele | 4 | MISRA C:2012 11.5 (A) | Die Rückrufe der Leitung und der Treiber bekommen den Zeiger des Wirts als `void *` (`takt_sdk.h`); nur der Wirt weiß, was dahinter liegt |
 | `misra-c2012-17.3` | Beispiele | 1 | MISRA C:2012 17.3 (M) | Fehlmeldung: `fcntl` ist in `<fcntl.h>` deklariert; `posix.cfg` kennt die Form mit drei Argumenten nicht |
@@ -371,26 +376,26 @@ Mandatory (M) weicht nichts ab.
 | `misra-c2012-10.4` | Rahmen | 321 | MISRA C:2012 10.4 (R) | wie 10.1 |
 | `misra-c2012-10.7` | Rahmen | 6 | MISRA C:2012 10.7 (R) | wie 10.1 |
 | `misra-c2012-10.8` | Rahmen | 11 | MISRA C:2012 10.8 (R) | wie 10.1 |
-| `misra-c2012-11.3` | Rahmen | 7 | MISRA C:2012 11.3 (R) | Die Arena ist ein Byte-Feld mit festen Versätzen, die der erzeugte Code mit genau einem Typ je Versatz liest und schreibt; der Rahmen greift mit demselben Typ zu. Ohne `-fno-strict-aliasing` bleibt das gegen CERT C EXP39-C offen (FB-650) |
 | `misra-c2012-11.5` | Rahmen | 69 | MISRA C:2012 11.5 (A) | Arena und Treiberobjekt kommen als `void *` über die C-ABI (`takt_sdk.h`, `P_ops`) |
-| `misra-c2012-12.1` | Rahmen | 142 | MISRA C:2012 12.1 (A) | erzeugte Ausdrücke; den Vorrang legt der Generator fest, nicht ein Leser |
-| `misra-c2012-12.3` | Rahmen | 88 | MISRA C:2012 12.3 (A) | Deklarationen mehrerer Felder und Variablen in einer Zeile des erzeugten Texts |
+| `misra-c2012-12.1` | Rahmen | 134 | MISRA C:2012 12.1 (A) | erzeugte Ausdrücke; den Vorrang legt der Generator fest, nicht ein Leser |
+| `misra-c2012-12.3` | Rahmen | 89 | MISRA C:2012 12.3 (A) | Deklarationen mehrerer Felder und Variablen in einer Zeile des erzeugten Texts |
 | `misra-c2012-13.3` | Rahmen | 8 | MISRA C:2012 13.3 (A) | `x++` in Vergleichen und Indizes der Ringe; erzeugt, nicht von Hand geändert |
 | `misra-c2012-14.4` | Rahmen | 70 | MISRA C:2012 14.4 (R) | Bedingungen auf Zählern und Zeigern (`if (k)`, `if (o->variants)`) im erzeugten Text |
-| `misra-c2012-15.5` | Rahmen | 237 | MISRA C:2012 15.5 (A) | früher Ausgang in erzeugten Funktionen; jeder Weg läuft gegen den Interpreter |
-| `misra-c2012-15.6` | Rahmen | 238 | MISRA C:2012 15.6 (R) | einzeilige Rümpfe im erzeugten Text; die Gefahr der Regel, eine später eingefügte Anweisung, besteht nur von Hand |
+| `misra-c2012-15.5` | Rahmen | 236 | MISRA C:2012 15.5 (A) | früher Ausgang in erzeugten Funktionen; jeder Weg läuft gegen den Interpreter |
+| `misra-c2012-15.6` | Rahmen | 230 | MISRA C:2012 15.6 (R) | einzeilige Rümpfe im erzeugten Text; die Gefahr der Regel, eine später eingefügte Anweisung, besteht nur von Hand |
 | `misra-c2012-15.7` | Rahmen | 9 | MISRA C:2012 15.7 (R) | Ketten aus `if … else if` ohne `else`, wo der letzte Fall nichts tut |
 | `misra-c2012-16.6` | Rahmen | 10 | MISRA C:2012 16.6 (R) | Ein `switch` über die Kanäle eines Programms hat für ein Programm ohne solche Kanäle nur `default` |
-| `misra-c2012-17.3` | Rahmen | 27 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für die Gleitkomma-Umgebung (4.2), gekapselt in je zwei Funktionen (D.4.3) |
-| `misra-c2012-17.7` | Rahmen | 59 | MISRA C:2012 17.7 (R) | `memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
+| `misra-c2012-17.2` | Rahmen | 6 | MISRA C:2012 17.2 (R) | wie `misc-no-recursion`: der Abstieg des Traces in die Felder eines Records, so tief wie die Typen des Programms |
+| `misra-c2012-17.3` | Rahmen | 28 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für die Gleitkomma-Umgebung (4.2), gekapselt in je zwei Funktionen (D.4.3) |
+| `misra-c2012-17.7` | Rahmen | 71 | MISRA C:2012 17.7 (R) | `memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
 | `misra-c2012-17.8` | Rahmen | 10 | MISRA C:2012 17.8 (A) | Parameter als Zähler in erzeugten Schleifen |
 | `misra-c2012-18.4` | Rahmen | 25 | MISRA C:2012 18.4 (A) | Zeiger in die Arena als Basis plus Versatz, die Versätze aus dem Layout (`takt-frame::layout`) |
 | `misra-c2012-2.2` | Rahmen | 20 | MISRA C:2012 2.2 (R) | `+ 0` und `* 1`: Der Generator schreibt jeden Zugriff in derselben Form (Basis plus Versatz), auch beim Versatz 0; der Übersetzer faltet die Konstante |
 | `misra-c2012-2.4` | Rahmen | 2 | MISRA C:2012 2.4 (A) | Tags der geteilten Typen des Randes, die nicht jedes Programm braucht |
 | `misra-c2012-2.5` | Rahmen | 20 | MISRA C:2012 2.5 (A) | Makros des Kopfs und der geteilten Typen, die nicht jedes Programm nutzt |
-| `misra-c2012-2.7` | Rahmen | 22 | MISRA C:2012 2.7 (A) | Die Einstiege haben für jedes Programm dieselbe Signatur (`P_ops`); ein Programm ohne Journal oder Tunables liest manche Parameter nicht |
+| `misra-c2012-2.7` | Rahmen | 23 | MISRA C:2012 2.7 (A) | Die Einstiege haben für jedes Programm dieselbe Signatur (`P_ops`); ein Programm ohne Journal oder Tunables liest manche Parameter nicht |
 | `misra-c2012-20.1` | Rahmen | 5 | MISRA C:2012 20.1 (A) | `#include <stddef.h>` im Block der geteilten Typen des Randes, den ein Wächter-Makro umschließt |
-| `misra-c2012-21.15` | Rahmen | 2 | MISRA C:2012 21.15 (R) | `memcpy` zwischen einem Wert und dem Byte-Feld der Arena; die Bytes sind der Wert |
+| `misra-c2012-21.15` | Rahmen | 12 | MISRA C:2012 21.15 (R) | `memcpy` zwischen einem Wert und seinen Bytes in der Arena: der Weg, den CERT C EXP39-C statt eines Zeiger-Casts verlangt |
 | `misra-c2012-21.2` | Rahmen | 12 | MISRA C:2012 21.2 (R) | Der Rahmen ist freistehend (`-ffreestanding`, keine C-Bibliothek) und deklariert `memcpy`, `memmove`, `memset` und `memcmp` selbst, mit den Signaturen des Standards |
 | `misra-c2012-5.1` | Rahmen | 3 | MISRA C:2012 5.1 (R) | Das Symbol `P_logic_<Hash>` trägt den Logik-Hash, damit das Archiv eines anderen Programms nicht bindet; die Linker aller Ziele unterscheiden die volle Länge |
 | `misra-c2012-5.6` | Rahmen | 2 | MISRA C:2012 5.6 (R) | wie 5.7, für den Typ der Jobs |
