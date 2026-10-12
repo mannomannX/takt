@@ -1016,33 +1016,79 @@ fn for_range(
     let vars = ctx.vars();
     let n = lower_expr(count, ctx.program, m, &vars)?;
     let (ptr, ty) = place(&Place::Var(var), ctx, m)?;
-    m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
     let k = ctx.next_label(m);
     let name = &ctx.machine.name;
-    let (head, loop_body, end_at) =
-        (format!("fuer{k}_{name}"), format!("fuer{k}_{name}_rumpf"), format!("fuer{k}_{name}_ende"));
-    m.void_inst(&format!("br label %{head}"));
-    m.label(&head);
-    let i = m.inst(&format!("load {ty}, ptr {ptr}"));
-    // Vorzeichenbehaftet: `range(n)` laeuft von 0 bis n-1 ueber einem
-    // `int` (3.1).
-    let go_on = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
-    m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
-    m.label(&loop_body);
-    ctx.breaks.push(end_at.clone());
+    let at = RangeLabels {
+        first: format!("fuer{k}_{name}"),
+        body: format!("fuer{k}_{name}_rumpf"),
+        step: format!("fuer{k}_{name}_weiter"),
+        end: format!("fuer{k}_{name}_ende"),
+    };
+    range_head(&ptr, &ty, &n, &at, m)?;
+    ctx.breaks.push(at.end.clone());
     ctx.loops.push((ptr.to_string(), ty.clone(), crate::machine::range_bound(count)));
     let result = block(body, ctx, m);
     ctx.loops.pop();
     ctx.breaks.pop();
     result?;
-    // Der Zaehler waechst am Ende des Rumpfs; ein `break` springt daran
-    // vorbei, und das ist richtig — er verlaesst die Schleife.
+    range_tail(&ptr, &ty, &n, &at, m)
+}
+
+/// Die Sprungziele einer Zaehlschleife.
+struct RangeLabels {
+    first: String,
+    body: String,
+    step: String,
+    end: String,
+}
+
+/// Der Kopf von `for i in range(n)` (4.1), wie der Interpreter ihn faehrt:
+/// Mit `n <= 0` laeuft kein Durchlauf und die Variable bleibt unberuehrt,
+/// sonst beginnt der erste mit `i = 0`. Verglichen wird in `i64`, nicht im
+/// Typ der Variable: Der fasst nur `0..n-1`, und `n` darf seine Grenze
+/// sein — `range(32768)` ueber einem `i16` lief sonst nie (FB-529).
+fn range_head(ptr: &Reg, ty: &LlvmType, n: &Lowered, at: &RangeLabels, m: &mut Module) -> Result<(), NotYet> {
+    let bound = range_count(n, m)?;
+    let any = m.inst(&format!("icmp slt i64 0, {bound}"));
+    m.void_inst(&format!("br i1 {any}, label %{}, label %{}", at.first, at.end));
+    m.label(&at.first);
+    m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
+    m.void_inst(&format!("br label %{}", at.body));
+    m.label(&at.body);
+    Ok(())
+}
+
+/// Das Ende eines Durchlaufs: Folgt einer, waechst die Variable um eins,
+/// sonst haelt sie nach dem letzten `n - 1` wie im Interpreter. Ob einer
+/// folgt, entscheidet `i + 1 < n` in `i64`, bevor die Variable waechst; so
+/// muss sie `n` nie fassen. Ein `break` springt an diesem Ende vorbei.
+fn range_tail(ptr: &Reg, ty: &LlvmType, n: &Lowered, at: &RangeLabels, m: &mut Module) -> Result<(), NotYet> {
     let cur = m.inst(&format!("load {ty}, ptr {ptr}"));
+    // Der Zaehler ist nie negativ: Er waechst von 0 bis n - 1.
+    let wide = match ty {
+        LlvmType::Int(64) => cur.to_string(),
+        LlvmType::Int(_) => m.inst(&format!("zext {ty} {cur} to i64")).to_string(),
+        _ => return Err(NotYet { what: "Schleifenvariable ohne Ganzzahltyp" }),
+    };
+    let bound = range_count(n, m)?;
+    let following = m.inst(&format!("add i64 {wide}, 1"));
+    let more = m.inst(&format!("icmp slt i64 {following}, {bound}"));
+    m.void_inst(&format!("br i1 {more}, label %{}, label %{}", at.step, at.end));
+    m.label(&at.step);
     let next = m.inst(&format!("add {ty} {cur}, 1"));
     m.void_inst(&format!("store {ty} {next}, ptr {ptr}"));
-    m.void_inst(&format!("br label %{head}"));
-    m.label(&end_at);
+    m.void_inst(&format!("br label %{}", at.body));
+    m.label(&at.end);
     Ok(())
+}
+
+/// Die Schranke `n` als `i64`; sie ist ein `int` (3.2), also vorzeichenbehaftet.
+fn range_count(n: &Lowered, m: &mut Module) -> Result<String, NotYet> {
+    match n.ty {
+        LlvmType::Int(64) => Ok(n.value.clone()),
+        LlvmType::Int(bits) => Ok(m.inst(&format!("sext i{bits} {} to i64", n.value)).to_string()),
+        _ => Err(NotYet { what: "Schranke von `range` ohne Ganzzahltyp" }),
+    }
 }
 
 /// `for x in W` (9.2, 9.6): ueber ein Fenster laeuft die Schleife ueber
@@ -1321,28 +1367,19 @@ fn fn_for<V: Slots>(
 ) -> Result<(), NotYet> {
     let n = lower_expr(count, ctx.program, m, &ctx.vars)?;
     let (ptr, ty) = ctx.vars.slot(var, m).ok_or(NotYet { what: "Schleifenvariable" })?;
-    m.void_inst(&format!("store {ty} 0, ptr {ptr}"));
     let k = ctx.next_label(m);
-    let (head, loop_body, end_at) = (format!("fuer{k}"), format!("fuer{k}_rumpf"), format!("fuer{k}_ende"));
-    m.void_inst(&format!("br label %{head}"));
-    m.label(&head);
-    let i = m.inst(&format!("load {ty}, ptr {ptr}"));
-    // Der Vergleich ist vorzeichenbehaftet: `range(n)` laeuft von 0 bis
-    // n-1, und `n` ist ein `int` (3.2).
-    let go_on = m.inst(&format!("icmp slt {ty} {i}, {}", n.value));
-    m.void_inst(&format!("br i1 {go_on}, label %{loop_body}, label %{end_at}"));
-    m.label(&loop_body);
-    ctx.breaks.push(end_at.clone());
+    let at = RangeLabels {
+        first: format!("fuer{k}"),
+        body: format!("fuer{k}_rumpf"),
+        step: format!("fuer{k}_weiter"),
+        end: format!("fuer{k}_ende"),
+    };
+    range_head(&ptr, &ty, &n, &at, m)?;
+    ctx.breaks.push(at.end.clone());
     let result = fn_block(body, ctx, m);
     ctx.breaks.pop();
     result?;
-    // Der Zaehler waechst am Ende des Rumpfs; ein `break` springt daran
-    // vorbei, und das ist richtig — es verlaesst die Schleife.
-    let cur = m.inst(&format!("load {ty}, ptr {ptr}"));
-    let next = m.inst(&format!("add {ty} {cur}, 1"));
-    m.void_inst(&format!("store {ty} {next}, ptr {ptr}"));
-    m.void_inst(&format!("br label %{head}"));
-    m.label(&end_at);
+    range_tail(&ptr, &ty, &n, &at, m)?;
     Ok(())
 }
 
