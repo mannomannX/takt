@@ -87,11 +87,12 @@ fn kept(text: &str) -> String {
     }
 }
 
-/// Was [`complete`] ohne die Stacks verlangt: keine verworfenen Bytes, die
+/// Was [`complete`] ohne die Stacks verlangt: keine verworfenen Bytes — ausser
+/// in einem Messlauf, der nur seine Bilanz belegt ([`Options::lossy`]) —, die
 /// Bilanz ab [`MARK`] und ein Trace bis zum letzten Tick.
 pub(crate) fn balanced(text: &str, options: &Options) -> Result<(), String> {
     let summary = text.rfind("takt schlief ");
-    if let Some(n) = counter(text, "verworfen").filter(|n| *n > 0) {
+    if let Some(n) = counter(text, "verworfen").filter(|n| *n > 0 && !options.lossy) {
         return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"));
     }
     let mark = text[..summary.unwrap_or(text.len())].rfind(MARK);
@@ -272,11 +273,13 @@ pub enum Bin {
     /// `takt`: das Programm unter der Tickschleife, mit Trace.
     #[default]
     Takt,
-    /// `bench`: das Messprogramm von `takt bench` (13.8) mit allen Kernen,
+    /// `bench`: das Messprogramm von `takt bench` (13.8), ein Teil davon,
     /// gebaut mit dem Merkmal `bench`; das Takt-Programm bleibt ungenutzt.
     Bench {
         /// Um wie viele Byte das Programm im Flash verschoben liegt (FB-367).
         shift: u32,
+        /// Welcher Teil des Messprogramms (FB-740).
+        part: crate::bench::Part,
     },
     /// `natives`: die Vektoren der kuratierten Natives mit dem
     /// Stack-Bedarf je Aufruf (13.8); das Takt-Programm bleibt ungenutzt.
@@ -367,6 +370,12 @@ pub struct Options {
     /// prueft die Vollstaendigkeit selbst und nennt sie neben den anderen
     /// Pflichten, also gibt [`complete`] sie ungeprueft weiter.
     pub judged: bool,
+    /// Ein Messlauf in Echtzeit, der nur seine Bilanz belegt, nicht seinen
+    /// Trace: der Lastkern der Stack-Reserve (13.8, FB-741). Verwirft die
+    /// Telemetrie, wie 12.2 es im Betrieb verlangt, wenn die Leitung ein
+    /// Aufholen nicht traegt, zaehlt der Lauf trotzdem; dass ankam, was das
+    /// Board sandte, prueft [`complete`] weiter (FB-304).
+    pub lossy: bool,
 }
 
 /// Ein absichtlich falscher Port (12.11, M11 Schritt 15): Die Portpruefung
@@ -467,10 +476,15 @@ impl Options {
         Options { judged: true, ..self }
     }
 
-    /// Das Messprogramm mit `runs` Messungen je Reihe, um `shift` Byte
-    /// verschoben.
-    pub fn bench(runs: u64, shift: u32) -> Options {
-        Options { ticks: runs, fresh: true, bin: Bin::Bench { shift }, ..Options::default() }
+    /// Derselbe Lauf als Messlauf, der nur seine Bilanz belegt ([`Options::lossy`]).
+    pub fn lossy(self) -> Options {
+        Options { lossy: true, ..self }
+    }
+
+    /// Teil `part` des Messprogramms mit `runs` Messungen je Reihe, um
+    /// `shift` Byte verschoben.
+    pub fn bench(runs: u64, shift: u32, part: crate::bench::Part) -> Options {
+        Options { ticks: runs, fresh: true, bin: Bin::Bench { shift, part }, ..Options::default() }
     }
 
     /// Wie lange ein Lauf hoechstens dauert, bis `takt end` kommt: das
@@ -547,11 +561,57 @@ pub trait Board {
         &[0]
     }
 
+    /// In wie viele Teile `takt bench` sein Messprogramm teilt, damit jedes
+    /// Abbild mit seiner Mindestreserve passt (FB-740).
+    fn bench_parts(&self) -> u32 {
+        1
+    }
+
+    /// Wie viel Platz das Abbild `elf` in den Speicherbereichen des Boards
+    /// laesst, in denen es eng werden kann (FB-740); leer, wo das Board keine
+    /// Grenze kennt.
+    fn room(&self, _elf: &Path) -> Result<Vec<Room>, String> {
+        Ok(Vec::new())
+    }
+
     /// Die Formen, in denen das Bring-up laufen kann ([`Options::form`],
     /// 12.11): In jeder misst `takt bench` die Stack-Reserve.
     fn forms(&self) -> &'static [Form] {
         &[Form::Own]
     }
+}
+
+/// Wie viel Platz ein Abbild in einem Speicherbereich des Boards laesst
+/// (FB-740).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Room {
+    /// Der Bereich, wie Meldungen ihn nennen.
+    pub region: &'static str,
+    /// Seine Groesse in Byte.
+    pub size: u64,
+    /// Was das Abbild davon frei laesst.
+    pub free: u64,
+}
+
+impl Room {
+    /// Der Bereich, in dem ein Abbild von `used` Byte liegt.
+    pub fn of(region: &'static str, size: u64, used: u64) -> Room {
+        Room { region, size, free: size.saturating_sub(used) }
+    }
+
+    /// Das RAM bis zum oberen Ende `top` des Hauptstacks: Was zwischen dem
+    /// Boden des Stacks (`floor`) und `TICK_STACK_BYTES` (`stack`) frei
+    /// bleibt, hat das Abbild uebrig (12.3, `takt_stack.x`). `origin` ist der
+    /// Anfang des RAM.
+    pub fn below_stack(origin: u64, top: u64, floor: u64, stack: u64) -> Room {
+        Room { region: "RAM", size: top.saturating_sub(origin), free: top.saturating_sub(floor).saturating_sub(stack) }
+    }
+}
+
+/// Der Wert eines Symbols in `symbols`, ein Fehler mit seinem Namen, wenn es
+/// fehlt.
+pub(crate) fn symbol(symbols: &[takt_llvm::inspect::Symbol], name: &str) -> Result<u64, String> {
+    symbols.iter().find(|s| s.name == name).map(|s| s.address).ok_or_else(|| format!("das Abbild nennt `{name}` nicht"))
 }
 
 /// Die Wurzel des Repositorys ([`crate::repo_root`]).
@@ -719,8 +779,11 @@ impl Bringup {
             cargo.args(["--features", feature]);
         }
         match &options.bin {
-            Bin::Bench { shift } => cargo.args(["--features", "bench"]).env("TAKT_BENCH_SHIFT", shift.to_string()),
-            _ => cargo.env_remove("TAKT_BENCH_SHIFT"),
+            Bin::Bench { shift, part } => cargo
+                .args(["--features", "bench"])
+                .env("TAKT_BENCH_SHIFT", shift.to_string())
+                .env(crate::bringup::BENCH_PART, part.to_string()),
+            _ => cargo.env_remove("TAKT_BENCH_SHIFT").env_remove(crate::bringup::BENCH_PART),
         };
         built_executable(&mut cargo)
     }
@@ -778,9 +841,10 @@ pub(crate) fn image_key(triple: &str, program: &Path, options: &Options) -> Resu
     match &options.bin {
         Bin::Takt => f.str("takt"),
         // Die Kerne stehen ausserhalb von `src`; ihre Kennung deckt sie.
-        Bin::Bench { shift } => {
+        Bin::Bench { shift, part } => {
             f.str("bench");
             f.u64(u64::from(*shift));
+            f.str(&part.to_string());
             f.str(&crate::bench::suite_id(&crate::bench::suite(), &crate::bench::math_vectors()?));
         }
         // Die Vektoren der Natives und der Mathematik, die das Bauskript
@@ -1279,7 +1343,8 @@ mod tests {
         let file = refused.split_once("der Lauf: ").map(|(_, f)| f.trim()).expect("eine Datei");
         assert!(std::fs::read_to_string(file).is_ok_and(|kept| kept.contains(body)), "{file}");
         assert!(complete(run(body, 0, body.len()), &any).is_ok());
-        assert!(complete("bench takt frame min 1\ntakt end\n".to_string(), &Options::bench(1, 0)).is_ok());
+        let bench = Options::bench(1, 0, crate::bench::Part::WHOLE);
+        assert!(complete("bench takt frame min 1\ntakt end\n".to_string(), &bench).is_ok());
         // 12.3: ein Stack ueber seiner Schranke ist ein Fehler, darunter keiner.
         let with = |stacks: &str| run(body, 0, body.len()).replace("stack 2048\r\n", &format!("{stacks}\r\n"));
         let deep = with("stack 2048 schranke 1024");
@@ -1289,6 +1354,36 @@ mod tests {
         assert!(complete(with("stack 512 schranke 1024 jobstack 500 jobschranke 600"), &any).is_ok());
         // 13.8: Wer die Reserve misst, haelt die Tiefe nicht gegen die alte.
         assert!(complete(with("stack 2048 schranke 1024"), &Options::default().calibrating()).is_ok());
+    }
+
+    /// **Der Lastkern in Echtzeit belegt nur seine Bilanz** (FB-741): Holt der
+    /// Kern nach einem blockierenden Journal die verpassten Grenzen nach,
+    /// verwirft die Telemetrie, was Ring und Leitung nicht fassen (12.2), und
+    /// der Lauf zaehlt trotzdem. Was ankam, muss stimmen (FB-304), und die
+    /// Tickschleife, deren Zeitzeilen den Jitter tragen, verwirft nichts.
+    #[test]
+    fn a_lossy_measuring_run_may_drop_but_not_lose_on_the_way() {
+        let body = "t=1 out a 1\r\n";
+        let load = Options::timed(1000).lossy().calibrating();
+        assert!(complete(run(body, 401, body.len()), &load).is_ok());
+        assert!(complete(run(body, 401, body.len() + 1), &load).is_err_and(|e| e.contains("FB-304")));
+        let looped = Options::timed(1000).calibrating();
+        assert!(complete(run(body, 401, body.len()), &looped).is_err_and(|e| e.contains("401")));
+    }
+
+    /// Der Platz eines Abbilds (FB-740): im Flash, was das Abbild nicht
+    /// belegt; im RAM, was zwischen dem Boden des Hauptstacks und
+    /// `TICK_STACK_BYTES` bleibt — die Zahlen des F401 an bdeae801.
+    #[test]
+    fn the_room_of_an_image_is_what_it_leaves() {
+        assert_eq!(Room::of("Flash", 196_608, 194_400).free, 2208);
+        assert_eq!(Room::of("Flash", 196_608, 200_000).free, 0);
+        let ram = Room::below_stack(0x2000_0000, 0x2001_0000, 0x2000_28c0, 2652);
+        assert_eq!((ram.size, ram.free), (65_536, 52_452));
+        let symbols =
+            [takt_llvm::inspect::Symbol { name: "_stack_start".into(), address: 0x2001_0000, size: 0, kind: 'A' }];
+        assert_eq!(symbol(&symbols, "_stack_start"), Ok(0x2001_0000));
+        assert!(symbol(&symbols, "_stack_end").is_err_and(|e| e.contains("_stack_end")));
     }
 
     /// **Ein Lauf des Programms braucht Marke, Bilanz und alle Ticks**

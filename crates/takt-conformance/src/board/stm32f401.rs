@@ -264,6 +264,37 @@ impl Board for Stm32f401 {
         &[0, 8, 24]
     }
 
+    /// Das ganze Messprogramm brauchte zuletzt mehr als die 192 KiB der
+    /// Anwendung (FB-740); in zwei Teilen belegt jeder etwa drei Fuenftel.
+    fn bench_parts(&self) -> u32 {
+        2
+    }
+
+    /// Der F401 fuehrt aus dem Flash aus: Dort liegt jeder Kern mit seinem
+    /// Rahmen, und dort wurde es zuerst eng (FB-740). Belegt ist, was das
+    /// Rohabbild umfasst, das der Lauf schreibt. Im RAM bleibt, was der
+    /// Hauptstack ueber `TICK_STACK_BYTES` hinaus nicht braucht; sein Boden ist
+    /// der Waechter der MPU, 32 Byte an der naechsten 32-Byte-Grenze ueber
+    /// `_stack_end` (`takt_stack.x`).
+    fn room(&self, elf: &Path) -> Result<Vec<super::Room>, String> {
+        let bin = self.image(elf)?;
+        let used = std::fs::metadata(&bin).map_err(|e| format!("{}: {e}", bin.display()))?.len();
+        let symbols = Binutils::best_for(Target::THUMBV7EM)
+            .symbols(elf)
+            .ok_or_else(|| "`nm` fehlt: kein Blick ins Abbild".to_string())?;
+        let symbol = |name| super::symbol(&symbols, name);
+        let floor = symbol("_stack_end")?.next_multiple_of(32) + 32;
+        Ok(vec![
+            super::Room::of("Flash", u64::from(APP_END - APP), used),
+            super::Room::below_stack(
+                u64::from(*RAM.start()),
+                symbol("_stack_start")?,
+                floor,
+                symbol("__takt_tick_stack_bytes")?,
+            ),
+        ])
+    }
+
     /// Interrupt- und Pollform auf TIM2 und RTIC (12.8): Takt als Aufgabe,
     /// darueber Funk-ISR und Treiber-Aufgabe.
     fn forms(&self) -> &'static [Form] {
