@@ -65,7 +65,7 @@ pub fn passed(target: u64, now: u64) -> bool {
 /// werden die Ticks an der Zeitachse ([`ticks_since`]), nicht am Wecken.
 pub fn next_boundary(last: u64, period: u32, now: u64) -> u64 {
     let period = u64::from(period.max(1));
-    let behind = now.saturating_sub(last) / period;
+    let behind = now.saturating_sub(last).checked_div(period).unwrap_or(0);
     last.saturating_add(period.saturating_mul(behind.saturating_add(1)))
 }
 
