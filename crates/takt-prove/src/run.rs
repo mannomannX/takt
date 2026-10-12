@@ -343,6 +343,8 @@ fn inputs(
 ) -> Result<BTreeMap<(u64, String), Val>, Stop> {
     let mut out = BTreeMap::new();
     let mut tunes = BTreeMap::new();
+    // Je Input, ob das Modell den Wert seiner Abtastung zuletzt sah.
+    let mut shown: BTreeMap<String, bool> = BTreeMap::new();
     for (name, text) in &seen.start_params {
         if let Some(v) = tune(p, name, text, 0)? {
             tunes.insert(name.clone(), v);
@@ -428,7 +430,7 @@ fn inputs(
         let samples = usize::try_from(k).ok().and_then(|k| seen.inputs.get(k));
         for (c, s) in p.channels.iter().zip(samples.into_iter().flatten()) {
             if c.dir == Direction::Input && !matches!(p.types.get(c.ty), Type::Stream(_)) {
-                sample_inputs(p, c, s, k, &mut out)?;
+                sample_inputs(p, c, s, k, &mut shown, &mut out)?;
             }
         }
     }
@@ -452,12 +454,14 @@ fn tune(p: &Program, name: &str, text: &str, k: u64) -> Result<Option<Val>, Stop
 
 /// Eine Abtastung, wie die Maschinen sie lesen: `i.<c>.held` ohne Lieferung
 /// in diesem Tick, `i.<c>.q` die Qualitaet, `i.<c>` der Wert, wenn es einen
-/// gibt; bei `samples<T, N>` dazu, was der Rand an Werten pruefte.
+/// gibt; bei `samples<T, N>` dazu, was der Rand an Werten pruefte. `shown`
+/// haelt je Input, ob sein Wert im vorigen Tick zu sehen war.
 fn sample_inputs(
     p: &Program,
     c: &Channel,
     seen: &Seen,
     k: u64,
+    shown: &mut BTreeMap<String, bool>,
     out: &mut BTreeMap<(u64, String), Val>,
 ) -> Result<(), Stop> {
     let name = &c.name;
@@ -471,9 +475,14 @@ fn sample_inputs(
     };
     out.insert((k, format!("i.{name}.q")), Val::Int(q));
     // Der Wert einer ungueltigen Lieferung ist unbeobachtbar und im Modell
-    // null; eine gehaltene, die `Stale` wurde, traegt ihren weiter.
-    let carried = s.quality == Quality::Stale && seen.delivery.is_none();
-    let visible = matches!(s.quality, Quality::Good | Quality::Suspect) || carried;
+    // null. Eine gehaltene Abtastung ist die vorige (3.5): Sie zeigt ihren
+    // Wert, wo die vorige ihn zeigte — auch wenn sie mit dem Alter `Stale`
+    // wurde —, und eine Lieferung `Stale` bleibt null.
+    let visible = match seen.delivery {
+        Some(_) => matches!(s.quality, Quality::Good | Quality::Suspect),
+        None => shown.get(name).copied().unwrap_or(false),
+    };
+    shown.insert(name.clone(), visible);
     let unreadable = || Stop::Gap { tick: k, what: format!("die Abtastung von `{name}`") };
     match &s.value {
         // 8.9: das Array, das die Maschinen lesen.

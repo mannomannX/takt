@@ -308,6 +308,9 @@ So arbeitet jeder Strang, als wäre er allein:
     Für 03_sequences_and_faults, 06_test_harness und 120_port_writes in
     4 min (Lauf 38255550331): die drei Stellen, für die die Einordnung einen
     Pfad fand, haben jetzt einen, die Beweise dieselben Stellen mit k = 1.
+    An zwei der neuen Pfade fand der Vergleich FB-616: Der Lauf des Modells
+    gab einer gehaltenen `Stale`-Lieferung den Wert des Interpreters, den
+    das Modell null hält.
   - Die `ovf`-Stellen an `now + d`: 3 laufen erst nach 2^63 ns über (Gruppe
     `Zeitschranke`); ein Beweis über die Zeitschranke wäre eine Annahme, und
     eine Prüfstelle steht unter keiner (13.3). Die 6 in `87_fault_kinds`
