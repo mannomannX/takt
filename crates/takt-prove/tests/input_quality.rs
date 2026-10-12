@@ -124,3 +124,16 @@ fn a_tunable_takes_any_value_in_its_range() {
     let Verdict::Violated { stimulus, .. } = &v else { panic!("{v:?}") };
     assert!(stimulus.contains("tune LIMIT"), "{stimulus}");
 }
+
+/// **FB-617.** Eine Lieferung nennt eine Variante, auch die eines offenen
+/// Enums (2.5): Der Trace kennt nur Namen. Das Modell liess dem Solver jeden
+/// Code, `hot` blieb mit einem Code hinter `C` falsch, und der Interpreter
+/// las den Stimulus nicht (`Mode` hat keine Variante `3`).
+#[test]
+fn an_enum_input_delivers_only_its_variants() {
+    let input = "enum Mode open: A, B, C\ninput mode : Mode @ hw(\"i/mode\")";
+    let body = "            hot = mode.or(A) == A or mode.or(A) == B or mode.or(A) == C";
+    let p = sensor(input, body, "property known: always(hot)");
+    let Some(v) = verdict(&p, 2) else { return };
+    assert!(matches!(v, Verdict::Proven { .. }), "{v:?}");
+}
