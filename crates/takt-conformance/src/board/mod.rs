@@ -899,9 +899,9 @@ pub(crate) fn hash_program(program: &Path, f: &mut Fingerprint) -> Result<(), St
 /// Manifeste aller Crates, Manifest und Lock des Workspace und die Versionen
 /// von rustc (wie `cargo` sie im Bring-up `dir` waehlt) und clang.
 ///
-/// Von `--version` zaehlt nur die Version: Die Zeilen danach nennen
-/// Zielplattform und Installationspfad, und dieselbe Version von clang nennt
-/// unter Linux noch Quelle und Commit, unter Windows nicht ([`clang_version`]).
+/// Von `--version` zaehlt nur die erste Zeile, die Version samt Quelle und
+/// Commit: Die Zeilen danach nennen Zielplattform und Installationspfad, und
+/// die sind unter Windows andere als unter Linux.
 pub(crate) fn hash_build_inputs(dir: &Path, f: &mut Fingerprint) -> Result<(), String> {
     let root = root();
     for name in ["Cargo.toml", "Cargo.lock"] {
@@ -924,15 +924,9 @@ pub(crate) fn hash_build_inputs(dir: &Path, f: &mut Fingerprint) -> Result<(), S
     };
     f.str(&first_line(Path::new("rustc")));
     if let takt_llvm::toolchain::Clang::At(clang) = takt_llvm::toolchain::find() {
-        f.str(clang_version(&first_line(&clang)));
+        f.str(&first_line(&clang));
     }
     Ok(())
-}
-
-/// Die Version aus der ersten Zeile von `clang --version`: `22.1.8` aus
-/// `clang version 22.1.8` wie aus `clang version 22.1.8 (https://github.com/llvm/llvm-project …)`.
-fn clang_version(line: &str) -> &str {
-    line.split_whitespace().skip_while(|w| *w != "version").nth(1).unwrap_or(line)
 }
 
 /// Kopiert ein gebautes Abbild in den Zwischenspeicher: erst unter einem
@@ -1421,19 +1415,6 @@ mod tests {
     #[test]
     fn the_fingerprint_is_the_head_of_sha256() {
         assert_eq!(format!("{:016x}", Fingerprint::new().finish()), "e3b0c44298fc1c14");
-    }
-
-    /// Von `clang --version` zaehlt die Version, nicht wie das clang gebaut
-    /// wurde: Die Ausgaben unter Windows und Linux unterscheiden sich darin.
-    #[test]
-    fn only_the_version_of_clang_counts() {
-        for line in [
-            "clang version 22.1.8",
-            "clang version 22.1.8 (https://github.com/llvm/llvm-project 0123456789abcdef)",
-            "Ubuntu clang version 22.1.8 (++20261001)",
-        ] {
-            assert_eq!(clang_version(line), "22.1.8", "{line}");
-        }
     }
 
     /// **Ein abgebrochenes Kopieren hinterlaesst kein gueltiges Abbild**
