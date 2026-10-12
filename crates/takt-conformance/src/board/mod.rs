@@ -53,15 +53,34 @@ pub const MARK: &str = "takt trace\r\n";
 /// Ein Bring-up, das zu frueh `takt end` schreibt, liefert sonst einen
 /// kurzen Trace, und [`crate::compare`] saehe nur, was der Interpreter
 /// danach noch aendert.
+///
+/// Verwirft es einen Lauf, legt es dessen Text ab und nennt die Datei
+/// ([`kept`]): Der Befund steht im Text, nicht in der Meldung.
 pub(crate) fn complete(text: String, options: &Options) -> Result<String, String> {
     if options.judged {
         return Ok(text);
     }
-    if !options.calibrating {
-        within_stacks(&text)?;
+    let stacks = if options.calibrating { Ok(()) } else { within_stacks(&text) };
+    match stacks.and_then(|()| balanced(&text, options)) {
+        Ok(()) => Ok(text),
+        Err(e) => Err(format!(
+            "{e}
+{}",
+            kept(&text)
+        )),
     }
-    balanced(&text, options)?;
-    Ok(text)
+}
+
+/// Legt den Text eines verworfenen Laufs unter `takt-board-failed` im
+/// Zielverzeichnis ab und nennt die Datei.
+fn kept(text: &str) -> String {
+    let dir = crate::target_dir().join("takt-board-failed");
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let path = dir.join(format!("{stamp}-{}.log", std::process::id()));
+    match std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, text)) {
+        Ok(()) => format!("der Lauf: {}", path.display()),
+        Err(e) => format!("der Lauf liess sich nicht ablegen ({}): {e}", path.display()),
+    }
 }
 
 /// Was [`complete`] ohne die Stacks verlangt: keine verworfenen Bytes, die
@@ -1233,7 +1252,11 @@ mod tests {
     fn a_trace_with_dropped_bytes_is_refused() {
         let body = "t=1 out a 1\r\n";
         let any = Options::default();
-        assert!(complete(run(body, 25076, body.len()), &any).is_err_and(|e| e.contains("25076")));
+        let refused = complete(run(body, 25076, body.len()), &any).expect_err("verworfen");
+        assert!(refused.contains("25076"), "{refused}");
+        // Der Text des verworfenen Laufs liegt in der Datei, die die Meldung nennt.
+        let file = refused.split_once("der Lauf: ").map(|(_, f)| f.trim()).expect("eine Datei");
+        assert!(std::fs::read_to_string(file).is_ok_and(|kept| kept.contains(body)), "{file}");
         assert!(complete(run(body, 0, body.len()), &any).is_ok());
         assert!(complete("bench takt frame min 1\ntakt end\n".to_string(), &Options::bench(1, 0)).is_ok());
         // 12.3: ein Stack ueber seiner Schranke ist ein Fehler, darunter keiner.
