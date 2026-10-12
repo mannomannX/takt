@@ -72,12 +72,13 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void};
 use core::marker::PhantomData;
 use core::mem::{MaybeUninit, align_of, size_of};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use takt_rt_baremetal::{Cadence, JournalStats, Port, Stacks, Telemetry, Trace};
 use takt_rt_core::port_test::{self, ForeignLoad};
 use takt_rt_core::{
     Clock, Journal, Memory, NextRun, Nvm, NvmState, Outputs, Persist, Persisting, Policy, Profile, Runtime, Store,
-    Tolerance, Unloaded, Volatile, Watchdog,
+    Tolerance, Tunables, Unloaded, Volatile, Watchdog,
 };
 
 // Die Natives und die Mathematik: Ihre Symbole ruft der erzeugte Code, und
@@ -681,17 +682,69 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
     }
 }
 
-/// Die Zeit des Wirts: der Augenblick, den er `takt_core_service` nennt.
-struct HostClock(i64);
+/// Die Zeit des Wirts: der Augenblick, den er `takt_core_service` nennt, und
+/// sein Weckereignis aus [`takt_core_wake`], das im Speicher des Kerns liegt.
+struct HostClock {
+    now: i64,
+    wake: *const AtomicBool,
+}
 
 impl Clock for HostClock {
     fn now(&self) -> i64 {
-        self.0
+        self.now
     }
 
     /// Der Kern ohne Warten wartet nie; gerufen, stellt sie die Uhr nur vor.
     fn wait_until(&mut self, deadline: i64) {
-        self.0 = self.0.max(deadline);
+        self.now = self.now.max(deadline);
+    }
+
+    /// Ein Weckereignis des Wirts seit dem letzten Aufruf (9.9).
+    fn woken(&mut self) -> bool {
+        // SAFETY: Das Flag liegt im Speicher des Kerns, der so lange lebt wie er.
+        unsafe { (*self.wake).swap(false, Ordering::SeqCst) }
+    }
+}
+
+/// Die Tunables des Wirts (`struct takt_tunables`, 8.4): `next` nennt je
+/// Aufruf eine Aenderung der Grenze `k` in Aufzeichnungsreihenfolge und
+/// liefert 1, am Ende 0; `idle` sagt, ob die Quelle ruht, und darf fehlen.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TunablesOps {
+    /// Der Zeiger des Wirts fuer seine Rueckrufe.
+    pub ctx: *mut c_void,
+    /// Die naechste Aenderung der Grenze `k`: Parameter und Wert; 0 am Ende.
+    pub next:
+        unsafe extern "C" fn(ctx: *mut c_void, k: u64, param: *mut u32, value: *mut *const u8, len: *mut u32) -> i32,
+    /// Ruht die Quelle? Null heisst: Das weiss sie nicht.
+    pub idle: Option<unsafe extern "C" fn(ctx: *mut c_void) -> u8>,
+}
+
+/// Die Tunables hinter ihrer Tabelle.
+struct HostTunables(TunablesOps);
+
+impl Tunables for HostTunables {
+    fn poll(&mut self, k: u64, apply: &mut dyn FnMut(u32, &[u8])) {
+        loop {
+            let (mut param, mut value, mut len) = (0u32, core::ptr::null::<u8>(), 0u32);
+            // SAFETY: Der Wirt sagt zu, dass der Rueckruf waehrend des Aufrufs gilt.
+            let more = unsafe { (self.0.next)(self.0.ctx, k, &mut param, &mut value, &mut len) };
+            let Ok(len) = usize::try_from(len) else { break };
+            let bytes: &[u8] = match (more, len, value.is_null()) {
+                (0, _, _) | (_, 1.., true) => break,
+                (_, 0, _) => &[],
+                // SAFETY: Der Wirt nennt `len` lesbare Byte an `value`, gueltig bis
+                // zum naechsten Aufruf von `next`.
+                _ => unsafe { core::slice::from_raw_parts(value, len) },
+            };
+            apply(param, bytes);
+        }
+    }
+
+    fn idle(&mut self) -> bool {
+        // SAFETY: wie oben.
+        self.0.idle.is_some_and(|idle| unsafe { idle(self.0.ctx) } != 0)
     }
 }
 
@@ -746,15 +799,15 @@ enum Engine {
 }
 
 impl Engine {
-    fn service(&mut self, now: i64) -> takt_rt_core::Next {
+    fn service(&mut self, now: i64, tunables: Option<&mut dyn Tunables>) -> takt_rt_core::Next {
         match self {
             Engine::Volatile(rt) => {
-                rt.clock.0 = now;
-                rt.service()
+                rt.clock.now = now;
+                rt.service_with(tunables)
             }
             Engine::Persisting(rt) => {
-                rt.clock.0 = now;
-                rt.service()
+                rt.clock.now = now;
+                rt.service_with(tunables)
             }
         }
     }
@@ -786,13 +839,22 @@ impl Engine {
     }
 }
 
-/// Was im Speicher des Wirts liegt. Tabelle und Arena stehen vor dem Kern:
-/// Der Job-Kontext liest nur sie, waehrend der Schrittkontext den Kern haelt.
+/// Was im Speicher des Wirts liegt. Tabelle, Arena und das Weckereignis
+/// stehen vor dem Kern: Der Job-Kontext liest nur Tabelle und Arena,
+/// [`takt_core_wake`] setzt nur das Flag, waehrend der Schrittkontext den
+/// Kern haelt.
 #[repr(C)]
 struct Parts {
     ops: *const Ops,
     arena: *mut c_void,
+    wake: AtomicBool,
     engine: Engine,
+}
+
+/// Die Uhr eines Kerns in `core`, mit dem Weckereignis im Speicher des Kerns.
+fn host_clock(core: *mut Core) -> HostClock {
+    // SAFETY: nur die Adresse des Felds, ohne Referenz; `Parts` steht danach dort.
+    HostClock { now: 0, wake: unsafe { &raw const (*core.cast::<Parts>()).wake } }
 }
 
 const _: () = assert!(size_of::<Parts>() <= CORE_BYTES && align_of::<Parts>() <= 8, "`CORE_BYTES` zu klein");
@@ -873,9 +935,10 @@ pub unsafe extern "C" fn takt_core_init(
     let tick_ns = unsafe { (*ops).tick_ns };
     let mut program = CProgram::new(ops, arena, user);
     program.ensure_init();
-    let rt = Runtime::new(program, HostClock(0), watchdog, host_sink(tick_ns), profile, tick_ns, policy);
+    let rt = Runtime::new(program, host_clock(core), watchdog, host_sink(tick_ns), profile, tick_ns, policy);
+    let wake = AtomicBool::new(false);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
-    unsafe { core.cast::<Parts>().write(Parts { ops, arena, engine: Engine::Volatile(rt) }) };
+    unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, engine: Engine::Volatile(rt) }) };
     status::OK
 }
 
@@ -930,9 +993,10 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     let (persist, _, _) = Unloaded::new(journal, current, stored).load(&mut program);
     program.ensure_init();
     let sink = host_sink(o.tick_ns);
-    let rt = Runtime::journaled(program, persist, HostClock(0), watchdog, sink, profile, o.tick_ns, policy);
+    let rt = Runtime::journaled(program, persist, host_clock(core), watchdog, sink, profile, o.tick_ns, policy);
+    let wake = AtomicBool::new(false);
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
-    unsafe { core.cast::<Parts>().write(Parts { ops, arena, engine: Engine::Persisting(rt) }) };
+    unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, engine: Engine::Persisting(rt) }) };
     status::OK
 }
 
@@ -946,9 +1010,49 @@ pub unsafe extern "C" fn takt_core_init_journaled(
 /// `core` ist ein Kern aus [`takt_core_init`]; nie zwei Aufrufe zugleich.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_core_service(core: *mut Core, now_ns: i64) -> NextStep {
-    // SAFETY: nur der Kern, nicht Tabelle und Arena, die der Job-Kontext liest.
+    // SAFETY: wie `takt_core_service_with`.
+    unsafe { takt_core_service_with(core, now_ns, core::ptr::null()) }
+}
+
+/// Wie [`takt_core_service`], mit den Tunables des Wirts (8.4): Ihre
+/// Aenderungen gehen vor dem Schritt ihrer Grenze in das Programm, und im
+/// Schlaf weckt eine Aenderung (9.9). `tunables` darf null sein.
+///
+/// # Safety
+///
+/// Wie [`takt_core_service`]; `tunables` ist null oder zeigt auf eine
+/// Tabelle, deren Rueckrufe waehrend des Aufrufs gelten.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_core_service_with(
+    core: *mut Core,
+    now_ns: i64,
+    tunables: *const TunablesOps,
+) -> NextStep {
+    // SAFETY: null oder gueltig, siehe oben.
+    let mut source = unsafe { tunables.as_ref() }.copied().map(HostTunables);
+    // SAFETY: nur der Kern, nicht Tabelle, Arena und Flag, die andere Kontexte lesen.
     let engine = unsafe { &mut (*core.cast::<Parts>()).engine };
-    engine.service(now_ns).into()
+    let source: Option<&mut dyn Tunables> = match source.as_mut() {
+        Some(s) => Some(s),
+        None => None,
+    };
+    engine.service(now_ns, source).into()
+}
+
+/// Ein Weckereignis des Wirts (9.9): Schlaeft der Kern, endet der Schlaf an
+/// der naechsten Grenze, die `takt_core_service` erreicht. Darf aus jedem
+/// Kontext kommen, auch aus einer ISR oder einem Signal, auch waehrend
+/// eines Schritts.
+///
+/// # Safety
+///
+/// `core` ist ein Kern aus [`takt_core_init`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_core_wake(core: *mut Core) {
+    // SAFETY: nur das Flag; den Kern haelt der Schrittkontext, Tabelle und
+    // Arena beruehrt dieser Aufruf nicht.
+    let wake = unsafe { &(*core.cast::<Parts>()).wake };
+    wake.store(true, Ordering::SeqCst);
 }
 
 /// Beendet den Lauf an einer Grenze, die der Wirt setzt (12.7): Das Journal
@@ -1020,7 +1124,9 @@ mod tests {
     use std::string::String;
     use std::vec::Vec;
 
-    use super::{ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, StackDepths, WatchdogOps, nvm, status};
+    use super::{
+        ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, StackDepths, TunablesOps, WatchdogOps, nvm, status,
+    };
 
     const HEADER: &str = include_str!("../include/takt_sdk.h");
 
@@ -1114,6 +1220,12 @@ mod tests {
         assert_eq!(fields("struct takt_line {"), line);
         let watchdog = in_order(vec![("ctx", offset_of!(WatchdogOps, ctx)), ("kick", offset_of!(WatchdogOps, kick))]);
         assert_eq!(fields("struct takt_watchdog {"), watchdog);
+        let tunables = in_order(vec![
+            ("ctx", offset_of!(TunablesOps, ctx)),
+            ("next", offset_of!(TunablesOps, next)),
+            ("idle", offset_of!(TunablesOps, idle)),
+        ]);
+        assert_eq!(fields("struct takt_tunables {"), tunables);
         let stacks = in_order(vec![
             ("tick", offset_of!(StackDepths, tick)),
             ("tick_bound", offset_of!(StackDepths, tick_bound)),
@@ -1162,8 +1274,9 @@ mod core_abi {
     use std::vec::Vec;
 
     use super::{
-        ABI, Core, LineOps, NvmOps, Ops, WatchdogOps, nvm, status, takt_board_trace, takt_core_finish, takt_core_init,
-        takt_core_init_journaled, takt_core_job_work, takt_core_report, takt_core_service, takt_line_init,
+        ABI, Core, LineOps, NvmOps, Ops, TunablesOps, WatchdogOps, nvm, status, takt_board_trace, takt_core_finish,
+        takt_core_init, takt_core_init_journaled, takt_core_job_work, takt_core_report, takt_core_service,
+        takt_core_service_with, takt_core_wake, takt_line_init,
     };
 
     const TICK_NS: i64 = 1_000_000;
@@ -1177,6 +1290,9 @@ mod core_abi {
         tick: i64,
         starts: u32,
         restored: i64,
+        /// Die letzte Aenderung eines Tunables: Tick des Rahmens, Parameter,
+        /// erstes Byte.
+        tuned: Option<(i64, u32, u8)>,
     }
 
     /// Die Arena hinter dem Zeiger des Archivs.
@@ -1258,8 +1374,24 @@ mod core_abi {
 
     extern "C" fn advance(_: *mut c_void, _: i64) {}
 
-    extern "C" fn tune(_: *mut c_void, _: i64, _: u32, _: *const c_void, _: i32) -> i32 {
-        0
+    unsafe extern "C" fn tune(arena: *mut c_void, k: i64, param: u32, value: *const c_void, len: i32) -> i32 {
+        if len < 1 {
+            return 0;
+        }
+        // SAFETY: Das Archiv reicht `len` lesbare Byte.
+        let first = unsafe { value.cast::<u8>().read() };
+        // SAFETY: die Arena des Tests.
+        unsafe { counter(arena) }.tuned = Some((k, param, first));
+        1
+    }
+
+    extern "C" fn yes(_: *mut c_void) -> u8 {
+        1
+    }
+
+    /// Die naechste Frist eines Programms, das bis 100 ms nichts vorhat.
+    extern "C" fn far(_: *mut c_void) -> i64 {
+        100 * TICK_NS
     }
 
     extern "C" fn woken(_: *mut c_void, _: i64) -> u8 {
@@ -1407,6 +1539,51 @@ mod core_abi {
         }
     }
 
+    /// Eine Quelle von Tunables mit einer Aenderung an der Grenze `at`:
+    /// Parameter 7, Wert 42.
+    struct Source {
+        at: u64,
+        given: bool,
+    }
+
+    static VALUE: [u8; 1] = [42];
+
+    unsafe extern "C" fn change(
+        ctx: *mut c_void,
+        k: u64,
+        param: *mut u32,
+        value: *mut *const u8,
+        len: *mut u32,
+    ) -> i32 {
+        // SAFETY: die Quelle des Tests.
+        let s = unsafe { &mut *ctx.cast::<Source>() };
+        if k != s.at || s.given {
+            return 0;
+        }
+        s.given = true;
+        // SAFETY: Das Archiv reicht drei beschreibbare Stellen.
+        unsafe {
+            param.write(7);
+            value.write(VALUE.as_ptr());
+            len.write(1);
+        }
+        1
+    }
+
+    /// Wie [`drive`], mit den Tunables `tunables`.
+    ///
+    /// # Safety
+    ///
+    /// Wie [`drive`].
+    unsafe fn drive_with(core: *mut Core, tunables: &TunablesOps) {
+        let mut now = 0;
+        while now < TICKS * TICK_NS {
+            // SAFETY: siehe oben; nie zwei Aufrufe zugleich.
+            let next = unsafe { takt_core_service_with(core, now, tunables) };
+            now = next.deadline_ns;
+        }
+    }
+
     /// Der Watchdog des Tests: zaehlt, wie oft der Kern meldet, dass er lebt.
     unsafe extern "C" fn kick(ctx: *mut c_void) {
         // SAFETY: `ctx` ist der Zaehler des Tests, der ihn ueberlebt.
@@ -1455,6 +1632,45 @@ mod core_abi {
         }
         assert!(arena.tick > 1 && arena.starts == 1, "Tick {}, Anfaenge {}", arena.tick, arena.starts);
         assert!(kicks.get() > 0, "der Kern meldete dem Watchdog nie");
+
+        // Ein Tunable kommt an seiner Grenze an (8.4): Grenze 3 ist der Tick 4
+        // des Rahmens, der ab 1 zaehlt.
+        let mut source = Source { at: 3, given: false };
+        let tunables = TunablesOps { ctx: (&raw mut source).cast(), next: change, idle: None };
+        let mut tuned = Counter::default();
+        let mut core = MaybeUninit::<Core>::uninit();
+        // SAFETY: wie oben.
+        let rc =
+            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut tuned).cast(), null_mut(), 0, &watchdog) };
+        assert_eq!(rc, status::OK);
+        // SAFETY: der Kern von eben, mit der Quelle des Tests.
+        unsafe { drive_with(core.as_mut_ptr(), &tunables) };
+        assert_eq!(tuned.tuned, Some((4, 7, 42)), "das Tunable kam nicht an seiner Grenze an");
+
+        // Ein Programm, das schlafen darf, schlaeft bis zu seiner Frist; ein
+        // Weckereignis des Wirts beendet den Schlaf an der naechsten Grenze
+        // (9.9). `Counter::tick` ist der Tick des Rahmens, der ab 1 zaehlt.
+        let mut sleepy = ops(false);
+        sleepy.idle = yes;
+        sleepy.deadline = far;
+        let mut dozing = Counter::default();
+        let mut core = MaybeUninit::<Core>::uninit();
+        // SAFETY: wie oben.
+        let rc =
+            unsafe { takt_core_init(core.as_mut_ptr(), &sleepy, (&raw mut dozing).cast(), null_mut(), 0, &watchdog) };
+        assert_eq!(rc, status::OK);
+        // SAFETY: der Kern von eben; nie zwei Aufrufe zugleich.
+        let asleep = unsafe { takt_core_service(core.as_mut_ptr(), 0) };
+        assert_eq!((asleep.deadline_ns, dozing.tick), (99 * TICK_NS, 1), "schlaeft bis zur Frist");
+        // SAFETY: wie oben.
+        unsafe { takt_core_service(core.as_mut_ptr(), 4 * TICK_NS) };
+        assert_eq!(dozing.tick, 1, "ohne Weckereignis rechnet der Schlaf keinen Tick");
+        // SAFETY: wie oben.
+        unsafe {
+            takt_core_wake(core.as_mut_ptr());
+            takt_core_service(core.as_mut_ptr(), 6 * TICK_NS);
+        }
+        assert_eq!(dozing.tick, 7, "das Weckereignis beendet den Schlaf an der Grenze bei 6 ms");
 
         let journaled = ops(true);
         let mut flash = Flash { slots: [[0xff; SLOT]; 2], pending: nvm::IDLE };

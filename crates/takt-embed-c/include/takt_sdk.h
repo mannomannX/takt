@@ -148,6 +148,26 @@ int32_t takt_core_init_journaled(takt_core *core, const struct takt_ops *ops, vo
 /* Rechnet alle Tickgrenzen bis `now_ns` (12.1). */
 takt_next takt_core_service(takt_core *core, int64_t now_ns);
 
+/* Die Tunables des Wirts (8.4): `next` nennt je Aufruf eine Aenderung der
+ * Grenze `k` in Aufzeichnungsreihenfolge (Parameter, Wert, Laenge; der Wert
+ * gilt bis zum naechsten Aufruf) und liefert 1, am Ende 0. `idle` sagt, ob
+ * die Quelle ruht, und darf NULL sein. */
+struct takt_tunables {
+    void *ctx;
+    int32_t (*next)(void *ctx, uint64_t k, uint32_t *param, const uint8_t **value, uint32_t *len);
+    uint8_t (*idle)(void *ctx);
+};
+
+/* Wie `takt_core_service`, mit den Tunables des Wirts: Ihre Aenderungen gehen
+ * vor dem Schritt ihrer Grenze in das Programm, und im Schlaf weckt eine
+ * Aenderung (9.9). `tunables` darf NULL sein. */
+takt_next takt_core_service_with(takt_core *core, int64_t now_ns, const struct takt_tunables *tunables);
+
+/* Ein Weckereignis des Wirts (9.9): Schlaeft der Kern, endet der Schlaf an
+ * der naechsten Grenze, die `takt_core_service` erreicht. Aus jedem Kontext,
+ * auch aus einer ISR oder einem Signal und waehrend eines Schritts. */
+void takt_core_wake(takt_core *core);
+
 /* Rechnet die verteilten Jobs (4.5), unterbrechbar durch `takt_core_service`. */
 void takt_core_job_work(takt_core *core);
 

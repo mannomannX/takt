@@ -668,12 +668,19 @@ pub fn native_library_for(triple: Option<&str>) -> Result<std::path::PathBuf, St
 /// den Wirt. Es traegt die Natives selbst; neben [`native_library`] gelinkt,
 /// staenden sie zweimal im Abbild.
 pub fn sdk_library_for(triple: Option<&str>) -> Result<std::path::PathBuf, String> {
-    static_library("takt-embed-c", &[], triple)
+    sdk_library_with(&[], triple)
+}
+
+/// Das SDK-Archiv mit den Features `features` (die Jobs aus `takt-crypto`:
+/// `ecdsa`, `rsa`, `aes-gcm`), fuer ein Ziel oder den Wirt.
+pub fn sdk_library_with(features: &[&str], triple: Option<&str>) -> Result<std::path::PathBuf, String> {
+    static_library("takt-embed-c", features, triple)
 }
 
 /// Baut das Crate `krate` als statische Bibliothek mit `features`, im
-/// eigenen Zielverzeichnis, damit der Bau nicht auf die Sperre eines
-/// laufenden `cargo` wartet.
+/// eigenen Zielverzeichnis je Satz von Features: Der Bau wartet nicht auf die
+/// Sperre eines laufenden `cargo`, und zwei Tests mit verschiedenen Saetzen
+/// ueberschreiben einander nicht das Archiv, waehrend der andere es bindet.
 fn static_library(krate: &str, features: &[&str], triple: Option<&str>) -> Result<std::path::PathBuf, String> {
     let root = crate::repo_root();
     let mut cargo = std::process::Command::new("cargo");
@@ -684,14 +691,17 @@ fn static_library(krate: &str, features: &[&str], triple: Option<&str>) -> Resul
     if let Some(triple) = triple {
         cargo.args(["--target", triple]);
     }
-    let out = cargo
-        .arg("--message-format=json-render-diagnostics")
-        .arg("--manifest-path")
-        .arg(root.join("crates").join(krate).join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(crate::target_dir().join(krate.trim_start_matches("takt-")))
-        .output()
-        .map_err(|e| format!("cargo: {e}"))?;
+    let out =
+        cargo
+            .arg("--message-format=json-render-diagnostics")
+            .arg("--manifest-path")
+            .arg(root.join("crates").join(krate).join("Cargo.toml"))
+            .arg("--target-dir")
+            .arg(crate::target_dir().join(
+                features.iter().fold(krate.trim_start_matches("takt-").to_string(), |dir, f| format!("{dir}+{f}")),
+            ))
+            .output()
+            .map_err(|e| format!("cargo: {e}"))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).into_owned());
     }

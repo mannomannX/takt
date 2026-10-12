@@ -363,7 +363,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | Befund | Teil | Zahl | Regel | Grund |
 |---|---|---|---|---|
 | `misra-c2012-1.4` | SDK | 1 | MISRA C:2012 1.4 (R) | `_Alignas(8)` am Speicher des Kerns: Das Archiv legt dort einen Rust-Typ mit Ausrichtung 8 ab; ohne die Angabe hinge sie an der ABI des Wirts |
-| `misra-c2012-2.5` | SDK | 17 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
+| `misra-c2012-2.5` | SDK | 18 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
 | `constParameterPointer` | Port | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: `pthread_attr_setstack` nimmt den Stack als `void *`, und der Faden schreibt hinein; `const` brauchte einen Cast, der es wieder entfernt (11.8) |
 | `misra-c2012-11.5` | Port | 3 | MISRA C:2012 11.5 (A) | `pthread_create` reicht den Port als `void *` an den Faden, der Wirt den Stack als `void *` (`takt_posix_config`) |
 | `cert-dcl37-c` | Port | 1 | CERT C DCL37-C | `#define _POSIX_C_SOURCE` ist das Feature Test Macro, mit dem POSIX die Schnittstelle wählen lässt; der Name gehört der Umgebung, die ihn liest |

@@ -25,6 +25,13 @@ takt-rt-baremetal = { path = "../takt-rt-baremetal" }
 # (4.5, 4.2, 12.6); ihre C-Symbole gehen mit ins Archiv.
 takt-native-abi = { path = "../takt-native-abi" }
 
+# Die Jobs aus `takt-crypto` (4.5) fuer Programme, die sie rufen; ohne das
+# Feature scheitert ein solches Programm beim Binden, nicht im Lauf (12.11).
+[features]
+ecdsa = ["takt-native-abi/ecdsa"]
+rsa = ["takt-native-abi/rsa"]
+aes-gcm = ["takt-native-abi/aes-gcm"]
+
 # Ohne Abwickeln: Ein C-Wirt faengt keinen Panic.
 [profile.dev]
 panic = "abort"
