@@ -10,13 +10,10 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Ein Lauf je Zweig zur Zeit; ein neuer Push wartet, bis der laufende fertig
-# ist, statt ihn abzubrechen. GitHub haelt je Gruppe hoechstens einen
-# wartenden Lauf: Kommen mehrere Pushes, solange einer laeuft, wartet nur der
-# neueste.
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: false
+# Keine `concurrency`-Gruppe: Jeder Push bekommt seinen eigenen, vollstaendigen
+# Lauf. Eine Gruppe haelt hoechstens einen wartenden Lauf und verwirft die
+# dazwischen; so wird kein Push ungeprueft ersetzt. Zu viele Jobs zugleich
+# reiht GitHub selbst ein.
 
 permissions:
   contents: read
