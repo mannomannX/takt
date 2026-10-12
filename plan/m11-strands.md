@@ -84,7 +84,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 17 | Wirt: Instanzen in Fäden, logische Zeit; `linux_rt` | E | – | 8 | Strang D (Helfer, seit 2026-10-12, Zweig `d-17-host-threads`) |
 | 15 | `takt port-test` mit `--judge` | W, R | beide | 14 | Strang A, umgesetzt 2026-10-11 |
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | frei |
-| 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a umgesetzt; 18c in Arbeit (Job-Länge, Leitung im SDK und POSIX-Port in main; unter POSIX wird noch kein Job fertig); 18b frei, seit 34d in main |
+| 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt (POSIX-Port besteht die Portprüfung, b52327e); 18b nach 34e (Strang A) |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | frei, nach 17 (beide bauen den Rahmen des Wirts um) |
 | 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | frei |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | frei |
