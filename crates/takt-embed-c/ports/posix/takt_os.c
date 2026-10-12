@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "takt_os.h"
+#include "takt_rtos.h"
 
 #include <errno.h>
 #include <sched.h>
@@ -91,7 +92,7 @@ void takt_os_destroy(struct takt_os *os) {
 
 /* `CLOCK_MONOTONIC` hat `takt_os_init` geprueft; danach scheitert die Uhr
  * nicht mehr. */
-int64_t takt_os_now(const struct takt_os *os) {
+int64_t takt_os_now(struct takt_os *os) {
     struct timespec now = os->origin;
     (void)clock_gettime(CLOCK_MONOTONIC, &now);
     return (((int64_t)now.tv_sec - (int64_t)os->origin.tv_sec) * TAKT_NS_PER_S) +
@@ -163,3 +164,16 @@ int takt_os_spawn(struct takt_os *os, int which, void (*body)(void *arg), void *
 }
 
 int takt_os_join(struct takt_os *os, int which) { return pthread_join(os->threads[which].id, NULL); }
+
+/* `pthread_create` fuellt einen Stack des Wirts nicht: die gemeinsame Vorgabe. */
+void takt_os_paint(struct takt_os *os, int which, void *stack, size_t bytes) {
+    (void)os;
+    (void)which;
+    takt_rtos_paint(stack, bytes);
+}
+
+int takt_os_depth(struct takt_os *os, int which, const void *stack, size_t bytes, uint32_t *depth) {
+    (void)os;
+    (void)which;
+    return takt_rtos_depth(stack, bytes, depth);
+}

@@ -13,13 +13,16 @@
  * rechnen beide auf verschiedenen Kernen oder im Wechsel, und eine
  * Zeitzusage gibt es nicht.
  *
- * Der Wirt stellt beide Stacks; der Port bemalt sie vor dem Start und misst
- * nach dem Ende, wie tief jeder reichte (12.3). Die Stacks wachsen nach
- * unten, wie auf jedem Ziel von Takt.
+ * Der Wirt stellt beide Stacks; der Adapter bereitet sie vor dem Start vor
+ * und misst nach dem Ende, wie tief jeder reichte (12.3, `takt_os_paint`,
+ * `takt_os_depth`); die gemeinsame Vorgabe dafuer steht unten. Die Stacks
+ * wachsen nach unten, wie auf jedem Ziel von Takt.
  *
  * Ablauf: `takt_rtos_start`, dann im aufrufenden Faden fremde Arbeit,
  * solange `takt_rtos_running` wahr ist, dann `takt_rtos_join` und
- * `takt_core_report`.
+ * `takt_core_report`. Ist `takt_rtos_running` falsch, haben beide Faeden
+ * ihre Arbeit getan: Der Schrittfaden wartet am Ende, bis der Jobfaden
+ * sein Ende meldet.
  */
 #ifndef TAKT_RTOS_H
 #define TAKT_RTOS_H
@@ -51,8 +54,9 @@ struct takt_rtos {
     takt_core *core;
     struct takt_rtos_config config;
     struct takt_os os;
-    int stop;    /* atomar: der Lauf ist zu Ende */
-    int running; /* atomar: der Schrittfaden laeuft */
+    int stop;      /* atomar: der Lauf ist zu Ende */
+    int job_ended; /* atomar: der Jobfaden hat seine Arbeit getan */
+    int running;   /* atomar: der Schrittfaden laeuft */
 };
 
 /* Ungueltige Konfiguration: ein Zeiger fehlt, oder die Tickperiode ist nicht
@@ -67,10 +71,21 @@ int takt_rtos_start(struct takt_rtos *rtos, takt_core *core, const struct takt_r
 /* Wahr, solange der Schrittfaden laeuft. */
 int takt_rtos_running(const struct takt_rtos *rtos);
 
-/* Wartet auf das Ende beider Faeden und nennt in `stacks` die Tiefe jedes
- * Stacks; die Schranken traegt der Wirt ein. 0 oder der Fehler des
- * Adapters. */
+/* Misst beide Stacks und wartet auf das Ende beider Faeden, nachdem
+ * `takt_rtos_running` falsch wurde; `stacks` nennt die Tiefe jedes Stacks,
+ * die Schranken traegt der Wirt ein. 0, TAKT_RTOS_INVALID, wenn der
+ * Schrittfaden noch laeuft, oder der Fehler des Adapters; misst er einen
+ * Stack nicht, bleibt dessen Tiefe 0 (nicht gemessen), und der Fehler kommt
+ * zurueck. */
 int takt_rtos_join(struct takt_rtos *rtos, struct takt_stacks *stacks);
+
+/* Die gemeinsame Vorgabe fuer `takt_os_paint`: malt `bytes` Byte ab `stack`
+ * mit der Farbe des Ports. */
+void takt_rtos_paint(void *stack, size_t bytes);
+
+/* Die gemeinsame Vorgabe fuer `takt_os_depth`: alles ueber den Bytes, die
+ * unten noch die Farbe tragen; 0. */
+int takt_rtos_depth(const void *stack, size_t bytes, uint32_t *depth);
 
 #ifdef __cplusplus
 }

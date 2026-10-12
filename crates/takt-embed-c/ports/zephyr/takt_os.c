@@ -10,13 +10,16 @@
  * auf einem Tick, und die Rundung verspaetet nichts. Abgerundet kaeme der
  * Schritt bis zu einen Tick zu frueh, `takt_core_service` rechnete keine
  * Grenze und nennte dieselbe Frist, und der Schrittfaden, der hoechste von
- * allen, kreiste bis zum Tick der Frist.
+ * allen, kreiste bis zum Tick der Frist. Die Ticks sind 64 Bit breit
+ * (`CONFIG_TIMEOUT_64BIT`, das Kconfig verlangt): Jede Frist wartet der
+ * Zephyr-Kern in einem Stueck, und die Uhr laeuft nicht ueber.
  *
  * Nicht `k_cycle_get_64`: Der Zaehler des Systemzeitgebers und die Ticks
  * haben nicht auf jedem Ziel denselben Ursprung — auf dem ESP32 zaehlt er ab
  * dem Einschalten, die Ticks ab dem Start des Treibers —, und eine Frist aus
  * Zyklen (`K_TIMEOUT_ABS_CYC`) laege um den Abstand daneben. */
 #include "takt_os.h"
+#include "takt_rtos.h"
 
 #include <errno.h>
 
@@ -34,7 +37,7 @@ void takt_os_destroy(struct takt_os *os) {
     ARG_UNUSED(os);
 }
 
-int64_t takt_os_now(const struct takt_os *os) {
+int64_t takt_os_now(struct takt_os *os) {
     const uint64_t ns = k_ticks_to_ns_floor64((uint64_t)(k_uptime_ticks() - os->origin));
     return (ns > (uint64_t)INT64_MAX) ? INT64_MAX : (int64_t)ns;
 }
@@ -89,4 +92,19 @@ int takt_os_spawn(struct takt_os *os, int which, void (*body)(void *arg), void *
 
 int takt_os_join(struct takt_os *os, int which) {
     return k_thread_join(&os->threads[which].thread, K_FOREVER);
+}
+
+/* Der Zephyr-Kern fuellt den Stack beim Anlegen nicht (`CONFIG_INIT_STACKS`
+ * schliesst Kconfig aus): die gemeinsame Vorgabe, ueber das ganze
+ * Stackobjekt (takt_os_types.h). */
+void takt_os_paint(struct takt_os *os, int which, void *stack, size_t bytes) {
+    ARG_UNUSED(os);
+    ARG_UNUSED(which);
+    takt_rtos_paint(stack, bytes);
+}
+
+int takt_os_depth(struct takt_os *os, int which, const void *stack, size_t bytes, uint32_t *depth) {
+    ARG_UNUSED(os);
+    ARG_UNUSED(which);
+    return takt_rtos_depth(stack, bytes, depth);
 }
