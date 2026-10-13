@@ -22,7 +22,7 @@ use common::board::{
     simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict,
     zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
-use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
+use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG, Tick};
 use takt_conformance::board::{self, Board, Form, Options};
 use takt_conformance::compare;
 use takt_conformance::zephyr::Variant;
@@ -291,7 +291,7 @@ fn a_board_input_reaches_the_process_image() {
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn persistence_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed = persistence_survives(&mut board, |board, elf, options| board.capture(elf, options));
+    let failed = persistence_survives(&mut board, |board, elf, options| board.capture(Tick::Bringup(elf), options));
     verdict(&failed);
 }
 
@@ -526,7 +526,13 @@ fn zephyr_run(
 ) -> Result<String, String> {
     let offset = image.config("FLASH_LOAD_OFFSET").ok_or("CONFIG_FLASH_LOAD_OFFSET fehlt")?;
     let offset = u64::from_str_radix(offset.trim_start_matches("0x"), 16).map_err(|e| format!("{offset}: {e}"))?;
-    board.run_raw(&image.bin, offset, &image.elf, options)
+    board.run_raw(&image.bin, offset, zephyr_tick(image)?, options)
+}
+
+/// Wo der Tick eines Zephyr-Abbilds steht: Die Symbole eines Bring-ups
+/// traegt es nicht.
+fn zephyr_tick(image: &takt_conformance::zephyr::Image) -> Result<Tick<'static>, String> {
+    image.tick_address(takt_conformance::zephyr::ESP32C6).map(Tick::At)
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart des C6** (5.9; M11
@@ -551,7 +557,7 @@ fn the_zephyr_journal_survives_a_reset() {
         &mut board,
         &image,
         |board, image| zephyr_run(board, image, &options),
-        |board, image| board.capture(&image.elf, &options),
+        |board, image| board.capture(zephyr_tick(image)?, &options),
     );
     verdict(&failed);
 }

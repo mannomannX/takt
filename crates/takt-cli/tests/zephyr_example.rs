@@ -157,6 +157,17 @@ fn placed(board: Board, image: &Image) -> Vec<String> {
     }
 }
 
+/// Die Probe findet den Tick: genau eine Arena im ELF und `tick_at` des
+/// Manifests in ihr. Auf dem C6 liest sie ihn ueber JTAG, wenn die Leitung
+/// schweigt; fehlte er, endete der Lauf dort statt mit dem Befund
+/// (`board::esp32c6::Tick`).
+fn ticks_found(expect: &Expect, board: Board, image: &Image) -> Vec<String> {
+    match image.tick_address(board) {
+        Ok(_) => Vec::new(),
+        Err(e) => vec![format!("{} {}: die Probe findet den Tick nicht: {e}", expect.example, board.west)],
+    }
+}
+
 /// Baut `expect.example` fuer jedes Board und nennt, was fehlt.
 fn builds(expect: &Expect, boards: &[Board]) -> Vec<String> {
     let west = zephyr::west().expect("TAKT_WEST nennt west");
@@ -169,6 +180,7 @@ fn builds(expect: &Expect, boards: &[Board]) -> Vec<String> {
                 failed.extend(configured(expect, board, &image));
                 failed.extend(linked(expect, board, &image));
                 failed.extend(placed(board, &image));
+                failed.extend(ticks_found(expect, board, &image));
             }
             Err(e) => failed.push(e),
         }
