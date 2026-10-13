@@ -4218,6 +4218,12 @@ impl Enc<'_> {
                     };
                     (Some((self.bound(&r.lo, sort), self.bound(&r.hi, sort))), Some(outside))
                 }
+                // Eine Lieferung nennt eine Variante, auch die eines offenen
+                // Enums (2.5); eine Verletzung gibt es nicht (FB-617).
+                Type::Enum(e) if composite.is_none() && samples.is_none() => {
+                    let n = self.p.enums[e.index()].variants.len() as i64;
+                    (Some((Term::int(0), Term::int(n - 1))), None)
+                }
                 _ => (None, None),
             };
             let violable = outside.is_some();
