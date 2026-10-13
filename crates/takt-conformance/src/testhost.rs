@@ -85,6 +85,10 @@ pub struct Run<'a> {
     pub mxcsr: Option<u32>,
     /// Das Muster, mit dem der Wirt die Arena vor `init` fuellt (12.11).
     pub fill: u8,
+    /// Die Hardware-Konfiguration, gegen die der Rahmen gebaut ist (8.10):
+    /// `guard`, `jitter` und `tick_granular` je Ausgang; ohne sie die Nullen
+    /// der Simulation (7.5).
+    pub hardware: Option<&'a takt_mir::hardware::Hardware>,
 }
 
 /// Die Quellen eines Testwirts, je Dateiname.
@@ -128,7 +132,12 @@ pub fn sources(p: &Program, run: &Run<'_>, triple: &str, sanitized: bool) -> Res
     }
     let frame = takt_frame::mcu::build_with(
         p,
-        takt_frame::mcu::Frame { prefix: x.clone(), scenario: run.scenario, ..Default::default() },
+        takt_frame::mcu::Frame {
+            prefix: x.clone(),
+            scenario: run.scenario,
+            hardware: run.hardware,
+            ..Default::default()
+        },
     );
     let header = takt_frame::embed::c_header(&frame.header, p, &x, 0, 0, frame.job_stack_bytes);
     let host = host(p, run)?;
