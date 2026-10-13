@@ -15,13 +15,14 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_WIRE_TICKS, a_foreign_write_becomes_runtime_hardware,
-    a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form,
-    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
-    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
-    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
-    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict,
-    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
+    Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS,
+    a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, agreement, agreement_with,
+    binds_no_driver, driver_edge_agrees, fits_the_poll_form, journal_costs_time_but_not_semantics,
+    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
+    overrun_reaches_every_machine, persistence_survives, ran, runs_shared, simultaneous_jobs_finish_on_time,
+    the_flawed_port_fails, the_form_keeps_its_deadline, the_poll_form_keeps_its_round, the_port_passes,
+    the_port_passes_with_header, verdict, zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives,
+    zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -398,7 +399,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::ZEPHYR;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, true, run));
+    verdict(&zephyr_verdict(board.name(), example, true, Some(ZEPHYR_COUNTER_CLOCK), run));
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart des F401 und ein neues
@@ -442,7 +443,7 @@ fn the_cmsis_rtos2_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::CMSIS_RTOS2;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, false, run));
+    verdict(&zephyr_verdict(board.name(), example, false, None, run));
 }
 
 /// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,

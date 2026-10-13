@@ -1,8 +1,10 @@
 /* takt_os_types.h - der Zustand des Zephyr-Adapters (takt_os.h, M11 Schritt
- * 19): die Uhr in Systemticks ab `takt_os_init`, je Ereignis ein Semaphor
- * mit Grenze 1, je Faden sein Objekt im Zephyr-Kern. Das Modul (`zephyr/`
- * an der Wurzel von Takt) baut den Adapter mit `ports/rtos/takt_rtos.c`,
- * wenn `CONFIG_TAKT` gesetzt ist.
+ * 19): die Uhr in Systemticks ab `takt_os_init` oder, wenn der Devicetree
+ * einen Zaehler als `takt,timer` waehlt, in dessen Takt
+ * (`CONFIG_TAKT_TIMER_COUNTER`, FB-733); je Ereignis ein Semaphor mit
+ * Grenze 1, je Faden sein Objekt im Zephyr-Kern. Das Modul (`zephyr/` an der
+ * Wurzel von Takt) baut den Adapter mit `ports/rtos/takt_rtos.c`, wenn
+ * `CONFIG_TAKT` gesetzt ist.
  *
  * **Die Faeden** sind Supervisor-Faeden: Mit `CONFIG_USERSPACE` erreicht ein
  * Faden im Benutzermodus die Arena nicht, wenn sie in einer eigenen
@@ -37,6 +39,9 @@
 #include <stdint.h>
 
 #include <zephyr/kernel.h>
+#if defined(CONFIG_TAKT_TIMER_COUNTER)
+#include <zephyr/device.h>
+#endif
 
 /* Die Prioritaet `zephyr` des Zephyr-Kerns als Prioritaet von Takt. */
 #define TAKT_OS_PRIORITY(zephyr) (K_LOWEST_APPLICATION_THREAD_PRIO + 1 - (zephyr))
@@ -55,9 +60,21 @@ struct takt_os_thread {
 };
 
 struct takt_os {
+#if defined(CONFIG_TAKT_TIMER_COUNTER)
+    const struct device *timer; /* der Zaehler, den `takt,timer` waehlt */
+    uint64_t ticks;             /* seine Ticks seit `takt_os_init`, auf 64 Bit erweitert */
+    uint32_t last;              /* sein Stand bei der letzten Erweiterung */
+    uint32_t top;               /* sein hoechster Stand vor dem Umlauf */
+    atomic_t alarmed;           /* der Alarm gab das Ereignis, kein `give` */
+#else
     int64_t origin; /* der Systemtick von `takt_os_init` */
+#endif
     struct k_sem events[2];
     struct takt_os_thread threads[2];
 };
+
+/* Die Uhr des Adapters fuer die Kopfzeile des Wirts: `counter` oder
+ * `systemtick`, und in `*hz` ihre Rate. */
+const char *takt_os_clock(uint32_t *hz);
 
 #endif /* TAKT_OS_TYPES_H */

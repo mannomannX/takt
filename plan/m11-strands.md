@@ -736,6 +736,16 @@ So arbeitet jeder Strang, als wäre er allein:
     Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
     unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
     38320906796); das zeigt der nächste Lauf.
+- **Stand 19g (Strang F, 2026-10-13, Zweig `f-19i-counter`):**
+  - **Der Zähler als Uhr (FB-733):** Wählt der Devicetree `takt,timer`,
+    rechnet der Zephyr-Adapter über die `counter`-API
+    (`CONFIG_TAKT_TIMER_COUNTER`, hängt an `COUNTER`, das die Anwendung
+    setzt; ohne es scheitert der Bau an einer Zusicherung): die Uhr auf
+    64 Bit erweitert, die Frist als absoluter Alarm in Stücken von einem
+    Viertel des Umlaufs, gelöscht nach dem Aufwachen. `examples/zephyr`
+    wählt TIM2 (F401) und Timer 0 (C6) mit 1 MHz; die Kopfzeile `takt uhr
+    counter 1000000 Hz` verlangt die Portprüfung auf beiden Boards. Die
+    übrigen Beispiele bleiben beim Systemtick und nennen ihn ebenso.
 
 ### 15, 16, 18, 9, 19 bis 23
 
