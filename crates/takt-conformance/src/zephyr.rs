@@ -75,7 +75,7 @@ impl Image {
     /// (`board::esp32c6::Tick`); ohne ihn haette sie nur die Symbole eines
     /// Bring-ups (`app_arena`, `__takt_tick_at`).
     pub fn tick_address(&self, board: Board) -> Result<u64, String> {
-        let target = Target::by_triple(board.triple).ok_or_else(|| format!("kein Ziel fuer {}", board.triple))?;
+        let target = Target::by_host_triple(board.triple)?;
         let symbols = Binutils::best_for(target)
             .symbols(&self.elf)
             .ok_or_else(|| format!("`nm` liest {} nicht", self.elf.display()))?;
@@ -349,6 +349,15 @@ mod tests {
         assert_eq!(image.config("FOO"), None);
         assert_eq!(image.manifest("tick_at"), Some("14272"));
         assert_eq!(image.manifest("tick"), None);
+    }
+
+    /// **Jedes Board nennt ein Ziel, dessen `nm` die Probe fragt**
+    /// ([`Image::tick_address`]): das Tripel des Rust-Ziels, nicht das von LLVM.
+    #[test]
+    fn every_board_names_a_known_target() {
+        for board in [STM32F401, ESP32C6] {
+            assert!(Target::by_host_triple(board.triple).is_ok(), "{}", board.triple);
+        }
     }
 
     /// **Die Arena eines Beispiels heisst `arena`**, auf Dateiebene so und in
