@@ -183,11 +183,11 @@ fn an_output_driver_sees_the_tick_it_commits() {
 
 #define T {tick}LL
 
-void takt_board_trace(const char *line) {{ (void)line; }}
-void takt_board_trace_i64(long long v) {{ (void)v; }}
-void takt_board_trace_u64(unsigned long long v) {{ (void)v; }}
-void takt_board_trace_f64(double v) {{ (void)v; }}
-void takt_board_trace_hex8(unsigned char v) {{ (void)v; }}
+void takt_trace_text(void *s, const char *t) {{ (void)s; (void)t; }}
+void takt_trace_i64(void *s, long long v) {{ (void)s; (void)v; }}
+void takt_trace_u64(void *s, unsigned long long v) {{ (void)s; (void)v; }}
+void takt_trace_f64(void *s, double v) {{ (void)s; (void)v; }}
+void takt_trace_hex8(void *s, unsigned char v) {{ (void)s; (void)v; }}
 
 static int64_t seen = -1;
 uint8_t app_out_ui_led(void *user, int64_t now, uint8_t value) {{ (void)user; (void)value; seen = now; return 1; }}
@@ -197,7 +197,7 @@ static struct app_arena arena;
 
 int main(void) {{
     int64_t k = 1, slept = 0;
-    app_init(&arena, 0);
+    app_init(&arena, 0, 0);
     while (k <= 300) {{
         int64_t n = 0;
         app_tick(&arena, k);
@@ -237,7 +237,7 @@ int main(void) {{
     assert!(run.status.success(), "{}: {}", run.status, String::from_utf8_lossy(&run.stderr));
 }
 
-/// Das Programm des Wirts: Leitung auf die Standardausgabe, MXCSR auf
+/// Das Programm des Wirts: die Senke ist die Standardausgabe, MXCSR auf
 /// `mxcsr`, die Arena vor `init` mit `fill` gefuellt, nach jedem Einstieg die
 /// Probe, dass MXCSR so geblieben ist. Die Schleife rechnet wie die der
 /// Runtime: Tick, Schlaf nach 9.9, Commit, ein Auftrag an den Job-Kontext.
@@ -251,11 +251,11 @@ fn main_c(ticks: u64, tick: i64, mxcsr: u32, fill: u8) -> String {
 
 #include "app.h"
 
-void takt_board_trace(const char *line) {{ fputs(line, stdout); }}
-void takt_board_trace_i64(long long v) {{ printf("%lld ", v); }}
-void takt_board_trace_u64(unsigned long long v) {{ printf("%llu ", v); }}
-void takt_board_trace_f64(double v) {{ printf("%.17g ", v); }}
-void takt_board_trace_hex8(unsigned char v) {{ printf("0x%02x", v); }}
+void takt_trace_text(void *s, const char *t) {{ fputs(t, (FILE *)s); }}
+void takt_trace_i64(void *s, long long v) {{ fprintf((FILE *)s, "%lld", v); }}
+void takt_trace_u64(void *s, unsigned long long v) {{ fprintf((FILE *)s, "%llu", v); }}
+void takt_trace_f64(void *s, double v) {{ fprintf((FILE *)s, "%.17g", v); }}
+void takt_trace_hex8(void *s, unsigned char v) {{ fprintf((FILE *)s, "0x%02x", v); }}
 
 static struct app_arena arena;
 static unsigned char journal[8192];
@@ -273,7 +273,7 @@ int main(void) {{
     int32_t n;
     _mm_setcsr({mxcsr:#x}u);
     memset(&arena, {fill:#04x}, sizeof arena);
-    app_init_with(&arena, 0, 0, 0); unchanged("init_with");
+    app_init_with(&arena, 0, stdout, 0, 0); unchanged("init_with");
     /* Das Journal einmal hin und zurueck: derselbe Stand, keine andere Rechnung. */
     n = app_persist_snapshot(&arena, journal, (int32_t)sizeof journal); unchanged("persist_snapshot");
     if (n > 0) {{ app_persist_restore(&arena, journal, n); unchanged("persist_restore"); }}

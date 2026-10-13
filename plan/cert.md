@@ -48,12 +48,12 @@ Workspace ohne Zeile, keine Zeile ohne Crate.
 | takt-board-esp32c6 | Register des ESP32-C6 (SYSTIMER, USB-Serial-JTAG, GPIO, MWDT), CSR-Zugriffe, `wfi` |
 | takt-board-stm32f401 | Register des STM32F401 (TIM2, USART1, IWDG, GPIO, Flash), DWT, `wfi` |
 | takt-native-abi | die C-Einstiege der kuratierten Natives (`takt_native_*`), die der erzeugte Code auf Wirt und Board ruft; gerechnet wird in `takt-native` und `takt-crypto` (4.5, FB-293) |
-| takt-bringup-esp32c6 | die Hülle der Lieferform (`app.rs`) hinter der C-ABI des Programms und seines Rahmens (12.11), der erzeugte Kleber der Treiber (`app_in_*`, `app_out_*`, …) zum Prüfstand, Geräte über statische Peripherie, `takt_board_trace*` hinter der C-ABI |
+| takt-bringup-esp32c6 | die Hülle der Lieferform (`app.rs`) hinter der C-ABI des Programms und seines Rahmens (12.11), der erzeugte Kleber der Treiber (`app_in_*`, `app_out_*`, …) zum Prüfstand, Geräte über statische Peripherie, die Haken `takt_trace_*` (`takt_embed::hooks!`) über der Leitung als Senke |
 | takt-trampoline-stm32f401 | das Sprungbrett in Sektor 1 der Black Pill (FB-385): liest die Vektortabelle der Anwendung in Sektor 4 und springt hinein, ohne sie in den DFU-Bootloader des ROM (`takt-board-stm32f401::bootloader`) |
 | takt-bringup-stm32f401 | dasselbe für die Black Pill; im Profil `shared` dazu RTIC 2 und `rtic-sync` — das RTOS gehört dort zur TCB (12.8) |
-| takt-bringup-host | die Schleife auf dem Wirt für `takt driver-test --crate` (13.8): `takt_board_trace*` hinter der C-ABI, die Leitung als statische Konsole; Lieferform, Hülle und Kleber zum Prüfstand bindet das Programm, das `takt-conformance::board::host` erzeugt |
-| takt-embed | Takt als Baustein in Rust (12.11): in der Testhilfe `takt_board_trace*` hinter der C-ABI, die Leitung je Faden; die Geräte-Traits und der Bauhelfer stehen unter `deny(unsafe_code)` |
-| takt-embed-c | Takt als Baustein in C (12.11, M11 Schritt 18a): der Kern ohne Warten hinter der C-ABI (`takt_core_*`), die Tabelle `P_ops` und das Gerät des Journals als Rückrufe des Wirts, der Kern im Speicher des Wirts (`takt_core`); dazu der Panic-Handler des Archivs (`abort`) |
+| takt-bringup-host | die Schleife auf dem Wirt für `takt driver-test --crate` (13.8): die Haken `takt_trace_*` (`takt_embed::hooks!`) über der Konsole als Senke, die Leitung als statische Konsole; Lieferform, Hülle und Kleber zum Prüfstand bindet das Programm, das `takt-conformance::board::host` erzeugt |
+| takt-embed | Takt als Baustein in Rust (12.11): die Haken `takt_trace_*` hinter der C-ABI, die das Makro `hooks!` für die eine Senke eines Wirts stellt (`trace`), in der Testhilfe die Senke je Faden; die Geräte-Traits und der Bauhelfer stehen unter `deny(unsafe_code)` |
+| takt-embed-c | Takt als Baustein in C (12.11, M11 Schritt 18a): der Kern ohne Warten hinter der C-ABI (`takt_core_*`), die Tabelle `P_ops` und das Gerät des Journals als Rückrufe des Wirts, der Kern und seine Senke im Speicher des Wirts (`takt_core`, `takt_sink`) mit den Haken `takt_trace_*`; dazu der Panic-Handler des Archivs (`abort`) |
 
 **Rechnen außerhalb der TCB.** Was in einem Board-Crate keine
 Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,

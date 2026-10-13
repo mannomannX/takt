@@ -133,15 +133,16 @@ uint8_t persist_out_o_first(void *user, int64_t now, int64_t value) { (void)user
 uint8_t persist_alive_o(void *user, int64_t now) { (void)user; (void)now; return 1; }
 "#;
 
-/// Was jeder C-Wirt dieser Tests stellt, der ein Journal hat: die Leitung
-/// nach stdout, einen Watchdog, dessen Meldung nirgendwohin geht (12.11),
-/// und ein Flash im Speicher mit zwei Slots, jeder Vorgang sofort fertig
-/// (5.9).
+/// Was jeder C-Wirt dieser Tests stellt, der ein Journal hat: die Senke mit
+/// ihrer Leitung nach stdout, einen Watchdog, dessen Meldung nirgendwohin
+/// geht (12.11), und ein Flash im Speicher mit zwei Slots, jeder Vorgang
+/// sofort fertig (5.9).
 const RAM_FLASH: &str = r#"
 static uint8_t put(void *ctx, uint8_t byte) { return fputc(byte, (FILE *)ctx) != EOF; }
 static void kick(void *ctx) { (void)ctx; }
 static const struct takt_watchdog watchdog = {NULL, kick};
 static uint8_t ring[4096];
+static takt_sink sink;
 
 #define SLOT 4096u
 static uint8_t slots[2][SLOT];
@@ -191,8 +192,8 @@ static struct persist_arena arena;
 static takt_core core;
 
 static int run(long long ticks) {
-    int32_t status = takt_core_init_journaled(&core, &persist_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm,
-                                              current, stored, PERSIST_PERSIST_BOUND);
+    int32_t status = takt_core_init_journaled(&core, &persist_ops, &arena, NULL, &sink, TAKT_PROFILE_BAREMETAL,
+                                              &watchdog, &nvm, current, stored, PERSIST_PERSIST_BOUND);
     if (status != TAKT_OK) {
         fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
         return 2;
@@ -213,7 +214,7 @@ static int run(long long ticks) {
 int main(int argc, char **argv) {
     long long ticks = argc > 1 ? strtoll(argv[1], NULL, 10) : 60;
     const struct takt_line line = {stdout, put, NULL};
-    if (takt_line_init(&line, ring, sizeof ring) != TAKT_OK) {
+    if (takt_sink_init(&sink, &line, ring, sizeof ring) != TAKT_OK) {
         return 2;
     }
     memset(slots, 0xff, sizeof slots);
@@ -274,9 +275,9 @@ int main(int argc, char **argv) {
     long long ticks = argc > 1 ? strtoll(argv[1], NULL, 10) : 400;
     const struct takt_line line = {stdout, put, NULL};
     memset(slots, 0xff, sizeof slots);
-    if (takt_line_init(&line, ring, sizeof ring) != TAKT_OK ||
-        takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm, current, stored,
-                                 PORT_TEST_PERSIST_BOUND) != TAKT_OK) {
+    if (takt_sink_init(&sink, &line, ring, sizeof ring) != TAKT_OK ||
+        takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, &sink, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm,
+                                 current, stored, PORT_TEST_PERSIST_BOUND) != TAKT_OK) {
         return 2;
     }
     int64_t now = 0;

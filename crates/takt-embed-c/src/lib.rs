@@ -21,14 +21,16 @@
 //! zugleich; der Job-Kontext ruft `takt_core_job_work` mit niedrigerer
 //! Prioritaet.
 //!
-//! **Die Leitung.** Der Rahmen schreibt den Trace ueber `takt_board_trace*`
-//! (12.5); diese Funktionen stellt das Archiv, mit derselben Telemetrie wie
+//! **Die Senke.** Der Rahmen schreibt den Trace ueber die Haken
+//! `takt_trace_*` (12.5), jeden Aufruf mit der Senke, die sein Kern bei
+//! `init` nannte; die Haken stellt das Archiv, mit derselben Telemetrie wie
 //! die Bring-ups (`takt_rt_baremetal`): ein Ring vor der Leitung des Wirts,
 //! je Tick die Zeitzeile, die Marke `takt trace` und am Ende die Bilanz
-//! ([`takt_core_report`]). Der Wirt bindet nur seine Leitung
-//! ([`takt_line_init`]). So rechnet kein C-Wirt Fliesskommazahlen selbst in
-//! Dezimalziffern um (4.2), und jeder C-Port schreibt, was die Portpruefung
-//! liest.
+//! ([`takt_core_report`]). Der Wirt bindet je Senke seine Leitung
+//! ([`takt_sink_init`]) und gibt jedem Kern eine: Zwei Kerne mit zwei
+//! Senken schreiben nie ineinander (FB-691). So rechnet kein C-Wirt
+//! Fliesskommazahlen selbst in Dezimalziffern um (4.2), und jeder C-Port
+//! schreibt, was die Portpruefung liest.
 
 #![cfg_attr(
     not(test),
@@ -68,14 +70,13 @@
     )
 )]
 
-use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_void};
 use core::marker::PhantomData;
 use core::mem::{MaybeUninit, align_of, size_of};
 use core::ptr::null;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use takt_rt_baremetal::{Cadence, JournalStats, Port, Stacks, Telemetry, Trace};
+use takt_rt_baremetal::{Cadence, JournalStats, Lead, Port, Stacks, Telemetry, Trace};
 use takt_rt_core::port_test::{self, ForeignLoad};
 use takt_rt_core::{
     Clock, Journal, Memory, NextRun, Nvm, NvmState, Outputs, Persist, Persisting, Policy, Profile, Runtime, Store,
@@ -109,11 +110,17 @@ extern "C" fn rust_eh_personality() {}
 /// Fassung nimmt [`takt_core_init`] nicht an. Fassung 2: Der Wirt nennt
 /// seinen Watchdog bei `takt_core_init` (12.11). Fassung 3: Die Tabelle
 /// traegt `P_operator_abort`, den der Kern nach [`takt_core_abort`] meldet
-/// (5.4).
-pub const ABI: u32 = 3;
+/// (5.4). Fassung 4: die Senke je Kern ([`takt_sink_init`],
+/// [`takt_core_init`] mit ihr), `init` und `init_with` der Tabelle mit ihr
+/// und die Haken `takt_trace_*` mit ihr; die Leitung je Prozess
+/// (`takt_line_*`) entfaellt (12.11, FB-691).
+pub const ABI: u32 = 4;
 
 /// So viele Byte haelt `takt_core` fuer den Kern (`TAKT_CORE_BYTES`).
 pub const CORE_BYTES: usize = 1024;
+
+/// So viele Byte haelt `takt_sink` fuer eine Senke (`TAKT_SINK_BYTES`).
+pub const SINK_BYTES: usize = 128;
 
 /// Rueckgaben von [`takt_core_init`] und [`takt_core_init_journaled`].
 pub mod status {
@@ -129,11 +136,11 @@ pub mod status {
     /// Kein Profil dieses Namens (12.8).
     pub const PROFILE: i32 = -4;
     /// Ein Puffer ist zu klein: Die des Journals fassen die Nutzlast des
-    /// Programms nicht, oder der Ring der Leitung ist leer.
+    /// Programms nicht, oder der Ring der Senke ist leer.
     pub const BOUND: i32 = -5;
-    /// Keine Leitung gebunden ([`takt_line_init`](super::takt_line_init)):
-    /// Die Senke der Telemetrie stellt der Wirt ausdruecklich (12.11), einen
-    /// Trace, der still verloren geht, gibt es nicht.
+    /// Keine Senke ([`takt_sink_init`](super::takt_sink_init)): Die Senke
+    /// des Trace stellt der Wirt ausdruecklich (12.11), einen Trace, der
+    /// still verloren geht, gibt es nicht.
     pub const LINE: i32 = -6;
 }
 
@@ -155,10 +162,16 @@ pub struct Ops {
     pub persist_min_interval_ns: i64,
     /// Die groesste Nutzlast eines Eintrags in Byte (`P_PERSIST_BOUND`).
     pub persist_bound: u32,
-    /// `P_init`.
-    pub init: unsafe extern "C" fn(arena: *mut c_void, user: *mut c_void),
+    /// `P_init`: mit dem Treiberobjekt und der Senke des Wirts.
+    pub init: unsafe extern "C" fn(arena: *mut c_void, user: *mut c_void, sink: *mut c_void),
     /// `P_init_with`: Tick 0 mit den Werten aus dem Journal.
-    pub init_with: unsafe extern "C" fn(arena: *mut c_void, user: *mut c_void, bytes: *const c_void, len: i32) -> i32,
+    pub init_with: unsafe extern "C" fn(
+        arena: *mut c_void,
+        user: *mut c_void,
+        sink: *mut c_void,
+        bytes: *const c_void,
+        len: i32,
+    ) -> i32,
     /// `P_tick`: der Schritt von Tick `k` (der Rahmen zaehlt ab 1).
     pub tick: unsafe extern "C" fn(arena: *mut c_void, k: i64),
     /// `P_commit`.
@@ -309,37 +322,52 @@ impl Port for HostLine {
     }
 }
 
-/// Die Leitung mit ihrem Ring, eine fuer alle Kerne des Wirts: Der Rahmen
-/// ruft `takt_board_trace*` ohne Kern (12.5).
-struct Shared(UnsafeCell<Option<Telemetry<HostLine>>>);
-
-// SAFETY: Der Wirt sagt zu, dass nie zwei Kontexte zugleich auf die Leitung
-// schreiben (`takt_sdk.h`): der Schrittkontext in `takt_core_service` und
-// `takt_core_finish`, der Wirt in `takt_line_init`, `takt_line_mark` und
-// `takt_core_report`, waehrend kein Schritt laeuft.
-unsafe impl Sync for Shared {}
-
-static LINE: Shared = Shared(UnsafeCell::new(None));
-
-/// Die Leitung, wenn der Wirt eine gebunden hat.
-fn line() -> Option<&'static mut Telemetry<HostLine>> {
-    // SAFETY: siehe `Shared`; jeder Griff endet, bevor der naechste beginnt.
-    unsafe { (*LINE.0.get()).as_mut() }
+/// Der Speicher einer Senke im Wirt (`takt_sink`, 12.5, 12.11): eine
+/// Leitung mit ihrem Ring. [`SINK_BYTES`] Byte, auf acht ausgerichtet;
+/// [`takt_sink_init`] beschreibt sie. Jeder Kern bekommt eine; teilen sich
+/// Kerne eine, sagt der Wirt zu, dass nie zwei zugleich schreiben.
+#[repr(C, align(8))]
+pub struct TraceSink {
+    bytes: [MaybeUninit<u8>; SINK_BYTES],
 }
 
-/// Bindet die Leitung des Wirts (12.5), eine fuer alle Kerne: Ueber sie gehen
-/// der Trace des Rahmens, je Tick die Zeitzeile, die Marke und die Bilanz.
-/// `ring` haelt `len` Byte zwischen Schritt und Leitung (12.2): Ist er voll
-/// und nimmt die Leitung nichts, wird verworfen und gezaehlt.
+const _: () = assert!(
+    size_of::<Telemetry<HostLine>>() <= SINK_BYTES && align_of::<Telemetry<HostLine>>() <= 8,
+    "`SINK_BYTES` zu klein"
+);
+
+/// Die Leitung in einer Senke, ein Griff je Aufruf.
 ///
 /// # Safety
 ///
-/// `line_ops` zeigt auf eine gueltige Tabelle, deren Rueckrufe so lange
-/// gelten wie der Prozess, `ring` auf `len` beschreibbare Byte, die nur das
-/// Archiv benutzt; kein Schritt laeuft.
+/// `sink` ist null oder eine Senke aus [`takt_sink_init`], die noch lebt;
+/// solange der Griff lebt, greift kein anderer auf sie zu: Der Wirt sagt zu,
+/// dass nie zwei Kontexte zugleich in dieselbe Senke schreiben.
+unsafe fn telemetry<'s>(sink: *mut TraceSink) -> Option<&'s mut Telemetry<HostLine>> {
+    // SAFETY: siehe oben.
+    unsafe { sink.cast::<Telemetry<HostLine>>().as_mut() }
+}
+
+/// Bindet die Leitung `line_ops` des Wirts an die Senke `sink` (12.5): Ueber
+/// sie gehen der Trace der Programme, deren Kern sie bekommt, je Tick die
+/// Zeitzeile, die Marke und die Bilanz. `ring` haelt `len` Byte zwischen
+/// Schritt und Leitung (12.2): Ist er voll und nimmt die Leitung nichts, wird
+/// verworfen und gezaehlt.
+///
+/// # Safety
+///
+/// `sink` zeigt auf [`SINK_BYTES`] beschreibbare, auf acht ausgerichtete Byte,
+/// `line_ops` auf eine gueltige Tabelle, `ring` auf `len` beschreibbare Byte;
+/// alle leben so lange wie jeder Kern, der die Senke bekommt, und Senke und
+/// Ring benutzt nur das Archiv. Kein Schritt laeuft.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_line_init(line_ops: *const LineOps, ring: *mut u8, len: u32) -> i32 {
-    if line_ops.is_null() || ring.is_null() {
+pub unsafe extern "C" fn takt_sink_init(
+    sink: *mut TraceSink,
+    line_ops: *const LineOps,
+    ring: *mut u8,
+    len: u32,
+) -> i32 {
+    if sink.is_null() || line_ops.is_null() || ring.is_null() {
         return status::NULL;
     }
     let Ok(len) = usize::try_from(len) else { return status::BOUND };
@@ -349,115 +377,139 @@ pub unsafe extern "C" fn takt_line_init(line_ops: *const LineOps, ring: *mut u8,
     // SAFETY: nicht null; der Wirt stellt eine gueltige Tabelle.
     let ops = unsafe { *line_ops };
     // SAFETY: `len` Byte an `ring`, die nur das Archiv benutzt und die so
-    // lange leben wie der Prozess.
+    // lange leben wie jeder Kern der Senke.
     let ring = unsafe { core::slice::from_raw_parts_mut(ring, len) };
-    // SAFETY: siehe `Shared`; kein Schritt laeuft.
-    unsafe { *LINE.0.get() = Some(Telemetry::new(HostLine(ops), ring)) };
+    // SAFETY: `sink` fasst die Telemetrie (Pruefung oben) und ist ausgerichtet.
+    unsafe { sink.cast::<Telemetry<HostLine>>().write(Telemetry::new(HostLine(ops), ring)) };
     status::OK
 }
 
-/// Macht die gebundene Leitung verlustfrei (13.8): Ist der Ring voll, wartet
-/// der Schreibende, bis die Leitung ihn geleert hat, statt zu verwerfen —
+/// Macht die Senke verlustfrei (13.8): Ist ihr Ring voll, wartet der
+/// Schreibende, bis die Leitung ihn geleert hat, statt zu verwerfen —
 /// hoechstens [`takt_rt_baremetal::DRAIN_ROUNDS`] Anlaeufe lang. Nur fuer
 /// Laeufe in logischer Zeit, wie die Bring-ups sie fahren: Im Betrieb
-/// verbietet 12.2 das Warten. [`status::LINE`], wenn keine Leitung gebunden
-/// ist.
+/// verbietet 12.2 das Warten. [`status::LINE`] ohne Senke.
 ///
 /// # Safety
 ///
-/// Kein Schritt laeuft.
+/// `sink` ist null oder eine Senke aus [`takt_sink_init`]; kein Schritt laeuft.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_line_lossless() -> i32 {
-    // SAFETY: siehe `Shared`; kein Schritt laeuft.
-    let slot = unsafe { &mut *LINE.0.get() };
-    match slot.take() {
-        Some(t) => {
-            *slot = Some(t.lossless());
-            status::OK
-        }
-        None => status::LINE,
+pub unsafe extern "C" fn takt_sink_lossless(sink: *mut TraceSink) -> i32 {
+    if sink.is_null() {
+        return status::LINE;
     }
+    let at = sink.cast::<Telemetry<HostLine>>();
+    // SAFETY: eine Senke aus `takt_sink_init`; sie wird sofort zurueckgeschrieben.
+    let t = unsafe { at.read() };
+    // SAFETY: dieselbe Stelle, die Telemetrie verlustfrei.
+    unsafe { at.write(t.lossless()) };
+    status::OK
 }
 
-/// Gibt an die Leitung, was der Ring haelt und sie ohne Warten nimmt: fuer
-/// Zeilen des Wirts, waehrend kein Schritt laeuft, etwa eine Meldung, dass
-/// der Kern nicht annahm. Waehrend des Laufs gibt der Kern den Ring nach
-/// jedem Tick ab.
+/// Gibt an die Leitung, was der Ring der Senke haelt und sie ohne Warten
+/// nimmt: fuer Zeilen des Wirts, waehrend kein Schritt laeuft, etwa eine
+/// Meldung, dass der Kern nicht annahm. Waehrend des Laufs gibt der Kern den
+/// Ring nach jedem Tick ab.
 ///
 /// # Safety
 ///
-/// Kein Schritt laeuft.
+/// Wie [`takt_sink_lossless`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_line_flush() {
-    if let Some(t) = line() {
+pub unsafe extern "C" fn takt_sink_flush(sink: *mut TraceSink) {
+    // SAFETY: siehe oben.
+    if let Some(t) = unsafe { telemetry(sink) } {
         t.flush();
     }
 }
 
 /// Schreibt die Marke `takt trace`, ab der die Bilanz zaehlt, was gesendet
-/// wurde (FB-304); davor darf der Wirt einen Kopf schreiben.
+/// wurde (FB-304); davor darf der Wirt einen Kopf schreiben
+/// (`takt_trace_text`).
 ///
 /// # Safety
 ///
-/// Kein Schritt laeuft.
+/// Wie [`takt_sink_lossless`].
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_line_mark() {
-    if let Some(t) = line() {
+pub unsafe extern "C" fn takt_sink_mark(sink: *mut TraceSink) {
+    // SAFETY: siehe oben.
+    if let Some(t) = unsafe { telemetry(sink) } {
         t.mark();
     }
 }
 
-/// Vom Rahmen gerufen: ein Text im Trace (12.5).
+/// Vom Rahmen gerufen, auch vom Wirt fuer seinen Kopf: ein Text in der Senke
+/// `sink` (12.5). Ein Haken haengt nichts an; die Trenner schreibt der
+/// Rahmen (FB-690).
 ///
 /// # Safety
 ///
-/// `text` ist null oder nullterminiert; der Rahmen uebergibt nur Literale
-/// und Namen aus seinen Tabellen.
+/// `sink` wie bei [`takt_sink_lossless`]; `text` ist null oder
+/// nullterminiert. Der Rahmen uebergibt nur Literale und Namen aus seinen
+/// Tabellen.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_board_trace(text: *const c_char) {
-    let Some(t) = line() else { return };
+pub unsafe extern "C" fn takt_trace_text(sink: *mut c_void, text: *const c_char) {
+    // SAFETY: siehe oben.
+    let Some(t) = (unsafe { telemetry(sink.cast()) }) else { return };
     if text.is_null() {
         return;
     }
-    // SAFETY: siehe oben.
+    // SAFETY: nicht null und nullterminiert, siehe oben.
     let text = unsafe { core::ffi::CStr::from_ptr(text) };
     for &b in text.to_bytes() {
         t.write_byte(b);
     }
 }
 
-/// Vom Rahmen gerufen: eine Zahl im Trace.
+/// Vom Rahmen gerufen: eine Zahl in der Senke.
+///
+/// # Safety
+///
+/// Wie [`takt_trace_text`].
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_i64(value: i64) {
-    if let Some(t) = line() {
+pub unsafe extern "C" fn takt_trace_i64(sink: *mut c_void, value: i64) {
+    // SAFETY: siehe oben.
+    if let Some(t) = unsafe { telemetry(sink.cast()) } {
         t.write_i64(value);
-        t.write_byte(b' ');
     }
 }
 
-/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
+/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen in der Senke.
+///
+/// # Safety
+///
+/// Wie [`takt_trace_text`].
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_u64(value: u64) {
-    if let Some(t) = line() {
+pub unsafe extern "C" fn takt_trace_u64(sink: *mut c_void, value: u64) {
+    // SAFETY: siehe oben.
+    if let Some(t) = unsafe { telemetry(sink.cast()) } {
         t.write_u64(value);
-        t.write_byte(b' ');
     }
 }
 
 /// Vom Rahmen gerufen: eine Fliesskommazahl als kuerzeste eindeutige
 /// Ziffernfolge (4.2), wie in den Bring-ups.
+///
+/// # Safety
+///
+/// Wie [`takt_trace_text`].
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_f64(value: f64) {
+pub unsafe extern "C" fn takt_trace_f64(sink: *mut c_void, value: f64) {
     use core::fmt::Write as _;
-    if let Some(t) = line() {
-        let _ = write!(t, "{value:?} ");
+    // SAFETY: siehe oben.
+    if let Some(t) = unsafe { telemetry(sink.cast()) } {
+        let _ = write!(t, "{value:?}");
     }
 }
 
 /// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
+///
+/// # Safety
+///
+/// Wie [`takt_trace_text`].
 #[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_hex8(value: u8) {
-    if let Some(t) = line() {
+pub unsafe extern "C" fn takt_trace_hex8(sink: *mut c_void, value: u8) {
+    // SAFETY: siehe oben.
+    if let Some(t) = unsafe { telemetry(sink.cast()) } {
         t.write_hex8(value);
     }
 }
@@ -559,13 +611,14 @@ struct CProgram<M> {
     ops: *const Ops,
     arena: *mut c_void,
     user: *mut c_void,
+    sink: *mut c_void,
     initialized: bool,
     memory: PhantomData<M>,
 }
 
 impl<M> CProgram<M> {
-    fn new(ops: *const Ops, arena: *mut c_void, user: *mut c_void) -> CProgram<M> {
-        CProgram { ops, arena, user, initialized: false, memory: PhantomData }
+    fn new(ops: *const Ops, arena: *mut c_void, user: *mut c_void, sink: *mut TraceSink) -> CProgram<M> {
+        CProgram { ops, arena, user, sink: sink.cast(), initialized: false, memory: PhantomData }
     }
 
     fn ops(&self) -> &Ops {
@@ -576,8 +629,8 @@ impl<M> CProgram<M> {
     /// Tick 0 ohne geladene Werte, wenn das Journal keine hatte.
     fn ensure_init(&mut self) {
         if !self.initialized {
-            // SAFETY: die Arena des Programms und das Treiberobjekt des Wirts.
-            unsafe { (self.ops().init)(self.arena, self.user) };
+            // SAFETY: die Arena des Programms, Treiberobjekt und Senke des Wirts.
+            unsafe { (self.ops().init)(self.arena, self.user, self.sink) };
             self.initialized = true;
         }
     }
@@ -664,7 +717,7 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
         } else {
             self.initialized = true;
             // SAFETY: Der Rahmen liest `len` Byte ab `bytes` und beginnt damit.
-            unsafe { (self.ops().init_with)(self.arena, self.user, bytes.as_ptr().cast(), len) }
+            unsafe { (self.ops().init_with)(self.arena, self.user, self.sink, bytes.as_ptr().cast(), len) }
         };
         usize::try_from(n).unwrap_or(0)
     }
@@ -712,7 +765,7 @@ impl<M: Memory> takt_rt_core::Program for CProgram<M> {
             Outputs::Changed => 0,
             Outputs::All => 1,
         };
-        // SAFETY: liest die Arena und schreibt ueber die Leitung des Wirts.
+        // SAFETY: liest die Arena und schreibt in die Senke des Kerns.
         unsafe { (self.ops().dump)(self.arena, all) };
         // SAFETY: ebenso, die Zeile der Programmzaehler.
         unsafe { (self.ops().pc)(self.arena, all) };
@@ -823,15 +876,24 @@ impl Watchdog for HostWatchdog {
     }
 }
 
-/// Der Trace des Wirts (12.5): der Anfangszustand ganz, danach je Tick die
-/// Aenderungen (9.3) und die Zeitzeile, ueber die Leitung aus
-/// [`takt_line_init`]; ohne Leitung nichts.
-type HostSink = Trace<fn() -> Option<&'static mut Telemetry<HostLine>>, Telemetry<HostLine>>;
+/// Der Griff des Kerns auf seine Senke, je Aufruf.
+struct SinkLead(*mut TraceSink);
 
-fn host_sink(tick_ns: i64) -> HostSink {
-    let lead: fn() -> Option<&'static mut Telemetry<HostLine>> = line;
+impl Lead<HostLine> for SinkLead {
+    fn lead(&mut self) -> Option<&'static mut Telemetry<HostLine>> {
+        // SAFETY: die Senke aus `takt_core_init`; der Wirt sagt zu, dass sie
+        // so lange lebt wie der Kern und nie zwei Kontexte zugleich schreiben.
+        unsafe { telemetry(self.0) }
+    }
+}
+
+/// Der Trace des Wirts (12.5): der Anfangszustand ganz, danach je Tick die
+/// Aenderungen (9.3) und die Zeitzeile, in die Senke des Kerns.
+type HostSink = Trace<SinkLead, Telemetry<HostLine>>;
+
+fn host_sink(tick_ns: i64, sink: *mut TraceSink) -> HostSink {
     // Die Grenze des Laufs setzt der Wirt, nicht die Senke.
-    Trace::new(Cadence::of(0, 1), tick_ns, lead)
+    Trace::new(Cadence::of(0, 1), tick_ns, SinkLead(sink))
 }
 
 /// Was die Bilanz vom Journal nennt (5.9).
@@ -886,15 +948,16 @@ impl Engine {
         };
     }
 
-    /// Die Bilanz ueber die Leitung, davor die Zeile der fremden Last.
-    fn report(&mut self, stacks: &Stacks, foreign: Option<Foreign>) {
+    /// Die Bilanz in die Senke `sink`, davor die Zeile der fremden Last.
+    fn report(&mut self, sink: *mut TraceSink, stacks: &Stacks, foreign: Option<Foreign>) {
         // Erst der Abschluss, der noch Trace schreiben kann (12.7, 9.9), dann
-        // ein Griff auf die Leitung fuer die Bilanz.
+        // ein Griff auf die Senke fuer die Bilanz.
         let (stats, overrun, journal) = match self {
             Engine::Volatile(rt) => (takt_rt_baremetal::stats(rt), *rt.overrun(), journal_stats(rt.journal())),
             Engine::Persisting(rt) => (takt_rt_baremetal::stats(rt), *rt.overrun(), journal_stats(rt.journal())),
         };
-        let Some(t) = line() else { return };
+        // SAFETY: die Senke des Kerns; kein Schritt laeuft.
+        let Some(t) = (unsafe { telemetry(sink) }) else { return };
         if let Some(f) = foreign {
             t.write(port_test::LINE);
             t.write_u64(f.rounds);
@@ -915,6 +978,7 @@ impl Engine {
 struct Parts {
     ops: *const Ops,
     arena: *mut c_void,
+    sink: *mut TraceSink,
     wake: AtomicBool,
     abort: AtomicBool,
     hardware: AtomicBool,
@@ -965,8 +1029,8 @@ pub struct Core {
 }
 
 /// Prueft, was beide Einstiege brauchen, und nennt Profil, Politik und den
-/// Watchdog. Die Fassung zuerst: Ein Wirt der Fassung 1 ruft mit einem
-/// Argument weniger, und `watchdog` liest erst, wer die Fassung bestand.
+/// Watchdog. Die Fassung zuerst: Ein Wirt einer frueheren Fassung ruft mit
+/// anderen Argumenten, und `watchdog` liest erst, wer die Fassung bestand.
 ///
 /// # Safety
 ///
@@ -976,6 +1040,7 @@ unsafe fn prepare(
     core: *mut Core,
     ops: *const Ops,
     arena: *mut c_void,
+    sink: *mut TraceSink,
     profile: i32,
     persisting: bool,
     watchdog: *const WatchdogOps,
@@ -990,7 +1055,7 @@ unsafe fn prepare(
     }
     // SAFETY: null oder gueltig, siehe oben.
     let Some(watchdog) = (unsafe { watchdog.as_ref() }).copied() else { return Err(status::NULL) };
-    if line().is_none() {
+    if sink.is_null() {
         return Err(status::LINE);
     }
     if (o.persists != 0) != persisting {
@@ -1007,36 +1072,40 @@ unsafe fn prepare(
 
 /// Baut den Kern eines Programms ohne `persist` in `core`: `ops` sind seine
 /// Einstiege (`P_ops`), `arena` seine Arena, `user` das Treiberobjekt,
-/// `profile` das Laufzeitprofil (12.8: 0 `baremetal`, 1 `shared`, 2
-/// `linux_rt`), `watchdog` der Watchdog des Wirts. Die Leitung ist schon
-/// gebunden ([`takt_line_init`]). Das Programm steht danach in Tick 0 (9.4).
+/// `sink` die Senke seines Trace ([`takt_sink_init`]), `profile` das
+/// Laufzeitprofil (12.8: 0 `baremetal`, 1 `shared`, 2 `linux_rt`),
+/// `watchdog` der Watchdog des Wirts. Das Programm steht danach in Tick 0
+/// (9.4).
 ///
 /// # Safety
 ///
-/// `core`, `ops`, `arena` und `watchdog` zeigen auf gueltigen Speicher, der so
-/// lange lebt wie der Kern; `arena` ist die Arena des Programms von `ops`.
+/// `core`, `ops`, `arena`, `sink` und `watchdog` zeigen auf gueltigen
+/// Speicher, der so lange lebt wie der Kern; `arena` ist die Arena des
+/// Programms von `ops`, `sink` eine Senke aus [`takt_sink_init`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_core_init(
     core: *mut Core,
     ops: *const Ops,
     arena: *mut c_void,
     user: *mut c_void,
+    sink: *mut TraceSink,
     profile: i32,
     watchdog: *const WatchdogOps,
 ) -> i32 {
     // SAFETY: siehe oben.
-    let (profile, policy, watchdog) = match unsafe { prepare(core, ops, arena, profile, false, watchdog) } {
+    let (profile, policy, watchdog) = match unsafe { prepare(core, ops, arena, sink, profile, false, watchdog) } {
         Ok(p) => p,
         Err(code) => return code,
     };
     // SAFETY: von `prepare` geprueft.
     let tick_ns = unsafe { (*ops).tick_ns };
-    let mut program = CProgram::new(ops, arena, user);
+    let mut program = CProgram::new(ops, arena, user, sink);
     program.ensure_init();
-    let rt = Runtime::new(program, host_clock(), watchdog, host_sink(tick_ns), profile, tick_ns, policy);
+    let rt = Runtime::new(program, host_clock(), watchdog, host_sink(tick_ns, sink), profile, tick_ns, policy);
     let (wake, abort, hardware) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false));
+    let parts = Parts { ops, arena, sink, wake, abort, hardware, engine: Engine::Volatile(rt) };
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
-    unsafe { core.cast::<Parts>().write(Parts { ops, arena, wake, abort, hardware, engine: Engine::Volatile(rt) }) };
+    unsafe { core.cast::<Parts>().write(parts) };
     status::OK
 }
 
@@ -1058,6 +1127,7 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     ops: *const Ops,
     arena: *mut c_void,
     user: *mut c_void,
+    sink: *mut TraceSink,
     profile: i32,
     watchdog: *const WatchdogOps,
     nvm: *const NvmOps,
@@ -1066,7 +1136,7 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     bound: u32,
 ) -> i32 {
     // SAFETY: siehe oben.
-    let (profile, policy, watchdog) = match unsafe { prepare(core, ops, arena, profile, true, watchdog) } {
+    let (profile, policy, watchdog) = match unsafe { prepare(core, ops, arena, sink, profile, true, watchdog) } {
         Ok(p) => p,
         Err(code) => return code,
     };
@@ -1087,16 +1157,15 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     // SAFETY: ebenso `stored`, ein eigener Puffer neben `current`.
     let stored = unsafe { core::slice::from_raw_parts_mut(stored, len) };
     let journal = Journal::new(HostNvm(device), o.logic_hash, o.persist_min_interval_ns);
-    let mut program = CProgram::new(ops, arena, user);
+    let mut program = CProgram::new(ops, arena, user, sink);
     let (persist, _, _) = Unloaded::new(journal, current, stored).load(&mut program);
     program.ensure_init();
-    let sink = host_sink(o.tick_ns);
-    let rt = Runtime::journaled(program, persist, host_clock(), watchdog, sink, profile, o.tick_ns, policy);
+    let trace = host_sink(o.tick_ns, sink);
+    let rt = Runtime::journaled(program, persist, host_clock(), watchdog, trace, profile, o.tick_ns, policy);
     let (wake, abort, hardware) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false));
+    let parts = Parts { ops, arena, sink, wake, abort, hardware, engine: Engine::Persisting(rt) };
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
-    unsafe {
-        core.cast::<Parts>().write(Parts { ops, arena, wake, abort, hardware, engine: Engine::Persisting(rt) });
-    };
+    unsafe { core.cast::<Parts>().write(parts) };
     status::OK
 }
 
@@ -1214,7 +1283,7 @@ pub unsafe extern "C" fn takt_core_finish(core: *mut Core) {
 }
 
 /// Beendet den Lauf wie [`takt_core_finish`] und schreibt die Bilanz als
-/// letzte Zeile ueber die Leitung (13.8): Schlaf, Ueberlaeufe, Rueckstand,
+/// letzte Zeile in die Senke des Kerns (13.8): Schlaf, Ueberlaeufe, Rueckstand,
 /// verworfene und gesendete Byte, das Journal und die Stacks `stacks`; davor
 /// die Zeile der fremden Last `foreign`, wenn sie nicht null ist, danach
 /// `takt end`. Leert den Ring.
@@ -1225,13 +1294,16 @@ pub unsafe extern "C" fn takt_core_finish(core: *mut Core) {
 /// `foreign` sind null oder gueltig.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_core_report(core: *mut Core, stacks: *const StackDepths, foreign: *const Foreign) {
+    let parts = core.cast::<Parts>();
+    // SAFETY: die Senke, gesetzt in `takt_core_init`.
+    let sink = unsafe { (*parts).sink };
     // SAFETY: wie in `takt_core_service`.
-    let engine = unsafe { &mut (*core.cast::<Parts>()).engine };
+    let engine = unsafe { &mut (*parts).engine };
     // SAFETY: null oder gueltig.
     let stacks = unsafe { stacks.as_ref() }.copied().unwrap_or_default();
     // SAFETY: ebenso.
     let foreign = unsafe { foreign.as_ref() }.copied();
-    engine.report(&Stacks::from(stacks), foreign);
+    engine.report(sink, &Stacks::from(stacks), foreign);
 }
 
 /// Rechnet die Jobs, die der Kern verteilt hat (4.5); unterbrechbar durch
@@ -1268,7 +1340,8 @@ mod tests {
     use std::vec::Vec;
 
     use super::{
-        ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, StackDepths, TunablesOps, WatchdogOps, nvm, status,
+        ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, SINK_BYTES, StackDepths, TunablesOps, WatchdogOps,
+        nvm, status,
     };
 
     const HEADER: &str = include_str!("../include/takt_sdk.h");
@@ -1383,18 +1456,24 @@ mod tests {
         assert_eq!(fields("typedef struct takt_foreign {"), foreign);
         assert_eq!(define("TAKT_SDK_ABI"), i64::from(ABI));
         // Jeder Einstieg des Archivs steht im Kopf: Einen, den er nicht
-        // deklariert, kann kein C-Wirt rufen. `takt_board_trace*` deklariert
-        // der Kopf des Programms (`P.h`).
+        // deklariert, kann kein C-Wirt rufen. Die Haken `takt_trace_*`
+        // deklariert er wie der Kopf des Programms (`P.h`), hinter demselben
+        // Waechter.
         let entries: Vec<&str> = include_str!("lib.rs")
             .lines()
             .filter_map(|l| l.split("extern \"C\" fn ").nth(1)?.split('(').next())
-            .filter(|name| ["takt_core_", "takt_line_", "takt_foreign_"].iter().any(|p| name.starts_with(p)))
+            .filter(|name| {
+                ["takt_core_", "takt_sink_", "takt_trace_", "takt_foreign_"].iter().any(|p| name.starts_with(p))
+            })
             .collect();
         assert!(entries.contains(&"takt_core_hardware_fault"), "{entries:?}");
+        assert!(entries.contains(&"takt_sink_init") && entries.contains(&"takt_trace_hex8"), "{entries:?}");
+        assert!(HEADER.contains("#ifndef TAKT_TRACE_HOOKS"), "derselbe Waechter wie in `P.h`");
         for name in entries {
             assert!(HEADER.contains(&format!(" {name}(")), "`{name}` fehlt im Kopf");
         }
         assert_eq!(define("TAKT_CORE_BYTES"), CORE_BYTES as i64);
+        assert_eq!(define("TAKT_SINK_BYTES"), SINK_BYTES as i64);
         for (name, value) in [
             ("TAKT_OK", status::OK),
             ("TAKT_ERR_NULL", status::NULL),
@@ -1416,24 +1495,23 @@ mod tests {
 /// Der Kern hinter der C-Schnittstelle, wie ein C-Wirt ihn faehrt (M11
 /// Schritt 33c): Programm, Leitung und Geraet des Journals sind Rueckrufe
 /// dieses Tests. Unter Miri prueft der Lauf jeden Zugriff des Archivs ueber
-/// die Zeiger des Wirts: den Kern in `takt_core`, die Arena, die Puffer des
-/// Journals und die Leitung hinter dem `static`.
+/// die Zeiger des Wirts: den Kern in `takt_core`, die Senke in `takt_sink`,
+/// die Arena und die Puffer des Journals.
 #[cfg(test)]
 mod core_abi {
     use core::cell::Cell;
     use core::ffi::c_void;
     use core::mem::MaybeUninit;
     use core::ops::Range;
-    use core::ptr::{null, null_mut};
-    use std::boxed::Box;
+    use core::ptr::{NonNull, null, null_mut};
     use std::string::String;
     use std::vec::Vec;
 
     use super::{
-        ABI, Core, LineOps, NvmOps, Ops, TunablesOps, WatchdogOps, nvm, status, takt_board_trace, takt_core_abort,
+        ABI, Core, LineOps, NvmOps, Ops, TraceSink, TunablesOps, WatchdogOps, nvm, status, takt_core_abort,
         takt_core_finish, takt_core_hardware_fault, takt_core_init, takt_core_init_journaled, takt_core_job_work,
-        takt_core_report, takt_core_service, takt_core_service_with, takt_core_wake, takt_line_flush, takt_line_init,
-        takt_line_lossless,
+        takt_core_report, takt_core_service, takt_core_service_with, takt_core_wake, takt_sink_flush, takt_sink_init,
+        takt_sink_lossless, takt_trace_text,
     };
 
     const TICK_NS: i64 = 1_000_000;
@@ -1458,6 +1536,8 @@ mod core_abi {
         hardware_pending: bool,
         /// Der Tick des Rahmens, vor dessen Schritt sie kam.
         hardware_in: Option<i64>,
+        /// Die Senke aus `init`, in die das Programm schreibt.
+        sink: Option<NonNull<c_void>>,
     }
 
     /// Die Arena hinter dem Zeiger des Archivs.
@@ -1471,11 +1551,12 @@ mod core_abi {
         unsafe { &mut *arena.cast::<Counter>() }
     }
 
-    unsafe extern "C" fn init(arena: *mut c_void, _user: *mut c_void) {
+    unsafe extern "C" fn init(arena: *mut c_void, _user: *mut c_void, sink: *mut c_void) {
         // SAFETY: die Arena des Tests.
         let c = unsafe { counter(arena) };
         c.tick = 0;
         c.starts += 1;
+        c.sink = NonNull::new(sink);
     }
 
     unsafe extern "C" fn restore(arena: *mut c_void, bytes: *const c_void, len: i32) -> i32 {
@@ -1490,10 +1571,16 @@ mod core_abi {
         8
     }
 
-    unsafe extern "C" fn init_with(arena: *mut c_void, user: *mut c_void, bytes: *const c_void, len: i32) -> i32 {
+    unsafe extern "C" fn init_with(
+        arena: *mut c_void,
+        user: *mut c_void,
+        sink: *mut c_void,
+        bytes: *const c_void,
+        len: i32,
+    ) -> i32 {
         // SAFETY: wie `init` und `restore`.
         unsafe {
-            init(arena, user);
+            init(arena, user, sink);
             restore(arena, bytes, len)
         }
     }
@@ -1531,9 +1618,27 @@ mod core_abi {
         8
     }
 
-    unsafe extern "C" fn dump(_arena: *mut c_void, _all: i32) {
-        // SAFETY: ein nullterminiertes Literal, wie der Rahmen es reicht.
-        unsafe { takt_board_trace(c"t= dump\n".as_ptr()) };
+    /// Schreibt `text` in die Senke des Programms, wie der Rahmen es tut.
+    ///
+    /// # Safety
+    ///
+    /// Wie [`counter`]; `text` ist nullterminiert.
+    unsafe fn say(arena: *mut c_void, text: &core::ffi::CStr) {
+        // SAFETY: die Arena des Tests.
+        let sink = unsafe { counter(arena) }.sink.map_or(null_mut(), NonNull::as_ptr);
+        // SAFETY: die Senke aus `init`, die der Test haelt.
+        unsafe { takt_trace_text(sink, text.as_ptr()) };
+    }
+
+    unsafe extern "C" fn dump(arena: *mut c_void, _all: i32) {
+        // SAFETY: die Arena des Tests.
+        unsafe { say(arena, c"t= dump\n") };
+    }
+
+    /// Wie [`dump`], fuer ein zweites Programm.
+    unsafe extern "C" fn dump_other(arena: *mut c_void, _all: i32) {
+        // SAFETY: die Arena des Tests.
+        unsafe { say(arena, c"t= dump other\n") };
     }
 
     unsafe extern "C" fn tolerance(ns: *mut i64, runs: *mut u32) {
@@ -1715,54 +1820,28 @@ mod core_abi {
         1
     }
 
-    /// Eine gebundene Leitung des Tests mit ihrem Ring.
-    struct Bound {
-        line: *mut Slow,
-        ring: *mut [u8],
-    }
-
-    impl Bound {
-        /// Gibt Leitung und Ring frei.
-        ///
-        /// # Safety
-        ///
-        /// Eine andere Leitung ist gebunden; diese benutzt niemand mehr.
-        unsafe fn release(self) {
-            // SAFETY: siehe oben; beide kamen aus `Box::into_raw`.
-            drop(unsafe { Box::from_raw(self.line) });
-            // SAFETY: ebenso.
-            drop(unsafe { Box::from_raw(self.ring) });
-        }
-    }
-
-    /// Bindet eine langsame Leitung mit einem Ring von vier Byte, auf Wunsch
-    /// verlustfrei, schreibt 16 Byte und gibt den Ring ab, bis er leer ist
-    /// ([`takt_line_flush`]); liefert, was ankam, und die Leitung, die
-    /// gebunden bleibt, bis eine andere sie abloest.
-    ///
-    /// # Safety
-    ///
-    /// Kein Kern laeuft; die Leitung des Prozesses ist danach diese.
-    unsafe fn through_a_slow_line(lossless: bool) -> (Vec<u8>, Bound) {
-        let line: *mut Slow = Box::into_raw(Box::new(Slow { bytes: Vec::new(), offered: 0 }));
-        let ring: *mut [u8] = Box::into_raw(std::vec![0u8; 4].into_boxed_slice());
-        let ops = LineOps { ctx: line.cast(), try_write: slow, flush: None };
-        // SAFETY: Tabelle und Ring gelten, bis eine andere Leitung gebunden ist; kein Schritt laeuft.
-        assert_eq!(unsafe { takt_line_init(&ops, ring.cast(), 4) }, status::OK);
+    /// Bindet eine langsame Leitung mit einem Ring von vier Byte an eine
+    /// Senke, auf Wunsch verlustfrei, schreibt 16 Byte und gibt den Ring ab,
+    /// bis er leer ist ([`takt_sink_flush`]); liefert, was ankam.
+    fn through_a_slow_line(lossless: bool) -> Vec<u8> {
+        let mut line = Slow { bytes: Vec::new(), offered: 0 };
+        let mut ring = [0u8; 4];
+        let mut sink = MaybeUninit::<TraceSink>::uninit();
+        let ops = LineOps { ctx: (&raw mut line).cast(), try_write: slow, flush: None };
+        // SAFETY: Senke, Tabelle, Leitung und Ring leben bis zum Ende; kein Schritt laeuft.
+        assert_eq!(unsafe { takt_sink_init(sink.as_mut_ptr(), &ops, ring.as_mut_ptr(), 4) }, status::OK);
         if lossless {
             // SAFETY: wie oben.
-            assert_eq!(unsafe { takt_line_lossless() }, status::OK);
+            assert_eq!(unsafe { takt_sink_lossless(sink.as_mut_ptr()) }, status::OK);
         }
         // SAFETY: wie oben; der Text ist nullterminiert.
-        unsafe { takt_board_trace(c"0123456789abcdef".as_ptr()) };
+        unsafe { takt_trace_text(sink.as_mut_ptr().cast(), c"0123456789abcdef".as_ptr()) };
         // Ein Abgeben nimmt hoechstens ein Byte: Die Leitung lehnt danach ab.
         for _ in 0..64 {
             // SAFETY: wie oben.
-            unsafe { takt_line_flush() };
+            unsafe { takt_sink_flush(sink.as_mut_ptr()) };
         }
-        // SAFETY: Die Leitung schreibt nicht mehr; ihr Puffer gehoert wieder dem Test.
-        let bytes = unsafe { (*line).bytes.clone() };
-        (bytes, Bound { line, ring })
+        line.bytes
     }
 
     /// Faehrt `core` wie ein C-Wirt in logischer Zeit ueber [`TICKS`] Ticks:
@@ -1843,10 +1922,10 @@ mod core_abi {
 
     /// **Ein Kern laeuft durch die C-Schnittstelle** (12.11): ohne Journal,
     /// dann zweimal mit Journal auf demselben Flash — der zweite Lauf
-    /// beginnt mit dem Stand des ersten —, die Bilanz geht ueber die
-    /// Leitung, und der Kern meldet dem Watchdog des Wirts, dass er lebt.
-    /// Ohne Leitung und ohne Watchdog nimmt er nicht an: Beide stellt der
-    /// Wirt ausdruecklich, einen stillen Vorgabewert gibt es nicht.
+    /// beginnt mit dem Stand des ersten —, die Bilanz geht in seine Senke,
+    /// und der Kern meldet dem Watchdog des Wirts, dass er lebt. Ohne Senke
+    /// und ohne Watchdog nimmt er nicht an: Beide stellt der Wirt
+    /// ausdruecklich, einen stillen Vorgabewert gibt es nicht.
     #[test]
     fn a_core_runs_through_the_c_interface() {
         let kicks = Cell::new(0u64);
@@ -1855,42 +1934,39 @@ mod core_abi {
         let mut arena = Counter::default();
         let mut core = MaybeUninit::<Core>::uninit();
         // SAFETY: Kern, Tabelle, Arena und Watchdog leben bis zum Ende des Tests.
-        let unbound =
-            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0, &watchdog) };
-        assert_eq!(unbound, status::LINE, "ohne Leitung");
+        let unbound = unsafe {
+            takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), null_mut(), 0, &watchdog)
+        };
+        assert_eq!(unbound, status::LINE, "ohne Senke");
         // SAFETY: Kein Schritt laeuft.
-        assert_eq!(unsafe { takt_line_lossless() }, status::LINE, "verlustfrei ohne Leitung");
+        assert_eq!(unsafe { takt_sink_lossless(null_mut()) }, status::LINE, "verlustfrei ohne Senke");
 
         // Eine Leitung, die langsamer nimmt, als geschrieben wird: Im Betrieb
         // verwirft der volle Ring (12.2), verlustfrei wartet der Schreibende
-        // (13.8), und alles kommt in seiner Reihenfolge an. Jede Leitung geht,
-        // sobald die naechste gebunden ist.
-        // SAFETY: Kein Kern laeuft.
-        let (dropping, first) = unsafe { through_a_slow_line(false) };
-        // SAFETY: wie oben.
-        let (lossless, second) = unsafe { through_a_slow_line(true) };
-        // SAFETY: Die zweite Leitung loeste die erste ab.
-        unsafe { first.release() };
+        // (13.8), und alles kommt in seiner Reihenfolge an.
+        let dropping = through_a_slow_line(false);
+        let lossless = through_a_slow_line(true);
         assert!(dropping.len() < 16, "ohne Warten verwirft ein voller Ring: {dropping:?}");
         assert_eq!(lossless, b"0123456789abcdef");
 
-        // Leitung und Ring leben so lange wie der Prozess, wie in einem C-Wirt.
-        let sink: *mut Vec<u8> = Box::into_raw(Box::default());
-        let ring: &'static mut [u8] = Box::leak(std::vec![0u8; 512].into_boxed_slice());
-        let line = LineOps { ctx: sink.cast(), try_write: put, flush: None };
+        // Senke, Leitung und Ring leben so lange wie jeder Kern, der sie nutzt.
+        let mut text = Vec::<u8>::new();
+        let mut ring = std::vec![0u8; 512];
+        let mut sink = MaybeUninit::<TraceSink>::uninit();
+        let sink = sink.as_mut_ptr();
+        let line = LineOps { ctx: (&raw mut text).cast(), try_write: put, flush: None };
         let len = u32::try_from(ring.len()).expect("Ring");
-        // SAFETY: Tabelle und Ring gelten so lange wie der Prozess; kein Schritt laeuft.
-        assert_eq!(unsafe { takt_line_init(&line, ring.as_mut_ptr(), len) }, status::OK);
-        // SAFETY: Diese Leitung loeste die zweite langsame ab.
-        unsafe { second.release() };
+        // SAFETY: Tabelle, Leitung und Ring leben bis zum Ende des Tests; kein Schritt laeuft.
+        assert_eq!(unsafe { takt_sink_init(sink, &line, ring.as_mut_ptr(), len) }, status::OK);
 
         // SAFETY: wie oben, ohne Watchdog.
         let blind =
-            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0, null()) };
+            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), sink, 0, null()) };
         assert_eq!(blind, status::NULL, "ohne Watchdog");
         // SAFETY: wie oben.
-        let rc =
-            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), 0, &watchdog) };
+        let rc = unsafe {
+            takt_core_init(core.as_mut_ptr(), &plain, (&raw mut arena).cast(), null_mut(), sink, 0, &watchdog)
+        };
         assert_eq!(rc, status::OK);
         // SAFETY: der Kern von eben; danach die Bilanz, waehrend kein Schritt laeuft.
         unsafe {
@@ -1907,8 +1983,9 @@ mod core_abi {
         let mut tuned = Counter::default();
         let mut core = MaybeUninit::<Core>::uninit();
         // SAFETY: wie oben.
-        let rc =
-            unsafe { takt_core_init(core.as_mut_ptr(), &plain, (&raw mut tuned).cast(), null_mut(), 0, &watchdog) };
+        let rc = unsafe {
+            takt_core_init(core.as_mut_ptr(), &plain, (&raw mut tuned).cast(), null_mut(), sink, 0, &watchdog)
+        };
         assert_eq!(rc, status::OK);
         // SAFETY: der Kern von eben, mit der Quelle des Tests.
         unsafe { drive_with(core.as_mut_ptr(), &tunables) };
@@ -1923,8 +2000,9 @@ mod core_abi {
         let mut dozing = Counter::default();
         let mut core = MaybeUninit::<Core>::uninit();
         // SAFETY: wie oben.
-        let rc =
-            unsafe { takt_core_init(core.as_mut_ptr(), &sleepy, (&raw mut dozing).cast(), null_mut(), 0, &watchdog) };
+        let rc = unsafe {
+            takt_core_init(core.as_mut_ptr(), &sleepy, (&raw mut dozing).cast(), null_mut(), sink, 0, &watchdog)
+        };
         assert_eq!(rc, status::OK);
         // SAFETY: der Kern von eben; nie zwei Aufrufe zugleich.
         let asleep = unsafe { takt_core_service(core.as_mut_ptr(), 0) };
@@ -1948,8 +2026,9 @@ mod core_abi {
         let mut halted = Counter::default();
         let mut core = MaybeUninit::<Core>::uninit();
         // SAFETY: wie oben.
-        let rc =
-            unsafe { takt_core_init(core.as_mut_ptr(), &halting, (&raw mut halted).cast(), null_mut(), 0, &watchdog) };
+        let rc = unsafe {
+            takt_core_init(core.as_mut_ptr(), &halting, (&raw mut halted).cast(), null_mut(), sink, 0, &watchdog)
+        };
         assert_eq!(rc, status::OK);
         // SAFETY: wie oben; der Abort kommt zwischen zwei Aufrufen.
         unsafe {
@@ -1971,7 +2050,7 @@ mod core_abi {
         let mut core = MaybeUninit::<Core>::uninit();
         // SAFETY: wie oben.
         let rc = unsafe {
-            takt_core_init(core.as_mut_ptr(), &guarding, (&raw mut guarded).cast(), null_mut(), 0, &watchdog)
+            takt_core_init(core.as_mut_ptr(), &guarding, (&raw mut guarded).cast(), null_mut(), sink, 0, &watchdog)
         };
         assert_eq!(rc, status::OK);
         // SAFETY: wie oben; die Meldung kommt zwischen zwei Aufrufen.
@@ -2008,6 +2087,7 @@ mod core_abi {
                     &journaled,
                     (&raw mut arena).cast(),
                     null_mut(),
+                    sink,
                     0,
                     &watchdog,
                     &device,
@@ -2027,8 +2107,54 @@ mod core_abi {
         assert_eq!(runs[0].1, 0, "das leere Flash hat keinen Stand");
         assert!(runs[1].1 > 0, "der zweite Lauf beginnt mit dem Stand des ersten: {runs:?}");
 
-        // SAFETY: Kein Kern laeuft mehr; der Puffer gehoert wieder dem Test.
-        let text = String::from_utf8_lossy(unsafe { &*sink }).into_owned();
+        // Kein Kern laeuft mehr; der Puffer gehoert wieder dem Test.
+        let text = String::from_utf8_lossy(&text).into_owned();
         assert!(text.contains("t= dump") && text.contains("takt end"), "{text}");
+    }
+
+    /// **Zwei Kerne, zwei Senken** (12.11, FB-691): Zwei Programme in einem
+    /// Wirt, jedes mit eigener Senke und abwechselnd gerechnet wie zwei Kerne
+    /// eines Wirts; jede Senke traegt nur den Trace und die Bilanz ihres
+    /// Programms.
+    #[test]
+    fn two_cores_write_into_their_own_sinks() {
+        let kicks = Cell::new(0u64);
+        let watchdog = WatchdogOps { ctx: core::ptr::from_ref(&kicks).cast_mut().cast(), kick };
+        let (first, mut second) = (ops(false), ops(false));
+        second.dump = dump_other;
+        let (mut text_a, mut text_b) = (Vec::<u8>::new(), Vec::<u8>::new());
+        let (mut ring_a, mut ring_b) = ([0u8; 256], [0u8; 256]);
+        let (mut sink_a, mut sink_b) = (MaybeUninit::<TraceSink>::uninit(), MaybeUninit::<TraceSink>::uninit());
+        let (sink_a, sink_b) = (sink_a.as_mut_ptr(), sink_b.as_mut_ptr());
+        let line_a = LineOps { ctx: (&raw mut text_a).cast(), try_write: put, flush: None };
+        let line_b = LineOps { ctx: (&raw mut text_b).cast(), try_write: put, flush: None };
+        // SAFETY: Senken, Tabellen, Leitungen und Ringe leben bis zum Ende des Tests.
+        unsafe {
+            assert_eq!(takt_sink_init(sink_a, &line_a, ring_a.as_mut_ptr(), 256), status::OK);
+            assert_eq!(takt_sink_init(sink_b, &line_b, ring_b.as_mut_ptr(), 256), status::OK);
+        }
+        let (mut arena_a, mut arena_b) = (Counter::default(), Counter::default());
+        let (mut core_a, mut core_b) = (MaybeUninit::<Core>::uninit(), MaybeUninit::<Core>::uninit());
+        let (a, b) = (core_a.as_mut_ptr(), core_b.as_mut_ptr());
+        // SAFETY: Kerne, Tabellen, Arenen, Senken und Watchdog leben bis zum Ende des Tests.
+        unsafe {
+            assert_eq!(takt_core_init(a, &first, (&raw mut arena_a).cast(), null_mut(), sink_a, 0, &watchdog), 0);
+            assert_eq!(takt_core_init(b, &second, (&raw mut arena_b).cast(), null_mut(), sink_b, 0, &watchdog), 0);
+        }
+        let mut now = 0;
+        while now < TICKS * TICK_NS {
+            // SAFETY: die Kerne von eben; nie zwei Aufrufe desselben Kerns zugleich.
+            let (next_a, next_b) = unsafe { (takt_core_service(a, now), takt_core_service(b, now)) };
+            now = next_a.deadline_ns.min(next_b.deadline_ns);
+        }
+        // SAFETY: Kein Schritt laeuft.
+        unsafe {
+            takt_core_report(a, null(), null());
+            takt_core_report(b, null(), null());
+        }
+        let (text_a, text_b) = (String::from_utf8_lossy(&text_a), String::from_utf8_lossy(&text_b));
+        assert!(text_a.lines().any(|l| l == "t= dump") && !text_a.contains("other"), "{text_a}");
+        assert!(text_b.lines().any(|l| l == "t= dump other") && !text_b.lines().any(|l| l == "t= dump"), "{text_b}");
+        assert!(text_a.contains("takt end") && text_b.contains("takt end"), "je Senke die Bilanz ihres Kerns");
     }
 }

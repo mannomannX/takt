@@ -4,22 +4,21 @@
 //! ```ignore
 //! let mut arena = valve::Arena::new();
 //! let mut tank = Tank::default();
-//! let trace = takt_embed::testing::run(valve::Program::init(&mut arena, &mut tank), valve::TICK_NS, 1000);
+//! let program = valve::Program::init(&mut arena, &mut tank, takt_embed::testing::sink());
+//! let trace = takt_embed::testing::run(program, valve::TICK_NS, 1000);
 //! takt_embed::testing::same_as_interpreter("takt/valve.takt", 1000, &trace).unwrap();
 //! ```
 //!
-//! **Die Leitung.** Der Rahmen schreibt seinen Trace ueber die C-Funktionen
-//! `takt_board_trace*` (12.5); dieses Modul stellt sie und sammelt je Faden
-//! in einen Puffer, den [`take`] leert. Ein Test, der mehrere Programme
-//! faehrt, sieht ihre Zeilen darum in der Reihenfolge der Aufrufe.
+//! **Die Senke.** Der Rahmen schreibt seinen Trace in die Senke, die die
+//! Huelle bei `init` bekommt (12.5, 12.11); dieses Modul stellt die Haken
+//! dafuer ([`crate::hooks!`]) und mit [`sink`] einen Puffer je Faden, den
+//! [`take`] leert. Ein Test, der mehrere Programme in einem Faden faehrt,
+//! sieht ihre Zeilen darum in der Reihenfolge der Schritte.
 //!
 //! **Der Vergleich** ist der der Board-Suite (Satz 9.4.4): je Tick die
 //! Ausgaenge, `f32` als sein Wert in `f64` (4.2, FB-356).
 
-#![allow(unsafe_code, reason = "die Leitung des Rahmens als C-Funktionen (12.5); 9.5 fuehrt sie in der TCB")]
-
 use core::cell::RefCell;
-use core::ffi::{CStr, c_char};
 use core::fmt::Write as _;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -28,6 +27,7 @@ use std::vec::Vec;
 use std::{format, thread_local, vec};
 
 use crate::Jobs as _;
+use crate::Line;
 use takt_rt_core::{Clock, Fits, NoJournal, Outputs, Policy, Profile, Runtime, Sink, Store, Tick, Tunables, Watchdog};
 
 thread_local! {
@@ -38,40 +38,22 @@ fn push(text: &str) {
     LINE.with(|l| l.borrow_mut().push_str(text));
 }
 
-/// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt einen nullterminierten Text, der waehrend des Aufrufs gilt.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_board_trace(text: *const c_char) {
-    // SAFETY: siehe oben.
-    let text = unsafe { CStr::from_ptr(text) };
-    push(&text.to_string_lossy());
+/// Der Puffer des Fadens als Senke: Was das Programm schreibt, liefert
+/// [`take`] in dem Faden, in dem es rechnet.
+#[derive(Debug)]
+pub struct Thread;
+
+impl Line for Thread {
+    fn write(&self, bytes: &[u8]) {
+        push(&String::from_utf8_lossy(bytes));
+    }
 }
 
-/// Vom Rahmen gerufen: eine Zahl im Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_i64(value: i64) {
-    push(&format!("{value} "));
-}
+crate::hooks!(Thread);
 
-/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_u64(value: u64) {
-    push(&format!("{value} "));
-}
-
-/// Vom Rahmen gerufen: eine Fliesskommazahl als kuerzeste eindeutige Ziffernfolge (4.2).
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_f64(value: f64) {
-    push(&format!("{value:?} "));
-}
-
-/// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_hex8(value: u8) {
-    push(&format!("0x{value:02x}"));
+/// Die Senke fuer die Huelle (`Program::init(…, sink())`).
+pub fn sink() -> &'static Thread {
+    &Thread
 }
 
 /// Der Trace dieses Fadens seit dem letzten Aufruf.
@@ -398,30 +380,38 @@ mod tests {
 
     const VALVE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/rust-host/takt/valve.takt");
 
-    /// **Die Leitung sammelt je Faden, was der Rahmen schreibt** (12.5): Text,
+    /// **Die Senke sammelt je Faden, was der Rahmen schreibt** (12.5): Text,
     /// Zahlen mit und ohne Vorzeichen, Fliesskommazahlen und Bytes eines
-    /// Stroms in der Form des Interpreters; `take` leert sie, und was ein
-    /// anderer Faden schreibt, bleibt in dessen Leitung (M11 Schritt 17:
-    /// Instanzen in Faeden). Die Funktionen laufen ueber ihren Rust-Pfad ohne
-    /// Rahmen, damit Miri ihr `unsafe` prueft (FB-652).
+    /// Stroms in der Form des Interpreters, ohne Trenner (FB-690); `take`
+    /// leert sie, und was ein anderer Faden schreibt, bleibt in dessen
+    /// Puffer (M11 Schritt 17: Instanzen in Faeden). Die Haken laufen ueber
+    /// ihren Rust-Pfad ohne Rahmen, damit Miri ihr `unsafe` prueft (FB-652).
     #[test]
-    fn the_line_collects_per_thread_what_the_frame_writes() {
+    #[allow(unsafe_code, reason = "die Haken des Rahmens ohne Rahmen gerufen, damit Miri sie prueft (FB-652)")]
+    fn the_sink_collects_per_thread_what_the_frame_writes() {
         take();
-        // SAFETY: ein nullterminierter Text, der waehrend des Aufrufs gilt.
-        unsafe { takt_board_trace(c"t=1 out x ".as_ptr()) };
-        takt_board_trace_i64(-3);
-        takt_board_trace_u64(7);
-        takt_board_trace_f64(0.5);
-        takt_board_trace_hex8(0xab);
+        let s = crate::trace::as_ffi(sink());
+        // SAFETY: die Senke des Fadens lebt immer; die Texte sind nullterminiert.
+        unsafe {
+            takt_trace_text(s, c"t=1 out x [".as_ptr());
+            takt_trace_i64(s, -3);
+            takt_trace_text(s, c", ".as_ptr());
+            takt_trace_u64(s, 7);
+            takt_trace_text(s, c", ".as_ptr());
+            takt_trace_f64(s, 0.5);
+            takt_trace_text(s, c", ".as_ptr());
+            takt_trace_hex8(s, 0xab);
+            takt_trace_text(s, c"]".as_ptr());
+        }
         let other = std::thread::spawn(|| {
             // SAFETY: wie oben.
-            unsafe { takt_board_trace(c"fremd".as_ptr()) };
+            unsafe { takt_trace_text(crate::trace::as_ffi(sink()), c"fremd".as_ptr()) };
             take()
         })
         .join()
         .expect("Faden");
         assert_eq!(other, "fremd");
-        assert_eq!(take(), "t=1 out x -3 7 0.5 0xab");
+        assert_eq!(take(), "t=1 out x [-3, 7, 0.5, 0xab]");
         assert_eq!(take(), "", "geleert");
     }
 

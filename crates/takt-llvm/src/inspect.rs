@@ -222,7 +222,7 @@ pub fn parse_call_graph(text: &str, code: &BTreeMap<u64, u64>) -> CallGraph {
             continue;
         }
         let Some(f) = current else { continue };
-        // `  408018fc:      \tjalr\t0x54e(ra) <takt_board_trace>`
+        // `  408018fc:      \tjalr\t0x54e(ra) <takt_trace_text>`
         let Some((pc, insn)) = line.split_once('\t') else { continue };
         let Some(pc) = pc.trim().strip_suffix(':').and_then(|pc| u64::from_str_radix(pc, 16).ok()) else { continue };
         let size = graph.functions.get(&f).map_or(0, |func| func.size);
@@ -688,7 +688,7 @@ mod tests {
 408018d0:      \tj\t0x40802be0 <__riscv_restore_3>
 408018d4:      \tjr\ta1
 408018f8:      \tauipc\tra, 0x1812
-408018fc:      \tjalr\t0x54e(ra) <takt_board_trace>
+408018fc:      \tjalr\t0x54e(ra) <takt_trace_text>
 40801900:      \tauipc\tra, 0xfffff
 40801904:      \tjalr\t-0x810(ra) <OUTLINED_FUNCTION_2>
 40801908:      \tjalr\t0x10(a5) <OUTLINED_FUNCTION_2>
@@ -704,7 +704,7 @@ mod tests {
 42000000 <core::fmt::write>:
 42000000:      \tret
 
-42013e46 <takt_board_trace>:
+42013e46 <takt_trace_text>:
 42013e46:      \tret
 ";
 
@@ -735,7 +735,7 @@ mod tests {
         assert!(g.functions[&0x4080_00f0].calls.is_empty(), "Konstanten hinter dem Stueck sind keine Befehle");
         assert_eq!(
             names(&g, 0x4080_18b8),
-            ["OUTLINED_FUNCTION_2", "__riscv_save_3", "__riscv_restore_3", "takt_board_trace"]
+            ["OUTLINED_FUNCTION_2", "__riscv_save_3", "__riscv_restore_3", "takt_trace_text"]
         );
         assert!(g.functions[&0x4080_18b8].calls.contains(&0x4080_00f0), "das Stueck, das `auipc` und `jalr` nennen");
         assert!(!g.functions[&0x4080_18b8].calls.contains(&0x4080_0400), "nicht das andere gleichen Namens");
@@ -754,17 +754,17 @@ mod tests {
     /// ARM (`bl`, `b.w`, `blx`, `bx lr`) und x86 (`call`, `call *`, `jmp *`).
     #[test]
     fn the_call_graph_reads_arm_and_x86() {
-        let arm = "08000100 <app_tick>:\n 8000102:      \tbl\t0x8000200 <takt_board_trace>\n 8000106:      \tblx\tr3\n \
-                   8000108:      \tb.w\t0x8000300 <takt_tail>\n 800010c:      \tbx\tlr\n\n08000200 <takt_board_trace>:\n \
+        let arm = "08000100 <app_tick>:\n 8000102:      \tbl\t0x8000200 <takt_trace_text>\n 8000106:      \tblx\tr3\n \
+                   8000108:      \tb.w\t0x8000300 <takt_tail>\n 800010c:      \tbx\tlr\n\n08000200 <takt_trace_text>:\n \
                    8000200:      \tbx\tlr\n\n08000300 <takt_tail>:\n 8000300:      \tbx\tlr\n";
         let g = parse_call_graph(arm, &[(0x0800_0100, 0x10), (0x0800_0200, 2), (0x0800_0300, 2)].into());
-        assert_eq!(names(&g, 0x0800_0100), ["takt_board_trace", "takt_tail"]);
+        assert_eq!(names(&g, 0x0800_0100), ["takt_trace_text", "takt_tail"]);
         assert!(g.functions[&0x0800_0100].indirect);
-        let x86 = "0000000000001000 <app_tick>:\n    1004:      \tcall\t0x2000 <takt_board_trace>\n    \
-                   1009:      \tcall\t*%rax\n    100b:      \tjmp\t*%rcx\n\n0000000000002000 <takt_board_trace>:\n    \
+        let x86 = "0000000000001000 <app_tick>:\n    1004:      \tcall\t0x2000 <takt_trace_text>\n    \
+                   1009:      \tcall\t*%rax\n    100b:      \tjmp\t*%rcx\n\n0000000000002000 <takt_trace_text>:\n    \
                    2000:      \tret\n";
         let g = parse_call_graph(x86, &[(0x1000, 0x10), (0x2000, 1)].into());
-        assert_eq!(names(&g, 0x1000), ["takt_board_trace"]);
+        assert_eq!(names(&g, 0x1000), ["takt_trace_text"]);
         assert!(g.functions[&0x1000].indirect);
     }
 

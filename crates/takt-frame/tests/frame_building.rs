@@ -72,6 +72,49 @@ fn a_protected_frame_puts_the_tick_at_the_region_boundary() {
     assert!(align >= 8, "jeder Bereich auf acht Byte: {align}");
 }
 
+/// **Die Senke ist ein benannter Slot der Runtime, den jedes `init` setzt**
+/// (12.11): Sie steht an fester Stelle hinter Tick und letztem Tick
+/// (`sink_at`), also nie im Programmbereich, den Schutzregion, Partition und
+/// Journal decken, auch mit Schutz nicht; clang bestaetigt den Versatz.
+/// `init` setzt sie gleich nach dem Loeschen der Arena, bevor irgendetwas
+/// schreibt; die Wege des Journals lesen sie nicht, und der Job-Kontext,
+/// der unter einer Partition neben dem Schritt rechnet, auch nicht.
+#[test]
+fn the_sink_is_a_runtime_slot_that_every_init_sets() {
+    let p = empty();
+    let x = Prefix::default();
+    let program_area = takt_llvm::arena::of(&p).bytes;
+    for frame in [build_with(&p, Frame::default()), build_with(&p, Frame { protect: Some(4096), ..Frame::default() })] {
+        assert_eq!(frame.sink_at, frame.tick_at + 16, "hinter `tick` und `done`");
+        assert!(frame.tick_at >= program_area, "der Tick fuehrt die Runtime an: {} < {program_area}", frame.tick_at);
+        let offset = format!("offsetof(struct {x}_arena, sink) == {}", frame.sink_at);
+        assert!(frame.source.contains(&offset), "{offset}");
+        arena_layout(&frame, &x, host(), &[]).expect("clang bestaetigt die Versaetze (FB-392)");
+        // Die Definition, nicht die Vorwaertsdeklaration: Ihre Kopfzeile endet mit `{`.
+        let body = |head: &str| {
+            let at = frame
+                .source
+                .match_indices(head)
+                .map(|(at, _)| at)
+                .find(|at| frame.source[*at..].lines().next().is_some_and(|l| l.trim_end().ends_with('{')))
+                .unwrap_or_else(|| panic!("{head} fehlt"));
+            let rest = &frame.source[at..];
+            rest[..rest.find("\n}\n").map_or(rest.len(), |end| end + 3)].to_string()
+        };
+        let init = body("static int32_t takt_init_with(");
+        let at = |s: &str| init.find(s).unwrap_or_else(|| panic!("`{s}` fehlt in init:\n{init}"));
+        assert!(at("memset(a, 0, sizeof *a);") < at("a->sink = sink;"), "{init}");
+        assert!(at("a->sink = sink;") < at("takt_edge_init(a);"), "die Senke vor allem anderen:\n{init}");
+        for head in ["static int32_t takt_persist_snapshot(", "static int32_t takt_persist_restore("] {
+            let f = body(head);
+            assert!(!f.contains("sink"), "{head} liest die Senke:\n{f}");
+        }
+        let work = format!("void {x}_job_work(");
+        let work = frame.source.lines().find(|l| l.starts_with(&work)).unwrap_or_else(|| panic!("{work} fehlt"));
+        assert!(!work.contains("sink"), "der Job-Kontext liest die Senke: {work}");
+    }
+}
+
 /// **Ohne die Konstanten im IR ist die Arena nicht zu bemessen** (12.11):
 /// ein Fehler mit dem fehlenden Namen, kein geratener Wert.
 #[test]

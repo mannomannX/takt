@@ -19,9 +19,10 @@
 //! Programm eine Bibliothek und das Modul `P.rs`; der Bauhelfer
 //! ([`build::Program`], Merkmal `build`) ruft es aus `build.rs`. Die Huelle
 //! im Modul erfuellt [`rt::Program`] und laeuft unter dem Kern ohne Warten
-//! ([`rt::Runtime::service`]). Die Testhilfe ([`testing`], Merkmal
-//! `testing`) faehrt das Programm in logischer Zeit und vergleicht seinen
-//! Trace mit dem Interpreter (13.1).
+//! ([`rt::Runtime::service`]). Ihren Trace schreibt sie in die Senke, die
+//! der Wirt ihr gibt ([`Line`], die Haken dazu aus [`hooks!`]). Die Testhilfe
+//! ([`testing`], Merkmal `testing`) faehrt das Programm in logischer Zeit
+//! und vergleicht seinen Trace mit dem Interpreter (13.1).
 
 #![cfg_attr(
     not(test),
@@ -67,6 +68,9 @@ extern crate std;
 pub mod build;
 #[cfg(feature = "testing")]
 pub mod testing;
+pub mod trace;
+
+pub use trace::{Line, Sink};
 
 /// Der Kern ohne Warten (12.11): `Runtime::service`, `Program`, die Senke.
 pub use takt_rt_core as rt;

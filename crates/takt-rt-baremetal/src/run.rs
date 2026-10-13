@@ -67,12 +67,26 @@ pub struct JournalStats {
     pub program_ns: i64,
 }
 
+/// Woher die Senke eines Laufs ihre Leitung holt, je Aufruf (12.5): eine
+/// Funktion ueber dem `static` eines Bring-ups oder der Griff des SDK auf
+/// die Senke seines Kerns (12.11).
+pub trait Lead<P: Port> {
+    /// Die Leitung, wenn sie gebunden ist; der Griff endet vor dem naechsten.
+    fn lead(&mut self) -> Option<&'static mut Telemetry<P>>;
+}
+
+impl<P: Port, F: FnMut() -> Option<&'static mut Telemetry<P>>> Lead<P> for F {
+    fn lead(&mut self) -> Option<&'static mut Telemetry<P>> {
+        self()
+    }
+}
+
 /// Die Senke eines Bring-ups (12.5): die Ausgaenge im Takt der Leitung. Im
 /// Konformitaetslauf zeigt sie den Anfangszustand ganz und danach jeden
 /// Tick seine Aenderungen mit Zeitzeile, sonst alle `every` Ticks alles.
 ///
-/// `telemetry` holt die Leitung je Aufruf, wie der erzeugte Rahmen sie
-/// ueber `takt_board_trace` holt — so gibt es nie zwei Griffe zugleich.
+/// `telemetry` holt die Leitung je Aufruf ([`Lead`]), wie die Haken des
+/// Rahmens sie ueber die Senke holen — so gibt es nie zwei Griffe zugleich.
 pub struct Trace<F, L> {
     cadence: Cadence,
     /// Ab dieser Tickzahl gehen die Ausgaenge das naechste Mal.
@@ -87,7 +101,7 @@ pub struct Trace<F, L> {
 
 impl<F, P> Trace<F, Telemetry<P>>
 where
-    F: FnMut() -> Option<&'static mut Telemetry<P>>,
+    F: Lead<P>,
     P: Port + 'static,
 {
     /// Eine Senke im Takt `cadence` fuer Ticks von `tick_ns`.
@@ -107,7 +121,7 @@ where
 
 impl<F, P> Sink for Trace<F, Telemetry<P>>
 where
-    F: FnMut() -> Option<&'static mut Telemetry<P>>,
+    F: Lead<P>,
     P: Port + 'static,
 {
     fn outputs(&mut self, tick: Option<&Tick>) -> Outputs {
@@ -116,7 +130,7 @@ where
         self.slept = self.slept.saturating_add(tick.slept);
         if conformance
             && tick.k.checked_rem(self.time_every) == Some(0)
-            && let Some(t) = (self.telemetry)()
+            && let Some(t) = self.telemetry.lead()
         {
             t.write_time(tick);
         }
@@ -129,7 +143,7 @@ where
     }
 
     fn record(&mut self, _tick: &Tick) {
-        if let Some(t) = (self.telemetry)() {
+        if let Some(t) = self.telemetry.lead() {
             t.flush();
         }
     }
@@ -148,7 +162,7 @@ where
     G: Program,
     C: Clock,
     W: Watchdog,
-    F: FnMut() -> Option<&'static mut Telemetry<P>>,
+    F: Lead<P>,
     J: Store,
     P: Port + 'static,
 {
@@ -173,7 +187,7 @@ where
     G: Program,
     C: Clock,
     W: Watchdog,
-    F: FnMut() -> Option<&'static mut Telemetry<P>>,
+    F: Lead<P>,
     J: Store,
     P: Port + 'static,
 {

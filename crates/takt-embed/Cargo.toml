@@ -6,8 +6,8 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.86"
 
-# Eigener Workspace wie die Bring-ups: Die Testhilfe stellt die Leitung des
-# Rahmens als C-Funktionen (`takt_board_trace*`), und das braucht `unsafe`;
+# Eigener Workspace wie die Bring-ups: Das Modul `trace` stellt die Haken
+# des Rahmens als C-Funktionen (`takt_trace_*`), und das braucht `unsafe`;
 # `forbid` (13.4) laesst sich nicht lokal aufheben. Alles andere steht
 # unter `deny(unsafe_code)`.
 [workspace]

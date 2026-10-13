@@ -96,8 +96,8 @@ fn checked(name: &str, host: Host) -> Option<Output> {
         "#define RAM __attribute__((section(\".rwtext.host\")))\n\
          #define FLASH __attribute__((section(\".text.host\")))\n\
          unsigned char app_arena[{arena}] __attribute__((aligned({align})));\n\
-         int app_init_with(void *, void *, const void *, int);\nvoid app_tick(void *, long long);\n\
-         RAM void _start(void) {{ app_init_with(app_arena, 0, 0, 0); app_tick(app_arena, 1); for (;;) {{}} }}\n"
+         int app_init_with(void *, void *, void *, const void *, int);\nvoid app_tick(void *, long long);\n\
+         RAM void _start(void) {{ app_init_with(app_arena, 0, 0, 0, 0); app_tick(app_arena, 1); for (;;) {{}} }}\n"
     );
     for driver in value(&manifest, "drivers").split(", ") {
         let place = if host == Host::DriverInFlash && driver.starts_with("app_in_") { "FLASH" } else { "RAM" };

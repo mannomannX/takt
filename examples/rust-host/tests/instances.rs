@@ -43,7 +43,7 @@ fn eight_instances_in_threads_agree_with_the_interpreter() {
                     .spawn_scoped(s, move || {
                         let mut arena = instance::Arena::new();
                         let mut seed = Seed::new(seed_of(i));
-                        let program = instance::Program::init(&mut arena, &mut seed);
+                        let program = instance::Program::init(&mut arena, &mut seed, takt_embed::testing::sink());
                         // Wie `testing::run`: Der Trace beginnt mit dem ersten Schritt.
                         takt_embed::testing::take();
                         let mut stepper = takt_embed::testing::Stepper::new(program, instance::TICK_NS, TICKS);

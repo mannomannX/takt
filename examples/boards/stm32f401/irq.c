@@ -55,6 +55,11 @@
  * Ticks, die die Leitung erst danach abnimmt. */
 #define RING_BYTES 2048u
 
+/* Die Senke des Programms (12.5, 12.11): ein Ring vor der Leitung des
+ * Wirts, gebunden mit `takt_sink_init`; in ihr stehen Kopf, Trace und
+ * Bilanz. */
+static takt_sink sink;
+
 /* Der Watchdog des Wirts (12.11): Ein Konformitaetslauf wartet auf die
  * Leitung und ist kein Betrieb (12.3); der Kern meldet, und die Meldung geht
  * ausdruecklich nirgendwohin. */
@@ -63,12 +68,12 @@ static void kick(void *ctx) { (void)ctx; }
 /* Der Kopf des Laufs, dann die Marke, ab der die Bilanz zaehlt. Die Form
  * steht darin, damit `takt bench` die Stack-Reserve zuordnet (FB-513). */
 static void banner(void) {
-    takt_board_trace("\r\ntakt auf stm32f401 in C\r\n  Kerntakt ");
-    takt_board_trace_u64(BOARD_CORE_HZ);
-    takt_board_trace("Hz, Tick ");
-    takt_board_trace_i64(APP_TICK_NS);
-    takt_board_trace("ns\r\n  Form interrupt\r\n\r\n");
-    takt_line_mark();
+    takt_trace_text(&sink, "\r\ntakt auf stm32f401 in C\r\n  Kerntakt ");
+    takt_trace_u64(&sink, BOARD_CORE_HZ);
+    takt_trace_text(&sink, " Hz, Tick ");
+    takt_trace_i64(&sink, APP_TICK_NS);
+    takt_trace_text(&sink, " ns\r\n  Form interrupt\r\n\r\n");
+    takt_sink_mark(&sink);
 }
 
 /* Der Kern des Programms auf seiner Arena; mit `persist` ueber das Journal
@@ -83,13 +88,13 @@ static int32_t start_core(takt_core *core, struct app_arena *arena) {
                                         board_nvm_write, board_nvm_poll, board_nvm_read};
 #if TAKT_FRESH_JOURNAL
     if (board_nvm_wipe() != 0) {
-        takt_board_trace("journal: loeschen scheiterte\r\n");
+        takt_trace_text(&sink, "journal: loeschen scheiterte\r\n");
     }
 #endif
-    status = takt_core_init_journaled(core, &app_ops, arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm, current,
-                                      stored, APP_PERSIST_BOUND);
+    status = takt_core_init_journaled(core, &app_ops, arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog, &nvm,
+                                      current, stored, APP_PERSIST_BOUND);
 #else
-    status = takt_core_init(core, &app_ops, arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
+    status = takt_core_init(core, &app_ops, arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog);
 #endif
     return status;
 }
@@ -107,7 +112,7 @@ static void run(takt_core *core) {
     board_protect_stack();
     board_paint_stack();
     if (takt_irq_start(&port, core, &config) != 0) {
-        takt_board_trace("takt: der Port startet nicht\r\n");
+        takt_trace_text(&sink, "takt: der Port startet nicht\r\n");
     } else {
         while (takt_irq_running(&port) != 0) {
 #if TAKT_LOGICAL
@@ -133,11 +138,11 @@ int main(void) {
     static const struct takt_line line = {NULL, board_line_put, board_line_flush};
     int32_t status = TAKT_ERR_LINE;
     if (board_init() == 0) {
-        status = takt_line_init(&line, ring, RING_BYTES);
+        status = takt_sink_init(&sink, &line, ring, RING_BYTES);
     }
 #if TAKT_LOGICAL
     if (status == TAKT_OK) {
-        status = takt_line_lossless();
+        status = takt_sink_lossless(&sink);
     }
 #endif
     if (status == TAKT_OK) {
@@ -146,12 +151,12 @@ int main(void) {
         if (status == TAKT_OK) {
             run(&core);
         } else {
-            takt_board_trace("takt: der Kern nimmt nicht an: ");
-            takt_board_trace_i64(status);
-            takt_board_trace("\r\n");
+            takt_trace_text(&sink, "takt: der Kern nimmt nicht an: ");
+            takt_trace_i64(&sink, status);
+            takt_trace_text(&sink, "\r\n");
         }
         /* Was ohne Lauf im Ring blieb, geht jetzt hinaus. */
-        takt_line_flush();
+        takt_sink_flush(&sink);
     }
     board_park();
     return 0;
