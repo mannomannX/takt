@@ -5,7 +5,7 @@ system:
 # Pruefung 53 (5.11): zwei gescopte Instanzen in exklusiven Zustaenden,
 # jede mit eigenem Output. Das ist der erlaubte Fall.
 
-input  mode : int in 0..1 @ sim("i/mode")
+input  mode : int in 0..1 @ hw("io/mode")
 output a    : bool        @ hw("o/a") with safe = false
 output b    : bool        @ hw("o/b") with safe = false
 

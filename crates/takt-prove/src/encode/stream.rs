@@ -211,10 +211,14 @@ impl Enc<'_> {
                 }
             }
             // Vom Rand kommt, was ein Stimulus liefert, auch an einen
-            // gekoppelten Strom: vor den Elementen der Kopplung.
-            let maxpt = match (takt_hal::edge::maxpt_of(c, self.p.config.tick), fed) {
+            // gekoppelten Strom: vor den Elementen der Kopplung. Nur an einen
+            // `hw`-Strom (12.5, FB-688); den Schreibstrom eines Ports fuellen
+            // die Portzugriffe, einen Strom ohne Bindung niemand.
+            let outside = takt_mir::stimulus::input(c).is_ok();
+            let maxpt = match (takt_hal::edge::maxpt_of(c, self.p.config.tick).filter(|_| outside), fed) {
                 (Some(m), _) => Some(m),
                 (None, Some(_)) => None,
+                (None, None) if !outside => None,
                 (None, None) => return no("Eingabestrom ohne `max_rate`", c.span),
             };
             let cap = c.attrs.capacity.unwrap_or(16);

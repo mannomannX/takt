@@ -12,7 +12,7 @@ const PROGRAM: &str = r#"system:
     language = 1
     tick     = 1 ms
 
-input  mode : int in 0..2 @ sim("i/mode")
+input  mode : int in 0..2 @ hw("i/mode")
 output a    : bool        @ hw("o/a") with safe = false
 output b    : bool        @ hw("o/b") with safe = false
 output c    : bool        @ hw("o/c") with safe = false

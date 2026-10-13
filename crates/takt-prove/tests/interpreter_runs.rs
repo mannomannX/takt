@@ -102,7 +102,7 @@ const SCOPED: &str = "system:
     language = 1
     tick = 10 ms
 
-input mode : int in 0..1 @ sim(\"i/mode\")
+input mode : int in 0..1 @ hw(\"i/mode\")
 
 output a : bool @ hw(\"o/a\") with safe = false
 output n : int in 0..100 @ hw(\"o/n\") with safe = 0
@@ -159,7 +159,7 @@ fn a_resumed_instance_continues_in_its_last_leaf() {
     language = 1
     tick = 10 ms
 
-input mode : int in 0..1 @ sim(\"i/mode\")
+input mode : int in 0..1 @ hw(\"i/mode\")
 
 output stage : int in 0..2 @ hw(\"o/stage\") with safe = 0
 
@@ -222,7 +222,7 @@ fn a_value_in_another_unit_is_refused() {
 
 param GAIN : float[bar] = 1.0 bar
 
-input p : float[bar] @ sim(\"i/p\")
+input p : float[bar] @ hw(\"i/p\")
 
 output q : float[bar] @ hw(\"o/q\") with safe = 0.0 bar
 
@@ -534,6 +534,57 @@ fn an_invalid_stimulus_names_its_line() {
     assert!(error("t=1 job m v done\n").is_some(), "Zeile ohne `start=`");
     let ok = read_stimulus(&p, "t=1 job m v done start=0\nt=4 abort\n", None).expect("gueltig");
     assert_eq!(ok.lines.len(), 2);
+}
+
+/// Ein Programm mit je einem Input mit und ohne `hw`-Bindung und je einem
+/// Output mit und ohne Treiber.
+const OUTSIDE: &str = "system:
+    language = 1
+    tick = 10 ms
+
+input  p : int in 0..9 @ hw(\"i/p\")
+input  q : int in 0..9 @ none
+output o : int in 0..9 @ hw(\"o/o\") with safe = 0
+output s : int in 0..9 @ sim(\"o/s\")
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            o = p.or(0)
+            s = q.or(0)
+";
+
+/// **Ein Stimulus enthaelt nur, was das Produkt erleben kann** (12.5;
+/// FB-688, FB-689): eine Lieferung an einen `hw`-Input, je Tick eine; einen
+/// Runtime-Fault mit Quelle — `Driver` an einem Ausgang mit Treiber, kein
+/// `Node` ohne Knoten, kein `Overrun` unter `alert` —, und Ereignisse erst
+/// ab einer Grenze. Der Leser nennt die Zeile, ein Lauf bricht ab.
+#[test]
+fn a_stimulus_holds_only_what_the_product_can_receive() {
+    use takt_interp::{StimulusError, read_stimulus};
+    let p = compile(OUTSIDE);
+    let error = |text: &str| read_stimulus(&p, text, None).err().map(|StimulusError { line, message }| (line, message));
+    for (text, line, why) in [
+        ("t=1 in q 3\n", 1, "keine Bindung"),
+        ("t=1 in p 3\nt=1 in p 4\n", 2, "zwei Lieferungen"),
+        ("t=1 runtime Node\n", 1, "ohne Knoten"),
+        ("t=1 runtime Driver s\n", 1, "keinen Treiber"),
+        ("t=0 abort\n", 1, "erst ab Tick 1"),
+        ("t=0 runtime Hardware\n", 1, "erst ab Tick 1"),
+        ("t=1 runtime Overrun\n", 1, "erst ab Tick 2"),
+    ] {
+        let (at, message) = error(text).unwrap_or_else(|| panic!("angenommen: {text}"));
+        assert!(at == line && message.contains(why), "{text}: Zeile {at}: {message}");
+        let stimulus = Trace::parse(text).expect("Stimulus");
+        let options = RunOptions { ticks: 3, ..Default::default() };
+        assert!(run(&p, &stimulus, &options).is_err(), "der Lauf nahm `{text}` an");
+    }
+    let ok = "t=0 in p 1\nt=1 in p 3\nt=1 runtime Driver o\nt=1 abort\nt=2 runtime Overrun\nt=2 runtime Hardware\n";
+    assert_eq!(read_stimulus(&p, ok, None).map(|t| t.lines.len()), Ok(6));
+    let alert = compile(&OUTSIDE.replace("    tick = 10 ms\n", "    tick = 10 ms\n    overrun = alert\n"));
+    let e = read_stimulus(&alert, "t=2 runtime Overrun\n", None).expect_err("unter `alert`");
+    assert!(e.message.contains("overrun = alert"), "{e}");
 }
 
 /// KOR-011 (8.4): Ein unbekanntes Profil und eine Ueberlagerung daneben

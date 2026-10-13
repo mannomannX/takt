@@ -539,6 +539,11 @@ fn apply_stimulus(
     let program = sim.loaded.program;
     let mut deliveries: Vec<(&str, &SampleText)> = Vec::new();
     for line in stimulus.at(tick) {
+        // 12.5: Ein Lauf nimmt nur, was das Produkt erleben kann (FB-688,
+        // FB-689); die Scheibe einer Maschine ist kein Stimulus eines Laufs.
+        if only.is_none() {
+            admissible(program, &line.kind, tick).map_err(|e| Trap::Bug(format!("Stimulus: t={tick}: {e}")))?;
+        }
         match &line.kind {
             // Maschinen-Replay (12.5): fremde Werte aus der Scheibe. Ohne
             // `only` bleiben diese Zeilen, was sie waren — Beobachtungen.
@@ -678,7 +683,65 @@ fn apply_stimulus(
             _ => {}
         }
     }
+    if only.is_none()
+        && let Some(name) = second_sample(program, deliveries.iter().map(|(c, _)| *c))
+    {
+        return Err(Trap::Bug(format!("Stimulus: t={tick}: {}", two_samples(name))));
+    }
     deliver(sim, &deliveries, tick, echo)
+}
+
+/// Kann das Produkt diese Zeile erleben (12.5; FB-688, FB-689)? Nur der
+/// Rand einer `hw`-Adresse liefert von aussen, ein Runtime-Fault braucht
+/// eine Quelle, und ein Ereignis wirkt erst an einer Grenze
+/// (`takt_mir::stimulus`). Fuer den Stimulus eines Laufs, nicht fuer die
+/// Scheibe einer Maschine.
+fn admissible(p: &Program, kind: &LineKind, tick: u64) -> Result<(), String> {
+    use takt_mir::stimulus::{self, Event};
+    match kind {
+        // Ein interner Strom steht nur in der Scheibe (`queue_internal`).
+        LineKind::Input { channel, .. } => channel_by_name(p, channel)
+            .map_or(Ok(()), |id| stimulus::input(&p.channels[id.index()]).map_err(|e| format!("`in {channel}`: {e}"))),
+        LineKind::Abort => stimulus::at(Event::Abort, tick).map_err(|e| format!("`abort`: {e}")),
+        LineKind::Tune { name, .. } => stimulus::at(Event::Tune, tick).map_err(|e| format!("`tune {name}`: {e}")),
+        LineKind::Runtime { kind, output } => {
+            let Some(r) = runtime_kind(kind) else { return Err(format!("Runtime-Fault `{kind}` gibt es nicht")) };
+            let channel = match output {
+                Some(o) => Some(channel_by_name(p, o).ok_or_else(|| format!("Output `{o}` gibt es nicht"))?),
+                None => None,
+            };
+            let channel = channel.map(|id| &p.channels[id.index()]);
+            stimulus::runtime(p, r, channel)
+                .and_then(|()| stimulus::at(Event::Runtime(r), tick))
+                .map_err(|e| format!("`runtime {kind}`: {e}"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Die Art eines Runtime-Faults aus ihrem Namen im Trace.
+fn runtime_kind(name: &str) -> Option<takt_mir::machine::RuntimeKind> {
+    use takt_mir::machine::RuntimeKind;
+    [RuntimeKind::Overrun, RuntimeKind::Driver, RuntimeKind::Hardware, RuntimeKind::Node]
+        .into_iter()
+        .find(|k| format!("{k:?}") == name)
+}
+
+/// Der erste skalare Input, an den `channels` ein zweites Mal liefert: Ein
+/// Treiber liefert je Tick eine Abtastung (12.6), nur ein Strom nimmt
+/// mehrere Elemente.
+fn second_sample<'a>(p: &Program, mut channels: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    let mut seen = std::collections::HashSet::new();
+    channels.find(|name| {
+        let Some(id) = channel_by_name(p, name) else { return false };
+        let stream = matches!(p.types.list.get(p.channels[id.index()].ty.index()), Some(Type::Stream(_)));
+        !stream && !seen.insert(id)
+    })
+}
+
+/// Die Meldung zu [`second_sample`].
+fn two_samples(name: &str) -> String {
+    format!("zwei Lieferungen an `{name}` in einem Tick; ein Treiber liefert je Tick eine Abtastung (12.6)")
 }
 
 /// Merkt einen Runtime-Fault vor (5.3, 5.4): fuer den Besitzer eines
@@ -883,7 +946,7 @@ pub fn read_stimulus(p: &Program, text: &str, only: Option<&str>) -> Result<Trac
         ),
         None => None,
     };
-    let mut lines = Vec::new();
+    let mut lines: Vec<TraceLine> = Vec::new();
     for (i, raw) in text.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -892,6 +955,17 @@ pub fn read_stimulus(p: &Program, text: &str, only: Option<&str>) -> Result<Trac
         let error = |message: String| StimulusError { line: i + 1, message };
         let parsed = crate::trace::parse_line(line).map_err(error)?;
         check_line(p, &parsed.kind, only).map_err(error)?;
+        if only.is_none() {
+            admissible(p, &parsed.kind, parsed.tick).map_err(error)?;
+            let same_tick = lines.iter().filter(|l| l.tick == parsed.tick).chain(std::iter::once(&parsed));
+            let channels = same_tick.filter_map(|l| match &l.kind {
+                LineKind::Input { channel, .. } => Some(channel.as_str()),
+                _ => None,
+            });
+            if let Some(name) = second_sample(p, channels) {
+                return Err(error(two_samples(name)));
+            }
+        }
         lines.push(parsed);
     }
     Ok(Trace { lines, ..Trace::default() })

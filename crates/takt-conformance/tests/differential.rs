@@ -454,27 +454,8 @@ fn a_running_job_keeps_the_native_system_awake() {
 /// Spalte, mit Grund. Die Liste ist eine Ratsche wie [`UNREACHED`]: Eine neue
 /// Luecke scheitert ebenso wie eine, die es nicht mehr gibt. Ein Programm
 /// ausserhalb der Suite `beweiser` nennt seinen Grund im Manifest.
-const GAPS: &[(&str, &str, &str, &str)] = &[
-    ("03_sequences_and_faults.takt", "pfad uebergang-SAFE__IDLE__2561", "nativ", RUNTIME_NODE),
-    ("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach"),
-    ("62_type_generics.takt", "pfad valid-1111", "nativ", SIM_INPUT),
-    ("62_type_generics.takt", "pfad valid-1310", "nativ", SIM_INPUT),
-    ("62_type_generics.takt", "stimulus", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-FIRST__SECOND__942", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-LOW__HIGH__715", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-SECOND__FIRST__1029", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad valid-1034", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "stimulus", "nativ", SIM_INPUT),
-    ("99_exit_fault.takt", "pfad range-983", "nativ", RUNTIME_NODE),
-    ("120_port_writes.takt", "pfad index-1857", "nativ", SIM_INPUT),
-];
-
-/// Ein Eingang mit `sim`-Bindung hat im Produkt keinen Treiber; nur der
-/// Interpreter nimmt dort einen Stimulus an (8.3, FB-688).
-const SIM_INPUT: &str = "der Stimulus liefert an einen Eingang mit `sim`-Bindung (FB-688)";
-
-/// Einen Knotenausfall meldet im Produkt kein Weg des Wirts (12.3, FB-689).
-const RUNTIME_NODE: &str = "`runtime Node` hat im Produkt keinen Weg (FB-689)";
+const GAPS: &[(&str, &str, &str, &str)] =
+    &[("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach")];
 
 /// **Die Abnahme: ein Vergleich, drei Ausfuehrer** (Satz 9.4.4, M11
 /// Schritte 28, 29). Je Korpusprogramm und Lauf ([`takt_conformance::cases`])
