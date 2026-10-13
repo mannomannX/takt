@@ -88,13 +88,14 @@ impl<W: Watchdog> Watchdog for Option<W> {
 /// [`Sink::record`].
 pub trait Sink {
     /// Welche Ausgaenge der Trace nach dem Tick `tick` zeigt (9.3); `None`
-    /// fragt nach dem Anfangszustand vor dem ersten Tick. Eine Senke, die
-    /// eine Zeitzeile schreibt, schreibt sie hier: vor den Ausgaben.
+    /// fragt nach dem Anfangszustand vor dem ersten Tick.
     fn outputs(&mut self, _tick: Option<&Tick>) -> Outputs {
         Outputs::None
     }
 
     /// Nimmt die Zusammenfassung eines Ticks entgegen, nach seinem Trace.
+    /// Eine Senke, die eine Zeitzeile schreibt, schreibt sie hier: Eine
+    /// Metazeile steht am Ende ihres Ticks (grammar/trace.md T5).
     fn record(&mut self, tick: &Tick);
 }
 
@@ -230,7 +231,8 @@ pub trait Tunables {
 /// Was ein Tick gekostet hat und was er ergab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Tick {
-    /// Nummer des Ticks, bei 0 beginnend.
+    /// Nummer des Ticks im Kern, bei 0 beginnend: Der Kern rechnet an seiner
+    /// Grenze `k` den Tick `k + 1` des Traces ([`Tick::traced`]).
     pub k: u64,
     /// Logische Zeit am Ende des Ticks in Nanosekunden.
     pub now: i64,
@@ -247,10 +249,17 @@ pub struct Tick {
 }
 
 impl Tick {
-    /// Die Metazeile `t=<k> time took=<ns> drift=<ns> slept=<n>`
-    /// (grammar/trace.md T1; 12.5: Zeit ausserhalb der Semantik).
+    /// Die Nummer dieses Ticks im Trace (grammar/trace.md T1): Tick 0 ist
+    /// der Anfangszustand (9.4), den der Kern vor seiner ersten Grenze zeigt.
+    pub fn traced(&self) -> u64 {
+        self.k.saturating_add(1)
+    }
+
+    /// Die Metazeile `t=<tick> time took=<ns> drift=<ns> slept=<n>` mit der
+    /// Nummer des Ticks im Trace (grammar/trace.md T1; 12.5: Zeit ausserhalb
+    /// der Semantik).
     pub fn write_time(&self, w: &mut impl core::fmt::Write) -> core::fmt::Result {
-        write!(w, "t={} time took={} drift={} slept={}", self.k, self.took, self.drift, self.slept)
+        write!(w, "t={} time took={} drift={} slept={}", self.traced(), self.took, self.drift, self.slept)
     }
 }
 
