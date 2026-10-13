@@ -1,5 +1,6 @@
 /* startup.c - Start und Vektortabelle der Black Pill fuer einen C-Wirt
- * (M11 Schritt 18b), mit dem Linker-Skript `stm32f401.ld`.
+ * (M11 Schritt 18b), mit dem Linker-Skript `stm32f401.ld` oder, unter
+ * FreeRTOS-MPU, `stm32f401-mpu.ld`.
  *
  * Das Sprungbrett in Sektor 1 startet die Anwendung ueber ihre
  * Vektortabelle: Stackzeiger und Resetvektor. `Reset_Handler` stellt VTOR
@@ -7,11 +8,14 @@
  * HID-Bootloader), gibt die FPU frei, kopiert `.data`, nullt `.bss` und ruft
  * `main`.
  *
- * Jeder Handler, den ein Port oder der Wirt nicht stellt, haelt das Board an
- * und laesst es fuer `TAKT` erreichbar (`board_halt`). Die Namen sind die von
+ * Jeder Handler, den ein Port oder der Wirt nicht stellt, nennt Grund und
+ * Adresse der Ausnahme, haelt das Board an und laesst es fuer `TAKT`
+ * erreichbar (`board_fault`). Die Namen sind die von
  * CMSIS: Der Port der Interruptform stellt `TIM2_IRQHandler` und
  * `PendSV_Handler`, die Leitung `USART1_IRQHandler`, ein RTOS `SVC_Handler`,
- * `PendSV_Handler` und `SysTick_Handler`.
+ * `PendSV_Handler` und `SysTick_Handler`, die Partition unter FreeRTOS-MPU
+ * `MemManage_Handler`. Ein Treffer des Watchpoints unter dem Stack der
+ * Interrupts (`DebugMon_Handler`) haelt an.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -129,4 +133,4 @@ void Reset_Handler(void) {
     board_halt();
 }
 
-void Default_Handler(void) { board_halt(); }
+void Default_Handler(void) { board_fault(); }

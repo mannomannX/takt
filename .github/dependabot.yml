@@ -2,6 +2,10 @@
 # Commit-SHA und der Fassung als Kommentar (SonarCloud S7637), und ein
 # Pull Request hebt beide zusammen. Die Workflows liegen unter `/`, die
 # zusammengesetzten Aktionen je in ihrem Verzeichnis.
+#
+# Dazu die Python-Pakete des Zephyr-Jobs: tools/ci/zephyr-requirements.txt
+# ist mit pip-compile aus der `.in` daneben gesperrt, Fassungen und
+# Pruefsummen (FB-738); Dependabot sperrt sie ebenso neu.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -13,5 +17,13 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns:
+          - "*"
+  - package-ecosystem: pip
+    directory: "/tools/ci"
+    schedule:
+      interval: weekly
+    groups:
+      zephyr-python:
         patterns:
           - "*"
