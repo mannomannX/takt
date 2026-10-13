@@ -1,0 +1,6 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5, vertieft bis 101), erzeugt mit `UPDATE_PATHS` (M11 Strang B2, Schritt 3)
+# ziel uebergang restart 101 RUN.S1->FAILED @3270
+# ticks 103
+t=160 runtime Driver word
+t=4895313923 job restart v done start=0
+t=38303961643 job restart v done start=1
