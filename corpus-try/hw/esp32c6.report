@@ -3,7 +3,7 @@
 # Streuungen als `min mean max` in Zyklen.
 
 [run]
-date = "2026-10-12"
+date = "2026-10-13"
 board = "esp32c6"
 target = "riscv32imac"
 profile = "baremetal"
@@ -14,310 +14,310 @@ suite = "c383ab0395482740"
 placements = 0
 
 [calibration]
-t_io_ps = 4181250
+t_io_ps = 4293750
 stretch = 1/1
-stack_reserve = 3060
+stack_reserve = 3044
 stack_reserve_interrupt = 3588
-stack_reserve_rtos = 3652
+stack_reserve_rtos = 3668
 subnormal_failures = 0
 overhead = 15
 
 [probe i32]
 ps = 7305
 ops = 320
-small = 767 767 767
-large = 1141 1141 1141
+small = 792 792 792
+large = 1166 1166 1166
 
 [probe i64]
-ps = 24561
+ps = 24732
 ops = 256
-small = 929 929 929
-large = 1935 1935 1935
+small = 947 947 947
+large = 1960 1960 1960
 
 [probe f32]
 ps = 332793
 ops = 192
-small = 3278 3278 3278
-large = 13651 13651 13651
+small = 3303 3303 3303
+large = 13676 13676 13676
 
 [probe f64]
 ps = 531914
 ops = 192
-small = 4804 4804 4804
-large = 21294 21294 21294
+small = 4829 4829 4829
+large = 21319 21319 21319
 
 [probe mem]
-ps = 28262
+ps = 28164
 ops = 64
-small = 791 791 791
-large = 1230 1230 1230
+small = 816 816 816
+large = 1254 1254 1254
 
 [probe call]
 ps = 44063
 ops = 40
-small = 3845 3845 3845
-large = 4127 4127 4127
+small = 3870 3870 3870
+large = 4152 4152 4152
 
 [probe call_hook]
-ps = 528633
+ps = 528828
 ops = 64
-small = 2082 2082 2082
-large = 7570 7570 7570
+small = 2105 2105 2105
+large = 7595 7595 7595
 
 [probe i32_div]
-ps = 60253
+ps = 60350
 ops = 64
-small = 962 962 962
-large = 1953 1953 1953
+small = 986 986 986
+large = 1978 1978 1978
 
 [probe i64_div]
-ps = 1042567
+ps = 1042737
 ops = 64
-small = 3634 3635 3636
-large = 15216 15216 15216
+small = 3652 3653 3654
+large = 15241 15241 15241
 
 [probe f32_div]
 ps = 1204023
 ops = 64
-small = 5529 5529 5529
-large = 24973 24973 24973
+small = 5554 5554 5554
+large = 24998 24998 24998
 
 [probe f64_div]
 ps = 2338593
 ops = 64
-small = 9450 9450 9450
-large = 44590 44590 44590
+small = 9475 9475 9475
+large = 44615 44615 44615
 
 [probe f32_fma]
 ps = 4290078
 ops = 64
-small = 11718 11718 11718
-large = 55798 55798 55798
+small = 11743 11743 11743
+large = 55823 55823 55823
 
 [probe f64_fma]
-ps = 2774160
+ps = 2774355
 ops = 64
-small = 7851 7851 7851
-large = 36408 36408 36408
+small = 7874 7874 7874
+large = 36433 36433 36433
 
 [probe f32_sqrt]
 ps = 458417
 ops = 64
-small = 3697 3697 3697
-large = 15506 15506 15506
+small = 3722 3722 3722
+large = 15531 15531 15531
 
 [probe f64_sqrt]
 ps = 1286836
 ops = 64
-small = 5431 5431 5431
-large = 24055 24055 24055
+small = 5456 5456 5456
+large = 24080 24080 24080
 
 [probe f32_math]
 function = "acos"
 ps = 203387500
 ops = 8
-small = 38903 38903 38903
-large = 191741 191741 191741
+small = 38928 38928 38928
+large = 191764 191764 191764
 
 [probe f64_math]
 function = "acos"
 ps = 495831250
 ops = 8
-small = 140220 140220 140220
-large = 698276 698276 698276
+small = 140245 140245 140245
+large = 698299 698299 698299
 
 [check i32_small]
-measured_ps = 4793750
-bound_ps = 5650089
+measured_ps = 4950000
+bound_ps = 5762342
 
 [check i32_large]
-measured_ps = 7131250
-bound_ps = 7987689
+measured_ps = 7287500
+bound_ps = 8099942
 
 [check i64_small]
-measured_ps = 5806250
-bound_ps = 6637593
+measured_ps = 5918750
+bound_ps = 6760790
 
 [check i64_large]
-measured_ps = 12093750
-bound_ps = 12925209
+measured_ps = 12250000
+bound_ps = 13092182
 
 [check f32_small]
-measured_ps = 20487500
-bound_ps = 21273513
+measured_ps = 20643750
+bound_ps = 21385766
 
 [check f32_large]
-measured_ps = 85318750
-bound_ps = 86104809
+measured_ps = 85475000
+bound_ps = 86217062
 
 [check f64_small]
-measured_ps = 30025000
-bound_ps = 30831321
+measured_ps = 30181250
+bound_ps = 30943574
 
 [check f64_large]
-measured_ps = 133087500
-bound_ps = 133893849
+measured_ps = 133243750
+bound_ps = 134006102
 
 [check mem_small]
-measured_ps = 4943750
-bound_ps = 5779903
+measured_ps = 5100000
+bound_ps = 5890490
 
 [check mem_large]
-measured_ps = 7687500
-bound_ps = 8523711
+measured_ps = 7837500
+bound_ps = 8628026
 
 [check call_small]
-measured_ps = 24031250
-bound_ps = 24360209
+measured_ps = 24187500
+bound_ps = 24472462
 
 [check call_large]
-measured_ps = 25793750
-bound_ps = 26122729
+measured_ps = 25950000
+bound_ps = 26234982
 
 [check call_hook_small]
-measured_ps = 13012500
-bound_ps = 13676264
+measured_ps = 13156250
+bound_ps = 13791539
 
 [check call_hook_large]
-measured_ps = 47312500
-bound_ps = 47976296
+measured_ps = 47468750
+bound_ps = 48104051
 
 [check i32_div_small]
-measured_ps = 6012500
-bound_ps = 6614137
+measured_ps = 6162500
+bound_ps = 6727942
 
 [check i32_div_large]
-measured_ps = 12206250
-bound_ps = 12807929
+measured_ps = 12362500
+bound_ps = 12927942
 
 [check i64_div_small]
-measured_ps = 22725000
-bound_ps = 23159449
+measured_ps = 22837500
+bound_ps = 23282630
 
 [check i64_div_large]
-measured_ps = 95100000
-bound_ps = 95534489
+measured_ps = 95256250
+bound_ps = 95701382
 
 [check f32_div_small]
-measured_ps = 34556250
-bound_ps = 35446953
+measured_ps = 34712500
+bound_ps = 35559206
 
 [check f32_div_large]
-measured_ps = 156081250
-bound_ps = 156972009
+measured_ps = 156237500
+bound_ps = 157084262
 
 [check f64_div_small]
-measured_ps = 59062500
-bound_ps = 59971945
+measured_ps = 59218750
+bound_ps = 60084198
 
 [check f64_div_large]
-measured_ps = 278687500
-bound_ps = 279596969
+measured_ps = 278843750
+bound_ps = 279709222
 
 [check f32_fma_small]
-measured_ps = 73237500
-bound_ps = 73940697
+measured_ps = 73393750
+bound_ps = 74052950
 
 [check f32_fma_large]
-measured_ps = 348737500
-bound_ps = 349440729
+measured_ps = 348893750
+bound_ps = 349552982
 
 [check f64_fma_small]
-measured_ps = 49068750
-bound_ps = 49686009
+measured_ps = 49212500
+bound_ps = 49801382
 
 [check f64_fma_large]
-measured_ps = 227550000
-bound_ps = 228167289
+measured_ps = 227706250
+bound_ps = 228295142
 
 [check f32_sqrt_small]
-measured_ps = 23106250
-bound_ps = 23517257
+measured_ps = 23262500
+bound_ps = 23629510
 
 [check f32_sqrt_large]
-measured_ps = 96912500
-bound_ps = 97323529
+measured_ps = 97068750
+bound_ps = 97435782
 
 [check f64_sqrt_small]
-measured_ps = 33943750
-bound_ps = 34712213
+measured_ps = 34100000
+bound_ps = 34824466
 
 [check f64_sqrt_large]
-measured_ps = 150343750
-bound_ps = 151112213
+measured_ps = 150500000
+bound_ps = 151224466
 
 [check f32_math_small]
-measured_ps = 243143750
-bound_ps = 243875065
+measured_ps = 243300000
+bound_ps = 243984192
 
 [check f32_math_large]
-measured_ps = 1198381250
-bound_ps = 1199112569
+measured_ps = 1198525000
+bound_ps = 1199209192
 
 [check f64_math_small]
-measured_ps = 876375000
-bound_ps = 877028189
+measured_ps = 876531250
+bound_ps = 877137318
 
 [check f64_math_large]
-measured_ps = 4364225000
-bound_ps = 4364878189
+measured_ps = 4364368750
+bound_ps = 4364974822
 
 [check pid]
-measured_ps = 10581250
-bound_ps = 12043568
+measured_ps = 10743750
+bound_ps = 12155135
 
 [check thermocouples]
-measured_ps = 67112500
-bound_ps = 91258292
+measured_ps = 67256250
+bound_ps = 91376655
 
 [check lines]
-measured_ps = 21162500
-bound_ps = 124135544
+measured_ps = 21431250
+bound_ps = 124102822
 
 [check matrix]
-measured_ps = 181362500
-bound_ps = 564774954
+measured_ps = 181525000
+bound_ps = 564873363
 
 [check crc32]
-measured_ps = 52512500
-bound_ps = 335351613
+measured_ps = 52625000
+bound_ps = 337183466
 
 [check sequence]
-measured_ps = 5525000
-bound_ps = 6584634
+measured_ps = 5656250
+bound_ps = 6696122
 
 [kernel pid]
-takt = 1636 1679 1693
+takt = 1662 1705 1719
 c = 956 999 1013
 same_digest = true
 implicit_checks = 6
 
 [kernel thermocouples]
-takt = 10032 10386 10738
+takt = 10055 10409 10761
 c = 9923 9976 10041
 same_digest = true
 implicit_checks = 2
 
 [kernel lines]
-takt = 2851 3319 3386
+takt = 2894 3362 3429
 c = 1675 2782 2915
 same_digest = true
 implicit_checks = 4
 
 [kernel matrix]
-takt = 28785 28841 29018
+takt = 28811 28867 29044
 c = 34229 34283 34460
 same_digest = true
 implicit_checks = 5
 
 [kernel crc32]
-takt = 8402 8402 8402
+takt = 8420 8420 8420
 c = 21538 21538 21541
 same_digest = true
 implicit_checks = 1
 
 [kernel sequence]
-takt = 752 774 884
+takt = 773 795 905
 c = 41 46 58
 same_digest = true
 implicit_checks = 0

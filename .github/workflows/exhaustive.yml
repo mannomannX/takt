@@ -26,20 +26,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref }}
       - name: Rust 1.98.0
         run: |
           rustup toolchain install 1.98.0 --profile minimal
           rustup default 1.98.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: exhaustive
       - run: cargo test -p libtaktm --release --test exhaustive -- --ignored --test-threads=1
       - name: Ratsche sichern
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: exhaustive-runs
           path: crates/libtaktm/tests/exhaustive_runs.txt

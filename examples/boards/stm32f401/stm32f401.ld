@@ -6,9 +6,10 @@
  *
  * Der Stack waechst vom Ende des RAM nach unten bis zum Waechter, 32 Byte
  * an einer 32-Byte-Grenze ueber `.bss` (12.3). Dazwischen muss Platz fuer
- * `board_stack_bytes` sein: Schritt und Jobs rechnen in der Interruptform
- * auf diesem Stack, also `P_TICK_STACK_BYTES + P_JOB_STACK_BYTES`; den Wert
- * setzt der Bau (`--defsym`).
+ * `board_stack_bytes` sein: In der Interruptform rechnen Schritt und Jobs
+ * auf diesem Stack, also `P_TICK_STACK_BYTES + P_JOB_STACK_BYTES`; unter
+ * FreeRTOS tragen ihn nur `main` und die ISRs. Den Wert setzt der Bau
+ * (`--defsym`).
  */
 MEMORY
 {
@@ -71,4 +72,4 @@ SECTIONS
 board_stack_top = ORIGIN(RAM) + LENGTH(RAM);
 
 ASSERT(board_stack_top - board_stack_bottom >= board_stack_bytes,
-       "der Stack ist kleiner als P_TICK_STACK_BYTES + P_JOB_STACK_BYTES (12.3)");
+       "der Stack der Interrupts ist kleiner als board_stack_bytes (12.3)");
