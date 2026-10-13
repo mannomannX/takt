@@ -2,7 +2,7 @@
 #
 #   find_package(Takt REQUIRED)        # Takt_DIR nennt dieses Verzeichnis
 #   takt_add_program(valve SOURCE takt/valve.takt FORM logical
-#                    [HARDWARE takt/board.hw] [TARGET tripel] [BUILD sim|hw])
+#                    [HARDWARE takt/board.hw] [TARGET tripel] [BUILD sim|hw] [LDGEN])
 #   target_link_libraries(app PRIVATE valve)
 #
 # `takt_add_program` legt die Bibliothek `valve` an: die Lieferform von
@@ -22,8 +22,12 @@
 # Das Ziel (`TARGET`) ist das Tripel des Wirts; ohne Angabe nimmt das Paket
 # `TAKT_TARGET`, dann `CMAKE_C_COMPILER_TARGET`, und auf einem x86-64-Wirt
 # unter Windows oder Linux dessen Tripel. Ohne `FORM` nimmt es `TAKT_FORM`.
-# Beide setzt das Zephyr-Modul (`zephyr/`) aus seiner Konfiguration. `BUILD`
-# geht als `--build` an das Werkzeug (8.1); ohne Angabe baut es `hw`.
+# Beide setzt das Zephyr-Modul (`zephyr/`) aus seiner Konfiguration, die
+# Komponente fuer ESP-IDF (`esp-idf/takt`) fest. `BUILD` geht als `--build`
+# an das Werkzeug (8.1); ohne Angabe baut es `hw`. Mit `LDGEN` liefert der
+# Bau auch das Fragment fuer `ldgen` (`<name>.lf`, 12.3: der Tick-Pfad im RAM
+# unter `xip_flash`); es liegt unter `<Binaerverzeichnis>/takt/<name>/`, wo
+# eine Komponente es als `LDFRAGMENTS` nennt.
 
 include_guard(GLOBAL)
 
@@ -58,7 +62,7 @@ function(_takt_host_triple out)
 endfunction()
 
 function(takt_add_program name)
-  cmake_parse_arguments(PARSE_ARGV 1 ARG "" "SOURCE;FORM;HARDWARE;TARGET;BUILD" "")
+  cmake_parse_arguments(PARSE_ARGV 1 ARG "LDGEN" "SOURCE;FORM;HARDWARE;TARGET;BUILD" "")
   set(form "${ARG_FORM}")
   if(NOT form)
     set(form "${TAKT_FORM}")
@@ -89,13 +93,17 @@ function(takt_add_program name)
     list(APPEND args --hardware "${hardware}")
     list(APPEND depends "${hardware}")
   endif()
+  set(outputs "${lib}" "${out}/${name}.h" "${out}/takt_sdk.h")
+  if(ARG_LDGEN)
+    list(APPEND outputs "${out}/${name}.lf")
+  endif()
   add_custom_command(
-    OUTPUT "${lib}" "${out}/${name}.h" "${out}/takt_sdk.h"
+    OUTPUT ${outputs}
     COMMAND "${TAKT_EXECUTABLE}" ${args}
     DEPENDS ${depends}
     COMMENT "takt build ${name} (${form}, ${triple})"
     VERBATIM)
-  add_custom_target(${name}_takt DEPENDS "${lib}")
+  add_custom_target(${name}_takt DEPENDS ${outputs})
   # Der erzeugte Code ruft `round`, `fma` und `fmaf`: unter Linux aus
   # `libm`, unter Windows aus der C-Laufzeit (FB-526).
   set(libs Takt::sdk)

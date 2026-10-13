@@ -1,0 +1,48 @@
+name: cppcheck
+description: >-
+  cppcheck 2.22.0 aus den Quellen des Projekts, wie LLVM mit Pruefsumme: Die
+  Zahlen im Katalog (plan/cert.md) haengen an der Fassung. Setzt
+  TAKT_CPPCHECK. Das MISRA-Addon laeuft ohne die Regeltexte und nennt nur die
+  Nummern.
+
+# Gesichert gleich nach dem Bau, nicht erst am Ende eines Jobs, der an einem
+# Befund scheitern darf.
+
+runs:
+  using: composite
+  steps:
+    - name: cppcheck 2.22.0 aus dem Cache
+      id: cppcheck
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/cppcheck-2.22.0
+        key: cppcheck-2.22.0-linux-x64-1
+
+    - name: cppcheck 2.22.0 bauen
+      if: steps.cppcheck.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cd "$RUNNER_TEMP"
+        curl -fsSLo cppcheck-2.22.0.tar.gz https://github.com/danmar/cppcheck/archive/refs/tags/2.22.0.tar.gz
+        echo "d74945deb2d50393430e07596b766f8a779512c7f60dac2a30ea64e059ece57b  cppcheck-2.22.0.tar.gz" | sha256sum -c -
+        tar -xzf cppcheck-2.22.0.tar.gz
+        dest="$HOME/cppcheck-2.22.0"
+        cmake -S cppcheck-2.22.0 -B cppcheck-build -DCMAKE_BUILD_TYPE=Release -DUSE_MATCHCOMPILER=On \
+          -DHAVE_RULES=Off -DBUILD_GUI=Off -DBUILD_TESTS=Off \
+          -DCMAKE_INSTALL_PREFIX="$dest" -DFILESDIR="$dest/share/Cppcheck"
+        cmake --build cppcheck-build -j "$(nproc)"
+        cmake --install cppcheck-build
+
+    - name: cppcheck 2.22.0 in den Cache
+      if: steps.cppcheck.outputs.cache-hit != 'true'
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/cppcheck-2.22.0
+        key: cppcheck-2.22.0-linux-x64-1
+
+    - name: cppcheck einrichten
+      shell: bash
+      run: |
+        echo "TAKT_CPPCHECK=$HOME/cppcheck-2.22.0/bin/cppcheck" >> "$GITHUB_ENV"
+        "$HOME/cppcheck-2.22.0/bin/cppcheck" --version
+        python3 --version

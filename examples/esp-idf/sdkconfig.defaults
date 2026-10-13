@@ -1,0 +1,28 @@
+# Takt unter ESP-IDF auf dem ESP32-C6-DevKitM-1-N4 (M11 Schritt 21a).
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Der Kerntakt der Hardware-Konfiguration (corpus-try/hw/esp32c6-idf.hw).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+
+# Der Schritt rechnet auf dem Stack der Interrupts; main.c prueft, dass er
+# den Schritt-Stack des Programms fasst (12.3).
+CONFIG_FREERTOS_ISR_STACKSIZE=16384
+
+# Die ISR des Zeitgebers und seine Steuerung im IRAM: Der Schritt laeuft auch
+# waehrend eines Flash-Zugriffs (plan/m11.md 1.7).
+CONFIG_GPTIMER_ISR_CACHE_SAFE=y
+CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM=y
+
+# Der USB-Serial-JTAG gehoert der Leitung (main/line.c); die Konsole von
+# ESP-IDF bleibt auf UART0.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Ein Konformitaetslauf hat keinen Watchdog (12.3): `app_main` rechnet die
+# fremde Last ohne Pause, die Leerlaufaufgabe kommt nicht dran.
+CONFIG_ESP_TASK_WDT_EN=n
