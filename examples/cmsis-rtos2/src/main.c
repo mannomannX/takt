@@ -29,16 +29,13 @@ static void kick(void *ctx) {
     ARG_UNUSED(ctx);
 }
 
-/* Das Geraet des Journals (5.9): zwei Slots im Flash, in der Partition
- * `takt_journal` des Devicetree (`ports/zephyr-nvm`, FB-732). Ein Bau mit
- * `TAKT_FRESH_JOURNAL` loescht sie vor dem Lauf: Die Portpruefung vergleicht
- * mit dem Interpreter ohne gespeicherte Werte; ohne ueberlebt `persist`
- * einen Neustart. */
-static struct takt_zephyr_nvm journal;
-
-/* Oeffnet das Journal und loescht es, wenn der Bau ein frisches verlangt;
- * 0 oder -errno. */
+/* Oeffnet das Geraet des Journals (5.9): zwei Slots im Flash, in der
+ * Partition `takt_journal` des Devicetree (`ports/zephyr-nvm`, FB-732). Ein
+ * Bau mit `TAKT_FRESH_JOURNAL` loescht sie vor dem Lauf: Die Portpruefung
+ * vergleicht mit dem Interpreter ohne gespeicherte Werte; ohne ueberlebt
+ * `persist` einen Neustart. 0 oder -errno. */
 static int journal_open(struct takt_nvm *nvm) {
+    static struct takt_zephyr_nvm journal;
     int rc = takt_zephyr_nvm_open(&journal, PARTITION_ID(takt_journal), PORT_TEST_NVM_BLOCKING_NS, nvm);
     if ((rc == 0) && (TAKT_FRESH_JOURNAL != 0)) {
         rc = takt_zephyr_nvm_clear(&journal);
@@ -46,18 +43,19 @@ static int journal_open(struct takt_nvm *nvm) {
     return rc;
 }
 
-/* Die Stacks beider Faeden: `osThreadNew` legt sie unter Zephyr mit
- * `k_thread_create` an, also als Stackobjekte, und `stack_size` ist ihre
- * nutzbare Groesse (`ports/cmsis-rtos2/takt_os_types.h`). Darueber Luft,
- * damit eine tiefere Messung im Urteil steht (12.3). */
+/* Luft ueber der Schranke des Programms in jedem Stack, damit eine tiefere
+ * Messung im Urteil steht (12.3). */
 #define STACK_SLACK 1024U
-K_THREAD_STACK_DEFINE(tick_stack, PORT_TEST_TICK_STACK_BYTES + STACK_SLACK);
-K_THREAD_STACK_DEFINE(job_stack, PORT_TEST_JOB_STACK_BYTES + STACK_SLACK);
 
 /* Faehrt den Kern `core` ueber den Port, waehrend `main` die fremde Last
  * rechnet, und schreibt die Bilanz. Verlangt der Host das Board zurueck,
  * gibt `main` es sofort ab. */
 static void drive(takt_core *core) {
+    /* Die Stacks beider Faeden: `osThreadNew` legt sie unter Zephyr mit
+     * `k_thread_create` an, also als Stackobjekte, und `stack_size` ist ihre
+     * nutzbare Groesse (`ports/cmsis-rtos2/takt_os_types.h`). */
+    static K_THREAD_STACK_DEFINE(tick_stack, PORT_TEST_TICK_STACK_BYTES + STACK_SLACK);
+    static K_THREAD_STACK_DEFINE(job_stack, PORT_TEST_JOB_STACK_BYTES + STACK_SLACK);
     static struct takt_rtos rtos;
     const struct takt_rtos_config config = {
         .ticks = TICKS,
