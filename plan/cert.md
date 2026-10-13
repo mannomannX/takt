@@ -306,11 +306,15 @@ Der C-Teil ist, was ein C-Wirt übersetzt: der Rahmen, den `takt build
 --emit embed` je Programm schreibt (`P_frame.c`, `P_ops.c`, `P.h`; erzeugt
 von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der Port für Systeme
 mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
-(`ports/posix`), der Port der Interruptform (`ports/irq`) mit seinem
-Adapter für STM32F4 (`ports/irq/stm32f4`) und die Beispiele
-(`examples/c-host/main.c`, `examples/posix/main.c`, der C-Wirt der Black
-Pill in `examples/boards/stm32f401`). Für ihn gelten CERT C und MISRA
-C:2012 unmittelbar (FB-524). Dazu gehören die Adapter für Zephyr und
+(`ports/posix`) und seinem Adapter für FreeRTOS (`ports/freertos`), der
+Port der Interruptform (`ports/irq`) mit seinem Adapter für STM32F4
+(`ports/irq/stm32f4`) und die Beispiele (`examples/c-host/main.c`,
+`examples/posix/main.c`, der C-Wirt der Black Pill in
+`examples/boards/stm32f401` mit seinem Wirt unter FreeRTOS). Für ihn gelten
+CERT C und MISRA C:2012 unmittelbar (FB-524). Der Kern von FreeRTOS gehört
+nicht dazu: Er bringt seine eigene Dokumentation nach MISRA C mit
+(`MISRA.md` im Kern), und was die Werkzeuge in seinen Köpfen finden, zählt
+der Test nicht. Zum C-Teil gehören auch die Adapter für Zephyr und
 CMSIS-RTOS2 (`ports/zephyr`, `ports/cmsis-rtos2`), das Gerät des Journals
 im Flash unter Zephyr (`ports/zephyr-nvm`) und ihre Beispiele
 (`examples/zephyr`, `examples/cmsis-rtos2`), im Katalog der Teil „Zephyr“.
@@ -320,15 +324,19 @@ Lieferformen — `examples/c-host/takt/valve.takt` mit dem Beispiel `c-host`,
 `corpus-try/124_port_test.takt` mit dem Port für Fäden und dem Beispiel
 `posix`, `corpus-try/05_streams_and_protocol.takt` für Ströme, Records und
 den Rand, und noch einmal `124_port_test.takt` für `thumbv7em` mit dem Port
-der Interruptform und dem C-Wirt der Black Pill (M11 Schritt 18b) — und
-prüft jede Bindung, also die Quellen eines Programms des Wirts, mit beiden
-Werkzeugen. Die Bindung für `thumbv7em` prüft clang-tidy für ihr Ziel
+der Interruptform und dem C-Wirt der Black Pill (M11 Schritt 18b); die
+Lieferform für `thumbv7em` bindet er auch an den Wirt der Black Pill unter
+FreeRTOS mit dem Kern V11.3.1 aus der Setup-Aktion (`FREERTOS_KERNEL_PATH`,
+M11 Schritt 20), einmal ohne MPU und einmal als FreeRTOS-MPU mit dem
+Handler der Partition (`freertos_mpu.c`, Schritt 20b). Jede Bindung, also
+die Quellen eines Programms des Wirts, prüft er mit beiden Werkzeugen. Die
+Bindungen für `thumbv7em` prüft clang-tidy für ihr Ziel
 (`--target=thumbv7em-none-eabihf`, freistehend) und cppcheck mit der
 Plattform `unix32`, beide mit den Werten, die ihr Bau setzt; so sehen sie
-auch den Zweig des Rahmens für die FPU des Cortex-M4. Der Test liest
-Aufruf und Abweichungen aus diesem Abschnitt; er läuft unter Linux (die
-Kopfdateien von POSIX), auf CI in `.github/workflows/analysis.yml` bei
-jedem Push.
+auch den Zweig des Rahmens für die FPU des Cortex-M4.
+Der Test liest Aufruf und Abweichungen aus diesem Abschnitt; er läuft unter
+Linux (die Kopfdateien von POSIX), auf CI in
+`.github/workflows/analysis.yml` bei jedem Push.
 
 **Unter Zephyr** bindet der Test `port_test` noch zweimal, wie die
 Beispiele es bauen: mit dem Zephyr-Adapter und `examples/zephyr`, mit dem
@@ -414,10 +422,10 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | Befund | Teil | Zahl | Regel | Grund |
 |---|---|---|---|---|
 | `misra-c2012-1.4` | SDK | 1 | MISRA C:2012 1.4 (R) | `_Alignas(8)` am Speicher des Kerns: Das Archiv legt dort einen Rust-Typ mit Ausrichtung 8 ab; ohne die Angabe hinge sie an der ABI des Wirts |
-| `misra-c2012-2.5` | SDK | 18 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
+| `misra-c2012-2.5` | SDK | 19 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
 | `constParameterPointer` | Port | 2 | MISRA C:2012 8.13 (A) | Fehlmeldung: `pthread_attr_setstack` nimmt den Stack als `void *`, und der Faden schreibt hinein; `const` brauchte einen Cast, der es wieder entfernt (11.8). Und `takt_os_join` des POSIX-Adapters liest den Zustand nur, doch der Vertrag `takt_os.h` gilt jedem Adapter, und unter Zephyr schreibt das Warten in den Faden (`k_thread_join`) |
 | `constParameterCallback` | Port | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: Der Einstieg eines Fadens (`takt_os_run`) hat die Gestalt, die `pthread_create` verlangt (`void *(*)(void *)`) |
-| `misra-c2012-11.5` | Port | 4 | MISRA C:2012 11.5 (A) | Die Faeden bekommen ihr Argument als `void *`: `pthread_create` reicht es an den Einstieg des Adapters, `takt_os_spawn` den Port an Schritt- und Jobfaden; der Wirt gibt die Stacks als `void *` (`takt_rtos_config`) |
+| `misra-c2012-11.5` | Port | 6 | MISRA C:2012 11.5 (A) | Die Faeden bekommen ihr Argument als `void *`: `pthread_create` und `xTaskCreateStatic` reichen es an den Einstieg des Adapters, `takt_os_spawn` den Port an Schritt- und Jobfaden; der Wirt gibt die Stacks als `void *` (`takt_rtos_config`), und der Adapter für FreeRTOS reicht sie als `StackType_t *` weiter |
 | `cert-dcl37-c` | Port | 1 | CERT C DCL37-C | `#define _POSIX_C_SOURCE` ist das Feature Test Macro, mit dem POSIX die Schnittstelle wählen lässt; der Name gehört der Umgebung, die ihn liest |
 | `misra-c2012-2.5` | Port | 1 | MISRA C:2012 2.5 (A) | `_POSIX_C_SOURCE` liest nur die C-Bibliothek: Es macht `clock_gettime` und `pthread_condattr_setclock` sichtbar |
 | `misra-c2012-21.1` | Port | 1 | MISRA C:2012 21.1 (R) | `#define _POSIX_C_SOURCE` wählt die Schnittstelle, wie POSIX es vorschreibt (Feature Test Macro); kein Bezeichner der Bibliothek ändert sich |
@@ -425,22 +433,23 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-11.4` | Port | 2 | MISRA C:2012 11.4 (A) | Der Adapter für STM32F4 (`ports/irq/stm32f4`) liest und schreibt die Register von TIM2, NVIC, SCB und FPU an ihrer Adresse aus dem Referenzhandbuch; die Zahl wird nur in `takt_reg` und `takt_reg8` zum Zeiger |
 | `misra-c2012-17.3` | Port | 2 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für PRIMASK im Adapter für STM32F4 (`takt_lock`, `takt_unlock`), gekapselt in je einer Funktion (D.4.3). Ein Builtin von clang an seiner Stelle übersetzte ein fremdes Projekt mit GCC nicht |
 | `misra-c2012-2.7` | Port | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `takt_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
-| `compareValueOutOfTypeRangeError` | Port | 1 | MISRA C:2012 14.3 (R) | `takt_rtos_depth` begrenzt die Tiefe aus `size_t` auf `uint32_t`; derselbe Text gilt auf dem Wirt mit 64 Bit, wo die Grenze greift. Unter Zephyr (32 Bit) ist der Vergleich stets falsch, und der Übersetzer entfernt ihn |
-| `misra-c2012-8.7` | Port | 2 | MISRA C:2012 8.7 (A) | `takt_rtos_paint` und `takt_rtos_depth` sind die Vorgabe des Ports für jeden Adapter (`takt_rtos.h`); der Adapter für CMSIS-RTOS2 ruft sie nicht: Die Implementierung füllt den Stack selbst, und er misst über `osThreadGetStackSpace` |
+| `misra-c2012-8.7` | Port | 2 | MISRA C:2012 8.7 (A) | `takt_rtos_paint` und `takt_rtos_depth` sind die Vorgabe des Ports für jeden Adapter (`takt_rtos.h`); wer den Stack selbst bemalt und misst, ruft sie aus seiner Einheit. Die Adapter für FreeRTOS (`uxTaskGetStackHighWaterMark2`) und CMSIS-RTOS2 messen mit ihrem System, und in ihren Bindungen ruft sie niemand |
 | `cert-dcl37-c` | Beispiele | 1 | CERT C DCL37-C | wie im Port: `_POSIX_C_SOURCE` |
-| `misra-c2012-1.4` | Beispiele | 2 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack |
+| `misra-c2012-1.4` | Beispiele | 4 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack. Unter FreeRTOS-MPU ist eine Region der MPU an ihrer Größe ausgerichtet: der Stack der fremden Aufgabe und ihr Austauschblock |
 | `misra-c2012-11.5` | Beispiele | 4 | MISRA C:2012 11.5 (A) | Die Rückrufe der Leitung und der Treiber bekommen den Zeiger des Wirts als `void *` (`takt_sdk.h`); nur der Wirt weiß, was dahinter liegt |
-| `misra-c2012-17.3` | Beispiele | 6 | MISRA C:2012 17.3 (M) | Fehlmeldung: `fcntl` ist in `<fcntl.h>` deklariert; `posix.cfg` kennt die Form mit drei Argumenten nicht. Im C-Wirt der Black Pill hält das Addon `__asm__ volatile(…)` für Aufrufe: PRIMASK, Barrieren und `wfi`, je in einer Funktion oder einer Zeile des Starts gekapselt (D.4.3) |
+| `misra-c2012-17.3` | Beispiele | 7 | MISRA C:2012 17.3 (M) | Fehlmeldung: `fcntl` ist in `<fcntl.h>` deklariert; `posix.cfg` kennt die Form mit drei Argumenten nicht. Im C-Wirt der Black Pill hält das Addon `__asm__ volatile(…)` für Aufrufe: PRIMASK, Barrieren, `wfi` und der Einstieg von MemManage unter FreeRTOS-MPU, je in einer Funktion oder einer Zeile des Starts gekapselt (D.4.3) |
 | `misra-c2012-21.1` | Beispiele | 1 | MISRA C:2012 21.1 (R) | wie im Port: `_POSIX_C_SOURCE` |
 | `misra-c2012-21.6` | Beispiele | 9 | MISRA C:2012 21.6 (R) | Ein Wirt auf dem Rechner schreibt den Trace nach stdout und Fehler nach stderr; auf einem Ziel ist die Leitung ein UART (`struct takt_line`). Die Ein- und Ausgabe gehört zum Beispiel, nicht zum SDK |
-| `misra-c2012-11.4` | Beispiele | 5 | MISRA C:2012 11.4 (A) | Der C-Wirt der Black Pill (`examples/boards/stm32f401`) liest und schreibt Register an ihrer Adresse aus dem Referenzhandbuch, kopiert `.data`, nullt `.bss`, bemalt den Stack und legt den Wächter der MPU an Adressen aus dem Linker-Skript. Je Datei wird die Zahl an einer Stelle zum Zeiger (`board_reg`, `board_reg8`, `board_word`) und die Adresse an einer Stelle zur Zahl (`board_address`, `board_start_address`) |
+| `misra-c2012-11.4` | Beispiele | 7 | MISRA C:2012 11.4 (A) | Der C-Wirt der Black Pill (`examples/boards/stm32f401`) liest und schreibt Register an ihrer Adresse aus dem Referenzhandbuch, kopiert `.data`, nullt `.bss`, bemalt den Stack und legt den Wächter an Adressen aus dem Linker-Skript; unter FreeRTOS-MPU liest der Handler von MemManage den Befehl am gestapelten PC. Die Zahl wird nur in Helfern zum Zeiger (`board_reg`, `board_reg8`, `board_word`, `mpu_reg`, `mpu_halfword`) und die Adresse nur in Helfern zur Zahl (`board_address`, `board_start_address`) |
+| `misra-c2012-11.6` | Beispiele | 1 | MISRA C:2012 11.6 (R) | Unter FreeRTOS-MPU vergleicht der Handler von MemManage die Adresse aus MMFAR, eine Zahl, mit der Arena: `mpu_arena` macht ihre Adresse einmal zur Zahl. Den Typ der Arena kennt nur das Programm (`app.h`) |
 | `misra-c2012-2.7` | Beispiele | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `board_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
-| `misra-c2012-21.2` | Beispiele | 1 | MISRA C:2012 21.2 (R) | `abort` im C-Wirt der Black Pill: Die Panik des SDK-Archivs ruft `abort` der C-Laufzeit, und ein Wirt ohne C-Bibliothek stellt sie mit der Signatur des Standards. Sie hält das Board an und lässt es für `TAKT` erreichbar |
-| `misra-c2012-8.7` | Beispiele | 1 | MISRA C:2012 8.7 (A) | Fehlmeldung: `abort` ruft das SDK-Archiv, das außerhalb der Analyse liegt; ohne externe Bindung bände es nicht |
+| `misra-c2012-21.2` | Beispiele | 3 | MISRA C:2012 21.2 (R) | `abort` im C-Wirt der Black Pill: Die Panik des SDK-Archivs ruft `abort` der C-Laufzeit, und ein Wirt ohne C-Bibliothek stellt sie mit der Signatur des Standards. Sie hält das Board an und lässt es für `TAKT` erreichbar. Unter FreeRTOS deklariert `libc/string.h` `memcpy` und `memset`, die der Kern ruft, mit der Signatur des Standards; ihren Code stellt das SDK-Archiv |
+| `misra-c2012-8.7` | Beispiele | 7 | MISRA C:2012 8.7 (A) | `abort` ruft das SDK-Archiv, `vApplicationStackOverflowHook` und `vApplicationGetIdleTaskMemory` der Kern von FreeRTOS, alle außerhalb der Analyse; ohne externe Bindung bänden sie nicht. `board_paint_stack` und `board_stack_depth` ruft der Wirt der Interruptform (`irq.c`); unter FreeRTOS misst der Kern die Stacks, und niemand ruft sie. Den Wächter unter dem Stack der Interrupts legt ohne FreeRTOS-MPU `board_protect_stack` an, mit ihm `board_watch_stack`; jede Bindung ruft eine der beiden |
+| `misra-c2012-2.5` | Beispiele | 10 | MISRA C:2012 2.5 (A) | Die Einstellungen in `FreeRTOSConfig.h`, die nur die Quellen des Kerns lesen (außerhalb der Analyse: Takt, Priorität des Kerns, die Namen der Handler, unter FreeRTOS-MPU der Vorrat an Objekten und die kritischen Abschnitte); das Addon zählt die Einstellungen von FreeRTOS-MPU auch in der Bindung ohne MPU, die sie nicht übersetzt. `BOARD_TIMER_HZ` braucht nur die Interruptform |
 | `misra-c2012-11.5` | Zephyr | 7 | MISRA C:2012 11.5 (A) | Was ein Rückruf bekommt, kommt als `void *`: das Gerät des Journals an seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`), der Faden an den Einstieg des Adapters (`k_thread_create`, `osThreadNew`) und das Ziel an die Probe der Partition |
 | `constParameterCallback` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt der Rückrufe ist vorgegeben: der Einstieg eines Fadens (`k_thread_entry_t`, `osThreadFunc_t`) und `read` des Geräts (`struct takt_nvm`) |
 | `constParameterPointer` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Der Vertrag `takt_os.h` gilt jedem Adapter: `takt_os_now` des Zephyr-Adapters liest den Zustand nur, der für CMSIS-RTOS2 erweitert darin die Uhr; `takt_os_give` und `takt_os_depth` für CMSIS-RTOS2 gehen über Kennungen, der Zephyr-Adapter gibt in das Semaphor in seinem Zustand |
-| `compareValueOutOfTypeRangeError` | Zephyr | 1 | MISRA C:2012 14.3 (R) | wie im Port, in `takt_os_depth` des Adapters für CMSIS-RTOS2: Der Text gilt jeder Implementierung, auch einer mit 64-Bit-`size_t` |
+| `compareValueOutOfTypeRangeError` | Zephyr | 1 | MISRA C:2012 14.3 (R) | `takt_os_depth` des Adapters für CMSIS-RTOS2 begrenzt die Tiefe aus `size_t` auf `uint32_t`: Der Text gilt jeder Implementierung, auch einer mit 64-Bit-`size_t` |
 | `misra-c2012-8.9` | Zephyr | 1 | MISRA C:2012 8.9 (A) | Der Stack der Probe (`probe_stack`) gehört einem Faden im Benutzermodus, und `k_thread_create` verlangt für ihn einen Stack, den der Zephyr-Kern in seiner Tabelle der Objekte findet (`z_stack_is_user_capable`); dorthin kommt nur ein Objekt auf Dateiebene („Object Placement“ in der Dokumentation von Zephyr) |
 | `misra-c2012-8.4` | Zephyr | 1 | MISRA C:2012 8.4 (R) | Fehlmeldung: `k_sys_fatal_error_handler` ist in `<zephyr/fatal.h>` deklariert, das die Probe einbindet; ohne die Köpfe von Zephyr sieht cppcheck die Deklaration nicht |
 | `bugprone-branch-clone` | Zephyr-Bau | 4 | CERT C MSC12-C | Fehlmeldung: `K_KERNEL_STACK_DEFINE` und `K_THREAD_STACK_DEFINE` von Zephyr nehmen für Ausrichtung und Größe das Größere zweier Werte, die auf dem F401 gleich sind (`MAX(128, 128)`); der Ausdruck steht im Kopf von Zephyr, nicht in den Beispielen |
@@ -468,8 +477,8 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-17.8` | Rahmen | 14 | MISRA C:2012 17.8 (A) | Parameter als Zähler in erzeugten Schleifen |
 | `misra-c2012-18.4` | Rahmen | 39 | MISRA C:2012 18.4 (A) | Zeiger in die Arena als Basis plus Versatz, die Versätze aus dem Layout (`takt-frame::layout`) |
 | `misra-c2012-2.2` | Rahmen | 23 | MISRA C:2012 2.2 (R) | `+ 0` und `* 1`: Der Generator schreibt jeden Zugriff in derselben Form (Basis plus Versatz), auch beim Versatz 0; der Übersetzer faltet die Konstante |
-| `misra-c2012-2.4` | Rahmen | 3 | MISRA C:2012 2.4 (A) | Tags der geteilten Typen des Randes, die nicht jedes Programm braucht |
-| `misra-c2012-2.5` | Rahmen | 27 | MISRA C:2012 2.5 (A) | Makros des Kopfs und der geteilten Typen, die nicht jedes Programm nutzt |
+| `misra-c2012-2.4` | Rahmen | 4 | MISRA C:2012 2.4 (A) | Tags der geteilten Typen des Randes, die nicht jedes Programm und nicht jeder Wirt braucht |
+| `misra-c2012-2.5` | Rahmen | 30 | MISRA C:2012 2.5 (A) | Makros des Kopfs und der geteilten Typen, die nicht jedes Programm und nicht jeder Wirt nutzt |
 | `misra-c2012-2.7` | Rahmen | 27 | MISRA C:2012 2.7 (A) | Die Einstiege haben für jedes Programm dieselbe Signatur (`P_ops`); ein Programm ohne Journal oder Tunables liest manche Parameter nicht |
 | `misra-c2012-20.1` | Rahmen | 7 | MISRA C:2012 20.1 (A) | `#include <stddef.h>` im Block der geteilten Typen des Randes, den ein Wächter-Makro umschließt |
 | `misra-c2012-21.15` | Rahmen | 3 | MISRA C:2012 21.15 (R) | `memcpy` zwischen einem Wert und seinen Bytes in der Arena im Trace: der Weg, den CERT C EXP39-C statt eines Zeiger-Casts verlangt |

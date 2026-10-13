@@ -145,6 +145,28 @@ void abort(void);
 #define MPU_CTRL_ON 0x00000005u      /* ENABLE, PRIVDEFENA */
 #define MPU_RASR_GUARD 0x10000009u   /* XN, kein Zugriff, 32 Byte, ENABLE */
 
+/* Die Fehlerregister des SCB: Grund und Adresse einer Ausnahme. */
+#define SCB_CFSR 0xE000ED28u
+#define SCB_HFSR 0xE000ED2Cu
+#define SCB_DFSR 0xE000ED30u
+#define SCB_MMFAR 0xE000ED34u
+#define SCB_BFAR 0xE000ED38u
+
+/* DWT und Debug-Monitor des Cortex-M4: der Komparator 0 als Watchpoint. */
+#define SCB_SHPR3 0xE000ED20u        /* Byte 0: Prioritaet von DebugMonitor */
+#define DHCSR 0xE000EDF0u
+#define DHCSR_C_DEBUGEN 0x00000001u  /* ein Debugger haelt bei einem Treffer an */
+#define DEMCR 0xE000EDFCu
+#define DEMCR_TRCENA 0x01000000u
+#define DEMCR_MON_EN 0x00010000u
+#define DWT_CTRL 0xE0001000u
+#define DWT_CTRL_NUMCOMP_SHIFT 28u
+#define DWT_COMP0 0xE0001020u
+#define DWT_MASK0 0xE0001024u
+#define DWT_FUNCTION0 0xE0001028u
+#define DWT_MASK_GUARD 5u            /* die unteren 5 Bit: 32 Byte */
+#define DWT_FUNCTION_ACCESS 7u       /* Watchpoint auf Lesen oder Schreiben */
+
 _Static_assert(BOARD_LINE_PRIORITY < BOARD_STEP_PRIORITY, "die Leitung liegt ueber dem Schritt");
 
 /* So oft fragt eine Schleife hoechstens ab: einige Millisekunden beim Start
@@ -554,6 +576,31 @@ void board_protect_stack(void) {
     board_barrier();
 }
 
+/* DebugMonitor bekommt die hoechste Prioritaet; ohne Debugger, der anhaelt,
+ * fuehrt ein Treffer dorthin (`DebugMon_Handler`, der Halt in `startup.c`).
+ * Danach liest der Wirt zurueck, ob der Monitor wirken kann. */
+int board_watch_stack(void) {
+    int rc = BOARD_WATCH_NO_COMPARATOR;
+    *board_reg(DEMCR) |= DEMCR_TRCENA;
+    board_barrier();
+    if ((*board_reg(DWT_CTRL) >> DWT_CTRL_NUMCOMP_SHIFT) != 0u) {
+        *board_reg8(SCB_SHPR3) = 0u;
+        *board_reg(DWT_COMP0) = (uint32_t)board_address(&board_stack_guard);
+        *board_reg(DWT_MASK0) = DWT_MASK_GUARD;
+        *board_reg(DWT_FUNCTION0) = DWT_FUNCTION_ACCESS;
+        *board_reg(DEMCR) |= DEMCR_MON_EN;
+        board_barrier();
+        if ((*board_reg(DEMCR) & DEMCR_MON_EN) == 0u) {
+            rc = BOARD_WATCH_NO_MONITOR;
+        } else if ((*board_reg(DHCSR) & DHCSR_C_DEBUGEN) != 0u) {
+            rc = BOARD_WATCH_DEBUGGER;
+        } else {
+            rc = BOARD_WATCH_ARMED;
+        }
+    }
+    return rc;
+}
+
 void board_paint_stack(void) {
     uint32_t here = 0u;
     const uintptr_t limit = (board_address(&here) - BOARD_PAINT_MARGIN) & ~(uintptr_t)3u;
@@ -586,13 +633,42 @@ static void board_put_polled(uint8_t byte) {
     }
 }
 
-void board_halt(void) {
-    static const char text[] = "\r\ntakt: angehalten\r\n";
+/* Eine Zeichenkette an die Leitung, ohne Interrupt. */
+static void board_put_text(const char *text) {
+    for (uint32_t i = 0u; text[i] != '\0'; i++) {
+        board_put_polled((uint8_t)text[i]);
+    }
+}
+
+/* Ein Wort als acht Hexziffern an die Leitung, ohne Interrupt. */
+static void board_put_hex(uint32_t value) {
+    static const char digits[] = "0123456789abcdef";
+    for (uint32_t shift = 32u; shift > 0u; shift -= 4u) {
+        board_put_polled((uint8_t)digits[(value >> (shift - 4u)) & 0xFu]);
+    }
+}
+
+void board_fault(void) {
     (void)board_lock();
     if (__atomic_load_n(&board_line_ready, __ATOMIC_SEQ_CST) != 0) {
-        for (uint32_t i = 0u; text[i] != '\0'; i++) {
-            board_put_polled((uint8_t)text[i]);
-        }
+        board_put_text("\r\ntakt: ausnahme cfsr ");
+        board_put_hex(*board_reg(SCB_CFSR));
+        board_put_text(" hfsr ");
+        board_put_hex(*board_reg(SCB_HFSR));
+        board_put_text(" dfsr ");
+        board_put_hex(*board_reg(SCB_DFSR));
+        board_put_text(" mmfar ");
+        board_put_hex(*board_reg(SCB_MMFAR));
+        board_put_text(" bfar ");
+        board_put_hex(*board_reg(SCB_BFAR));
+    }
+    board_halt();
+}
+
+void board_halt(void) {
+    (void)board_lock();
+    if (__atomic_load_n(&board_line_ready, __ATOMIC_SEQ_CST) != 0) {
+        board_put_text("\r\ntakt: angehalten\r\n");
         board_matched = 0u;
         for (;;) {
             if ((*board_reg(USART1_SR) & (USART_SR_RXNE | USART_SR_ORE)) != 0u) {
