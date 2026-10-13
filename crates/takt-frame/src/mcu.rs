@@ -138,7 +138,7 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     );
     let _ = writeln!(
         t.code,
-        "_Static_assert(offsetof(struct {x}_arena, sink) == {sink_at}, \"die Senke folgt Tick und letztem Tick\");\n"
+        "_Static_assert(offsetof(struct {x}_arena, sink) == {sink_at}u, \"die Senke folgt Tick und letztem Tick\");\n"
     );
     // Der Tick zuerst: `tick_at` sagt, wo er steht.
     runtime_abi(&mut t, p, x);
@@ -1587,7 +1587,7 @@ fn telemetry(
         s,
         "    else if (f->kind == 0x88) {{ double x; __builtin_memcpy(&x, at, sizeof x); takt_trace_f64(sink, x); }}"
     );
-    let _ = writeln!(s, "    else if (f->kind == {DURATION}) takt_dur_trace(sink, v);");
+    let _ = writeln!(s, "    else if (f->kind == {DURATION}) {{ takt_dur_trace(sink, v); }}");
     let _ = writeln!(s, "    else if (f->kind & 0x40) takt_trace_u64(sink, (unsigned long long)v);");
     let _ = writeln!(s, "    else takt_trace_i64(sink, v);");
     let _ = writeln!(s, "}}");

@@ -51,7 +51,7 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
     let mut main = String::from(BOARD);
     let mut calls = String::new();
     let mut programs = Vec::new();
-    for (i, (name, file)) in PROGRAMS.iter().enumerate() {
+    for (name, file) in &PROGRAMS {
         let prefix = Prefix::new(name).expect("Praefix");
         let p = common::board::corpus(file);
         let ir = takt_llvm::lower::program(&p, host.triple, &prefix).ir;

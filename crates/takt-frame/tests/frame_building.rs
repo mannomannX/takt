@@ -87,7 +87,7 @@ fn the_sink_is_a_runtime_slot_that_every_init_sets() {
     for frame in [build_with(&p, Frame::default()), build_with(&p, Frame { protect: Some(4096), ..Frame::default() })] {
         assert_eq!(frame.sink_at, frame.tick_at + 16, "hinter `tick` und `done`");
         assert!(frame.tick_at >= program_area, "der Tick fuehrt die Runtime an: {} < {program_area}", frame.tick_at);
-        let offset = format!("offsetof(struct {x}_arena, sink) == {}", frame.sink_at);
+        let offset = format!("offsetof(struct {x}_arena, sink) == {}u", frame.sink_at);
         assert!(frame.source.contains(&offset), "{offset}");
         arena_layout(&frame, &x, host(), &[]).expect("clang bestaetigt die Versaetze (FB-392)");
         // Die Definition, nicht die Vorwaertsdeklaration: Ihre Kopfzeile endet mit `{`.
