@@ -1,0 +1,17 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5, vertieft bis 6), erzeugt mit `UPDATE_PATHS` (M11 Strang B2, Schritt 3)
+# ziel uebergang boot 6 SELFTEST.S0->SELFTEST.S1 @2487
+# ticks 8
+t=0 in previous_run ENDED
+t=1 in on_trial true
+t=2 in on_trial false suspect
+t=3 in on_trial true suspect
+t=4 in previous_run WATCHDOG
+t=4 in on_trial false bad
+t=5 in previous_run NONE suspect
+t=5 in on_trial true
+t=6 in previous_run ENDED stale
+t=7 in on_trial stale
+t=8 in previous_run stale
+t=8 runtime Node
+t=9 in previous_run WATCHDOG stale
+t=10 in previous_run WATCHDOG stale
