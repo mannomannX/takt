@@ -667,6 +667,15 @@ So arbeitet jeder Strang, als wäre er allein:
     (`partition_guard`, `takt_core_hardware_fault`). Board-Tests
     `the_zephyr_partition_turns_an_access_in_the_run_into_a_fault` mit
     `TAKT_PROBE_IN_RUN`.
+  - **Harness (FB-737, FB-739):** Zwei Bauten desselben neuen Stands
+    räumten einander das Verzeichnis weg (F401-Abbild im Lauf 38321047944
+    verloren); `enter_stand` räumt nur noch frühere Stände. Die Probe des C6
+    las den Tick über JTAG nur an den Symbolen der Bring-ups; ein Abbild
+    unter Zephyr nennt ihn über Arena (`arena`) und `tick_at` des Manifests
+    (`zephyr::Image::tick_address`, Manifest im Zwischenspeicher). Der
+    Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
+    unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
+    38320906796); das zeigt der nächste Lauf.
 
 ### 15, 16, 18, 9, 19 bis 23
 
