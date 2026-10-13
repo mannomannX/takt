@@ -1349,17 +1349,19 @@ impl Enc<'_> {
             ExprKind::Accessor { base, accessor, .. } if matches!(self.p.types.get(base.ty), Type::Stream(_)) => {
                 self.stream_accessor(base, *accessor, cx, env, span)?
             }
-            // Die Qualitaet eines Inputs; ueber ein oversampeltes Array rechnen
-            // die Reduktionen wie ueber ein Array (8.9).
+            // Die Qualitaet eines Inputs. Jeder andere Zugriff liest ihn wie
+            // ein Wert: eine Reduktion ueber ein Array, auch ein oversampeltes
+            // (8.9), und ein Zugriff, vor dem die Beweisdatei die
+            // Gueltigkeitspruefung ausliess (FB-618).
             ExprKind::Accessor { base, accessor, .. }
                 if matches!(base.kind, ExprKind::Input { .. })
-                    && (!matches!(self.p.types.get(base.ty), Type::Samples { .. })
-                        || matches!(
-                            accessor,
-                            takt_mir::expr::Accessor::Valid
-                                | takt_mir::expr::Accessor::Suspect
-                                | takt_mir::expr::Accessor::Stale
-                        )) =>
+                    && (matches!(
+                        accessor,
+                        takt_mir::expr::Accessor::Valid
+                            | takt_mir::expr::Accessor::Suspect
+                            | takt_mir::expr::Accessor::Stale
+                    ) || (*accessor == takt_mir::expr::Accessor::Or
+                        && !matches!(self.p.types.get(base.ty), Type::Samples { .. }))) =>
             {
                 self.input_accessor(e, cx, env, flow)?
             }
