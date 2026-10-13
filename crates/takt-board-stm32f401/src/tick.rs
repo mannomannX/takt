@@ -58,6 +58,9 @@ static LAST_CYCLES: AtomicU32 = AtomicU32::new(0);
 /// Der DWT-Stand an der vorigen Weckgrenze.
 static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
 
+/// Wie oft der Wecker kam: je Ereignis eine Periode in [`LAST_CYCLES`].
+static WAKES: AtomicU32 = AtomicU32::new(0);
+
 /// Startet TIM2 als Zeitachse und den Wecker auf die erste Grenze: Das
 /// Raster beginnt beim Stand, den der Start liest (FB-352 auf dem C6), so
 /// liegt jede Grenze genau auf ihrem Wecken.
@@ -102,6 +105,7 @@ pub fn on_interrupt() {
     }
     let now = crate::cycles::now();
     LAST_CYCLES.store(now.wrapping_sub(LAST_STAMP.swap(now, Ordering::SeqCst)), Ordering::SeqCst);
+    WAKES.fetch_add(1, Ordering::SeqCst);
     let period = PERIOD.load(Ordering::SeqCst);
     let next = cortex_m::interrupt::free(|cs| {
         let wake = WAKE.borrow(cs);
@@ -166,6 +170,12 @@ impl TickSource for Tim2Tick {
         // Die Messung steht in Kernzyklen; `Measurement` rechnet sie um —
         // dieselbe Rechnung, die auch `takt bench` benutzt (13.8).
         takt_board_support::Measurement { cycles: LAST_CYCLES.load(Ordering::SeqCst), core_hz: self.core_hz }.ns()
+    }
+
+    /// Die Weckgrenzen seit dem Start: Nach einem Stillstand kommt der Wecker
+    /// einmal, fuer alle Ticks, die die Schleife nachholt (FB-742).
+    fn events(&self) -> u64 {
+        u64::from(WAKES.load(Ordering::SeqCst))
     }
 
     /// Die Zeitachse seit dem Ursprung des Rasters: dasselbe Raster wie
