@@ -26,9 +26,12 @@ fn korpus() -> Vec<&'static str> {
 /// wenig genug, dass ein Fehlschlag noch zu lesen ist.
 const TICKS: u64 = 60;
 
-/// Eine Zeile von [`UNREACHED`]: das Programm, die sechs Zahlen und je
-/// Gruppe aus [`GROUPS`] die Zahl ihrer Stellen in Spalte drei.
-type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, &'static [(&'static str, usize)]);
+/// Je Gruppe aus [`GROUPS`] die Zahl ihrer Stellen in einer Spalte.
+type Groups = &'static [(&'static str, usize)];
+
+/// Eine Zeile von [`UNREACHED`]: das Programm, die sechs Zahlen und die
+/// Gruppen der Spalten eins bis drei.
+type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, Groups, Groups, Groups);
 
 /// Was ueber alle Laeufe eines Korpusprogramms unerreicht bleibt (M11
 /// Schritt 29a; Coverage aus 13.2, [`takt_conformance::cases`]): Programm,
@@ -47,8 +50,8 @@ type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, &'stat
 /// Die Spalten vier bis sechs zaehlen die Pruefstellen, die nie faulten
 /// koennen, je Grund (13.2, `takt_interp::coverage::Silent`): `proven`,
 /// `message`, `observe`. Sie stehen nicht in Spalte drei, und die Ratsche
-/// haelt sie ebenso genau. Die letzte Spalte teilt Spalte drei nach dem
-/// Grund auf, der Gruppe aus [`GROUPS`] (FB-511 Schritt 5).
+/// haelt sie ebenso genau. Die letzten drei Spalten teilen die Spalten eins
+/// bis drei nach dem Grund auf, der Gruppe aus [`GROUPS`] (FB-511 Schritt 5).
 const UNREACHED: &[Unreached] = &[
     ("01_minimal.takt", 0, 0, 0, 0, 1, 0, &[]),
     ("02_units_and_data.takt", 0, 3, 5, 0, 1, 0, &[("Frist", 2), ("ohne Urteil", 3)]),
@@ -167,22 +170,25 @@ const UNREACHED: &[Unreached] = &[
     ("sim/14_7/program.takt", 10, 6, 22, 0, 4, 0, &[("Speicher", 4), ("Frist", 18)]),
 ];
 
-/// Die Gruppen der Pruefstellen in Spalte drei von [`UNREACHED`], mit ihrem
-/// Grund (FB-511): die Einordnung des Solvers (Schritt 1, `solver.yml`, Lauf
-/// 38188098609; fuer `11_foc_drive`, `46_matrices` und `sim/14_7` nach
-/// Schritt 2 Lauf 38199208294) und was Schritt 3 an den Stellen fand, die
-/// k-Induktion nicht schliesst (FB-613). Eine Stelle hat die Gruppe ihrer
-/// tiefsten Anfrage. Was die Einordnung bewies, fuehren seit Schritt 4 die
-/// Beweisdateien; die drei Gruppen mit „bewiesen“ sagen, warum eine solche
-/// Stelle noch hier steht.
+/// Die Gruppen des Unerreichten in [`UNREACHED`], mit ihrem Grund (FB-511):
+/// die Einordnung des Solvers und was Schritt 3 an den Stellen fand, die
+/// k-Induktion nicht schliesst (FB-613). Spalte drei aus Schritt 1
+/// (`solver.yml`, Lauf 38188098609; fuer `11_foc_drive`, `46_matrices` nach
+/// Schritt 2 Lauf 38199208294), die Spalten eins und zwei aus Schritt 5
+/// (Lauf 38320013325, fuer `02_units_and_data`, `sim/12_7` und `sim/14_7`
+/// nach FB-617 und FB-618 die Laeufe 38319891273 und 38336280659). Eine
+/// Stelle hat die Gruppe ihrer tiefsten Anfrage; was kein Modell fuehrt,
+/// hat den Grund dafuer. Was die Einordnung bewies, fuehren seit Schritt 4
+/// die Beweisdateien und `.unfired`; die Gruppen mit „bewiesen“ sagen,
+/// warum eine solche Stelle noch hier steht.
 const GROUPS: &[(&str, &str)] = &[
     ("Speicher", "z3 braucht mehr als 6 GB, schon mit k = 1 oder in der Tiefe (FB-612)"),
     ("Frist", "der Solver entscheidet sie in 60 s nicht"),
     ("ohne Teilmodell", "keine Maschine laesst sich allein kodieren, das Gesamtmodell entscheidet z3 nicht (FB-604)"),
     (
         "bewiesen, nicht nachgerechnet",
-        "die Einordnung bewies sie (Tiefe 10 oder Spacer, 6 GB); die Pfade des Solvers (Tiefe 5, 60 s, 4 GB) \
-         bestaetigen es nicht, die Beweisdatei fuehrt sie darum nicht (FB-511 Schritt 4)",
+        "die Einordnung bewies sie (Tiefe 10 oder 20 oder Spacer, 6 GB); die Pfade des Solvers (Tiefe 5, 60 s, \
+         4 GB) bestaetigen es nicht, Beweisdatei und `.unfired` fuehren sie darum nicht (FB-511 Schritt 4)",
     ),
     (
         "bewiesen, explizit",
@@ -200,6 +206,23 @@ const GROUPS: &[(&str, &str)] = &[
     ),
     ("Fragment", "Induktionsschritt offen, die Invariantensuche kennt kein Fliesskomma und keine Bitoperationen"),
     ("ohne Urteil", "kein Modell fuehrt die Stelle"),
+    ("nie gerufen", "in einer Funktion, die keine Maschine ruft (3.4); ob die Coverage sie zaehlt, fragt FB-619"),
+    (
+        "Range bewiesen",
+        "eine bewiesene Range (13.2 `proven`), die Modell und Codegen nicht pruefen: Sie besteht, sobald ihr \
+         Ausdruck ohne Fault ausgewertet ist, und das ist er in keinem Lauf",
+    ),
+    (
+        "in einer Meldung",
+        "in der Meldung eines `check` (13.2 `message`), die erst beim Verletzen entsteht; der `check` faultet in \
+         keinem Lauf",
+    ),
+    ("faultet stets", "bewiesen: jede Auswertung faultet, die Stelle besteht in keinem Lauf"),
+    (
+        "unbestaetigt",
+        "der Solver fand einen Pfad, den der Interpreter nicht geht: `inv` und `sha256` sieht er uninterpretiert \
+         (13.3)",
+    ),
     ("jenseits MAX_TICKS", "erreichbar, aber erst nach `cases::MAX_TICKS` Ticks (FB-613)"),
     (
         "Zeitschranke",
@@ -207,29 +230,33 @@ const GROUPS: &[(&str, &str)] = &[
     ),
 ];
 
-/// **Jede nie verletzte Pruefstelle hat einen Grund** (FB-511 Schritt 5):
-/// Die Gruppen einer Zeile von [`UNREACHED`] stehen in [`GROUPS`] und
-/// zaehlen zusammen Spalte drei; jede Gruppe kommt vor. Dass die Zahlen
-/// stimmen, haelt `the_three_executors_agree` gegen die Coverage.
+/// **Alles Unerreichte hat einen Grund** (FB-511 Schritt 5): Die Gruppen
+/// einer Zeile von [`UNREACHED`] stehen in [`GROUPS`] und zaehlen zusammen
+/// ihre Spalte — Uebergaenge, nie bestandene und nie verletzte
+/// Pruefstellen; jede Gruppe kommt vor. Dass die Zahlen stimmen, haelt
+/// `the_three_executors_agree` gegen die Coverage.
 #[test]
-fn every_never_failed_site_has_a_group() {
+fn every_unreached_item_has_a_group() {
     let mut failed = Vec::new();
-    for (name, _, _, never_failed, _, _, _, groups) in UNREACHED {
-        let sum: usize = groups.iter().map(|(_, n)| n).sum();
-        if sum != *never_failed {
-            failed.push(format!("{name}: die Gruppen zaehlen {sum}, Spalte drei {never_failed}"));
-        }
-        for (group, n) in *groups {
-            if !GROUPS.iter().any(|(g, _)| g == group) {
-                failed.push(format!("{name}: `{group}` ist keine Gruppe aus `GROUPS`"));
+    for &(name, transitions, passes, faults, _, _, _, g1, g2, g3) in UNREACHED {
+        for (column, count, groups) in [(1, transitions, g1), (2, passes, g2), (3, faults, g3)] {
+            let sum: usize = groups.iter().map(|(_, n)| n).sum();
+            if sum != count {
+                failed.push(format!("{name}: die Gruppen der Spalte {column} zaehlen {sum}, die Spalte {count}"));
             }
-            if *n == 0 || groups.iter().filter(|(g, _)| g == group).count() > 1 {
-                failed.push(format!("{name}: `{group}` ohne Stelle oder doppelt"));
+            for (group, n) in groups {
+                if !GROUPS.iter().any(|(g, _)| g == group) {
+                    failed.push(format!("{name}: `{group}` ist keine Gruppe aus `GROUPS`"));
+                }
+                if *n == 0 || groups.iter().filter(|(g, _)| g == group).count() > 1 {
+                    failed.push(format!("{name}, Spalte {column}: `{group}` ohne Stelle oder doppelt"));
+                }
             }
         }
     }
     for (group, _) in GROUPS {
-        if !UNREACHED.iter().any(|row| row.7.iter().any(|(g, _)| g == group)) {
+        let used = |row: &Unreached| [row.7, row.8, row.9].iter().any(|gs| gs.iter().any(|(g, _)| g == group));
+        if !UNREACHED.iter().any(used) {
             failed.push(format!("`{group}` kommt in keiner Zeile vor"));
         }
     }
@@ -611,7 +638,7 @@ fn compare_program(clang: &takt_llvm::toolchain::Clang, name: &'static str, mode
     let allowed = UNREACHED
         .iter()
         .find(|(n, ..)| *n == name)
-        .map_or([0; 6], |&(_, t, ps, f, proven, message, observe, _)| [t, ps, f, proven, message, observe]);
+        .map_or([0; 6], |&(_, t, ps, f, proven, message, observe, ..)| [t, ps, f, proven, message, observe]);
     if counts != allowed {
         let list: Vec<String> = [
             "Uebergang",
