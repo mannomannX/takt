@@ -142,7 +142,11 @@ fn generate(name: &str, src: &str, p: &Program, solver: &Solver) -> Result<Found
         for r in takt_prove::classify_transitions(model, p, &open, DEPTH, solver, TIMEOUT_S)? {
             match r.verdict {
                 CheckVerdict::Reachable { at, stimulus } => {
-                    let label = label("uebergang", &r.key);
+                    // Teilen Instanzen einen offenen Uebergang, nennt das Label
+                    // die Maschine; sonst traegt nur eine ihren Pfad.
+                    let shared = open.iter().filter(|(_, k)| *k == r.key).count() > 1;
+                    let tail = if shared { format!("{} {}", r.machine, r.key) } else { r.key.clone() };
+                    let label = label("uebergang", &tail);
                     let target = Target::Transition { machine: r.machine, key: r.key, at };
                     found.push(Path { label, target, stimulus, ticks: ticks.max(at + 2) });
                 }
