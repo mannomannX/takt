@@ -52,7 +52,6 @@
 pub mod alarm;
 pub mod clock;
 pub mod console;
-pub mod counter;
 pub mod cycles;
 pub mod edge_probe;
 pub mod fifo;
@@ -66,7 +65,6 @@ pub mod watchdog;
 pub mod wire;
 
 pub use clock::{PeriodError, counts_for, ns_per_count, prescaler_for, whole_micros};
-pub use counter::Counter64;
 pub use cycles::Measurement;
 pub use fifo::ByteFifo;
 

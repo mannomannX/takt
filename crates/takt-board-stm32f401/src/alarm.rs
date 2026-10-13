@@ -6,7 +6,9 @@
 //! TIM2 gehoert in dieser Form dem Alarm: Die ISR des Boards ruft
 //! [`on_interrupt`], und ist die Frist erreicht, rechnet sie den Schritt.
 //! Den Job-Interrupt waehlt das Bring-up: eine freie Leitung niedrigster
-//! Prioritaet, die nur von Hand ansteht.
+//! Prioritaet, die nur von Hand ansteht. Der eigene Kern nutzt dieselbe
+//! Zeitachse und stellt den Alarm als Wecker auf jede Tickgrenze
+//! ([`crate::tick`], FB-742).
 
 use core::cell::Cell;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -33,8 +35,10 @@ pub(crate) fn start(rcc: &stm32f4::stm32f401::RCC, tim2: &TIM2, prescaler: u16) 
     tim2.psc().write(|w| unsafe { w.psc().bits(prescaler) });
     // SAFETY: `ARR` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
     tim2.arr().write(|w| unsafe { w.bits(u32::MAX) });
-    // Uebernehmen und das dabei gesetzte `UIF` wieder loeschen, wie beim
-    // periodischen Tick (`start_tim2`): Der erste Ueberlauf kommt vom Zaehler.
+    // Uebernehmen und das dabei gesetzte `UIF` wieder loeschen: `UG` erzeugt
+    // dasselbe Ereignis wie ein Ueberlauf, und bliebe es stehen, zaehlte die
+    // erste ISR eine Epoche, die es nie gab. Der erste Ueberlauf kommt vom
+    // Zaehler.
     tim2.egr().write(|w| w.ug().set_bit());
     // SAFETY: `SR` ist `rc_w0`; Nullen loeschen jedes Flag.
     tim2.sr().write(|w| unsafe { w.bits(0) });
