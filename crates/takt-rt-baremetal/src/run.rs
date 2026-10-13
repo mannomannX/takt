@@ -70,12 +70,12 @@ pub struct JournalStats {
 /// Woher die Senke eines Laufs ihre Leitung holt, je Aufruf (12.5): eine
 /// Funktion ueber dem `static` eines Bring-ups oder der Griff des SDK auf
 /// die Senke seines Kerns (12.11).
-pub trait Lead<P: Port> {
+pub trait Lead<P: Port + 'static> {
     /// Die Leitung, wenn sie gebunden ist; der Griff endet vor dem naechsten.
     fn lead(&mut self) -> Option<&'static mut Telemetry<P>>;
 }
 
-impl<P: Port, F: FnMut() -> Option<&'static mut Telemetry<P>>> Lead<P> for F {
+impl<P: Port + 'static, F: FnMut() -> Option<&'static mut Telemetry<P>>> Lead<P> for F {
     fn lead(&mut self) -> Option<&'static mut Telemetry<P>> {
         self()
     }
