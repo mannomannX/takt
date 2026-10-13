@@ -32,16 +32,13 @@ static void kick(void *ctx) {
     ARG_UNUSED(ctx);
 }
 
-/* Das Geraet des Journals (5.9): zwei Slots im Flash, in der Partition
- * `takt_journal` des Devicetree (`ports/zephyr-nvm`, FB-732). Ein Bau mit
- * `TAKT_FRESH_JOURNAL` loescht sie vor dem Lauf: Die Portpruefung vergleicht
- * mit dem Interpreter ohne gespeicherte Werte; ohne ueberlebt `persist`
- * einen Neustart. */
-static struct takt_zephyr_nvm journal;
-
-/* Oeffnet das Journal und loescht es, wenn der Bau ein frisches verlangt;
- * 0 oder -errno. */
+/* Oeffnet das Geraet des Journals (5.9): zwei Slots im Flash, in der
+ * Partition `takt_journal` des Devicetree (`ports/zephyr-nvm`, FB-732). Ein
+ * Bau mit `TAKT_FRESH_JOURNAL` loescht sie vor dem Lauf: Die Portpruefung
+ * vergleicht mit dem Interpreter ohne gespeicherte Werte; ohne ueberlebt
+ * `persist` einen Neustart. 0 oder -errno. */
 static int journal_open(struct takt_nvm *nvm) {
+    static struct takt_zephyr_nvm journal;
     int rc = takt_zephyr_nvm_open(&journal, PARTITION_ID(takt_journal), PORT_TEST_NVM_BLOCKING_NS, nvm);
     if ((rc == 0) && (TAKT_FRESH_JOURNAL != 0)) {
         rc = takt_zephyr_nvm_clear(&journal);
@@ -49,13 +46,10 @@ static int journal_open(struct takt_nvm *nvm) {
     return rc;
 }
 
-/* Die Stacks beider Faeden, Kernel-Stacks fuer Supervisor-Faeden
- * (`ports/zephyr/takt_os_types.h`): die Schranke des Programms und darueber
- * Luft, damit eine tiefere Messung im Urteil steht, statt dass der
- * Stackwaechter sie als Fault meldet (12.3). */
+/* Luft ueber der Schranke des Programms in jedem Stack, damit eine tiefere
+ * Messung im Urteil steht, statt dass der Stackwaechter sie als Fault
+ * meldet (12.3). */
 #define STACK_SLACK 1024U
-K_KERNEL_STACK_DEFINE(tick_stack, PORT_TEST_TICK_STACK_BYTES + STACK_SLACK);
-K_KERNEL_STACK_DEFINE(job_stack, PORT_TEST_JOB_STACK_BYTES + STACK_SLACK);
 
 /* Die Arena in ihrer Partition (12.11): `init` beschreibt sie ganz, darum
  * im Abschnitt ohne Anfangswerte. */
@@ -80,6 +74,9 @@ static const char *protection(void) {
  * gibt `main` es sofort ab. Startet der Port nicht oder misst er die Stacks
  * nicht, steht die Bilanz trotzdem da, und das Urteil nennt, was fehlt. */
 static void drive(takt_core *core) {
+    /* Kernel-Stacks fuer Supervisor-Faeden (`ports/zephyr/takt_os_types.h`). */
+    static K_KERNEL_STACK_DEFINE(tick_stack, PORT_TEST_TICK_STACK_BYTES + STACK_SLACK);
+    static K_KERNEL_STACK_DEFINE(job_stack, PORT_TEST_JOB_STACK_BYTES + STACK_SLACK);
     static struct takt_rtos rtos;
     const struct takt_rtos_config config = {
         .ticks = TICKS,

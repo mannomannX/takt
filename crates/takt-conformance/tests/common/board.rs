@@ -766,26 +766,20 @@ fn header_has(text: &str, lines: &[&str]) -> Vec<String> {
 /// [`takt_conformance::zephyr`]), gebaut mit dem Werkzeug, mit dem der Harness
 /// die Bring-ups baut (`<target>/release/takt`), unter
 /// `<target>/takt-zephyr/<board>-<example>[-fresh]`; mit `fresh` loescht das
-/// Abbild sein Journal vor dem Lauf. Zephyr und sein SDK liegen ausserhalb
-/// des Baums: Im Lauf, der nur baut, ohne `TAKT_WEST` (der Runner von
-/// GitHub), baut erst der Lauf am Board, und der Test endet dort.
+/// Abbild sein Journal vor dem Lauf. Ein Abbild aus dem Zwischenspeicher
+/// ([`takt_conformance::zephyr::image`]) braucht kein Zephyr: So faehrt der
+/// Rechner am Board die Abbilder aus CI (`tools/board-run.ps1 -FromCi`).
 pub fn zephyr_image(
     name: &str,
     example: &str,
     zephyr: takt_conformance::zephyr::Board,
     fresh: bool,
 ) -> Result<takt_conformance::zephyr::Image, String> {
-    let Some(west) = takt_conformance::zephyr::west() else {
-        return Err(if board::build_only() {
-            format!("Zephyr-Abbilder baut der Lauf am Board: {}", board::BUILT_ONLY)
-        } else {
-            "TAKT_WEST nennt kein west (Zephyr aus D:\\takt-tools, activate.ps1)".to_string()
-        });
-    };
     let target = takt_conformance::target_dir();
     let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
     let dir = target.join("takt-zephyr").join(format!("{name}-{example}{}", if fresh { "-fresh" } else { "" }));
-    takt_conformance::zephyr::build(&west, example, zephyr, fresh, &dir, &tool)
+    let west = takt_conformance::zephyr::west();
+    takt_conformance::zephyr::image(west.as_deref(), example, zephyr, fresh, &dir, &tool)
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart** (5.9, 12.11; M11

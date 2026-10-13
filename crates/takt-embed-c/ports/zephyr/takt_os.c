@@ -38,7 +38,8 @@ void takt_os_destroy(struct takt_os *os) {
 }
 
 int64_t takt_os_now(struct takt_os *os) {
-    const uint64_t ns = k_ticks_to_ns_floor64((uint64_t)(k_uptime_ticks() - os->origin));
+    const int64_t ticks = k_uptime_ticks() - os->origin;
+    const uint64_t ns = k_ticks_to_ns_floor64((uint64_t)ticks);
     return (ns > (uint64_t)INT64_MAX) ? INT64_MAX : (int64_t)ns;
 }
 

@@ -6,7 +6,8 @@
 
 /* Der Beginn des Slots `slot` in der Partition. */
 static off_t takt_zephyr_nvm_at(const struct takt_zephyr_nvm *dev, uint8_t slot, uint32_t offset) {
-    return (off_t)(((uint32_t)slot * dev->slot_size) + offset);
+    const uint32_t at = ((uint32_t)slot * dev->slot_size) + offset;
+    return (off_t)at;
 }
 
 /* Ob `len` Byte ab `offset` im Slot `slot` liegen. */
@@ -74,6 +75,6 @@ int takt_zephyr_nvm_open(struct takt_zephyr_nvm *dev, uint8_t id, int64_t blocki
     return rc;
 }
 
-int takt_zephyr_nvm_clear(struct takt_zephyr_nvm *dev) {
+int takt_zephyr_nvm_clear(const struct takt_zephyr_nvm *dev) {
     return flash_area_erase(dev->area, 0, (size_t)dev->slot_size * 2U);
 }
