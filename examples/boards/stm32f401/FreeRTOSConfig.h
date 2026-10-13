@@ -47,6 +47,7 @@
 
 #define INCLUDE_vTaskDelete 1
 #define INCLUDE_vTaskSuspend 1
+#define INCLUDE_vTaskDelay 1
 #define INCLUDE_uxTaskGetStackHighWaterMark2 1
 
 #if TAKT_FREERTOS_MPU
