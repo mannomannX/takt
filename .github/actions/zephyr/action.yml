@@ -1,17 +1,16 @@
 name: Zephyr
 description: >-
   Zephyr v4.4.2 mit den Modulen cmsis, cmsis_6, hal_stm32 und hal_espressif,
-  das Zephyr-SDK 1.0.1 mit arm-zephyr-eabi und riscv64-zephyr-elf, west 1.5.0
-  und gperf: dieselben Fassungen wie in D:\takt-tools (M11 Schritt 19,
-  FB-731). Setzt TAKT_WEST, ZEPHYR_BASE, ZEPHYR_SDK_INSTALL_DIR und
+  das Zephyr-SDK 1.0.1 mit arm-zephyr-eabi und riscv64-zephyr-elf, west und
+  gperf: dieselben Fassungen wie in D:\takt-tools (M11 Schritt 19, FB-731).
+  Setzt TAKT_WEST, ZEPHYR_BASE, ZEPHYR_SDK_INSTALL_DIR und
   ZEPHYR_TOOLCHAIN_VARIANT, wie activate.ps1 es dort tut.
 
 # Arbeitsbereich und SDK liegen im Cache, flach geklont und ohne die
 # uebrigen Toolchains des SDK. Die Python-Umgebung nicht: Sie haengt am
-# Python des Runners und entsteht in jedem Lauf neu aus dem Arbeitsbereich.
-# Die Pruefsummen des SDK stehen in seiner `sha256.sum` (sdk-ng v1.0.1);
-# geladen wird nur ueber HTTPS. west und die Pakete, die Zephyr verlangt,
-# kommen ueber HTTPS von PyPI, wie Zephyr sie selbst nennt, ohne Pruefsumme.
+# Python des Runners und entsteht in jedem Lauf neu. Die Pruefsummen des
+# SDK stehen in seiner `sha256.sum` (sdk-ng v1.0.1), die der Python-Pakete
+# in tools/ci/zephyr-requirements.txt (FB-738); geladen wird nur ueber HTTPS.
 
 runs:
   using: composite
@@ -32,11 +31,13 @@ runs:
           ~/zephyr-sdk-1.0.1
         key: zephyr-v4.4.2-sdk-1.0.1-linux-x64-1
 
-    - name: west 1.5.0
+    # west, was der Bau importiert, und esptool fuer den C6: jedes Paket
+    # mit Fassung und Pruefsumme aus der Sperrdatei, auch die mittelbaren.
+    - name: west und die Python-Pakete
       shell: bash
       run: |
         python3 -m venv "$HOME/zephyr-venv"
-        "$HOME/zephyr-venv/bin/pip" install -q west==1.5.0
+        "$HOME/zephyr-venv/bin/pip" install -q --require-hashes -r "$GITHUB_WORKSPACE/tools/ci/zephyr-requirements.txt"
 
     - name: Zephyr v4.4.2 laden
       if: steps.cache.outputs.cache-hit != 'true'
@@ -77,14 +78,9 @@ runs:
         ls "$HOME/zephyr-sdk-1.0.1" "$HOME/zephyr-sdk-1.0.1/gnu"
         du -sh "$HOME/zephyr-sdk-1.0.1"
 
-    # Die Pakete, die Zephyr und hal_espressif verlangen (esptool fuer das
-    # Abbild des C6), wie `west packages pip --install` in D:\takt-tools.
     - name: Zephyr freischalten
       shell: bash
       run: |
-        export ZEPHYR_BASE="$HOME/zephyrproject/zephyr"
-        cd "$HOME/zephyrproject"
-        "$HOME/zephyr-venv/bin/west" packages pip --install
         {
           echo "TAKT_WEST=$HOME/zephyr-venv/bin/west"
           echo "ZEPHYR_BASE=$HOME/zephyrproject/zephyr"
