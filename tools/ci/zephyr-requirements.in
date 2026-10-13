@@ -1,0 +1,20 @@
+# Was der Zephyr-Job (.github/actions/zephyr) wirklich braucht: `west build`
+# fuer examples/zephyr*, nichts zum Flashen, Signieren oder Testen. Aus
+# scripts/requirements-base.txt von Zephyr v4.4.2 die Pakete, die der Bau
+# importiert (west_commands/build.py, zephyr_module.py, list_boards.py,
+# list_hardware.py, snippets.py, edtlib, scripts/build/*), dazu esptool aus
+# hal_espressif (zephyr/requirements.txt) fuer das Abbild des C6.
+#
+# Neu sperren, unter Linux mit Python 3.12 wie auf dem Runner:
+#   cd tools/ci && pip-compile --generate-hashes --strip-extras zephyr-requirements.in
+# Dependabot (pip) haelt die Sperrdatei danach aktuell; sie muss `.txt`
+# heissen, sonst findet er sie nicht.
+
+# west in der Fassung aus D:\takt-tools.
+west==1.5.0
+pyelftools>=0.29
+PyYAML>=6.0
+pykwalify
+jsonschema
+packaging
+esptool>=5.2.0

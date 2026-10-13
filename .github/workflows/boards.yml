@@ -46,6 +46,7 @@ on:
       - "crates/takt-cli/tests/c_analysis.rs"
       - "plan/cert.md"
       - ".github/actions/zephyr/**"
+      - "tools/ci/zephyr-requirements.*"
       - ".github/workflows/boards.yml"
 
   # Der Pull Request eines Merge-Antrags zeigt den Job `zephyr` mit (plan/m11-strands.md,
@@ -63,6 +64,7 @@ on:
       - "crates/takt-cli/tests/c_analysis.rs"
       - "plan/cert.md"
       - ".github/actions/zephyr/**"
+      - "tools/ci/zephyr-requirements.*"
       - ".github/workflows/boards.yml"
 
 permissions:
