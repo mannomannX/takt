@@ -15,7 +15,9 @@
  * des Wirts, gebunden mit `takt_sink_init`. In ihr stehen je Tick die
  * Zeitzeile, die Marke (`takt_sink_mark`) und am Ende die Bilanz
  * (`takt_core_report`), die `takt port-test --judge` liest; davor darf der
- * Wirt einen Kopf schreiben (`takt_trace_text`).
+ * Wirt einen Kopf schreiben (`takt_trace_text`). Die Haken deklariert der
+ * Kopf des Programms (`P.h`), eine Deklaration fuer alle Programme; ein
+ * Haken haengt nichts an, Leerzeichen und Zeilenende schreibt, wer ruft.
  *
  * Der Kern wartet nie und nimmt keinen Heap; `takt_core_service` laeuft nie
  * zweimal zugleich. `ops`, Arena, Treiberobjekt und Senke leben so lange wie
@@ -234,18 +236,6 @@ void takt_sink_flush(takt_sink *sink);
  * davor darf ein Kopf stehen (`takt_trace_text`). Kein Schritt laeuft. */
 void takt_sink_mark(takt_sink *sink);
 
-/* Die Haken des Trace (12.5): Der Rahmen ruft sie mit der Senke seines Kerns,
- * der Wirt fuer seinen Kopf mit seiner Senke. Ein Haken haengt nichts an;
- * Leerzeichen und Zeilenende schreibt, wer ruft. Derselbe Waechter wie im
- * Kopf des Programms (`P.h`). */
-#ifndef TAKT_TRACE_HOOKS
-#define TAKT_TRACE_HOOKS
-void takt_trace_text(void *sink, const char *text);
-void takt_trace_i64(void *sink, long long value);
-void takt_trace_u64(void *sink, unsigned long long value);
-void takt_trace_f64(void *sink, double value);
-void takt_trace_hex8(void *sink, unsigned char value);
-#endif
 
 /* Die Stacks eines Laufs (12.3), wie der Port sie misst: die Tiefe unter
  * Last und die Schranke des Programms (`P_TICK_STACK_BYTES`,

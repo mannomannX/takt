@@ -1457,18 +1457,14 @@ mod tests {
         assert_eq!(define("TAKT_SDK_ABI"), i64::from(ABI));
         // Jeder Einstieg des Archivs steht im Kopf: Einen, den er nicht
         // deklariert, kann kein C-Wirt rufen. Die Haken `takt_trace_*`
-        // deklariert er wie der Kopf des Programms (`P.h`), hinter demselben
-        // Waechter.
+        // deklariert der Kopf des Programms (`P.h`), einmal (MISRA 8.5).
         let entries: Vec<&str> = include_str!("lib.rs")
             .lines()
             .filter_map(|l| l.split("extern \"C\" fn ").nth(1)?.split('(').next())
-            .filter(|name| {
-                ["takt_core_", "takt_sink_", "takt_trace_", "takt_foreign_"].iter().any(|p| name.starts_with(p))
-            })
+            .filter(|name| ["takt_core_", "takt_sink_", "takt_foreign_"].iter().any(|p| name.starts_with(p)))
             .collect();
-        assert!(entries.contains(&"takt_core_hardware_fault"), "{entries:?}");
-        assert!(entries.contains(&"takt_sink_init") && entries.contains(&"takt_trace_hex8"), "{entries:?}");
-        assert!(HEADER.contains("#ifndef TAKT_TRACE_HOOKS"), "derselbe Waechter wie in `P.h`");
+        assert!(entries.contains(&"takt_core_hardware_fault") && entries.contains(&"takt_sink_init"), "{entries:?}");
+        assert!(!HEADER.contains("void takt_trace_text("), "die Haken deklariert `P.h`");
         for name in entries {
             assert!(HEADER.contains(&format!(" {name}(")), "`{name}` fehlt im Kopf");
         }
