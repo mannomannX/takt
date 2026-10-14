@@ -16,15 +16,13 @@
 //!
 //! **Was ein Haken schreibt.** Genau das Stueck, ohne Trenner: Leerzeichen
 //! und Zeilenende schreibt der Rahmen selbst (`grammar/trace.md` T1,
-//! FB-690). Eine Fliesskommazahl steht in der kuerzesten Ziffernfolge, die
-//! beim Zuruecklesen denselben Wert ergibt (4.2), ein Byte als `0x` und zwei
-//! Ziffern. Ganzzahlen und Bytes gehen ohne `core::fmt` ueber
+//! FB-690). Eine Fliesskommazahl steht in der Textform aus T2, wie der
+//! Interpreter sie schreibt (FB-750), ein Byte als `0x` und zwei Ziffern. Ganzzahlen und Bytes gehen ohne `core::fmt` ueber
 //! `takt_rt_core::digits`, wie auf der Leitung der Boards.
 
 #![allow(unsafe_code, reason = "die Haken des Rahmens als C-Funktionen (12.5); 9.5 fuehrt sie in der TCB")]
 
 use core::ffi::{CStr, c_char, c_void};
-use core::fmt::Write as _;
 
 use takt_rt_core::digits;
 
@@ -121,7 +119,8 @@ pub unsafe fn unsigned<L: Line>(sink: *mut c_void, value: u64) {
     }
 }
 
-/// Eine Fliesskommazahl als kuerzeste eindeutige Ziffernfolge (4.2), fuer
+/// Eine Fliesskommazahl in der Textform aus T2 (4.2, 3.9), wie der
+/// Interpreter sie schreibt (`takt_rt_core::digits::float64`), fuer
 /// `takt_trace_f64`.
 ///
 /// # Safety
@@ -130,7 +129,7 @@ pub unsafe fn unsigned<L: Line>(sink: *mut c_void, value: u64) {
 pub unsafe fn float<L: Line>(sink: *mut c_void, value: f64) {
     // SAFETY: siehe oben.
     if let Some(line) = unsafe { line::<L>(sink) } {
-        let _ = write!(Fmt(line), "{value:?}");
+        let _ = digits::float64(value, &mut Fmt(line));
     }
 }
 
@@ -270,12 +269,16 @@ mod tests {
             text::<Text>(t.ffi(), c", ".as_ptr());
             float::<Text>(t.ffi(), 2.5);
             text::<Text>(t.ffi(), c", ".as_ptr());
+            float::<Text>(t.ffi(), 3.0);
+            text::<Text>(t.ffi(), c", ".as_ptr());
+            float::<Text>(t.ffi(), 1e30);
+            text::<Text>(t.ffi(), c", ".as_ptr());
             byte::<Text>(t.ffi(), 0x0a);
             text::<Text>(t.ffi(), c", ".as_ptr());
             signed::<Text>(t.ffi(), i64::MIN);
             text::<Text>(t.ffi(), c"]\n".as_ptr());
         }
-        assert_eq!(t.text(), "t=-3 out x [18446744073709551615, 2.5, 0x0a, -9223372036854775808]\n");
+        assert_eq!(t.text(), "t=-3 out x [18446744073709551615, 2.5, 3.0, 1.0e30, 0x0a, -9223372036854775808]\n");
     }
 
     /// **Zwei Senken, zwei Traces** (FB-691): Was ein Programm schreibt,

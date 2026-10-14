@@ -464,18 +464,17 @@ fn the_mcu_trace_can_be_compared_with_the_interpreter() {
     // Die Gegenprobe am Vergleich selbst: Eine Zeile in der erzeugten
     // Form muss ankommen, eine ohne `t=` nicht.
     let want = "t=0 out led true\n";
-    assert!(takt_conformance::run::compare(want, "t=0 out led 1\n").is_empty(), "true gegen 1 ist gleich (9.3)");
-    assert!(!takt_conformance::run::compare(want, "t=0 out led 0\n").is_empty(), "true gegen 0 ist ein Unterschied");
-    assert!(!takt_conformance::run::compare(want, "out led 1\n").is_empty(), "eine Zeile ohne `t=` kommt nicht an");
+    assert!(takt_conformance::run::compare(want, "t=0 out led true\n").is_empty(), "dieselbe Zeile");
+    assert!(!takt_conformance::run::compare(want, "t=0 out led 1\n").is_empty(), "true gegen 1 ist eine (T2)");
+    assert!(!takt_conformance::run::compare(want, "out led true\n").is_empty(), "eine Zeile ohne `t=` kommt nicht an");
 }
 
 /// Ein Enum-Ausgang traegt seinen Namen, nicht seine Diskriminante.
 ///
-/// Der Interpreter schreibt den Variantennamen (9.3). `same_number`
-/// vergleicht Zahlen und gliche `CLOSED` gegen `0` nicht aus — der
-/// Unterschied waere einer der Schreibweise, und der Test faende ihn als
-/// Wertunterschied. Der MCU-Rahmen fuehrt dafuer je Enum-Ausgang eine
-/// Tabelle der Varianten mit Diskriminante und Namen.
+/// Der Interpreter schreibt den Variantennamen (9.3), und `compare`
+/// vergleicht Zeichen fuer Zeichen: `CLOSED` gegen `0` waere eine
+/// Abweichung. Der MCU-Rahmen fuehrt dafuer je Enum-Ausgang eine Tabelle
+/// der Varianten mit Diskriminante und Namen.
 #[test]
 fn an_enum_output_carries_its_name() {
     let p = corpus("33_enum_param.takt");
@@ -516,9 +515,9 @@ fn a_record_output_is_in_the_table() {
 /// Der Linker kann sie nicht entfernen, weil der Rahmen sie exportiert.
 ///
 /// Die Bits kosten nichts und sagen mehr. 4.2 verlangt bitgleiche
-/// Ergebnisse ueber alle Targets, und `same_number` vergleicht
-/// Fliesskomma ohnehin bitweise (9.4.4) — eine Multiplikation waere eine
-/// zweite Rundungsquelle unmittelbar vor diesem Vergleich.
+/// Ergebnisse ueber alle Targets, und der Vergleich liest eine Messung
+/// ohnehin als Bitmuster (9.4.4) — eine Multiplikation waere eine zweite
+/// Rundungsquelle unmittelbar vor diesem Vergleich.
 #[test]
 fn the_harness_does_no_floating_point_arithmetic() {
     for name in ["19_faults.takt", "29_heartbeat.takt"] {

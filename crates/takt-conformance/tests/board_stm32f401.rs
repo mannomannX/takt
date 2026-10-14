@@ -62,7 +62,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     assert!(!quiet.contains("takt auf stm32f401"), "zu frueh geweckt:\n{quiet}");
     let second = board.listen(Duration::from_secs(6)).unwrap_or_else(|e| panic!("{e}"));
     assert!(second.contains("takt auf stm32f401"), "kein neuer Lauf nach der Dauer:\n{second}");
-    assert!(second.contains("out woke 1"), "der zweite Lauf beginnt mit `previous_run = ENDED`:\n{second}");
+    assert!(second.contains("out woke true"), "der zweite Lauf beginnt mit `previous_run = ENDED`:\n{second}");
 }
 
 /// **`next_run = NOW` beginnt sofort den naechsten Lauf, und der weiss es**
@@ -82,7 +82,7 @@ fn a_run_ended_now_begins_the_next_at_once() {
     assert!(first.contains("end now"), "der erste Lauf endet mit `next_run`:\n{first}");
     assert!(first.contains("out previous NONE"), "nach dem Flashen kein voriger Lauf:\n{first}");
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
+    assert!(second.contains("out again true"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
     assert!(second.contains("out previous ENDED"), "{second}");
 }
 
@@ -174,7 +174,7 @@ fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     };
     let previous: Vec<String> = runs.iter().filter_map(|r| first(r, "previous")).collect();
     assert_eq!(previous, ["NONE", "WATCHDOG"], "der zweite Lauf weiss vom Watchdog (12.7):\n{text}");
-    assert!(runs.iter().all(|r| r.contains("out rested 1")), "jeder Lauf schlief vor dem Reset:\n{text}");
+    assert!(runs.iter().all(|r| r.contains("out rested true")), "jeder Lauf schlief vor dem Reset:\n{text}");
 }
 
 /// **Das Board kommt ohne Hand zurueck** (FB-275): Zwei Laeufe

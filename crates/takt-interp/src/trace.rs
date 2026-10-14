@@ -688,9 +688,12 @@ pub fn value_text(v: &Value, ty: TypeId, p: &Program) -> String {
 /// Ein `f64` als Text (3.9, T2): die kuerzeste Ziffernfolge, die beim
 /// Zuruecklesen denselben Wert ergibt, immer mit Dezimalpunkt; ab dem
 /// Betrag `1e16` und unter `1e-5` in Exponentform (`1.0e30`, `1.5e-7`), so
-/// dass hoechstens 24 Zeichen entstehen.
+/// dass hoechstens 24 Zeichen entstehen. Dieselbe Stelle schreibt den Trace
+/// des Rahmens (`takt_rt_core::digits`, FB-750).
 pub fn float_text(x: f64) -> String {
-    if exponent_form(x, F64_BIG) { with_point(format!("{x:e}")) } else { with_point(format!("{x}")) }
+    let mut s = String::new();
+    let _ = takt_rt_core::digits::float64(x, &mut s);
+    s
 }
 
 /// Ein `f32` als Text, nach derselben Regel mit der Grenze `1e7` und
@@ -698,36 +701,12 @@ pub fn float_text(x: f64) -> String {
 /// nach f64 zeigte die Ziffern der f64-Darstellung (`0.1f32` wurde
 /// `0.10000000149011612`).
 pub fn float32_text(x: f32) -> String {
-    if exponent_form(f64::from(x), F32_BIG) { with_point(format!("{x:e}")) } else { with_point(format!("{x}")) }
+    let mut s = String::new();
+    let _ = takt_rt_core::digits::float32(x, &mut s);
+    s
 }
 
-/// Ab diesem Betrag waeren die Stellen vor dem Punkt nicht mehr
-/// signifikant (3.9): `f64`.
-pub const F64_BIG: f64 = 1e16;
-/// Dasselbe fuer `f32`.
-pub const F32_BIG: f64 = 1e7;
-
-/// Steht `x` in Exponentform (3.9)? Ab `big` und unter `1e-5`, nie die Null.
-pub fn exponent_form(x: f64, big: f64) -> bool {
-    let a = x.abs();
-    a.is_finite() && (a >= big || (a > 0.0 && a < 1e-5))
-}
-
-/// Rust schreibt einen ganzzahligen Wert und eine ganzzahlige Mantisse ohne
-/// Punkt (`1e30`, `100`); die Textform traegt immer einen (`1.0e30`).
-fn with_point(text: String) -> String {
-    let (mantissa, exponent) = match text.split_once('e') {
-        Some((m, e)) => (m, Some(e)),
-        None => (text.as_str(), None),
-    };
-    if mantissa.contains('.') || !mantissa.trim_start_matches('-').bytes().all(|b| b.is_ascii_digit()) {
-        return text;
-    }
-    match exponent {
-        Some(e) => format!("{mantissa}.0e{e}"),
-        None => format!("{mantissa}.0"),
-    }
-}
+pub use takt_rt_core::digits::{F32_BIG, F64_BIG, exponent_form};
 
 /// Abtastung aus der Textform (T2).
 pub fn sample_from_text(text: &SampleText, ty: TypeId, p: &Program) -> Result<Sample, String> {

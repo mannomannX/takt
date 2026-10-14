@@ -486,18 +486,17 @@ pub unsafe extern "C" fn takt_trace_u64(sink: *mut c_void, value: u64) {
     }
 }
 
-/// Vom Rahmen gerufen: eine Fliesskommazahl als kuerzeste eindeutige
-/// Ziffernfolge (4.2), wie in den Bring-ups.
+/// Vom Rahmen gerufen: eine Fliesskommazahl in der Textform aus T2, wie der
+/// Interpreter sie schreibt (4.2, 3.9, FB-750).
 ///
 /// # Safety
 ///
 /// Wie [`takt_trace_text`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn takt_trace_f64(sink: *mut c_void, value: f64) {
-    use core::fmt::Write as _;
     // SAFETY: siehe oben.
     if let Some(t) = unsafe { telemetry(sink.cast()) } {
-        let _ = write!(t, "{value:?}");
+        let _ = takt_rt_core::digits::float64(value, t);
     }
 }
 

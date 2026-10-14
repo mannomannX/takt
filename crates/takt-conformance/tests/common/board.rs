@@ -133,7 +133,7 @@ pub fn driver_edge_agrees(board: &mut dyn Board) -> Vec<String> {
         failed.push(format!("Interpreter: `failing` steht in Tick 1 nicht in FAULTED:\n{interpreted}"));
     }
     // FAULTED setzt den Ausgang auf `safe` (5.3), im selben Tick.
-    if !text.lines().any(|l| l.trim_end() == "t=1 out f 0") {
+    if !text.lines().any(|l| l.trim_end() == "t=1 out f false") {
         failed.push(format!("{}: `f` geht in Tick 1 nicht auf `safe`:\n{text}", board.name()));
     }
     eprintln!("{} Treiberrand: {} Abweichungen", board.name(), failed.len());
@@ -397,7 +397,7 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
     let mut failed = Vec::new();
     match run(&program, Options::fresh(20).with_hardware(hardware.clone())) {
         Ok(with) => {
-            if !with.lines().any(|l| l.contains("out probe 1")) {
+            if !with.lines().any(|l| l.contains("out probe true")) {
                 failed.push(format!("1 ms voraus geht nicht durch:\n{with}"));
             }
             if !with.lines().any(|l| l.contains("fault m") && l.contains("Timing")) {
@@ -412,8 +412,8 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
         }
         // Beide geplanten Ausgaben kommen an: erst die Eins, dann die Null.
         Ok(without) => {
-            let one = without.lines().position(|l| l.contains("out probe 1"));
-            let zero = one.and_then(|i| without.lines().skip(i).position(|l| l.contains("out probe 0")));
+            let one = without.lines().position(|l| l.contains("out probe true"));
+            let zero = one.and_then(|i| without.lines().skip(i).position(|l| l.contains("out probe false")));
             if zero.is_none() {
                 failed.push(format!("ohne `guard` fehlen `out probe 1` und danach `out probe 0`:\n{without}"));
             }
@@ -450,8 +450,8 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
         (Some(k), [fault]) if tick_of(fault) == Some(k) && fault.contains("Timing") => {}
         _ => failed.push(format!("`at now + {guard} ns` faultet nicht im Tick des Eintritts in EDGE:\n{text}")),
     }
-    let one = text.lines().position(|l| l.contains("out probe 1"));
-    if one.and_then(|i| text.lines().skip(i).position(|l| l.contains("out probe 0"))).is_none() {
+    let one = text.lines().position(|l| l.contains("out probe true"));
+    if one.and_then(|i| text.lines().skip(i).position(|l| l.contains("out probe false"))).is_none() {
         failed.push(format!("`at now + {} ns` geht nicht durch:\n{text}", guard + 1));
     }
     if !text.contains(&format!("out spread {spread} ns")) {

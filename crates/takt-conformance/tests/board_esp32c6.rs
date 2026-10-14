@@ -82,7 +82,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let previous = board.word_over_jtag(&elf, |n| n.contains("PREVIOUS_RUN")).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(previous, 1, "der zweite Lauf beginnt mit `previous_run = ENDED` (12.7)");
     let heard = board.listen(Duration::from_secs(3)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(heard.contains("out woke 1"), "die Konsole schweigt nach dem Wecken (FB-311):\n{heard}");
+    assert!(heard.contains("out woke true"), "die Konsole schweigt nach dem Wecken (FB-311):\n{heard}");
 }
 
 /// **`next_run = NOW` beginnt sofort den naechsten Lauf, und der weiss es**
@@ -105,7 +105,7 @@ fn a_run_ended_now_begins_the_next_at_once() {
     assert!(first.contains("end now"), "der erste Lauf endet mit `next_run`:\n{first}");
     assert!(first.contains("out previous NONE"), "nach dem Flashen kein voriger Lauf:\n{first}");
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
+    assert!(second.contains("out again true"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
     assert!(second.contains("out previous ENDED"), "{second}");
 }
 
@@ -155,7 +155,7 @@ fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     };
     let previous: Vec<String> = runs.iter().filter_map(|r| first(r, "previous")).collect();
     assert_eq!(previous, ["NONE", "WATCHDOG"], "der zweite Lauf weiss vom Watchdog (12.7):\n{text}");
-    assert!(runs.iter().all(|r| r.contains("out rested 1")), "jeder Lauf schlief vor dem Reset:\n{text}");
+    assert!(runs.iter().all(|r| r.contains("out rested true")), "jeder Lauf schlief vor dem Reset:\n{text}");
 }
 
 /// **`guard` aus der Konfiguration wirkt auf dem Board** (7.5, FB-331):
@@ -274,7 +274,7 @@ fn a_board_input_reaches_the_process_image() {
     };
 
     // Der Taster ist ungedrueckt: `led` bleibt aus, `pressed` bei null.
-    assert_eq!(last_output(&text, "led").as_deref(), Some("0"), "{text}");
+    assert_eq!(last_output(&text, "led").as_deref(), Some("false"), "{text}");
     assert_eq!(last_output(&text, "pressed").as_deref(), Some("0"), "{text}");
 
     // Und das ist die Aussage: Waere der Treiber nicht gerufen worden,

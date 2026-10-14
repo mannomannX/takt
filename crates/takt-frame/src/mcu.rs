@@ -582,9 +582,9 @@ fn runtime_abi(t: &mut Text, p: &Program, x: &Prefix) {
     // 4866 Byte — fuer eine Funktion, die das Programm nie rief (FB-143).
     //
     // Die Bits kosten nichts und sagen mehr: 4.2 verlangt bitgleiche
-    // Ergebnisse ueber alle Targets, und `same_number` vergleicht
-    // Fliesskomma ohnehin bitweise (9.4.4). Eine Multiplikation waere eine
-    // zweite Rundungsquelle vor genau diesem Vergleich.
+    // Ergebnisse ueber alle Targets, und der Vergleich liest eine Messung
+    // ohnehin als Bitmuster (9.4.4). Eine Multiplikation waere eine zweite
+    // Rundungsquelle vor genau diesem Vergleich.
     //
     // `memcpy` statt eines Zeiger-Casts: Ein `*(long long *)&v` waere ein
     // Verstoss gegen die Aliasing-Regeln von C, und ein Compiler darf ihn
@@ -1425,7 +1425,7 @@ fn telemetry(
     let _ = writeln!(s, "struct takt_variant;");
     let _ = writeln!(
         s,
-        "struct takt_field {{ const struct takt_variant *names; unsigned short off; unsigned char kind; unsigned int n; }};"
+        "struct takt_field {{ const struct takt_variant *names; unsigned short off; unsigned char kind; unsigned int n; const char *unit; }};"
     );
     let _ = writeln!(
         s,
@@ -1433,7 +1433,7 @@ fn telemetry(
     );
     let _ = writeln!(
         s,
-        "struct takt_out {{ const char *name; const struct takt_variant *variants; unsigned short off, size, count; unsigned char kind, n_variants; }};"
+        "struct takt_out {{ const char *name; const struct takt_variant *variants; unsigned short off, size, count; unsigned char kind, n_variants; const char *unit; }};"
     );
     let mut rows = Vec::new();
     let mut kinds: Vec<u8> = Vec::new();
@@ -1444,20 +1444,17 @@ fn telemetry(
             t => (t, 0),
         };
         let payload = payload_variants(p, &slot.name);
+        // Der Typ eines Werts: der des Ausgangs, bei einem Feld der seines Elements.
+        let value_ty = p.channels.iter().find(|c| c.name == slot.name).map(|c| match p.types.get(c.ty) {
+            takt_mir::types::Type::Array { elem, .. } => *elem,
+            _ => c.ty,
+        });
         // FB-312: Ein Record ist eine Variante mit seinem Namen; `takt_load`
         // liefert fuer seine Art null und trifft sie.
-        let record = p
-            .channels
-            .iter()
-            .find(|c| c.name == slot.name)
-            .map(|c| match p.types.get(c.ty) {
-                takt_mir::types::Type::Array { elem, .. } => *elem,
-                _ => c.ty,
-            })
-            .and_then(|ty| record_variant(s, p, ty, elem, &mut named, &mut kinds));
+        let record = value_ty.and_then(|ty| record_variant(s, p, ty, elem, &mut named, &mut kinds));
         if let Some(table) = record {
             rows.push(format!(
-                "    {{ \"{}\", {table}, {}, {}, {count}, {RECORD}, 1 }},",
+                "    {{ \"{}\", {table}, {}, {}, {count}, {RECORD}, 1, NULL }},",
                 slot.name, slot.offset, slot.size
             ));
             continue;
@@ -1467,7 +1464,15 @@ fn telemetry(
             .iter()
             .find(|c| c.name == slot.name)
             .is_some_and(|c| matches!(p.types.get(c.ty), takt_mir::types::Type::Duration { .. }));
-        let kind = if duration { Some(DURATION) } else { value_kind(elem, slot.signed) };
+        // T2: ein Wahrheitswert als `true`/`false`, nicht als Zahl (FB-750).
+        let boolean = value_ty.is_some_and(|ty| matches!(p.types.get(ty), takt_mir::types::Type::Bool));
+        let kind = if duration {
+            Some(DURATION)
+        } else if boolean {
+            Some(BOOL)
+        } else {
+            value_kind(elem, slot.signed)
+        };
         let Some(kind) = kind.or(payload.as_ref().map(|_| 4)) else { continue };
         kinds.push(kind);
         let variants = enum_variants(p, &slot.name).unwrap_or_default();
@@ -1479,7 +1484,7 @@ fn telemetry(
                 let mut fptr = "0".to_string();
                 if !fields.is_empty() {
                     let mut items = Vec::with_capacity(fields.len());
-                    for (k, (kind, names)) in fields.iter().enumerate() {
+                    for (k, (kind, names, unit)) in fields.iter().enumerate() {
                         kinds.push(*kind);
                         let table = match names {
                             Some((enum_name, table)) => {
@@ -1495,7 +1500,7 @@ fn telemetry(
                         };
                         let n_names = names.as_ref().map_or(0, |(_, t)| t.matches("{ ").count());
                         // Die Nutzlast liegt in Worten zu acht Byte hinter der Diskriminante.
-                        items.push(format!("{{ {table}, {}, {kind}, {n_names} }}", 8 + 8 * k));
+                        items.push(format!("{{ {table}, {}, {kind}, {n_names}, {unit} }}", 8 + 8 * k));
                     }
                     let _ =
                         writeln!(s, "static const struct takt_field g_out{i}_v{j}_f[] = {{ {} }};", items.join(", "));
@@ -1507,18 +1512,19 @@ fn telemetry(
             vptr = format!("g_out{i}_v");
         }
         rows.push(format!(
-            "    {{ \"{}\", {vptr}, {}, {}, {count}, {kind}, {} }},",
+            "    {{ \"{}\", {vptr}, {}, {}, {count}, {kind}, {}, {} }},",
             slot.name,
             slot.offset,
             slot.size,
-            variants.len()
+            variants.len(),
+            value_ty.map_or_else(|| "NULL".to_string(), |ty| unit_c(p, ty))
         ));
     }
     kinds.sort_unstable();
     kinds.dedup();
     let n = rows.len();
     if rows.is_empty() {
-        rows.push("    { \"\", 0, 0, 0, 0, 0, 0 },".to_string());
+        rows.push("    { \"\", 0, 0, 0, 0, 0, 0, NULL },".to_string());
     }
     let _ = writeln!(s, "static const struct takt_out g_outs[] = {{\n{}\n}};", rows.join("\n"));
     let bytes = kinds.contains(&BYTES);
@@ -1553,6 +1559,13 @@ fn telemetry(
         let _ = writeln!(s, "    takt_trace_text(sink, \"]\");");
         let _ = writeln!(s, "}}");
     }
+    // T2: eine Groesse mit ihrer Einheit, wie `value_text` im Interpreter (FB-750).
+    let _ = writeln!(s, "static void takt_dump_unit(void *sink, const char *unit) {{");
+    let _ = writeln!(s, "    if (unit != NULL) {{");
+    let _ = writeln!(s, "        takt_trace_text(sink, \" \");");
+    let _ = writeln!(s, "        takt_trace_text(sink, unit);");
+    let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "}}");
     let _ =
         writeln!(s, "static void takt_dump_fields(void *sink, const struct takt_variant *x, const unsigned char *at);");
     let _ =
@@ -1590,6 +1603,7 @@ fn telemetry(
     let _ = writeln!(s, "    else if (f->kind == {DURATION}) {{ takt_dur_trace(sink, v); }}");
     let _ = writeln!(s, "    else if (f->kind & 0x40) takt_trace_u64(sink, (unsigned long long)v);");
     let _ = writeln!(s, "    else takt_trace_i64(sink, v);");
+    let _ = writeln!(s, "    takt_dump_unit(sink, f->unit);");
     let _ = writeln!(s, "}}");
     // `Name(f1, f2)` wie `value_text` im Interpreter (9.3).
     let _ = writeln!(
@@ -1621,7 +1635,7 @@ fn telemetry(
         let ct = kind_c_type(*kind);
         let _ = writeln!(
             s,
-            "    if (o->kind == {kind}) {{ {ct} x; __builtin_memcpy(&x, v, sizeof x); takt_trace_f64(sink, (double)x); return; }}"
+            "    if (o->kind == {kind}) {{ {ct} x; __builtin_memcpy(&x, v, sizeof x); takt_trace_f64(sink, (double)x); takt_dump_unit(sink, o->unit); return; }}"
         );
     }
     if kinds.contains(&DURATION) {
@@ -1631,8 +1645,15 @@ fn telemetry(
         let _ = writeln!(s, "        return;");
         let _ = writeln!(s, "    }}");
     }
+    if kinds.contains(&BOOL) {
+        let _ = writeln!(s, "    if (o->kind == {BOOL}) {{");
+        let _ = writeln!(s, "        takt_trace_text(sink, (takt_load(o->kind, v) != 0) ? \"true\" : \"false\");");
+        let _ = writeln!(s, "        return;");
+        let _ = writeln!(s, "    }}");
+    }
     let _ = writeln!(s, "    if (o->kind & 0x40) takt_trace_u64(sink, (unsigned long long)takt_load(o->kind, v));");
     let _ = writeln!(s, "    else takt_trace_i64(sink, takt_load(o->kind, v));");
+    let _ = writeln!(s, "    takt_dump_unit(sink, o->unit);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static void takt_dump(struct {x}_arena *a, int32_t all) {{");
     let _ = writeln!(s, "    for (unsigned i = 0; i < {n}; i++) {{");
@@ -1718,9 +1739,8 @@ const BYTES: u8 = 0x12;
 /// Feld; dessen Versatz ist der Abstand der Elemente, `n` ist `N`.
 const ARRAY: u8 = 0x13;
 
-/// Ein Wahrheitswert als Feld: ein Byte, geschrieben als `true`/`false`
-/// wie im Interpreter. Als Ausgang bleibt er `0x41` und erscheint als
-/// Zahl, die `compare` gleich liest.
+/// Ein Wahrheitswert: ein Byte, geschrieben als `true`/`false` wie im
+/// Interpreter, als Feld wie als Ausgang (T2, FB-750).
 const BOOL: u8 = 0x11;
 
 /// Die Art eines Werts in der Ausgabetabelle: Breite in Bytes, `0x40`
@@ -1756,7 +1776,7 @@ fn kind_c_type(kind: u8) -> &'static str {
 /// Die Felder je Variante eines Enum-Ausgangs mit Nutzlast: Art wie
 /// [`value_kind`], bei einem Enum-Feld dazu Name und Tabelle seiner Namen.
 #[allow(clippy::type_complexity)]
-fn payload_variants(p: &Program, name: &str) -> Option<Vec<Vec<(u8, Option<(String, String)>)>>> {
+fn payload_variants(p: &Program, name: &str) -> Option<Vec<Vec<(u8, Option<(String, String)>, String)>>> {
     use takt_mir::types::Type;
     let c = p.channels.iter().find(|c| c.name == name)?;
     let Type::Enum(e) = p.types.get(c.ty) else { return None };
@@ -1779,12 +1799,12 @@ fn payload_variants(p: &Program, name: &str) -> Option<Vec<Vec<(u8, Option<(Stri
                         .iter()
                         .map(|w| format!("{{ {}LL, \"{}\", 0, 0 }}", w.discriminant, w.name))
                         .collect();
-                    fields.push((4u8, Some((def.name.clone(), table.join(", ")))));
+                    fields.push((4u8, Some((def.name.clone(), table.join(", "))), "NULL".to_string()));
                     continue;
                 }
                 _ => value_kind(&takt_llvm::ty::lower(f.ty, p)?, signed)?,
             };
-            fields.push((kind, None));
+            fields.push((kind, None, unit_c(p, f.ty)));
         }
         out.push(fields);
     }
@@ -1817,7 +1837,7 @@ fn record_variant(
     for (i, f) in def.fields.iter().enumerate() {
         let (part, off) = (parts.get(i)?, llvm.field_offset(i));
         let (names, kind, n) = field_entry(s, p, f.ty, part, named, kinds)?;
-        items.push(format!("{{ {names}, {off}, {kind}, {n} }}"));
+        items.push(format!("{{ {names}, {off}, {kind}, {n}, {} }}", unit_c(p, f.ty)));
     }
     let _ = writeln!(s, "static const struct takt_field {symbol}_f[] = {{ {} }};", items.join(", "));
     let _ = writeln!(
@@ -1851,8 +1871,9 @@ fn field_entry(
             let symbol = format!("g_arr{}", named.len());
             let _ = writeln!(
                 s,
-                "static const struct takt_field {symbol}_f[] = {{ {{ {names}, {}, {kind}, {n} }} }};",
-                inner.aligned_size()
+                "static const struct takt_field {symbol}_f[] = {{ {{ {names}, {}, {kind}, {n}, {} }} }};",
+                inner.aligned_size(),
+                unit_c(p, *elem)
             );
             let _ = writeln!(s, "static const struct takt_variant {symbol}[] = {{ {{ 0LL, \"\", {symbol}_f, 1 }} }};");
             named.insert(symbol.clone());
@@ -1882,6 +1903,18 @@ fn field_entry(
         kinds.push(entry.1);
     }
     Some(entry)
+}
+
+/// Die Einheit eines Werts als C-Ausdruck, wie der Interpreter sie hinter
+/// die Zahl schreibt (T2, `value_text`): ihr Name oder `NULL`.
+fn unit_c(p: &Program, ty: takt_mir::TypeId) -> String {
+    use takt_mir::types::Type;
+    match p.types.get(ty) {
+        Type::Float { unit: Some(u), .. } | Type::Int { unit: Some(u), .. } => {
+            p.units.get(u.index()).map_or_else(|| "NULL".to_string(), |u| format!("\"{}\"", u.name))
+        }
+        _ => "NULL".to_string(),
+    }
 }
 
 /// Die Varianten eines Enum-Ausgangs mit ihren Diskriminanten.

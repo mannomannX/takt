@@ -148,7 +148,7 @@ fn an_overlong_line_arrives_truncated_like_in_the_interpreter() {
         4,
     );
     assert!(trace.contains("out len 16"), "auf sechzehn gekuerzt:\n{trace}");
-    assert!(trace.contains("t=1 out cut 1"), "`.truncated` meldet das Kuerzen (KON2-028):\n{trace}");
+    assert!(trace.contains("t=1 out cut true"), "`.truncated` meldet das Kuerzen (KON2-028):\n{trace}");
     agrees_with("long_line", "t=1 in rx \"0123456789ABCDEFXXXX\"\n", &trace, 4);
 }
 
@@ -175,8 +175,8 @@ fn the_host_provides_the_sys_inputs_like_a_stimulus() {
             stim.push_str("t=3 in button true\n");
         }
     }
-    assert!(trace.contains("out after_end 1"), "previous_run = ENDED vom Wirt:\n{trace}");
-    assert!(trace.contains("out late 1"), "die Wanduhr vom Wirt:\n{trace}");
+    assert!(trace.contains("out after_end true"), "previous_run = ENDED vom Wirt:\n{trace}");
+    assert!(trace.contains("out late true"), "die Wanduhr vom Wirt:\n{trace}");
     agrees_with("sys_inputs", &stim, &trace, 6);
 }
 
@@ -408,5 +408,5 @@ fn a_driver_that_reports_more_room_than_the_stream_has_breaks_the_contract() {
     );
     let driver: Vec<&str> = trace.lines().filter(|l| l.contains("runtime Driver")).collect();
     assert_eq!(driver, ["t=6 runtime Driver tx"], "{trace}");
-    assert!(trace.contains("t=6 out up 0"), "der Besitzer geht auf DOWN:\n{trace}");
+    assert!(trace.contains("t=6 out up false"), "der Besitzer geht auf DOWN:\n{trace}");
 }
