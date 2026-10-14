@@ -91,7 +91,7 @@ int main(void) {
     struct takt_line line;
     const char *channel = NULL;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
-        takt_board_trace("takt auf zephyr mit pins aus dem devicetree\n");
+        takt_board_trace("takt auf zephyr mit pins aus dem devicetree\n" TAKT_RTOS_PROTECTION "\n");
         clock_line();
         if (wire_zephyr_init(&channel) != 0) {
             /* Die Pins vor dem Kern (8.10): Ein Kanal ohne Pin beginnt nicht. */

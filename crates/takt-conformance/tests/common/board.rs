@@ -8,6 +8,7 @@ use takt_conformance::board::{self, Board, Flaw, Form, Options};
 use takt_conformance::compare;
 use takt_conformance::port;
 use takt_mir::program::Program;
+pub use takt_rt_core::protection::Case;
 
 /// Ticks eines Konformitaetslaufs auf dem Board.
 pub const TICKS: u64 = 60;
@@ -695,27 +696,54 @@ fn port_run(board: &mut dyn Board, form: Form, flaw: Option<Flaw>) -> Result<(po
 
 /// **Der Port besteht die Portpruefung** (12.11, 13.8): Trace gleich dem
 /// Interpreter, FPU-Kontext gesichert, Jobs unterbrechbar, Stacks unter der
-/// Schranke, kein Tick zu spaet, das Journal geschrieben.
-pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
+/// Schranke, kein Tick zu spaet, das Journal geschrieben; und der Kopf nennt
+/// den Speicherschutz `protection`, den dieser Port herstellt (M11 Schritt
+/// 23).
+pub fn the_port_passes(board: &mut dyn Board, form: Form, protection: Case) -> Vec<String> {
     match port_test(board, form, None) {
-        Ok(v) if v.passed() => Vec::new(),
-        Ok(v) => vec![format!("{form:?}: {v}")],
+        Ok(v) => passed_with(&v, &format!("{form:?}"), protection),
         Err(e) => vec![format!("{form:?}: kein Lauf: {e}")],
     }
 }
 
-/// **Der Port besteht die Portpruefung, und der Kopf nennt seinen Schutz**
+/// **Der Port besteht die Portpruefung, und der Kopf belegt seinen Schutz**
 /// (12.3, 12.11, 13.8; M11 Schritt 20b): wie [`the_port_passes`], und vor der
 /// Marke steht jede der Zeilen `lines`, etwa [`PARTITION_REFUSED`] und
 /// [`GUARD_WATCHPOINT`].
-pub fn the_port_passes_with_header(board: &mut dyn Board, form: Form, lines: &[&str]) -> Vec<String> {
+pub fn the_port_passes_with_header(board: &mut dyn Board, form: Form, protection: Case, lines: &[&str]) -> Vec<String> {
     match port_run(board, form, None) {
         Ok((v, text)) => {
-            let mut failed = if v.passed() { Vec::new() } else { vec![format!("{form:?}: {v}")] };
+            let mut failed = passed_with(&v, &format!("{form:?}"), protection);
             failed.extend(header_has(&text, lines));
             failed
         }
         Err(e) => vec![format!("{form:?}: kein Lauf: {e}")],
+    }
+}
+
+/// Das Urteil `v` ueber den Port `label` hat bestanden und nennt den
+/// Speicherschutz `protection` (12.11).
+fn passed_with(v: &port::Verdict, label: &str, protection: Case) -> Vec<String> {
+    let mut failed = if v.passed() { Vec::new() } else { vec![format!("{label}: {v}")] };
+    if v.protection != Some(protection) {
+        let named = v.protection.map_or("?", Case::name);
+        failed.push(format!(
+            "{label}: der Kopf nennt `Schutz: {named}`, verlangt `{}` (12.11)",
+            protection.line().trim()
+        ));
+    }
+    failed
+}
+
+/// Die Kopfzeile `Schutz` des Falls `protection` vor der Marke (12.11): je
+/// Abweichung ein Befund mit den Zeilen `Schutz` des Kopfs.
+pub fn header_names(text: &str, protection: Case) -> Vec<String> {
+    let header = text.rfind(board::MARK).map_or(text, |at| &text[..at]);
+    let seen: Vec<&str> = header.lines().map(str::trim).filter(|l| l.starts_with("Schutz")).collect();
+    if seen.last() == Some(&protection.line().trim()) {
+        Vec::new()
+    } else {
+        vec![format!("vor der Marke nicht `{}`, gesehen {seen:?}", protection.line().trim())]
     }
 }
 
@@ -733,6 +761,7 @@ pub fn a_foreign_write_becomes_runtime_hardware(board: &mut dyn Board) -> Vec<St
         Err(e) => return vec![format!("kein Lauf: {e}")],
     };
     let mut failed = header_has(&text, &[PARTITION_REFUSED]);
+    failed.extend(header_names(&text, Case::Partition));
     let tick = text.lines().find_map(|l| l.strip_prefix("t=")?.strip_suffix(" runtime Hardware"));
     match tick {
         Some(t) if t != "0" => {
@@ -824,14 +853,15 @@ pub fn zephyr_persistence_survives<B: Board>(
 /// **Ein Port unter Zephyr besteht die Portpruefung** (12.11, 13.8; M11
 /// Schritt 19): das Urteil ueber den Lauf `run` von `examples/<example>` auf
 /// dem Board `name`; der Lauf steht unter
-/// `<target>/port-test/<name>-<example>.log`. Mit `partition` verlangt es
-/// dazu die Kopfzeile, mit der die Partition der Arena den Schreibzugriff
-/// eines Fadens im Benutzermodus abwies (M11 Schritt 19b), und mit `clock`
-/// die Kopfzeile der Uhr des Ports (FB-733: `takt uhr counter 1000000 Hz`).
+/// `<target>/port-test/<name>-<example>.log`. Der Kopf nennt den
+/// Speicherschutz `protection` (M11 Schritt 23); unter `Partition` dazu die
+/// Zeile, mit der die Partition der Arena den Schreibzugriff eines Fadens im
+/// Benutzermodus abwies (M11 Schritt 19b). Mit `clock` verlangt es die
+/// Kopfzeile der Uhr des Ports (FB-733: `takt uhr counter 1000000 Hz`).
 pub fn zephyr_verdict(
     name: &str,
     example: &str,
-    partition: bool,
+    protection: Case,
     clock: Option<&str>,
     run: Result<String, String>,
 ) -> Vec<String> {
@@ -845,8 +875,8 @@ pub fn zephyr_verdict(
     }
     let verdict = port::judge(&text, port::PROGRAM);
     eprintln!("{name}-{example}: {}{verdict}", log.display());
-    let mut failed = if verdict.passed() { Vec::new() } else { vec![format!("{example}: {verdict}")] };
-    if partition {
+    let mut failed = passed_with(&verdict, example, protection);
+    if protection == Case::Partition {
         failed.extend(header_has(&text, &[PARTITION_REFUSED]).into_iter().map(|f| format!("{example}: {f}")));
     }
     let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
@@ -1407,7 +1437,8 @@ pub const ZEPHYR_WIRE_TICKS: u64 = 2_000;
 /// (`pub bridge seen`). Steht die Bruecke, sieht jeder Tick den Pegel des
 /// Ticks davor und Tick 0 den `safe`-Wert, auf den `wire_zephyr_init` den
 /// Ausgang stellte; kein Fault, keine Zeile des Treiberrands (12.6), und der
-/// Ausgang wechselt bis zum letzten Tick. Der Lauf steht unter
+/// Ausgang wechselt bis zum letzten Tick. Ohne `CONFIG_USERSPACE` nennt der
+/// Kopf `Schutz: keiner` (M11 Schritt 23). Der Lauf steht unter
 /// `<target>/port-test/<name>-zephyr-gpio.log`.
 pub fn zephyr_wire_follows(name: &str, run: Result<String, String>) -> Vec<String> {
     let text = match run {
@@ -1420,7 +1451,8 @@ pub fn zephyr_wire_follows(name: &str, run: Result<String, String>) -> Vec<Strin
     }
     let trace = text.find(board::MARK).map_or("", |at| &text[at..]);
     let (mut probe, mut seen) = (BTreeMap::new(), BTreeMap::new());
-    let mut failed = Vec::new();
+    let mut failed: Vec<String> =
+        header_names(&text, Case::Unprotected).into_iter().map(|f| format!("zephyr-gpio: {f}")).collect();
     for line in trace.lines().map(str::trim_end) {
         let mut words = line.split_whitespace();
         let Some(tick) = words.next().and_then(|w| w.strip_prefix("t=")).and_then(|k| k.parse::<u64>().ok()) else {

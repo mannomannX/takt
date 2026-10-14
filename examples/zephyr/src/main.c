@@ -134,7 +134,7 @@ int main(void) {
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
-        takt_board_trace("takt auf zephyr\n");
+        takt_board_trace("takt auf zephyr\n" TAKT_RTOS_PROTECTION "\n");
         takt_board_trace(protection());
         clock_line();
         takt_line_mark();
