@@ -1645,15 +1645,17 @@ fn telemetry(
         let _ = writeln!(s, "        return;");
         let _ = writeln!(s, "    }}");
     }
+    let number = "if (o->kind & 0x40) takt_trace_u64(sink, (unsigned long long)takt_load(o->kind, v));\n    \
+                  else takt_trace_i64(sink, takt_load(o->kind, v));\n    takt_dump_unit(sink, o->unit);";
     if kinds.contains(&BOOL) {
-        let _ = writeln!(s, "    if (o->kind == {BOOL}) {{");
+        let _ = writeln!(s, "    if (o->kind == {BOOL}u) {{");
         let _ = writeln!(s, "        takt_trace_text(sink, (takt_load(o->kind, v) != 0) ? \"true\" : \"false\");");
-        let _ = writeln!(s, "        return;");
+        let _ = writeln!(s, "    }} else {{");
+        let _ = writeln!(s, "        {}", number.replace("\n    ", "\n        "));
         let _ = writeln!(s, "    }}");
+    } else {
+        let _ = writeln!(s, "    {number}");
     }
-    let _ = writeln!(s, "    if (o->kind & 0x40) takt_trace_u64(sink, (unsigned long long)takt_load(o->kind, v));");
-    let _ = writeln!(s, "    else takt_trace_i64(sink, takt_load(o->kind, v));");
-    let _ = writeln!(s, "    takt_dump_unit(sink, o->unit);");
     let _ = writeln!(s, "}}");
     let _ = writeln!(s, "static void takt_dump(struct {x}_arena *a, int32_t all) {{");
     let _ = writeln!(s, "    for (unsigned i = 0; i < {n}; i++) {{");
