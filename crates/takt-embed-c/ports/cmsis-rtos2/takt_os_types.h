@@ -38,6 +38,10 @@
 #define TAKT_OS_STEP_PRIORITY ((int)osPriorityRealtime7)
 #define TAKT_OS_JOB_PRIORITY ((int)osPriorityHigh)
 
+/* CMSIS-RTOS2 kennt keine Partitionen; was das System darunter kann, sieht
+ * der Adapter nicht (12.11). */
+#define TAKT_OS_PARTITION 0
+
 /* Ein Faden: seine Kennung, was er ausfuehrt und wie gross sein Stack ist. */
 struct takt_os_thread {
     osThreadId_t id;

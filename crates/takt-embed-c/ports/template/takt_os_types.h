@@ -9,6 +9,10 @@
 
 #include <stdint.h>
 
+/* TODO(port): 1, wenn das System die Arena in einer Partition haelt, die nur
+ * der Schrittfaden beschreibt, aus seiner Konfiguration (12.11); sonst 0. */
+#define TAKT_OS_PARTITION 0
+
 struct takt_os {
     /* TODO(port): der Zaehlerstand der monotonen Uhr bei `takt_os_init`. */
     int64_t origin_ns;
