@@ -4118,6 +4118,10 @@ impl Enc<'_> {
                 out.push(Term::or(vec![faulted.clone().not(), Enc::equal(&now, &safe)]));
             }
         }
+        // 12.7: Wer vor diesem Tick geendet hatte, hat geendet. Ohne das Lemma
+        // finge ein Induktionsschritt in einem Zustand an, der schon vorbei
+        // waere und dessen Ziel darum nichts sagte.
+        out.push(Term::or(vec![pre[OVER].clone().not(), pre[ENDED].clone()]));
         out
     }
 
@@ -4621,11 +4625,15 @@ impl Enc<'_> {
 
     /// Nach dem Ende eines Laufs (12.7) gibt es keinen Tick, an dem die
     /// Eigenschaft gelten muesste; der Tick des Endes zaehlt noch.
+    ///
+    /// Eine Annahme bewacht das Ende nur, wenn das Programm selbst endet:
+    /// Das Ende an der Achse (3.3) erreicht kein Pfad einer Tiefe, und ein
+    /// Induktionsschritt ueber das Ende hinaus braucht nach ihm kein Ziel.
+    /// Bewacht teilte jede Annahme `over` mit jedem Ziel und laege in jedem
+    /// Kegel ([`crate::smt`]).
     fn goal_after_end(&self, prop: &Property, t: Term, state: &Env, position: Position) -> Goal {
-        let formula = match state.get(OVER) {
-            Some(over) => Term::or(vec![over.clone(), t]),
-            None => t,
-        };
+        let guarded = !prop.assumption || self.run_end().is_some();
+        let formula = if guarded { Term::or(vec![state[OVER].clone(), t]) } else { t };
         Goal { name: prop.name.clone(), assumption: prop.assumption, formula, position }
     }
 
