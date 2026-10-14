@@ -923,6 +923,9 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "    a->outer = 0;");
     crate::parts::outer_fault(s, p, "    ");
     crate::parts::enter_machines(s, p, layout, driven, "    ", x);
+    // 5.4: Ein `abort` im Tick 0 erreicht jede andere Maschine in der
+    // Abort-Phase desselben Ticks, nach den Eintritten (FB-751).
+    crate::parts::abort_phase(s, p, layout, driven, "    ", "0", x);
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).
     crate::parts::commit_sequence(s, p, driven, "    ", "0");

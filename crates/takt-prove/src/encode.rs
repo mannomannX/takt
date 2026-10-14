@@ -3901,6 +3901,18 @@ impl Enc<'_> {
         }
         let faults = self.faults_now();
         self.scoped_lifecycle(&mut env, &actives, &faults)?;
+        // 5.4: Ein `abort` im Tick 0 erreicht jede andere Maschine in der
+        // Abort-Phase desselben Ticks, nach den Eintritten (FB-751).
+        if self.scope.is_some() {
+            let foreign = self.input("i.abort.foreign".into(), Sort::Bool);
+            self.aborts.push(foreign);
+        }
+        let raised = Term::or(std::mem::take(&mut self.aborts));
+        if !raised.is_bool(false) {
+            self.abort_phase(&raised, &psi, &actives, &mut env)?;
+            let faults = self.faults_now();
+            self.scoped_lifecycle(&mut env, &actives, &faults)?;
+        }
         self.flush_sends(&mut env)?;
         // Tick 0 aktiviert jede Maschine mit `phase = 0` (7.2).
         let started: BTreeMap<MachineId, Term> =
