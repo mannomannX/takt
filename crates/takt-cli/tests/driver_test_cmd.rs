@@ -193,3 +193,18 @@ fn a_driver_crate_needs_a_directory_with_its_wiring() {
     let stderr = String::from_utf8_lossy(&unwired.stderr);
     assert!(!unwired.status.success() && stderr.contains("keine Verdrahtung `takt-drivers.toml` (12.6)"), "{stderr}");
 }
+
+/// **Die Adapter bestehen `takt driver-test`** (plan/m11.md 2.7, M11
+/// Schritt 22a): ein Pin aus `embedded-hal`, eine Schnittstelle aus
+/// `embedded-io` und der Ring einer ISR, verdrahtet in
+/// `crates/takt-adapter-probe`. Ohne clang uebersprungen.
+#[test]
+fn the_adapters_pass_the_driver_test() {
+    let found = takt_llvm::toolchain::find().path().cloned();
+    let Some(_) = takt_testkit::require("clang", found, "`TAKT_CLANG` setzen oder LLVM installieren") else { return };
+    let program = "crates/takt-adapter-probe/adapters.takt";
+    let out = takt(&["driver-test", "--crate", "crates/takt-adapter-probe", program, "--ticks", "50"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("0 Verstoesse gegen den Treibervertrag"), "{stdout}");
+}

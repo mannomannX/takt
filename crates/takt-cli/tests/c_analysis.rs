@@ -220,7 +220,7 @@ impl Link {
 /// der erzeugten Lieferformen.
 fn part(path: &str, out: &Path) -> &'static str {
     const ZEPHYR: [&str; 4] = ["/ports/zephyr", "/ports/cmsis-rtos2/", "/examples/zephyr/", "/examples/cmsis-rtos2/"];
-    if path.ends_with("/takt_sdk.h") {
+    if path.ends_with("/takt_sdk.h") || path.ends_with("/takt_ring.h") {
         "SDK"
     } else if ZEPHYR.iter().any(|dir| path.contains(dir)) {
         "Zephyr"
@@ -235,11 +235,11 @@ fn part(path: &str, out: &Path) -> &'static str {
     }
 }
 
-/// Ein Befund aus einer Zeile `DATEI:ZEILE:SPALTE: …`; der Kopf des SDK
-/// steht in jeder Lieferform und im Crate, er zaehlt einmal je Stelle.
+/// Ein Befund aus einer Zeile `DATEI:ZEILE:SPALTE: …`; die Koepfe des SDK
+/// stehen in jeder Lieferform und im Crate, sie zaehlen einmal je Stelle.
 fn finding(id: &str, file: &str, line: &str, column: &str, out: &Path) -> Finding {
     let part = part(file, out);
-    let file = if part == "SDK" { "takt_sdk.h" } else { file };
+    let file = if part == "SDK" { file.rsplit(['/', '\\']).next().unwrap_or(file) } else { file };
     Finding { id: id.to_string(), part, at: format!("{file}:{line}:{column}") }
 }
 
@@ -558,6 +558,9 @@ fn deliveries(out: &Path) -> Vec<Link> {
         }
         links.push(link);
     }
+    // Der Ring fuer Stream-Treiber (plan/m11.md 2.7) mit seinem Pruefprogramm.
+    let ring = Link::host(vec![root.join("examples/c-ring/main.c")], vec![root.join("crates/takt-embed-c/include")]);
+    links.push(ring);
     links.extend(freertos(out, "ARM_CM4F", FREERTOS_PLAIN, &[]));
     links.extend(freertos(out, "ARM_CM4_MPU", FREERTOS_MPU, &["freertos_mpu.c"]));
     links.extend(zephyr(out));
