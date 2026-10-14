@@ -69,6 +69,17 @@ static const char *protection(void) {
     return line;
 }
 
+/* Ein Schritt vor dem Lauf scheiterte: Er steht mit seinem Code auf der
+ * Leitung, bevor das Board auf den Host wartet. Ohne `takt_line_flush`
+ * bliebe er im Ring, denn den gibt der Kern erst nach einem Tick ab, und
+ * die Leitung schwiege (FB-757). */
+static void refused(const char *what, int32_t code) {
+    takt_board_trace(what);
+    takt_board_trace_i64(code);
+    takt_board_trace("\n");
+    takt_line_flush();
+}
+
 /* Faehrt den Kern `core` ueber den Port, waehrend `main` die fremde Last
  * rechnet, und schreibt die Bilanz. Verlangt der Host das Board zurueck,
  * gibt `main` es sofort ab. Startet der Port nicht oder misst er die Stacks
@@ -123,14 +134,27 @@ int main(void) {
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
+        int rc;
+        int32_t status;
+        /* Jede Zeile des Kopfs geht gleich an die Leitung: Steht der Start
+         * danach, zeigt sie, wie weit er kam (FB-757). */
         takt_board_trace("takt auf zephyr\n");
+        takt_line_flush();
         takt_board_trace(protection());
         takt_line_mark();
-        if ((journal_open(&nvm) == 0) &&
-            (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
-                                      current, stored, PORT_TEST_PERSIST_BOUND) == TAKT_OK)) {
-            partition_guard(&core);
-            drive(&core);
+        takt_line_flush();
+        rc = journal_open(&nvm);
+        if (rc != 0) {
+            refused("takt journal: nicht offen ", rc);
+        } else {
+            status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog,
+                                              &nvm, current, stored, PORT_TEST_PERSIST_BOUND);
+            if (status != TAKT_OK) {
+                refused("takt kern: nicht bereit ", status);
+            } else {
+                partition_guard(&core);
+                drive(&core);
+            }
         }
     }
     handback_await();

@@ -72,6 +72,17 @@ static void drive(takt_core *core) {
     takt_core_report(core, measured, NULL);
 }
 
+/* Ein Schritt vor dem Lauf scheiterte: Er steht mit seinem Code auf der
+ * Leitung, bevor das Board auf den Host wartet. Ohne `takt_line_flush`
+ * bliebe er im Ring, denn den gibt der Kern erst nach einem Tick ab, und
+ * die Leitung schwiege (FB-757). */
+static void refused(const char *what, int32_t code) {
+    takt_board_trace(what);
+    takt_board_trace_i64(code);
+    takt_board_trace("\n");
+    takt_line_flush();
+}
+
 int main(void) {
     static uint8_t ring[4096];
     static struct wire_arena arena;
@@ -80,15 +91,22 @@ int main(void) {
     struct takt_line line;
     const char *channel = NULL;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
+        int32_t status;
         takt_board_trace("takt auf zephyr mit pins aus dem devicetree\n");
+        takt_line_flush();
         if (wire_zephyr_init(&channel) != 0) {
             /* Die Pins vor dem Kern (8.10): Ein Kanal ohne Pin beginnt nicht. */
             takt_board_trace("takt pins: nicht eingerichtet: ");
             takt_board_trace(channel);
             takt_board_trace("\n");
+            takt_line_flush();
         } else {
             takt_line_mark();
-            if (takt_core_init(&core, &wire_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog) == TAKT_OK) {
+            takt_line_flush();
+            status = takt_core_init(&core, &wire_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
+            if (status != TAKT_OK) {
+                refused("takt kern: nicht bereit ", status);
+            } else {
                 drive(&core);
             }
         }

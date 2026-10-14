@@ -87,6 +87,17 @@ static void drive(takt_core *core) {
     takt_core_report(core, measured, &foreign);
 }
 
+/* Ein Schritt vor dem Lauf scheiterte: Er steht mit seinem Code auf der
+ * Leitung, bevor das Board auf den Host wartet. Ohne `takt_line_flush`
+ * bliebe er im Ring, denn den gibt der Kern erst nach einem Tick ab, und
+ * die Leitung schwiege (FB-757). */
+static void refused(const char *what, int32_t code) {
+    takt_board_trace(what);
+    takt_board_trace_i64(code);
+    takt_board_trace("\n");
+    takt_line_flush();
+}
+
 int main(void) {
     static uint8_t ring[4096];
     static uint8_t current[PORT_TEST_PERSIST_BOUND];
@@ -97,12 +108,23 @@ int main(void) {
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
+        int rc;
+        int32_t status;
+        /* Der Kopf geht gleich an die Leitung (FB-757). */
         takt_board_trace("takt auf zephyr mit cmsis-rtos2\n");
         takt_line_mark();
-        if ((journal_open(&nvm) == 0) &&
-            (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
-                                      current, stored, PORT_TEST_PERSIST_BOUND) == TAKT_OK)) {
-            drive(&core);
+        takt_line_flush();
+        rc = journal_open(&nvm);
+        if (rc != 0) {
+            refused("takt journal: nicht offen ", rc);
+        } else {
+            status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog,
+                                              &nvm, current, stored, PORT_TEST_PERSIST_BOUND);
+            if (status != TAKT_OK) {
+                refused("takt kern: nicht bereit ", status);
+            } else {
+                drive(&core);
+            }
         }
     }
     handback_await();
