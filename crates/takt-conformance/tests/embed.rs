@@ -75,11 +75,13 @@ const AROUND: [&str; 4] = ["13_framing.takt", "28_scheduled.takt", "47_monitors.
 /// `ieee` und aus [`AROUND`] — still, mit Stimulus, mit den erzeugten
 /// Eingaben und auf den Pfaden des Solvers ([`takt_conformance::cases`]) —
 /// laeuft im Produktrahmen mit dem Kern des SDK (M11 Schritt 9) unter einem
-/// eigenen Praefix, mit MXCSR aus [`HOSTILE`] reihum und der Arena vor
-/// `init` mit 0xA5 gefuellt. Nach jedem Aufruf des SDK ist MXCSR wieder der
-/// des Wirts, und der Trace gleicht dem des Interpreters bitgenau: Ein
-/// Einstieg, der die Umgebung des Wirts erbt oder verstellt, oder ein Feld,
-/// das `init` nicht setzt, fiele hier auf. Was im Produkt keinen Weg hat,
+/// eigenen Praefix, mit MXCSR aus [`HOSTILE`] reihum, der Arena vor `init`
+/// mit 0xA5 gefuellt und in zwei Instanzen nebeneinander, jede mit Arena,
+/// Kern, Senke und eigenem Zustand der Testtreiber (FB-691). Nach jedem
+/// Aufruf des SDK ist MXCSR wieder der des Wirts, und der Trace jeder
+/// Instanz gleicht dem des Interpreters bitgenau: Ein Einstieg, der die
+/// Umgebung des Wirts erbt oder verstellt, ein Feld, das `init` nicht setzt,
+/// oder Zustand, den zwei Instanzen teilen, fiele hier auf. Was im Produkt keinen Weg hat,
 /// faehrt auch diese Probe nicht; `GAPS` in `differential.rs` fuehrt es.
 #[test]
 #[cfg_attr(not(target_arch = "x86_64"), ignore = "die Probe setzt MXCSR, das es nur auf x86-64 gibt")]
@@ -121,6 +123,7 @@ fn hostile_runs(clang: &Clang, name: &str) -> Vec<String> {
             prefix: Some("wirt"),
             mxcsr: Some(mxcsr),
             fill: 0xA5,
+            instances: 2,
             ..Run::default()
         };
         if takt_conformance::testhost::sources(&p, &run, takt_conformance::testhost::host_triple(), false).is_err() {
@@ -135,11 +138,17 @@ fn hostile_runs(clang: &Clang, name: &str) -> Vec<String> {
             }
         };
         match common::run_product(clang, &p, name, &run) {
-            Ok(native) => {
-                let diffs = compare(&interpreted, &native);
-                if !diffs.is_empty() {
-                    let shown: Vec<String> = diffs.iter().take(6).map(ToString::to_string).collect();
-                    failed.push(format!("{label}: {} Abweichungen\n{}", diffs.len(), shown.join("\n")));
+            Ok(text) => {
+                for i in 0..run.instances {
+                    let diffs = compare(&interpreted, &takt_conformance::testhost::instance(&text, i));
+                    if !diffs.is_empty() {
+                        let shown: Vec<String> = diffs.iter().take(6).map(ToString::to_string).collect();
+                        failed.push(format!(
+                            "{label}, Instanz {i}: {} Abweichungen\n{}",
+                            diffs.len(),
+                            shown.join("\n")
+                        ));
+                    }
                 }
             }
             Err(e) => failed.push(format!("{label}: {e}")),
