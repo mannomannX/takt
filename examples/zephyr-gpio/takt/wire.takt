@@ -1,0 +1,23 @@
+# Die Messschleife auf der Drahtbruecke des Boards, unter Zephyr mit den
+# Treibern aus dem Devicetree (8.10, 12.11; M11 Schritt 19): je Tick den
+# Eingang lesen, dann den anderen Pegel schreiben. Steht die Bruecke, liest
+# jeder Tick den Pegel, den der Tick davor schrieb.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+output probe : bool @ hw("wire/out") with safe = false
+input  echo  : bool @ hw("wire/in")  with max_age = 10 ms
+
+machine bridge:
+    pub var seen : bool = false
+    var level    : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            seen = echo
+            level = not level
+            probe = level

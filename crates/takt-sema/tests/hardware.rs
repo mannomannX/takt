@@ -4,7 +4,7 @@
 use takt_diag::{Policy, Span};
 use takt_mir::hardware::{self, Hardware};
 use takt_mir::program::Direction;
-use takt_sema::calibrated::{check, check_bindings};
+use takt_sema::calibrated::{check, check_bindings, check_zephyr};
 use takt_sema::{Build, Options};
 
 const HEAD: &str = "system:\n    language = 1\n    tick = 1 ms\n\n";
@@ -472,4 +472,74 @@ machine m:
             "{member}: {errors:?}"
         );
     }
+}
+
+/// Zwei Pins an `zephyr-gpio` (8.10, „Treiber aus dem Devicetree“).
+const PINS: &str = "
+input  button : bool @ hw(\"ui/button\")
+output led    : bool @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            led = button
+";
+
+/// Die Konfiguration der Pins: `port` des Tasters, Treiber und Rohtyp der LED.
+fn pins(button_port: &str, driver: &str, led_raw: &str) -> Hardware {
+    hw(&format!(
+        "
+[device.pins]
+driver = \"{driver}\"
+
+[channel ui/button]
+direction = input
+raw = bool
+device = pins
+port = \"{button_port}\"
+
+[channel ui/led]
+direction = output
+raw = {led_raw}
+safe = false
+device = pins
+port = \"takt_led\"
+"
+    ))
+}
+
+/// **Unter `--zephyr` nennt `port` ein Label und der Rohtyp ist `bool`**
+/// (Pruefung 60): Labels aus Kleinbuchstaben, Ziffern und `_` bestehen.
+#[test]
+fn labels_and_bool_pins_pass_check_60_under_zephyr() {
+    let diags = check_zephyr(&compile(PINS), &pins("takt_button0", "zephyr-gpio", "bool"));
+    assert!(diags.is_empty(), "{:?}", codes(&diags));
+}
+
+/// Ein `port`, der kein Label ist, und ein anderer Rohtyp als `bool` sind
+/// Fehler, die Kanal, Treiber und Rohtyp nennen.
+#[test]
+fn a_port_that_is_no_label_and_a_raw_type_other_than_bool_fail_check_60() {
+    for (port, raw, want) in [
+        ("PA0", "bool", "`button` an `ui/button`: `port = \"PA0\"` ist kein Label des Devicetree (zephyr-gpio)"),
+        ("0button", "bool", "`port = \"0button\"` ist kein Label"),
+        (
+            "takt_button",
+            "u8",
+            "`led` an `ui/led`: `zephyr-gpio` bedient Kanaele mit Rohtyp `bool`, der Kanal hat Rohtyp `u8`",
+        ),
+    ] {
+        let diags = check_zephyr(&compile(PINS), &pins(port, "zephyr-gpio", raw));
+        let found = codes(&diags);
+        assert!(found.iter().any(|d| d.starts_with("SC-60") && d.contains(want)), "{port}, {raw}: {found:?}");
+    }
+}
+
+/// **Ohne `zephyr-gpio` deutet die Pruefung `port` nicht** (9.5): Ein Geraet
+/// mit einem anderen Treiber bleibt undurchsichtig.
+#[test]
+fn another_driver_keeps_its_port_opaque() {
+    let diags = check_zephyr(&compile(PINS), &pins("PA0 active_low", "stm32f4-gpio", "u8"));
+    assert!(diags.is_empty(), "{:?}", codes(&diags));
 }

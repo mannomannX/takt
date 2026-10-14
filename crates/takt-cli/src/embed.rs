@@ -100,6 +100,8 @@ pub(crate) struct Embed<'a> {
     pub(crate) nvm_blocking_ns: i64,
     /// Die Konstanten als Rust (`--emit consts-rs`).
     pub(crate) consts_rs: String,
+    /// `--zephyr`: die Treiber aus dem Devicetree dazu (`P_zephyr.c`, 8.10).
+    pub(crate) zephyr: bool,
     pub(crate) out: PathBuf,
 }
 
@@ -171,6 +173,14 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         jobs: !takt_frame::parts::job_slots(e.program).is_empty(),
     };
     write(&e.out.join(format!("{x}.rs")), &takt_frame::embed::rust_module(&module))?;
+    // 8.10: die Treiber aus dem Devicetree, nur auf ausdruecklichen Wunsch;
+    // der Bau unter Zephyr uebersetzt sie mit seinen Koepfen.
+    if e.zephyr {
+        let hw = e.hardware.ok_or_else(|| "--zephyr: `--hardware` fehlt (8.10)".to_string())?;
+        let files = takt_frame::zephyr::files(e.program, hw, &drivers, x)?;
+        write(&e.out.join(format!("{x}_zephyr.c")), &files.source)?;
+        write(&e.out.join(format!("{x}_zephyr.h")), &files.header)?;
+    }
     // 12.3: Unter `xip_flash` gehoert der Tick-Pfad in den RAM; die
     // Fragmente sagen dem Linker des Wirts, was dazu gehoert.
     let xip = memory.iram.is_some();
