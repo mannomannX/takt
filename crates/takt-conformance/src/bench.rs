@@ -33,7 +33,9 @@
 //! eine Senke und ruft sie Schritt fuer Schritt. Was die Senke bekommt, liest
 //! [`log`], und [`import`] rechnet daraus Tabelle und Bericht — fuer jedes
 //! Board, auf dem ein Wirt laeuft. Die eigenen Bring-ups messen auf demselben
-//! Weg ([`run`]): ein Abbild je Lage statt eines je Kern.
+//! Weg ([`run`]): ein Abbild je Lage statt eines je Kern. Passt das ganze
+//! Messprogramm nicht in ein Abbild, teilt es sich ([`Part`]), und ein Abbild
+//! je Lage und Teil misst; jedes haelt eine Mindestreserve ([`RESERVE_DIVISOR`]).
 //!
 //! **Die Mathematik** (FB-344) misst den Aufwand eines Aufrufs im erzeugten
 //! Code an `pow`, der Funktion mit der teuersten Pruefung ihres
@@ -231,6 +233,126 @@ pub fn suite() -> Vec<Kernel> {
         });
     }
     out
+}
+
+/// Die Gruppen des Messprogramms, aus denen ein Teil besteht (FB-740).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Group {
+    /// Der leere Kern und die Proben der Klassen ohne die Mathematik.
+    Classes,
+    /// Die Referenzkerne aus 13.8 mit ihren C-Referenzen.
+    References,
+    /// Die Proben der Mathematik, ihre Vektoren und der Subnormal-Vektor (4.2).
+    Math,
+}
+
+/// Wie das Messprogramm sich in Teile gliedert, je Zahl der Teile: welche
+/// Gruppen jeder Teil nimmt.
+///
+/// Auf Thumb, gemessen am Abbild von bdeae801, belegen die Klassen (31 Kerne)
+/// rund 88 KiB, die Mathematik (vier Kerne, `libtaktm` ganz und die Vektoren)
+/// 74 KiB und die Referenzen 25 KiB; dazu kommen in jedem Abbild Wirt, Laeufer
+/// und `compiler_builtins` mit rund 20 KiB. Die Mathematik bleibt beisammen:
+/// Ihre Proben und ihre Vektoren binden dieselbe Bibliothek.
+pub const SPLITS: [&[&[Group]]; 3] = [
+    &[&[Group::Classes, Group::References, Group::Math]],
+    &[&[Group::Classes], &[Group::References, Group::Math]],
+    &[&[Group::Classes], &[Group::References], &[Group::Math]],
+];
+
+/// Ein Teil des Messprogramms (FB-740): der `index`-te von `of`, ab 1.
+///
+/// Jeder Kern bringt seinen eigenen Rahmen mit, und auf einem Board mit wenig
+/// Speicher passt das ganze Messprogramm nicht in ein Abbild. Ein Teil ist ein
+/// eigenes Abbild mit eigenem Schritt fuer den Messaufwand, denn der haengt an
+/// der Lage des Codes; [`import`] fuehrt die Teile einer Lage zusammen. Die
+/// Kennung ([`suite_id`]) gilt fuer das ganze Messprogramm, und jeder Teil
+/// nennt sich im Protokoll (`bench part`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Part {
+    /// Welcher Teil, ab 1.
+    pub index: u32,
+    /// Von wie vielen.
+    pub of: u32,
+}
+
+impl Part {
+    /// Das ganze Messprogramm in einem Abbild.
+    pub const WHOLE: Part = Part { index: 1, of: 1 };
+
+    /// Teil `index` von `of`; geteilt wird in hoechstens so viele Teile, wie
+    /// [`SPLITS`] kennt.
+    pub fn new(index: u32, of: u32) -> Result<Part, String> {
+        let known = u32::try_from(SPLITS.len()).unwrap_or(u32::MAX);
+        if of == 0 || of > known {
+            return Err(format!("das Messprogramm teilt sich in 1 bis {known} Teile, nicht in {of}"));
+        }
+        if index == 0 || index > of {
+            return Err(format!("Teil {index} von {of} gibt es nicht"));
+        }
+        Ok(Part { index, of })
+    }
+
+    /// `I/N`, wie `takt bench --emit embed --part` ihn nimmt.
+    pub fn parse(text: &str) -> Result<Part, String> {
+        let number = |w: &str| w.trim().parse::<u32>().map_err(|e| format!("`{text}`: {e}"));
+        let (index, of) = text.split_once('/').ok_or_else(|| format!("`{text}`: erwartet `I/N`"))?;
+        Part::new(number(index)?, number(of)?)
+    }
+
+    /// Alle Teile des Messprogramms, geteilt in `of`.
+    pub fn all(of: u32) -> Result<Vec<Part>, String> {
+        (1..=of.max(1)).map(|index| Part::new(index, of)).collect()
+    }
+
+    /// Die Gruppen dieses Teils.
+    pub fn groups(self) -> &'static [Group] {
+        let at = |n: u32| usize::try_from(n.saturating_sub(1)).unwrap_or(usize::MAX);
+        SPLITS.get(at(self.of)).and_then(|split| split.get(at(self.index))).copied().unwrap_or(&[])
+    }
+}
+
+/// Ohne Angabe ist es das ganze Messprogramm.
+impl Default for Part {
+    fn default() -> Part {
+        Part::WHOLE
+    }
+}
+
+impl std::fmt::Display for Part {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.index, self.of)
+    }
+}
+
+impl Kernel {
+    /// Die Gruppe des Kerns (FB-740).
+    pub fn group(&self) -> Group {
+        match &self.role {
+            Role::Probe { probe: Probe::Heavy(Heavy::Math, _), .. } => Group::Math,
+            Role::Frame | Role::Probe { .. } => Group::Classes,
+            Role::Reference { .. } => Group::References,
+        }
+    }
+}
+
+/// Was ein Teil misst: seine Kerne in der Reihenfolge der [`suite`] und ob er
+/// die Mathematik traegt, mit ihr den Subnormal-Vektor.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selection {
+    /// Die Kerne des Teils.
+    pub kernels: Vec<Kernel>,
+    /// Rechnet der Teil die Vektoren der Mathematik und den Subnormal-Vektor?
+    pub math: bool,
+}
+
+/// Die Kerne und Schritte von `part`.
+pub fn selection(part: Part) -> Selection {
+    let groups = part.groups();
+    Selection {
+        kernels: suite().into_iter().filter(|k| groups.contains(&k.group())).collect(),
+        math: groups.contains(&Group::Math),
+    }
 }
 
 /// Die Vektoren der Mathematik, die das Messprogramm rechnet: Stufe 2 aus
@@ -717,8 +839,16 @@ pub const LOAD_KERNEL: &str = include_str!("../bench/load.takt");
 
 /// Wie der Lastkern laeuft: in Echtzeit und in logischer Zeit, wo der Trace
 /// nichts verwirft, und beides in jeder Form, die das Board kennt.
+///
+/// **In Echtzeit belegt er nur seine Bilanz** (FB-741, [`Options::lossy`]).
+/// Er schreibt das Journal in jedem Tick und nimmt Ueberlaeufe an; haelt ein
+/// blockierendes NVM den Kern an — auf dem F401 loescht ein Sektor 197 ms
+/// lang —, rechnet der Kern danach jede verpasste Grenze nach (7.3, 12.11),
+/// und ihr Trace kommt auf einmal, mehr als Ring und Leitung fassen. Die
+/// Telemetrie verwirft ihn dann, wie 12.2 es verlangt; die Tiefe des Stacks
+/// steht trotzdem in der Bilanz, die ankommt.
 fn load_runs(forms: &[Form]) -> Vec<Options> {
-    let runs = [Options::timed(LOOP_TICKS), Options::fresh(LOOP_TICKS)].map(Options::calibrating);
+    let runs = [Options::timed(LOOP_TICKS).lossy(), Options::fresh(LOOP_TICKS)].map(Options::calibrating);
     forms.iter().flat_map(|&form| runs.clone().map(|o| o.in_form(form))).collect()
 }
 
@@ -783,7 +913,7 @@ pub struct Outcome {
 /// Was `takt bench --import` liest.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Logs {
-    /// Die Protokolle des Messprogramms, je Lage eines.
+    /// Die Protokolle des Messprogramms, je Lage und Teil eines.
     pub bench: Vec<String>,
     /// Der leere Kern in der Tickschleife: Jitter und Stack-Reserve.
     pub looped: Option<String>,
@@ -798,9 +928,10 @@ pub struct Logs {
 /// Rechnet Tabelle, Referenzkerne und Urteile aus den Protokollen (13.8).
 ///
 /// Die Kostenvektoren kommen aus den Quelltexten der [`suite`]; ein
-/// Protokoll mit fremder Kennung wird abgelehnt. Mehrere Lagen werden zu
-/// einer Messung ([`log::merge`]); das Gewicht jeder Probe in jeder Lage
-/// steht dazu in [`ProbeRow::placements`].
+/// Protokoll mit fremder Kennung wird abgelehnt. Die Teile einer Lage werden
+/// ein Lauf, jeder ohne seinen eigenen Messaufwand ([`log::combine`]), und
+/// mehrere Lagen eine Messung ([`log::merge`]); das Gewicht jeder Probe in
+/// jeder Lage steht dazu in [`ProbeRow::placements`].
 pub fn import(logs: &Logs) -> Result<Outcome, String> {
     let kernels = suite();
     let vectors = math_vectors()?;
@@ -818,7 +949,9 @@ pub fn import(logs: &Logs) -> Result<Outcome, String> {
             r.suite
         ));
     }
-    let runs: Vec<log::Run> = runs.iter().map(log::Run::without_overhead).collect();
+    let overhead = runs.iter().map(|r| r.overhead.min).max().unwrap_or(0);
+    let parts: Vec<log::Run> = runs.iter().map(log::Run::without_overhead).collect();
+    let runs = log::combine(&parts)?;
     let merged = log::merge(&runs)?;
     let costs = kernels
         .iter()
@@ -890,9 +1023,9 @@ pub fn import(logs: &Logs) -> Result<Outcome, String> {
         math,
         suite: id,
         placements: runs.iter().map(|r| r.shift).collect(),
-        overhead: runs.iter().map(|r| r.overhead.min).max().unwrap_or(0),
+        overhead,
         runs: merged.takt.get("frame").map_or(0, |s| s.n / runs.len() as u64),
-        subnormal: merged.subnormal,
+        subnormal: merged.subnormal.ok_or("der Subnormal-Vektor fehlt im Protokoll (`bench subnormal`)")?,
         stack_reserve: stack_reserves(looped.into_iter().chain(logs.loads.iter().map(String::as_str))),
         tick_jitter_ns: looped.and_then(tick_jitter),
     })
@@ -900,8 +1033,8 @@ pub fn import(logs: &Logs) -> Result<Outcome, String> {
 
 /// Was ein Abbild des Bench misst.
 enum Image {
-    /// Das Messprogramm in einer Lage des Boards.
-    Bench(u32),
+    /// Ein Teil des Messprogramms in einer Lage des Boards.
+    Bench(u32, Part),
     /// Der leere Kern in der Tickschleife.
     Loop,
     /// Der Lastkern in einer Form.
@@ -910,20 +1043,74 @@ enum Image {
     Natives,
 }
 
+impl Image {
+    /// Was das Abbild misst, fuer Meldungen.
+    fn what(&self, options: &Options) -> String {
+        match self {
+            Image::Bench(shift, part) if part.of > 1 => format!("Messprogramm in Lage {shift}, Teil {part}"),
+            Image::Bench(shift, _) => format!("Messprogramm in Lage {shift}"),
+            Image::Loop => "Tickschleife".into(),
+            Image::Load => format!(
+                "Lastkern{}{}",
+                match options.form {
+                    Form::Own => "",
+                    Form::Interrupt => " in der Interruptform",
+                    Form::Poll => " in der Pollform",
+                    Form::Rtos => " unter RTOS",
+                    Form::Embassy => " unter Embassy",
+                },
+                if options.timed { " in Echtzeit" } else { " in logischer Zeit" }
+            ),
+            Image::Natives => "Natives und Mathematik".into(),
+        }
+    }
+}
+
 /// Die Abbilder eines Laufs in seiner Reihenfolge: je Abbild, was es misst,
-/// sein Programm und seine Optionen.
+/// sein Programm und seine Optionen. Das Messprogramm kommt in so vielen
+/// Teilen, wie das Board verlangt ([`Board::bench_parts`]), jeder in jeder
+/// Lage.
 fn images(board: &dyn Board, runs: u64) -> Result<Vec<(Image, PathBuf, Options)>, String> {
     let frame = write_kernel("frame", &frame_kernel())?;
     let load = write_kernel("load", LOAD_KERNEL)?;
-    let mut images: Vec<(Image, PathBuf, Options)> = board
-        .placements()
-        .iter()
-        .map(|&shift| (Image::Bench(shift), frame.clone(), Options::bench(runs, shift)))
-        .collect();
+    let mut images: Vec<(Image, PathBuf, Options)> = Vec::new();
+    for part in Part::all(board.bench_parts())? {
+        for &shift in board.placements() {
+            images.push((Image::Bench(shift, part), frame.clone(), Options::bench(runs, shift, part)));
+        }
+    }
     images.push((Image::Loop, frame.clone(), Options::timed(LOOP_TICKS).calibrating()));
     images.extend(load_runs(board.forms()).into_iter().map(|options| (Image::Load, load.clone(), options)));
     images.push((Image::Natives, frame, Options::natives()));
     Ok(images)
+}
+
+/// **Die Mindestreserve eines Abbilds** (FB-740): Von jedem Speicherbereich,
+/// den das Board nennt ([`Board::room`]), bleibt dieser Bruchteil frei.
+///
+/// Jeder Kern des Messprogramms bringt seinen eigenen Rahmen mit, und eine
+/// Zeile mehr im Rahmen kostet in einem Abbild ihr Vielfaches. Zwischen
+/// d7279e1a (432 Byte Luft) und 47b2f158 (224 Byte zu viel) wuchs das
+/// Messprogramm des F401 um 656 Byte, und erst der Link meldete es. Ein Achtel
+/// sind dort 24 KiB, das Sechsunddreissigfache: Wird es knapper, braucht das
+/// Board einen Teil mehr, und bis der Link scheitert, bleibt Zeit dafuer.
+pub const RESERVE_DIVISOR: u64 = 8;
+
+/// Wie viel Platz das Abbild `elf` laesst, und je Bereich unter der
+/// Mindestreserve ([`RESERVE_DIVISOR`]) eine Meldung. Im Lauf, der nur baut,
+/// nennt `log` jeden Bereich.
+fn cramped(board: &dyn Board, elf: &Path, what: &str, log: &mut impl FnMut(&str)) -> Result<Vec<String>, String> {
+    let mut short = Vec::new();
+    for room in board.room(elf)? {
+        let reserve = room.size / RESERVE_DIVISOR;
+        let line = format!("{what}: {} {} von {} Byte frei", room.region, room.free, room.size);
+        if room.free < reserve {
+            short.push(format!("{line}, unter der Reserve von {reserve} Byte (FB-740): ein Teil mehr"));
+        } else if crate::board::build_only() {
+            log(&line);
+        }
+    }
+    Ok(short)
 }
 
 /// Misst auf dem Board: das Messprogramm in jeder Lage des Boards, den leeren
@@ -932,23 +1119,31 @@ fn images(board: &dyn Board, runs: u64) -> Result<Vec<(Image, PathBuf, Options)>
 ///
 /// `log` bekommt je Abbild eine Zeile, damit ein langer Lauf zeigt, wo er
 /// steht. Im Lauf, der nur baut ([`crate::board::build_only`]), baut es
-/// jedes Abbild und endet mit [`crate::board::BUILT_ONLY`].
+/// jedes Abbild, prueft seinen Platz ([`cramped`]) und endet mit
+/// [`crate::board::BUILT_ONLY`] — oder mit jedem Abbild, das unter seiner
+/// Mindestreserve liegt: So scheitert `boards.yml`, bevor es ein Link tut. Am
+/// Board meldet der Lauf ein solches Abbild und misst weiter.
 pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Result<Logs, String> {
     let images = images(board, runs)?;
     if crate::board::build_only() {
-        for (_, program, options) in &images {
-            board.build(program, options)?;
+        let mut short = Vec::new();
+        for (image, program, options) in &images {
+            let elf = board.build(program, options)?;
+            short.extend(cramped(board, &elf, &image.what(options), &mut log)?);
         }
-        return Err(crate::board::BUILT_ONLY.into());
+        return Err(if short.is_empty() { crate::board::BUILT_ONLY.into() } else { short.join("\n") });
     }
     let mut logs = Logs::default();
     for (image, program, options) in images {
         let elf = board.build(&program, &options)?;
+        for line in cramped(board, &elf, &image.what(&options), &mut log)? {
+            log(&line);
+        }
         let text = board.run(&elf, &options)?;
         match image {
-            Image::Bench(shift) => {
+            Image::Bench(..) => {
                 let n = log::runs(&text)?.first().map_or(0, |r| r.takt.len());
-                log(&format!("Messprogramm in Lage {shift}: {n} Kerne"));
+                log(&format!("{}: {n} Kerne", image.what(&options)));
                 logs.bench.push(text);
             }
             Image::Loop => {
@@ -960,18 +1155,13 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
                 logs.looped = Some(text);
             }
             Image::Load => {
+                let dropped = crate::board::counter(&text, "verworfen").filter(|n| *n > 0);
                 log(&format!(
-                    "Lastkern{}{}: Stack {:?} Byte, davon Programm {:?}",
-                    match options.form {
-                        Form::Own => "",
-                        Form::Interrupt => " in der Interruptform",
-                        Form::Poll => " in der Pollform",
-                        Form::Rtos => " unter RTOS",
-                        Form::Embassy => " unter Embassy",
-                    },
-                    if options.timed { " in Echtzeit" } else { " in logischer Zeit" },
+                    "{}: Stack {:?} Byte, davon Programm {:?}{}",
+                    image.what(&options),
                     crate::board::counter(&text, "stack"),
-                    crate::board::counter(&text, "programm")
+                    crate::board::counter(&text, "programm"),
+                    dropped.map_or_else(String::new, |n| format!("; die Telemetrie verwarf {n} Byte (FB-741)"))
                 ));
                 logs.loads.push(text);
             }
@@ -1513,13 +1703,20 @@ mod tests {
     /// Ein Protokoll, wie ein Board mit der Tabelle [`table`] bei 1 GHz es
     /// schriebe: jeder Kern `T_IO` plus seine Kosten, dazu der Messaufwand.
     fn synthetic(shift: u32, overhead: u64) -> String {
-        let kernels = suite();
+        synthetic_part(shift, overhead, Part::WHOLE)
+    }
+
+    /// Wie [`synthetic`], nur Teil `part` des Messprogramms.
+    fn synthetic_part(shift: u32, overhead: u64, part: Part) -> String {
         let vectors = math_vectors().expect("Vektoren");
+        let Selection { kernels, math } = selection(part);
         let (t, frame) = (table(), 500);
         let mut s = format!(
-            "boot\ntakt bench {}\nbench core_hz 1000000000\nbench shift {shift}\n\
+            "boot\ntakt bench {}\nbench part {} {}\nbench core_hz 1000000000\nbench shift {shift}\n\
              bench overhead min {overhead} mean {overhead} max {overhead} n 4 digest 0\n",
-            suite_id(&kernels, &vectors)
+            suite_id(&suite(), &vectors),
+            part.index,
+            part.of
         );
         for k in &kernels {
             let work =
@@ -1530,16 +1727,122 @@ mod tests {
                 let _ = writeln!(s, "bench c {} min {c} mean {c} max {c} n 4 digest 7", k.name);
             }
         }
-        for (i, v) in vectors.iter().enumerate() {
-            let _ = writeln!(s, "math {i} {:016x} cycles {}", v.want, overhead + 100);
+        if math {
+            for (i, v) in vectors.iter().enumerate() {
+                let _ = writeln!(s, "math {i} {:016x} cycles {}", v.want, overhead + 100);
+            }
+            // Der Einstieg der Probe an ihren Argumenten: die Haelfte des Gewichts.
+            for (name, ps) in [("f32", 2_000_000), ("f64", 9_000_000)] {
+                let c = overhead + ps / 2 / 1000;
+                let _ = writeln!(s, "bench entry {name} min {c} mean {c} max {c} n 4 digest 0");
+            }
+            s.push_str("bench subnormal 0\n");
         }
-        // Der Einstieg der Probe an ihren Argumenten: die Haelfte des Gewichts.
-        for (name, ps) in [("f32", 2_000_000), ("f64", 9_000_000)] {
-            let c = overhead + ps / 2 / 1000;
-            let _ = writeln!(s, "bench entry {name} min {c} mean {c} max {c} n 4 digest 0");
-        }
-        s.push_str("bench subnormal 0\ntakt end\n");
+        s.push_str("takt end\n");
         s
+    }
+
+    /// **Jede Teilung nimmt jeden Kern genau einmal** (FB-740), die
+    /// Mathematik mit ihren Proben genau ein Teil, und beide Kerne eines Paars
+    /// stehen im selben: Ihr Unterschied ist das Gewicht, und er soll nicht
+    /// den Unterschied zweier Abbilder enthalten.
+    #[test]
+    fn every_split_takes_every_kernel_once() {
+        let mut all: Vec<String> = suite().into_iter().map(|k| k.name).collect();
+        all.sort();
+        for of in 1..=SPLITS.len() as u32 {
+            let parts: Vec<Selection> = Part::all(of).expect("Teilung").into_iter().map(selection).collect();
+            let mut names: Vec<String> = parts.iter().flat_map(|s| s.kernels.iter().map(|k| k.name.clone())).collect();
+            names.sort();
+            assert_eq!(names, all, "in {of} Teilen");
+            assert_eq!(parts.iter().filter(|s| s.math).count(), 1, "in {of} Teilen");
+            for s in &parts {
+                assert_eq!(s.math, s.kernels.iter().any(|k| k.group() == Group::Math), "in {of} Teilen");
+                for probe in Probe::ORDER {
+                    let n = s.kernels.iter().filter(|k| matches!(k.role, Role::Probe { probe: p, .. } if p == probe));
+                    assert!(matches!(n.count(), 0 | 2), "{} in {of} Teilen", probe.name());
+                }
+            }
+        }
+        assert_eq!(selection(Part::WHOLE).kernels, suite());
+        assert!(Part::all(4).is_err() && Part::new(0, 2).is_err() && Part::new(3, 2).is_err());
+        assert_eq!(Part::parse("2/3"), Ok(Part { index: 2, of: 3 }));
+        assert!(Part::parse("2").is_err() && Part::parse("a/2").is_err());
+    }
+
+    /// **Der Import fuehrt die Teile zusammen** (FB-740): Zwei Teile in zwei
+    /// Lagen, jeder mit eigenem Messaufwand, ergeben dieselbe Tabelle wie das
+    /// ganze Messprogramm; jeder Teil zieht seinen eigenen Aufwand ab.
+    #[test]
+    fn an_import_joins_the_parts_of_each_placement() {
+        let half = |index| Part { index, of: 2 };
+        let parts = Logs {
+            bench: vec![
+                synthetic_part(0, 6, half(1)),
+                synthetic_part(0, 11, half(2)),
+                synthetic_part(8, 9, half(2)),
+                synthetic_part(8, 4, half(1)),
+            ],
+            ..Logs::default()
+        };
+        let whole = Logs { bench: vec![synthetic(0, 6), synthetic(8, 9)], ..Logs::default() };
+        let (o, w) =
+            (import(&parts).unwrap_or_else(|e| panic!("{e}")), import(&whole).unwrap_or_else(|e| panic!("{e}")));
+        assert_eq!(o.calibration.c_target, w.calibration.c_target);
+        assert_eq!(o.calibration.stretch, (1, 1));
+        assert_eq!((o.placements.clone(), o.overhead, o.runs), (vec![0, 8], 11, 4));
+        let missing = Logs { bench: parts.bench[..3].to_vec(), ..Logs::default() };
+        let e = import(&missing).expect_err("Teil 1 der Lage 8 fehlt");
+        assert!(e.contains("Lage 8: Teil 1 von 2 fehlt"), "{e}");
+    }
+
+    /// Ein Board, dessen Abbilder `used` Byte von 192 KiB belegen.
+    struct Filled(u64);
+
+    impl Board for Filled {
+        fn name(&self) -> &'static str {
+            "gefuellt"
+        }
+
+        fn target(&self) -> &'static str {
+            "thumbv7em"
+        }
+
+        fn builder(&self, _slot: usize) -> crate::board::Builder {
+            Box::new(|_: &Path, _: &Options| -> Result<PathBuf, String> { Err("baut nicht".into()) })
+        }
+
+        fn run(&mut self, _elf: &Path, _options: &Options) -> Result<String, String> {
+            Err("laeuft nicht".into())
+        }
+
+        fn room(&self, _elf: &Path) -> Result<Vec<crate::board::Room>, String> {
+            Ok(vec![crate::board::Room::of("Flash", 196_608, self.0)])
+        }
+    }
+
+    /// **Unter einem Achtel frei meldet sich ein Abbild** (FB-740): das ganze
+    /// Messprogramm des F401 an bdeae801 mit 2208 Byte Luft; zwei Teile mit
+    /// je drei Fuenfteln nicht.
+    #[test]
+    fn an_image_below_its_reserve_is_reported() {
+        let mut lines = Vec::new();
+        let mut log = |l: &str| lines.push(l.to_string());
+        let roomy = cramped(&Filled(120_000), Path::new("x.elf"), "Messprogramm", &mut log).expect("Platz");
+        assert!(roomy.is_empty(), "{roomy:?}");
+        let short = cramped(&Filled(194_400), Path::new("x.elf"), "Messprogramm", &mut log).expect("Platz");
+        let [line] = short.as_slice() else { panic!("eine Meldung: {short:?}") };
+        assert!(line.contains("Flash 2208 von 196608 Byte frei") && line.contains("24576"), "{line}");
+    }
+
+    /// Nur der Lastkern in Echtzeit darf verwerfen (FB-741): In logischer
+    /// Zeit ist sein Trace verlustfrei, und die Zeitzeilen der Tickschleife
+    /// tragen den Jitter.
+    #[test]
+    fn only_the_timed_load_runs_may_drop() {
+        let runs = load_runs(&[Form::Own, Form::Interrupt]);
+        assert_eq!(runs.len(), 4);
+        assert!(runs.iter().all(|o| o.lossy == o.timed && o.calibrating), "{runs:?}");
     }
 
     /// **Die Reserve ist die tiefste Last ohne ihr Programm, je Form** (12.3,

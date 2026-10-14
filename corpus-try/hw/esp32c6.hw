@@ -46,21 +46,21 @@ nvm_erase_ns = 60000000
 nvm_program_ns = 200000
 nvm_blocking = true
 i32 = 7305
-i64 = 24561
+i64 = 24732
 f32 = 332793
 f64 = 531914
-mem = 28262
+mem = 28164
 call = 44063
 native = 0
-i32_div = 60253
-i64_div = 1042567
+i32_div = 60350
+i64_div = 1042737
 f32_div = 1204023
 f64_div = 2338593
 f32_fma = 4290078
-f64_fma = 2774160
+f64_fma = 2774355
 f32_sqrt = 458417
 f64_sqrt = 1286836
-t_io = 4181250
+t_io = 4293750
 tick_jitter_ns = 0
 # Stack-Reserve je Form (12.3, 13.8, FB-513): die tiefste Hochwassermarke
 # des Lastkerns (`bench/load.takt`) in Echtzeit und logischer Zeit, gemalt
@@ -69,14 +69,14 @@ tick_jitter_ns = 0
 # selbst. Seit FB-458 liegt der Ring der Telemetrie nicht mehr im Rahmen von
 # `main`. Die Form `rtos` ist Embassy (M11 Schritt 14d), gemessen am
 # 2026-10-11 mit dem Lastkern allein: 3716 Byte tief, davon 96 Programm.
-stack_reserve = 3060
+stack_reserve = 3044
 stack_reserve_interrupt = 3588
-stack_reserve_rtos = 3652
+stack_reserve_rtos = 3668
 # Interrupts laufen auf dem Stack des unterbrochenen Fadens, also auch auf
 # dem des Jobs; Trap-Rahmen, Verteiler und die Handler einer
 # Prioritaetsstufe brauchen unter 1 KiB, die Reserve verdoppelt das (4.5).
 job_stack_reserve = 2048
-call_hook = 528633
+call_hook = 528828
 f32_math = 203387500
 f64_math = 495831250
 

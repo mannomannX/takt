@@ -60,6 +60,18 @@ void board_led(int on);
 /* Der Waechter unter dem Stack (12.3): eine Region der MPU ohne Zugriff. */
 void board_protect_stack(void);
 
+/* Derselbe Waechter ohne Region, wenn die MPU einem RTOS gehoert (12.11):
+ * ein Watchpoint der DWT auf jedes Lesen und Schreiben darin. Ein Treffer
+ * loest DebugMonitor aus, und das Board haelt an. Der Monitor wirkt nur,
+ * solange kein Debugger das Halten eingeschaltet hat (DHCSR.C_DEBUGEN):
+ * Sonst hielte ein Treffer den Kern an, statt den Handler zu rufen. Was
+ * gilt, sagt der Wert, und der Wirt nennt es im Kopf (12.3). */
+#define BOARD_WATCH_ARMED 0
+#define BOARD_WATCH_NO_COMPARATOR (-1)
+#define BOARD_WATCH_NO_MONITOR (-2)
+#define BOARD_WATCH_DEBUGGER (-3)
+int board_watch_stack(void);
+
 /* Bemalt den Stack vom Waechter bis kurz unter den Stackzeiger (12.3). */
 void board_paint_stack(void);
 
@@ -74,5 +86,9 @@ void board_park(void);
 /* Haelt an, nach einer Panik des SDK oder einer Ausnahme, und bleibt fuer
  * `TAKT` erreichbar. Kehrt nicht zurueck. */
 void board_halt(void);
+
+/* Nach einer Ausnahme: nennt auf der Leitung Grund und Adresse (CFSR, HFSR,
+ * DFSR, MMFAR, BFAR), dann `board_halt`. Kehrt nicht zurueck. */
+void board_fault(void);
 
 #endif /* BOARD_H */

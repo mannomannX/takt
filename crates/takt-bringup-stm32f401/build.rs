@@ -78,10 +78,15 @@ fn text_shift(out: &Path) {
     println!("cargo:rustc-env=TAKT_BENCH_SHIFT={shift}");
 }
 
-/// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`.
+/// Das Messprogramm von `takt bench` (13.8) fuer das Binary `bench`; in die
+/// 192 KiB der Anwendung passt es nur in Teilen (`TAKT_BENCH_PART`, FB-740).
 fn bench() {
     if env::var_os("CARGO_FEATURE_BENCH").is_some() {
-        takt_embed::build::Bench::new().tool(bringup::takt()).hardware(hardware()).build();
+        let mut bench = takt_embed::build::Bench::new().tool(bringup::takt()).hardware(hardware());
+        if let Some(part) = bringup::bench_part() {
+            bench = bench.part(part);
+        }
+        bench.build();
     }
 }
 

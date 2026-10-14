@@ -87,12 +87,12 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt, der Watchdog als Dienst (Fassung 2 des SDK, 33f64ed1), Tunables und Weckereignis (3e1460c0), die Vorlage `c-port` als Adapter des gemeinsamen Ports mit Fäden (`ports/rtos`); 18b bei Strang G (Helfer, seit 2026-10-12, Zweig `g-18b-c-irq`): Port `ports/irq` mit Adapter STM32F4, C-Wirt `examples/boards/stm32f401`, der Board-Lauf steht aus |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | Strang D (Helfer, seit 2026-10-12, Zweig `d-9-one-frame`): umgesetzt, CI grün auf `ubuntu-24.04` und `windows-2025` (Lauf 38302979240), Analyse grün (38303421868); FB-391 und FB-402 geschlossen, FB-382 bis auf Instanzen (FB-691); wartet auf den Merge; gemergt 2026-10-12 |
 | 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards, gemergt cea0c88c; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`). 19b: Partition umgesetzt bis auf den Board-Lauf, Format des Devicetree-Adapters in der Referenz (FB-734), gemergt 9f0673d1; der Erzeuger `P_zephyr.c` nach Schritt 9 (Strang D). 19c: Vertrag `takt_os.h` erweitert (60aa91d0), Adapter `ports/cmsis-rtos2` und `examples/cmsis-rtos2` bauen für den F401; Portprüfung am Board offen |
-| 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G nach 18b, als Adapter `ports/freertos` hinter `ports/rtos/takt_os.h` auf dem C-Wirt aus 18b |
+| 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G (Helfer, seit 2026-10-12, Zweig `g-20-freertos`): 20a Adapter `ports/freertos` und Wirt unter FreeRTOS umgesetzt, der Board-Lauf steht aus; 20b FreeRTOS-MPU (Zweig `g-20b-freertos-mpu`) umgesetzt bis auf die Board-Läufe |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
-| 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | frei |
+| 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | Strang F (seit 2026-10-13, Zweig `f-23-protection`): Kopfzeile `Schutz`, Tests je Fall, TCB-Zeilen in `plan/cert.md`; der Fall ESP-IDF (PMP) folgt nach 21a |
 | 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a bis 33c umgesetzt (33b/33c Strang C, gemergt 7b924a3; Board-Crates Strang E, gemergt 0a57fe7a); offen der Board-Lauf über den neuen Stand (Strang A) |
-| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34e umgesetzt (34d Strang B, 34e Strang A); offen der neue Bench nach dem Umbau der Runtime (Stack-Reserve `rtos` auf dem F401) |
+| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34e umgesetzt (34d Strang B, 34e Strang A); offen der neue Bench nach dem Umbau der Runtime (Stack-Reserve `rtos` auf dem F401). Strang H (Helfer, seit 2026-10-12, Zweig `h-bench-split`): der Bench in Teilen mit Mindestreserve je Abbild (FB-740) und der Lastkern in Echtzeit, der nur seine Bilanz belegt (FB-741), umgesetzt, CI grün (38312676185), `boards.yml` baut beide Boards samt Bench-Abbildern (38312679018); gemergt (8a6b9d03), der Bench am Board bestanden (38320906796). Danach Zweig `h-fb742-clock` (PR #3): die Uhr des eigenen Kerns auf der Zeitachse von TIM2 und die Tickperiode je Ereignis (FB-742), `angehalten` in der Bilanz (FB-530); am Board bestanden (38331645022), main nachgeholt, wartet auf den Merge. Danach T1, die präfigierten Haken des Trace (Schritt 16) |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
 | 24 | Vorlagen, `takt doctor`, Anleitung, Inventur, Abschluss | W | beide | alle | zuletzt |
 
@@ -134,8 +134,16 @@ So arbeitet jeder Strang, als wäre er allein:
    - jede Prüfung mit ihrem Ergebnis,
    - Änderungen in Kern-Crates,
    - offene Punkte.
-7. **Merge.** Die Koordination rebased den Zweig auf `main`, fährt die volle
-   Suite und merged. Der andere Strang zieht `main` beim nächsten Halt nach.
+7. **Merge über einen Pull Request** (seit 2026-10-13). Die Koordination
+   öffnet zum Antrag einen Pull Request gegen `main`. `ci.yml` und
+   `analysis.yml` prüfen dort das Ergebnis des Merges, also den Zweig samt
+   dem aktuellen `main`: Suite, Clippy, rustfmt und die Zahlen des
+   C-Katalogs. Meldet der Pull Request einen Konflikt oder eine falsche Zahl,
+   zieht der Strang `main` in seinen Zweig nach und behebt es dort. Ändert
+   der Zweig Abbilder, fährt die Koordination die Board-Tests vor dem Merge.
+   Gemergt wird bei Grün mit einem Merge-Commit; der Text der Statuszeile
+   kommt im selben Zug in `plan/m11.md`. Die anderen Stränge ziehen `main`
+   beim nächsten Halt nach.
 
 ## Prüfmatrix
 
@@ -681,6 +689,24 @@ So arbeitet jeder Strang, als wäre er allein:
     `the_zephyr_journal_survives_a_reset` (C6) und
     `the_zephyr_journal_survives_a_reset_and_a_new_image` (F401): Der zweite
     Lauf beginnt mit `kept` des ersten plus eins.
+- **Stand 19e (Strang F, 2026-10-12, Zweig `f-19g-zephyr-ci`):**
+  - **C-Teil unter Zephyr, cppcheck (FB-731 (B)):** `c_analysis.rs` bindet
+    `port_test` zweimal wie die Beispiele unter Zephyr (Zephyr-Adapter und
+    CMSIS-RTOS2, je mit `zephyr-nvm`), nur cppcheck, `unix32`, mit
+    `tools/c-analysis/zephyr.cfg` statt der Köpfe; im Katalog der Teil
+    „Zephyr“. Behoben, was es fand: Stacks, Ring und Gerät ohne externe
+    Bindung, in der Funktion, die sie braucht (8.4, 8.7, 8.9), Casts
+    zusammengesetzter Ausdrücke (10.8).
+  - **Zephyr auf CI (FB-731 (A)):** Job `zephyr` in `boards.yml` statt eines
+    eigenen Workflows: Bei einem Push auf Adapter, Beispiele, Modul, cfg oder
+    Katalog baut er alle Beispiele (`zephyr_example.rs`) und fährt clang-tidy
+    über ihre `compile_commands.json` gegen den Katalog (Teil „Zephyr-Bau“,
+    samt `handback_stm32f401.c`). Zephyr v4.4.2 und SDK 1.0.1 kommen aus dem
+    Cache (`.github/actions/zephyr`). Ein Lauf der Board-Abbilder richtet
+    Zephyr ebenso ein, und die Zephyr-Tests der Suiten legen ihre Abbilder
+    in den Zwischenspeicher der Harness (`zephyr-<tripel>-<stand>`): Sie
+    kommen im selben Artefakt, und `board-run.ps1 -FromCi` fährt sie ohne
+    `west`.
 
 ### 15, 16, 18, 9, 19 bis 23
 

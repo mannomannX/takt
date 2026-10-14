@@ -181,6 +181,7 @@ impl Program {
 pub struct Bench {
     hardware: Option<PathBuf>,
     tool: Option<PathBuf>,
+    part: Option<String>,
 }
 
 impl Bench {
@@ -202,6 +203,13 @@ impl Bench {
         self
     }
 
+    /// Nur ein Teil des Messprogramms, `I/N` wie `takt bench --emit embed
+    /// --part`: fuer einen Wirt, in den das ganze nicht passt.
+    pub fn part(mut self, part: impl Into<String>) -> Bench {
+        self.part = Some(part.into());
+        self
+    }
+
     /// Was der Bau ruft und wohin er legt, wie [`Program::invocation`].
     pub fn invocation(&self, out: &Path, triple: &str) -> Invocation {
         let prefix = "takt_bench".to_string();
@@ -214,6 +222,10 @@ impl Bench {
         if let Some(hw) = &self.hardware {
             args.push("--hardware".into());
             args.push(hw.clone().into_os_string());
+        }
+        if let Some(part) = &self.part {
+            args.push("--part".into());
+            args.push(part.into());
         }
         let module = dir.join(format!("{prefix}.rs"));
         Invocation { args, dir, module, prefix, env: "TAKT_BENCH_RS".into() }
@@ -449,6 +461,8 @@ mod tests {
             ]
         );
         assert_eq!((call.prefix.as_str(), call.env.as_str()), ("takt_bench", "TAKT_BENCH_RS"));
+        let part = Bench::new().part("2/2").invocation(Path::new("o"), "thumbv7em-none-eabihf");
+        assert!(words(&part).ends_with(&["--part".to_string(), "2/2".to_string()]), "{:?}", words(&part));
     }
 
     /// Ein Wert des Manifests nach seinem Schluessel, ohne Leerraum; ein

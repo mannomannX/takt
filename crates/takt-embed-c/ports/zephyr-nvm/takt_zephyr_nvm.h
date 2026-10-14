@@ -45,7 +45,7 @@ int takt_zephyr_nvm_open(struct takt_zephyr_nvm *dev, uint8_t id, int64_t blocki
 
 /* Loescht beide Slots: ein frisches Journal, wie es ein Lauf ohne
  * gespeicherte Werte verlangt (Portpruefung). 0 oder -errno. */
-int takt_zephyr_nvm_clear(struct takt_zephyr_nvm *dev);
+int takt_zephyr_nvm_clear(const struct takt_zephyr_nvm *dev);
 
 #ifdef __cplusplus
 }

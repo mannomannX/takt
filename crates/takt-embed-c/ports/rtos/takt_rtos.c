@@ -111,8 +111,10 @@ int takt_rtos_depth(const void *stack, size_t bytes, uint32_t *depth) {
     while ((untouched < bytes) && (s[untouched] == (uint8_t)TAKT_RTOS_PAINT)) {
         untouched++;
     }
+    /* In 64 Bit: Mit einem `size_t` von 32 Bit waere der Vergleich immer falsch. */
     const size_t used = bytes - untouched;
-    *depth = (used > UINT32_MAX) ? UINT32_MAX : (uint32_t)used;
+    const uint64_t wide = used;
+    *depth = (wide > (uint64_t)UINT32_MAX) ? UINT32_MAX : (uint32_t)used;
     return 0;
 }
 

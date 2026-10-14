@@ -55,6 +55,27 @@ pub fn passed(target: u64, now: u64) -> bool {
     now >= target
 }
 
+/// **Die naechste Grenze eines periodischen Weckers** (12.3, FB-742): die
+/// erste `last + n·period` mit `n >= 1` nach `now`.
+///
+/// Der eigene Kern weckt sich an jeder Tickgrenze ueber denselben Vergleich
+/// wie die Interruptform. Stand der Kern laenger als eine Periode — eine
+/// Sektorloeschung haelt ihn auf dem F401 197 ms an —, liegen die naechsten
+/// Grenzen schon zurueck; sie fallen fuer das Wecken weg, denn gezaehlt
+/// werden die Ticks an der Zeitachse ([`ticks_since`]), nicht am Wecken.
+pub fn next_boundary(last: u64, period: u32, now: u64) -> u64 {
+    let period = u64::from(period.max(1));
+    let behind = now.saturating_sub(last).checked_div(period).unwrap_or(0);
+    last.saturating_add(period.saturating_mul(behind.saturating_add(1)))
+}
+
+/// Die Ticks seit `origin` am Stand `now` der Zeitachse, je `counts`
+/// Schritte einer (FB-742): Der Zaehler ist die Zeit, der Interrupt nur das
+/// Wecken, und was der Kern verschlief, zaehlt mit.
+pub fn ticks_since(origin: u64, counts: u32, now: u64) -> u64 {
+    now.saturating_sub(origin).checked_div(u64::from(counts)).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +98,35 @@ mod tests {
         assert_eq!(compare(now + 5, now), Compare::At(105));
         assert_eq!(compare((3 << 32) | 1, now), Compare::Later);
         assert!(passed(now, now) && !passed(now + 1, now));
+    }
+
+    /// Ein periodischer Wecker auf der Zeitachse: Er weckt an jeder Grenze,
+    /// und nach dem Wecken steht die naechste immer vor ihm.
+    #[test]
+    fn the_next_boundary_lies_ahead() {
+        assert_eq!(next_boundary(1_000, 1_000, 1_000), 2_000);
+        assert_eq!(next_boundary(1_000, 1_000, 1_999), 2_000);
+        assert_eq!(next_boundary(1_000, 1_000, 2_000), 3_000, "eine erreichte Grenze ist vorbei");
+        assert_eq!(next_boundary(1_000, 1_050, 1_200), 2_050, "gestreckt vom Pruefgeraet");
+        assert_eq!(next_boundary(5, 0, 5), 6, "eine leere Periode ist ein Schritt");
+    }
+
+    /// **Ein Stillstand verliert keinen Tick** (FB-742). Der Wecker steht auf
+    /// Tick 6, der Kern steht von 5,5 bis 202,7 Perioden — eine
+    /// Sektorloeschung —, und die ISR kommt einmal. Die Zahl der Ticks folgt
+    /// der Zeitachse und nicht den Aufrufen der ISR: 202 statt 6. Der
+    /// naechste Wecker steht auf Tick 203.
+    #[test]
+    fn a_stall_loses_no_tick() {
+        let (origin, period) = (40_000, 10_000);
+        let wake = |k: u64| origin + k * u64::from(period);
+        let mut armed = wake(6);
+        assert_eq!(ticks_since(origin, period, wake(5) + 5_000), 5);
+        let after_stall = wake(202) + 7_000;
+        assert!(passed(armed, after_stall), "der Vergleich fiel in den Stillstand");
+        armed = next_boundary(armed, period, after_stall);
+        assert_eq!(ticks_since(origin, period, after_stall), 202);
+        assert_eq!(armed, wake(203));
+        assert_eq!(ticks_since(origin, 0, after_stall), 0, "ohne Periode kein Tick");
     }
 }

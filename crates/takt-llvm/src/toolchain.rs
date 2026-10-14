@@ -99,12 +99,28 @@ pub fn object_flags(triple: &str) -> Vec<&'static str> {
 /// der Runtime —, und eine ausgelagerte Folge kostet dort bei jedem Aufruf:
 /// Ohne Outliner fiel `call_hook` auf dem F401 um 21 %, auf dem C6 um 8 %,
 /// `T_IO` um 4 und 1 %, fuer 54 und 84 Byte je Rahmen (FB-366).
+///
+/// Auf ARM ohne Betriebssystem legt der Rahmen Enums an wie die Plattform
+/// (AAPCS, [`short_enums`]).
 pub fn frame_flags(triple: &str) -> Vec<&'static str> {
     let mut flags = vec![opt_level_for(triple), "-ffunction-sections", "-fdata-sections"];
     if triple.starts_with("riscv32") {
         flags.push("-msave-restore");
     }
+    if short_enums(triple) {
+        flags.push("-fshort-enums");
+    }
     flags
+}
+
+/// Legt C auf `triple` Enums so klein an, wie ihre Werte es erlauben (FB-730)?
+/// Auf ARM ohne Betriebssystem ist das die Voreinstellung der AAPCS und jeder
+/// GCC fuer das Ziel (`arm-none-eabi`, das Zephyr-SDK), clang nimmt dagegen
+/// `int`. Jedes Objekt traegt seine Wahl als `Tag_ABI_enum_size`, und ld.bfd
+/// warnt, wenn sie in einem Abbild verschieden ist; mit `-fshort-enums` traegt
+/// der C-Teil von Takt die der Plattform, und die Pruefung bleibt an.
+pub fn short_enums(triple: &str) -> bool {
+    (triple.starts_with("thumb") || triple.starts_with("arm")) && triple.contains("-none-eabi")
 }
 
 impl Clang {

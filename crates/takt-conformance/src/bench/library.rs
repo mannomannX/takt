@@ -20,10 +20,15 @@
 //! gehoert nicht zum Tick). Ihre Rahmen sind mit [`TRACE`] auf die Stummel
 //! des Laeufers uebersetzt; die Leitung des Wirts bleibt fuer seine
 //! Programme frei, und beide binden in dasselbe Abbild.
+//!
+//! **Ein Teil je Abbild** (FB-740). Passt das Messprogramm nicht in einen
+//! Wirt, baut `--part I/N` nur die Kerne eines Teils ([`Contents`]); der
+//! Laeufer misst dann seinen eigenen Messaufwand und nennt seinen Teil im
+//! Protokoll.
 
 use std::fmt::Write as _;
 
-use super::{Kernel, Role};
+use super::{Kernel, Part, Role};
 use crate::math::{FUNCTIONS, Vector};
 
 /// Durchlaeufe vor der Messung: Die Initialisierung der Maschinen ist
@@ -49,9 +54,25 @@ pub const REFERENCE_FLAGS: [&str; 2] = ["-ffp-contract=off", "-fno-math-errno"];
 /// Der Name der Bibliothek, ihres Kopfs, Moduls und Manifests.
 pub const NAME: &str = "takt_bench";
 
-/// Die Schritte des Laeufers: Messaufwand, die Kerne, Mathematik, Subnormale.
-pub fn steps(kernels: &[Kernel]) -> usize {
-    kernels.len() + 3
+/// Was ein Abbild des Messprogramms misst: die Kerne eines Teils und, wenn
+/// er sie traegt, die Vektoren der Mathematik, mit ihnen den
+/// Subnormal-Vektor.
+#[derive(Clone, Copy, Debug)]
+pub struct Contents<'a> {
+    /// Die Kerne in der Reihenfolge der Suite.
+    pub kernels: &'a [Kernel],
+    /// Die Vektoren der Mathematik, wenn der Teil sie rechnet.
+    pub math: Option<&'a [Vector]>,
+    /// Welcher Teil.
+    pub part: Part,
+}
+
+impl Contents<'_> {
+    /// Die Schritte des Laeufers: Messaufwand, die Kerne, dann Mathematik und
+    /// Subnormale, wenn der Teil sie traegt.
+    pub fn steps(&self) -> usize {
+        self.kernels.len() + 1 + if self.math.is_some() { 2 } else { 0 }
+    }
 }
 
 /// Das Praefix eines Kerns (12.11).
@@ -75,7 +96,8 @@ pub fn defines<'a>(names: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<S
 }
 
 /// Der Kopf `takt_bench.h`: die Haken, die der Wirt stellt, und die Einstiege.
-pub fn header(kernels: &[Kernel], suite: &str) -> String {
+pub fn header(contents: &Contents<'_>, suite: &str) -> String {
+    let part = contents.part;
     format!(
         "/* Das Messprogramm von `takt bench` (13.8) als Baustein; erzeugt von\n \
          * `takt bench --emit embed`. Nicht von Hand aendern.\n *\n \
@@ -84,8 +106,9 @@ pub fn header(kernels: &[Kernel], suite: &str) -> String {
          * danach `takt_bench_report`; `takt bench --import` liest, was die Senke\n \
          * bekam. Jeder Schritt laeuft einmal je Start.\n */\n\
          #ifndef TAKT_BENCH_H\n#define TAKT_BENCH_H\n\n#include <stdint.h>\n\n\
-         /* Die Schritte und die Kennung der Kerne, wie das Protokoll sie nennt. */\n\
-         #define TAKT_BENCH_STEPS {}u\n#define TAKT_BENCH_SUITE \"{suite}\"\n\n\
+         /* Die Schritte, die Kennung der Kerne und der Teil, wie das Protokoll sie nennt. */\n\
+         #define TAKT_BENCH_STEPS {}u\n#define TAKT_BENCH_SUITE \"{suite}\"\n\
+         #define TAKT_BENCH_PART \"{} {}\"\n\n\
          /* Die Haken des Wirts: der Zyklenzaehler des Kerns (laeuft frei, darf\n \
          * ueberlaufen) und ein Byte des Protokolls. */\n\
          uint32_t takt_bench_cycles(void *user);\nvoid takt_bench_put(void *user, uint8_t byte);\n\n\
@@ -94,23 +117,27 @@ pub fn header(kernels: &[Kernel], suite: &str) -> String {
          void takt_bench_measure(void *user, uint32_t step, uint32_t runs);\n\
          void takt_bench_report(void *user, uint32_t step);\n\
          void takt_bench_end(void *user);\n\n#endif\n",
-        steps(kernels)
+        contents.steps(),
+        part.index,
+        part.of
     )
 }
 
 /// Das Manifest `takt_bench.manifest`: was der Bau des Wirts braucht, und
 /// fuer `takt check-image` die Einstiege, die messen.
-pub fn manifest(kernels: &[Kernel], suite: &str, target: &str, triple: &str, xip: bool) -> String {
+pub fn manifest(contents: &Contents<'_>, suite: &str, target: &str, triple: &str, xip: bool) -> String {
     format!(
         "# takt-bench 1\n# Erzeugt von `takt bench --emit embed` (13.8).\nprefix = {NAME}\nsuite = {suite}\n\
-         steps = {}\ntarget = {target}\ntriple = {triple}\nxip_flash = {xip}\ntick_path = {NAME}_measure\n",
-        steps(kernels)
+         part = {}\nsteps = {}\ntarget = {target}\ntriple = {triple}\nxip_flash = {xip}\ntick_path = {NAME}_measure\n",
+        contents.part,
+        contents.steps()
     )
 }
 
 /// Der Laeufer `takt_bench.c`.
-pub fn runner(kernels: &[Kernel], vectors: &[Vector]) -> String {
-    let n = steps(kernels);
+pub fn runner(contents: &Contents<'_>) -> String {
+    let kernels = contents.kernels;
+    let n = contents.steps();
     let (math, subnormal) = (kernels.len() + 1, kernels.len() + 2);
     let mut s = String::new();
     s.push_str(
@@ -121,19 +148,25 @@ pub fn runner(kernels: &[Kernel], vectors: &[Vector]) -> String {
     for k in kernels {
         let _ = writeln!(s, "#include \"{}.h\"", prefix(k));
     }
-    let _ = write!(s, "\n#define WARMUP {WARMUP}u\n#define VECTORS {}u\n\n", vectors.len());
+    let _ = writeln!(s, "\n#define WARMUP {WARMUP}u");
+    if let Some(vectors) = contents.math {
+        let _ = writeln!(s, "#define VECTORS {}u", vectors.len());
+    }
+    s.push('\n');
 
     s.push_str("/* Die C-Referenzen (13.8), beim Uebersetzen umbenannt. */\n");
     for k in kernels.iter().filter(|k| matches!(k.role, Role::Reference { .. })) {
         let [(_, run), (_, digest)] = reference_names(k);
         let _ = writeln!(s, "void {run}(void);\nunsigned long long {digest}(void);");
     }
-    s.push_str("\n/* Die korrekt gerundete Mathematik (4.2): die Einstiege, die der erzeugte Code ruft. */\n");
-    for (wide, t) in [(true, "double"), (false, "float")] {
-        for fun in FUNCTIONS {
-            let w = if wide { "f64" } else { "f32" };
-            let params = if binary(fun) { format!("{t} x, {t} y") } else { format!("{t} x") };
-            let _ = writeln!(s, "{t} takt_m_{fun}_{w}({params});");
+    if contents.math.is_some() {
+        s.push_str("\n/* Die korrekt gerundete Mathematik (4.2): die Einstiege, die der erzeugte Code ruft. */\n");
+        for (wide, t) in [(true, "double"), (false, "float")] {
+            for fun in FUNCTIONS {
+                let w = if wide { "f64" } else { "f32" };
+                let params = if binary(fun) { format!("{t} x, {t} y") } else { format!("{t} x") };
+                let _ = writeln!(s, "{t} takt_m_{fun}_{w}({params});");
+            }
         }
     }
     s.push_str(
@@ -151,23 +184,28 @@ pub fn runner(kernels: &[Kernel], vectors: &[Vector]) -> String {
     for (i, k) in kernels.iter().enumerate() {
         let _ = writeln!(s, "    struct {}_arena k{};", prefix(k), i + 1);
     }
-    let _ = write!(
-        s,
-        "}} arena;\n\nstatic struct series takt_series[{n}];\nstatic struct series c_series[{n}];\n\
-         static struct series entry_series[2];\nstatic uint64_t math_result[VECTORS];\n\
-         static uint32_t math_cycles[VECTORS];\nstatic uint32_t subnormal;\n\n"
-    );
-    s.push_str("/* Die Namen der Schritte im Protokoll; eine C-Referenz hat nur ein Referenzkern. */\n");
+    let _ = write!(s, "}} arena;\n\nstatic struct series takt_series[{n}];\nstatic struct series c_series[{n}];\n");
+    if contents.math.is_some() {
+        s.push_str(
+            "static struct series entry_series[2];\nstatic uint64_t math_result[VECTORS];\n\
+             static uint32_t math_cycles[VECTORS];\nstatic uint32_t subnormal;\n",
+        );
+    }
+    s.push_str("\n/* Die Namen der Schritte im Protokoll; eine C-Referenz hat nur ein Referenzkern. */\n");
     let _ = writeln!(s, "static const char *const names[{n}] = {{");
     s.push_str("    \"overhead\",\n");
     for k in kernels {
         let _ = writeln!(s, "    \"{}\",", k.name);
     }
-    s.push_str("    \"math\",\n    \"subnormal\",\n};\n");
+    if contents.math.is_some() {
+        s.push_str("    \"math\",\n    \"subnormal\",\n");
+    }
+    s.push_str("};\n");
     let _ = writeln!(s, "static const uint8_t has_c[{n}] = {{");
+    let extras: &[&str] = if contents.math.is_some() { &["0u", "0u"] } else { &[] };
     let flags: Vec<&str> = std::iter::once("0u")
         .chain(kernels.iter().map(|k| if matches!(k.role, Role::Reference { .. }) { "1u" } else { "0u" }))
-        .chain(["0u", "0u"])
+        .chain(extras.iter().copied())
         .collect();
     let _ = writeln!(s, "    {}\n}};\n", flags.join(", "));
     s.push_str(SERIES_C);
@@ -175,17 +213,24 @@ pub fn runner(kernels: &[Kernel], vectors: &[Vector]) -> String {
     for (i, k) in kernels.iter().enumerate() {
         kernel_step(&mut s, i + 1, k);
     }
-    math_step(&mut s, vectors);
-    s.push_str(SUBNORMAL_C);
+    if let Some(vectors) = contents.math {
+        math_step(&mut s, vectors);
+        s.push_str(SUBNORMAL_C);
+    }
     s.push_str(REPORT_C);
+    if contents.math.is_some() {
+        s.push_str(MATH_REPORT_C);
+    }
 
     s.push_str("void takt_bench_measure(void *user, uint32_t step, uint32_t runs) {\n    switch (step) {\n");
     s.push_str("    case 0u:\n        measure_overhead(user, runs);\n        break;\n");
     for i in 1..=kernels.len() {
         let _ = writeln!(s, "    case {i}u:\n        measure_{i}(user, runs);\n        break;");
     }
-    let _ = writeln!(s, "    case {math}u:\n        measure_math(user, runs);\n        break;");
-    let _ = writeln!(s, "    case {subnormal}u:\n        measure_subnormal();\n        break;");
+    if contents.math.is_some() {
+        let _ = writeln!(s, "    case {math}u:\n        measure_math(user, runs);\n        break;");
+        let _ = writeln!(s, "    case {subnormal}u:\n        measure_subnormal();\n        break;");
+    }
     s.push_str("    default:\n        break;\n    }\n}\n\n");
 
     let _ = write!(
@@ -193,12 +238,18 @@ pub fn runner(kernels: &[Kernel], vectors: &[Vector]) -> String {
         "void takt_bench_report(void *user, uint32_t step) {{\n    \
          if (step == 0u) {{\n        put_series(user, \"overhead\", (const char *)0, &takt_series[0]);\n    \
          }} else if (step < {math}u) {{\n        put_series(user, \"takt\", names[step], &takt_series[step]);\n        \
-         if (has_c[step] != 0u) {{\n            put_series(user, \"c\", names[step], &c_series[step]);\n        }}\n    \
-         }} else if (step == {math}u) {{\n        put_series(user, \"entry\", \"f32\", &entry_series[0]);\n        \
-         put_series(user, \"entry\", \"f64\", &entry_series[1]);\n        put_math(user);\n    \
-         }} else if (step == {subnormal}u) {{\n        put(user, \"bench subnormal \");\n        \
-         put_u64(user, subnormal);\n        put(user, \"\\n\");\n    }} else {{\n    }}\n}}\n"
+         if (has_c[step] != 0u) {{\n            put_series(user, \"c\", names[step], &c_series[step]);\n        }}\n    "
     );
+    if contents.math.is_some() {
+        let _ = write!(
+            s,
+            "}} else if (step == {math}u) {{\n        put_series(user, \"entry\", \"f32\", &entry_series[0]);\n        \
+             put_series(user, \"entry\", \"f64\", &entry_series[1]);\n        put_math(user);\n    \
+             }} else if (step == {subnormal}u) {{\n        put(user, \"bench subnormal \");\n        \
+             put_u64(user, subnormal);\n        put(user, \"\\n\");\n    "
+        );
+    }
+    s.push_str("} else {\n    }\n}\n");
     s
 }
 
@@ -433,13 +484,6 @@ static void put_u64(void *user, uint64_t value) {
     }
 }
 
-static void put_hex(void *user, uint64_t value) {
-    static const char hex[] = \"0123456789abcdef\";
-    for (uint32_t shift = 64u; shift > 0u; shift -= 4u) {
-        takt_bench_put(user, (uint8_t)hex[(value >> (shift - 4u)) & 15u]);
-    }
-}
-
 /* `bench <art> [<name>] min .. mean .. max .. n .. digest ..` */
 static void put_series(void *user, const char *kind, const char *name, const struct series *s) {
     put(user, \"bench \");
@@ -461,6 +505,26 @@ static void put_series(void *user, const char *kind, const char *name, const str
     put(user, \"\\n\");
 }
 
+void takt_bench_begin(void *user, uint32_t core_hz) {
+    put(user, \"\\ntakt bench \" TAKT_BENCH_SUITE \"\\nbench part \" TAKT_BENCH_PART \"\\nbench core_hz \");
+    put_u64(user, core_hz);
+    put(user, \"\\n\");
+}
+
+void takt_bench_end(void *user) {
+    put(user, \"takt end\\n\");
+}
+
+";
+
+/// Das Protokoll der Mathematik, nur im Teil, der sie rechnet.
+const MATH_REPORT_C: &str = "static void put_hex(void *user, uint64_t value) {
+    static const char hex[] = \"0123456789abcdef\";
+    for (uint32_t shift = 64u; shift > 0u; shift -= 4u) {
+        takt_bench_put(user, (uint8_t)hex[(value >> (shift - 4u)) & 15u]);
+    }
+}
+
 /* `math <i> <ergebnis> cycles <zyklen>`, wie `takt_conformance::math` sie liest. */
 static void put_math(void *user) {
     for (uint32_t i = 0u; i < VECTORS; i++) {
@@ -474,21 +538,11 @@ static void put_math(void *user) {
     }
 }
 
-void takt_bench_begin(void *user, uint32_t core_hz) {
-    put(user, \"\\ntakt bench \" TAKT_BENCH_SUITE \"\\nbench core_hz \");
-    put_u64(user, core_hz);
-    put(user, \"\\n\");
-}
-
-void takt_bench_end(void *user) {
-    put(user, \"takt end\\n\");
-}
-
 ";
 
 /// Das Modul `takt_bench.rs` fuer einen Wirt in Rust: die Haken als Trait,
 /// die Einstiege als Funktionen und ein Lauf ueber alle Schritte.
-pub fn rust_module(kernels: &[Kernel], suite: &str) -> String {
+pub fn rust_module(contents: &Contents<'_>, suite: &str) -> String {
     format!(
         "// Das Messprogramm von `takt bench` (13.8) fuer einen Wirt in Rust; erzeugt von\n\
          // `takt bench --emit embed`. Nicht von Hand aendern.\n\n\
@@ -542,7 +596,7 @@ pub fn rust_module(kernels: &[Kernel], suite: &str) -> String {
          pub fn steps(host: &mut dyn Host, runs: u32, mut locked: impl FnMut(&mut dyn FnMut())) {{\n    \
          for step in 0..STEPS {{\n        locked(&mut || measure(host, step, runs));\n        \
          report(host, step);\n    }}\n}}\n",
-        steps = steps(kernels)
+        steps = contents.steps()
     )
 }
 
@@ -562,11 +616,17 @@ mod tests {
         vec![Vector { line: 1, fun: "pow", wide: true, args: [0x4000_0000_0000_0000, 0x3ff0_0000_0000_0000], want: 0 }]
     }
 
+    /// Das ganze Messprogramm aus `kernels` mit der Mathematik.
+    fn whole<'a>(kernels: &'a [Kernel], vectors: &'a [Vector]) -> Contents<'a> {
+        Contents { kernels, math: Some(vectors), part: Part::WHOLE }
+    }
+
     /// Jeder Kern hat seinen Schritt und seinen Platz in der Arena; ein
     /// Referenzkern misst dazu seine C-Referenz, umbenannt auf sein Praefix.
     #[test]
     fn every_kernel_has_its_step() {
-        let c = runner(&kernels(), &vectors());
+        let (kernels, vectors) = (kernels(), vectors());
+        let c = runner(&whole(&kernels, &vectors));
         assert!(c.contains("#include \"bench_frame.h\"\n#include \"bench_pid.h\""), "{c}");
         assert!(c.contains("struct bench_frame_arena k1;\n    struct bench_pid_arena k2;"), "{c}");
         assert!(c.contains("case 1u:\n        measure_1(user, runs);"), "{c}");
@@ -583,14 +643,37 @@ mod tests {
         assert!(c.contains("{9u, 1u, 0x4000000000000000ULL, 0x3ff0000000000000ULL},"), "{c}");
         assert!(c.contains("case 9u:\n            return bits_f64(takt_m_pow_f64(x, y));"), "{c}");
         assert!(c.contains("static const uint8_t has_c[5] = {\n    0u, 0u, 1u, 0u, 0u\n};"), "{c}");
+        assert!(c.contains("\"\\nbench part \" TAKT_BENCH_PART \"\\nbench core_hz \""), "der Teil im Kopf: {c}");
+    }
+
+    /// **Ein Teil ohne die Mathematik** (FB-740) misst seinen Messaufwand und
+    /// seine Kerne, sonst nichts: keine Vektoren, kein Subnormal-Vektor, und
+    /// kein Einstieg von `libtaktm` bindet sich ueber den Laeufer ein.
+    #[test]
+    fn a_part_without_math_measures_only_its_kernels() {
+        let kernels = kernels();
+        let contents = Contents { kernels: &kernels, math: None, part: Part { index: 1, of: 2 } };
+        let c = runner(&contents);
+        assert_eq!(contents.steps(), 3);
+        assert!(c.contains("case 2u:\n        measure_2(user, runs);\n        break;\n    default:"), "{c}");
+        for absent in ["VECTORS", "takt_m_", "measure_math", "measure_subnormal", "put_math", "put_hex", "entry_series"]
+        {
+            assert!(!c.contains(absent), "{absent}: {c}");
+        }
+        assert!(c.contains("static const uint8_t has_c[3] = {\n    0u, 0u, 1u\n};"), "{c}");
+        assert!(c.contains("} else if (step < 3u) {"), "{c}");
+        assert!(header(&contents, "0123456789abcdef").contains("#define TAKT_BENCH_PART \"1 2\""));
+        assert!(manifest(&contents, "0123456789abcdef", "thumbv7em", "t", false).contains("part = 1/2\nsteps = 3\n"));
     }
 
     /// Kopf und Modul nennen dieselbe Zahl der Schritte und dieselbe Kennung.
     #[test]
     fn header_and_module_agree() {
-        let h = header(&kernels(), "0123456789abcdef");
-        let r = rust_module(&kernels(), "0123456789abcdef");
+        let (kernels, vectors) = (kernels(), vectors());
+        let h = header(&whole(&kernels, &vectors), "0123456789abcdef");
+        let r = rust_module(&whole(&kernels, &vectors), "0123456789abcdef");
         assert!(h.contains("#define TAKT_BENCH_STEPS 5u\n#define TAKT_BENCH_SUITE \"0123456789abcdef\""), "{h}");
+        assert!(h.contains("#define TAKT_BENCH_PART \"1 1\""), "{h}");
         assert!(r.contains("pub const STEPS: u32 = 5;") && r.contains("pub const SUITE: &str = \"0123456789abcdef\";"));
         for entry in ["takt_bench_begin", "takt_bench_measure", "takt_bench_report", "takt_bench_end"] {
             assert!(

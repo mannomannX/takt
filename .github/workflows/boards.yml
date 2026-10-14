@@ -15,6 +15,15 @@
 # Compiler mehr. Die Quellen nennt am Board `TAKT_ROOT`
 # (`takt_conformance::repo_root`), denn ein Pfad aus `env!` waere der des
 # Runners.
+#
+# Die Abbilder unter Zephyr baut derselbe Lauf mit (M11 Schritt 19, FB-731):
+# Mit Zephyr und seinem SDK (`.github/actions/zephyr`) bauen die Zephyr-Tests
+# der Suiten ihre Abbilder in denselben Zwischenspeicher
+# (`takt_conformance::zephyr::image`). Bei einem Push, der Adapter, Beispiele
+# oder Modul unter Zephyr aendert, und im Pull Request dazu laeuft nur der Job
+# `zephyr`: Er baut alle Beispiele fuer beide Boards mit den Pruefungen aus
+# `zephyr_example.rs` und faehrt clang-tidy ueber ihre `compile_commands.json`
+# gegen den Katalog des C-Teils (plan/cert.md).
 name: Board-Abbilder
 
 on:
@@ -24,6 +33,39 @@ on:
         description: Zweig oder Commit; leer heisst der Stand, von dem aus gestartet wird
         required: false
         default: ""
+  push:
+    paths:
+      - "crates/takt-embed-c/ports/zephyr*/**"
+      - "crates/takt-embed-c/ports/cmsis-rtos2/**"
+      - "examples/zephyr*/**"
+      - "examples/cmsis-rtos2/**"
+      - "zephyr/**"
+      - "tools/cmake/**"
+      - "tools/c-analysis/zephyr.cfg"
+      - "crates/takt-cli/tests/zephyr_example.rs"
+      - "crates/takt-cli/tests/c_analysis.rs"
+      - "plan/cert.md"
+      - ".github/actions/zephyr/**"
+      - "tools/ci/zephyr-requirements.*"
+      - ".github/workflows/boards.yml"
+
+  # Der Pull Request eines Merge-Antrags zeigt den Job `zephyr` mit (plan/m11-strands.md,
+  # Ablauf je Punkt 7).
+  pull_request:
+    paths:
+      - "crates/takt-embed-c/ports/zephyr*/**"
+      - "crates/takt-embed-c/ports/cmsis-rtos2/**"
+      - "examples/zephyr*/**"
+      - "examples/cmsis-rtos2/**"
+      - "zephyr/**"
+      - "tools/cmake/**"
+      - "tools/c-analysis/zephyr.cfg"
+      - "crates/takt-cli/tests/zephyr_example.rs"
+      - "crates/takt-cli/tests/c_analysis.rs"
+      - "plan/cert.md"
+      - ".github/actions/zephyr/**"
+      - "tools/ci/zephyr-requirements.*"
+      - ".github/workflows/boards.yml"
 
 permissions:
   contents: read
@@ -34,8 +76,31 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  zephyr:
+    name: Zephyr
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/zephyr
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: zephyr
+      # Die Beispiele bauen und pruefen; die Baue bleiben in `target/tmp`
+      # fuer clang-tidy liegen.
+      - name: Die Beispiele unter Zephyr
+        run: cargo nextest run -p takt-cli --test zephyr_example --run-ignored all --no-fail-fast --profile ci
+      - name: clang-tidy ueber die Baue gegen den Katalog
+        run: >-
+          cargo nextest run -p takt-cli --test c_analysis --run-ignored all --profile ci
+          -E 'test(=the_zephyr_build_deviates_only_as_the_catalog_says)'
+
   images:
     name: Abbilder ${{ matrix.board }}
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 340
     strategy:
@@ -45,13 +110,15 @@ jobs:
     steps:
       # Werkzeuge und Quellen vom selben Stand: Die Setup-Aktion legt fest,
       # mit welchem rustc und clang gebaut wird, und beide gehen in den Stand.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup
+      # Die Zephyr-Tests der Suite bauen ihre Abbilder mit west.
+      - uses: ./.github/actions/zephyr
       # Nur die Registry: Ein Cache des Zielverzeichnisses truege den
       # Zwischenspeicher der Abbilder mit.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: boards
           cache-targets: "false"
@@ -87,7 +154,7 @@ jobs:
             done
             echo "gebaut $(cat "$images/misses.log" 2>/dev/null | wc -l)"
           } | tee "$images/stand-${{ matrix.board }}.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: board-images-${{ matrix.board }}
@@ -97,14 +164,15 @@ jobs:
 
   tests:
     name: Board-Suiten als Archiv
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: board-tests
       - name: Archiv bauen
@@ -115,7 +183,7 @@ jobs:
       # `takt bench` am Board, mit den Abbildern aus `images`.
       - name: takt
         run: cargo build --release -p takt-cli
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: board-tests-windows
           path: |

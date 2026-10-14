@@ -17,7 +17,7 @@ use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
 use super::{
-    Board, Bringup, Builder, ConsoleLine, Failure, Form, Options, attached, capture, port_listed, run_bounded,
+    Board, Bringup, Builder, ConsoleLine, Failure, Form, Options, Room, attached, capture, port_listed, run_bounded,
 };
 
 pub(super) const BRINGUP: Bringup = Bringup {
@@ -343,7 +343,26 @@ impl Board for Esp32c6 {
         self.download(elf)?;
         self.capture(elf, options).and_then(|text| super::complete(text, options))
     }
+
+    /// Der C6 rechnet das Messprogramm aus dem RAM (12.3, `xip_flash`): Dort
+    /// liegen die Kerne mit ihren Rahmen, und dort wird es eng, nicht im Flash
+    /// (FB-740). Frei ist, was der Hauptstack ueber `TICK_STACK_BYTES` hinaus
+    /// nicht braucht; sein Boden ist das Waechterwort von `esp-hal`
+    /// (`takt_stack.x`).
+    fn room(&self, elf: &Path) -> Result<Vec<Room>, String> {
+        let symbols = symbols(elf)?;
+        let symbol = |name| super::symbol(&symbols, name);
+        Ok(vec![Room::below_stack(
+            RAM,
+            symbol("_stack_start_cpu0")?,
+            symbol("__stack_chk_guard")? + 4,
+            symbol("__takt_tick_stack_bytes")?,
+        )])
+    }
 }
+
+/// Wo das HP-SRAM des C6 beginnt, Code und Daten in einem Adressraum.
+const RAM: u64 = 0x4080_0000;
 
 /// Die Symbole des Abbilds.
 fn symbols(elf: &Path) -> Result<Vec<takt_llvm::inspect::Symbol>, String> {
