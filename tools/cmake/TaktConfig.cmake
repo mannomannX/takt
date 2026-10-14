@@ -24,6 +24,13 @@
 # unter Windows oder Linux dessen Tripel. Ohne `FORM` nimmt es `TAKT_FORM`.
 # Beide setzt das Zephyr-Modul (`zephyr/`) aus seiner Konfiguration. `BUILD`
 # geht als `--build` an das Werkzeug (8.1); ohne Angabe baut es `hw`.
+#
+# Unter Zephyr (`TAKT_ZEPHYR`, vom Modul gesetzt) bekommt ein Programm mit
+# `HARDWARE` die Treiber aus dem Devicetree (8.10): `takt build --zephyr`
+# schreibt `<name>_zephyr.c` und `<name>_zephyr.h`, und die Anwendung `app`
+# uebersetzt die Quelle mit den Koepfen von Zephyr. Nicht in einer eigenen
+# Bibliothek: Eine, die erst die Anwendung anlegt, haengt nicht an den Koepfen,
+# die der Bau von Zephyr erzeugt (`zephyr_generated_headers`).
 
 include_guard(GLOBAL)
 
@@ -84,13 +91,20 @@ function(takt_add_program name)
     list(APPEND args --build "${ARG_BUILD}")
   endif()
   set(depends "${source}")
+  set(outputs "${lib}" "${out}/${name}.h" "${out}/takt_sdk.h")
+  set(devicetree OFF)
   if(ARG_HARDWARE)
     get_filename_component(hardware "${ARG_HARDWARE}" ABSOLUTE)
     list(APPEND args --hardware "${hardware}")
     list(APPEND depends "${hardware}")
+    if(TAKT_ZEPHYR)
+      set(devicetree ON)
+      list(APPEND args --zephyr)
+      list(APPEND outputs "${out}/${name}_zephyr.c" "${out}/${name}_zephyr.h")
+    endif()
   endif()
   add_custom_command(
-    OUTPUT "${lib}" "${out}/${name}.h" "${out}/takt_sdk.h"
+    OUTPUT ${outputs}
     COMMAND "${TAKT_EXECUTABLE}" ${args}
     DEPENDS ${depends}
     COMMENT "takt build ${name} (${form}, ${triple})"
@@ -108,4 +122,7 @@ function(takt_add_program name)
     INTERFACE_INCLUDE_DIRECTORIES "${out}"
     INTERFACE_LINK_LIBRARIES "${libs}")
   add_dependencies(${name} ${name}_takt)
+  if(devicetree)
+    target_sources(app PRIVATE "${out}/${name}_zephyr.c")
+  endif()
 endfunction()

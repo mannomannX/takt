@@ -94,6 +94,7 @@ const FLAGS: &[(&str, &[&str])] = &[
             "--review",
             "--target",
             "--warnings-as-errors",
+            "--zephyr",
         ],
     ),
     (
@@ -218,6 +219,7 @@ const FLAGS: &[(&str, &[&str])] = &[
             "--profile",
             "--proof",
             "--target",
+            "--zephyr",
         ],
     ),
     (
@@ -732,9 +734,20 @@ fn check(args: &Args) -> bool {
                     diags.extend(takt_sema::calibrated::check_in(program, target, span, reserve));
                 }
             }
-            if let Some(hw) = hardware(args) {
-                diags.extend(takt_sema::calibrated::check_bindings(program, &hw));
-                diags.extend(takt_sema::calibrated::polling(program, &hw, kalibriert.as_ref()));
+            match hardware(args) {
+                Some(hw) => {
+                    diags.extend(takt_sema::calibrated::check_bindings(program, &hw));
+                    diags.extend(takt_sema::calibrated::polling(program, &hw, kalibriert.as_ref()));
+                    // 8.10: Label und Rohtyp der Treiber aus dem Devicetree.
+                    if args.has("--zephyr") {
+                        diags.extend(takt_sema::calibrated::check_zephyr(program, &hw));
+                    }
+                }
+                None if args.has("--zephyr") => {
+                    eprintln!("{ZEPHYR_WITHOUT_HARDWARE}");
+                    ok = false;
+                }
+                None => {}
             }
             // 4.5: `tcb_policy = reviewed(…)` verlangt je Projekt-Native
             // eine Zeile in `natives.review`.
@@ -1069,6 +1082,10 @@ fn build(args: &Args) -> bool {
                 return false;
             };
             let hw = hardware(args);
+            let zephyr = args.has("--zephyr");
+            if zephyr && !zephyr_checked(path, &program, hw.as_ref()) {
+                return false;
+            }
             let nvm_blocking_ns = nvm_blocking_ns(&program, hw.as_ref(), args);
             let e = embed::Embed {
                 program: &program,
@@ -1082,6 +1099,7 @@ fn build(args: &Args) -> bool {
                 drivers_type: args.value("--drivers"),
                 nvm_blocking_ns,
                 consts_rs: constants_rust(&program, hw.as_ref(), nvm_blocking_ns),
+                zephyr,
                 out: std::path::PathBuf::from(out),
             };
             match embed::embed(&e) {
@@ -1097,6 +1115,26 @@ fn build(args: &Args) -> bool {
             false
         }
     }
+}
+
+/// `--zephyr` ohne Konfiguration: Die Treiber aus dem Devicetree stehen in ihr (8.10).
+const ZEPHYR_WITHOUT_HARDWARE: &str =
+    "--zephyr: die Treiber aus dem Devicetree nennt die Hardware-Konfiguration (8.10); `--hardware` fehlt";
+
+/// Pruefung 60 unter `--zephyr` (8.10, „Treiber aus dem Devicetree“) vor
+/// dem Bau der Lieferform: Label und Rohtyp der Kanaele an `zephyr-gpio`.
+fn zephyr_checked(path: &str, program: &takt_mir::Program, hw: Option<&takt_mir::hardware::Hardware>) -> bool {
+    let Some(hw) = hw else {
+        eprintln!("{ZEPHYR_WITHOUT_HARDWARE}");
+        return false;
+    };
+    let Some(src) = read(path) else { return false };
+    let map = takt_sema::source_map(path, src.as_str());
+    let diags = takt_sema::calibrated::check_zephyr(program, hw);
+    for d in &diags {
+        eprintln!("{}", map.render(d));
+    }
+    !diags.iter().any(takt_diag::Diagnostic::is_error)
 }
 
 /// Die Konstanten eines Programms als C-Header.

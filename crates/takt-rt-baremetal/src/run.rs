@@ -128,12 +128,6 @@ where
         let conformance = self.cadence.conformance();
         let Some(tick) = tick else { return if conformance { Outputs::All } else { Outputs::None } };
         self.slept = self.slept.saturating_add(tick.slept);
-        if conformance
-            && tick.k.checked_rem(self.time_every) == Some(0)
-            && let Some(t) = self.telemetry.lead()
-        {
-            t.write_time(tick);
-        }
         let k = tick.k.saturating_add(1).saturating_add(tick.slept);
         if k < self.next {
             return Outputs::None;
@@ -142,10 +136,14 @@ where
         if conformance { Outputs::Changed } else { Outputs::All }
     }
 
-    fn record(&mut self, _tick: &Tick) {
-        if let Some(t) = self.telemetry.lead() {
-            t.flush();
+    /// Im Konformitaetslauf die Zeitzeile des Ticks, am Ende seiner Zeilen
+    /// (grammar/trace.md T5) und mit seiner Nummer im Trace (FB-687).
+    fn record(&mut self, tick: &Tick) {
+        let Some(t) = self.telemetry.lead() else { return };
+        if self.cadence.conformance() && tick.traced().checked_rem(self.time_every) == Some(0) {
+            t.write_time(tick);
         }
+        t.flush();
     }
 }
 

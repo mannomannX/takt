@@ -97,6 +97,12 @@ static void drive(takt_core *core) {
     struct takt_stacks stacks;
     const struct takt_stacks *measured = NULL;
     if (takt_rtos_start(&rtos, core, &config) == 0) {
+#if TAKT_PROBE_IN_RUN
+        /* Ein Bau mit `TAKT_PROBE_IN_RUN` probt die Partition noch einmal im
+         * Lauf: Die Schutzeinheit weist den Zugriff ab, und der Kern meldet
+         * `Runtime(Hardware)` (12.3, `partition_guard`). */
+        (void)partition_probe(&arena);
+#endif
         /* Die fremde Aufgabe: rechnet mit der FPU, solange Takt laeuft. */
         while (takt_rtos_running(&rtos) != 0) {
             takt_foreign_round(&foreign);
@@ -128,6 +134,7 @@ int main(void) {
         if ((journal_open(&nvm) == 0) &&
             (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog, &nvm,
                                       current, stored, PORT_TEST_PERSIST_BOUND) == TAKT_OK)) {
+            partition_guard(&core);
             drive(&core);
         }
     }

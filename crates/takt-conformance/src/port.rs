@@ -227,7 +227,7 @@ fn trace_agrees(log: &str, text: &str, failures: &mut Vec<String>) {
         return;
     }
     match board::reached(log) {
-        Some(last) if last + 1 >= TICKS => {}
+        Some(last) if last >= TICKS => {}
         last => {
             let last = last.map_or_else(|| "keinem".to_string(), |t| t.to_string());
             failures.push(format!("Trace unvollstaendig: er reicht bis Tick {last}, der Lauf hat {TICKS} Ticks"));
@@ -437,12 +437,15 @@ mod tests {
             let tick_of = |l: &str| l.strip_prefix("t=")?.split_once(' ')?.0.parse::<u64>().ok();
             let mut lines = trace.lines().peekable();
             let mut body = String::new();
-            for k in 0..TICKS {
+            // Die Zeitzeile steht am Ende ihres Ticks, ab Tick 1 (FB-687).
+            for k in 0..=TICKS {
                 while let Some(l) = lines.next_if(|l| tick_of(l) == Some(k)) {
                     body.push_str(l);
                     body.push('\n');
                 }
-                body.push_str(&format!("t={k} time took=40000 drift=3000 slept=0\n"));
+                if k > 0 {
+                    body.push_str(&format!("t={k} time took=40000 drift=3000 slept=0\n"));
+                }
             }
             body.push_str(&format!("{FOREIGN}40000 fehler 0\n"));
             format!("takt auf wirt\r\n{}{body}{}takt end\n", board::MARK, summary(body.len()))
