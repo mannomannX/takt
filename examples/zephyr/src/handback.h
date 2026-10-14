@@ -1,8 +1,9 @@
 /* handback.h - das Board zurueck an den Host (FB-275): Schreibt der Host
  * `TAKT` auf die Leitung, gibt die Anwendung das Board ab, damit er das
  * naechste Abbild ohne Hand schreibt. Was das heisst, haengt am Board: der
- * F401 springt in den DFU-Bootloader des ROM (handback_stm32f401.c), jedes
- * andere startet neu (handback_reboot.c). Den Wunsch nimmt handback.c an. */
+ * F401 startet mit dem Wunsch nach dem DFU-Bootloader des ROM neu, und das
+ * Sprungbrett springt hinein (handback_stm32f401.c); jedes andere startet
+ * neu (handback_reboot.c). Den Wunsch des Hosts nimmt handback.c an. */
 #ifndef HANDBACK_H
 #define HANDBACK_H
 
