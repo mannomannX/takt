@@ -61,9 +61,8 @@ pub struct Image {
 
 /// Was der Schritt ausserhalb des Programms ruft und darum im IRAM liegen
 /// muss: die ISRs und Primitive des Adapters (`ports/irq/esp-idf`), der Port
-/// der Interruptform, der Kern, das Geraet des Journals (`ports/esp-idf-nvm`),
-/// Leitung und Watchdog des Wirts (`examples/esp-idf/main`) und was sie von
-/// ESP-IDF rufen. Dass dessen Funktionen im IRAM liegen, haengt an der
+/// der Interruptform, der Kern, Leitung und Watchdog des Wirts
+/// (`examples/esp-idf/main`) und was sie von ESP-IDF rufen. Dass dessen Funktionen im IRAM liegen, haengt an der
 /// Konfiguration (`CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM` in `sdkconfig.defaults`,
 /// `CONFIG_FREERTOS_PLACE_ISR_FUNCTIONS_INTO_FLASH` aus); die Liste faengt
 /// eine, die sie verschiebt.
@@ -81,14 +80,20 @@ pub const RESIDENT: &[&str] = &[
     "takt_irq_chip_pend_step",
     "takt_irq_chip_pend_jobs",
     "takt_core_service",
-    "takt_idf_nvm_erase",
-    "takt_idf_nvm_write",
-    "takt_idf_nvm_poll",
     "line_isr",
     "line_try_write",
     "line_flush",
     "kick",
 ];
+
+/// Dazu das Geraet des Journals (`ports/esp-idf-nvm`), das der Wirt nur
+/// bindet, wenn das Programm `persist` hat ([`journaled`]).
+pub const RESIDENT_JOURNAL: &[&str] = &["takt_idf_nvm_erase", "takt_idf_nvm_write", "takt_idf_nvm_poll"];
+
+/// Schreibt das Programm ein Journal? `persist_bytes` im Manifest.
+fn journaled(manifest: &str) -> bool {
+    manifest.lines().filter_map(|l| l.split_once('=')).any(|(k, v)| k.trim() == "persist_bytes" && v.trim() != "0")
+}
 
 /// Wo der C6 Code aus dem RAM rechnet: das HP-SRAM, 512 KiB.
 const IRAM: std::ops::Range<u64> = 0x4080_0000..0x4088_0000;
@@ -137,7 +142,8 @@ pub fn build(idf: &Path, program: &Path, ticks: u64, fresh: bool, dir: &Path, ta
 }
 
 /// Die Residenz im RAM am Abbild: `takt check-image` fuer den Tick-Pfad des
-/// Programms, [`RESIDENT`] fuer das, was der Schritt sonst ruft.
+/// Programms, [`RESIDENT`] und [`RESIDENT_JOURNAL`] fuer das, was der Schritt
+/// sonst ruft.
 pub fn resident(takt: &Path, image: &Image) -> Result<(), String> {
     let checked = Command::new(takt)
         .arg("check-image")
@@ -157,7 +163,13 @@ pub fn resident(takt: &Path, image: &Image) -> Result<(), String> {
     let symbols = takt_llvm::inspect::Binutils::best_for(takt_llvm::target::Target::RISCV32IMAC)
         .symbols(&image.elf)
         .ok_or_else(|| "`nm` fehlt: kein Blick ins Abbild".to_string())?;
-    let outside = outside_iram(&symbols, RESIDENT);
+    let manifest =
+        std::fs::read_to_string(&image.manifest).map_err(|e| format!("{}: {e}", image.manifest.display()))?;
+    let mut names = RESIDENT.to_vec();
+    if journaled(&manifest) {
+        names.extend(RESIDENT_JOURNAL);
+    }
+    let outside = outside_iram(&symbols, &names);
     if outside.is_empty() { Ok(()) } else { Err(format!("nicht im IRAM: {}", outside.join(", "))) }
 }
 
@@ -332,5 +344,14 @@ mod tests {
         let symbols = [symbol("kick", 0x4080_1234), symbol("line_isr", 0x4200_0100)];
         let outside = outside_iram(&symbols, &["kick", "line_isr", "takt_core_service"]);
         assert_eq!(outside, vec!["line_isr bei 0x42000100".to_string(), "takt_core_service fehlt".to_string()]);
+    }
+
+    /// **Das Geraet des Journals gehoert nur mit `persist` ins Abbild**: Ohne
+    /// Journal bindet der Wirt es nicht, und sein Fehlen ist kein Befund.
+    #[test]
+    fn the_journal_device_is_resident_only_with_persist() {
+        assert!(journaled("prefix = program\npersist_bytes = 20\n"));
+        assert!(!journaled("prefix = program\npersist_bytes = 0\n"));
+        assert!(!journaled("prefix = program\n"));
     }
 }
