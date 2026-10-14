@@ -3703,9 +3703,14 @@ impl Enc<'_> {
         Some((loc, ending.collect()))
     }
 
-    /// Beendet der committete Zustand `env` den Lauf?
-    fn ends(env: &Env, (loc, ending): &(String, Vec<i64>)) -> Term {
-        Term::or(ending.iter().map(|i| Term::eq(env[loc].clone(), Term::int(*i))).collect())
+    /// Beendet der committete Zustand `env` den Lauf: eine Variante von
+    /// `sys/next_run`, die ihn beendet, oder `now` an der groessten
+    /// `Duration` (3.3)?
+    fn ends(&self, env: &Env) -> Term {
+        let axis = Term::eq(env[NOW].clone(), Term::int(i64::MAX));
+        let Some((loc, ending)) = self.run_end() else { return axis };
+        let own = ending.iter().map(|i| Term::eq(env[&loc].clone(), Term::int(*i)));
+        Term::or(own.chain([axis]).collect())
     }
 
     /// Die Outputs, wie sie zu Beginn und nach dem Ende eines Laufs stehen:
@@ -3742,7 +3747,8 @@ impl Enc<'_> {
     /// laeuft keine Maschine mehr, und die Outputs stehen auf `safe`.
     fn tick(&mut self, pre: &Env) -> R<Env> {
         let mut cur = pre.clone();
-        // 3.3: `now` bleibt bei der groessten `Duration` stehen (FB-614).
+        // 3.3: `now` saettigt bei der groessten `Duration`; mit diesem Tick
+        // endet der Lauf (`ends`).
         let tick = self.p.config.tick.max(1);
         let beyond = Term::bin(Op::Gt, pre[NOW].clone(), Term::int(i64::MAX - tick));
         let next = Term::bin(Op::Add, pre[NOW].clone(), Term::int(tick));
@@ -3758,9 +3764,8 @@ impl Enc<'_> {
             }
         }
         self.faults_cleared(&mut cur);
-        let end = self.run_end();
-        let ended = end.as_ref().map(|_| pre[ENDED].clone());
-        let running = ended.clone().map_or_else(|| Term::bool(true), Term::not);
+        let ended = pre[ENDED].clone();
+        let running = ended.clone().not();
         let actives: BTreeMap<MachineId, Term> =
             self.actives(pre).into_iter().map(|(m, a)| (m, Term::and(vec![a, running.clone()]))).collect();
         self.aborts.clear();
@@ -3807,14 +3812,12 @@ impl Enc<'_> {
         self.apply_scheduled(&mut cur)?;
         self.drain_tx(&mut cur)?;
         self.edges_next(pre, &mut cur)?;
-        if let (Some(end), Some(ended)) = (end, ended) {
-            let now = Enc::ends(&cur, &end);
-            for (loc, ty, safe) in self.safe_outputs()? {
-                self.put(&mut cur, &loc, ty, safe, &ended, Span::default())?;
-            }
-            cur.insert(OVER.into(), ended.clone());
-            cur.insert(ENDED.into(), Term::or(vec![ended, now]));
+        let now = self.ends(&cur);
+        for (loc, ty, safe) in self.safe_outputs()? {
+            self.put(&mut cur, &loc, ty, safe, &ended, Span::default())?;
         }
+        cur.insert(OVER.into(), ended.clone());
+        cur.insert(ENDED.into(), Term::or(vec![ended, now]));
         let monitors = self.monitors.clone();
         self.monitors_next(&monitors, Some(pre), &mut cur)?;
         Ok(cur)
@@ -3880,10 +3883,9 @@ impl Enc<'_> {
         self.advance(&started, &mut env);
         self.drain_tx(&mut env)?;
         self.edges_next(&before, &mut env)?;
-        if let Some(end) = self.run_end() {
-            env.insert(OVER.into(), Term::bool(false));
-            env.insert(ENDED.into(), Enc::ends(&env, &end));
-        }
+        env.insert(OVER.into(), Term::bool(false));
+        let ended = self.ends(&env);
+        env.insert(ENDED.into(), ended);
         let monitors = self.monitors.clone();
         self.monitors_next(&monitors, None, &mut env)?;
         Ok(env)
@@ -4588,7 +4590,9 @@ impl Enc<'_> {
         self.now = state[NOW].clone();
         if let Some(m) = self.monitors.iter().find(|m| m.name() == prop.name).cloned() {
             let t = self.monitor_goal(&m, state)?;
-            if m.future() > 0 && state.contains_key(OVER) {
+            // Das Ende an der Achse (3.3) liegt Jahrhunderte voraus; der
+            // Hinweis gilt dem Ende, das das Programm selbst waehlt (12.7).
+            if m.future() > 0 && self.run_end().is_some() {
                 self.note(&format!(
                     "`{}`: die Positionen der letzten {} Ticks vor dem Ende eines Laufs entscheidet das Modell nicht",
                     prop.name,
@@ -4754,7 +4758,8 @@ const NOW: &str = "s.now";
 /// steht an der Grenze von `Duration` still (3.3), der Tick zaehlt weiter.
 const TICKS: &str = "s.ticks";
 
-/// Hat der Lauf geendet (12.7), in diesem Tick oder davor?
+/// Hat der Lauf geendet (12.7, 3.3), in diesem Tick oder davor? Jedes
+/// Modell fuehrt ihn: Ohne eigenes Ende endet ein Lauf an der Achse.
 const ENDED: &str = "s.run.ended";
 
 /// Hatte er schon vor diesem Tick geendet? Dann ist der Tick keiner des Laufs.

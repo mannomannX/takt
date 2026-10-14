@@ -761,17 +761,23 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    /// 12.7: die Zeile `end` mit dem Grund aus `sys/next_run`.
+    /// 12.7: die Zeile `end` mit dem Grund aus `sys/next_run`; ohne eigenes
+    /// Ende hat `now` die groesste `Duration` erreicht (3.3).
     fn end(&mut self, k: u64, s: &Env) -> Result<(), Stop> {
-        let (index, variants) = takt_mir::sys::next_run(self.p).ok_or_else(|| missing(k, "`sys/next_run`"))?;
-        let c = &self.p.channels[index];
-        let variant = match value_at(self.p, c.ty, &format!("s.out.{}", c.name), s) {
-            Some(Value::Enum { variant, .. }) => variant,
-            _ => return Err(missing(k, &format!("s.out.{}", c.name))),
+        let own = match takt_mir::sys::next_run(self.p) {
+            Some((index, variants)) => {
+                let c = &self.p.channels[index];
+                let variant = match value_at(self.p, c.ty, &format!("s.out.{}", c.name), s) {
+                    Some(Value::Enum { variant, .. }) => variant,
+                    _ => return Err(missing(k, &format!("s.out.{}", c.name))),
+                };
+                variants.get(variant as usize).and_then(|v| v.1).map(takt_interp::Ended::NextRun)
+            }
+            None => None,
         };
-        let next = variants.get(variant as usize).and_then(|v| v.1);
-        let next = next.ok_or_else(|| missing(k, "der Grund des Endes"))?;
-        self.push(k, LineKind::End { reason: next.word().to_string() });
+        let ended = own.or_else(|| takt_interp::run::end_of_time(self.p, k));
+        let ended = ended.ok_or_else(|| missing(k, "der Grund des Endes"))?;
+        self.push(k, LineKind::End { reason: ended.name().to_string() });
         Ok(())
     }
 

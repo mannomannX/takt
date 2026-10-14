@@ -17,7 +17,7 @@ fn roundtrip(kind: LineKind) {
 
 #[test]
 fn an_end_line_reads_back() {
-    for reason in ["now", "after", "on_wake", "on_start", "scenario"] {
+    for reason in ["now", "after", "on_wake", "on_start", "duration", "scenario"] {
         roundtrip(LineKind::End { reason: reason.into() });
     }
     roundtrip(LineKind::Persist { hex: "0a0bff".into() });
