@@ -290,6 +290,10 @@ pub enum Bin {
     /// `natives`: die Vektoren der kuratierten Natives mit dem
     /// Stack-Bedarf je Aufruf (13.8); das Takt-Programm bleibt ungenutzt.
     Natives,
+    /// `leftover`: ein Vorgaenger, der eine Region der MPU stehen laesst
+    /// und ohne Reset in den Bootloader springt (FB-752); nur auf dem
+    /// F401, das Takt-Programm bleibt ungenutzt.
+    Leftover,
 }
 
 /// Die Form, in der das Bring-up den Kern ruft (12.11); jede ausser dem
@@ -505,6 +509,11 @@ impl Options {
     /// Die Vektoren der kuratierten Natives.
     pub fn natives() -> Options {
         Options { bin: Bin::Natives, ..Options::default() }
+    }
+
+    /// Der Vorgaenger, der eine Region der MPU stehen laesst ([`Bin::Leftover`]).
+    pub fn leftover() -> Options {
+        Options { bin: Bin::Leftover, ..Options::default() }
     }
 }
 
@@ -737,6 +746,7 @@ impl Bringup {
             Bin::Takt => "takt",
             Bin::Bench { .. } => "bench",
             Bin::Natives => "natives",
+            Bin::Leftover => "leftover",
         };
         let target = crate::target_dir();
         let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
@@ -871,6 +881,7 @@ pub(crate) fn image_key(triple: &str, program: &Path, options: &Options) -> Resu
             f.file(&crate::natives::spec_path())?;
             f.file(&crate::math::spec_path())?;
         }
+        Bin::Leftover => f.str("leftover"),
     }
     Ok(f.finish())
 }
