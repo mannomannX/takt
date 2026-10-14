@@ -91,7 +91,6 @@ int main(void) {
     struct takt_line line;
     const char *channel = NULL;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
-        int32_t status;
         takt_board_trace("takt auf zephyr mit pins aus dem devicetree\n");
         takt_line_flush();
         if (wire_zephyr_init(&channel) != 0) {
@@ -103,7 +102,7 @@ int main(void) {
         } else {
             takt_line_mark();
             takt_line_flush();
-            status = takt_core_init(&core, &wire_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
+            const int32_t status = takt_core_init(&core, &wire_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
             if (status != TAKT_OK) {
                 refused("takt kern: nicht bereit ", status);
             } else {

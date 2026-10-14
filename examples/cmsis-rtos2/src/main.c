@@ -109,7 +109,6 @@ int main(void) {
     struct takt_line line;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
         int rc;
-        int32_t status;
         /* Der Kopf geht gleich an die Leitung (FB-757). */
         takt_board_trace("takt auf zephyr mit cmsis-rtos2\n");
         takt_line_mark();
@@ -118,8 +117,9 @@ int main(void) {
         if (rc != 0) {
             refused("takt journal: nicht offen ", rc);
         } else {
-            status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog,
-                                              &nvm, current, stored, PORT_TEST_PERSIST_BOUND);
+            const int32_t status =
+                takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
+                                         current, stored, PORT_TEST_PERSIST_BOUND);
             if (status != TAKT_OK) {
                 refused("takt kern: nicht bereit ", status);
             } else {
