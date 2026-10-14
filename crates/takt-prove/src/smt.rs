@@ -355,6 +355,9 @@ pub enum Target {
     /// Ein Uebergang (Index in `Model::transitions`): wie eine Pruefstelle,
     /// deren Feuern das Nehmen des Uebergangs ist.
     Transition(usize),
+    /// Das Bestehen einer Pruefstelle (Index in `Model::passes`, FB-511
+    /// Schritt 5): wie eine Pruefstelle, deren Feuern ihr Bestehen ist.
+    Pass(usize),
 }
 
 impl Target {
@@ -364,6 +367,7 @@ impl Target {
             Target::Property(_) => None,
             Target::Check(i) => model.checks.get(i),
             Target::Transition(i) => model.transitions.get(i),
+            Target::Pass(i) => model.passes.get(i),
         }
     }
 }
@@ -402,7 +406,7 @@ fn scope<'a>(model: &'a Model, targets: &[Target], slice: bool) -> Scope<'a> {
         .iter()
         .flat_map(|t| match *t {
             Target::Property(i) => vec![&model.properties[i].formula],
-            Target::Check(_) | Target::Transition(_) => {
+            Target::Check(_) | Target::Transition(_) | Target::Pass(_) => {
                 t.site(model).map_or_else(Vec::new, |s| vec![&s.init, &s.fires])
             }
         })
@@ -469,7 +473,7 @@ fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth:
                 let word = if prop.assumption { "Annahme" } else { "Eigenschaft" };
                 (format!("{word} `{}`", prop.name), (0..=steps).map(|k| p.name(&prop.formula, k, k)).collect())
             }
-            Target::Check(_) | Target::Transition(_) => {
+            Target::Check(_) | Target::Transition(_) | Target::Pass(_) => {
                 let Some(site) = target.site(model) else { continue };
                 let mut holds = Vec::new();
                 if kind == Query::Bmc {
@@ -480,7 +484,11 @@ fn block(out: &mut String, model: &Model, tag: &'static str, kind: Query, depth:
                     let fires = p.name(&site.fires, k, k + 1);
                     holds.push(format!("(not {fires})"));
                 }
-                let word = if matches!(target, Target::Transition(_)) { "Uebergang" } else { "Pruefstelle" };
+                let word = match target {
+                    Target::Transition(_) => "Uebergang",
+                    Target::Pass(_) => "Bestehen der Pruefstelle",
+                    _ => "Pruefstelle",
+                };
                 (format!("{word} `{}` @{}", site.kind, site.start), holds)
             }
         };
@@ -810,7 +818,7 @@ pub fn horn(model: &Model, target: Target) -> Result<String, String> {
             body.push(format!("(not {})", lp.name(&model.properties[i].formula, 0, 0)?));
             let _ = writeln!(out, "{}", rule(binders(&[0]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
         }
-        Target::Check(_) | Target::Transition(_) => {
+        Target::Check(_) | Target::Transition(_) | Target::Pass(_) => {
             let Some(site) = target.site(model) else { return Err("keine Pruefstelle".to_string()) };
             let mut lp = LetPrinter::new(tag);
             let mut body = start(&mut lp)?;

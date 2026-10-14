@@ -386,6 +386,65 @@ So arbeitet jeder Strang, als wäre er allein:
     337 → 286, Programme 97. Der Vergleich der drei Ausführer bestätigt
     jeden neuen Beweis: Der Codegen lässt die Prüfung aus, der Interpreter
     prüft weiter, und kein Lauf weicht ab.
+- **Stand nach Schritt 5 (2026-10-14, Zweig `b5-groups`):**
+  - Jede Zeile von `UNREACHED` trägt jetzt für alle drei Spalten ihre
+    Gruppen als Grund: Übergänge, nie bestandene und nie verletzte
+    Prüfstellen. Geprüft wird das wie bisher, jetzt in
+    `every_unreached_item_has_a_group`.
+  - Das Modell kennt das Bestehen einer Prüfstelle, so wie die Coverage es
+    zählt (13.2: ausgewertet ohne Fault, ein `check` ausgewertet):
+    `Model::passes`, Ziel `Target::Pass`, `classify_passes`. Die Einordnung
+    (`CLASSIFY_UNREACHED`, `CLASSIFY_WHAT`, `solver.yml` Eingabe `what`)
+    fragt Übergänge und nie bestandene Stellen wie die Prüfstellen. Für eine
+    Stelle, die kein Modell führt, nennt sie den Grund: eine Funktion, die
+    keine Maschine ruft, eine bewiesene Range, eine Meldung oder eine
+    Beobachtung.
+  - Sieht Spacer einen Pfad jenseits der Tiefe, folgt die BMC ihm jetzt auch
+    für Übergänge und das Bestehen einer Stelle. Neue Pfade:
+    - `40_jobs`: RUN.S0->FAILED bei t = 100.
+    - `87_fault_kinds`: RUN.S1->FAILED bei t = 101.
+    - `63_scoped_instances`: HIGH->LOW je Instanz p, q und r. Geteilte
+      Übergänge tragen die Maschine im Label; vorher blieb nur ein Pfad.
+    - `sim/12_7`: drei Übergänge zu SELFTEST und weiter.
+  - Die Einordnung fand zwei Fehler im Modell:
+    - FB-617: Eine Lieferung eines Enums war im Modell jeder Code. Der
+      Interpreter las den Stimulus nicht, die Pfade zu SELFTEST in
+      `sim/12_7` blieben unbestätigt.
+    - FB-618: Unter seiner Beweisdatei aus Schritt 4 war `sim/14_7` nicht
+      mehr kodierbar (`cell_v.min()` direkt am Input).
+  - Offen ist FB-619: Die Coverage zählt die Stellen einer Funktion, die
+    keine Maschine ruft. Diese Frage liegt beim Nutzer.
+  - Einordnung in den Läufen 38320013325 (alle Programme, Übergänge und
+    Bestehen), 38319891273 und 38336280659 (`02_units_and_data`,
+    `98_last_fault`, `sim/12_7`, `sim/14_7`, `63_scoped_instances`, alle
+    drei Spalten). Pfade aus den Läufen 38319880152 und 38331751010.
+  - `UNREACHED`: Übergänge 101 → 93, nie bestanden 56 → 53, nie verletzt
+    286. Die Zeilen von `40_jobs` und `63_scoped_instances` entfallen, 95
+    Programme. Die Gruppen:
+
+    | Gruppe | Übergänge | nie bestanden | nie verletzt |
+    |---|---|---|---|
+    | Speicher (FB-612) | 13 | – | 96 |
+    | Frist | 27 | 25 | 80 |
+    | ohne Teilmodell (FB-604) | 31 | 5 | 70 |
+    | Fragment | 16 | 6 | 12 |
+    | nicht k-induktiv | 2 | – | 12 |
+    | bewiesen, nicht nachgerechnet | 4 | – | 5 |
+    | Range bewiesen | – | 6 | – |
+    | in einer Meldung | – | 4 | – |
+    | nie gerufen (FB-619) | – | 3 | 3 |
+    | faultet stets | – | 3 | – |
+    | unbestätigt (`inv`, `sha256`) | – | 1 | – |
+    | Zeitschranke (FB-614, FB-694) | – | – | 3 |
+    | jenseits `MAX_TICKS` | – | – | 2 |
+    | außerhalb `beweiser` | – | – | 2 |
+    | bewiesen, explizit | – | – | 1 |
+
+  - Die Gruppen „Frist“ und „nicht k-induktiv“ schwanken von Lauf zu Lauf
+    an denselben Stellen (Runner, Fristen von 60 s). Eine Zeile trägt
+    deshalb die Gruppe ihres jüngsten Laufs.
+  - Weiter: Schritt 2, Invarianten für „nicht k-induktiv“ und „Fragment“,
+    dann der Speicher (FB-612).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.

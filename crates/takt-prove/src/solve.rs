@@ -475,6 +475,11 @@ pub fn classify_transitions(
             continue;
         }
         let target = Target::Transition(i);
+        let taken = |bmc: &str, d: u32| {
+            let stimulus = stimulus(&parse_values(bmc, "@"), program, d);
+            let at = taken_at(program, &goal.machine, &goal.kind, &stimulus, d)?;
+            Some(CheckVerdict::Reachable { at, stimulus })
+        };
         let bmc = solver.run(&query(model, depth, target, Query::Bmc), timeout_s, "transition-bmc")?;
         let verdict = match answer(&bmc) {
             "sat" => {
@@ -496,9 +501,9 @@ pub fn classify_transitions(
                     "unsat" => CheckVerdict::Unreachable { k: depth },
                     "sat" => match invariant(model, target, solver, timeout_s)? {
                         Search::Invariant => CheckVerdict::Unreachable { k: 0 },
-                        found => CheckVerdict::Undecided {
-                            reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
-                        },
+                        Search::Path => deeper(model, target, depth, solver, timeout_s, &taken)?
+                            .unwrap_or_else(|| undecided(model, depth, &Search::Path)),
+                        found => undecided(model, depth, &found),
                     },
                     other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
                 }
@@ -508,6 +513,93 @@ pub fn classify_transitions(
         out.push(TransitionReport { machine: goal.machine.clone(), key: goal.kind.clone(), verdict });
     }
     Ok(out)
+}
+
+/// Klassifiziert das Bestehen der Pruefstellen `which` (Anfang, Ende, Art;
+/// FB-511 Schritt 5), wie die Coverage es zaehlt (13.2): ein Pfad, auf dem
+/// die Stelle besteht, bewiesen nie bestehend — nie erreicht oder stets
+/// verletzt — oder unentschieden. Erst Tiefe 1, dann `depth`, wie bei den
+/// Pruefstellen; den Pfad bestaetigt der Interpreter an seiner Coverage.
+pub fn classify_passes(
+    model: &Model,
+    program: &Program,
+    which: &[(u32, u32, String)],
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+) -> Result<Vec<CheckReport>, String> {
+    let model = &strengthened(model, solver, timeout_s)?;
+    let mut out = Vec::new();
+    for (i, goal) in model.passes.iter().enumerate() {
+        if !which.iter().any(|(a, b, k)| *a == goal.span.start && *b == goal.span.end && *k == goal.kind) {
+            continue;
+        }
+        let target = Target::Pass(i);
+        let passed = |bmc: &str, d: u32| {
+            let stimulus = stimulus(&parse_values(bmc, "@"), program, d);
+            let at = passed_at(program, goal, &stimulus, d)?;
+            Some(CheckVerdict::Reachable { at, stimulus })
+        };
+        let mut verdict = None;
+        for d in [1, depth.max(1)] {
+            let bmc = solver.run(&query(model, d, target, Query::Bmc), timeout_s, "pass-bmc")?;
+            let found = match answer(&bmc) {
+                "sat" => {
+                    let values = parse_values(&bmc, "@");
+                    let stimulus = stimulus(&values, program, d);
+                    Some(match passed_at(program, goal, &stimulus, d) {
+                        Some(at) => CheckVerdict::Reachable { at, stimulus },
+                        None => CheckVerdict::Undecided {
+                            reason: format!(
+                                "der Solver fand einen Pfad bis Tiefe {d}, der Interpreter bestaetigt ihn nicht — {}",
+                                unconfirmed(model)
+                            ),
+                        },
+                    })
+                }
+                "unsat" => {
+                    let ind = solver.run(&query(model, d, target, Query::Induction), timeout_s, "pass-ind")?;
+                    match answer(&ind) {
+                        "unsat" => Some(CheckVerdict::Unreachable { k: d }),
+                        "sat" if d < depth => None,
+                        "sat" => Some(match invariant(model, target, solver, timeout_s)? {
+                            Search::Invariant => CheckVerdict::Unreachable { k: 0 },
+                            Search::Path => deeper(model, target, d, solver, timeout_s, &passed)?
+                                .unwrap_or_else(|| undecided(model, d, &Search::Path)),
+                            found => undecided(model, d, &found),
+                        }),
+                        other => Some(CheckVerdict::Undecided {
+                            reason: format!("Induktionsschritt: Solver sagt `{other}`"),
+                        }),
+                    }
+                }
+                other => Some(CheckVerdict::Undecided { reason: format!("BMC: Solver sagt `{other}`") }),
+            };
+            if found.is_some() {
+                verdict = found;
+                break;
+            }
+        }
+        let verdict = verdict.unwrap_or_else(|| CheckVerdict::Undecided { reason: "ohne Urteil".into() });
+        out.push(report(goal, verdict));
+    }
+    Ok(out)
+}
+
+/// Der erste Tick bis `depth`, nach dem der Interpreter mit `stimulus` die
+/// Stelle `site` bestehen sah: ein `check` ausgewertet, eine implizite
+/// Pruefung bestanden (13.2).
+fn passed_at(program: &Program, site: &crate::encode::CheckSite, stimulus: &str, depth: u32) -> Option<u64> {
+    use takt_interp::CoverKind;
+    let key = match site.kind.as_str() {
+        "check" | "expect" => (CoverKind::Check, site.machine.clone(), format!("{} @{}", site.kind, site.span.start)),
+        kind => (CoverKind::Site, String::new(), format!("{kind} @{}-{}", site.span.start, site.span.end)),
+    };
+    let stim = Trace::parse(stimulus).ok()?;
+    (0..=u64::from(depth)).find(|&ticks| {
+        let options = RunOptions { ticks, ..Default::default() };
+        run(program, &stim, &options).is_ok_and(|r| r.coverage.hits.contains_key(&key))
+    })
 }
 
 /// Der erste Tick bis `depth`, nach dem der Interpreter mit `stimulus` den
@@ -693,6 +785,12 @@ fn open(model: &Model, depth: u32, search: &Search) -> String {
     format!("Induktionsschritt offen (k = {depth}){deadline}{outside}")
 }
 
+/// Das Urteil, wenn weder BMC noch Induktion noch die Invariantensuche
+/// entscheiden.
+fn undecided(model: &Model, depth: u32, found: &Search) -> CheckVerdict {
+    CheckVerdict::Undecided { reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, found)) }
+}
+
 fn induction_verdict(
     model: &Model,
     program: &Program,
@@ -709,27 +807,19 @@ fn induction_verdict(
             Search::Invariant => CheckVerdict::Unreachable { k: 0 },
             found => {
                 let deep = match found {
-                    Search::Path => deeper(model, program, i, depth, solver, timeout_s, path)?,
+                    Search::Path => deeper_check(model, program, i, depth, solver, timeout_s, path)?,
                     _ => None,
                 };
-                deep.unwrap_or_else(|| CheckVerdict::Undecided {
-                    reason: format!("kein Pfad bis Tiefe {depth}, {}", open(model, depth, &found)),
-                })
+                deep.unwrap_or_else(|| undecided(model, depth, &found))
             }
         },
         other => CheckVerdict::Undecided { reason: format!("Induktionsschritt: Solver sagt `{other}`") },
     })
 }
 
-/// Der Pfad, den die Invariantensuche jenseits der Tiefe `depth` sieht (M11
-/// Strang B2, Schritt 3): BMC mit jeweils doppelter Tiefe bis [`DEEPEST`],
-/// am Modell oder — fuer ein Maschinenmodell — am Gesamtmodell; der erste
-/// Pfad, den der Interpreter bestaetigt. Die Frist waechst mit der Tiefe:
-/// BMC rollt den Tick so oft aus, wie die Tiefe sagt (`99_exit_fault`, ein
-/// Pfad bei t = 72: Tiefe 40 in 18 s, Tiefe 80 in 106 s). Eine Frist, der
-/// Speicher oder ein Pfad, den der Interpreter nicht geht, beenden die
-/// Suche: tiefer wird keine Anfrage kleiner.
-fn deeper(
+/// [`deeper`] fuer eine Pruefstelle: am Modell oder — fuer ein
+/// Maschinenmodell — am Gesamtmodell.
+fn deeper_check(
     model: &Model,
     program: &Program,
     i: usize,
@@ -743,14 +833,34 @@ fn deeper(
         PathOn::Whole(w, k) => (w, k),
         PathOn::Nowhere => return Ok(None),
     };
+    deeper(model, Target::Check(i), depth, solver, timeout_s, &|bmc, d| confirmed(model, program, i, bmc, d))
+}
+
+/// Der Pfad, den die Invariantensuche jenseits der Tiefe `depth` sieht (M11
+/// Strang B2, Schritt 3): BMC mit jeweils doppelter Tiefe bis [`DEEPEST`];
+/// der erste Pfad, den der Interpreter bestaetigt. Die Frist waechst mit der Tiefe:
+/// BMC rollt den Tick so oft aus, wie die Tiefe sagt (`99_exit_fault`, ein
+/// Pfad bei t = 72: Tiefe 40 in 18 s, Tiefe 80 in 106 s). Eine Frist, der
+/// Speicher oder ein Pfad, den der Interpreter nicht geht, beenden die
+/// Suche: tiefer wird keine Anfrage kleiner. `confirm` bestaetigt die
+/// Antwort des Solvers in ihrer Tiefe; so gilt dasselbe fuer Pruefstellen,
+/// Uebergaenge und das Bestehen einer Stelle (FB-511 Schritt 5).
+fn deeper(
+    model: &Model,
+    target: Target,
+    depth: u32,
+    solver: &Solver,
+    timeout_s: u64,
+    confirm: &dyn Fn(&str, u32) -> Option<CheckVerdict>,
+) -> Result<Option<CheckVerdict>, String> {
     let mut d = depth.max(1);
     while d < DEEPEST {
         d = d.saturating_mul(2).min(DEEPEST);
         let budget = timeout_s.saturating_mul(u64::from(d / depth.max(1)));
-        let bmc = solver.run(&query(model, d, Target::Check(i), Query::Bmc), budget, "check-bmc")?;
+        let bmc = solver.run(&query(model, d, target, Query::Bmc), budget, "deeper-bmc")?;
         match answer(&bmc) {
             "unsat" => {}
-            "sat" => return Ok(confirmed(model, program, i, &bmc, d)),
+            "sat" => return Ok(confirm(&bmc, d)),
             _ => return Ok(None),
         }
     }
