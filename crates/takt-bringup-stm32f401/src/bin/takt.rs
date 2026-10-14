@@ -177,10 +177,6 @@ const _: () = assert!(
     "`TAKT_PORT_FLAW` ist `fpu` oder `jobs` und gilt nur in der Interruptform"
 );
 
-/// Der Zyklenstand der vorigen Tickgrenze des periodischen Zeitgebers.
-#[cfg(timer = "periodic")]
-static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
-
 /// Die Telemetrie, statisch: Der erzeugte Rahmen ruft `takt_board_trace`
 /// als C-Symbol, und eine Funktion ohne Empfaenger kommt an nichts heran,
 /// was in `main` liegt.
@@ -581,19 +577,11 @@ fn EXTI0() {
     });
 }
 
-/// Die Tickgrenze (12.3): Zeitstempel fuer die Periode, Tickzaehler.
+/// Die Tickgrenze (12.3): Der Wecker misst die Periode und stellt die
+/// naechste Grenze; ein Ueberlauf zaehlt nur die Epoche der Zeitachse.
 #[cfg(timer = "periodic")]
 fn on_tim2() {
-    mpu::isr(|| {
-        // SAFETY: TIM2 gehoert der Tickquelle; die ISR schreibt nur `SR`.
-        let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
-        let now = cycles::now();
-        let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::SeqCst));
-        // SAFETY: `rc_w0`: Nullen loeschen, Einsen lassen stehen; das Muster
-        // loescht nur `UIF`.
-        tim2.sr().write(|w| unsafe { w.bits(!1) });
-        tick::on_timer_interrupt(elapsed);
-    });
+    mpu::isr(tick::on_interrupt);
 }
 
 #[cfg(form = "own")]

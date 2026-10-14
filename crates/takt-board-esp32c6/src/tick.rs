@@ -25,6 +25,8 @@ static COUNTS_PER_TICK: AtomicU32 = AtomicU32::new(0);
 /// Das Periodenfeld des Vergleichers ist 26 Bit breit.
 const PERIOD_MAX: u32 = (1 << 26) - 1;
 static LAST_COUNTS: AtomicU32 = AtomicU32::new(0);
+/// Wie oft der Alarm kam: je Ereignis eine Periode in [`LAST_COUNTS`].
+static ALARMS: AtomicU32 = AtomicU32::new(0);
 static ORIGIN: Mutex<Cell<u64>> = Mutex::new(Cell::new(0));
 
 /// Von `init` gesetzt: so viele SYSTIMER-Schritte ist ein Tick lang.
@@ -69,6 +71,7 @@ fn since_origin() -> u64 {
 #[esp_hal::ram]
 pub fn on_timer_interrupt(elapsed_counts: u32) {
     LAST_COUNTS.store(elapsed_counts, Ordering::SeqCst);
+    ALARMS.fetch_add(1, Ordering::SeqCst);
     // 4.5: Ein Job, der gerade rechnet, gibt den Kern an die Hauptschleife.
     crate::jobs::preempt();
 }
@@ -125,6 +128,13 @@ impl TickSource for SystimerTick {
     #[esp_hal::ram]
     fn last_period_ns(&self) -> i64 {
         takt_board_support::clock::period_ns(self.timer_hz, LAST_COUNTS.load(Ordering::SeqCst))
+    }
+
+    /// Die Alarme seit dem Start: Nach einem Stillstand kommt einer fuer alle
+    /// Ticks, die die Schleife nachholt (FB-742).
+    #[esp_hal::ram]
+    fn events(&self) -> u64 {
+        u64::from(ALARMS.load(Ordering::SeqCst))
     }
 
     /// Ein `wfi`, ausser der Tick ist schon da; geprueft bei gesperrten

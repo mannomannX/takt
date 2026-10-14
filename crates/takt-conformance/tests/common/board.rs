@@ -1124,6 +1124,51 @@ pub fn journal_writes_in_sleep_windows(board: &mut dyn Board) -> Vec<String> {
     failed
 }
 
+/// **Ein Stillstand ist Rueckstand und wird nachgeholt** (7.3, 12.3; FB-198,
+/// FB-742). `58_persist_alert` schreibt in jedem Tick ins Journal und nimmt
+/// Ueberlaeufe an. Ist ein Slot voll, loescht das Journal den anderen, und
+/// der Kern steht so lange — auf dem F401 rund 200 ms. Die Zeitachse laeuft
+/// weiter: Der groesste Rueckstand reicht mindestens bis zur gemessenen
+/// Loeschdauer abzueglich einer Periode, die verpassten Perioden zaehlen als
+/// verloren, und am Ende liegt der Tick wieder auf seiner Frist. Eine Uhr,
+/// die Aufrufe der ISR zaehlt, saehe den Stillstand nicht. Den Trace des
+/// Aufholens darf die Telemetrie verwerfen (12.2, FB-741); hier zaehlt die
+/// Bilanz.
+pub fn a_stall_is_lag_and_caught_up(board: &mut dyn Board) -> Vec<String> {
+    // Genug Eintraege, dass ein Slot auch mit den 16 KiB des F401 voll wird.
+    const STALL_TICKS: u64 = 500;
+    const PERIOD_NS: i64 = 10_000_000;
+    let name = "58_persist_alert.takt";
+    let options = Options::timed(STALL_TICKS).lossy();
+    let text = match board.build(&board::corpus_path(name), &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("{name}: {e}")],
+    };
+    let count = |key: &str| board::counter(&text, key).unwrap_or(0);
+    let (erase, lag, lost) = (count("nvm loeschen"), count("rueckstand"), count("verloren"));
+    eprintln!("{} {name}: Loeschung {erase} ns, Rueckstand {lag} ns, {lost} verlorene Perioden", board.name());
+    if erase == 0 {
+        return vec![format!("in {STALL_TICKS} Ticks loeschte das Journal keinen Sektor:\n{text}")];
+    }
+    let mut failed = Vec::new();
+    if lag.saturating_add(PERIOD_NS.unsigned_abs()) < erase {
+        failed.push(format!(
+            "der Kern stand {erase} ns, der groesste Rueckstand ist {lag} ns: Die Uhr verlor die Perioden (FB-742)\n{text}"
+        ));
+    }
+    if lost == 0 {
+        failed.push(format!("keine verlorene Periode nach {erase} ns Stillstand:\n{text}"));
+    }
+    let last_drift = text
+        .lines()
+        .rev()
+        .find_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse::<i64>().ok());
+    if !last_drift.is_some_and(|d| d < PERIOD_NS) {
+        failed.push(format!("am Ende liegt der Tick nicht auf seiner Frist (drift {last_drift:?}):\n{text}"));
+    }
+    failed
+}
+
 /// Der Soll-Trace ueber [`TICKS`] Ticks.
 pub fn run_interpreted(p: &Program) -> String {
     replayed(p, "")
