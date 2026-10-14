@@ -22,7 +22,8 @@
 //!
 //! Liegt im Verzeichnis eine `hardware.hw`, laufen zusaetzlich die
 //! Pruefungen, die eine Konfiguration brauchen (`takt_sema::calibrated`:
-//! Kalibrierung gegen das erste Ziel, Bindungen, Polling). Sie entscheiden
+//! Kalibrierung gegen das erste Ziel, Bindungen, Polling und die Pins aus
+//! dem Devicetree wie unter `--zephyr`). Sie entscheiden
 //! aus zwei Eingaben und sind darum ohne Konfiguration nicht nur stumm,
 //! sondern gar nicht anwendbar. Eine Datei mit `tcb_policy = reviewed(…)`
 //! prueft wie `takt check` gegen `natives.review` im Verzeichnis.
@@ -95,6 +96,7 @@ fn check_dir(dir: &Path, code: &str, failures: &mut Vec<String>, silent_seen: &m
             }
             diagnostics.extend(takt_sema::calibrated::check_bindings(program, hw));
             diagnostics.extend(takt_sema::calibrated::polling(program, hw, target));
+            diagnostics.extend(takt_sema::calibrated::check_zephyr(program, hw));
         }
         if let Some(program) = checked.program.as_ref().filter(|p| p.config.tcb_reviewed) {
             diagnostics.extend(reviewed(dir, program));

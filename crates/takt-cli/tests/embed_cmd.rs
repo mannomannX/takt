@@ -800,3 +800,73 @@ fn the_frame_takes_the_enum_size_of_the_platform() {
         }
     }
 }
+
+/// Die Messschleife unter Zephyr mit den Treibern aus dem Devicetree
+/// (`examples/zephyr-gpio`).
+const WIRE: &str = "examples/zephyr-gpio/takt/wire.takt";
+
+/// Ihre Konfiguration: beide Kanaele an `zephyr-gpio`.
+const WIRE_HW: &str = "examples/zephyr-gpio/takt/wire.hw";
+
+/// Die Lieferform der Messschleife nach `dir`, mit `extra` am Aufruf.
+fn wire_delivery(dir: &Path, extra: &[&str]) -> Output {
+    let out = dir.to_str().expect("Pfad");
+    let args = ["build", WIRE, "--emit", "embed", "--target", host_triple(), "--form", "logical", "--out", out];
+    takt(&[&args[..], extra].concat())
+}
+
+/// **`--zephyr` legt die Treiber aus dem Devicetree dazu** (8.10, 12.11):
+/// `wire_zephyr.c` mit je Pin der Zusicherung seines Knotens, seinem
+/// Treiber in der Signatur aus `wire.h` und dem Heartbeat des Geraets, dazu
+/// `wire_zephyr_init` mit dem `safe`-Wert des Ausgangs; `wire_zephyr.h`
+/// deklariert es. Ohne `--zephyr` entsteht keines von beiden.
+#[test]
+fn zephyr_brings_the_devicetree_drivers() {
+    let dir = scratch("takt-embed-zephyr");
+    let run = wire_delivery(&dir, &["--hardware", WIRE_HW, "--zephyr"]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let source = std::fs::read_to_string(dir.join("wire_zephyr.c")).expect("wire_zephyr.c");
+    for want in [
+        "#include \"wire.h\"\n#include \"wire_zephyr.h\"",
+        "#if !DT_NODE_HAS_PROP(DT_NODELABEL(takt_wire_out), gpios)",
+        "#error \"takt: Kanal `echo` an `wire/in`: kein Knoten `takt_wire_in` mit `gpios` im Devicetree\"",
+        "static const struct gpio_dt_spec wire_pin_in_wire_in = GPIO_DT_SPEC_GET(DT_NODELABEL(takt_wire_in), gpios);",
+        "uint8_t wire_in_wire_in(void *user, int64_t now, uint8_t *value, uint8_t *quality, uint8_t *reason, int64_t \
+         *age, int64_t *t) {",
+        "const int level = gpio_pin_get_dt(&wire_pin_in_wire_in);",
+        "*quality = WIRE_ZEPHYR_BAD;",
+        "uint8_t wire_out_wire_out(void *user, int64_t now, uint8_t value) {",
+        "return (gpio_pin_set_dt(&wire_pin_out_wire_out, (value != 0U) ? 1 : 0) == 0) ? 1U : 0U;",
+        "uint8_t wire_alive_wire(void *user, int64_t now) {",
+        "{&wire_pin_out_wire_out, GPIO_OUTPUT_INACTIVE, \"probe\"},",
+        "{&wire_pin_in_wire_in, GPIO_INPUT, \"echo\"},",
+        "int wire_zephyr_init(const char **channel) {",
+    ] {
+        assert!(source.contains(want), "`{want}` fehlt in wire_zephyr.c:\n{source}");
+    }
+    let header = std::fs::read_to_string(dir.join("wire_zephyr.h")).expect("wire_zephyr.h");
+    assert!(header.contains("int wire_zephyr_init(const char **channel);"), "{header}");
+    let plain = scratch("takt-embed-zephyr-plain");
+    let run = wire_delivery(&plain, &["--hardware", WIRE_HW]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(!plain.join("wire_zephyr.c").exists() && !plain.join("wire_zephyr.h").exists(), "ohne --zephyr");
+}
+
+/// **Unter `--zephyr` scheitert der Bau an Pruefung 60** (8.10): Ein `port`,
+/// der kein Label des Devicetree ist, nennt Kanal und Treiber; ohne
+/// Konfiguration gibt es keine Treiber aus dem Devicetree.
+#[test]
+fn zephyr_refuses_a_port_that_is_no_label_and_a_missing_configuration() {
+    let dir = scratch("takt-embed-zephyr-refused");
+    let text = std::fs::read_to_string(root().join(WIRE_HW)).expect("wire.hw").replace("\"takt_wire_in\"", "\"PA1\"");
+    let bad = dir.join("bad.hw");
+    std::fs::write(&bad, text).expect("bad.hw");
+    let run = wire_delivery(&dir.join("out"), &["--hardware", bad.to_str().expect("Pfad"), "--zephyr"]);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "{stderr}");
+    let want = "`echo` an `wire/in`: `port = \"PA1\"` ist kein Label des Devicetree";
+    assert!(stderr.contains("SC-60") && stderr.contains(want), "{stderr}");
+    let run = wire_delivery(&dir.join("bare"), &["--zephyr"]);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success() && stderr.contains("`--hardware` fehlt"), "{stderr}");
+}

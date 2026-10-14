@@ -302,6 +302,8 @@ const ZEPHYR_BUILDS: &[&str] = &[
     "takt-zephyr-thumbv7em-none-eabihf",
     "takt-zephyr-riscv32imac-unknown-none-elf",
     "takt-cmsis-rtos2-thumbv7em-none-eabihf",
+    "takt-zephyr-gpio-thumbv7em-none-eabihf",
+    "takt-zephyr-gpio-riscv32imac-unknown-none-elf",
 ];
 
 /// Ein Pfad als regulaerer Ausdruck, der genau ihn trifft.
@@ -507,8 +509,8 @@ const F401_TARGET: &[&str] = &[
 ];
 
 /// Was der Bau der Beispiele unter Zephyr setzt: das frische Journal der
-/// Portpruefung (`examples/zephyr/CMakeLists.txt`).
-const ZEPHYR_DEFINES: &[&str] = &["-DTAKT_FRESH_JOURNAL=1"];
+/// Portpruefung, ohne Probe im Lauf (`examples/zephyr/CMakeLists.txt`).
+const ZEPHYR_DEFINES: &[&str] = &["-DTAKT_FRESH_JOURNAL=1", "-DTAKT_PROBE_IN_RUN=0"];
 
 /// Schreibt die Lieferformen nach `out` und nennt die Bindungen: je
 /// Programm sein Rahmen, bei `valve` mit `examples/c-host`, bei `port_test`
@@ -604,12 +606,14 @@ fn freertos(out: &Path, port: &str, variant: &[&str], extra: &[&str]) -> Option<
     Some(link)
 }
 
-/// Die Bindungen unter Zephyr, beide mit dem Rahmen von `port_test` und dem
-/// Geraet des Journals: `examples/zephyr` mit dem Zephyr-Adapter und
-/// `examples/cmsis-rtos2` mit dem Adapter fuer CMSIS-RTOS2. Die Rueckgabe des
-/// Boards an den Bootloader des F401 (`handback_stm32f401.c`) fehlt: Sie
+/// Die Bindungen unter Zephyr: zweimal mit dem Rahmen von `port_test` und
+/// dem Geraet des Journals, `examples/zephyr` mit dem Zephyr-Adapter und
+/// `examples/cmsis-rtos2` mit dem Adapter fuer CMSIS-RTOS2, und
+/// `examples/zephyr-gpio` mit dem Rahmen von `wire` und den Treibern aus dem
+/// Devicetree, die `--zephyr` erzeugt (`wire_zephyr.c`, 8.10). Die Rueckgabe
+/// des Boards an den Bootloader des F401 (`handback_stm32f401.c`) fehlt: Sie
 /// schreibt die Register ueber die Strukturen aus dem Kopf des Chips, und
-/// ohne ihn kennt cppcheck keines; die Bindung nimmt den Neustart des C6.
+/// ohne ihn kennt cppcheck keines; die Bindungen nehmen den Neustart des C6.
 fn zephyr(out: &Path) -> Vec<Link> {
     let root = root();
     let ports = root.join("crates/takt-embed-c/ports");
@@ -642,7 +646,53 @@ fn zephyr(out: &Path) -> Vec<Link> {
     };
     let native = ["main.c", "line.c", "handback.c", "partition.c", "handback_reboot.c"].map(|s| shared.join(s));
     let cmsis = vec![root.join("examples/cmsis-rtos2/src/main.c"), shared.join("line.c"), shared.join("handback.c")];
-    vec![link("zephyr", native.to_vec()), link("cmsis-rtos2", cmsis)]
+    vec![link("zephyr", native.to_vec()), link("cmsis-rtos2", cmsis), wire(out)]
+}
+
+/// `examples/zephyr-gpio` (8.10): die Lieferform von `wire` mit `--zephyr`,
+/// ihr Rahmen, ihre Treiber aus dem Devicetree, der Port mit dem
+/// Zephyr-Adapter und das Beispiel.
+fn wire(out: &Path) -> Link {
+    let root = root();
+    let ports = root.join("crates/takt-embed-c/ports");
+    let shared = root.join("examples/zephyr/src");
+    let dir = out.join("wire");
+    let run = takt(&[
+        "build",
+        "examples/zephyr-gpio/takt/wire.takt",
+        "--emit",
+        "embed",
+        "--form",
+        "rtos",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "--prefix",
+        "wire",
+        "--hardware",
+        "examples/zephyr-gpio/takt/wire.hw",
+        "--zephyr",
+        "--out",
+        dir.to_str().expect("Pfad"),
+    ]);
+    assert!(run.status.success(), "wire: {}", String::from_utf8_lossy(&run.stderr));
+    let mut units = ["wire_frame.c", "wire_ops.c", "wire_zephyr.c"].map(|f| dir.join(f)).to_vec();
+    units.extend([
+        ports.join("rtos/takt_rtos.c"),
+        ports.join("zephyr/takt_os.c"),
+        root.join("examples/zephyr-gpio/src/main.c"),
+        shared.join("line.c"),
+        shared.join("handback.c"),
+        shared.join("handback_reboot.c"),
+    ]);
+    Link {
+        units,
+        include: vec![dir.clone(), ports.join("rtos"), ports.join("zephyr"), shared],
+        defines: Vec::new(),
+        target: Vec::new(),
+        platform: "unix32",
+        external: Vec::new(),
+        zephyr: true,
+    }
 }
 
 // --- Die Tests --------------------------------------------------------------
