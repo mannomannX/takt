@@ -79,9 +79,9 @@ jobs:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
       # Die Setup-Aktion kommt von main, der eingeordnete Stand nach `src`.
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           path: src
@@ -102,7 +102,7 @@ jobs:
           cargo test --release -p takt-conformance --test solver_paths -- --nocapture
       - name: Ergebnisse sichern
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fb511-teil-${{ matrix.shard }}
           path: |
@@ -117,7 +117,7 @@ jobs:
     if: always() && inputs.art == 'einordnen'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: fb511-teil-*
           path: teile
@@ -141,7 +141,7 @@ jobs:
             echo "== $f: $(wc -l < "$f") Stellen"
             cut -f6 "$f" | sort | uniq -c | sort -rn
           done | tee ergebnis/uebersicht.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fb511-ergebnis
           path: ergebnis/
@@ -153,9 +153,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 355
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           path: src
@@ -170,7 +170,7 @@ jobs:
         run: cargo test --release -p takt-conformance --test solver_paths -- --nocapture the_stored_solver_paths_still_hold
       - name: Ergebnis sichern
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pfade
           path: src/corpus-try/paths/
