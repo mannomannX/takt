@@ -411,8 +411,12 @@ So arbeitet jeder Strang, als wäre er allein:
       `sim/12_7` blieben unbestätigt.
     - FB-618: Unter seiner Beweisdatei aus Schritt 4 war `sim/14_7` nicht
       mehr kodierbar (`cell_v.min()` direkt am Input).
-  - Offen ist FB-619: Die Coverage zählt die Stellen einer Funktion, die
-    keine Maschine ruft. Diese Frage liegt beim Nutzer.
+  - FB-619 (entschieden: Option a, Zweig `b6-fb619`): Die Coverage zählt
+    nur, was eine laufende Maschine erreichen kann (13.2). Eine Funktion,
+    die keine Maschine ruft, ist kein Pfad des Laufs. In
+    `02_units_and_data` fallen die drei Stellen von `shunt_current` weg,
+    ebenso die Gruppe „nie gerufen“: nie bestanden 53 → 50, nie verletzt
+    286 → 283.
   - Einordnung in den Läufen 38320013325 (alle Programme, Übergänge und
     Bestehen), 38319891273 und 38336280659 (`02_units_and_data`,
     `98_last_fault`, `sim/12_7`, `sim/14_7`, `63_scoped_instances`, alle
@@ -431,7 +435,6 @@ So arbeitet jeder Strang, als wäre er allein:
     | bewiesen, nicht nachgerechnet | 4 | – | 5 |
     | Range bewiesen | – | 6 | – |
     | in einer Meldung | – | 4 | – |
-    | nie gerufen (FB-619) | – | 3 | 3 |
     | faultet stets | – | 3 | – |
     | unbestätigt (`inv`, `sha256`) | – | 1 | – |
     | Zeitschranke (FB-614, FB-694) | – | – | 3 |
