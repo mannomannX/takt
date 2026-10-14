@@ -1,0 +1,14 @@
+# Takt im RAM unter ESP-IDF (12.3, M11 Schritt 21a): Port, Adapter und
+# Geraet des Journals aus dieser Komponente und das SDK-Archiv mit dem Kern.
+# Der Schritt rechnet in einer IRAM-ISR, auch waehrend ESP-IDF auf den Flash
+# zugreift; dann darf nichts, was er ruft, im Flash liegen (plan/m11.md 1.7).
+# Das Programm legt sein eigenes Fragment dorthin (`takt_add_program ... LDGEN`).
+[mapping:takt_port]
+archive: libtakt.a
+entries:
+    * (noflash)
+
+[mapping:takt_sdk]
+archive: libtakt_sdk.a
+entries:
+    * (noflash)

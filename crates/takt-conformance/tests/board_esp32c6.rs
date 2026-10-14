@@ -18,13 +18,14 @@ use std::time::{Duration, Instant};
 use common::board::{
     TICKS, ZEPHYR_WIRE_TICKS, agreement, agreement_with, corpus, driver_edge_agrees,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
-    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, replayed, runs_shared,
-    simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict,
+    natives_agree, overrun_reaches_every_machine, overrun_reaches_every_machine_with, persistence_survives, ran,
+    replayed, runs_shared, simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict,
     zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG, Tick};
 use takt_conformance::board::{self, Board, Form, Options};
 use takt_conformance::compare;
+use takt_conformance::esp_idf::Esp32c6Idf;
 use takt_conformance::zephyr::Variant;
 
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
@@ -526,6 +527,34 @@ fn the_zephyr_port_passes_the_port_test() {
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, Variant::FRESH)
         .and_then(|image| zephyr_run(&mut board, &image, &options));
     verdict(&zephyr_verdict(board.name(), example, true, run));
+}
+
+/// **Der Port der Interruptform unter ESP-IDF besteht die Portpruefung**
+/// (12.11, 13.8; M11 Schritt 21a): `examples/esp-idf` mit der Komponente
+/// `takt`, dem Adapter `ports/irq/esp-idf` und dem Journal in seiner
+/// Partition. Den Schritt rechnet die IRAM-ISR des `gptimer`, die Jobs eine
+/// Aufgabe, darunter rechnet `app_main` die fremde Last; die Leitung ist der
+/// USB-Serial-JTAG. Das Abbild am Stueck geht an 0x0. Baut mit ESP-IDF
+/// (`TAKT_IDF`), am Board aus dem Zwischenspeicher.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; ESP-IDF: TAKT_IDF; mit --ignored"]
+fn the_esp_idf_port_passes_the_port_test() {
+    let Some((board, _guard)) = board() else { return };
+    let failed = the_port_passes(&mut Esp32c6Idf::on(board), Form::Interrupt);
+    verdict(&failed);
+}
+
+/// **Unter ESP-IDF wird ein Tick ueber seiner Periode `Runtime(Overrun)`**
+/// (7.3, 12.11; M11 Schritt 21a): Nach dem langen Tick liegt jede Frist schon
+/// zurueck, wenn der Adapter den Alarm stellt; er laesst die ISR dann selbst
+/// anstehen, statt auf einen Alarm zu warten, der nicht kommt
+/// (`ports/irq/esp-idf`). Ohne das stuende der Lauf nach dem Ueberlauf.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; ESP-IDF: TAKT_IDF; mit --ignored"]
+fn the_esp_idf_port_turns_an_overrun_into_a_fault() {
+    let Some((board, _guard)) = board() else { return };
+    let failed = overrun_reaches_every_machine_with(&mut Esp32c6Idf::on(board), "overrun_sim.takt", Form::Interrupt);
+    verdict(&failed);
 }
 
 /// Schreibt ein Zephyr-Abbild (`zephyr.bin` mit dem Kopf fuer den ROM-Lader,

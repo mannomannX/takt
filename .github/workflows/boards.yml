@@ -24,6 +24,14 @@
 # `zephyr`: Er baut alle Beispiele fuer beide Boards mit den Pruefungen aus
 # `zephyr_example.rs` und faehrt clang-tidy ueber ihre `compile_commands.json`
 # gegen den Katalog des C-Teils (plan/cert.md).
+#
+# Ebenso unter ESP-IDF (M11 Schritt 21a): Mit ESP-IDF (`.github/actions/esp-idf`)
+# baut der C6 im Job `images` die Abbilder von `examples/esp-idf` in den
+# Zwischenspeicher (`takt_conformance::esp_idf::image`); bei einem Push, der
+# Komponente, Port oder Beispiel aendert, baut der Job `esp-idf` das Beispiel
+# mit den Pruefungen aus `esp_idf_example.rs`, der Residenz im RAM
+# eingeschlossen, und faehrt clang-tidy und cppcheck ueber seinen Bau gegen
+# den Katalog.
 name: Board-Abbilder
 
 on:
@@ -49,6 +57,16 @@ on:
       - "plan/cert.md"
       - ".github/actions/zephyr/**"
       - "tools/ci/zephyr-requirements.*"
+      - "crates/takt-embed-c/ports/irq/**"
+      - "crates/takt-embed-c/ports/esp-idf*/**"
+      - "examples/esp-idf/**"
+      - "esp-idf/**"
+      - "corpus-try/hw/esp32c6-idf.hw"
+      - "crates/takt-conformance/src/esp_idf.rs"
+      - "crates/takt-cli/tests/esp_idf_example.rs"
+      - "tools/c-analysis/takt.cfg"
+      - ".github/actions/esp-idf/**"
+      - ".github/actions/cppcheck/**"
       - ".github/workflows/boards.yml"
 
   # Der Pull Request eines Merge-Antrags zeigt den Job `zephyr` mit (plan/m11-strands.md,
@@ -68,6 +86,16 @@ on:
       - "plan/cert.md"
       - ".github/actions/zephyr/**"
       - "tools/ci/zephyr-requirements.*"
+      - "crates/takt-embed-c/ports/irq/**"
+      - "crates/takt-embed-c/ports/esp-idf*/**"
+      - "examples/esp-idf/**"
+      - "esp-idf/**"
+      - "corpus-try/hw/esp32c6-idf.hw"
+      - "crates/takt-conformance/src/esp_idf.rs"
+      - "crates/takt-cli/tests/esp_idf_example.rs"
+      - "tools/c-analysis/takt.cfg"
+      - ".github/actions/esp-idf/**"
+      - ".github/actions/cppcheck/**"
       - ".github/workflows/boards.yml"
 
 permissions:
@@ -101,6 +129,28 @@ jobs:
           cargo nextest run -p takt-cli --test c_analysis --run-ignored all --profile ci
           -E 'test(=the_zephyr_build_deviates_only_as_the_catalog_says)'
 
+  esp-idf:
+    name: ESP-IDF
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: ./.github/actions/setup
+      - uses: ./.github/actions/esp-idf
+      - uses: ./.github/actions/cppcheck
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: esp-idf
+      # Der Bau bleibt in `target/tmp` fuer die Analyse liegen.
+      - name: Das Beispiel unter ESP-IDF
+        run: cargo nextest run -p takt-cli --test esp_idf_example --run-ignored all --no-fail-fast --profile ci
+      - name: clang-tidy und cppcheck ueber den Bau gegen den Katalog
+        run: >-
+          cargo nextest run -p takt-cli --test c_analysis --run-ignored all --profile ci
+          -E 'test(=the_esp_idf_build_deviates_only_as_the_catalog_says)'
+
   images:
     name: Abbilder ${{ matrix.board }}
     if: github.event_name == 'workflow_dispatch'
@@ -119,6 +169,9 @@ jobs:
       - uses: ./.github/actions/setup
       # Die Zephyr-Tests der Suite bauen ihre Abbilder mit west.
       - uses: ./.github/actions/zephyr
+      # Die Tests unter ESP-IDF auf dem C6 bauen ihre Abbilder mit idf.py.
+      - uses: ./.github/actions/esp-idf
+        if: matrix.board == 'esp32c6'
       # Nur die Registry: Ein Cache des Zielverzeichnisses truege den
       # Zwischenspeicher der Abbilder mit.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
