@@ -85,6 +85,10 @@ pub struct Run<'a> {
     pub mxcsr: Option<u32>,
     /// Das Muster, mit dem der Wirt die Arena vor `init` fuellt (12.11).
     pub fill: u8,
+    /// Die Hardware-Konfiguration, gegen die der Rahmen gebaut ist (8.10):
+    /// `guard`, `jitter` und `tick_granular` je Ausgang; ohne sie die Nullen
+    /// der Simulation (7.5).
+    pub hardware: Option<&'a takt_mir::hardware::Hardware>,
 }
 
 /// Die Quellen eines Testwirts, je Dateiname.
@@ -128,7 +132,12 @@ pub fn sources(p: &Program, run: &Run<'_>, triple: &str, sanitized: bool) -> Res
     }
     let frame = takt_frame::mcu::build_with(
         p,
-        takt_frame::mcu::Frame { prefix: x.clone(), scenario: run.scenario, ..Default::default() },
+        takt_frame::mcu::Frame {
+            prefix: x.clone(),
+            scenario: run.scenario,
+            hardware: run.hardware,
+            ..Default::default()
+        },
     );
     let header = takt_frame::embed::c_header(&frame.header, p, &x, 0, 0, frame.job_stack_bytes);
     let host = host(p, run)?;
@@ -215,17 +224,17 @@ pub fn complete(text: &str, ticks: u64) -> Result<(), String> {
         .any(|l| l.strip_prefix("t=").and_then(|r| r.split_once(' ')).is_some_and(|(_, r)| r.starts_with("end ")));
     match reached(text) {
         _ if ended || ticks == 0 => Ok(()),
-        Some(last) if last + 1 >= ticks => Ok(()),
+        Some(last) if last >= ticks => Ok(()),
         last => Err(format!(
             "der Lauf reichte bis Tick {} von {ticks} ohne Ende des Programms:\n{text}",
-            last.map_or_else(|| "keinem".to_string(), |t| (t + 1).to_string())
+            last.map_or_else(|| "keinem".to_string(), |t| t.to_string())
         )),
     }
 }
 
-/// Der letzte Tick des Kerns, bis zu dem ein Lauf reicht. Die Zeitzeile
-/// `t=<k> time ... slept=<n>` deckt die Ticks `k` bis `k + n` des Kerns; unter
-/// einer Millisekunde Tick steht sie nur jeden `m`-ten Tick (FB-271), und der
+/// Der letzte Tick des Traces, bis zu dem ein Lauf reicht. Die Zeitzeile
+/// `t=<k> time ... slept=<n>` deckt die Ticks `k` bis `k + n`; unter einer
+/// Millisekunde Tick steht sie nur jeden `m`-ten Tick (FB-271), und der
 /// groesste gemeinsame Teiler ihrer `k` ist eine obere Schranke fuer die
 /// Luecke nach der letzten.
 pub fn reached(text: &str) -> Option<u64> {
@@ -990,11 +999,11 @@ machine m:
     /// unvollstaendig.
     #[test]
     fn a_run_reaches_its_last_tick() {
-        let text = "t=0 time took=0 drift=0 slept=0\nt=1 time took=0 drift=0 slept=8\ntakt end\n";
-        assert_eq!(reached(text), Some(9));
+        let text = "t=1 time took=0 drift=0 slept=0\nt=2 time took=0 drift=0 slept=8\ntakt end\n";
+        assert_eq!(reached(text), Some(10));
         assert!(complete(text, 10).is_ok());
-        assert!(complete(text, 11).is_err());
-        assert!(complete("t=0 time took=0 drift=0 slept=20\n", 10).is_err(), "ohne `takt end`");
+        assert!(complete(text, 11).is_err_and(|e| e.contains("bis Tick 10 von 11")));
+        assert!(complete("t=1 time took=0 drift=0 slept=20\n", 10).is_err(), "ohne `takt end`");
     }
 
     /// Das Journal des Laufs haelt die Nutzlast: Ein Journal ueber den Slots

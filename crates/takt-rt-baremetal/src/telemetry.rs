@@ -199,10 +199,11 @@ impl<P: Port> Telemetry<P> {
         self.write_byte(hex_digit(b & 15));
     }
 
-    /// Die Metazeile eines Ticks (grammar/trace.md, `time`).
+    /// Die Metazeile eines Ticks (grammar/trace.md, `time`), mit seiner
+    /// Nummer im Trace ([`Tick::traced`]).
     pub fn write_time(&mut self, t: &Tick) {
         self.write("t=");
-        self.write_u64(t.k);
+        self.write_u64(t.traced());
         self.write(" time took=");
         self.write_i64(t.took);
         self.write(" drift=");
@@ -362,11 +363,13 @@ mod tests {
         assert_eq!((full.sent(), full.dropped()), (4, 6));
     }
 
+    /// **Die Zeitzeile nennt den Tick des Traces** (grammar/trace.md T1,
+    /// FB-687): An seiner Grenze 7 rechnet der Kern Tick 8.
     #[test]
     fn the_time_line_follows_the_trace_grammar() {
         let mut t = Telemetry::new(line(128), ring(128));
         t.write_time(&Tick { k: 7, now: 0, took: 22_000, drift: -125, overrun: false, slept: 3 });
         t.flush();
-        assert_eq!(text(&t), "t=7 time took=22000 drift=-125 slept=3\r\n");
+        assert_eq!(text(&t), "t=8 time took=22000 drift=-125 slept=3\r\n");
     }
 }

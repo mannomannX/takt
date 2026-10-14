@@ -86,6 +86,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | Strang H (seit 2026-10-13): Entwurf entschieden; T1 vorab auf `h-t1-trace-hooks` (die Senke des Trace, ABI 6, SDK Fassung 4, FB-690, FB-691), PR #11; FB-750 auf `h-fb750-exact-trace` (PR nach #11), dann FB-691 (Instanzen im Testwirt), danach die zwei Programme |
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt, der Watchdog als Dienst (Fassung 2 des SDK, 33f64ed1), Tunables und Weckereignis (3e1460c0), die Vorlage `c-port` als Adapter des gemeinsamen Ports mit Fäden (`ports/rtos`); 18b bei Strang G (Helfer, seit 2026-10-12, Zweig `g-18b-c-irq`): Port `ports/irq` mit Adapter STM32F4, C-Wirt `examples/boards/stm32f401`, der Board-Lauf steht aus |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | Strang D (Helfer, seit 2026-10-12, Zweig `d-9-one-frame`): umgesetzt, CI grün auf `ubuntu-24.04` und `windows-2025` (Lauf 38302979240), Analyse grün (38303421868); FB-391 und FB-402 geschlossen, FB-382 bis auf Instanzen (FB-691); wartet auf den Merge; gemergt 2026-10-12 |
+| 9b | Offene Befunde aus Schritt 9 (FB-686 bis FB-694) | C, E, R | beide (FB-687) | 9 | Strang I (Helfer, seit 2026-10-13, Zweig `i-9-findings`): FB-687 und FB-693 umgesetzt, CI grün (38336355678), Analyse (38336357334), Board-Lauf ausstehend; FB-686 und FB-692 nach T1 (Strang H); FB-690 und FB-691 bei Strang H; FB-688 und FB-689 entschieden (A), FB-694 entschieden (Laufende an der Achse, Revision von FB-614), je ein eigener Zweig |
 | 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards, gemergt cea0c88c; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`). 19b: Partition umgesetzt bis auf den Board-Lauf, Format des Devicetree-Adapters in der Referenz (FB-734), gemergt 9f0673d1; der Erzeuger `P_zephyr.c` nach Schritt 9 (Strang D). 19c: Vertrag `takt_os.h` erweitert (60aa91d0), Adapter `ports/cmsis-rtos2` und `examples/cmsis-rtos2` bauen für den F401; Portprüfung am Board offen |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G (Helfer, seit 2026-10-12, Zweig `g-20-freertos`): 20a Adapter `ports/freertos` und Wirt unter FreeRTOS umgesetzt, der Board-Lauf steht aus; 20b FreeRTOS-MPU (Zweig `g-20b-freertos-mpu`) umgesetzt bis auf die Board-Läufe |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
@@ -648,6 +649,34 @@ So arbeitet jeder Strang, als wäre er allein:
     in den Zwischenspeicher der Harness (`zephyr-<tripel>-<stand>`): Sie
     kommen im selben Artefakt, und `board-run.ps1 -FromCi` fährt sie ohne
     `west`.
+- **Stand 19f (Strang F, 2026-10-13, Zweig `f-19f-dt-drivers`):**
+  - **Treiber aus dem Devicetree (FB-734):** `takt build --emit embed
+    --zephyr` schreibt `P_zephyr.c` und `P_zephyr.h` (`takt_frame::zephyr`):
+    je Kanal an `zephyr-gpio` eine `gpio_dt_spec` mit der Zusicherung
+    `#if !DT_NODE_HAS_PROP … #error`, die Treiber in der Signatur aus `P.h`
+    (ein Eingang, dessen Lesen scheitert, ist `BAD` mit Grund `DRIVER`),
+    `P_alive_<gerät>` für reine Pin-Geräte und `P_zephyr_init` mit dem
+    `safe`-Wert jedes Ausgangs. Prüfung 60 unter `--zephyr`
+    (`check_zephyr`, Prüfungskorpus SC-60). Das Modul gibt `--zephyr` bei
+    `HARDWARE` und übersetzt `P_zephyr.c` in `app`. `examples/zephyr-gpio`
+    fährt die Messschleife auf den Drahtbrücken (F401 PA0→PA1, C6
+    GPIO7→GPIO17), Board-Tests `the_zephyr_gpio_wire_follows_its_pin`. Im
+    C-Teil die fünfte Lieferform `wire`: cppcheck mit dem Modell von
+    `gpio.h` in `zephyr.cfg`, clang-tidy über die Baue.
+  - **Fault-Handler (SDK 3):** Nach `takt_core_init` meldet ein
+    abgewiesener Zugriff eines Fadens im Benutzermodus `Runtime(Hardware)`
+    (`partition_guard`, `takt_core_hardware_fault`). Board-Tests
+    `the_zephyr_partition_turns_an_access_in_the_run_into_a_fault` mit
+    `TAKT_PROBE_IN_RUN`.
+  - **Harness (FB-737, FB-739):** Zwei Bauten desselben neuen Stands
+    räumten einander das Verzeichnis weg (F401-Abbild im Lauf 38321047944
+    verloren); `enter_stand` räumt nur noch frühere Stände. Die Probe des C6
+    las den Tick über JTAG nur an den Symbolen der Bring-ups; ein Abbild
+    unter Zephyr nennt ihn über Arena (`arena`) und `tick_at` des Manifests
+    (`zephyr::Image::tick_address`, Manifest im Zwischenspeicher). Der
+    Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
+    unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
+    38320906796); das zeigt der nächste Lauf.
 
 ### 15, 16, 18, 9, 19 bis 23
 

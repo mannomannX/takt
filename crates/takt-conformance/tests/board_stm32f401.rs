@@ -15,16 +15,17 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, a_foreign_write_becomes_runtime_hardware,
+    Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_WIRE_TICKS, a_foreign_write_becomes_runtime_hardware,
     a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
     natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
     simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
-    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict, zephyr_image,
-    zephyr_persistence_survives, zephyr_verdict,
+    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict,
+    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
+use takt_conformance::zephyr::Variant;
 
 /// Was der F401 nicht fasst (Pruefung 39): `45_journal_cut` und
 /// `110_journal_log` halten ein Flash-Modell mit seinen Sektoren im RAM, das
@@ -395,7 +396,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(takt_conformance::port::TICKS).judged();
     let example = takt_conformance::zephyr::ZEPHYR;
-    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, true)
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
     verdict(&zephyr_verdict(board.name(), example, true, run));
 }
@@ -413,7 +414,7 @@ fn the_zephyr_journal_survives_a_reset_and_a_new_image() {
         board.name(),
         takt_conformance::zephyr::ZEPHYR,
         takt_conformance::zephyr::STM32F401,
-        false,
+        Variant::KEPT,
     ) {
         Ok(image) => image,
         Err(e) => return verdict(&[e]),
@@ -439,7 +440,7 @@ fn the_cmsis_rtos2_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(takt_conformance::port::TICKS).judged();
     let example = takt_conformance::zephyr::CMSIS_RTOS2;
-    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, true)
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
     verdict(&zephyr_verdict(board.name(), example, false, run));
 }
@@ -674,4 +675,33 @@ fn the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware() {
             .unwrap_or_else(|| panic!("{which}: keine Bilanz:\n{text}"));
         assert!(line.contains(&format!("verletzungen 1 region {region}")), "{which}: {line}");
     }
+}
+
+/// **Die Pins aus dem Devicetree treiben und lesen die Drahtbruecke des
+/// F401** (8.10, 12.11; M11 Schritt 19): `examples/zephyr-gpio` mit den
+/// Treibern aus `wire_zephyr.c` auf PA0 und PA1; jeder Tick liest den Pegel
+/// des Ticks davor.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_gpio_wire_follows_its_pin() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(ZEPHYR_WIRE_TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR_GPIO;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::KEPT)
+        .and_then(|image| board.run(&image.elf, &options));
+    verdict(&zephyr_wire_follows(board.name(), run));
+}
+
+/// **Eine Schutzverletzung im Lauf wird auf dem F401 zum Fault des Kerns**
+/// (12.3; M11 Schritt 19): `examples/zephyr` mit `TAKT_PROBE_IN_RUN`; die
+/// MPU weist die zweite Probe ab, und der Kern meldet `Runtime(Hardware)`.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_partition_turns_an_access_in_the_run_into_a_fault() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(takt_conformance::port::TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::PROBE_IN_RUN)
+        .and_then(|image| board.run(&image.elf, &options));
+    verdict(&zephyr_access_in_the_run_faults(board.name(), run));
 }
