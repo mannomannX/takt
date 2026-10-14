@@ -54,7 +54,7 @@ fn board_provides(symbol: &str) -> bool {
         "app_idle_",
         "app_alive_",
         "app_cmd_",
-        "takt_board_",
+        "takt_trace_",
         "takt_edge_",
         "takt_native_",
         "takt_m_",
