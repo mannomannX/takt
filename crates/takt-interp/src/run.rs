@@ -703,7 +703,6 @@ fn admissible(p: &Program, kind: &LineKind, tick: u64) -> Result<(), String> {
         LineKind::Input { channel, .. } => channel_by_name(p, channel)
             .map_or(Ok(()), |id| stimulus::input(&p.channels[id.index()]).map_err(|e| format!("`in {channel}`: {e}"))),
         LineKind::Abort => stimulus::at(Event::Abort, tick).map_err(|e| format!("`abort`: {e}")),
-        LineKind::Tune { name, .. } => stimulus::at(Event::Tune, tick).map_err(|e| format!("`tune {name}`: {e}")),
         LineKind::Runtime { kind, output } => {
             let Some(r) = runtime_kind(kind) else { return Err(format!("Runtime-Fault `{kind}` gibt es nicht")) };
             let channel = match output {

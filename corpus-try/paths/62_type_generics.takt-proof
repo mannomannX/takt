@@ -1,5 +1,5 @@
 takt-proof 2
 program 4c7a6995e02c70890de3fbf1b3904191b46f609ea64bae8ad5c93bfd76bb6334
 solver z3 4.13.4
-site 1208 1209 valid k=5
-site 1225 1226 valid k=5
+site 1208 1209 valid k=1
+site 1225 1226 valid k=1

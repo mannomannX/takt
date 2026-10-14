@@ -15,7 +15,7 @@ record Reg layout little:
 port dev : Reg @ mmio(0x40000000)
 
 input  dev_w : stream<bytes<4>> @ sim("mmio/0x40000000/w") with capacity = 2, max_rate = 200 Hz
-output got   : int in 0..999    @ hw("o/got") with safe = 0
+output got   : int in 0..999    @ hw("o/got")              with safe = 0
 
 driver machine drv:
     initial RUN

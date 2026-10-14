@@ -376,7 +376,11 @@ fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
                     .ok_or_else(|| format!("t={tick}: kein Tunable `{name}`"))?;
                 let bytes = crate::harness::tune_bytes(p, index, text)
                     .ok_or_else(|| format!("t={tick}: `{text}` ist kein Wert von `{name}`"))?;
-                admissible::at(Event::Tune, tick).map_err(|e| format!("t={tick}: `tune {name}`: {e}"))?;
+                if tick == 0 {
+                    return Err(format!(
+                        "t=0: `tune {name}` ist ein Startwert (12.5); der Testwirt baut das Programm mit seinen Vorgaben"
+                    ));
+                }
                 out.tunes.push((tick - 1, index, bytes));
                 event(&mut out, tick)?;
             }

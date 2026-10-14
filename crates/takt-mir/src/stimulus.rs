@@ -14,15 +14,15 @@ use crate::machine::RuntimeKind;
 use crate::pattern::Address;
 use crate::program::{Binding, Channel, Direction, OverrunPolicy, Program};
 
-/// Ein Ereignis von aussen, das an einer Tickgrenze wirkt.
+/// Ein Fault von aussen, der vor dem Schritt einer Grenze wirkt (5.4, 12.11).
+/// Ein Tunable hat keine solche Grenze: Eine Zeile `tune` in Tick 0 nennt
+/// seinen Startwert, den Parametervektor im Kopf (12.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
     /// Ein Operator-Abort (5.4).
     Abort,
     /// Ein Runtime-Fault (5.3, 7.3, 12.6).
     Runtime(RuntimeKind),
-    /// Die Aenderung eines Tunables (8.4).
-    Tune,
 }
 
 /// Liefert der Rand von aussen an `c`? Nur an einen Input mit `hw`-Bindung
@@ -79,13 +79,12 @@ pub fn runtime(p: &Program, kind: RuntimeKind, output: Option<&Channel>) -> Resu
 
 /// Der erste Tick, in dem `event` wirken kann. Tick 0 ist der
 /// Anfangszustand (1.5, 9.4): Ein Abort und ein Runtime-Fault wirken vor dem
-/// Schritt einer Grenze (12.11), ein Tunable ab einer Grenze nach Tick 0
-/// (8.4), und ein Ueberlauf meldet den Tick davor, der ein Schritt sein muss
-/// (7.3).
+/// Schritt einer Grenze (12.11), und ein Ueberlauf meldet den Tick davor,
+/// der ein Schritt sein muss (7.3).
 pub fn first_tick(event: Event) -> u64 {
     match event {
         Event::Runtime(RuntimeKind::Overrun) => 2,
-        Event::Abort | Event::Runtime(_) | Event::Tune => 1,
+        Event::Abort | Event::Runtime(_) => 1,
     }
 }
 
@@ -99,7 +98,6 @@ pub fn at(event: Event, tick: u64) -> Result<(), String> {
         Event::Abort => "ein Operator-Abort wirkt vor dem Schritt einer Grenze (5.4, 12.11)".to_string(),
         Event::Runtime(RuntimeKind::Overrun) => "ein Ueberlauf meldet den Schritt des Ticks davor (7.3)".to_string(),
         Event::Runtime(kind) => format!("`Runtime({kind:?})` wirkt vor dem Schritt einer Grenze (5.4, 12.11)"),
-        Event::Tune => "ein Tunable gilt ab einer Grenze nach Tick 0 (8.4)".to_string(),
     };
     Err(format!("erst ab Tick {first}: {what}"))
 }
@@ -149,7 +147,8 @@ mod tests {
         assert!(runtime(&p, RuntimeKind::Driver, Some(&sim)).is_err());
         assert!(runtime(&p, RuntimeKind::Driver, None).is_err());
         assert!(at(Event::Abort, 0).is_err() && at(Event::Abort, 1).is_ok());
-        assert!(at(Event::Tune, 0).is_err() && at(Event::Runtime(RuntimeKind::Hardware), 1).is_ok());
+        assert!(at(Event::Runtime(RuntimeKind::Hardware), 0).is_err());
+        assert!(at(Event::Runtime(RuntimeKind::Hardware), 1).is_ok());
         assert!(at(Event::Runtime(RuntimeKind::Overrun), 1).is_err());
         assert!(at(Event::Runtime(RuntimeKind::Overrun), 2).is_ok());
     }
