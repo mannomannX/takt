@@ -258,4 +258,5 @@ fn the_four_properties_of_13_3_are_decided() {
     }
     let Verdict::Violated { stimulus, .. } = verdict("no_chatter") else { panic!("{:?}", verdict("no_chatter")) };
     assert!(stimulus.contains("cmd abort_test"), "{stimulus}");
+    panic!("Probe FB-694: abort_recovers {:?}, armed_before_fire {:?}", verdict("abort_recovers"), verdict("armed_before_fire"));
 }
