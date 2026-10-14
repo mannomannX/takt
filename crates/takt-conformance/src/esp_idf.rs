@@ -63,9 +63,10 @@ pub struct Image {
 /// muss: die ISRs und Primitive des Adapters (`ports/irq/esp-idf`), der Port
 /// der Interruptform, der Kern, das Geraet des Journals (`ports/esp-idf-nvm`),
 /// Leitung und Watchdog des Wirts (`examples/esp-idf/main`) und was sie von
-/// ESP-IDF rufen. Dass dessen Funktionen im IRAM liegen, haengt an
-/// `sdkconfig.defaults` (`CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM`, FreeRTOS nicht
-/// im Flash); die Liste faengt eine Konfiguration, die sie verschiebt.
+/// ESP-IDF rufen. Dass dessen Funktionen im IRAM liegen, haengt an der
+/// Konfiguration (`CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM` in `sdkconfig.defaults`,
+/// `CONFIG_FREERTOS_PLACE_ISR_FUNCTIONS_INTO_FLASH` aus); die Liste faengt
+/// eine, die sie verschiebt.
 pub const RESIDENT: &[&str] = &[
     "gptimer_get_raw_count",
     "gptimer_set_alarm_action",

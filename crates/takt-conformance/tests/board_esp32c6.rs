@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use common::board::{
     TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
     journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, overrun_reaches_every_machine_in, persistence_survives, ran, replayed, runs_shared,
-    simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict, zephyr_image,
+    overrun_reaches_every_machine, overrun_reaches_every_machine_with, persistence_survives, ran, replayed,
+    runs_shared, simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict, zephyr_image,
     zephyr_persistence_survives, zephyr_verdict,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
@@ -552,7 +552,7 @@ fn the_esp_idf_port_passes_the_port_test() {
 #[ignore = "Board: TAKT_ESP32C6_PORT; ESP-IDF: TAKT_IDF; mit --ignored"]
 fn the_esp_idf_port_turns_an_overrun_into_a_fault() {
     let Some((board, _guard)) = board() else { return };
-    let failed = overrun_reaches_every_machine_in(&mut Esp32c6Idf::on(board), Form::Interrupt);
+    let failed = overrun_reaches_every_machine_with(&mut Esp32c6Idf::on(board), "overrun_sim.takt", Form::Interrupt);
     verdict(&failed);
 }
 

@@ -954,15 +954,16 @@ pub fn binds_no_driver(name: &str) -> bool {
 /// rechnet. Danach laeuft der Lauf ohne Reset zu Ende, und der Interpreter
 /// spielt ihn mit der Zeile `runtime` als Stimulus nach (12.5).
 pub fn overrun_reaches_every_machine(board: &mut dyn Board) -> Vec<String> {
-    overrun_reaches_every_machine_in(board, Form::Own)
+    overrun_reaches_every_machine_with(board, "overrun.takt", Form::Own)
 }
 
-/// [`overrun_reaches_every_machine`] in der Form `form` (12.11): In der
-/// Interruptform liegt nach dem langen Tick jede Frist schon zurueck, wenn
-/// der Port den Alarm stellt.
-pub fn overrun_reaches_every_machine_in(board: &mut dyn Board, form: Form) -> Vec<String> {
+/// [`overrun_reaches_every_machine`] mit dem Programm `name` aus
+/// `tests/programs` in der Form `form` (12.11): Ein C-Wirt stellt keine
+/// Treiber und nimmt `overrun_sim.takt`; in der Interruptform liegt nach dem
+/// langen Tick jede Frist schon zurueck, wenn der Port den Alarm stellt.
+pub fn overrun_reaches_every_machine_with(board: &mut dyn Board, name: &str, form: Form) -> Vec<String> {
     const RUN: u64 = 300;
-    let path = board::root().join("crates/takt-conformance/tests/programs/overrun.takt");
+    let path = board::root().join("crates/takt-conformance/tests/programs").join(name);
     let options = Options::timed(RUN).in_form(form);
     let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
         Ok(t) => t,
