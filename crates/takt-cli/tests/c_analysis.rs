@@ -690,6 +690,7 @@ fn wire(out: &Path) -> Link {
         defines: Vec::new(),
         target: Vec::new(),
         platform: "unix32",
+        external: Vec::new(),
         zephyr: true,
     }
 }
