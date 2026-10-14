@@ -8,9 +8,17 @@
 //! selbst ausloest, verlangt ueber JTAG oder ueber die Konsole.
 //!
 //! `TAKT_ESP32C6_PORT` nennt den Port der Konsole (`COM4`, `/dev/ttyACM0`).
+//! `TAKT_ESP32C6_UART0` nennt, wenn gesetzt, die Bruecke an UART0 des
+//! DevKit (die CP2102, `COM5`): Waehrend eines Laufs liest ein zweiter Leser
+//! dort mit, und scheitert der Lauf, steht das Gelesene in der Meldung
+//! (FB-757). Unter Zephyr liegt dort die Konsole des Kerns, die eine Panik
+//! oder einen Fault meldet, waehrend die Leitung schweigt.
 
-use std::io::Write;
+use std::io::{Read as _, Write};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 
 use takt_llvm::inspect::Binutils;
@@ -65,11 +73,25 @@ fn run_probe_rs(args: &[&str]) -> Result<String, Failure> {
 /// Frist fuer den Trace nach dem Start.
 const TRACE: Duration = Duration::from_secs(30);
 
+/// Wo die Probe den Tick eines Abbilds liest, wenn die Konsole schweigt
+/// ([`Esp32c6::capture`]).
+#[derive(Clone, Copy, Debug)]
+pub enum Tick<'a> {
+    /// Ein Bring-up mit seinem ELF: die Arena `app_arena`, der Tick
+    /// `__takt_tick_at` Byte dahinter.
+    Bringup(&'a Path),
+    /// Die Adresse, die ein Abbild ohne diese Symbole nennt, etwa unter
+    /// Zephyr ([`crate::zephyr::Image::tick_address`]).
+    At(u64),
+}
+
 /// Board 2 am Host.
 #[derive(Clone, Debug)]
 pub struct Esp32c6 {
     /// Der Port der Konsole; keiner im Lauf, der nur baut.
     port: Option<String>,
+    /// Die Bruecke an UART0, wenn ein zweiter Leser dort mitliest.
+    uart0: Option<String>,
 }
 
 impl Esp32c6 {
@@ -78,9 +100,10 @@ impl Esp32c6 {
     /// jeder Zugriff auf das Board endet mit [`super::BUILT_ONLY`].
     pub fn from_env() -> Option<Esp32c6> {
         if super::build_only() {
-            return Some(Esp32c6 { port: None });
+            return Some(Esp32c6 { port: None, uart0: None });
         }
-        std::env::var("TAKT_ESP32C6_PORT").ok().map(|port| Esp32c6 { port: Some(port) })
+        let uart0 = std::env::var("TAKT_ESP32C6_UART0").ok();
+        std::env::var("TAKT_ESP32C6_PORT").ok().map(|port| Esp32c6 { port: Some(port), uart0 })
     }
 
     /// Der Port der Konsole; [`super::BUILT_ONLY`] im Lauf, der nur baut.
@@ -103,22 +126,36 @@ impl Esp32c6 {
     }
 
     /// Wie [`Board::run`] fuer ein Rohabbild ab `offset` ([`Esp32c6::download_raw`]);
-    /// `elf` ist sein ELF, fuer den Blick ueber JTAG, wenn die Konsole schweigt.
-    pub fn run_raw(&mut self, bin: &Path, offset: u64, elf: &Path, options: &Options) -> Result<String, String> {
+    /// `tick` sagt, wo sein Tick steht, fuer den Blick ueber JTAG, wenn die
+    /// Konsole schweigt.
+    pub fn run_raw(&mut self, bin: &Path, offset: u64, tick: Tick<'_>, options: &Options) -> Result<String, String> {
         self.download_raw(bin, offset)?;
-        self.capture(elf, options).and_then(|text| super::complete(text, options))
+        self.capture(tick, options).and_then(|text| super::complete(text, options))
     }
 
     /// Setzt das Board zurueck und liest den Trace bis `takt end`.
     ///
-    /// Fehlt das Ende, entscheidet der Tickzaehler ueber JTAG: Steht das
+    /// Fehlt das Ende, entscheidet der Tickzaehler ueber JTAG (`tick`): Steht das
     /// Programm vor dem Ende, ist das der Befund, und der Text gehoert in
     /// die Meldung. Lief es durch, hat die Konsole geschwiegen — gleich nach
     /// dem Flashen, weil der USB-Serial-JTAG neu anlegt und ein Handle von
     /// davor nichts liefert, genuegt ein zweiter Reset; sonst steht ihr
     /// Empfangsendpunkt (FB-266), und das Board meldet sein USB-Geraet auf
     /// Wunsch neu an — ein Neustecken ohne Hand.
-    pub fn capture(&self, elf: &Path, options: &Options) -> Result<String, String> {
+    ///
+    /// Mit `TAKT_ESP32C6_UART0` liest ein zweiter Leser UART0 ueber alle
+    /// Versuche mit; scheitert der Lauf, haengt die Meldung an, was dort kam.
+    pub fn capture(&self, tick: Tick<'_>, options: &Options) -> Result<String, String> {
+        let uart0 = self.uart0.as_deref().map(Uart0::listen);
+        let result = self.capture_console(tick, options);
+        match (result, uart0.map(Uart0::heard)) {
+            (Err(e), Some(heard)) => Err(format!("{e}\n{heard}")),
+            (result, _) => result,
+        }
+    }
+
+    /// [`Esp32c6::capture`] ueber die Konsole allein.
+    fn capture_console(&self, tick: Tick<'_>, options: &Options) -> Result<String, String> {
         let ticks = options.ticks;
         let mut last = String::new();
         for attempt in 0..3 {
@@ -138,15 +175,25 @@ impl Esp32c6 {
             if text.contains(super::END) {
                 return Ok(text);
             }
-            let tick = self.tick_over_jtag(elf)?;
-            if u64::from(tick) < ticks {
+            // Ohne den Tick bleibt das Gelesene der Befund.
+            let reached = match tick {
+                Tick::Bringup(elf) => self.tick_over_jtag(elf),
+                Tick::At(address) => self.word_at(address),
+            }
+            .map_err(|e| {
+                format!(
+                    "kein `takt end` binnen {} s, und kein Tick ueber JTAG: {e}; gelesen:\n{text}",
+                    options.within().as_secs()
+                )
+            })?;
+            if u64::from(reached) < ticks {
                 return Err(format!(
-                    "kein `takt end` binnen {} s, das Programm steht bei Tick {tick}; gelesen:\n{text}",
+                    "kein `takt end` binnen {} s, das Programm steht bei Tick {reached}; gelesen:\n{text}",
                     options.within().as_secs()
                 ));
             }
             let when = if text.is_empty() { "" } else { " mittendrin" };
-            last = format!("das Programm lief bis Tick {tick}, die Konsole schwieg{when}");
+            last = format!("das Programm lief bis Tick {reached}, die Konsole schwieg{when}");
             eprintln!("{last}; {next}");
             if attempt > 0 {
                 self.reenumerate()?;
@@ -341,7 +388,7 @@ impl Board for Esp32c6 {
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
         self.download(elf)?;
-        self.capture(elf, options).and_then(|text| super::complete(text, options))
+        self.capture(Tick::Bringup(elf), options).and_then(|text| super::complete(text, options))
     }
 
     /// Der C6 rechnet das Messprogramm aus dem RAM (12.3, `xip_flash`): Dort
@@ -358,6 +405,89 @@ impl Board for Esp32c6 {
             symbol("__stack_chk_guard")? + 4,
             symbol("__takt_tick_stack_bytes")?,
         )])
+    }
+}
+
+/// Die Rate der Konsole von Zephyr auf UART0.
+const UART0_BAUD: u32 = 115_200;
+
+/// So viel von UART0 behaelt der zweite Leser, das Letzte.
+const UART0_KEEP: usize = 16 * 1024;
+
+/// So lange wartet [`Uart0::heard`] auf den Leser.
+const UART0_JOIN: Duration = Duration::from_secs(2);
+
+/// Ein zweiter Leser auf UART0 des C6 (FB-757), solange ein Lauf gelesen
+/// wird. Er oeffnet die Bruecke mit DTR und RTS inaktiv: Ueber die
+/// Schaltung des DevKit treiben sie EN und IO9, und aktiv startete einer
+/// den C6 neu oder in den Download-Modus. Er schreibt nichts.
+struct Uart0 {
+    port: String,
+    stop: Arc<AtomicBool>,
+    heard: mpsc::Receiver<Result<Vec<u8>, String>>,
+}
+
+impl Uart0 {
+    /// Oeffnet `port` und liest in einem eigenen Faden, bis [`Uart0::heard`]
+    /// ihn anhaelt. Geoeffnet wird vor dem Start des Laufs, damit der Start
+    /// des Kerns nicht verloren geht.
+    fn listen(port: &str) -> Uart0 {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (send, heard) = mpsc::channel();
+        match Self::open(port) {
+            Ok(mut serial) => {
+                let stop = Arc::clone(&stop);
+                let _ = std::thread::spawn(move || {
+                    let mut kept = Vec::new();
+                    let mut buf = [0u8; 1024];
+                    while !stop.load(Ordering::Relaxed) {
+                        match serial.read(&mut buf) {
+                            Ok(n) => {
+                                kept.extend_from_slice(&buf[..n]);
+                                let over = kept.len().saturating_sub(UART0_KEEP);
+                                kept.drain(..over);
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+                            Err(e) => {
+                                let _ = send.send(Err(e.to_string()));
+                                return;
+                            }
+                        }
+                    }
+                    let _ = send.send(Ok(kept));
+                });
+            }
+            Err(e) => {
+                let _ = send.send(Err(e));
+            }
+        }
+        Uart0 { port: port.to_string(), stop, heard }
+    }
+
+    /// Die Bruecke, DTR und RTS inaktiv; RTS zuerst, denn RTS aktiv bei
+    /// inaktivem DTR zoege EN.
+    fn open(port: &str) -> Result<Box<dyn serialport::SerialPort>, String> {
+        let mut serial = serialport::new(port, UART0_BAUD)
+            .flow_control(serialport::FlowControl::None)
+            .dtr_on_open(false)
+            .timeout(Duration::from_millis(50))
+            .open()
+            .map_err(|e| e.to_string())?;
+        serial
+            .write_request_to_send(false)
+            .and_then(|()| serial.write_data_terminal_ready(false))
+            .map_err(|e| e.to_string())?;
+        Ok(serial)
+    }
+
+    /// Haelt den Leser an und nennt, was auf UART0 kam.
+    fn heard(self) -> String {
+        self.stop.store(true, Ordering::Relaxed);
+        match self.heard.recv_timeout(UART0_JOIN) {
+            Ok(Ok(bytes)) => format!("UART0 ({}):\n{}", self.port, String::from_utf8_lossy(&bytes)),
+            Ok(Err(e)) => format!("UART0 ({}): {e}", self.port),
+            Err(_) => format!("UART0 ({}): der Leser antwortet nicht", self.port),
+        }
     }
 }
 

@@ -122,7 +122,7 @@ pub(crate) fn balanced(text: &str, options: &Options) -> Result<(), String> {
     let checked = options.bin == Bin::Takt && !options.timed && options.ticks > 0 && !ended;
     match reached(text) {
         _ if !checked => Ok(()),
-        Some(last) if last + 1 >= options.ticks => Ok(()),
+        Some(last) if last >= options.ticks => Ok(()),
         last => Err(format!(
             "Trace unvollstaendig: er reicht bis Tick {}, der Lauf hat {} Ticks (KON1-010)",
             last.map_or_else(|| "keinem".to_string(), |t| t.to_string()),
@@ -164,8 +164,8 @@ pub fn counter(text: &str, label: &str) -> Option<u64> {
     words.get(at + label.len())?.parse().ok()
 }
 
-/// Der letzte Tick, bis zu dem ein Konformitaetslauf reicht. Die Zeitzeile
-/// `t=<k> time ... slept=<n>` deckt die Ticks `k` bis `k + n`; das Board
+/// Der letzte Tick des Traces, bis zu dem ein Konformitaetslauf reicht. Die
+/// Zeitzeile `t=<k> time ... slept=<n>` deckt die Ticks `k` bis `k + n`; das Board
 /// schreibt sie hoechstens je Millisekunde, unter einer Millisekunde Tick
 /// also nur jeden `m`-ten Tick (FB-271). Dieses `m` teilt jedes `k`, der
 /// groesste gemeinsame Teiler der Zeilen ist darum eine obere Schranke fuer
@@ -1443,17 +1443,18 @@ mod tests {
             ticks.map(|k| format!("t={k} time took=0 drift=0 slept=0\r\n")).collect()
         };
         assert!(complete("t=0 out a 1\r\ntakt end\r\n".to_string(), &options).is_err_and(|e| e.contains("Bilanz")));
-        let body = times(0..10);
+        // Die Zeitzeilen nennen die Ticks des Traces, 1 bis 10 (FB-687).
+        let body = times(1..11);
         assert!(complete(run(&body, 0, body.len()), &options).is_ok());
-        let short = times(0..6);
-        assert!(complete(run(&short, 0, short.len()), &options).is_err_and(|e| e.contains("bis Tick 5")));
-        let ended = format!("{short}t=5 end now\r\n");
+        let short = times(1..7);
+        assert!(complete(run(&short, 0, short.len()), &options).is_err_and(|e| e.contains("bis Tick 6")));
+        let ended = format!("{short}t=6 end now\r\n");
         assert!(complete(run(&ended, 0, ended.len()), &options).is_ok());
-        let slept = "t=0 time took=0 drift=0 slept=0\r\nt=1 time took=0 drift=0 slept=8\r\n";
+        let slept = "t=1 time took=0 drift=0 slept=0\r\nt=2 time took=0 drift=0 slept=8\r\n";
         assert!(complete(run(slept, 0, slept.len()), &options).is_ok());
-        let sparse: String = (0..3).map(|k| format!("t={} time took=0 drift=0 slept=0\r\n", k * 20)).collect();
-        assert!(complete(run(&sparse, 0, sparse.len()), &Options::fresh(60)).is_ok());
-        assert!(complete(run(&sparse, 0, sparse.len()), &Options::fresh(61)).is_err());
+        let sparse: String = (1..4).map(|k| format!("t={} time took=0 drift=0 slept=0\r\n", k * 20)).collect();
+        assert!(complete(run(&sparse, 0, sparse.len()), &Options::fresh(79)).is_ok());
+        assert!(complete(run(&sparse, 0, sparse.len()), &Options::fresh(80)).is_err());
         assert!(complete(run("", 0, 0), &Options::timed(10)).is_ok(), "in Echtzeit ohne Zeitzeilen");
     }
 
@@ -1489,7 +1490,7 @@ mod tests {
         let mut t = takt_rt_baremetal::Telemetry::new(Memory(&line), vec![0; 4096].leak());
         t.write("takt auf wirt\r\n");
         t.mark();
-        for k in 0..4 {
+        for k in 1..5 {
             t.write(&format!("t={k} time took=0 drift=0 slept=0\r\n"));
         }
         let mut overrun = takt_rt_core::Overrun::new(takt_rt_core::Policy::Fault);
@@ -1507,7 +1508,7 @@ mod tests {
         takt_rt_baremetal::report(&mut t, &overrun, &stats, &journal, &stacks);
         let text = String::from_utf8(line.into_inner()).expect("ASCII");
         let text = complete(text, &Options::fresh(4)).unwrap_or_else(|e| panic!("{e}"));
-        let body = "t=0 time took=0 drift=0 slept=0\r\n".len() * 4;
+        let body = "t=1 time took=0 drift=0 slept=0\r\n".len() * 4;
         let counters = [
             ("schlief", 9),
             ("ueberlaeufe", 3),

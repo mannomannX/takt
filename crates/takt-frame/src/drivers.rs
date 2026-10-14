@@ -474,7 +474,7 @@ fn c_return(kind: Kind) -> &'static str {
 }
 
 /// Die Signatur eines Treibers in C.
-fn c_signature(d: &Driver, x: &Prefix) -> String {
+pub fn c_signature(d: &Driver, x: &Prefix) -> String {
     let params = c_params(d);
     let rest = if params.is_empty() { String::new() } else { format!(", {params}") };
     format!("{} {}(void *user, int64_t now{rest})", c_return(d.kind), d.symbol(x))

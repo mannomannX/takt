@@ -117,6 +117,7 @@ fn runs() -> &'static [Run] {
                     }
                     diagnostics.extend(takt_sema::calibrated::check_bindings(program, hw));
                     diagnostics.extend(takt_sema::calibrated::polling(program, hw, target));
+                    diagnostics.extend(takt_sema::calibrated::check_zephyr(program, hw));
                 }
                 if let Some(program) = checked.program.as_ref().filter(|p| p.config.tcb_reviewed) {
                     diagnostics.extend(reviewed(&path, program));

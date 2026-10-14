@@ -42,6 +42,11 @@ Abbilder und `takt` aus dem Lauf von boards.yml, ohne lokalen Bau.
 der Test dazu meldet sich als uebersprungen, und die Zusammenfassung sagt es.
 Vorgabe ist die Bruecke an UART0 des C6, die nicht angesteckt ist.
 
+`-Esp32c6Uart0 COM5` liest in jedem Lauf des C6 auch UART0 mit, die Konsole
+des Kerns unter Zephyr (`TAKT_ESP32C6_UART0`, FB-757); scheitert ein Lauf,
+steht das Gelesene in der Meldung. Die Bruecke treibt GPIO17: Der Test der
+Drahtbruecke GPIO7 an GPIO17 braucht sie ausgesteckt.
+
 Der Lauf belegt Speicher und Rechenzeit neben der Arbeit im Hauptbaum: die
 volle Suite dort zugleich zu fahren, kann die Zusagegrenze des Rechners
 sprengen. Exit-Code 0 heisst: jede gewaehlte Suite bestanden.
@@ -56,6 +61,7 @@ pwsh -NoProfile -File tools/board-run.ps1 -Rev e6093b4 -Boards esp32c6
 pwsh -NoProfile -File tools/board-run.ps1 -Boards esp32c6 -Filter 'test(=the_board_agrees_with_the_interpreter)'
 pwsh -NoProfile -File tools/board-run.ps1 -FromCi 18423456789
 pwsh -NoProfile -File tools/board-run.ps1 -FromCi 18423456789 -Bench -Boards stm32f401
+pwsh -NoProfile -File tools/board-run.ps1 -FromCi 18423456789 -Boards esp32c6 -Esp32c6Uart0 COM5 -Filter 'test(/zephyr/)'
 #>
 param(
     [string]$Rev = 'HEAD',
@@ -66,6 +72,7 @@ param(
     [string]$Esp32c6Port = 'COM4',
     [string]$F401Port = 'COM7',
     [string]$AllowMissing = 'uart-bridge',
+    [string]$Esp32c6Uart0 = '',
     [string]$Filter = '',
     [string]$FromCi = '',
     [switch]$Bench
@@ -153,6 +160,11 @@ try {
     $env:TAKT_ESP32C6_PORT = $Esp32c6Port
     $env:TAKT_F401_PORT = $F401Port
     $env:TAKT_ALLOW_MISSING = $AllowMissing
+    if ($Esp32c6Uart0) {
+        $env:TAKT_ESP32C6_UART0 = $Esp32c6Uart0
+    } else {
+        Remove-Item Env:TAKT_ESP32C6_UART0 -ErrorAction SilentlyContinue
+    }
     # Die Quellen des Laufs fuer die Testprozesse, auch fuer die aus dem
     # Archiv, die anderswo gebaut wurden.
     $env:TAKT_ROOT = $Worktree

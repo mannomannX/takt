@@ -16,7 +16,7 @@
 //! Stroeme, Rand und Registerports; `text` fuegt den Rahmen um die Arena
 //! zusammen (12.11). `drivers` nennt die Treiber eines Programms in jeder
 //! Form (12.6), `embed` schreibt das Rust-Modul der Lieferform (`P.rs`,
-//! 12.11).
+//! 12.11), `zephyr` die Treiber aus dem Devicetree (`P_zephyr.c`, 8.10).
 
 #![cfg_attr(
     not(test),
@@ -46,3 +46,4 @@ pub mod parts;
 pub mod ports;
 pub mod streams;
 pub mod text;
+pub mod zephyr;
