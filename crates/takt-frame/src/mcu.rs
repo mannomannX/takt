@@ -1444,9 +1444,12 @@ fn telemetry(
             t => (t, 0),
         };
         let payload = payload_variants(p, &slot.name);
-        // Der Typ eines Werts: der des Ausgangs, bei einem Feld der seines Elements.
+        // Der Typ eines Werts: der des Ausgangs, bei einem Feld, Vektor oder
+        // Tick-Array (8.9) der seines Elements.
         let value_ty = p.channels.iter().find(|c| c.name == slot.name).map(|c| match p.types.get(c.ty) {
-            takt_mir::types::Type::Array { elem, .. } => *elem,
+            takt_mir::types::Type::Array { elem, .. }
+            | takt_mir::types::Type::Vec { elem, .. }
+            | takt_mir::types::Type::Samples { elem, .. } => *elem,
             _ => c.ty,
         });
         // FB-312: Ein Record ist eine Variante mit seinem Namen; `takt_load`
