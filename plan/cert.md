@@ -60,6 +60,30 @@ Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,
 die Messschleife von `driver-test` —, steht in `takt-board-support`,
 im Workspace, unter `forbid` und mit Tests auf dem Wirt.
 
+### Einbettung: wem die Schutzeinheit gehört (12.11, M11 Schritt 23)
+
+Neben fremdem Code entscheidet der Besitzer der Schutzeinheit, was die
+Arena schützt (plan/m11.md 2.11). Der Fall steht im Kopf jedes Laufs
+(`Schutz: Fenster`, `Partition` oder `keiner`) und im Konformitätsbericht
+(`protection` je Port); die Portprüfung verlangt die Kopfzeile, und ein
+Nachweis der Probe darf ihr nicht widersprechen
+(`takt_conformance::port`). Den Fall nennt, wer ihn herstellt: der
+Speicherschutz des Boards (`Protection::CASE`), der Adapter eines RTOS
+aus dessen Konfiguration (`TAKT_OS_PARTITION`), nicht der Wirt nach Wahl.
+Was der Schutz nicht abweist, gehört zur TCB:
+
+| Fall | Läufe | Fremder Code im Adressraum | Treiber des Wirts | RTOS | Port | Nachweis am Board |
+|---|---|---|---|---|---|---|
+| `Schutz: Fenster` | Bring-up des F401 in jeder Form (eigener Kern, Interrupt, Poll, RTIC, Embassy) | außerhalb des Schritts abgewiesen, im nächsten Tick `Runtime(Hardware)`; eine fremde ISR, die den Schritt unterbricht, findet die Arena offen und gehört zur TCB | gehören zur TCB; die Output-Treiber laufen im Commit bei geschlossener Arena (12.3) | RTIC und der Executor von Embassy gehören zur TCB (12.8) | `takt-rt-baremetal` (`Guarded`) und der Bring-up | `the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware` in jeder Form, `every_port_passes_the_port_test` |
+| `Schutz: Partition` | Zephyr mit `CONFIG_USERSPACE` (F401, C6), FreeRTOS-MPU (F401) | Aufgaben ohne Privileg abgewiesen; privilegierter Code — ISRs, Kern, Fäden im Supervisor-Modus — gehört zur TCB | rechnen im privilegierten Schrittfaden und gehören zur TCB | gehört zur TCB, es besitzt die Schutzeinheit | `ports/rtos` mit seinem Adapter | `the_zephyr_port_passes_the_port_test` (Probe `takt schutz partition verweigert`), `the_freertos_mpu_port_passes_the_port_test`, `the_freertos_mpu_turns_a_foreign_write_into_runtime_hardware` |
+| `Schutz: keiner` | Bring-ups des C6 (Takt schaltet die PMP im Lauf nicht um, 12.3), die Interruptform in C (FB-755), FreeRTOS ohne MPU, CMSIS-RTOS2 und Zephyr ohne `CONFIG_USERSPACE`, POSIX, `takt-bringup-host` | gehört ganz zur TCB | gehören zur TCB | gehört zur TCB | gehört zur TCB | die Kopfzeile in `every_port_passes_the_port_test` (C6), `the_c_interrupt_port_passes_the_port_test`, `the_freertos_port_passes_the_port_test`, `the_cmsis_rtos2_port_passes_the_port_test`, `a_posix_port_passes_the_port_test` |
+| ESP-IDF (PMP) | offen bis Schritt 21a (FB-756) | — | — | — | — | — |
+
+Unter jedem Stack liegt in allen drei Fällen ein Wächter (12.3, Zeile
+`takt waechter …`); er schützt den Stack, nicht die Arena. Für
+sicherheitsrelevante Produkte bleibt die Empfehlung aus 12.8: Takt auf
+einem eigenen Chip.
+
 ### Native Funktionen
 
 Die kuratierte Menge (4.5, 13.8). Jede ist bitgleich über alle Ziele,

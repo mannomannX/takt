@@ -15,10 +15,10 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, a_foreign_write_becomes_runtime_hardware,
+    Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, a_foreign_write_becomes_runtime_hardware,
     a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form,
-    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
-    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    header_names, journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output,
+    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
     simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
     the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict, zephyr_image,
     zephyr_persistence_survives, zephyr_verdict,
@@ -359,13 +359,16 @@ fn the_poll_form_steps_within_a_round_of_its_main_loop() {
 /// **Jeder Port des F401 mit unterbrechbarem Job-Kontext besteht die
 /// Portpruefung** (12.11, 13.8; M11 Schritt 15): Interruptform, RTIC und
 /// Embassy. Die Pollform weist das Pruefprogramm beim Bau ab: Ihr Schritt
-/// unterbricht keinen Job (`port_test_cmd.rs`).
+/// unterbricht keinen Job (`port_test_cmd.rs`). Die MPU gehoert in jeder
+/// Form Takt: `Schutz: Fenster` (M11 Schritt 23).
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn every_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed: Vec<String> =
-        [Form::Interrupt, Form::Rtos, Form::Embassy].into_iter().flat_map(|f| the_port_passes(&mut board, f)).collect();
+    let failed: Vec<String> = [Form::Interrupt, Form::Rtos, Form::Embassy]
+        .into_iter()
+        .flat_map(|f| the_port_passes(&mut board, f, Case::Window))
+        .collect();
     verdict(&failed);
 }
 
@@ -385,7 +388,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::ZEPHYR;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, true)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, true, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Partition, run));
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart des F401 und ein neues
@@ -421,6 +424,7 @@ fn the_zephyr_journal_survives_a_reset_and_a_new_image() {
 /// unter Zephyrs CMSIS-Schicht; Leitung, Lage und Rueckgabe des Boards wie
 /// beim Zephyr-Port. Braucht ausser dem Board Zephyr (`TAKT_WEST` und die
 /// Umgebung aus `D:\takt-tools\activate.ps1`) und `<target>/release/takt`.
+/// CMSIS-RTOS2 kennt keine Partition: `Schutz: keiner` (M11 Schritt 23).
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
 fn the_cmsis_rtos2_port_passes_the_port_test() {
@@ -429,7 +433,7 @@ fn the_cmsis_rtos2_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::CMSIS_RTOS2;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, true)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, false, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Unprotected, run));
 }
 
 /// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,
@@ -474,12 +478,13 @@ fn simultaneous_jobs_finish_on_time_on_the_board() {
 /// 13.8; M11 Schritt 18b): der C-Wirt der Black Pill mit dem SDK-Archiv,
 /// `ports/irq` und seinem Adapter fuer STM32F4. Den Schritt rechnet die ISR
 /// von TIM2, die Jobs PendSV, darunter rechnet die Hauptschleife die fremde
-/// Last mit der FPU.
+/// Last mit der FPU. Die MPU bewacht nur den Stack; ein Fenster um den
+/// Schritt oeffnet der Port nicht (FB-755): `Schutz: keiner`.
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_c_interrupt_port_passes_the_port_test() {
     let Some((board, _guard)) = board() else { return };
-    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Interrupt);
+    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Interrupt, Case::Unprotected);
     verdict(&failed);
 }
 
@@ -505,12 +510,13 @@ fn the_c_interrupt_port_agrees_with_the_interpreter() {
 /// `ports/rtos`, seinem Adapter `ports/freertos` und dem Kern von FreeRTOS
 /// V11.3.1 (`ARM_CM4F`). Den Schritt rechnet eine Aufgabe hoechster
 /// Prioritaet, die Jobs eine darunter, darunter rechnet eine fremde Aufgabe
-/// des Wirts ihre Last mit der FPU.
+/// des Wirts ihre Last mit der FPU. Ohne MPU-Port schuetzt die Arena
+/// niemand: `Schutz: keiner`.
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_freertos_port_passes_the_port_test() {
     let Some((board, _guard)) = board() else { return };
-    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Rtos);
+    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Rtos, Case::Unprotected);
     verdict(&failed);
 }
 
@@ -528,7 +534,7 @@ fn the_freertos_port_passes_the_port_test() {
 fn the_freertos_mpu_port_passes_the_port_test() {
     let Some((board, _guard)) = board() else { return };
     let header = [PARTITION_REFUSED, GUARD_WATCHPOINT];
-    let failed = the_port_passes_with_header(&mut Stm32f401C::mpu(board), Form::Rtos, &header);
+    let failed = the_port_passes_with_header(&mut Stm32f401C::mpu(board), Form::Rtos, Case::Partition, &header);
     verdict(&failed);
 }
 
@@ -633,33 +639,56 @@ fn the_unread_channels_are_recorded() {
 /// Handler uebergeht ihn, und im Tick danach bekommen alle Maschinen
 /// `Runtime(Hardware)`; die Bilanz nennt die Region. Ohne Schutz haette
 /// ein Zugriff auf den Programmzustand das Abbild ueberschrieben.
+///
+/// **Das Fenster in jeder Form** (12.11; M11 Schritt 23): Der Zugriff
+/// zwischen zwei Ticks laeuft in jeder Form des Boards, der Kopf nennt
+/// `Schutz: Fenster`. Die uebrigen Faelle haengen nicht an der Form und
+/// laufen im eigenen Kern.
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware() {
     let Some((mut board, _guard)) = board() else { return };
-    for (which, region, tick) in [
-        ("tcb", "Programmzustand", 3),
-        ("guard", "Waechter", 3),
-        ("job_guard", "Waechter", 3),
-        ("isr", "Programmzustand", 4),
+    let every = board.forms();
+    let mut failed = Vec::new();
+    for (which, region, tick, forms) in [
+        ("tcb", "Programmzustand", 3, every),
+        ("guard", "Waechter", 3, &[Form::Own][..]),
+        ("job_guard", "Waechter", 3, &[Form::Own][..]),
+        ("isr", "Programmzustand", 4, &[Form::Own][..]),
     ] {
         let program = board::root().join(format!("crates/takt-conformance/tests/programs/protect_{which}.takt"));
-        let options = Options::fresh(20);
-        let Some(text) = ran(board.build(&program, &options).and_then(|elf| board.run(&elf, &options))) else {
-            continue;
-        };
-        assert!(
-            text.contains(&format!("t={tick} runtime Hardware")),
-            "{which}: kein Runtime(Hardware) im Tick nach dem Zugriff:\n{text}"
-        );
-        assert!(
-            text.lines().any(|l| l.starts_with(&format!("t={tick} fault m"))),
-            "{which}: die Maschine faultet nicht:\n{text}"
-        );
-        let line = text
-            .lines()
-            .find(|l| l.starts_with("takt schutz "))
-            .unwrap_or_else(|| panic!("{which}: keine Bilanz:\n{text}"));
-        assert!(line.contains(&format!("verletzungen 1 region {region}")), "{which}: {line}");
+        for &form in forms {
+            let options = Options::fresh(20).in_form(form);
+            let Some(text) = ran(board.build(&program, &options).and_then(|elf| board.run(&elf, &options))) else {
+                continue;
+            };
+            let found = window_held(&text, tick, region);
+            failed.extend(
+                found.into_iter().chain(header_names(&text, Case::Window)).map(|f| format!("{which} {form:?}: {f}")),
+            );
+        }
     }
+    verdict(&failed);
+}
+
+/// Was ein abgewiesener Zugriff hinterlaesst: `Runtime(Hardware)` und der
+/// Fault der Maschine im Tick `tick`, eine Verletzung der Region `region` in
+/// der Bilanz; je Fehlendes ein Befund mit dem Lauf.
+fn window_held(text: &str, tick: u32, region: &str) -> Vec<String> {
+    let mut failed = Vec::new();
+    if !text.contains(&format!("t={tick} runtime Hardware")) {
+        failed.push(format!("kein Runtime(Hardware) im Tick {tick} nach dem Zugriff"));
+    }
+    if !text.lines().any(|l| l.starts_with(&format!("t={tick} fault m"))) {
+        failed.push("die Maschine faultet nicht".to_string());
+    }
+    match text.lines().find(|l| l.starts_with("takt schutz verletzungen ")) {
+        Some(line) if line.contains(&format!("verletzungen 1 region {region}")) => {}
+        Some(line) => failed.push(format!("die Bilanz nennt `{line}`")),
+        None => failed.push("keine Bilanz des Speicherschutzes".to_string()),
+    }
+    if !failed.is_empty() {
+        failed.push(text.to_string());
+    }
+    failed
 }

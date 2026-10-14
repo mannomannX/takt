@@ -16,7 +16,7 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
+    Case, TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
     journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
     overrun_reaches_every_machine, persistence_survives, ran, replayed, runs_shared, simultaneous_jobs_finish_on_time,
     the_form_keeps_its_deadline, the_port_passes, verdict, zephyr_image, zephyr_persistence_survives, zephyr_verdict,
@@ -492,8 +492,11 @@ fn the_embassy_task_steps_on_its_deadline_beside_a_foreign_main_loop() {
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn every_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed: Vec<String> =
-        [Form::Interrupt, Form::Embassy].into_iter().flat_map(|f| the_port_passes(&mut board, f)).collect();
+    // Takt schaltet die PMP des C6 im Lauf nicht um (12.3): `Schutz: keiner`.
+    let failed: Vec<String> = [Form::Interrupt, Form::Embassy]
+        .into_iter()
+        .flat_map(|f| the_port_passes(&mut board, f, Case::Unprotected))
+        .collect();
     verdict(&failed);
 }
 
@@ -512,7 +515,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::ZEPHYR;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, true)
         .and_then(|image| zephyr_run(&mut board, &image, &options));
-    verdict(&zephyr_verdict(board.name(), example, true, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Partition, run));
 }
 
 /// Schreibt ein Zephyr-Abbild (`zephyr.bin` mit dem Kopf fuer den ROM-Lader,

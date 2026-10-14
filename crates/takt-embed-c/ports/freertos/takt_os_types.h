@@ -47,6 +47,14 @@
 #define TAKT_OS_STEP_PRIORITY ((int)configMAX_PRIORITIES - 1)
 #define TAKT_OS_JOB_PRIORITY ((int)configMAX_PRIORITIES - 2)
 
+/* Unter FreeRTOS-MPU (`portUSING_MPU_WRAPPERS`) erreicht eine Aufgabe ohne
+ * Privileg nur ihre Regionen, die Arena also nicht (12.11). */
+#if portUSING_MPU_WRAPPERS == 1
+#define TAKT_OS_PARTITION 1
+#else
+#define TAKT_OS_PARTITION 0
+#endif
+
 /* Ein binaeres Semaphor mit seinem Speicher. */
 struct takt_os_event {
     SemaphoreHandle_t handle;

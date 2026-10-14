@@ -21,8 +21,9 @@ use std::fmt::Write as _;
 /// `placements` im Lauf, `overhead` in der Kalibrierung, `function` und
 /// `placements` je Probe; die Kerne heissen wie im Protokoll. 3: die
 /// Stack-Reserve je Form (`stack_reserve_<form>`, FB-513). 4: das Urteil der
-/// Portpruefung je Port (`[port <name>]`, M11 Schritt 15).
-pub const FORMAT_VERSION: u32 = 4;
+/// Portpruefung je Port (`[port <name>]`, M11 Schritt 15). 5: der
+/// Speicherschutz je Port (`protection`, M11 Schritt 23).
+pub const FORMAT_VERSION: u32 = 5;
 
 const MAGIC: &str = "takt-conformance";
 
@@ -206,6 +207,9 @@ pub struct PortEntry {
     pub job_stack_shared: bool,
     /// Schreibvorgaenge des Journals.
     pub journal_writes: Option<u64>,
+    /// Der Speicherschutz, den der Kopf des Laufs nannte (12.11): `Fenster`,
+    /// `Partition` oder `keiner`.
+    pub protection: Option<String>,
 }
 
 /// Was beim Lesen schiefgehen kann; jeder Fall nennt die Zeile.
@@ -300,6 +304,7 @@ pub fn render(r: &Report) -> String {
             ("job_stack", p.job_stack.map(|(d, b)| format!("{d} {b}"))),
             ("job_stack_shared", p.job_stack_shared.then(|| "true".to_string())),
             ("journal_writes", p.journal_writes.map(|n| n.to_string())),
+            ("protection", p.protection.as_ref().map(|c| format!("\"{c}\""))),
         ];
         for (key, value) in numbers {
             if let Some(value) = value {
@@ -527,6 +532,7 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                     "job_stack" => p.job_stack = Some(depth_and_bound()?),
                     "job_stack_shared" => p.job_stack_shared = flag()?,
                     "journal_writes" => p.journal_writes = Some(number()?),
+                    "protection" => p.protection = Some(text()),
                     _ => return Err(unknown()),
                 }
             }
@@ -651,6 +657,7 @@ mod tests {
                 job_stack: Some((1_100, 2_700)),
                 job_stack_shared: false,
                 journal_writes: None,
+                protection: Some("Fenster".into()),
             }],
         }
     }
@@ -659,7 +666,8 @@ mod tests {
     fn a_report_round_trips() {
         let r = sample();
         let text = render(&r);
-        assert!(text.starts_with("# takt-conformance 4\n"), "{text}");
+        assert!(text.starts_with("# takt-conformance 5\n"), "{text}");
+        assert!(text.contains("job_stack = 1100 2700\nprotection = \"Fenster\"\n"), "{text}");
         assert!(text.contains("[port interrupt]\ndate = \"2026-10-11\"\npassed = true\n"), "{text}");
         assert!(text.contains("stack = 3900 4500\njob_stack = 1100 2700\n"), "{text}");
         assert!(!text.contains("journal_writes"), "was die Ausgabe nicht nannte, fehlt: {text}");

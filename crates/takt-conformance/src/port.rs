@@ -17,6 +17,7 @@
 //! | Drift | kein Tick ueber seiner Periode und keiner eine Periode zu spaet (`ueberlaeufe`, `verspaetet`, 7.3) |
 //! | Keine Runtime-Faults | keine Zeile `runtime` (5.3, 7.3, 12.3, 12.6): Das Pruefprogramm gibt einem richtigen Port keinen Anlass |
 //! | Journal | geschrieben, nie fehlgeschlagen (5.9, 12.3) |
+//! | Speicherschutz genannt | vor der Marke die Kopfzeile `Schutz: Fenster`, `Partition` oder `keiner` (12.11), und kein Nachweis darunter widerspricht ihr |
 //!
 //! Drift und Jitter stehen gemessen im Urteil und im Konformitaetsbericht
 //! (`[port <name>]`), bewertet werden sie nicht. `verloren` folgt aus
@@ -36,6 +37,7 @@
 
 use crate::board::{self, Drift, Options};
 use crate::report::PortEntry;
+use takt_rt_core::protection::{self, Case};
 
 /// Das Pruefprogramm, ein Programm des Korpus.
 pub const PROGRAM: &str = include_str!("../../../corpus-try/124_port_test.takt");
@@ -71,6 +73,11 @@ const JOB_LINE: &str = "const JOB_BYTES = ";
 /// fehler M` (`takt_rt_core::port_test`).
 pub const FOREIGN: &str = takt_rt_core::port_test::LINE;
 
+/// Der Nachweis einer Probe im Kopf, die aus einer Aufgabe ohne Privileg in
+/// die Arena schrieb: `verweigert`, `offen` oder `ungeprueft` dahinter
+/// (`examples/zephyr`, der C-Wirt der Black Pill unter FreeRTOS-MPU).
+pub const PARTITION_PROBE: &str = "takt schutz partition ";
+
 /// Das Urteil ueber eine Ausgabe.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Verdict {
@@ -88,6 +95,8 @@ pub struct Verdict {
     pub job_stack_shared: bool,
     /// Schreibvorgaenge des Journals.
     pub journal_writes: Option<u64>,
+    /// Der Speicherschutz, den der Kopf nennt (12.11).
+    pub protection: Option<Case>,
     /// Was der Port nicht belegt hat, je Pflicht eine Zeile.
     pub failures: Vec<String>,
 }
@@ -115,6 +124,7 @@ impl Verdict {
             job_stack: self.job_stack,
             job_stack_shared: self.job_stack_shared,
             journal_writes: self.journal_writes,
+            protection: self.protection.map(|c| c.name().to_string()),
         }
     }
 }
@@ -144,6 +154,7 @@ impl std::fmt::Display for Verdict {
             if self.job_stack_shared { "auf dem Schritt-Stack".to_string() } else { pair(self.job_stack) + " Byte" },
             self.journal_writes.map_or_else(|| "?".to_string(), |w| w.to_string())
         )?;
+        writeln!(f, "  {}{}", protection::LABEL, self.protection.map_or("?", Case::name))?;
         for failure in &self.failures {
             writeln!(f, "  - {failure}")?;
         }
@@ -217,6 +228,7 @@ pub fn judge(log: &str, text: &str) -> Verdict {
     on_time(log, &mut v.failures);
     no_faults(log, &mut v.failures);
     journal(log, &mut v);
+    protected(log, &mut v);
     v
 }
 
@@ -385,6 +397,40 @@ fn no_faults(log: &str, failures: &mut Vec<String>) {
     failures.push(format!("{} Runtime-Faults, zuerst `{first}`: {}", faults.len(), named.join(", ")));
 }
 
+/// Der Kopf nennt den Speicherschutz (12.11): eine Kopfzeile `Schutz: …`
+/// vor der Marke mit einem der drei Faelle, die letzte gilt. Ein Nachweis
+/// darunter darf ihr nicht widersprechen: Eine Probe, die die Partition
+/// abwies, verlangt `Partition`; eine, die in die Arena schrieb, schliesst
+/// es aus. Ein Schutz, der nur behauptet ist, waere schlechter als keiner.
+fn protected(log: &str, v: &mut Verdict) {
+    let header = log.rfind(board::MARK).map_or(log, |at| &log[..at]);
+    let Some(name) = header.lines().rev().find_map(|l| l.trim().strip_prefix(protection::LABEL)) else {
+        v.failures.push(format!("der Kopf nennt den Speicherschutz nicht (`{}…`, 12.11)", protection::LABEL));
+        return;
+    };
+    let Some(case) = Case::from_name(name) else {
+        let known: Vec<&str> = Case::ALL.iter().map(|c| c.name()).collect();
+        v.failures
+            .push(format!("`{}{name}` ist kein Fall des Speicherschutzes, nur {known:?} (12.11)", protection::LABEL));
+        return;
+    };
+    v.protection = Some(case);
+    let probe = header.lines().rev().find_map(|l| l.trim_end().strip_prefix(PARTITION_PROBE));
+    match (case, probe) {
+        (Case::Partition, Some("offen")) => v.failures.push(format!(
+            "der Kopf nennt `{}{}`, doch die Probe schrieb in die Arena (`{PARTITION_PROBE}offen`)",
+            protection::LABEL,
+            case.name()
+        )),
+        (Case::Window | Case::Unprotected, Some("verweigert")) => v.failures.push(format!(
+            "die Partition wies die Probe ab (`{PARTITION_PROBE}verweigert`), doch der Kopf nennt `{}{}`",
+            protection::LABEL,
+            case.name()
+        )),
+        _ => {}
+    }
+}
+
 /// Das Journal schrieb und scheiterte nie (5.9, 12.3).
 fn journal(log: &str, v: &mut Verdict) {
     v.journal_writes = board::counter(log, "journal geschrieben");
@@ -445,7 +491,7 @@ mod tests {
                 body.push_str(&format!("t={k} time took=40000 drift=3000 slept=0\n"));
             }
             body.push_str(&format!("{FOREIGN}40000 fehler 0\n"));
-            format!("takt auf wirt\r\n{}{body}{}takt end\n", board::MARK, summary(body.len()))
+            format!("takt auf wirt\r\n  Schutz: keiner\r\n{}{body}{}takt end\n", board::MARK, summary(body.len()))
         })
     }
 
@@ -461,8 +507,41 @@ mod tests {
         assert_eq!(v.foreign, Some((40_000, 0)));
         assert_eq!((v.stack, v.job_stack, v.journal_writes), (Some((3900, 4500)), Some((1100, 2700)), Some(1)));
         assert_eq!((v.drift.median, v.drift.jitter), (3000, Some(0)));
+        assert_eq!(v.protection, Some(Case::Unprotected));
         let entry = v.entry("interrupt", "2026-10-11");
         assert!(entry.passed && entry.ticks == TICKS - 2, "{entry:?}");
+        assert_eq!(entry.protection.as_deref(), Some("keiner"));
+    }
+
+    /// **Der Kopf nennt den Speicherschutz, und kein Nachweis widerspricht**
+    /// (12.11): ohne Kopfzeile, mit einem unbekannten Fall oder gegen die
+    /// Probe der Partition faellt der Port durch; die letzte Kopfzeile vor
+    /// der Marke gilt.
+    #[test]
+    fn the_header_names_the_protection_and_no_probe_contradicts_it() {
+        let judged = |header: &str| {
+            let mut v = Verdict::default();
+            protected(&format!("takt auf wirt\n{header}{}t=0 time\n", board::MARK), &mut v);
+            v
+        };
+        for case in Case::ALL {
+            let v = judged(&format!("{}\r\n", case.line()));
+            assert!(v.passed() && v.protection == Some(case), "{case:?}: {v}");
+        }
+        let missing = judged("");
+        assert!(missing.failures.iter().any(|f| f.contains("nicht")) && missing.protection.is_none(), "{missing}");
+        let unknown = judged("  Schutz: teilweise\n");
+        assert!(unknown.failures.iter().any(|f| f.contains("teilweise")), "{unknown}");
+        let refused = judged("  Schutz: Partition\ntakt schutz partition verweigert\n");
+        assert!(refused.passed(), "{refused}");
+        let open = judged("  Schutz: Partition\ntakt schutz partition offen\n");
+        assert!(open.failures.iter().any(|f| f.contains("offen")), "{open}");
+        let understated = judged("  Schutz: keiner\ntakt schutz partition verweigert\n");
+        assert!(understated.failures.iter().any(|f| f.contains("verweigert")), "{understated}");
+        let unchecked = judged("  Schutz: Partition\ntakt schutz partition ungeprueft\n");
+        assert!(unchecked.passed(), "{unchecked}");
+        let last = judged("  Schutz: keiner\n\n  Schutz: Fenster\n");
+        assert_eq!(last.protection, Some(Case::Window), "{last}");
     }
 
     /// **Ein Trace, der vom Interpreter abweicht, faellt durch**, auch wenn
