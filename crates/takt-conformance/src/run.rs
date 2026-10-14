@@ -466,7 +466,7 @@ fn changes<'a>(values: &[&'a str], current: Option<&&str>) -> Vec<&'a str> {
     let mut last = current.copied();
     let mut out = Vec::new();
     for v in values {
-        if last.is_none_or(|l| l != v) {
+        if last.is_none_or(|l| l != *v) {
             out.push(*v);
         }
         last = Some(v);
