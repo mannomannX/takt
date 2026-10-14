@@ -1459,8 +1459,8 @@ pub fn zephyr_access_in_the_run_faults(name: &str, run: Result<String, String>) 
     eprintln!("{name}-zephyr-probe: {}", log.display());
     let mut failed = Vec::new();
     let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
-    if !header.lines().any(|l| l.trim_end() == ZEPHYR_PARTITION_REFUSED) {
-        failed.push(format!("zephyr-probe: keine Zeile `{ZEPHYR_PARTITION_REFUSED}` vor der Marke"));
+    if !header.lines().any(|l| l.trim_end() == PARTITION_REFUSED) {
+        failed.push(format!("zephyr-probe: keine Zeile `{PARTITION_REFUSED}` vor der Marke"));
     }
     let trace = text.find(board::MARK).map_or("", |at| &text[at..]);
     let faults: Vec<&str> =
