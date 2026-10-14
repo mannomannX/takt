@@ -21,6 +21,7 @@ pub mod c_host;
 pub mod dfuse;
 pub mod esp32c6;
 pub mod host;
+pub mod reset_path;
 pub mod stm32f401;
 
 use std::io::{Read, Write};
@@ -669,6 +670,9 @@ pub(crate) struct Bringup {
     /// Umgebung des Baus, die `.cargo/config.toml` des Bring-ups sonst
     /// setzt: Von aussen gebaut greift jene Datei nicht.
     pub env: &'static [(&'static str, &'static str)],
+    /// Was jedes Abbild erfuellen muss, bevor es in den Zwischenspeicher
+    /// kommt; ein Abbild, das es bricht, bleibt draussen.
+    pub checked: Option<fn(&Path) -> Result<(), String>>,
 }
 
 impl Bringup {
@@ -709,6 +713,9 @@ impl Bringup {
         };
         for _ in 0..ATTEMPTS {
             let elf = self.build_uncached(program, options, &key, slot)?;
+            if let Some(check) = self.checked {
+                check(&elf)?;
+            }
             self.enter(&stand)?;
             if publish_checked(&elf, &cached, ours)? {
                 return Ok(cached);
@@ -1588,7 +1595,7 @@ mod tests {
         let program = dir.join("recorded.takt");
         std::fs::write(&program, "import channels from \"recorded.hw\"\n").expect("Programm");
         std::fs::write(dir.join("recorded.hw"), "a\n").expect("Konfiguration");
-        let bringup = Bringup { dir: "crates/takt-bringup-host", triple: "x", inputs: &[], env: &[] };
+        let bringup = Bringup { dir: "crates/takt-bringup-host", triple: "x", inputs: &[], env: &[], checked: None };
         let host = host::Host::new();
         let options = Options::fresh(10);
         let (board_before, host_before) =
@@ -1621,7 +1628,7 @@ mod tests {
             hash_tree(dir, &mut f).expect("Baum");
             f.finish()
         };
-        let bringup = Bringup { dir: "crates/takt-bringup-host", triple: "x", inputs: &[], env: &[] };
+        let bringup = Bringup { dir: "crates/takt-bringup-host", triple: "x", inputs: &[], env: &[], checked: None };
         let key = |dir: &Path| bringup.key(&dir.join("sub/b.takt"), &Options::fresh(10)).expect("Schluessel");
         let dirs = [tree("lf", "\n", 1), tree("crlf", "\r\n", 1), tree("other", "\n", 2)];
         let stands = dirs.each_ref().map(|d| stand(d));

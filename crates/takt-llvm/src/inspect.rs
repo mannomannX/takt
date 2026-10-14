@@ -450,6 +450,27 @@ impl Binutils {
         Command::new(self.tool("objcopy")).args(["-O", "binary"]).arg(elf).arg(out).status().is_ok_and(|s| s.success())
     }
 
+    /// Die Befehle von `start` bis vor `stop` (`objdump -d`, ohne Rohbytes).
+    pub fn disassemble(&self, file: &Path, start: u64, stop: u64) -> Option<String> {
+        let range = [format!("--start-address={start:#x}"), format!("--stop-address={stop:#x}")];
+        let out = Command::new(self.tool("objdump"))
+            .args(["-d", "--no-show-raw-insn"])
+            .args(range)
+            .arg(file)
+            .output()
+            .ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
+    /// Der Inhalt der Abschnitte um `start` bis vor `stop` (`objdump -s`): je
+    /// Zeile eine Adresse und bis zu sechzehn Byte; `objdump` zeigt dabei
+    /// ganze Zeilen und auch Abschnitte ausserhalb des Bereichs.
+    pub fn contents(&self, file: &Path, start: u64, stop: u64) -> Option<String> {
+        let range = [format!("--start-address={start:#x}"), format!("--stop-address={stop:#x}")];
+        let out = Command::new(self.tool("objdump")).arg("-s").args(range).arg(file).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    }
+
     /// Die Abschnitte mit ihrer Lage im Abbild (`objdump -h`).
     pub fn section_ranges(&self, file: &Path) -> Option<Vec<SectionRange>> {
         let out = Command::new(self.tool("objdump")).arg("-h").arg(file).output().ok()?;
