@@ -1,0 +1,40 @@
+/* Board 2 (plan/esp32c6.md): ein ESP32-C6-DevKitM-1-N4 mit 4 MB Flash wie in
+ * examples/zephyr, die Leitung auf dem USB-Serial-JTAG und die
+ * Drahtbruecke GPIO7 an GPIO17 als zwei Knoten mit `gpios`, deren Labels
+ * `takt/wire.hw` nennt. GPIO17 ist sonst der Empfaenger von UART0; der
+ * bleibt aus. `gpio-leds` und `gpio-keys` tragen nur die Pins: Ohne
+ * CONFIG_LED und CONFIG_INPUT greift kein Treiber des Zephyr-Kerns nach
+ * ihnen. */
+/ {
+	chosen {
+		takt,line = &usb_serial;
+	};
+
+	takt-wire-out {
+		compatible = "gpio-leds";
+
+		takt_wire_out: wire-out {
+			gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	takt-wire-in {
+		compatible = "gpio-keys";
+
+		takt_wire_in: wire-in {
+			gpios = <&gpio0 17 GPIO_ACTIVE_HIGH>;
+		};
+	};
+};
+
+&flash0 {
+	reg = <0x0 DT_SIZE_M(4)>;
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&usb_serial {
+	status = "okay";
+};

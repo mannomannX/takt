@@ -593,6 +593,23 @@ impl Hardware {
     pub fn channel(&self, address: &str) -> Option<&HwChannel> {
         self.channels.get(address)
     }
+
+    /// Der Treibertyp des Geraets, das den Kanal bedient.
+    pub fn driver_of(&self, entry: &HwChannel) -> Option<&str> {
+        self.devices.get(entry.device.as_deref()?)?.driver.as_deref()
+    }
+}
+
+/// Der Treibertyp der Pins aus dem Devicetree (8.10, „Treiber aus dem
+/// Devicetree“): Unter `--zephyr` erzeugt `takt build --emit embed` die
+/// Treiber seiner Kanaele.
+pub const ZEPHYR_GPIO: &str = "zephyr-gpio";
+
+/// Ist `text` ein Label des Devicetree: Kleinbuchstaben, Ziffern und `_`,
+/// nicht mit einer Ziffer am Anfang (8.10)?
+pub fn is_devicetree_label(text: &str) -> bool {
+    text.bytes().next().is_some_and(|b| !b.is_ascii_digit())
+        && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
 
 /// Welcher Abschnitt gerade gelesen wird.
