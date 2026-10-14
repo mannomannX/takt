@@ -83,8 +83,6 @@
     )
 )]
 
-use core::sync::atomic::{AtomicU32, Ordering};
-
 use cortex_m_rt::entry;
 use panic_halt as _;
 use stm32f4::stm32f401::{Peripherals, interrupt};
@@ -98,42 +96,14 @@ const TICK_NS: i64 = 1_000_000;
 /// Wie viele Ticks zwischen zwei Meldungen liegen.
 const REPORT_EVERY: u64 = 1_000;
 
-/// Der DWT-Stand beim vorigen Interrupt.
-///
-/// Aus der Differenz zweier Ablesungen entsteht die gemessene Periode
-/// (7.1, `tick_tolerance`).
-static LAST_STAMP: AtomicU32 = AtomicU32::new(0);
-
-/// Der Tick-Interrupt (12.3: „die ISR setzt ein Flag").
-///
-/// Sie tut so wenig wie moeglich: Flag loeschen, Zaehler erhoehen. Alles
-/// Weitere gehoert in die Hauptschleife, damit ein langer Schritt als
-/// Overrun sichtbar wird statt die naechste ISR zu verzoegern.
+/// Der Tick-Interrupt (12.3): Er weckt an der Grenze, misst ihren Abstand
+/// zur vorigen am DWT und stellt die naechste; die Zahl der Ticks steht in
+/// der Zeitachse von TIM2, nicht in ihm (FB-742). Alles Weitere gehoert in
+/// die Hauptschleife, damit ein langer Schritt als Overrun sichtbar wird
+/// statt die naechste ISR zu verzoegern.
 #[interrupt]
 fn TIM2() {
-    // SAFETY: Die ISR ist die einzige Stelle, die TIM2 nach dem Start noch
-    // anfasst — `Peripherals::take` hat den Rest schon vergeben.
-    let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
-
-    // **Gemessen wird ueber den DWT, nicht ueber den Timer selbst.** Der
-    // Timerzaehler steht beim Update-Interrupt immer nahe null — er ist
-    // ja gerade uebergelaufen. Was die Periode wirklich sagt, ist der
-    // Abstand zweier Interrupts, und den misst der Zyklenzaehler des
-    // Kerns: Er laeuft unabhaengig vom Timer und mit `CORE_HZ`.
-    let now = cycles::now();
-    let elapsed = now.wrapping_sub(LAST_STAMP.swap(now, Ordering::SeqCst));
-
-    // **`write` mit Maske, nicht `modify`.** `TIMx_SR` ist `rc_w0`:
-    // Eine Null loescht, eine Eins laesst stehen. Ein `modify` liest
-    // zuerst und schriebe ein Flag, das zwischen Lesen und Schreiben
-    // gesetzt wurde, mit einer Null zurueck — es waere weg, ohne dass es
-    // jemand gesehen hat. Heute ist nur `UIF` aktiv, aber die
-    // Compare-Kanaele fuer `at` (7.5) kommen, und dann verloere dieser
-    // Handler still ihre Ereignisse. Dieselbe Falle beschreibt FB-11 fuer
-    // die Registerfeld-Zugriffsarten.
-    // SAFETY: siehe oben; das Muster loescht nur `UIF`.
-    tim2.sr().write(|w| unsafe { w.bits(!1) });
-    tick::on_timer_interrupt(elapsed);
+    tick::on_interrupt();
 }
 
 /// Die Leitung: senden ohne zu warten, und der Host kann das Board

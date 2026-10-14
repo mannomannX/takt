@@ -32,6 +32,13 @@ pub trait Port {
     fn idle(&mut self) -> bool {
         true
     }
+
+    /// Wie oft die Gegenstelle die Leitung angehalten hat, etwa mit `XOFF`
+    /// (FB-306). Verwirft die Telemetrie, waehrend die Leitung stand, las der
+    /// Wirt nicht mit; eine Leitung ohne Rueckstau haelt nie an.
+    fn halts(&self) -> u32 {
+        0
+    }
 }
 
 /// Der Ring vor der Leitung.
@@ -130,6 +137,11 @@ impl<P: Port> Telemetry<P> {
     /// Wie viele Bytes ohne Platz verworfen wurden.
     pub fn dropped(&self) -> u32 {
         self.dropped
+    }
+
+    /// Wie oft die Gegenstelle die Leitung angehalten hat ([`Port::halts`]).
+    pub fn halts(&self) -> u32 {
+        self.port.halts()
     }
 
     /// Die Zeile `takt trace`, ab der [`Telemetry::sent`] zaehlt: Was davor

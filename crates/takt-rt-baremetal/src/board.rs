@@ -34,6 +34,15 @@ pub trait TickSource {
     /// `tick_tolerance` — siehe [`crate::tolerance`].
     fn last_period_ns(&self) -> i64;
 
+    /// Wie viele Ereignisse die Tickquelle seit dem Start brachte; jedes hat
+    /// seine gemessene Periode ([`TickSource::last_period_ns`]).
+    ///
+    /// Gewoehnlich ist es eines je Tick. Nach einem Stillstand des Kerns ist
+    /// es eines fuer alle Ticks, die die Schleife nachholt (FB-742): Sie
+    /// brachte die Quelle nicht einzeln, und `tick_tolerance` misst am
+    /// Ereignis (7.1).
+    fn events(&self) -> u64;
+
     /// Die Zeit des Timers in Nanosekunden, feiner als ein Tick: fuer
     /// `took` und `drift` (7.3). Monoton, ab einem beliebigen Nullpunkt.
     fn now_ns(&self) -> i64;

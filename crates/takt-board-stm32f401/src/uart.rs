@@ -35,7 +35,7 @@
 //! diesem Board.
 
 use core::cell::Cell;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use cortex_m::interrupt::Mutex;
 use stm32f4::stm32f401::{GPIOA, RCC, USART1};
@@ -90,6 +90,10 @@ const XOFF: u8 = 0x13;
 
 /// Der Adapter hat `XOFF` gesandt und noch kein `XON`.
 static PAUSED: AtomicBool = AtomicBool::new(false);
+
+/// Wie oft der Adapter die Leitung angehalten hat; die Bilanz nennt es
+/// (`angehalten`, FB-530).
+static HALTS: AtomicU32 = AtomicU32::new(0);
 
 /// Der Erkenner der Gegenrichtung; nur der Interrupt fuehrt ihn fort.
 static RECOGNIZER: Mutex<Cell<Magic>> = Mutex::new(Cell::new(Magic::new()));
@@ -180,7 +184,11 @@ pub fn on_interrupt() {
             // Acht Datenbits: Das neunte Bit von `DR` ist ohne Paritaet null.
             let [byte, _] = usart.dr().read().dr().bits().to_le_bytes();
             match byte {
-                XOFF => PAUSED.store(true, Ordering::SeqCst),
+                XOFF => {
+                    if !PAUSED.swap(true, Ordering::SeqCst) {
+                        HALTS.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
                 XON => {
                     PAUSED.store(false, Ordering::SeqCst);
                     usart.cr1().modify(|_, w| w.txeie().set_bit());
@@ -232,6 +240,11 @@ impl Port for Usart1 {
     /// Der FIFO ist leer, und `TC` meldet auch das letzte Stoppbit gesendet.
     fn idle(&mut self) -> bool {
         TX.is_empty() && self.usart.sr().read().tc().bit_is_set()
+    }
+
+    /// Wie oft der Adapter `XOFF` sandte, waehrend die Leitung lief.
+    fn halts(&self) -> u32 {
+        HALTS.load(Ordering::SeqCst)
     }
 }
 

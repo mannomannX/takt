@@ -29,6 +29,9 @@ pub struct TimerClock<T, F = fn()> {
     nominal_ns: i64,
     /// Laeuft vor jedem Schlaf bis zur Frist, etwa um den Ring zu leeren.
     idle: F,
+    /// Das Ereignis der Tickquelle, dessen Periode die Schleife zuletzt
+    /// bekam ([`Clock::tick_period`]).
+    seen: core::cell::Cell<u64>,
 }
 
 impl<T: core::fmt::Debug, F> core::fmt::Debug for TimerClock<T, F> {
@@ -42,12 +45,13 @@ fn nothing() {}
 impl<T: TickSource> TimerClock<T> {
     /// Bindet einen Timer an die nominale Periode.
     pub fn new(timer: T, nominal_ns: i64) -> TimerClock<T> {
-        TimerClock { timer, nominal_ns, idle: nothing }
+        let seen = core::cell::Cell::new(timer.events());
+        TimerClock { timer, nominal_ns, idle: nothing, seen }
     }
 
     /// Mit einer Arbeit fuer die Zeit zwischen den Ticks.
     pub fn with_idle<F: FnMut()>(self, idle: F) -> TimerClock<T, F> {
-        TimerClock { timer: self.timer, nominal_ns: self.nominal_ns, idle }
+        TimerClock { timer: self.timer, nominal_ns: self.nominal_ns, idle, seen: self.seen }
     }
 }
 
@@ -96,9 +100,20 @@ impl<T: TickSource, F: FnMut()> Clock for TimerClock<T, F> {
         }
     }
 
-    /// Die Periode, die der Timer zwischen den letzten beiden Ereignissen
-    /// gemessen hat (7.1); vor dem zweiten kennt er keine.
+    /// Die Periode, mit der der Timer den anstehenden Tick brachte (7.1):
+    /// die zwischen seinen letzten beiden Ereignissen, vor dem zweiten keine.
+    ///
+    /// **Je Ereignis einmal** (FB-742). Ein Tick, den die Schleife nach einem
+    /// Stillstand nachholt, kam mit keinem eigenen Ereignis, und seine Periode
+    /// gibt es nicht; `tick_tolerance` misst am Ereignis. Bekaeme jeder
+    /// nachgeholte Tick die eine lange Periode des Stillstands, waeren zwanzig
+    /// Ticks zwanzig Verletzungen in Folge, und ein Stillstand, den
+    /// `overrun = alert` annimmt, wuerde `Runtime(Hardware)`.
     fn tick_period(&self) -> Option<i64> {
+        let events = self.timer.events();
+        if self.seen.replace(events) == events {
+            return None;
+        }
         let ns = self.timer.last_period_ns();
         (ns > 0).then_some(ns)
     }
@@ -183,6 +198,10 @@ mod tests {
             self.period_ns
         }
 
+        fn events(&self) -> u64 {
+            self.count.get()
+        }
+
         fn now_ns(&self) -> i64 {
             self.count.get() as i64 * self.period_ns
         }
@@ -205,6 +224,10 @@ mod tests {
 
         fn last_period_ns(&self) -> i64 {
             MS
+        }
+
+        fn events(&self) -> u64 {
+            self.0.get()
         }
 
         fn now_ns(&self) -> i64 {
@@ -290,6 +313,10 @@ mod tests {
             self.period_ns
         }
 
+        fn events(&self) -> u64 {
+            self.ticks()
+        }
+
         fn now_ns(&self) -> i64 {
             self.now.get()
         }
@@ -345,5 +372,105 @@ mod tests {
         assert_eq!(clock.timer.waits.get(), 100, "hundert Ereignisse");
         assert_eq!(clock.now() - 100 * MS, MS, "hundert Perioden zu je 10 us zu lang");
         assert_eq!(clock.tick_period(), Some(slow));
+        assert_eq!(clock.tick_period(), None, "dasselbe Ereignis meldet seine Periode einmal");
+    }
+
+    /// Eine Zeitachse mit einem Wecker an jeder Grenze, wie auf beiden
+    /// Boards: Jedes Warten bringt ein Ereignis mit seiner Periode. Steht der
+    /// Kern ([`AxisState::stall`]), laeuft die Achse weiter, und an seinem
+    /// Ende kommt ein einziges Ereignis.
+    #[derive(Default)]
+    struct AxisState {
+        now: Cell<i64>,
+        events: Cell<u64>,
+        last: Cell<i64>,
+        at: Cell<i64>,
+    }
+
+    impl AxisState {
+        fn event(&self, at: i64) {
+            self.last.set(at - self.at.get());
+            self.at.set(at);
+            self.now.set(at);
+            self.events.set(self.events.get() + 1);
+        }
+
+        /// Der Kern steht `ns` lang; danach laeuft die ISR einmal.
+        fn stall(&self, ns: i64) {
+            self.event(self.now.get() + ns);
+        }
+    }
+
+    struct Axis<'a>(&'a AxisState);
+
+    impl TickSource for Axis<'_> {
+        fn ticks(&self) -> u64 {
+            (self.0.now.get() / MS) as u64
+        }
+
+        fn last_period_ns(&self) -> i64 {
+            self.0.last.get()
+        }
+
+        fn events(&self) -> u64 {
+            self.0.events.get()
+        }
+
+        fn now_ns(&self) -> i64 {
+            self.0.now.get()
+        }
+
+        fn wait_event(&mut self, target: u64) {
+            if self.ticks() < target {
+                self.0.event((self.ticks() as i64 + 1) * MS);
+            }
+        }
+    }
+
+    /// Ein Programm mit `tick_tolerance` (Vorgabe `2 pct for 10 ticks`), das
+    /// in Tick 5 den Kern 20,5 Perioden lang anhaelt — wie eine
+    /// Sektorloeschung des Journals unter `overrun = alert` (12.3).
+    struct Stalling<'a> {
+        axis: &'a AxisState,
+        hardware: u32,
+    }
+
+    impl takt_rt_core::Program for Stalling<'_> {
+        type Memory = takt_rt_core::Volatile;
+
+        fn tick(&mut self, k: u64, _now: i64) {
+            if k == 5 {
+                self.axis.stall(20 * MS + MS / 2);
+            }
+        }
+
+        fn raise_hardware(&mut self) {
+            self.hardware += 1;
+        }
+
+        fn tick_tolerance(&self) -> Option<takt_rt_core::Tolerance> {
+            Some(takt_rt_core::Tolerance { ns: MS * 2 / 100, runs: 10 })
+        }
+    }
+
+    /// **Ein Stillstand ist keine Verletzung der Tickperiode** (7.1, FB-742).
+    /// Nach ihm holt die Schleife zwanzig Ticks nach, aber die Tickquelle
+    /// brachte ein Ereignis: eine lange Periode, eine Verletzung. Meldete die
+    /// Uhr sie jedem nachgeholten Tick, waeren es zwanzig in Folge und
+    /// `Runtime(Hardware)` — so lief es auf dem F401, bis der eigene Kern
+    /// nach FB-742 aufholte: Alle Ausgaenge standen ab Tick 11 auf `safe`.
+    #[test]
+    fn a_stall_is_no_violation_of_the_tick_period() {
+        let axis = AxisState::default();
+        let clock = TimerClock::new(Axis(&axis), MS);
+        let program = Stalling { axis: &axis, hardware: 0 };
+        let profile = takt_rt_core::Profile::BAREMETAL;
+        let policy = takt_rt_core::Policy::Alert;
+        let mut rt = takt_rt_core::Runtime::new(program, clock, crate::run::NoWatchdog, (), profile, MS, policy);
+        for _ in 0..40 {
+            rt.step();
+        }
+        assert_eq!(rt.program.hardware, 0, "der Stillstand erhob `Runtime(Hardware)`");
+        assert!(rt.overrun().lost >= 19, "der Stillstand ist Rueckstand: {:?}", rt.overrun());
     }
 }
