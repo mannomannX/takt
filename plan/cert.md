@@ -455,7 +455,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `bugprone-branch-clone` | Zephyr-Bau | 4 | CERT C MSC12-C | Fehlmeldung: `K_KERNEL_STACK_DEFINE` und `K_THREAD_STACK_DEFINE` von Zephyr nehmen für Ausrichtung und Größe das Größere zweier Werte, die auf dem F401 gleich sind (`MAX(128, 128)`); der Ausdruck steht im Kopf von Zephyr, nicht in den Beispielen |
 | `clang-analyzer-security.ArrayBound` | Rahmen | 2 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |
 | `constParameterPointer` | Rahmen | 63 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
-| `knownConditionTrueFalse` | Rahmen | 10 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |
+| `knownConditionTrueFalse` | Rahmen | 12 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |
 | `misc-no-recursion` | Rahmen | 8 | MISRA C:2012 17.2 (R) | `takt_dump_field` und `takt_dump_fields` steigen nur im Trace in die Felder eines Records ab; die Tiefe ist die Schachtelung der Typen des Programms, eine Konstante, und der Stack des Ticks ist gemessen (12.3) |
 | `misra-c2012-1.4` | Rahmen | 86 | MISRA C:2012 1.4 (R) | `_Alignas` und `_Alignof`: Arena und Puffer des Randes liegen ausgerichtet, wie der erzeugte LLVM-Code sie liest (12.11) |
 | `misra-c2012-10.1` | Rahmen | 11 | MISRA C:2012 10.1 (R) | Das Modell der wesentlichen Typen: Der Rahmen rechnet in den Typen des erzeugten Codes und mischt sie, wo Takt es festlegt; was herauskommt, prüft der Vergleich mit dem Interpreter bitgleich (Satz 9.4.4) |
@@ -463,17 +463,17 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-10.7` | Rahmen | 8 | MISRA C:2012 10.7 (R) | wie 10.1 |
 | `misra-c2012-10.8` | Rahmen | 14 | MISRA C:2012 10.8 (R) | wie 10.1 |
 | `misra-c2012-11.5` | Rahmen | 97 | MISRA C:2012 11.5 (A) | Arena und Treiberobjekt kommen als `void *` über die C-ABI (`takt_sdk.h`, `P_ops`) |
-| `misra-c2012-12.1` | Rahmen | 196 | MISRA C:2012 12.1 (A) | erzeugte Ausdrücke; den Vorrang legt der Generator fest, nicht ein Leser |
+| `misra-c2012-12.1` | Rahmen | 213 | MISRA C:2012 12.1 (A) | erzeugte Ausdrücke; den Vorrang legt der Generator fest, nicht ein Leser |
 | `misra-c2012-12.3` | Rahmen | 141 | MISRA C:2012 12.3 (A) | Deklarationen mehrerer Felder und Variablen in einer Zeile des erzeugten Texts |
 | `misra-c2012-13.3` | Rahmen | 11 | MISRA C:2012 13.3 (A) | `x++` in Vergleichen und Indizes der Ringe; erzeugt, nicht von Hand geändert |
 | `misra-c2012-14.4` | Rahmen | 96 | MISRA C:2012 14.4 (R) | Bedingungen auf Zählern und Zeigern (`if (k)`, `if (o->variants)`) im erzeugten Text |
 | `misra-c2012-15.5` | Rahmen | 332 | MISRA C:2012 15.5 (A) | früher Ausgang in erzeugten Funktionen; jeder Weg läuft gegen den Interpreter |
 | `misra-c2012-15.6` | Rahmen | 325 | MISRA C:2012 15.6 (R) | einzeilige Rümpfe im erzeugten Text; die Gefahr der Regel, eine später eingefügte Anweisung, besteht nur von Hand |
-| `misra-c2012-15.7` | Rahmen | 15 | MISRA C:2012 15.7 (R) | Ketten aus `if … else if` ohne `else`, wo der letzte Fall nichts tut |
+| `misra-c2012-15.7` | Rahmen | 30 | MISRA C:2012 15.7 (R) | Ketten aus `if … else if` ohne `else`, wo der letzte Fall nichts tut |
 | `misra-c2012-16.6` | Rahmen | 13 | MISRA C:2012 16.6 (R) | Ein `switch` über die Kanäle eines Programms hat für ein Programm ohne solche Kanäle nur `default` |
 | `misra-c2012-17.2` | Rahmen | 8 | MISRA C:2012 17.2 (R) | wie `misc-no-recursion`: der Abstieg des Traces in die Felder eines Records, so tief wie die Typen des Programms |
 | `misra-c2012-17.3` | Rahmen | 29 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für die Gleitkomma-Umgebung (4.2), gekapselt in je zwei Funktionen (D.4.3) |
-| `misra-c2012-17.7` | Rahmen | 179 | MISRA C:2012 17.7 (R) | `memcpy`, `__builtin_memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
+| `misra-c2012-17.7` | Rahmen | 183 | MISRA C:2012 17.7 (R) | `memcpy`, `__builtin_memcpy`, `memset` und `memmove` liefern ihr Ziel zurück, das der Rahmen schon hat |
 | `misra-c2012-17.8` | Rahmen | 14 | MISRA C:2012 17.8 (A) | Parameter als Zähler in erzeugten Schleifen |
 | `misra-c2012-18.4` | Rahmen | 39 | MISRA C:2012 18.4 (A) | Zeiger in die Arena als Basis plus Versatz, die Versätze aus dem Layout (`takt-frame::layout`) |
 | `misra-c2012-2.2` | Rahmen | 23 | MISRA C:2012 2.2 (R) | `+ 0` und `* 1`: Der Generator schreibt jeden Zugriff in derselben Form (Basis plus Versatz), auch beim Versatz 0; der Übersetzer faltet die Konstante |
