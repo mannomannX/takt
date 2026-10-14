@@ -299,11 +299,36 @@ fn two_runs_of_the_same_program_build_side_by_side() {
     }
 }
 
-/// Wie viele Ticks der Kern nach dem Tick `tick` des Rahmens schlief: die
-/// Zeitzeile der Grenze `tick - 1` des Kerns (`t=<k> time ... slept=<n>`),
-/// die den Tick `tick` rechnet (`testhost::reached`).
+/// **Die Zeitzeile nennt den Tick des Traces und steht an seinem Ende**
+/// (grammar/trace.md T1 und T5, FB-687): Ein Ausgang aendert sich in jedem
+/// Tick; je Tick 1 bis 5 steht `t=<k> time` nach allen anderen Zeilen von
+/// Tick `k` und vor denen von Tick `k + 1`. Der Kern schrieb die Zeile mit
+/// seiner Grenze `k - 1` und vor den Ausgaben.
+#[test]
+fn the_time_line_names_the_tick_of_the_trace() {
+    let Some(clang) = common::clang() else { return };
+    let src = "system:\n    language = 1\n    tick     = 10 ms\n\n\
+               output n : int in 0..99 @ hw(\"o/n\") with safe = 0\n\n\
+               machine m:\n    var count : int in 0..99 = 0\n    initial RUN\n\n\
+               \x20   state RUN:\n        loop:\n            count = count + 1\n            n = count\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let native = common::run_native_all(&clang, &p, "time_line", 5).unwrap_or_else(|e| panic!("{e}"));
+    let lines: Vec<&str> = native.lines().map(str::trim_end).collect();
+    let tick_of = |l: &str| l.strip_prefix("t=")?.split_once(' ')?.0.parse::<u64>().ok();
+    for k in 1..=5u64 {
+        let head = format!("t={k} time ");
+        let at = lines.iter().position(|l| l.starts_with(&head)).unwrap_or_else(|| panic!("ohne `{head}`:\n{native}"));
+        assert!(lines[..at].iter().all(|l| tick_of(l).is_none_or(|t| t <= k)), "Tick {k} zu spaet:\n{native}");
+        assert!(lines[at + 1..].iter().all(|l| tick_of(l).is_none_or(|t| t > k)), "Tick {k} zu frueh:\n{native}");
+    }
+}
+
+/// Wie viele Ticks der Kern nach dem Tick `tick` schlief: die Zeitzeile des
+/// Ticks (`t=<tick> time ... slept=<n>`, `testhost::reached`).
 fn slept_after(trace: &str, tick: u64) -> Option<u64> {
-    let head = format!("t={} time ", tick.checked_sub(1)?);
+    let head = format!("t={tick} time ");
     trace
         .lines()
         .find_map(|l| l.strip_prefix(&head)?.split_whitespace().find_map(|w| w.strip_prefix("slept="))?.parse().ok())
