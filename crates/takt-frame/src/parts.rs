@@ -14,7 +14,7 @@ use crate::layout::{Layout, c_type};
 use crate::text::Text;
 
 /// Eine Dauer in der groessten ganzzahligen Einheit, wie `takt_mir::dump::duration`
-/// sie schreibt (T2).
+/// sie schreibt (T2): Zahl, ein Leerzeichen, Einheit (`takt_dur_trace`).
 pub const DURATION_C: &str = "\
 static const long long takt_dur_factor[7] = { 86400000000000LL, 3600000000000LL, 60000000000LL, 1000000000LL, \
 1000000LL, 1000LL, 1LL };
@@ -26,7 +26,12 @@ static inline int takt_dur_index(long long ns) {
     return i;
 }
 static inline long long takt_dur_value(long long ns) { return ns / takt_dur_factor[takt_dur_index(ns)]; }
-static inline const char *takt_dur_unit(long long ns) { return takt_dur_name[takt_dur_index(ns)]; }";
+static inline const char *takt_dur_unit(long long ns) { return takt_dur_name[takt_dur_index(ns)]; }
+static inline void takt_dur_trace(void *sink, long long ns) {
+    takt_trace_i64(sink, takt_dur_value(ns));
+    takt_trace_text(sink, \" \");
+    takt_trace_text(sink, takt_dur_unit(ns));
+}";
 
 /// `now` und die Zeit aus Ticks (3.3): Tickzahl mal T0, gesaettigt bei der
 /// groessten `Duration` wie im Interpreter (FB-614). Beide Rahmen rechnen
@@ -1063,16 +1068,17 @@ pub fn tune(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     let _ = writeln!(s, "}}");
 }
 
-/// `takt_tune_trace(k, param, value, len, accepted)`: die Zeile `t=<k> tune
+/// `takt_tune_trace(sink, k, param, value, len, accepted)`: die Zeile `t=<k> tune
 /// <name> <wert>` des Golden-Trace (`grammar/trace.md`), eine verworfene
 /// mit ` rejected` — in der Form, die der Interpreter als Stimulus liest
 /// (12.5). Ein Wert, der keinem Tunable gehoert oder nicht seine Laenge
-/// hat, ist keine Tune-Zeile und steht nicht im Trace. Jedes Stueck endet
-/// wie `takt_board_trace_i64` mit einem Leerzeichen; `DURATION_C` steht davor.
+/// hat, ist keine Tune-Zeile und steht nicht im Trace. Der Wert steht ohne
+/// Leerzeichen dahinter, ` rejected` beginnt mit seinem (FB-690);
+/// `DURATION_C` steht davor.
 pub fn tune_trace(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(
         s,
-        "static void takt_tune_trace(int64_t k, uint32_t param, const unsigned char *v, int32_t len, int32_t accepted) {{"
+        "static void takt_tune_trace(void *sink, int64_t k, uint32_t param, const unsigned char *v, int32_t len, int32_t accepted) {{"
     );
     let _ = writeln!(s, "    unsigned long long raw = 0;");
     let _ = writeln!(s, "    if (len < 1 || len > 8) return;");
@@ -1080,8 +1086,10 @@ pub fn tune_trace(s: &mut String, p: &Program, layout: &Layout) {
     let _ = writeln!(s, "    switch (param) {{");
     for t in tunables(p, layout) {
         let (ct, bytes) = (t.ct, t.bytes);
-        let head =
-            format!("takt_board_trace(\"t=\"); takt_board_trace_i64(k); takt_board_trace(\"tune {} \");", t.name);
+        let head = format!(
+            "takt_trace_text(sink, \"t=\"); takt_trace_i64(sink, k); takt_trace_text(sink, \" tune {} \");",
+            t.name
+        );
         let _ = writeln!(s, "    case {}: {{", t.index);
         if let TuneKind::Enum(variants) = &t.kind {
             let _ = writeln!(s, "        long long d;");
@@ -1090,9 +1098,9 @@ pub fn tune_trace(s: &mut String, p: &Program, layout: &Layout) {
             let _ = writeln!(s, "        {head}");
             let _ = writeln!(s, "        switch (d) {{");
             for (d, name) in variants {
-                let _ = writeln!(s, "        case {d}LL: takt_board_trace(\"{name} \"); break;");
+                let _ = writeln!(s, "        case {d}LL: takt_trace_text(sink, \"{name}\"); break;");
             }
-            let _ = writeln!(s, "        default: takt_board_trace_i64(d); break;");
+            let _ = writeln!(s, "        default: takt_trace_i64(sink, d); break;");
             let _ = writeln!(s, "        }}");
             let _ = writeln!(s, "        break;");
             let _ = writeln!(s, "    }}");
@@ -1106,27 +1114,24 @@ pub fn tune_trace(s: &mut String, p: &Program, layout: &Layout) {
         let _ = writeln!(s, "        {head}");
         let (value, unit) = match &t.kind {
             TuneKind::Bool => {
-                ("if (x <= 1) takt_board_trace(x ? \"true \" : \"false \"); else takt_board_trace_i64(x);", None)
+                ("if (x <= 1) takt_trace_text(sink, x ? \"true\" : \"false\"); else takt_trace_i64(sink, x);", None)
             }
-            TuneKind::Int { unit, wide: true, .. } => ("takt_board_trace_u64((unsigned long long)x);", unit.as_deref()),
-            TuneKind::Int { unit, .. } => ("takt_board_trace_i64((long long)x);", unit.as_deref()),
-            TuneKind::Float { unit, .. } => ("takt_board_trace_f64((double)x);", unit.as_deref()),
-            TuneKind::Duration { .. } => (
-                "takt_board_trace_i64(takt_dur_value(x)); takt_board_trace(takt_dur_unit(x)); takt_board_trace(\" \");",
-                None,
-            ),
+            TuneKind::Int { unit, wide: true, .. } => ("takt_trace_u64(sink, (unsigned long long)x);", unit.as_deref()),
+            TuneKind::Int { unit, .. } => ("takt_trace_i64(sink, (long long)x);", unit.as_deref()),
+            TuneKind::Float { unit, .. } => ("takt_trace_f64(sink, (double)x);", unit.as_deref()),
+            TuneKind::Duration { .. } => ("takt_dur_trace(sink, x);", None),
             TuneKind::Enum(_) => continue,
         };
         let _ = writeln!(s, "        {value}");
         if let Some(unit) = unit {
-            let _ = writeln!(s, "        takt_board_trace(\"{unit} \");");
+            let _ = writeln!(s, "        takt_trace_text(sink, \" {unit}\");");
         }
         let _ = writeln!(s, "        break;");
         let _ = writeln!(s, "    }}");
     }
-    let _ = writeln!(s, "    default: (void)k; (void)raw; return;");
+    let _ = writeln!(s, "    default: (void)sink; (void)k; (void)raw; return;");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    takt_board_trace(accepted ? \"\\n\" : \"rejected\\n\");");
+    let _ = writeln!(s, "    takt_trace_text(sink, accepted ? \"\\n\" : \" rejected\\n\");");
     let _ = writeln!(s, "}}");
 }
 
@@ -1351,7 +1356,7 @@ pub fn signal_lines(s: &mut String, p: &Program, driven: &[&takt_mir::machine::M
             let at = base + off;
             let _ = writeln!(
                 s,
-                "{indent}if (a->image[{at}]) {{ takt_board_trace(\"t=\"); takt_board_trace_i64({tick}); takt_board_trace(\" signal {} {}\\n\"); }}",
+                "{indent}if (a->image[{at}]) {{ takt_trace_text(a->sink, \"t=\"); takt_trace_i64(a->sink, {tick}); takt_trace_text(a->sink, \" signal {} {}\\n\"); }}",
                 m.name, sig.name
             );
         }

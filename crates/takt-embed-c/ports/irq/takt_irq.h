@@ -20,8 +20,8 @@
  * In logischer Zeit (13.8) wartet der Alarm hinter einem Tor, das die
  * Hauptschleife oeffnet (`takt_irq_release`): Wenn sie laeuft, ruht jede ISR
  * und jeder Job ist fertig. Die Uhr steht dann mit jedem Alarm auf seiner
- * Frist; so haelt jeder Job seine Dauer, und mit einer verlustfreien Leitung
- * (`takt_line_lossless`) geht keine Zeile verloren.
+ * Frist; so haelt jeder Job seine Dauer, und mit einer verlustfreien Senke
+ * (`takt_sink_lossless`) geht keine Zeile verloren.
  *
  * Ablauf: `takt_irq_start`, dann in der Hauptschleife fremde Arbeit, in
  * logischer Zeit dazu `takt_irq_release`, solange `takt_irq_running` wahr

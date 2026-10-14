@@ -162,7 +162,7 @@ static int drive(takt_core *core, uint64_t ticks) {
     return (rc == 0) ? 0 : 2;
 }
 
-/* Was der Wirt fuer den Lauf stellt: Leitung, Journal und Kern; 0 oder 2. */
+/* Was der Wirt fuer den Lauf stellt: Senke, Journal und Kern; 0 oder 2. */
 static int run(uint64_t ticks) {
     static struct out out;
     static uint8_t ring[65536];
@@ -170,19 +170,20 @@ static int run(uint64_t ticks) {
     static uint8_t stored[PORT_TEST_PERSIST_BOUND];
     static struct port_test_arena arena;
     static takt_core core;
+    static takt_sink sink;
     static const struct takt_nvm nvm = {NULL, SLOT, -1, erase, program, poll_nvm, read_nvm};
     static const struct takt_watchdog watchdog = {NULL, kick};
     const struct takt_line line = {&out, put, flush};
     int rc = 2;
-    int32_t status = takt_line_init(&line, ring, sizeof ring);
+    int32_t status = takt_sink_init(&sink, &line, ring, sizeof ring);
     if (status != TAKT_OK) {
-        (void)fprintf(stderr, "takt_line_init: %d\n", (int)status);
+        (void)fprintf(stderr, "takt_sink_init: %d\n", (int)status);
     } else {
-        takt_board_trace("takt auf posix\n");
-        takt_line_mark();
+        takt_trace_text(&sink, "takt auf posix\n");
+        takt_sink_mark(&sink);
         (void)memset(slots, 0xff, sizeof slots);
-        status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
-                                          current, stored, PORT_TEST_PERSIST_BOUND);
+        status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog,
+                                          &nvm, current, stored, PORT_TEST_PERSIST_BOUND);
         if (status != TAKT_OK) {
             (void)fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
         } else {

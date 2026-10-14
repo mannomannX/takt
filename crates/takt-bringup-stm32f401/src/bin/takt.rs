@@ -177,9 +177,8 @@ const _: () = assert!(
     "`TAKT_PORT_FLAW` ist `fpu` oder `jobs` und gilt nur in der Interruptform"
 );
 
-/// Die Telemetrie, statisch: Der erzeugte Rahmen ruft `takt_board_trace`
-/// als C-Symbol, und eine Funktion ohne Empfaenger kommt an nichts heran,
-/// was in `main` liegt.
+/// Die Telemetrie, statisch: Die Senke des Programms ([`UartSink`]) hat
+/// keinen Empfaenger und kommt an nichts heran, was in `main` liegt.
 static mut UART: Option<Telemetry> = None;
 
 /// Die LED, die das Geraet `devices::UiLed` schaltet; aus demselben Grund.
@@ -212,56 +211,21 @@ fn led() -> Option<&'static mut Led> {
     unsafe { slot.as_mut() }.and_then(Option::as_mut)
 }
 
-/// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
-///
-/// # Safety
-///
-/// Der Rahmen uebergibt einen nullterminierten Zeiger auf statischen
-/// Text; die Schranke haelt einen Zeiger ohne Null auf (4.1, von Hand).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
-    let Some(uart) = uart() else { return };
-    let mut p = text;
-    for _ in 0..256 {
-        // SAFETY: siehe oben; gelesen wird bis zur Null, hoechstens 256 Byte.
-        let b = unsafe { p.read() };
-        if b == 0 {
-            return;
+/// Die Leitung als Senke des Programms (12.11): Was der Rahmen ueber die
+/// Haken schreibt, geht in den Ring vor der Leitung. Ohne Zustand; sie
+/// kommt ueber [`uart`] an die Telemetrie.
+struct UartSink;
+
+impl takt_embed::Line for UartSink {
+    fn write(&self, bytes: &[u8]) {
+        let Some(uart) = uart() else { return };
+        for &b in bytes {
+            uart.write_byte(b);
         }
-        uart.write_byte(b);
-        p = p.wrapping_add(1);
     }
 }
 
-/// Vom Rahmen gerufen: eine Zahl im Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_i64(value: i64) {
-    let Some(uart) = uart() else { return };
-    uart.write_i64(value);
-    uart.write_byte(b' ');
-}
-
-/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_u64(value: u64) {
-    let Some(uart) = uart() else { return };
-    uart.write_u64(value);
-    uart.write_byte(b' ');
-}
-
-/// Vom Rahmen gerufen: eine Fliesskommazahl als kuerzeste eindeutige Ziffernfolge (4.2).
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_f64(value: f64) {
-    let Some(uart) = uart() else { return };
-    let _ = write!(uart, "{value:?} ");
-}
-
-/// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_hex8(value: u8) {
-    let Some(uart) = uart() else { return };
-    uart.write_hex8(value);
-}
+takt_embed::hooks!(UartSink);
 
 /// Ein Pruefzugriff der TCB auf geschuetzten Speicher (12.3): zwischen zwei
 /// Ticks auf den Programmzustand (1), den Waechter unter dem Hauptstack (2)
@@ -333,7 +297,7 @@ unsafe fn program(flash: FLASH) -> (app::Program<'static>, Journaled) {
     let arena = unsafe { &mut *arena };
     // SAFETY: siehe oben.
     let rig = unsafe { &mut *rig }.insert(drivers::Rig::default());
-    let mut program = app::Program::new(arena, rig);
+    let mut program = app::Program::new(arena, rig, &UartSink);
     let mut loaded = None;
     let journal = <Needs as takt_rt_core::Memory>::store(|| {
         let mut nvm = FlashNvm::new(flash).with_blocking_ns(NVM_BLOCKING_NS);

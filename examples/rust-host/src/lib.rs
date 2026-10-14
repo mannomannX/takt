@@ -10,7 +10,7 @@
 //! ```
 //! let mut arena = rust_host::valve::Arena::new();
 //! let mut tank = rust_host::Tank::default();
-//! let mut program = rust_host::valve::Program::init(&mut arena, &mut tank);
+//! let mut program = rust_host::valve::Program::init(&mut arena, &mut tank, takt_embed::testing::sink());
 //! let jobs = program.jobs();
 //! drop((jobs, program));
 //! drop(arena);
@@ -21,8 +21,8 @@
 //! ```compile_fail,E0499
 //! let mut arena = rust_host::valve::Arena::new();
 //! let (mut t1, mut t2) = (rust_host::Tank::default(), rust_host::Tank::default());
-//! let a = rust_host::valve::Program::init(&mut arena, &mut t1);
-//! let b = rust_host::valve::Program::init(&mut arena, &mut t2);
+//! let a = rust_host::valve::Program::init(&mut arena, &mut t1, takt_embed::testing::sink());
+//! let b = rust_host::valve::Program::init(&mut arena, &mut t2, takt_embed::testing::sink());
 //! drop((a, b));
 //! ```
 //!
@@ -31,7 +31,7 @@
 //! ```compile_fail,E0502
 //! let mut arena = rust_host::valve::Arena::new();
 //! let mut tank = rust_host::Tank::default();
-//! let program = rust_host::valve::Program::init(&mut arena, &mut tank);
+//! let program = rust_host::valve::Program::init(&mut arena, &mut tank, takt_embed::testing::sink());
 //! let size = core::mem::size_of_val(&arena);
 //! drop((program, size));
 //! ```
@@ -41,7 +41,7 @@
 //! ```compile_fail,E0505
 //! let mut arena = rust_host::valve::Arena::new();
 //! let mut tank = rust_host::Tank::default();
-//! let program = rust_host::valve::Program::init(&mut arena, &mut tank);
+//! let program = rust_host::valve::Program::init(&mut arena, &mut tank, takt_embed::testing::sink());
 //! let moved = arena;
 //! drop((program, moved));
 //! ```
@@ -52,7 +52,7 @@
 //! let jobs = {
 //!     let mut arena = rust_host::valve::Arena::new();
 //!     let mut tank = rust_host::Tank::default();
-//!     let mut program = rust_host::valve::Program::init(&mut arena, &mut tank);
+//!     let mut program = rust_host::valve::Program::init(&mut arena, &mut tank, takt_embed::testing::sink());
 //!     program.jobs()
 //! };
 //! drop(jobs);
@@ -76,7 +76,7 @@
 //! ```
 //! use rust_host::lifecycle;
 //! let mut arena = lifecycle::Arena::new();
-//! let mut program = lifecycle::Program::new(&mut arena);
+//! let mut program = lifecycle::Program::new(&mut arena, takt_embed::testing::sink());
 //! let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
 //! let device = takt_embed::rt::FakeNvm::<256>::new();
 //! let journal = takt_embed::rt::Journal::new(device, lifecycle::LOGIC_HASH, lifecycle::PERSIST_MIN_INTERVAL_NS);
@@ -89,7 +89,7 @@
 //!
 //! ```compile_fail,E0271
 //! let mut arena = rust_host::lifecycle::Arena::new();
-//! let program = rust_host::lifecycle::Program::new(&mut arena);
+//! let program = rust_host::lifecycle::Program::new(&mut arena, takt_embed::testing::sink());
 //! takt_embed::testing::run(program, rust_host::lifecycle::TICK_NS, 4);
 //! ```
 //!
@@ -98,7 +98,7 @@
 //! ```compile_fail,E0277
 //! use rust_host::lifecycle;
 //! let mut arena = lifecycle::Arena::new();
-//! let program = lifecycle::Program::new(&mut arena);
+//! let program = lifecycle::Program::new(&mut arena, takt_embed::testing::sink());
 //! let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
 //! let journal = takt_embed::rt::Journal::new(takt_embed::rt::FakeNvm::<256>::new(), lifecycle::LOGIC_HASH, 0);
 //! let unloaded = takt_embed::rt::Unloaded::new(journal, &mut current, &mut stored);
@@ -109,7 +109,7 @@
 //!
 //! ```compile_fail,E0599
 //! let mut arena = rust_host::lifecycle::Arena::new();
-//! let program = rust_host::lifecycle::Program::init(&mut arena);
+//! let program = rust_host::lifecycle::Program::init(&mut arena, takt_embed::testing::sink());
 //! ```
 //!
 //! **Ob ein Programm Jobs hat, sagt sein Typ** (4.5, FB-385): Ein Wirt fuer

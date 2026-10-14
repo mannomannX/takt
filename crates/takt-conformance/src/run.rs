@@ -40,23 +40,17 @@ impl std::fmt::Display for Difference {
 /// Die Zeilen `t=<tick> out <name> <wert>`, je Tick und Output in der
 /// Reihenfolge des Traces.
 ///
-/// Der Wert ohne Leerraum vor `,`, `)` und `]`: Der Produktrahmen schreibt
-/// jede Zahl mit einem Leerzeichen dahinter (`takt_board_trace_i64`), auch
-/// in einem Record oder einer Liste (`Timing(90 min, 0 )`, FB-690). Das ist
-/// Schreibweise, kein Wert; verglichen wird Zeichen fuer Zeichen danach.
+/// Der Wert ist der genaue Rest der Zeile (`grammar/trace.md` T1, T2): Beide
+/// Seiten schreiben ihn gleich, jeden Trenner eingeschlossen (FB-690). Nur
+/// ein `\r` am Ende faellt weg, das die Leitung eines Boards anhaengt.
 fn outputs(text: &str) -> BTreeMap<(u64, String), Vec<String>> {
     let mut out = BTreeMap::new();
     for line in text.lines() {
-        let mut w = line.split_whitespace();
-        let Some(t) = w.next().and_then(|s| s.strip_prefix("t=")).and_then(|s| s.parse::<u64>().ok()) else {
-            continue;
-        };
-        if w.next() != Some("out") {
-            continue;
-        }
-        let Some(name) = w.next() else { continue };
-        let value = w.collect::<Vec<&str>>().join(" ").replace(" ,", ",").replace(" )", ")").replace(" ]", "]");
-        out.entry((t, name.to_string())).or_insert_with(Vec::new).push(value);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Some((tick, rest)) = line.strip_prefix("t=").and_then(|r| r.split_once(' ')) else { continue };
+        let (Ok(t), Some(rest)) = (tick.parse::<u64>(), rest.strip_prefix("out ")) else { continue };
+        let Some((name, value)) = rest.split_once(' ') else { continue };
+        out.entry((t, name.to_string())).or_insert_with(Vec::new).push(value.to_string());
     }
     out
 }
@@ -706,13 +700,16 @@ mod tests {
         }
     }
 
-    /// Leerraum vor `,`, `)` und `]` ist Schreibweise des Produktrahmens,
-    /// kein Wert (FB-690); ein anderer Wert bleibt eine Abweichung.
+    /// **Der Wert ist der Rest der Zeile** (`grammar/trace.md` T1, FB-690):
+    /// Leerraum vor `,`, `)` und `]` ist eine Abweichung wie ein anderer
+    /// Wert; nur das `\r` der Leitung eines Boards zaehlt nicht.
     #[test]
-    fn spaces_inside_a_composite_value_are_no_value() {
+    fn spaces_inside_a_composite_value_are_a_difference() {
         let want = "t=1 out r UartData(0, [0, 0, 0])\n";
-        assert!(compare(want, "t=1 out r UartData(0 , [0 , 0 , 0 ]) \n").is_empty());
-        assert_eq!(compare(want, "t=1 out r UartData(0 , [0 , 1 , 0 ]) \n").len(), 1);
+        assert_eq!(compare(want, "t=1 out r UartData(0 , [0 , 0 , 0 ]) \n").len(), 1);
+        assert_eq!(compare(want, "t=1 out r UartData(0 , [0 , 0 , 0 ])\n").len(), 1);
+        assert_eq!(compare(want, "t=1 out r UartData(0, [0, 1, 0])\n").len(), 1);
+        assert!(compare(want, "t=1 out r UartData(0, [0, 0, 0])\r\n").is_empty());
     }
 
     /// Das Ende eines Szenarios waehlt der Interpreter (13.6); der Rahmen

@@ -593,6 +593,7 @@ fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
     let _ = writeln!(s, "    static uint8_t ring[4096];");
     let _ = writeln!(s, "    static struct {x}_arena arena;");
     let _ = writeln!(s, "    static takt_core core;");
+    let _ = writeln!(s, "    static takt_sink sink;");
     if let Some(mxcsr) = run.mxcsr {
         let _ = writeln!(s, "    _mm_setcsr({mxcsr:#x}u);");
     }
@@ -602,27 +603,27 @@ fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
     let _ = writeln!(s, "    const struct takt_line line = {{ stdout, host_put, NULL }};");
     let _ = writeln!(s, "    const struct takt_watchdog watchdog = {{ NULL, host_kick }};");
     let _ = writeln!(s, "    const struct takt_tunables tunables = {{ NULL, host_tune, NULL }};");
-    let _ = writeln!(s, "    int32_t status = takt_line_init(&line, ring, sizeof ring);");
+    let _ = writeln!(s, "    int32_t status = takt_sink_init(&sink, &line, ring, sizeof ring);");
     let _ = writeln!(s, "    if (status == TAKT_OK) {{");
-    let _ = writeln!(s, "        takt_line_mark();");
+    let _ = writeln!(s, "        takt_sink_mark(&sink);");
     if persists {
         let _ = writeln!(s, "        static uint8_t current[{upper}_PERSIST_BOUND], stored[{upper}_PERSIST_BOUND];");
         let _ = writeln!(s, "        host_flash_init();");
         let _ = writeln!(
             s,
-            "        status = takt_core_init_journaled(&core, &{x}_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, \
-             &host_nvm, current, stored, {upper}_PERSIST_BOUND);"
+            "        status = takt_core_init_journaled(&core, &{x}_ops, &arena, NULL, &sink, TAKT_PROFILE_BAREMETAL, \
+             &watchdog, &host_nvm, current, stored, {upper}_PERSIST_BOUND);"
         );
     } else {
         let _ = writeln!(
             s,
-            "        status = takt_core_init(&core, &{x}_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog);"
+            "        status = takt_core_init(&core, &{x}_ops, &arena, NULL, &sink, TAKT_PROFILE_BAREMETAL, &watchdog);"
         );
     }
     fenv(&mut s, "        ", "init");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    if (status != TAKT_OK) {{");
-    let _ = writeln!(s, "        fprintf(stderr, \"takt: Leitung oder Kern: %d\\n\", (int)status);");
+    let _ = writeln!(s, "        fprintf(stderr, \"takt: Senke oder Kern: %d\\n\", (int)status);");
     let _ = writeln!(s, "        return 2;");
     let _ = writeln!(s, "    }}");
     // Logische Zeit (12.11): die Uhr zu jeder Frist und zu jedem Ereignis des

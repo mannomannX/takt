@@ -135,7 +135,7 @@ fn programs_of_the_linux_form_run_in_their_tick_threads_like_the_interpreter() {
             let (mut arena, mut tank) = (valve_rt::Arena::new(), Tank::default());
             let config = Config::new(valve_rt::TICK_STACK_BYTES, valve_rt::JOB_STACK_BYTES).cpu(core(0)).ticks(TICKS);
             let run = in_tick_thread(&config, valve_rt::TICK_NS, || {
-                (valve_rt::Program::init(&mut arena, &mut tank), no_journal())
+                (valve_rt::Program::init(&mut arena, &mut tank, takt_embed::testing::sink()), no_journal())
             });
             (run, tank.openings)
         });
@@ -144,7 +144,7 @@ fn programs_of_the_linux_form_run_in_their_tick_threads_like_the_interpreter() {
             let config =
                 Config::new(instance_rt::TICK_STACK_BYTES, instance_rt::JOB_STACK_BYTES).cpu(core(1)).ticks(TICKS);
             let run = in_tick_thread(&config, instance_rt::TICK_NS, || {
-                (instance_rt::Program::init(&mut arena, &mut seed), no_journal())
+                (instance_rt::Program::init(&mut arena, &mut seed, takt_embed::testing::sink()), no_journal())
             });
             (run, seed)
         });
@@ -154,7 +154,7 @@ fn programs_of_the_linux_form_run_in_their_tick_threads_like_the_interpreter() {
             let config =
                 Config::new(lifecycle_rt::TICK_STACK_BYTES, lifecycle_rt::JOB_STACK_BYTES).cpu(core(2)).ticks(TICKS);
             in_tick_thread(&config, lifecycle_rt::TICK_NS, || {
-                let mut program = lifecycle_rt::Program::new(&mut arena);
+                let mut program = lifecycle_rt::Program::new(&mut arena, takt_embed::testing::sink());
                 let device = FakeNvm::<256>::new();
                 let journal = Journal::new(device, lifecycle_rt::LOGIC_HASH, lifecycle_rt::PERSIST_MIN_INTERVAL_NS);
                 let (journal, ..) = Unloaded::new(journal, &mut current, &mut stored).load(&mut program);
@@ -167,7 +167,7 @@ fn programs_of_the_linux_form_run_in_their_tick_threads_like_the_interpreter() {
                 .cpu(core(3))
                 .ticks(TICKS);
             in_tick_thread(&config, idle_multirate_rt::TICK_NS, || {
-                (idle_multirate_rt::Program::init(&mut arena), no_journal())
+                (idle_multirate_rt::Program::init(&mut arena, takt_embed::testing::sink()), no_journal())
             })
         });
         let join = "ein Lauf brach ab";
