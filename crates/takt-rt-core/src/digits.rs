@@ -110,15 +110,10 @@ fn with_point<W: core::fmt::Write>(text: &str, out: &mut W) -> core::fmt::Result
 
 /// Ein Puffer fester Groesse fuer `core::fmt`: Eine Zahl in der Textform hat
 /// hoechstens 24 Zeichen (3.9). Was nicht hineinpasst, ist ein Fehler.
+#[derive(Default)]
 struct Buf {
     bytes: [u8; 32],
     len: usize,
-}
-
-impl Default for Buf {
-    fn default() -> Buf {
-        Buf { bytes: [0; 32], len: 0 }
-    }
 }
 
 impl Buf {
