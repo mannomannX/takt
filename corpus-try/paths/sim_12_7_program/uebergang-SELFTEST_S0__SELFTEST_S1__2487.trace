@@ -13,5 +13,3 @@ t=6 in previous_run ENDED stale
 t=7 in on_trial stale
 t=8 in previous_run stale
 t=8 runtime Node
-t=9 in previous_run WATCHDOG stale
-t=10 in previous_run WATCHDOG stale

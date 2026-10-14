@@ -155,12 +155,28 @@ fn generate(name: &str, src: &str, p: &Program, solver: &Solver) -> Result<Found
             }
         }
     }
+    for path in &mut found {
+        path.stimulus = within(&path.stimulus, path.ticks);
+    }
     let identity = solver.identity().unwrap_or_default();
     Ok(Found {
         proof: paths::proof_text(src, &identity, &sites),
         unfired: paths::unfired_text(src, &identity, &unfired),
         paths: found,
     })
+}
+
+/// Der Stimulus eines Pfads bis zu seinem letzten Tick: Was danach kaeme,
+/// erreicht der Lauf nicht, und der Produktrahmen rechnete bis dorthin
+/// weiter (FB-620). Eine Job-Fertigstellung bleibt: Liegt sie hinter dem
+/// Lauf, endet der Job in ihm nicht (4.5).
+fn within(stimulus: &str, ticks: u64) -> String {
+    let keep = |line: &&str| {
+        let mut words = line.split(' ');
+        let tick = words.next().and_then(|t| t.strip_prefix("t=")).and_then(|t| t.parse::<u64>().ok());
+        tick.is_none_or(|t| t <= ticks) || words.next() == Some("job")
+    };
+    stimulus.lines().filter(keep).map(|l| format!("{l}\n")).collect()
 }
 
 /// Erreicht der Pfad im Interpreter noch sein Ziel? Eine Pruefstelle nach

@@ -583,18 +583,27 @@ fn a_running_job_keeps_the_native_system_awake() {
 /// ausserhalb der Suite `beweiser` nennt seinen Grund im Manifest.
 const GAPS: &[(&str, &str, &str, &str)] = &[
     ("03_sequences_and_faults.takt", "pfad uebergang-SAFE__IDLE__2561", "nativ", RUNTIME_NODE),
-    ("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach"),
+    ("40_jobs.takt", "pfad uebergang-RUN_S0__FAILED__848", "nativ", JOB_RECORD),
+    ("40_jobs.takt", "stimulus", "nativ", JOB_RECORD),
     ("62_type_generics.takt", "pfad valid-1111", "nativ", SIM_INPUT),
     ("62_type_generics.takt", "pfad valid-1310", "nativ", SIM_INPUT),
     ("62_type_generics.takt", "stimulus", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad uebergang-FIRST__SECOND__942", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad uebergang-LOW__HIGH__715", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad uebergang-SECOND__FIRST__1029", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-p_HIGH__LOW__797", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-q_HIGH__LOW__797", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-r_HIGH__LOW__797", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad valid-1034", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "stimulus", "nativ", SIM_INPUT),
+    ("87_fault_kinds.takt", "pfad uebergang-RUN_S1__FAILED__3270", "nativ", JOB_RECORD),
     ("99_exit_fault.takt", "pfad range-983", "nativ", RUNTIME_NODE),
     ("120_port_writes.takt", "pfad index-1857", "nativ", SIM_INPUT),
+    ("sim/12_7/program.takt", "pfad uebergang-SELFTEST_S0__SELFTEST_S1__2487", "nativ", RUNTIME_NODE),
 ];
+
+/// Eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach (4.5).
+const JOB_RECORD: &str = "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach";
 
 /// Ein Eingang mit `sim`-Bindung hat im Produkt keinen Treiber; nur der
 /// Interpreter nimmt dort einen Stimulus an (8.3, FB-688).

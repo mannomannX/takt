@@ -12,4 +12,3 @@ t=6 in on_trial false
 t=8 in previous_run NONE
 t=8 in on_trial stale
 t=9 in previous_run WATCHDOG stale
-t=10 in previous_run WATCHDOG stale
