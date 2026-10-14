@@ -7,7 +7,9 @@
 //! dasselbe mit Absicht, damit der Board-Test den Fall ohne Zephyr nachstellt
 //! (`a_region_left_by_the_previous_image_changes_nothing`): Es meldet sich,
 //! belegt die letzte Region nur lesbar ueber [`LEFT_AT`], schaltet die MPU aus
-//! und gibt das Board ohne Reset an den Bootloader.
+//! und gibt das Board ohne Reset an den Bootloader. Mit `TAKT_LEFTOVER_ON`
+//! beim Bau bleibt die MPU an ([`ON`]): Das naechste Abbild beginnt dann unter
+//! fremden Regionen (`a_predecessor_leaving_the_mpu_on_changes_nothing`).
 
 #![cfg_attr(
     not(test),
@@ -60,6 +62,9 @@ use takt_board_support::mpu::{Access, Region};
 /// in C.
 const LEFT_AT: u32 = 0x2000_A000;
 
+/// `TAKT_LEFTOVER_ON` beim Bau: Die MPU bleibt an.
+const ON: bool = option_env!("TAKT_LEFTOVER_ON").is_some();
+
 /// Die Periode des Zeitgebers, den das Einrichten des Takts mitbringt; einen
 /// Tick rechnet dieses Programm nicht.
 const TICK_NS: i64 = 1_000_000;
@@ -95,7 +100,8 @@ fn main() -> ! {
 
 /// Belegt die letzte Region nur lesbar ueber [`LEFT_AT`] und schaltet die
 /// MPU aus, wie Zephyrs Rueckgabe es tat: Die Region bleibt eingeschaltet
-/// stehen, bis ein Abbild die MPU wieder einschaltet.
+/// stehen, bis ein Abbild die MPU wieder einschaltet. Mit [`ON`] bleibt die
+/// MPU an, samt der Standardkarte fuer alles ausserhalb der Region.
 fn leave(mpu: &MPU) {
     let region = takt_board_stm32f401::mpu::regions(mpu).saturating_sub(1);
     let left = Region { base: LEFT_AT, size: 32, eighths: 8 };
@@ -108,6 +114,11 @@ fn leave(mpu: &MPU) {
     unsafe { mpu.rbar.write(left.rbar(region)) };
     // SAFETY: 32 Byte nur lesbar, die Region eingeschaltet.
     unsafe { mpu.rasr.write(left.rasr(Access::ReadOnly)) };
+    if ON {
+        // SAFETY: ENABLE und PRIVDEFENA; ausser der Region gilt die
+        // Standardkarte, also auch fuer den Weg in den Bootloader.
+        unsafe { mpu.ctrl.write(0b101) };
+    }
 }
 
 /// Ohne Peripherie, Takt oder Leitung gibt es niemanden, dem das Board sich

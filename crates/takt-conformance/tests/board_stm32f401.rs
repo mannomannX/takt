@@ -608,6 +608,40 @@ fn a_region_left_by_the_previous_image_changes_nothing() {
     verdict(&failed);
 }
 
+/// **Ein Abbild beginnt wie nach einem Reset, auch wenn sein Vorgaenger die
+/// MPU mit einer Region anliess** (12.3, FB-752): `leftover` mit eingeschalteter
+/// MPU, danach das Rust-Abbild der Form own, der C-Wirt der Interruptform und
+/// der C-Wirt unter FreeRTOS-MPU, je ohne Schutzverletzung und mit einem Stack
+/// in der Schranke. Bis zu ihrem Schutz liefen sie vorher unter der fremden
+/// MPU; jetzt schaltet ihr Resetvektor sie aus, bevor er RAM beruehrt.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_predecessor_leaving_the_mpu_on_changes_nothing() {
+    let Some((mut rust, _guard)) = board() else { return };
+    let name = board::corpus()
+        .into_iter()
+        .find(|n| !TOO_BIG.contains(n) && binds_no_driver(n) && corpus(n).config.runtime_profile().is_none())
+        .expect("ein Programm fuer alle Wirte");
+    let program = board::corpus_path(name);
+    let leftover = Options::leftover_on();
+    let own = Options::fresh(TICKS);
+    let (irq, rtos) = (own.clone().in_form(Form::Interrupt), own.clone().in_form(Form::Rtos));
+    let port = || Stm32f401::from_env().expect("TAKT_F401_PORT nennt kein Board");
+    let (mut c, mut c_mpu) = (Stm32f401C::on(port()), Stm32f401C::mpu(port()));
+    let left = rust.build(&program, &leftover).unwrap_or_else(|e| panic!("{e}"));
+    let rust_elf = rust.build(&program, &own).unwrap_or_else(|e| panic!("{e}"));
+    let c_elf = c.build(&program, &irq).unwrap_or_else(|e| panic!("{e}"));
+    let c_mpu_elf = c_mpu.build(&program, &rtos).unwrap_or_else(|e| panic!("{e}"));
+    let mut failed = Vec::new();
+    failed.extend(rust.run(&left, &leftover).err().map(|e| format!("leftover: {e}")));
+    failed.extend(after_leftover(&format!("{name}, Rust in der Form own"), rust.run(&rust_elf, &own)));
+    failed.extend(rust.run(&left, &leftover).err().map(|e| format!("leftover: {e}")));
+    failed.extend(after_leftover(&format!("{name}, C-Wirt"), c.run(&c_elf, &irq)));
+    failed.extend(rust.run(&left, &leftover).err().map(|e| format!("leftover: {e}")));
+    failed.extend(after_leftover(&format!("{name}, C-Wirt unter FreeRTOS-MPU"), c_mpu.run(&c_mpu_elf, &rtos)));
+    verdict(&failed);
+}
+
 /// Was ein Lauf nach `leftover` falsch machte: kein Lauf, der die Pruefungen
 /// des Harness besteht, oder eine Verletzung des Speicherschutzes.
 fn after_leftover(who: &str, run: Result<String, String>) -> Option<String> {

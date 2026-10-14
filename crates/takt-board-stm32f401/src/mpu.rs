@@ -223,6 +223,28 @@ impl Protection for Mpu {
     }
 }
 
+// Vor allem anderen die MPU aus (FB-752): Ein Vorgaenger, der ohne Reset in
+// den Bootloader sprang, kann sie mit seinen Regionen eingeschaltet lassen,
+// und schon das Nullen von `.bss` oder der erste Rahmen auf dem Stack fiele
+// unter eine fremde Region. `cortex-m-rt` ruft `__pre_init` vor dem
+// Initialisieren des RAM; dort gibt es noch keinen Rust-Code, darum in
+// Assembler und ohne Stack. Danach richtet `Mpu::arm` die eigenen Regionen
+// ein.
+core::arch::global_asm!(
+    ".section .text.__pre_init,\"ax\",%progbits",
+    ".global __pre_init",
+    ".type __pre_init,%function",
+    ".thumb_func",
+    "__pre_init:",
+    "    movw r0, #0xED94",
+    "    movt r0, #0xE000",
+    "    movs r1, #0",
+    "    str r1, [r0]",
+    "    dsb",
+    "    isb",
+    "    bx lr",
+);
+
 // Der Einstieg holt den Zeiger auf den gestapelten Rahmen — vom Stack, der
 // beim Eintritt aktiv war — und springt in den Handler; dessen Rueckkehr
 // ist die Rueckkehr aus der Ausnahme, denn `lr` traegt noch EXC_RETURN.

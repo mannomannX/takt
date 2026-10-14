@@ -57,6 +57,12 @@ fn main() {
         println!("cargo:rustc-env=TAKT_HOSTILE_FPU=1");
     }
 
+    // FB-752: `leftover` laesst die MPU an, statt sie auszuschalten.
+    println!("cargo:rerun-if-env-changed=TAKT_LEFTOVER_ON");
+    if env::var("TAKT_LEFTOVER_ON").is_ok() {
+        println!("cargo:rustc-env=TAKT_LEFTOVER_ON=1");
+    }
+
     build_takt_program(&out, form());
     bench();
     native_vectors(&out);

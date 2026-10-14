@@ -293,7 +293,10 @@ pub enum Bin {
     /// `leftover`: ein Vorgaenger, der eine Region der MPU stehen laesst
     /// und ohne Reset in den Bootloader springt (FB-752); nur auf dem
     /// F401, das Takt-Programm bleibt ungenutzt.
-    Leftover,
+    Leftover {
+        /// Die MPU bleibt dabei an.
+        on: bool,
+    },
 }
 
 /// Die Form, in der das Bring-up den Kern ruft (12.11); jede ausser dem
@@ -513,7 +516,12 @@ impl Options {
 
     /// Der Vorgaenger, der eine Region der MPU stehen laesst ([`Bin::Leftover`]).
     pub fn leftover() -> Options {
-        Options { bin: Bin::Leftover, ..Options::default() }
+        Options { bin: Bin::Leftover { on: false }, ..Options::default() }
+    }
+
+    /// Derselbe Vorgaenger, der dazu die MPU anlaesst.
+    pub fn leftover_on() -> Options {
+        Options { bin: Bin::Leftover { on: true }, ..Options::default() }
     }
 }
 
@@ -746,7 +754,7 @@ impl Bringup {
             Bin::Takt => "takt",
             Bin::Bench { .. } => "bench",
             Bin::Natives => "natives",
-            Bin::Leftover => "leftover",
+            Bin::Leftover { .. } => "leftover",
         };
         let target = crate::target_dir();
         let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
@@ -800,6 +808,10 @@ impl Bringup {
                 .env("TAKT_BENCH_SHIFT", shift.to_string())
                 .env(crate::bringup::BENCH_PART, part.to_string()),
             _ => cargo.env_remove("TAKT_BENCH_SHIFT").env_remove(crate::bringup::BENCH_PART),
+        };
+        match options.bin {
+            Bin::Leftover { on: true } => cargo.env("TAKT_LEFTOVER_ON", "1"),
+            _ => cargo.env_remove("TAKT_LEFTOVER_ON"),
         };
         built_executable(&mut cargo)
     }
@@ -881,7 +893,10 @@ pub(crate) fn image_key(triple: &str, program: &Path, options: &Options) -> Resu
             f.file(&crate::natives::spec_path())?;
             f.file(&crate::math::spec_path())?;
         }
-        Bin::Leftover => f.str("leftover"),
+        Bin::Leftover { on } => {
+            f.str("leftover");
+            f.u64(u64::from(*on));
+        }
     }
     Ok(f.finish())
 }
