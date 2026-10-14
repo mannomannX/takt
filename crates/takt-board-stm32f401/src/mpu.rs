@@ -64,6 +64,11 @@ fn guard() -> Region {
     guard_above(crate::word((&raw const _stack_end).expose_provenance()))
 }
 
+/// Wie viele Regionen die MPU hat (`MPU_TYPE.DREGION`; der Cortex-M4 hat 8).
+pub fn regions(mpu: &MPU) -> u32 {
+    (mpu._type.read() >> 8) & 0xFF
+}
+
 /// Der Waechter unter dem Job-Stack, falls es einen gibt.
 fn job_guard() -> Option<Region> {
     Some(JOB_STACK.load(Ordering::SeqCst)).filter(|&b| b != 0).map(guard_above)
