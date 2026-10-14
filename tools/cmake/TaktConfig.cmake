@@ -28,6 +28,13 @@
 # Bau auch das Fragment fuer `ldgen` (`<name>.lf`, 12.3: der Tick-Pfad im RAM
 # unter `xip_flash`); es liegt unter `<Binaerverzeichnis>/takt/<name>/`, wo
 # eine Komponente es als `LDFRAGMENTS` nennt.
+#
+# Unter Zephyr (`TAKT_ZEPHYR`, vom Modul gesetzt) bekommt ein Programm mit
+# `HARDWARE` die Treiber aus dem Devicetree (8.10): `takt build --zephyr`
+# schreibt `<name>_zephyr.c` und `<name>_zephyr.h`, und die Anwendung `app`
+# uebersetzt die Quelle mit den Koepfen von Zephyr. Nicht in einer eigenen
+# Bibliothek: Eine, die erst die Anwendung anlegt, haengt nicht an den Koepfen,
+# die der Bau von Zephyr erzeugt (`zephyr_generated_headers`).
 
 include_guard(GLOBAL)
 
@@ -88,12 +95,18 @@ function(takt_add_program name)
     list(APPEND args --build "${ARG_BUILD}")
   endif()
   set(depends "${source}")
+  set(outputs "${lib}" "${out}/${name}.h" "${out}/takt_sdk.h")
+  set(devicetree OFF)
   if(ARG_HARDWARE)
     get_filename_component(hardware "${ARG_HARDWARE}" ABSOLUTE)
     list(APPEND args --hardware "${hardware}")
     list(APPEND depends "${hardware}")
+    if(TAKT_ZEPHYR)
+      set(devicetree ON)
+      list(APPEND args --zephyr)
+      list(APPEND outputs "${out}/${name}_zephyr.c" "${out}/${name}_zephyr.h")
+    endif()
   endif()
-  set(outputs "${lib}" "${out}/${name}.h" "${out}/takt_sdk.h")
   if(ARG_LDGEN)
     list(APPEND outputs "${out}/${name}.lf")
   endif()
@@ -116,4 +129,7 @@ function(takt_add_program name)
     INTERFACE_INCLUDE_DIRECTORIES "${out}"
     INTERFACE_LINK_LIBRARIES "${libs}")
   add_dependencies(${name} ${name}_takt)
+  if(devicetree)
+    target_sources(app PRIVATE "${out}/${name}_zephyr.c")
+  endif()
 endfunction()

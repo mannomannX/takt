@@ -65,6 +65,18 @@ fn run_probe_rs(args: &[&str]) -> Result<String, Failure> {
 /// Frist fuer den Trace nach dem Start.
 const TRACE: Duration = Duration::from_secs(30);
 
+/// Wo die Probe den Tick eines Abbilds liest, wenn die Konsole schweigt
+/// ([`Esp32c6::capture`]).
+#[derive(Clone, Copy, Debug)]
+pub enum Tick<'a> {
+    /// Ein Bring-up mit seinem ELF: die Arena `app_arena`, der Tick
+    /// `__takt_tick_at` Byte dahinter.
+    Bringup(&'a Path),
+    /// Die Adresse, die ein Abbild ohne diese Symbole nennt, etwa unter
+    /// Zephyr ([`crate::zephyr::Image::tick_address`]).
+    At(u64),
+}
+
 /// Board 2 am Host.
 #[derive(Clone, Debug)]
 pub struct Esp32c6 {
@@ -103,22 +115,23 @@ impl Esp32c6 {
     }
 
     /// Wie [`Board::run`] fuer ein Rohabbild ab `offset` ([`Esp32c6::download_raw`]);
-    /// `elf` ist sein ELF, fuer den Blick ueber JTAG, wenn die Konsole schweigt.
-    pub fn run_raw(&mut self, bin: &Path, offset: u64, elf: &Path, options: &Options) -> Result<String, String> {
+    /// `tick` sagt, wo sein Tick steht, fuer den Blick ueber JTAG, wenn die
+    /// Konsole schweigt.
+    pub fn run_raw(&mut self, bin: &Path, offset: u64, tick: Tick<'_>, options: &Options) -> Result<String, String> {
         self.download_raw(bin, offset)?;
-        self.capture(elf, options).and_then(|text| super::complete(text, options))
+        self.capture(tick, options).and_then(|text| super::complete(text, options))
     }
 
     /// Setzt das Board zurueck und liest den Trace bis `takt end`.
     ///
-    /// Fehlt das Ende, entscheidet der Tickzaehler ueber JTAG: Steht das
+    /// Fehlt das Ende, entscheidet der Tickzaehler ueber JTAG (`tick`): Steht das
     /// Programm vor dem Ende, ist das der Befund, und der Text gehoert in
     /// die Meldung. Lief es durch, hat die Konsole geschwiegen — gleich nach
     /// dem Flashen, weil der USB-Serial-JTAG neu anlegt und ein Handle von
     /// davor nichts liefert, genuegt ein zweiter Reset; sonst steht ihr
     /// Empfangsendpunkt (FB-266), und das Board meldet sein USB-Geraet auf
     /// Wunsch neu an — ein Neustecken ohne Hand.
-    pub fn capture(&self, elf: &Path, options: &Options) -> Result<String, String> {
+    pub fn capture(&self, tick: Tick<'_>, options: &Options) -> Result<String, String> {
         let ticks = options.ticks;
         let mut last = String::new();
         for attempt in 0..3 {
@@ -138,15 +151,25 @@ impl Esp32c6 {
             if text.contains(super::END) {
                 return Ok(text);
             }
-            let tick = self.tick_over_jtag(elf)?;
-            if u64::from(tick) < ticks {
+            // Ohne den Tick bleibt das Gelesene der Befund.
+            let reached = match tick {
+                Tick::Bringup(elf) => self.tick_over_jtag(elf),
+                Tick::At(address) => self.word_at(address),
+            }
+            .map_err(|e| {
+                format!(
+                    "kein `takt end` binnen {} s, und kein Tick ueber JTAG: {e}; gelesen:\n{text}",
+                    options.within().as_secs()
+                )
+            })?;
+            if u64::from(reached) < ticks {
                 return Err(format!(
-                    "kein `takt end` binnen {} s, das Programm steht bei Tick {tick}; gelesen:\n{text}",
+                    "kein `takt end` binnen {} s, das Programm steht bei Tick {reached}; gelesen:\n{text}",
                     options.within().as_secs()
                 ));
             }
             let when = if text.is_empty() { "" } else { " mittendrin" };
-            last = format!("das Programm lief bis Tick {tick}, die Konsole schwieg{when}");
+            last = format!("das Programm lief bis Tick {reached}, die Konsole schwieg{when}");
             eprintln!("{last}; {next}");
             if attempt > 0 {
                 self.reenumerate()?;
@@ -341,7 +364,7 @@ impl Board for Esp32c6 {
 
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
         self.download(elf)?;
-        self.capture(elf, options).and_then(|text| super::complete(text, options))
+        self.capture(Tick::Bringup(elf), options).and_then(|text| super::complete(text, options))
     }
 
     /// Der C6 rechnet das Messprogramm aus dem RAM (12.3, `xip_flash`): Dort

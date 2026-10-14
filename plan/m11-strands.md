@@ -648,6 +648,34 @@ So arbeitet jeder Strang, als wäre er allein:
     in den Zwischenspeicher der Harness (`zephyr-<tripel>-<stand>`): Sie
     kommen im selben Artefakt, und `board-run.ps1 -FromCi` fährt sie ohne
     `west`.
+- **Stand 19f (Strang F, 2026-10-13, Zweig `f-19f-dt-drivers`):**
+  - **Treiber aus dem Devicetree (FB-734):** `takt build --emit embed
+    --zephyr` schreibt `P_zephyr.c` und `P_zephyr.h` (`takt_frame::zephyr`):
+    je Kanal an `zephyr-gpio` eine `gpio_dt_spec` mit der Zusicherung
+    `#if !DT_NODE_HAS_PROP … #error`, die Treiber in der Signatur aus `P.h`
+    (ein Eingang, dessen Lesen scheitert, ist `BAD` mit Grund `DRIVER`),
+    `P_alive_<gerät>` für reine Pin-Geräte und `P_zephyr_init` mit dem
+    `safe`-Wert jedes Ausgangs. Prüfung 60 unter `--zephyr`
+    (`check_zephyr`, Prüfungskorpus SC-60). Das Modul gibt `--zephyr` bei
+    `HARDWARE` und übersetzt `P_zephyr.c` in `app`. `examples/zephyr-gpio`
+    fährt die Messschleife auf den Drahtbrücken (F401 PA0→PA1, C6
+    GPIO7→GPIO17), Board-Tests `the_zephyr_gpio_wire_follows_its_pin`. Im
+    C-Teil die fünfte Lieferform `wire`: cppcheck mit dem Modell von
+    `gpio.h` in `zephyr.cfg`, clang-tidy über die Baue.
+  - **Fault-Handler (SDK 3):** Nach `takt_core_init` meldet ein
+    abgewiesener Zugriff eines Fadens im Benutzermodus `Runtime(Hardware)`
+    (`partition_guard`, `takt_core_hardware_fault`). Board-Tests
+    `the_zephyr_partition_turns_an_access_in_the_run_into_a_fault` mit
+    `TAKT_PROBE_IN_RUN`.
+  - **Harness (FB-737, FB-739):** Zwei Bauten desselben neuen Stands
+    räumten einander das Verzeichnis weg (F401-Abbild im Lauf 38321047944
+    verloren); `enter_stand` räumt nur noch frühere Stände. Die Probe des C6
+    las den Tick über JTAG nur an den Symbolen der Bring-ups; ein Abbild
+    unter Zephyr nennt ihn über Arena (`arena`) und `tick_at` des Manifests
+    (`zephyr::Image::tick_address`, Manifest im Zwischenspeicher). Der
+    Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
+    unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
+    38320906796); das zeigt der nächste Lauf.
 
 ### 15, 16, 18, 9, 19 bis 23
 

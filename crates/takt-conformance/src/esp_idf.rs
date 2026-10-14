@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(feature = "board")]
-use crate::board::esp32c6::Esp32c6;
+use crate::board::esp32c6::{Esp32c6, Tick};
 #[cfg(feature = "board")]
 use crate::board::{Bin, Board, Builder, Form, Options};
 
@@ -62,8 +62,9 @@ pub struct Image {
 /// Was der Schritt ausserhalb des Programms ruft und darum im IRAM liegen
 /// muss: die ISRs und Primitive des Adapters (`ports/irq/esp-idf`), der Port
 /// der Interruptform, der Kern, Leitung und Watchdog des Wirts
-/// (`examples/esp-idf/main`) und was sie von ESP-IDF rufen. Dass dessen Funktionen im IRAM liegen, haengt an der
-/// Konfiguration (`CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM` in `sdkconfig.defaults`,
+/// (`examples/esp-idf/main`) und was sie von ESP-IDF rufen. Dass dessen
+/// Funktionen im IRAM liegen, haengt an der Konfiguration
+/// (`CONFIG_GPTIMER_CTRL_FUNC_IN_IRAM` in `sdkconfig.defaults`,
 /// `CONFIG_FREERTOS_PLACE_ISR_FUNCTIONS_INTO_FLASH` aus); die Liste faengt
 /// eine, die sie verschiebt.
 pub const RESIDENT: &[&str] = &[
@@ -90,9 +91,32 @@ pub const RESIDENT: &[&str] = &[
 /// bindet, wenn das Programm `persist` hat ([`journaled`]).
 pub const RESIDENT_JOURNAL: &[&str] = &["takt_idf_nvm_erase", "takt_idf_nvm_write", "takt_idf_nvm_poll"];
 
+/// Der Wert von `key` in einem Manifest (`key = wert`).
+fn manifest_value<'a>(manifest: &'a str, key: &str) -> Option<&'a str> {
+    manifest.lines().filter_map(|l| l.split_once('=')).find(|(k, _)| k.trim() == key).map(|(_, v)| v.trim())
+}
+
 /// Schreibt das Programm ein Journal? `persist_bytes` im Manifest.
 fn journaled(manifest: &str) -> bool {
-    manifest.lines().filter_map(|l| l.split_once('=')).any(|(k, v)| k.trim() == "persist_bytes" && v.trim() != "0")
+    manifest_value(manifest, "persist_bytes").is_some_and(|v| v != "0")
+}
+
+/// Wo der Tick des Programms im laufenden Abbild `elf` steht: in der Arena
+/// (`arena_symbol` im Manifest) `tick_at` Byte hinter ihrem Anfang. Die Probe
+/// des C6 liest ihn ueber JTAG, wenn die Leitung schweigt.
+pub fn tick_address(elf: &Path, manifest: &Path) -> Result<u64, String> {
+    let text = std::fs::read_to_string(manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let name = manifest_value(&text, "arena_symbol").ok_or("`arena_symbol` fehlt im Manifest")?;
+    let at: u64 = manifest_value(&text, "tick_at").and_then(|v| v.parse().ok()).ok_or("`tick_at` fehlt im Manifest")?;
+    let symbols = takt_llvm::inspect::Binutils::best_for(takt_llvm::target::Target::RISCV32IMAC)
+        .symbols(elf)
+        .ok_or_else(|| format!("`nm` liest {} nicht", elf.display()))?;
+    let arena = symbols.iter().find(|s| s.name == name).ok_or_else(|| format!("keine Arena `{name}` im Abbild"))?;
+    // Der Tick ist ein `long long` in der Arena.
+    if at.checked_add(8).is_none_or(|end| end > arena.size) {
+        return Err(format!("`tick_at` {at} liegt nicht in der Arena `{name}` ({} Byte)", arena.size));
+    }
+    Ok(arena.address + at)
 }
 
 /// Wo der C6 Code aus dem RAM rechnet: das HP-SRAM, 512 KiB.
@@ -319,9 +343,11 @@ impl Board for Esp32c6Idf {
         Box::new(|program, options| image(idf().as_deref(), program, options))
     }
 
-    /// Das Abbild am Stueck ab 0x0, sein ELF fuer den Blick ueber JTAG.
+    /// Das Abbild am Stueck ab 0x0; den Tick fuer den Blick ueber JTAG nennt
+    /// das Manifest neben dem ELF ([`tick_address`]).
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
-        self.board.run_raw(&elf.with_extension("bin"), 0, elf, options)
+        let tick = tick_address(elf, &elf.with_extension("manifest"))?;
+        self.board.run_raw(&elf.with_extension("bin"), 0, Tick::At(tick), options)
     }
 
     fn forms(&self) -> &'static [Form] {
@@ -353,5 +379,6 @@ mod tests {
         assert!(journaled("prefix = program\npersist_bytes = 20\n"));
         assert!(!journaled("prefix = program\npersist_bytes = 0\n"));
         assert!(!journaled("prefix = program\n"));
+        assert_eq!(manifest_value("arena_symbol = program_arena\ntick_at = 5080\n", "tick_at"), Some("5080"));
     }
 }

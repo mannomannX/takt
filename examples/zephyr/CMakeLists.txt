@@ -48,3 +48,12 @@ if(TAKT_FRESH_JOURNAL)
 else()
   target_compile_definitions(app PRIVATE TAKT_FRESH_JOURNAL=0)
 endif()
+
+# Eine zweite Probe der Partition im Lauf: Der Kern meldet sie als
+# `Runtime(Hardware)` (12.3); fuer den Board-Test, nicht fuer die Portpruefung.
+option(TAKT_PROBE_IN_RUN "die Partition auch im Lauf proben" OFF)
+if(TAKT_PROBE_IN_RUN)
+  target_compile_definitions(app PRIVATE TAKT_PROBE_IN_RUN=1)
+else()
+  target_compile_definitions(app PRIVATE TAKT_PROBE_IN_RUN=0)
+endif()

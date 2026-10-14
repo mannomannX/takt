@@ -16,16 +16,17 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    TICKS, agreement, agreement_with, corpus, driver_edge_agrees, journal_costs_time_but_not_semantics,
-    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, overrun_reaches_every_machine_with, persistence_survives, ran, replayed,
-    runs_shared, simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict, zephyr_image,
-    zephyr_persistence_survives, zephyr_verdict,
+    TICKS, ZEPHYR_WIRE_TICKS, agreement, agreement_with, corpus, driver_edge_agrees,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, overrun_reaches_every_machine_with, persistence_survives, ran,
+    replayed, runs_shared, simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict,
+    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
-use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG};
+use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG, Tick};
 use takt_conformance::board::{self, Board, Form, Options};
 use takt_conformance::compare;
 use takt_conformance::esp_idf::Esp32c6Idf;
+use takt_conformance::zephyr::Variant;
 
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
 /// und sein Port vertragen nur einen Lauf zugleich.
@@ -291,7 +292,7 @@ fn a_board_input_reaches_the_process_image() {
 #[ignore = "Board: TAKT_ESP32C6_PORT; mit --ignored"]
 fn persistence_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
-    let failed = persistence_survives(&mut board, |board, elf, options| board.capture(elf, options));
+    let failed = persistence_survives(&mut board, |board, elf, options| board.capture(Tick::Bringup(elf), options));
     verdict(&failed);
 }
 
@@ -523,7 +524,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(takt_conformance::port::TICKS).judged();
     let example = takt_conformance::zephyr::ZEPHYR;
-    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, true)
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, Variant::FRESH)
         .and_then(|image| zephyr_run(&mut board, &image, &options));
     verdict(&zephyr_verdict(board.name(), example, true, run));
 }
@@ -565,7 +566,13 @@ fn zephyr_run(
 ) -> Result<String, String> {
     let offset = image.config("FLASH_LOAD_OFFSET").ok_or("CONFIG_FLASH_LOAD_OFFSET fehlt")?;
     let offset = u64::from_str_radix(offset.trim_start_matches("0x"), 16).map_err(|e| format!("{offset}: {e}"))?;
-    board.run_raw(&image.bin, offset, &image.elf, options)
+    board.run_raw(&image.bin, offset, zephyr_tick(image)?, options)
+}
+
+/// Wo der Tick eines Zephyr-Abbilds steht: Die Symbole eines Bring-ups
+/// traegt es nicht.
+fn zephyr_tick(image: &takt_conformance::zephyr::Image) -> Result<Tick<'static>, String> {
+    image.tick_address(takt_conformance::zephyr::ESP32C6).map(Tick::At)
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart des C6** (5.9; M11
@@ -577,16 +584,20 @@ fn zephyr_run(
 fn the_zephyr_journal_survives_a_reset() {
     let Some((mut board, _guard)) = board() else { return };
     let options = Options::timed(takt_conformance::port::TICKS).judged();
-    let image =
-        match zephyr_image(board.name(), takt_conformance::zephyr::ZEPHYR, takt_conformance::zephyr::ESP32C6, false) {
-            Ok(image) => image,
-            Err(e) => return verdict(&[e]),
-        };
+    let image = match zephyr_image(
+        board.name(),
+        takt_conformance::zephyr::ZEPHYR,
+        takt_conformance::zephyr::ESP32C6,
+        Variant::KEPT,
+    ) {
+        Ok(image) => image,
+        Err(e) => return verdict(&[e]),
+    };
     let failed = zephyr_persistence_survives(
         &mut board,
         &image,
         |board, image| zephyr_run(board, image, &options),
-        |board, image| board.capture(&image.elf, &options),
+        |board, image| board.capture(zephyr_tick(image)?, &options),
     );
     verdict(&failed);
 }
@@ -661,4 +672,33 @@ fn the_unread_channels_are_recorded() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = common::board::unread_channels_are_recorded(&mut board);
     verdict(&failed);
+}
+
+/// **Die Pins aus dem Devicetree treiben und lesen die Drahtbruecke des C6**
+/// (8.10, 12.11; M11 Schritt 19): `examples/zephyr-gpio` mit den Treibern aus
+/// `wire_zephyr.c` auf GPIO7 und GPIO17; jeder Tick liest den Pegel des Ticks
+/// davor.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_gpio_wire_follows_its_pin() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(ZEPHYR_WIRE_TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR_GPIO;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, Variant::KEPT)
+        .and_then(|image| zephyr_run(&mut board, &image, &options));
+    verdict(&zephyr_wire_follows(board.name(), run));
+}
+
+/// **Eine Schutzverletzung im Lauf wird auf dem C6 zum Fault des Kerns**
+/// (12.3; M11 Schritt 19): `examples/zephyr` mit `TAKT_PROBE_IN_RUN`; die PMP
+/// weist die zweite Probe ab, und der Kern meldet `Runtime(Hardware)`.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_partition_turns_an_access_in_the_run_into_a_fault() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(takt_conformance::port::TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, Variant::PROBE_IN_RUN)
+        .and_then(|image| zephyr_run(&mut board, &image, &options));
+    verdict(&zephyr_access_in_the_run_faults(board.name(), run));
 }
