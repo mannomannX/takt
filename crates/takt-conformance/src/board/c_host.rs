@@ -122,6 +122,9 @@ pub struct CHost {
     pub script: &'static str,
     /// Die Formen, in denen der Wirt binden kann.
     pub bindings: &'static [Binding],
+    /// Was jedes Abbild erfuellen muss, bevor es in den Zwischenspeicher
+    /// kommt ([`super::Bringup::checked`]).
+    pub checked: Option<fn(&Path) -> Result<(), String>>,
 }
 
 /// Was jeder C-Wirt mit clang braucht: C11 freistehend ohne C-Bibliothek
@@ -209,8 +212,10 @@ impl CHost {
             let elf = std::fs::read(part).map_err(|e| format!("{}: {e}", part.display()))?;
             Ok(takt_board_support::image_key::carries(&elf, &key))
         };
+        let checked = |elf: PathBuf| self.checked.map_or(Ok(()), |check| check(&elf)).map(|()| elf);
         let published = self
             .link(&tool, program, options, &work, &key)
+            .and_then(checked)
             .and_then(|elf| enter_stand(&self.kind(), &stand).and_then(|()| publish_checked(&elf, &cached, ours)));
         let _ = std::fs::remove_dir_all(&work);
         if published? { Ok(cached) } else { Err(format!("{}: ohne den Schluessel {key}", cached.display())) }
