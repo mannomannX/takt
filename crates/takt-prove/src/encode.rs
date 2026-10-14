@@ -3586,6 +3586,10 @@ impl Enc<'_> {
     /// dahinter —, und der Zaehler einer Antwort hat keine offene Pflicht.
     /// Gezaehlt werden die Zaehler der Monitore und die ganzzahligen
     /// Variablen der Maschine.
+    ///
+    /// Jeder Kandidat gilt bis zum Tick des Endes (12.7, 3.3): Danach
+    /// schreitet keine Maschine mehr, die Monitore zaehlen weiter, und kein
+    /// Kandidat waere induktiv.
     fn candidates(&self, pre: &Env) -> Vec<Term> {
         let mut counters: Vec<(Term, bool)> = self
             .monitors
@@ -3625,7 +3629,7 @@ impl Enc<'_> {
                 }
             }
         }
-        out
+        out.into_iter().map(|c| Term::or(vec![pre[OVER].clone(), c])).collect()
     }
 
     /// Die Frist, bis zu der der Timer eines aktiven Blatts hoechstens
