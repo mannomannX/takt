@@ -151,8 +151,11 @@ int takt_irq_chip_start(struct takt_irq *irq) {
     int rc = TAKT_IRQ_CHIP_FAILED;
     const uint32_t hz = irq->config.timer_hz;
     const uint8_t level = irq->config.step_priority;
-    /* Die Stufen 1 bis 3 rechnen in C (`ESP_INTR_FLAG_LOWMED`). */
-    if ((hz != 0U) && ((TAKT_NS_PER_S % hz) == 0U) && (takt_jobs_stack != NULL) && (level >= 1U) && (level <= 3U)) {
+    /* Die Stufen 1 bis 3 rechnen in C (`ESP_INTR_FLAG_LOWMED`). Ohne Jobs
+     * gibt es keinen Job-Stack und keine Aufgabe. */
+    const int jobs = (takt_jobs_bytes != 0U) ? 1 : 0;
+    if ((hz != 0U) && ((TAKT_NS_PER_S % hz) == 0U) && ((jobs == 0) || (takt_jobs_stack != NULL)) && (level >= 1U) &&
+        (level <= 3U)) {
         takt_chip_irq = irq;
         takt_chip_ns_per_count = TAKT_NS_PER_S / hz;
         const gptimer_config_t timer = {
@@ -162,9 +165,12 @@ int takt_irq_chip_start(struct takt_irq *irq) {
             .intr_priority = (int)level,
         };
         const gptimer_event_callbacks_t callbacks = {.on_alarm = takt_chip_on_alarm};
-        takt_jobs_task = xTaskCreateStatic(takt_chip_jobs, "takt-jobs", (uint32_t)(takt_jobs_bytes / sizeof(StackType_t)),
-                                           NULL, takt_jobs_priority, takt_jobs_stack, &tcb);
-        if ((takt_jobs_task != NULL) && (gptimer_new_timer(&timer, &takt_chip_timer) == ESP_OK) &&
+        if (jobs != 0) {
+            /* Die Tiefe zaehlt FreeRTOS in `StackType_t`, unter ESP-IDF ein Byte. */
+            takt_jobs_task = xTaskCreateStatic(takt_chip_jobs, "takt-jobs", (uint32_t)(takt_jobs_bytes / sizeof(StackType_t)),
+                                               NULL, takt_jobs_priority, takt_jobs_stack, &tcb);
+        }
+        if (((jobs == 0) || (takt_jobs_task != NULL)) && (gptimer_new_timer(&timer, &takt_chip_timer) == ESP_OK) &&
             (gptimer_register_event_callbacks(takt_chip_timer, &callbacks, NULL) == ESP_OK) &&
             (esp_intr_alloc(ETS_FROM_CPU_INTR3_SOURCE, takt_chip_flags(level), takt_chip_on_pend, NULL, NULL) == ESP_OK) &&
             (gptimer_enable(takt_chip_timer) == ESP_OK) && (gptimer_start(takt_chip_timer) == ESP_OK)) {
@@ -201,11 +207,14 @@ IRAM_ATTR void takt_irq_chip_pend_step(void) {
     WRITE_PERI_REG(INTPRI_CPU_INTR_FROM_CPU_3_REG, INTPRI_CPU_INTR_FROM_CPU_3);
 }
 
-/* Aus der ISR des Schritts (`takt_irq_serve`). */
+/* Aus der ISR des Schritts (`takt_irq_serve`); ein Programm ohne Jobs hat
+ * keine Aufgabe und laesst keinen Job anstehen. */
 IRAM_ATTR void takt_irq_chip_pend_jobs(void) {
-    BaseType_t woken = pdFALSE;
-    vTaskNotifyGiveFromISR(takt_jobs_task, &woken);
-    if (woken != pdFALSE) {
-        takt_chip_woken = pdTRUE;
+    if (takt_jobs_task != NULL) {
+        BaseType_t woken = pdFALSE;
+        vTaskNotifyGiveFromISR(takt_jobs_task, &woken);
+        if (woken != pdFALSE) {
+            takt_chip_woken = pdTRUE;
+        }
     }
 }

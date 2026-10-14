@@ -20,7 +20,9 @@ extern "C" {
 #endif
 
 /* Der Stack `stack` mit `bytes` Byte und die Prioritaet `priority` der
- * Aufgabe, in der die Jobs rechnen; vor `takt_irq_start`. */
+ * Aufgabe, in der die Jobs rechnen; vor `takt_irq_start`. Ein Programm ohne
+ * Jobs hat keinen Job-Stack (`P_JOB_STACK_BYTES` 0): Mit `bytes` 0 entsteht
+ * keine Aufgabe, und `stack` darf NULL sein. */
 void takt_irq_esp_idf_jobs(StackType_t *stack, size_t bytes, UBaseType_t priority);
 
 /* Die Tiefe des Job-Stacks nach dem Lauf in Byte, aus der Hochwassermarke

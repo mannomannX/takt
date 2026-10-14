@@ -19,7 +19,7 @@ set(program_lf ${CMAKE_CURRENT_BINARY_DIR}/takt/program/program.lf)
 idf_component_register(
   SRCS main.c line.c
   INCLUDE_DIRS .
-  REQUIRES takt esp_hal_usb esp_hw_support esp_system freertos
+  REQUIRES takt esp_hal_usb esp_hal_wdt esp_hw_support esp_system freertos
   LDFRAGMENTS host.lf ${program_lf})
 
 if(CMAKE_BUILD_EARLY_EXPANSION)

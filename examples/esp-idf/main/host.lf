@@ -1,7 +1,6 @@
 # Die Leitung des Wirts im RAM (12.3, M11 Schritt 21a): Der Schritt ruft sie
-# in seiner IRAM-ISR, und ihre eigene ISR sendet auch waehrend eines
-# Flash-Zugriffs; Code und Konstanten von `line.c` duerfen dann nicht im Flash
-# liegen.
+# in seiner IRAM-ISR, auch waehrend eines Flash-Zugriffs; Code und
+# Konstanten von `line.c` duerfen dann nicht im Flash liegen.
 [mapping:takt_host]
 archive: libmain.a
 entries:

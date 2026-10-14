@@ -1,121 +1,151 @@
-/* line.c - die Leitung auf dem USB-Serial-JTAG des C6 (line.h). */
+/* line.c - die Leitung auf dem USB-Serial-JTAG des C6 (line.h).
+ *
+ * **Der Vertrag der Leitung** ist der des Bring-ups in Rust
+ * (`crates/takt-board-esp32c6/src/uart.rs`; FB-264, FB-267, FB-272, FB-311):
+ * Ein Byte geht nur ins FIFO, solange `serial_in_ep_data_free` steht. Ein
+ * Paket bleibt unter 64 Byte und geht immer mit `wr_done` hinaus, denn ein
+ * volles Paket ist fuer den Host eine unvollstaendige Transaktion. Nach dem
+ * Abschicken nimmt die Leitung erst wieder ein Byte, wenn das Rohflag
+ * `serial_in_empty` das Abholen meldet; `serial_in_ep_data_free` allein
+ * trog unter Last. Nach einem Bus-Reset gibt erst ein `wr_done` beim
+ * naechsten IN-Token den Endpunkt frei.
+ *
+ * Ohne Interrupt: Das Rohflag liest die Leitung bei jedem Aufruf selbst.
+ * Ein Interrupt, der es quittierte, nahme ihr das Abholen; eine ISR, die
+ * aus einem eigenen FIFO nachschiebt, verstummte, sobald es leer lief und
+ * kein Paket mehr unterwegs war, das den naechsten Interrupt ausloest.
+ */
 #include "line.h"
 
 #include <stdint.h>
 
 #include "esp_attr.h"
-#include "esp_intr_alloc.h"
 #include "hal/usb_serial_jtag_ll.h"
-#include "soc/interrupts.h"
+#include "hal/wdt_hal.h"
+#include "soc/lp_aon_reg.h"
+#include "soc/soc.h"
 
-/* Das FIFO vor dem Sender: bei voller Geschwindigkeit einige Millisekunden. */
-#define LINE_BYTES 512U
-
-/* Hoechstens so viel geht je Paket an den Sender: kuerzer als sein FIFO von
- * 64 Byte, sonst haelt der Host ein volles Paket fuer unvollstaendig
- * (FB-264, FB-267). */
+/* Hoechstens so viel geht je Paket an den Host: kuerzer als sein FIFO von
+ * 64 Byte (FB-264, FB-267). */
 #define LINE_PACKET 63U
 
-/* Das Flag von `esp_intr_alloc` fuer die Stufe der Leitung. */
-#define LINE_LEVEL_FLAG ESP_INTR_FLAG_LEVEL3
-_Static_assert(LINE_PRIORITY == 3U, "LINE_LEVEL_FLAG nennt die Stufe LINE_PRIORITY");
+/* Das Wort, mit dem der Host das Board zurueckverlangt, in der Konsole und
+ * als Wert in LP_AON STORE0 (`REENUMERATE_MAGIC` des Harness). */
+#define LINE_MAGIC 0x54414B54U
 
-/* Das FIFO: `tail` schreibt, wer sendet (Schritt oder Wirt, nie beide
- * zugleich), `head` nur die ISR; beide zaehlen frei und atomar. */
-static uint8_t line_fifo[LINE_BYTES];
-static uint32_t line_head;
-static uint32_t line_tail;
+/* So viele Takte des RTC wartet der Watchdog vor dem Reset: unter einer
+ * Millisekunde am RC-Takt, wenige am 32-kHz-Quarz. */
+#define LINE_RESET_TICKS 100U
 
-/* Atomar: Der Host hat `TAKT` gesandt. */
-static int line_wish;
+/* Bytes im FIFO seit dem letzten Abschicken. Die Leitung gehoert einem
+ * Kontext zugleich (`takt_sdk.h`): im Lauf dem Schritt, sonst `app_main`. */
+static uint32_t line_filled;
 
-/* Liest die Gegenrichtung und sucht das Wort, mit dem der Host das Board
- * zurueckverlangt. */
+/* Abgeschickt und vom Host noch nicht abgeholt. */
+static uint8_t line_in_flight;
+
+/* Seit einem Bus-Reset, bis der Host wieder abfragt (FB-311). */
+static uint8_t line_stalled;
+
+/* Setzt den Chip auf RTC-Ebene zurueck, wie der EN-Pin: Auch der
+ * USB-Serial-JTAG faengt neu an, und der Host sieht ein Abstecken. Ein
+ * Neustart von ESP-IDF (`esp_restart`) setzte nur das HP-System zurueck. */
+static IRAM_ATTR void line_chip_reset(void) {
+    wdt_hal_context_t rwdt = RWDT_HAL_CONTEXT_DEFAULT();
+    wdt_hal_init(&rwdt, WDT_RWDT, 0U, false);
+    wdt_hal_write_protect_disable(&rwdt);
+    wdt_hal_config_stage(&rwdt, WDT_STAGE0, LINE_RESET_TICKS, WDT_STAGE_ACTION_RESET_RTC);
+    wdt_hal_enable(&rwdt);
+    wdt_hal_write_protect_enable(&rwdt);
+    for (;;) {
+        /* Der Watchdog setzt den Chip zurueck. */
+    }
+}
+
+/* Liest die Gegenrichtung leer, hoechstens ein Paket, damit ein ungelesenes
+ * Paket den Host nicht blockiert; steht `TAKT` darin, setzt sich der Chip
+ * zurueck (FB-266). */
 static IRAM_ATTR void line_receive(void) {
-    static const char word[] = "TAKT";
-    /* Wie viele Bytes des Worts zuletzt am Stueck kamen. */
+    /* Wie viele Bytes von `TAKT` zuletzt am Stueck kamen. */
     static uint32_t matched;
-    uint8_t bytes[LINE_PACKET];
+    static const uint8_t word[4] = {(uint8_t)'T', (uint8_t)'A', (uint8_t)'K', (uint8_t)'T'};
+    uint8_t bytes[LINE_PACKET + 1U];
     const int n = usb_serial_jtag_ll_read_rxfifo(bytes, sizeof bytes);
     for (int i = 0; i < n; i++) {
-        if (bytes[i] == (uint8_t)word[matched]) {
+        if (bytes[i] == word[matched]) {
             matched++;
         } else {
-            matched = (bytes[i] == (uint8_t)word[0]) ? 1U : 0U;
+            matched = (bytes[i] == word[0]) ? 1U : 0U;
         }
-        if (matched == ((sizeof word) - 1U)) {
-            matched = 0U;
-            __atomic_store_n(&line_wish, 1, __ATOMIC_SEQ_CST);
+        if (matched == sizeof word) {
+            line_chip_reset();
         }
     }
 }
 
-/* Gibt dem Sender ein Paket; ist nichts da, schweigt der Interrupt, bis
- * `try_write` ihn wieder einschaltet. */
-static IRAM_ATTR void line_send(void) {
-    const uint32_t head = __atomic_load_n(&line_head, __ATOMIC_SEQ_CST);
-    const uint32_t tail = __atomic_load_n(&line_tail, __ATOMIC_SEQ_CST);
-    uint32_t sent = 0U;
-    while (((head + sent) != tail) && (sent < LINE_PACKET) && (usb_serial_jtag_ll_txfifo_writable() != 0)) {
-        const uint8_t byte = line_fifo[(head + sent) % LINE_BYTES];
-        if (usb_serial_jtag_ll_write_txfifo(&byte, 1U) != 1) {
-            break;
+/* Nimmt das Abholen zur Kenntnis: Das FIFO ist wieder frei. */
+static IRAM_ATTR void line_settle(void) {
+    const uint32_t raw = usb_serial_jtag_ll_get_intraw_mask();
+    if ((raw & (uint32_t)USB_SERIAL_JTAG_INTR_BUS_RESET) != 0U) {
+        usb_serial_jtag_ll_clr_intsts_mask((uint32_t)USB_SERIAL_JTAG_INTR_BUS_RESET |
+                                           (uint32_t)USB_SERIAL_JTAG_INTR_TOKEN_REC_IN_EP1);
+        line_filled = 0U;
+        line_in_flight = 0U;
+        line_stalled = 1U;
+    } else if ((line_stalled != 0U) && ((raw & (uint32_t)USB_SERIAL_JTAG_INTR_TOKEN_REC_IN_EP1) != 0U)) {
+        line_stalled = 0U;
+        if (usb_serial_jtag_ll_txfifo_writable() == 0) {
+            usb_serial_jtag_ll_clr_intsts_mask((uint32_t)USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+            usb_serial_jtag_ll_txfifo_flush();
+            line_in_flight = 1U;
         }
-        sent++;
-    }
-    if (sent != 0U) {
-        usb_serial_jtag_ll_txfifo_flush();
-        __atomic_store_n(&line_head, head + sent, __ATOMIC_SEQ_CST);
+    } else if ((line_in_flight != 0U) && ((raw & (uint32_t)USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY) != 0U)) {
+        usb_serial_jtag_ll_clr_intsts_mask((uint32_t)USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+        line_in_flight = 0U;
     } else {
-        usb_serial_jtag_ll_disable_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+        /* Nichts abgeholt. */
     }
 }
 
-static IRAM_ATTR void line_isr(void *arg) {
-    (void)arg;
-    const uint32_t pending = usb_serial_jtag_ll_get_intsts_mask();
-    usb_serial_jtag_ll_clr_intsts_mask(pending);
-    if ((pending & (uint32_t)USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT) != 0U) {
-        line_receive();
-    }
-    if ((pending & (uint32_t)USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY) != 0U) {
-        line_send();
-    }
-}
-
-/* Ein Byte, wenn im FIFO Platz ist, ohne zu warten. */
+/* Ein Byte, wenn das FIFO es nimmt, ohne zu warten. */
 static IRAM_ATTR uint8_t line_try_write(void *ctx, uint8_t byte) {
     (void)ctx;
-    const uint32_t tail = __atomic_load_n(&line_tail, __ATOMIC_SEQ_CST);
-    const uint32_t head = __atomic_load_n(&line_head, __ATOMIC_SEQ_CST);
     uint8_t taken = 0U;
-    if ((tail - head) < LINE_BYTES) {
-        line_fifo[tail % LINE_BYTES] = byte;
-        __atomic_store_n(&line_tail, tail + 1U, __ATOMIC_SEQ_CST);
+    line_settle();
+    if ((line_in_flight == 0U) && (line_filled < LINE_PACKET) && (usb_serial_jtag_ll_txfifo_writable() != 0) &&
+        (usb_serial_jtag_ll_write_txfifo(&byte, 1U) == 1)) {
+        line_filled++;
         taken = 1U;
     }
     return taken;
 }
 
-/* Weckt die ISR, die sendet, was im FIFO liegt. */
+/* Schickt das Paket ab, wenn eines gefuellt ist und keines unterwegs. */
 static IRAM_ATTR void line_flush(void *ctx) {
     (void)ctx;
-    usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
-}
-
-int line_open(struct takt_line *line) {
-    int rc = -1;
-    usb_serial_jtag_ll_disable_intr_mask(USB_SERIAL_JTAG_LL_INTR_MASK);
-    usb_serial_jtag_ll_clr_intsts_mask(USB_SERIAL_JTAG_LL_INTR_MASK);
-    if (esp_intr_alloc(ETS_USB_SERIAL_JTAG_INTR_SOURCE, ESP_INTR_FLAG_IRAM | LINE_LEVEL_FLAG, line_isr, NULL, NULL) ==
-        ESP_OK) {
-        usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_OUT_RECV_PKT);
-        line->ctx = NULL;
-        line->try_write = line_try_write;
-        line->flush = line_flush;
-        rc = 0;
+    line_settle();
+    line_receive();
+    if ((line_filled != 0U) && (line_in_flight == 0U)) {
+        usb_serial_jtag_ll_clr_intsts_mask((uint32_t)USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+        line_in_flight = 1U;
+        line_filled = 0U;
+        usb_serial_jtag_ll_txfifo_flush();
     }
-    return rc;
 }
 
-int line_handback(void) { return __atomic_load_n(&line_wish, __ATOMIC_SEQ_CST); }
+void line_open(struct takt_line *line) {
+    /* Den Wunsch nach einem Chip-Reset schreibt der Host ueber JTAG in
+     * LP_AON STORE0, das einen Reset ueberlebt und das ESP-IDF auf dem C6
+     * nicht nutzt, oder als `TAKT` in die Konsole: Der Start liest beides
+     * vor allem anderen. */
+    if (REG_READ(LP_AON_STORE0_REG) == LINE_MAGIC) {
+        REG_WRITE(LP_AON_STORE0_REG, 0U);
+        line_chip_reset();
+    }
+    line_receive();
+    /* Nur, was die Leitung selbst liest: kein Interrupt des USB-Serial-JTAG. */
+    usb_serial_jtag_ll_disable_intr_mask(USB_SERIAL_JTAG_LL_INTR_MASK);
+    line->ctx = NULL;
+    line->try_write = line_try_write;
+    line->flush = line_flush;
+}

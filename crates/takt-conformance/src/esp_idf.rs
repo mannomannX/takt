@@ -81,7 +81,6 @@ pub const RESIDENT: &[&str] = &[
     "takt_irq_chip_pend_step",
     "takt_irq_chip_pend_jobs",
     "takt_core_service",
-    "line_isr",
     "line_try_write",
     "line_flush",
     "kick",
@@ -367,9 +366,9 @@ mod tests {
     /// eine Funktion im Flash (0x42…) und eine, die fehlt.
     #[test]
     fn a_function_of_the_step_outside_iram_is_named() {
-        let symbols = [symbol("kick", 0x4080_1234), symbol("line_isr", 0x4200_0100)];
-        let outside = outside_iram(&symbols, &["kick", "line_isr", "takt_core_service"]);
-        assert_eq!(outside, vec!["line_isr bei 0x42000100".to_string(), "takt_core_service fehlt".to_string()]);
+        let symbols = [symbol("kick", 0x4080_1234), symbol("line_flush", 0x4200_0100)];
+        let outside = outside_iram(&symbols, &["kick", "line_flush", "takt_core_service"]);
+        assert_eq!(outside, vec!["line_flush bei 0x42000100".to_string(), "takt_core_service fehlt".to_string()]);
     }
 
     /// **Das Geraet des Journals gehoert nur mit `persist` ins Abbild**: Ohne

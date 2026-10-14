@@ -17,8 +17,9 @@
  * des C6 (`CONFIG_ESP_SYSTEM_HW_STACK_GUARD`).
  *
  * Ein Lauf ist ein Konformitaetslauf: Er hat keinen Watchdog (12.3) und
- * fuehrt `next_run` nicht aus, sondern schreibt die Bilanz. Danach wartet der
- * Wirt, bis der Host das Board zurueckverlangt (`TAKT`), und startet neu.
+ * fuehrt `next_run` nicht aus, sondern schreibt die Bilanz. Danach gibt der
+ * Wirt die Leitung weiter ab, bis der Host das Board zurueckverlangt
+ * (`TAKT`); dann setzt sich der Chip zurueck (line.c).
  *
  * Der Bau setzt `TAKT_TICKS` (so viele Ticks, 0: bis das Programm endet) und
  * `TAKT_FRESH_JOURNAL`; so baut ihn `takt_conformance::esp_idf`.
@@ -28,7 +29,6 @@
 
 #include "program.h"
 #include "esp_attr.h"
-#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "line.h"
@@ -53,10 +53,9 @@ _Static_assert((uint32_t)CONFIG_FREERTOS_ISR_STACKSIZE >= PROGRAM_TICK_STACK_BYT
 /* Der Takt des `gptimer`: ein Schritt des Zaehlers sind 25 ns. */
 #define TIMER_HZ 40000000U
 
-/* Die Stufe des Schritts: unter der Leitung, die den Ring leert, waehrend
- * der Schritt rechnet. */
+/* Die Stufe des Schritts, eine der Stufen in C (1 bis 3); die Leitung hat
+ * keinen Interrupt, sie rechnet im Schritt (line.c). */
 #define STEP_PRIORITY 2U
-_Static_assert(STEP_PRIORITY < LINE_PRIORITY, "die Leitung muss den Schritt unterbrechen");
 
 /* Die Prioritaeten der Aufgaben ueber `app_main` (1), der fremden Last: die
  * Jobs, darunter das Geraet des Journals. */
@@ -96,9 +95,11 @@ struct program_arena program_arena;
 
 /* Der Stack der Jobs unter dem Namen, unter dem `takt check-image` ihn
  * prueft (`job_stack_symbol`): so gross, wie das Programm verlangt, und an 32
- * Byte ausgerichtet. */
+ * Byte ausgerichtet. Ein Programm ohne Jobs hat keinen. */
+#if PROGRAM_JOB_STACK_BYTES > 0u
 extern StackType_t program_job_stack[PROGRAM_JOB_STACK_BYTES / sizeof(StackType_t)];
 _Alignas(32) StackType_t program_job_stack[PROGRAM_JOB_STACK_BYTES / sizeof(StackType_t)];
+#endif
 
 /* ESP-IDF ruft sie aus seiner Hauptaufgabe. */
 void app_main(void);
@@ -171,7 +172,11 @@ static void run(takt_core *core) {
     static struct takt_irq port;
     const struct takt_irq_config config = {TAKT_TICKS, PROGRAM_TICK_NS, TIMER_HZ, STEP_PRIORITY, 0u};
     takt_foreign foreign = {0u, 0u};
+#if PROGRAM_JOB_STACK_BYTES > 0u
     takt_irq_esp_idf_jobs(program_job_stack, sizeof program_job_stack, JOB_PRIORITY);
+#else
+    takt_irq_esp_idf_jobs(NULL, 0u, JOB_PRIORITY);
+#endif
     paint_isr_stack();
     if (takt_irq_start(&port, core, &config) != 0) {
         takt_board_trace("takt: der Port startet nicht\r\n");
@@ -191,7 +196,8 @@ void app_main(void) {
     static uint8_t ring[RING_BYTES];
     static takt_core core;
     static struct takt_line line;
-    if ((line_open(&line) == 0) && (takt_line_init(&line, ring, RING_BYTES) == TAKT_OK)) {
+    line_open(&line);
+    if (takt_line_init(&line, ring, RING_BYTES) == TAKT_OK) {
         banner();
         const int32_t status = start_core(&core);
         if (status != TAKT_OK) {
@@ -201,10 +207,11 @@ void app_main(void) {
         } else {
             run(&core);
         }
-        takt_line_flush();
     }
-    while (line_handback() == 0) {
+    /* Was im Ring blieb, geht hinaus; `flush` liest dabei den Wunsch des
+     * Hosts, der den Chip zuruecksetzt. */
+    for (;;) {
+        takt_line_flush();
         vTaskDelay(1);
     }
-    esp_restart();
 }
