@@ -15,12 +15,13 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Drift, TICKS, ZEPHYR_WIRE_TICKS, a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver,
-    driver_edge_agrees, fits_the_poll_form, journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows,
-    last_output, long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, persistence_survives, ran,
-    runs_shared, simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
-    the_poll_form_keeps_its_round, the_port_passes, verdict, zephyr_access_in_the_run_faults, zephyr_image,
-    zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
+    Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_WIRE_TICKS, a_foreign_write_becomes_runtime_hardware,
+    a_hostile_fpu_changes_nothing, agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
+    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict,
+    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -106,6 +107,18 @@ fn persistence_survives_a_reset_and_a_new_image() {
 fn the_journal_costs_time_but_not_semantics() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = journal_costs_time_but_not_semantics(&mut board);
+    verdict(&failed);
+}
+
+/// **Ein Stillstand ist Rueckstand und wird nachgeholt** (7.3, FB-742):
+/// Eine Sektorloeschung haelt den Kern rund 200 ms an, und die Uhr des
+/// eigenen Kerns verliert die Perioden nicht, denn sie liest die Zeitachse
+/// von TIM2.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_stall_is_lag_and_caught_up() {
+    let Some((mut board, _guard)) = board() else { return };
+    let failed = common::board::a_stall_is_lag_and_caught_up(&mut board);
     verdict(&failed);
 }
 
@@ -497,6 +510,51 @@ fn the_c_interrupt_port_agrees_with_the_interpreter() {
         board::corpus().into_iter().filter(|n| !TOO_BIG.contains(n) && runs_shared(n) && binds_no_driver(n)).collect();
     let options = Options::fresh(TICKS).in_form(Form::Interrupt);
     let failed = agreement_with(&mut Stm32f401C::on(board), &names, only.as_deref(), &options);
+    verdict(&failed);
+}
+
+/// **Der Port mit Faeden unter FreeRTOS besteht die Portpruefung** (12.11,
+/// 13.8; M11 Schritt 20): der C-Wirt der Black Pill mit dem SDK-Archiv,
+/// `ports/rtos`, seinem Adapter `ports/freertos` und dem Kern von FreeRTOS
+/// V11.3.1 (`ARM_CM4F`). Den Schritt rechnet eine Aufgabe hoechster
+/// Prioritaet, die Jobs eine darunter, darunter rechnet eine fremde Aufgabe
+/// des Wirts ihre Last mit der FPU.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_freertos_port_passes_the_port_test() {
+    let Some((board, _guard)) = board() else { return };
+    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Rtos);
+    verdict(&failed);
+}
+
+/// **Unter FreeRTOS-MPU besteht der Port die Portpruefung hinter einer
+/// Partition** (12.11, 13.8; M11 Schritt 20b): derselbe Wirt mit dem Port
+/// `ARM_CM4_MPU`. Schritt und Jobs sind privilegierte Aufgaben, die fremde
+/// Last rechnet ohne Privileg, und vor dem Lauf wies die MPU ihren
+/// Schreibzugriff auf die Arena ab (`takt schutz partition verweigert`). Den
+/// Stack der Interrupts bewacht ein Watchpoint, und kein Debugger haelt bei
+/// einem Treffer an (`takt waechter watchpoint`); haelt einer an (die Probe
+/// am SWD hat DHCSR.C_DEBUGEN gesetzt), faellt der Test, bis das Board ohne
+/// Strom war.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_freertos_mpu_port_passes_the_port_test() {
+    let Some((board, _guard)) = board() else { return };
+    let header = [PARTITION_REFUSED, GUARD_WATCHPOINT];
+    let failed = the_port_passes_with_header(&mut Stm32f401C::mpu(board), Form::Rtos, &header);
+    verdict(&failed);
+}
+
+/// **Unter FreeRTOS-MPU wird ein Schreibzugriff der fremden Last auf die
+/// Arena `Runtime(Hardware)`** (12.3; M11 Schritt 20b): Die Aufgabe ohne
+/// Privileg schreibt 20 ms nach dem Start ihrer Last hinein, die MPU weist
+/// den Zugriff ab, der Handler von MemManage meldet ihn dem Kern
+/// (`takt_core_hardware_fault`), und im naechsten Tick faulten die Maschinen.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_freertos_mpu_turns_a_foreign_write_into_runtime_hardware() {
+    let Some((board, _guard)) = board() else { return };
+    let failed = a_foreign_write_becomes_runtime_hardware(&mut Stm32f401C::mpu_probe(board));
     verdict(&failed);
 }
 

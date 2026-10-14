@@ -29,14 +29,14 @@
 [target.thumbv7em]
 cost_model = 2
 core_hz = 84000000
-i32 = 13052
-i64 = 22769
-f32 = 97379
-f64 = 2097887
-mem = 40188
-call = 235262
+i32 = 11905
+i64 = 20694
+f32 = 87612
+f64 = 1888889
+mem = 36272
+call = 249405
 native = 0
-t_io = 8345239
+t_io = 8869048
 ram = 65536
 flash = 196608
 protect = armv7m_mpu
@@ -51,32 +51,32 @@ nvm_min_interval = 10000000000
 nvm_erase_ns = 300000000
 nvm_program_ns = 200000
 nvm_blocking = true
-i32_div = 116062
-i64_div = 2206371
-f32_div = 526227
-f64_div = 3565914
+i32_div = 104724
+i64_div = 1962472
+f32_div = 449776
+f64_div = 3212177
 tick_jitter_ns = 0
 # Stack-Reserve je Form (12.3, 13.8, FB-513): die tiefste Hochwassermarke
 # des Lastkerns (`bench/load.takt`) in Echtzeit und logischer Zeit, gemalt
 # ab der Tickschleife, ohne seinen Programmanteil. Aus den Protokollen des
 # Bench vom 2026-10-11 je Form zugeordnet; der naechste Bench schreibt sie
 # selbst, seit der Kopf eines Laufs seine Form nennt.
-stack_reserve = 2628
-stack_reserve_interrupt = 3364
-stack_reserve_poll = 2764
-stack_reserve_rtos = 3648
+stack_reserve = 2884
+stack_reserve_interrupt = 3716
+stack_reserve_poll = 3052
+stack_reserve_rtos = 4240
 # Die Hauptschleife des Bring-ups in der Pollform (12.11): je Runde 10 us
 # fremde Arbeit, dazu Leitung, LED und Pruefzugriffe; die Bilanz nennt die
 # gemessene laengste Runde. EXTI1 ist der Job-Interrupt.
 main_loop_ns = 50000
 job_interrupt = true
-f32_fma = 284082
-f64_fma = 6935297
-f32_sqrt = 495869
-f64_sqrt = 4264829
-call_hook = 1657239
-f32_math = 504299201
-f64_math = 1120696050
+f32_fma = 287016
+f64_fma = 6270647
+f32_sqrt = 465587
+f64_sqrt = 3826699
+call_hook = 1499256
+f32_math = 395222097
+f64_math = 878439483
 
 [device.gpio]
 driver = "stm32f4-gpio"

@@ -105,7 +105,7 @@ pub use jobs::JobContext;
 pub use led::Led;
 pub use mpu::Mpu;
 pub use nvm::FlashNvm;
-pub use tick::{Tim2Tick, on_timer_interrupt};
+pub use tick::Tim2Tick;
 pub use uart::{BAUD, Telemetry, Usart1, console_byte, telemetry};
 pub use wire::Wire;
 
@@ -212,9 +212,11 @@ pub enum InitError {
 /// der Host das Board zurueckverlangt, kam der Start nicht bis hier: Das
 /// Sprungbrett gab es an den Bootloader ([`bootloader::enter_if_requested`]).
 ///
-/// `tick_ns` ist die Periode aus `system: tick`. Die Reihenfolge ist
-/// nicht beliebig: Erst der Takt, dann der Timer — ein Timer, der vor der
-/// PLL konfiguriert wird, rechnet mit der falschen Eingangsfrequenz.
+/// `tick_ns` ist die Periode aus `system: tick`. TIM2 laeuft frei als
+/// Zeitachse, und ein Wecker steht auf jeder Tickgrenze ([`tick`]). Die
+/// Reihenfolge ist nicht beliebig: Erst der Takt, dann der Timer — ein
+/// Timer, der vor der PLL konfiguriert wird, rechnet mit der falschen
+/// Eingangsfrequenz.
 pub fn init(
     board: Board,
     rcc: &stm32f4::stm32f401::RCC,
@@ -227,14 +229,13 @@ pub fn init(
     let psc = takt_board_support::prescaler_for(CORE_HZ, TIMER_HZ).ok_or(InitError::ClockNotReady)?;
     let pllm = takt_board_support::pll::divider_m(board.hse_hz).ok_or(InitError::UnsupportedCrystal)?;
     clocks(rcc, flash, pwr, pllm)?;
-    tick::set_counts_per_tick(counts);
-    start_tim2(rcc, tim2, psc, counts);
+    tick::start(rcc, tim2, psc, counts);
     Ok(Tim2Tick::new(TIMER_HZ, counts, CORE_HZ))
 }
 
-/// Wie [`init`], fuer die Interruptform (12.11): TIM2 laeuft frei als
-/// Zeitachse des Alarms ([`alarm::Tim2Alarm`]) statt periodisch; den Takt
-/// gibt die Frist, die `service` nennt. Jobs laufen im Interrupt `jobs`.
+/// Wie [`init`], fuer die Interruptform (12.11): Auf derselben Zeitachse
+/// steht der Alarm ([`alarm::Tim2Alarm`]) nicht auf jeder Tickgrenze, sondern
+/// auf der Frist, die `service` nennt. Jobs laufen im Interrupt `jobs`.
 pub fn init_alarm(
     board: Board,
     rcc: &stm32f4::stm32f401::RCC,
@@ -336,7 +337,7 @@ fn clocks(
 
     // APB1 auf 42 MHz (Teiler 2): Der F401 erlaubt dort hoechstens 42.
     // Die Timer an APB1 bekommen dafuer den doppelten Takt, also wieder
-    // 84 MHz — deshalb rechnet `start_tim2` mit `CORE_HZ`.
+    // 84 MHz — deshalb rechnet der Vorteiler von TIM2 mit `CORE_HZ`.
     //
     // APB2 bleibt bei Teiler 1, also 84 MHz. Der Reset-Wert waere
     // derselbe; er steht trotzdem hier, weil `Telemetry` den Takt als
@@ -394,35 +395,4 @@ fn wait_for(mut ready: impl FnMut() -> bool) -> bool {
     // 100 000 Durchlaeufe sind bei 16 MHz Startakt einige Millisekunden —
     // ein Quarz braucht typisch unter einer.
     (0..100_000).any(|_| ready())
-}
-
-/// TIM2 als Tickquelle: Aufwaertszaehler mit Update-Interrupt.
-fn start_tim2(rcc: &stm32f4::stm32f401::RCC, tim2: &stm32f4::stm32f401::TIM2, psc: u16, counts: u32) {
-    rcc.apb1enr().modify(|_, w| w.tim2en().set_bit());
-    let _ = rcc.apb1enr().read();
-
-    // SAFETY: `PSC` nimmt jeden 16-Bit-Wert.
-    tim2.psc().write(|w| unsafe { w.psc().bits(psc) });
-    // Der Zaehler laeuft von 0 bis `arr`, das sind `arr + 1` Schritte.
-    // SAFETY: `ARR` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
-    tim2.arr().write(|w| unsafe { w.bits(counts.saturating_sub(1)) });
-
-    // Die neuen Werte uebernehmen, bevor der Zaehler laeuft.
-    tim2.egr().write(|w| w.ug().set_bit());
-
-    // **Und das dabei gesetzte Flag wieder loeschen.** `ug` erzeugt ein
-    // Update-Ereignis — genau dasselbe, das der Ueberlauf spaeter
-    // erzeugt —, und es setzt `UIF`. Bliebe es stehen, feuerte die ISR
-    // sofort beim Freigeben des Interrupts, und der erste Tick kaeme vom
-    // Aufsetzen statt vom Timer. Die Periodenmessung haette damit einen
-    // sinnlosen ersten Wert, und die Tickzahl waere um eins verschoben.
-    //
-    // `write` mit Maske, weil `SR` ein `rc_w0`-Register ist: Nullen
-    // loeschen, Einsen lassen stehen. Hier ist ohnehin alles frisch, aber
-    // die Form bleibt dieselbe wie in der ISR.
-    // SAFETY: `SR` ist `rc_w0`; das Muster loescht nur `UIF`.
-    tim2.sr().write(|w| unsafe { w.bits(!1) });
-
-    tim2.dier().modify(|_, w| w.uie().set_bit());
-    tim2.cr1().modify(|_, w| w.cen().set_bit());
 }

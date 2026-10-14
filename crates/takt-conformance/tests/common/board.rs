@@ -673,6 +673,11 @@ impl HostRun {
 /// port-test --judge` traegt das Urteil daraus in den Konformitaetsbericht
 /// ein.
 pub fn port_test(board: &mut dyn Board, form: Form, flaw: Option<Flaw>) -> Result<port::Verdict, String> {
+    port_run(board, form, flaw).map(|(verdict, _)| verdict)
+}
+
+/// [`port_test`] mit der Ausgabe des Laufs.
+fn port_run(board: &mut dyn Board, form: Form, flaw: Option<Flaw>) -> Result<(port::Verdict, String), String> {
     let path = board::corpus_path(port::CORPUS_NAME);
     let mut options = Options::timed(port::TICKS).in_form(form).judged();
     if let Some(flaw) = flaw {
@@ -685,7 +690,7 @@ pub fn port_test(board: &mut dyn Board, form: Form, flaw: Option<Flaw>) -> Resul
     std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&log, &text)).map_err(|e| e.to_string())?;
     let verdict = port::judge(&text, port::PROGRAM);
     eprintln!("{name}: {}{verdict}", log.display());
-    Ok(verdict)
+    Ok((verdict, text))
 }
 
 /// **Der Port besteht die Portpruefung** (12.11, 13.8): Trace gleich dem
@@ -697,6 +702,64 @@ pub fn the_port_passes(board: &mut dyn Board, form: Form) -> Vec<String> {
         Ok(v) => vec![format!("{form:?}: {v}")],
         Err(e) => vec![format!("{form:?}: kein Lauf: {e}")],
     }
+}
+
+/// **Der Port besteht die Portpruefung, und der Kopf nennt seinen Schutz**
+/// (12.3, 12.11, 13.8; M11 Schritt 20b): wie [`the_port_passes`], und vor der
+/// Marke steht jede der Zeilen `lines`, etwa [`PARTITION_REFUSED`] und
+/// [`GUARD_WATCHPOINT`].
+pub fn the_port_passes_with_header(board: &mut dyn Board, form: Form, lines: &[&str]) -> Vec<String> {
+    match port_run(board, form, None) {
+        Ok((v, text)) => {
+            let mut failed = if v.passed() { Vec::new() } else { vec![format!("{form:?}: {v}")] };
+            failed.extend(header_has(&text, lines));
+            failed
+        }
+        Err(e) => vec![format!("{form:?}: kein Lauf: {e}")],
+    }
+}
+
+/// **Ein Schreibzugriff ohne Privileg auf die Arena wird `Runtime(Hardware)`**
+/// (12.3, 12.11; M11 Schritt 20b): Der Wirt `board` schreibt aus einer
+/// Aufgabe ohne Privileg waehrend des Laufs in die Arena; die MPU weist den
+/// Zugriff ab, der Wirt meldet ihn dem Kern, und im naechsten Tick bekommt
+/// jede Maschine `Runtime(Hardware)`. Das Pruefprogramm der Portpruefung,
+/// 100 Ticks in Echtzeit.
+pub fn a_foreign_write_becomes_runtime_hardware(board: &mut dyn Board) -> Vec<String> {
+    let path = board::corpus_path(port::CORPUS_NAME);
+    let options = Options::timed(100).in_form(Form::Rtos);
+    let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("kein Lauf: {e}")],
+    };
+    let mut failed = header_has(&text, &[PARTITION_REFUSED]);
+    let tick = text.lines().find_map(|l| l.strip_prefix("t=")?.strip_suffix(" runtime Hardware"));
+    match tick {
+        Some(t) if t != "0" => {
+            let fault = format!("t={t} fault ");
+            if !text.lines().any(|l| l.starts_with(&fault) && l.contains("Hardware")) {
+                failed.push(format!("bei t={t} faultet keine Maschine mit Hardware"));
+            }
+        }
+        Some(_) => failed.push("`runtime Hardware` schon bei t=0, vor dem Zugriff".to_string()),
+        None => failed.push("kein `runtime Hardware` nach dem Zugriff".to_string()),
+    }
+    if !failed.is_empty() {
+        failed.push(text);
+    }
+    failed
+}
+
+/// Die Kopfzeilen `lines` vor der Marke; je fehlende ein Befund mit den
+/// Zeilen des Kopfs, die mit `takt ` beginnen.
+fn header_has(text: &str, lines: &[&str]) -> Vec<String> {
+    let header = text.find(board::MARK).map_or(text, |at| &text[..at]);
+    let seen: Vec<&str> = header.lines().map(str::trim_end).filter(|l| l.starts_with("takt ")).collect();
+    lines
+        .iter()
+        .filter(|line| !seen.contains(*line))
+        .map(|line| format!("keine Zeile `{line}` vor der Marke, gesehen {seen:?}"))
+        .collect()
 }
 
 /// Das Abbild von `examples/<example>` fuer `zephyr` (M11 Schritt 19,
@@ -776,17 +839,21 @@ pub fn zephyr_verdict(name: &str, example: &str, partition: bool, run: Result<St
     let verdict = port::judge(&text, port::PROGRAM);
     eprintln!("{name}-{example}: {}{verdict}", log.display());
     let mut failed = if verdict.passed() { Vec::new() } else { vec![format!("{example}: {verdict}")] };
-    let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
-    if partition && !header.lines().any(|l| l.trim_end() == ZEPHYR_PARTITION_REFUSED) {
-        let seen: Vec<&str> = header.lines().filter(|l| l.starts_with("takt schutz")).collect();
-        failed.push(format!("{example}: keine Zeile `{ZEPHYR_PARTITION_REFUSED}` vor der Marke, gesehen {seen:?}"));
+    if partition {
+        failed.extend(header_has(&text, &[PARTITION_REFUSED]).into_iter().map(|f| format!("{example}: {f}")));
     }
     failed
 }
 
-/// Die Kopfzeile von `examples/zephyr`, wenn die Partition der Arena den
-/// Schreibzugriff eines Fadens im Benutzermodus abwies.
-const ZEPHYR_PARTITION_REFUSED: &str = "takt schutz partition verweigert";
+/// Die Kopfzeile eines Wirts, wenn die Partition der Arena den
+/// Schreibzugriff eines Fadens im Benutzermodus abwies (`examples/zephyr`,
+/// der C-Wirt der Black Pill unter FreeRTOS-MPU).
+pub const PARTITION_REFUSED: &str = "takt schutz partition verweigert";
+
+/// Die Kopfzeile des C-Wirts der Black Pill unter FreeRTOS-MPU, wenn der
+/// Watchpoint unter dem Stack der Interrupts wirkt: kein Debugger, der bei
+/// einem Treffer anhielte (12.3).
+pub const GUARD_WATCHPOINT: &str = "takt waechter watchpoint";
 
 /// **Ein absichtlich falscher Port faellt durch, und zwar an der Pflicht,
 /// die er verletzt** (M11 Schritt 15): Das Urteil verwirft ihn, jeder Grund
@@ -1046,6 +1113,51 @@ pub fn journal_writes_in_sleep_windows(board: &mut dyn Board) -> Vec<String> {
     let diffs = compare(&replayed(&corpus(name), &text), &text);
     if !diffs.is_empty() {
         failed.push(format!("{diffs:?}"));
+    }
+    failed
+}
+
+/// **Ein Stillstand ist Rueckstand und wird nachgeholt** (7.3, 12.3; FB-198,
+/// FB-742). `58_persist_alert` schreibt in jedem Tick ins Journal und nimmt
+/// Ueberlaeufe an. Ist ein Slot voll, loescht das Journal den anderen, und
+/// der Kern steht so lange — auf dem F401 rund 200 ms. Die Zeitachse laeuft
+/// weiter: Der groesste Rueckstand reicht mindestens bis zur gemessenen
+/// Loeschdauer abzueglich einer Periode, die verpassten Perioden zaehlen als
+/// verloren, und am Ende liegt der Tick wieder auf seiner Frist. Eine Uhr,
+/// die Aufrufe der ISR zaehlt, saehe den Stillstand nicht. Den Trace des
+/// Aufholens darf die Telemetrie verwerfen (12.2, FB-741); hier zaehlt die
+/// Bilanz.
+pub fn a_stall_is_lag_and_caught_up(board: &mut dyn Board) -> Vec<String> {
+    // Genug Eintraege, dass ein Slot auch mit den 16 KiB des F401 voll wird.
+    const STALL_TICKS: u64 = 500;
+    const PERIOD_NS: i64 = 10_000_000;
+    let name = "58_persist_alert.takt";
+    let options = Options::timed(STALL_TICKS).lossy();
+    let text = match board.build(&board::corpus_path(name), &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("{name}: {e}")],
+    };
+    let count = |key: &str| board::counter(&text, key).unwrap_or(0);
+    let (erase, lag, lost) = (count("nvm loeschen"), count("rueckstand"), count("verloren"));
+    eprintln!("{} {name}: Loeschung {erase} ns, Rueckstand {lag} ns, {lost} verlorene Perioden", board.name());
+    if erase == 0 {
+        return vec![format!("in {STALL_TICKS} Ticks loeschte das Journal keinen Sektor:\n{text}")];
+    }
+    let mut failed = Vec::new();
+    if lag.saturating_add(PERIOD_NS.unsigned_abs()) < erase {
+        failed.push(format!(
+            "der Kern stand {erase} ns, der groesste Rueckstand ist {lag} ns: Die Uhr verlor die Perioden (FB-742)\n{text}"
+        ));
+    }
+    if lost == 0 {
+        failed.push(format!("keine verlorene Periode nach {erase} ns Stillstand:\n{text}"));
+    }
+    let last_drift = text
+        .lines()
+        .rev()
+        .find_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse::<i64>().ok());
+    if !last_drift.is_some_and(|d| d < PERIOD_NS) {
+        failed.push(format!("am Ende liegt der Tick nicht auf seiner Frist (drift {last_drift:?}):\n{text}"));
     }
     failed
 }
