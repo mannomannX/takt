@@ -1,6 +1,6 @@
 //! Der Korpus auf einem Board gegen den Interpreter (13.8, Satz 9.4.4).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 pub use takt_conformance::board::Drift;
@@ -794,21 +794,21 @@ fn header_has(text: &str, lines: &[&str]) -> Vec<String> {
 /// Das Abbild von `examples/<example>` fuer `zephyr` (M11 Schritt 19,
 /// [`takt_conformance::zephyr`]), gebaut mit dem Werkzeug, mit dem der Harness
 /// die Bring-ups baut (`<target>/release/takt`), unter
-/// `<target>/takt-zephyr/<board>-<example>[-fresh]`; mit `fresh` loescht das
-/// Abbild sein Journal vor dem Lauf. Ein Abbild aus dem Zwischenspeicher
+/// `<target>/takt-zephyr/<board>-<example><spielart>`, in der Spielart
+/// `variant` ([`takt_conformance::zephyr::Variant`]). Ein Abbild aus dem Zwischenspeicher
 /// ([`takt_conformance::zephyr::image`]) braucht kein Zephyr: So faehrt der
 /// Rechner am Board die Abbilder aus CI (`tools/board-run.ps1 -FromCi`).
 pub fn zephyr_image(
     name: &str,
     example: &str,
     zephyr: takt_conformance::zephyr::Board,
-    fresh: bool,
+    variant: takt_conformance::zephyr::Variant,
 ) -> Result<takt_conformance::zephyr::Image, String> {
     let target = takt_conformance::target_dir();
     let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
-    let dir = target.join("takt-zephyr").join(format!("{name}-{example}{}", if fresh { "-fresh" } else { "" }));
+    let dir = target.join("takt-zephyr").join(format!("{name}-{example}{}", variant.suffix()));
     let west = takt_conformance::zephyr::west();
-    takt_conformance::zephyr::image(west.as_deref(), example, zephyr, fresh, &dir, &tool)
+    takt_conformance::zephyr::image(west.as_deref(), example, zephyr, variant, &dir, &tool)
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart** (5.9, 12.11; M11
@@ -1147,6 +1147,51 @@ pub fn journal_writes_in_sleep_windows(board: &mut dyn Board) -> Vec<String> {
     failed
 }
 
+/// **Ein Stillstand ist Rueckstand und wird nachgeholt** (7.3, 12.3; FB-198,
+/// FB-742). `58_persist_alert` schreibt in jedem Tick ins Journal und nimmt
+/// Ueberlaeufe an. Ist ein Slot voll, loescht das Journal den anderen, und
+/// der Kern steht so lange — auf dem F401 rund 200 ms. Die Zeitachse laeuft
+/// weiter: Der groesste Rueckstand reicht mindestens bis zur gemessenen
+/// Loeschdauer abzueglich einer Periode, die verpassten Perioden zaehlen als
+/// verloren, und am Ende liegt der Tick wieder auf seiner Frist. Eine Uhr,
+/// die Aufrufe der ISR zaehlt, saehe den Stillstand nicht. Den Trace des
+/// Aufholens darf die Telemetrie verwerfen (12.2, FB-741); hier zaehlt die
+/// Bilanz.
+pub fn a_stall_is_lag_and_caught_up(board: &mut dyn Board) -> Vec<String> {
+    // Genug Eintraege, dass ein Slot auch mit den 16 KiB des F401 voll wird.
+    const STALL_TICKS: u64 = 500;
+    const PERIOD_NS: i64 = 10_000_000;
+    let name = "58_persist_alert.takt";
+    let options = Options::timed(STALL_TICKS).lossy();
+    let text = match board.build(&board::corpus_path(name), &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("{name}: {e}")],
+    };
+    let count = |key: &str| board::counter(&text, key).unwrap_or(0);
+    let (erase, lag, lost) = (count("nvm loeschen"), count("rueckstand"), count("verloren"));
+    eprintln!("{} {name}: Loeschung {erase} ns, Rueckstand {lag} ns, {lost} verlorene Perioden", board.name());
+    if erase == 0 {
+        return vec![format!("in {STALL_TICKS} Ticks loeschte das Journal keinen Sektor:\n{text}")];
+    }
+    let mut failed = Vec::new();
+    if lag.saturating_add(PERIOD_NS.unsigned_abs()) < erase {
+        failed.push(format!(
+            "der Kern stand {erase} ns, der groesste Rueckstand ist {lag} ns: Die Uhr verlor die Perioden (FB-742)\n{text}"
+        ));
+    }
+    if lost == 0 {
+        failed.push(format!("keine verlorene Periode nach {erase} ns Stillstand:\n{text}"));
+    }
+    let last_drift = text
+        .lines()
+        .rev()
+        .find_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse::<i64>().ok());
+    if !last_drift.is_some_and(|d| d < PERIOD_NS) {
+        failed.push(format!("am Ende liegt der Tick nicht auf seiner Frist (drift {last_drift:?}):\n{text}"));
+    }
+    failed
+}
+
 /// Der Soll-Trace ueber [`TICKS`] Ticks.
 pub fn run_interpreted(p: &Program) -> String {
     replayed(p, "")
@@ -1364,4 +1409,100 @@ pub fn natives_agree(board: &mut dyn Board) -> Vec<String> {
         }
         Err(e) => vec![format!("kein Lauf der Natives: {e}")],
     }
+}
+
+/// So viele Ticks faehrt `examples/zephyr-gpio` (`src/main.c`).
+pub const ZEPHYR_WIRE_TICKS: u64 = 2_000;
+
+/// **Die Pins aus dem Devicetree treiben und lesen die Drahtbruecke** (8.10,
+/// 12.11; M11 Schritt 19): das Urteil ueber den Lauf `run` von
+/// `examples/zephyr-gpio` auf dem Board `name`. Die Messschleife schreibt je
+/// Tick den anderen Pegel nach `wire/out` (`out probe`) und liest `wire/in`
+/// (`pub bridge seen`). Steht die Bruecke, sieht jeder Tick den Pegel des
+/// Ticks davor und Tick 0 den `safe`-Wert, auf den `wire_zephyr_init` den
+/// Ausgang stellte; kein Fault, keine Zeile des Treiberrands (12.6), und der
+/// Ausgang wechselt bis zum letzten Tick. Ohne `CONFIG_USERSPACE` nennt der
+/// Kopf `Schutz: keiner` (M11 Schritt 23). Der Lauf steht unter
+/// `<target>/port-test/<name>-zephyr-gpio.log`.
+pub fn zephyr_wire_follows(name: &str, run: Result<String, String>) -> Vec<String> {
+    let text = match run {
+        Ok(text) => text,
+        Err(e) => return vec![format!("zephyr-gpio: kein Lauf: {e}")],
+    };
+    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-zephyr-gpio.log"));
+    if let Err(e) = log.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&log, &text)) {
+        return vec![format!("{}: {e}", log.display())];
+    }
+    let trace = text.find(board::MARK).map_or("", |at| &text[at..]);
+    let (mut probe, mut seen) = (BTreeMap::new(), BTreeMap::new());
+    let mut failed: Vec<String> =
+        header_names(&text, Case::Unprotected).into_iter().map(|f| format!("zephyr-gpio: {f}")).collect();
+    for line in trace.lines().map(str::trim_end) {
+        let mut words = line.split_whitespace();
+        let Some(tick) = words.next().and_then(|w| w.strip_prefix("t=")).and_then(|k| k.parse::<u64>().ok()) else {
+            continue;
+        };
+        match words.collect::<Vec<&str>>().as_slice() {
+            ["out", "probe", level] => {
+                probe.insert(tick, *level == "true");
+            }
+            ["pub", "bridge", "seen", level] => {
+                seen.insert(tick, *level == "true");
+            }
+            ["fault" | "driver" | "runtime", ..] => failed.push(format!("zephyr-gpio: `{line}`")),
+            _ => {}
+        }
+    }
+    let at = |levels: &BTreeMap<u64, bool>, tick: u64| levels.range(..=tick).next_back().is_some_and(|(_, l)| *l);
+    if probe.len() < usize::try_from(ZEPHYR_WIRE_TICKS).unwrap_or(usize::MAX) {
+        failed.push(format!("zephyr-gpio: der Ausgang wechselte in {} von {ZEPHYR_WIRE_TICKS} Ticks", probe.len()));
+    }
+    if at(&seen, 0) {
+        failed.push("zephyr-gpio: Tick 0 las `true`, der Ausgang stand auf `safe = false`".to_string());
+    }
+    let wrong: Vec<u64> = (1..ZEPHYR_WIRE_TICKS).filter(|&k| at(&seen, k) != at(&probe, k - 1)).collect();
+    if let Some(first) = wrong.first() {
+        failed.push(format!(
+            "zephyr-gpio: in {} Ticks las der Eingang nicht den Pegel des Ticks davor, zuerst in Tick {first}",
+            wrong.len()
+        ));
+    }
+    eprintln!("{name}-zephyr-gpio: {}", log.display());
+    failed
+}
+
+/// **Eine Schutzverletzung im Lauf wird zum Fault des Kerns** (12.3; M11
+/// Schritt 19): das Urteil ueber den Lauf `run` von `examples/zephyr` mit
+/// `TAKT_PROBE_IN_RUN` auf dem Board `name`. Vor dem Lauf weist die
+/// Partition die Probe ab wie in der Portpruefung; die zweite Probe im Lauf
+/// trifft dieselbe Schutzeinheit, und der Fault-Handler meldet sie dem Kern
+/// (`partition_guard`, `takt_core_hardware_fault`): genau eine Zeile
+/// `runtime Hardware`, und der Lauf reicht danach bis zu seinem letzten
+/// Tick. Der Lauf steht unter `<target>/port-test/<name>-zephyr-probe.log`.
+pub fn zephyr_access_in_the_run_faults(name: &str, run: Result<String, String>) -> Vec<String> {
+    let text = match run {
+        Ok(text) => text,
+        Err(e) => return vec![format!("zephyr-probe: kein Lauf: {e}")],
+    };
+    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-zephyr-probe.log"));
+    if let Err(e) = log.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&log, &text)) {
+        return vec![format!("{}: {e}", log.display())];
+    }
+    eprintln!("{name}-zephyr-probe: {}", log.display());
+    let mut failed = Vec::new();
+    let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
+    if !header.lines().any(|l| l.trim_end() == PARTITION_REFUSED) {
+        failed.push(format!("zephyr-probe: keine Zeile `{PARTITION_REFUSED}` vor der Marke"));
+    }
+    let trace = text.find(board::MARK).map_or("", |at| &text[at..]);
+    let faults: Vec<&str> =
+        trace.lines().map(str::trim_end).filter(|l| l.split_whitespace().nth(1) == Some("runtime")).collect();
+    if faults.len() != 1 || !faults.iter().all(|l| l.ends_with(" runtime Hardware")) {
+        failed.push(format!("zephyr-probe: verlangt genau `runtime Hardware`, gesehen {faults:?}"));
+    }
+    let last = port::TICKS - 1;
+    if !trace.lines().any(|l| l.starts_with(&format!("t={last} "))) {
+        failed.push(format!("zephyr-probe: der Trace reicht nicht bis Tick {last}"));
+    }
+    failed
 }

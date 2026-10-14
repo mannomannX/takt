@@ -92,7 +92,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
 | 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | Strang F (seit 2026-10-13, Zweig `f-23-protection`): Kopfzeile `Schutz` in jedem Kopf, Urteil und Bericht, Tests je Fall, TCB-Zeilen in `plan/cert.md`, umgesetzt bis auf die Board-Läufe; offen ESP-IDF (FB-756, nach 21a) und das Fenster der Interruptform in C (FB-755) |
 | 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a bis 33c umgesetzt (33b/33c Strang C, gemergt 7b924a3; Board-Crates Strang E, gemergt 0a57fe7a); offen der Board-Lauf über den neuen Stand (Strang A) |
-| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34e umgesetzt (34d Strang B, 34e Strang A); offen der neue Bench nach dem Umbau der Runtime (Stack-Reserve `rtos` auf dem F401). Strang H (Helfer, seit 2026-10-12, Zweig `h-bench-split`): der Bench in Teilen mit Mindestreserve je Abbild (FB-740) und der Lastkern in Echtzeit, der nur seine Bilanz belegt (FB-741), umgesetzt, CI grün (38312676185), `boards.yml` baut beide Boards samt Bench-Abbildern (38312679018); wartet auf den Merge und den Bench am Board |
+| 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34e umgesetzt (34d Strang B, 34e Strang A); offen der neue Bench nach dem Umbau der Runtime (Stack-Reserve `rtos` auf dem F401). Strang H (Helfer, seit 2026-10-12, Zweig `h-bench-split`): der Bench in Teilen mit Mindestreserve je Abbild (FB-740) und der Lastkern in Echtzeit, der nur seine Bilanz belegt (FB-741), umgesetzt, CI grün (38312676185), `boards.yml` baut beide Boards samt Bench-Abbildern (38312679018); gemergt (8a6b9d03), der Bench am Board bestanden (38320906796). Danach Zweig `h-fb742-clock` (PR #3): die Uhr des eigenen Kerns auf der Zeitachse von TIM2 und die Tickperiode je Ereignis (FB-742), `angehalten` in der Bilanz (FB-530); am Board bestanden (38331645022), main nachgeholt, wartet auf den Merge. Danach T1, die präfigierten Haken des Trace (Schritt 16) |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
 | 24 | Vorlagen, `takt doctor`, Anleitung, Inventur, Abschluss | W | beide | alle | zuletzt |
 
@@ -648,6 +648,34 @@ So arbeitet jeder Strang, als wäre er allein:
     in den Zwischenspeicher der Harness (`zephyr-<tripel>-<stand>`): Sie
     kommen im selben Artefakt, und `board-run.ps1 -FromCi` fährt sie ohne
     `west`.
+- **Stand 19f (Strang F, 2026-10-13, Zweig `f-19f-dt-drivers`):**
+  - **Treiber aus dem Devicetree (FB-734):** `takt build --emit embed
+    --zephyr` schreibt `P_zephyr.c` und `P_zephyr.h` (`takt_frame::zephyr`):
+    je Kanal an `zephyr-gpio` eine `gpio_dt_spec` mit der Zusicherung
+    `#if !DT_NODE_HAS_PROP … #error`, die Treiber in der Signatur aus `P.h`
+    (ein Eingang, dessen Lesen scheitert, ist `BAD` mit Grund `DRIVER`),
+    `P_alive_<gerät>` für reine Pin-Geräte und `P_zephyr_init` mit dem
+    `safe`-Wert jedes Ausgangs. Prüfung 60 unter `--zephyr`
+    (`check_zephyr`, Prüfungskorpus SC-60). Das Modul gibt `--zephyr` bei
+    `HARDWARE` und übersetzt `P_zephyr.c` in `app`. `examples/zephyr-gpio`
+    fährt die Messschleife auf den Drahtbrücken (F401 PA0→PA1, C6
+    GPIO7→GPIO17), Board-Tests `the_zephyr_gpio_wire_follows_its_pin`. Im
+    C-Teil die fünfte Lieferform `wire`: cppcheck mit dem Modell von
+    `gpio.h` in `zephyr.cfg`, clang-tidy über die Baue.
+  - **Fault-Handler (SDK 3):** Nach `takt_core_init` meldet ein
+    abgewiesener Zugriff eines Fadens im Benutzermodus `Runtime(Hardware)`
+    (`partition_guard`, `takt_core_hardware_fault`). Board-Tests
+    `the_zephyr_partition_turns_an_access_in_the_run_into_a_fault` mit
+    `TAKT_PROBE_IN_RUN`.
+  - **Harness (FB-737, FB-739):** Zwei Bauten desselben neuen Stands
+    räumten einander das Verzeichnis weg (F401-Abbild im Lauf 38321047944
+    verloren); `enter_stand` räumt nur noch frühere Stände. Die Probe des C6
+    las den Tick über JTAG nur an den Symbolen der Bring-ups; ein Abbild
+    unter Zephyr nennt ihn über Arena (`arena`) und `tick_at` des Manifests
+    (`zephyr::Image::tick_address`, Manifest im Zwischenspeicher). Der
+    Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
+    unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
+    38320906796); das zeigt der nächste Lauf.
 
 ### 23 — Speicherschutz neben fremdem Code
 
@@ -667,7 +695,8 @@ So arbeitet jeder Strang, als wäre er allein:
     `zephyr_verdict(…, Case, …)`; der Fall je Port wie in `plan/cert.md`.
     Der Zugriff der TCB zwischen zwei Ticks läuft in jeder Form des F401.
   - **Offen:** ESP-IDF (FB-756), das Fenster der Interruptform in C
-    (FB-755), `examples/zephyr-gpio` nach PR #4 (`keiner`).
+    (FB-755). `examples/zephyr-gpio` (nach PR #4) nennt `keiner`, und
+    `the_zephyr_gpio_wire_follows_its_pin` verlangt es.
 
 ### 15, 16, 18, 9, 19 bis 23
 

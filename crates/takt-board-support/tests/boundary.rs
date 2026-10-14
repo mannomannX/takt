@@ -106,9 +106,7 @@ fn everything_the_board_needs_is_exported() {
     assert_eq!(takt_board_support::ns_per_count(1_000_000), Some(1_000));
     assert_eq!(takt_board_support::clock::period_ns(1_000_000, 1000), 1_000_000);
 
-    let c = takt_board_support::Counter64::new();
-    c.tick();
-    assert_eq!(c.get(), 1);
+    assert_eq!(takt_board_support::alarm::ticks_since(0, 1000, 2500), 2);
 
     let m = takt_board_support::Measurement { cycles: 84_000, core_hz: 84_000_000 };
     assert_eq!(m.ns(), 1_000_000);

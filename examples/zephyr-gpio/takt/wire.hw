@@ -1,0 +1,21 @@
+# takt-hw 17
+# Die Drahtbruecke unter Zephyr (8.10, „Treiber aus dem Devicetree“): Beide
+# Kanaele bedient der Treiber `zephyr-gpio`, und `port` ist das Label des
+# Knotens in boards/*.overlay, der Pin und Polaritaet nennt. Den Treiber
+# erzeugt `takt build --emit embed --zephyr`.
+
+[device.wire]
+driver = "zephyr-gpio"
+
+[channel wire/out]
+direction = output
+raw = bool
+safe = false
+device = wire
+port = "takt_wire_out"
+
+[channel wire/in]
+direction = input
+raw = bool
+device = wire
+port = "takt_wire_in"

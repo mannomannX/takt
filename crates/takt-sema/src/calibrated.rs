@@ -344,6 +344,65 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
     out
 }
 
+/// Pruefung 60 unter `--zephyr` (8.10, „Treiber aus dem Devicetree“): Ein
+/// Kanal an einem Geraet mit `zephyr-gpio` nennt mit `port` ein Label des
+/// Devicetree, und Rohtyp wie Typ im Programm sind `bool`. Ob es den Knoten
+/// gibt, weiss erst der Bau unter Zephyr; dort steht die Zusicherung im
+/// erzeugten Code. Ohne `--zephyr` ruft niemand diese Pruefung: Dann ist
+/// `port` undurchsichtig wie bei jedem Treiber (9.5).
+pub fn check_zephyr(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    for c in &p.channels {
+        let Binding::Hw(addr) = &c.binding else { continue };
+        let address = addr.text();
+        let Some(entry) = hw.channel(&address) else { continue };
+        if hw.driver_of(entry) != Some(takt_mir::hardware::ZEPHYR_GPIO) {
+            continue;
+        }
+        let driver = takt_mir::hardware::ZEPHYR_GPIO;
+        match entry.port.as_deref() {
+            Some(port) if takt_mir::hardware::is_devicetree_label(port) => {}
+            Some(port) => out.push(
+                Diagnostic::error(
+                    SC60,
+                    c.span,
+                    format!(
+                        "`{}` an `{address}`: `port = \"{port}\"` ist kein Label des Devicetree ({driver})",
+                        c.name
+                    ),
+                )
+                .with_suggestion(
+                    "das Label des Knotens mit `gpios`: Kleinbuchstaben, Ziffern und `_`, nicht mit einer Ziffer am \
+                     Anfang (8.10)"
+                        .to_string(),
+                ),
+            ),
+            None => out.push(Diagnostic::error(
+                SC60,
+                c.span,
+                format!("`{}` an `{address}`: `{driver}` braucht `port`, das Label des Knotens im Devicetree", c.name),
+            )),
+        }
+        let raw = entry.raw.as_deref();
+        let typed = matches!(p.types.list.get(c.ty.index()), Some(Type::Bool));
+        if raw.is_some_and(|r| r != "bool") || !typed {
+            let shown = match raw {
+                Some(r) if r != "bool" => format!("Rohtyp `{r}`"),
+                _ => "einen anderen Typ als `bool` im Programm".to_string(),
+            };
+            out.push(Diagnostic::error(
+                SC60,
+                c.span,
+                format!(
+                    "`{}` an `{address}`: `{driver}` bedient Kanaele mit Rohtyp `bool`, der Kanal hat {shown}",
+                    c.name
+                ),
+            ));
+        }
+    }
+    out
+}
+
 /// Pruefung 60 (8.8, FB-124): `tx.idle` an einem Kanal, dessen Treiber die
 /// Frage nach der Konfiguration nicht beantwortet (`tx_idle = false`). Der
 /// Rand raet nicht: Ein leerer Puffer allein sagt nicht, dass das letzte

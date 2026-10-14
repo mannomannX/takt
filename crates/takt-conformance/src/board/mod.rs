@@ -93,7 +93,13 @@ fn kept(text: &str) -> String {
 pub(crate) fn balanced(text: &str, options: &Options) -> Result<(), String> {
     let summary = text.rfind("takt schlief ");
     if let Some(n) = counter(text, "verworfen").filter(|n| *n > 0 && !options.lossy) {
-        return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"));
+        // Hielt der Adapter die Leitung an, las der Wirt nicht mit (FB-530);
+        // sonst brachte das Board mehr, als Ring und Leitung fassen (FB-741).
+        let why = match counter(text, "angehalten").filter(|h| *h > 0) {
+            Some(h) => format!(", die Leitung stand {h}-mal (XOFF des Wirts, FB-530)"),
+            None => String::new(),
+        };
+        return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292){why}"));
     }
     let mark = text[..summary.unwrap_or(text.len())].rfind(MARK);
     match (mark, summary.zip(counter(text, "gesendet"))) {
@@ -1404,7 +1410,10 @@ mod tests {
         assert!(complete(run(body, 401, body.len()), &load).is_ok());
         assert!(complete(run(body, 401, body.len() + 1), &load).is_err_and(|e| e.contains("FB-304")));
         let looped = Options::timed(1000).calibrating();
-        assert!(complete(run(body, 401, body.len()), &looped).is_err_and(|e| e.contains("401")));
+        assert!(complete(run(body, 401, body.len()), &looped).is_err_and(|e| e.contains("401") && !e.contains("XOFF")));
+        // Hielt der Adapter die Leitung an, sagt es die Meldung (FB-530).
+        let halted = run(body, 79, body.len()).replace(" journal geschrieben", " angehalten 3 journal geschrieben");
+        assert!(complete(halted, &looped).is_err_and(|e| e.contains("die Leitung stand 3-mal (XOFF")));
     }
 
     /// Der Platz eines Abbilds (FB-740): im Flash, was das Abbild nicht

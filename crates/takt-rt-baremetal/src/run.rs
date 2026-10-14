@@ -235,6 +235,10 @@ pub fn report<P: Port>(
     t.write_u64(dropped);
     t.write(" gesendet ");
     t.write_u64(sent);
+    // Ob die Gegenstelle die Leitung anhielt: Verworfenes ist dann ein
+    // Leser, der nicht mitkam, kein Stoss des Boards (FB-530).
+    t.write(" angehalten ");
+    t.write_u64(u64::from(t.halts()));
     let journal_counts = [
         (" journal geschrieben ", u64::from(journal.writes)),
         (" fehlgeschlagen ", u64::from(journal.failures)),
@@ -482,6 +486,31 @@ mod tests {
         }
     }
 
+    /// Eine Leitung, die die Gegenstelle zweimal anhielt.
+    struct Halted<'a>(Memory<'a>);
+
+    impl Port for Halted<'_> {
+        fn try_write(&mut self, b: u8) -> bool {
+            self.0.try_write(b)
+        }
+
+        fn halts(&self) -> u32 {
+            2
+        }
+    }
+
+    /// **Die Bilanz nennt, wie oft die Leitung stand** (FB-530): Was das
+    /// Board dann verwirft, kam nicht ab, weil der Wirt nicht las.
+    #[test]
+    fn the_balance_line_counts_the_halts_of_the_line() {
+        let line = core::cell::RefCell::new(([0u8; 512], 0));
+        let mut t = Telemetry::new(Halted(Memory(&line)), std::vec![0; 512].leak());
+        report(&mut t, &Overrun::new(Policy::Fault), &Stats::default(), &JournalStats::default(), &Stacks::default());
+        let (sent, len) = *line.borrow();
+        let text = core::str::from_utf8(&sent[..len]).expect("ASCII");
+        assert!(text.contains(" gesendet 0 angehalten 2 journal "), "{text}");
+    }
+
     /// **Die Bilanzzeile in ihrer Form** (12.5, 13.8): je Kennzahl ihr Wort
     /// und ihre Zahl, in dieser Reihenfolge; `gesendet` zaehlt ab `takt
     /// trace`. Der Wirt liest die Woerter (`board::complete`, die Zaehler
@@ -513,7 +542,7 @@ mod tests {
             text,
             "boot\ntakt trace\r\nt=0 out x 1\n\
              takt schlief 9 ueberlaeufe 3 verspaetet 1 verloren 2 rueckstand 2500000 ns verworfen 0 gesendet 12 \
-             journal geschrieben 4 fehlgeschlagen 1 flush 1 nvm loeschen 12 ns programmieren 5 ns stack 2048 \
+             angehalten 0 journal geschrieben 4 fehlgeschlagen 1 flush 1 nvm loeschen 12 ns programmieren 5 ns stack 2048 \
              schranke 4096 programm 120 jobstack 300\r\ntakt end\r\n"
         );
     }

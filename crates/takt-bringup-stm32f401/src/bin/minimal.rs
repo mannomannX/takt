@@ -63,15 +63,10 @@ use takt_board_stm32f401::{Board, Led, tick};
 /// Die Tickperiode: 1 ms.
 const TICK_NS: i64 = 1_000_000;
 
+/// Der Wecker an der Tickgrenze; die Zahl der Ticks steht in der Zeitachse.
 #[interrupt]
 fn TIM2() {
-    // SAFETY: TIM2 gehoert der Tickquelle; die ISR schreibt nur `SR`.
-    let tim2 = unsafe { &*stm32f4::stm32f401::TIM2::ptr() };
-    // SAFETY: `rc_w0`: Nullen loeschen, Einsen lassen stehen; das Muster
-    // loescht nur `UIF`.
-    tim2.sr().write(|w| unsafe { w.bits(!1) });
-    // Die Periode interessiert hier nicht — nur, dass gezaehlt wird.
-    tick::on_timer_interrupt(0);
+    tick::on_interrupt();
 }
 
 #[entry]
