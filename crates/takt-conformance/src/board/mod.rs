@@ -93,7 +93,13 @@ fn kept(text: &str) -> String {
 pub(crate) fn balanced(text: &str, options: &Options) -> Result<(), String> {
     let summary = text.rfind("takt schlief ");
     if let Some(n) = counter(text, "verworfen").filter(|n| *n > 0 && !options.lossy) {
-        return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292)"));
+        // Hielt der Adapter die Leitung an, las der Wirt nicht mit (FB-530);
+        // sonst brachte das Board mehr, als Ring und Leitung fassen (FB-741).
+        let why = match counter(text, "angehalten").filter(|h| *h > 0) {
+            Some(h) => format!(", die Leitung stand {h}-mal (XOFF des Wirts, FB-530)"),
+            None => String::new(),
+        };
+        return Err(format!("Trace unvollstaendig: das Board verwarf {n} Byte (FB-292){why}"));
     }
     let mark = text[..summary.unwrap_or(text.len())].rfind(MARK);
     match (mark, summary.zip(counter(text, "gesendet"))) {
@@ -794,14 +800,25 @@ impl Bringup {
 /// Tripel eines Bring-ups): Gegen sie baut niemand mehr.
 pub(crate) fn enter_stand(kind: &str, stand: &Path) -> Result<(), String> {
     if !stand.is_dir() {
-        let prefix = format!("{kind}-");
-        for entry in std::fs::read_dir(images()).into_iter().flatten().flatten() {
-            if entry.file_name().to_string_lossy().starts_with(&prefix) {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
+        clear_older_stands(kind, stand);
     }
     std::fs::create_dir_all(stand).map_err(|e| format!("{}: {e}", stand.display()))
+}
+
+/// Raeumt die Staende der Art `kind` weg, ausser `stand` selbst (FB-737):
+/// Zwei Bauten desselben neuen Stands, in zwei Faeden eines Prozesses oder
+/// in zwei Prozessen, sehen ihn beide als neu. Raeumte der zweite alles
+/// seiner Art, naehme er dem ersten das Verzeichnis samt dem Abbild, das der
+/// gerade veroeffentlicht.
+fn clear_older_stands(kind: &str, stand: &Path) {
+    let prefix = format!("{kind}-");
+    let own = stand.file_name();
+    for entry in std::fs::read_dir(images()).into_iter().flatten().flatten() {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with(&prefix) && Some(name.as_os_str()) != own {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 /// Die Quellen aller Crates und die Verdrahtung des Bring-ups und der
@@ -1307,6 +1324,31 @@ pub(crate) fn port_listed(port: &str, present: bool, within: Duration) -> bool {
 mod tests {
     use super::*;
 
+    /// **Ein neuer Stand raeumt nur fruehere Staende seiner Art weg, nie sich
+    /// selbst** (FB-737): Sah ein zweiter Bau denselben Stand noch als neu,
+    /// nahm er dem ersten das Verzeichnis, und dessen Abbild fehlte
+    /// (`….part.….elf: No such file or directory`).
+    #[test]
+    fn a_new_stand_clears_only_older_stands_of_its_kind() {
+        let kind = format!("test-stand-{}", std::process::id());
+        let older = images().join(format!("{kind}-0000000000000001"));
+        let stand = images().join(format!("{kind}-0000000000000002"));
+        let foreign = images().join(format!("other-{kind}-0000000000000003"));
+        for dir in [&older, &stand, &foreign] {
+            std::fs::create_dir_all(dir).expect("Verzeichnis");
+        }
+        let part = stand.join("1.part.0000000000000004.elf");
+        std::fs::write(&part, b"ELF").expect("Datei");
+        clear_older_stands(&kind, &stand);
+        let (older_left, part_left, foreign_left) = (older.exists(), part.is_file(), foreign.exists());
+        for dir in [&older, &stand, &foreign] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        assert!(!older_left, "ein frueherer Stand bleibt");
+        assert!(part_left, "der eigene Stand verlor sein Abbild");
+        assert!(foreign_left, "eine andere Art verlor ihren Stand");
+    }
+
     /// **Jede Eingabe eines Bring-up-Baus gibt es**, auch die
     /// Hardware-Konfiguration des Boards: Sie geht so in den Stand jedes
     /// Abbilds ein, und eine neue Kalibrierung baut neu (FB-514).
@@ -1368,7 +1410,10 @@ mod tests {
         assert!(complete(run(body, 401, body.len()), &load).is_ok());
         assert!(complete(run(body, 401, body.len() + 1), &load).is_err_and(|e| e.contains("FB-304")));
         let looped = Options::timed(1000).calibrating();
-        assert!(complete(run(body, 401, body.len()), &looped).is_err_and(|e| e.contains("401")));
+        assert!(complete(run(body, 401, body.len()), &looped).is_err_and(|e| e.contains("401") && !e.contains("XOFF")));
+        // Hielt der Adapter die Leitung an, sagt es die Meldung (FB-530).
+        let halted = run(body, 79, body.len()).replace(" journal geschrieben", " angehalten 3 journal geschrieben");
+        assert!(complete(halted, &looped).is_err_and(|e| e.contains("die Leitung stand 3-mal (XOFF")));
     }
 
     /// Der Platz eines Abbilds (FB-740): im Flash, was das Abbild nicht
