@@ -228,6 +228,30 @@ pub struct Model {
     /// Kegel einer Anfrage (`smt::cone`): beim ersten Kegel einmal ueber den
     /// geteilten Graphen gesammelt statt je Anfrage (FB-603).
     pub(crate) deps: std::cell::OnceCell<std::rc::Rc<Vec<std::collections::BTreeSet<String>>>>,
+    /// Das Ende an der Achse, offen fuer Beweisanfragen (3.3, FB-694): ohne
+    /// eigenes Ende (`sys/next_run`) der Ort `s.run.ended`, sein Folgewert
+    /// mit einer freien Eingabe statt `now = 2^63 − 1` und diese Eingabe.
+    /// BMC, Pfade und [`Model::run`] bleiben exakt; Induktion und
+    /// Invariantensuche sehen [`crate::smt`] zufolge das offene Ende.
+    pub open_end: Option<OpenEnd>,
+    /// Das Modell mit offenem Ende, einmal gebaut (`smt::proving`).
+    pub(crate) proving: std::cell::OnceCell<std::rc::Rc<Model>>,
+}
+
+/// Das Ende an der Achse, offen (FB-694): Jeder Lauf ist ein Pfad des
+/// offenen Modells, denn die freie Eingabe kann genau im Tick wahr sein, in
+/// dem `now` die groesste `Duration` erreicht. Ein frueheres Ende auf einem
+/// anderen Pfad haelt die Maschinen an und macht jedes Ziel leer
+/// ([`after_end`]); es verletzt keines. Kein Pfad einer Tiefe erreicht das
+/// Ende an der Achse, und der Kegel eines Ziels braucht `now` nicht mehr.
+#[derive(Clone, Debug)]
+pub struct OpenEnd {
+    /// Der Ort des Endes.
+    pub var: String,
+    /// Sein Folgewert: geendet, oder die freie Eingabe.
+    pub next: Term,
+    /// Die freie Eingabe.
+    pub input: (String, Sort),
 }
 
 impl Model {
@@ -830,6 +854,13 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
             .collect();
         (m.name.clone(), done)
     });
+    // 3.3: Ohne eigenes Ende endet ein Lauf nur an der Achse; Beweisanfragen
+    // lassen dieses Ende offen (FB-694).
+    let open_end = enc.run_end().is_none().then(|| OpenEnd {
+        var: ENDED.to_string(),
+        next: Term::or(vec![Term::var(ENDED, Sort::Bool), Term::var(AXIS, Sort::Bool)]),
+        input: (AXIS.to_string(), Sort::Bool),
+    });
     let mut notes = enc.notes;
     notes.sort();
     notes.dedup();
@@ -851,6 +882,8 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
         observed,
         scenario,
         deps: Default::default(),
+        open_end,
+        proving: Default::default(),
     })
 }
 
@@ -3629,7 +3662,7 @@ impl Enc<'_> {
                 }
             }
         }
-        out.into_iter().map(|c| Term::or(vec![pre[OVER].clone(), c])).collect()
+        out.into_iter().filter_map(|c| after_end(&pre[OVER], c).ok()).collect()
     }
 
     /// Die Frist, bis zu der der Timer eines aktiven Blatts hoechstens
@@ -4607,7 +4640,7 @@ impl Enc<'_> {
                     m.future()
                 ));
             }
-            return Ok(Some(self.goal_after_end(prop, t, state, m.position())));
+            return Ok(Some(self.goal_after_end(prop, t, state, m.position())?));
         }
         let (inner, negate) = match &prop.formula {
             TProp::Temporal { op: TemporalOp::Always, inner, .. } => (inner.as_ref(), false),
@@ -4624,7 +4657,7 @@ impl Enc<'_> {
         let cx = Cx { m: None, leaf: None, mode: Mode::Entry, pre: &before, active: &actives, locals: None };
         let Some(t) = self.tprop(inner, &cx, state)? else { return Ok(None) };
         let t = if negate { t.not() } else { t };
-        Ok(Some(self.goal_after_end(prop, t, state, Position::Lag(0))))
+        Ok(Some(self.goal_after_end(prop, t, state, Position::Lag(0))?))
     }
 
     /// Nach dem Ende eines Laufs (12.7) gibt es keinen Tick, an dem die
@@ -4635,10 +4668,10 @@ impl Enc<'_> {
     /// Induktionsschritt ueber das Ende hinaus braucht nach ihm kein Ziel.
     /// Bewacht teilte jede Annahme `over` mit jedem Ziel und laege in jedem
     /// Kegel ([`crate::smt`]).
-    fn goal_after_end(&self, prop: &Property, t: Term, state: &Env, position: Position) -> Goal {
+    fn goal_after_end(&self, prop: &Property, t: Term, state: &Env, position: Position) -> R<Goal> {
         let guarded = !prop.assumption || self.run_end().is_some();
-        let formula = if guarded { Term::or(vec![state[OVER].clone(), t]) } else { t };
-        Goal { name: prop.name.clone(), assumption: prop.assumption, formula, position }
+        let formula = if guarded { after_end(&state[OVER], t)? } else { unread_end(t)? };
+        Ok(Goal { name: prop.name.clone(), assumption: prop.assumption, formula, position })
     }
 
     #[deny(clippy::wildcard_enum_match_arm)]
@@ -4777,6 +4810,30 @@ const ENDED: &str = "s.run.ended";
 /// Hatte er schon vor diesem Tick geendet? Dann ist der Tick keiner des Laufs.
 const OVER: &str = "s.run.over";
 
+/// Die freie Eingabe des offenen Endes ([`OpenEnd`]): Der Lauf erreicht in
+/// diesem Tick das Ende der Achse. Nur Beweisanfragen kennen sie.
+const AXIS: &str = "i.run.axis";
+
+/// Ein Ziel nach dem Ende eines Laufs (12.7, 3.3; FB-694): `over ∨ c`, und `c`
+/// liest das Ende nicht. Nur in dieser Form wird ein Ziel nach dem Ende
+/// hoechstens leerer; darauf baut das offene Ende der Beweisanfragen
+/// ([`OpenEnd`]). Ein Ziel, das vom Ende abhinge, ist ein Fehler der
+/// Kodierung und wird nicht gebaut.
+fn after_end(over: &Term, c: Term) -> R<Term> {
+    Ok(Term::or(vec![over.clone(), unread_end(c)?]))
+}
+
+/// `t`, wenn es das Ende des Laufs nicht liest (`s.run.over`, `s.run.ended`).
+fn unread_end(t: Term) -> R<Term> {
+    let end = |a: &Term| matches!(&*a.0, Node::Var(v, _) if v == OVER || v == ENDED);
+    let inner = term::post_order(&t, |_| false);
+    let reads = end(&t) || inner.iter().any(|n| matches!(&*n.0, Node::App(_, args) if args.iter().any(end)));
+    if reads {
+        return no("ein Ziel, das vom Ende des Laufs abhaengt (FB-694)", Span::default());
+    }
+    Ok(t)
+}
+
 /// Die Eingabe eines Operator-Aborts (5.4): Im Tick, in dem sie gilt, wird
 /// jeder Maschine ein Abort vorgemerkt.
 pub const OPERATOR_ABORT: &str = "i.abort.operator";
@@ -4842,5 +4899,31 @@ fn stmt_name(s: &StmtKind) -> &'static str {
         StmtKind::Cancel(_) | StmtKind::Skip(_) | StmtKind::Arm { .. } => "Strom oder Trigger",
         StmtKind::Return(_) => "`return`",
         _ => "dieser Art",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **Ein Ziel, das vom Ende des Laufs abhaengt, wird nicht gebaut**
+    /// (FB-694): Beweisanfragen lassen das Ende an der Achse offen, und das
+    /// traegt nur fuer Ziele der Form `over ∨ c`, deren `c` das Ende nicht
+    /// liest. Eines, das nach dem Ende etwas verlangte, scheitert beim Bau,
+    /// statt still einen Pfad zu melden, den es nicht gibt.
+    #[test]
+    fn a_goal_that_reads_the_end_of_the_run_is_refused() {
+        let over = Term::var(OVER, Sort::Bool);
+        let ended = Term::var(ENDED, Sort::Bool);
+        let leaf = Term::eq(Term::var("s.m.leaf", Sort::Int), Term::int(1));
+        assert!(after_end(&over, leaf.clone()).is_ok());
+        for c in [
+            over.clone().not(),
+            Term::and(vec![leaf.clone(), ended.clone()]),
+            Term::ite(ended, leaf.clone(), over.clone()),
+        ] {
+            assert!(after_end(&over, c.clone()).is_err(), "{c:?}");
+            assert!(unread_end(c.clone()).is_err(), "{c:?}");
+        }
     }
 }
