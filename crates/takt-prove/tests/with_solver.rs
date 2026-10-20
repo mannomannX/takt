@@ -448,6 +448,41 @@ machine counter:
     assert_eq!(out.report.checks.get("Declared").copied().unwrap_or(0), 0, "{:?}", out.report.checks);
 }
 
+/// **FB-618.** Die Beweisdatei laesst die Gueltigkeitspruefung vor
+/// `xs.min()` aus, wie in `sim/14_7`; der Zugriff steht dann direkt am
+/// Input, und das Modell nahm ihn fuer einen Zugriff auf die Qualitaet, den
+/// es nicht kennt. Eine Reduktion liest den Input wie ohne Beweis.
+#[test]
+fn a_reduction_over_an_input_stays_encodable_under_a_proof() {
+    let src = "system:
+    language = 1
+    tick     = 10 ms
+
+input  xs : [4] int in 0..9 @ hw(\"i/xs[0:4]\")
+output y  : int @ hw(\"o/y\") with safe = 0
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            y = xs.min()
+";
+    let valid: Vec<Site> = takt_interp::coverage::sites(&compile(src))
+        .iter()
+        .filter(|s| takt_mir::analysis::walk::name_of_tag(s.tag) == "valid")
+        .map(|s| Site { start: s.start, end: s.end, kind: "valid".into(), k: 1 })
+        .collect();
+    assert!(!valid.is_empty(), "eine Gueltigkeitspruefung am Input");
+    let hash = takt_mir::review::hash_of(src.as_bytes());
+    let proof = parse(&render(&hash, "z3 4.13.4", &valid)).expect("Beweisdatei");
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile_with(src, &options, Some(&proof));
+    assert!(!out.has_errors(), "{:?}", out.diagnostics);
+    if let Err(e) = encode(&out.program.expect("Programm")) {
+        panic!("{}", e.what);
+    }
+}
+
 /// P3: Eine implizite Range-Pruefung mit Pfad — der Interpreter bestaetigt
 /// den Fault.
 #[test]

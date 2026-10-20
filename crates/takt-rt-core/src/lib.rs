@@ -64,6 +64,7 @@ pub mod loopcore;
 pub mod overrun;
 pub mod port_test;
 pub mod profile;
+pub mod protection;
 pub mod stream;
 
 pub use journal::{

@@ -25,7 +25,8 @@ Ein Leser nimmt jede Version bis zu seiner eigenen und lehnt eine neuere ab
 `suite` und `placements` im Lauf, `overhead` in der Kalibrierung, `function`
 und `placements` je Probe; eine Datei der Version 1 kennt sie nicht. Version 3
 (FB-513) führt die Stack-Reserve je Form, Version 4 (M11 Schritt 15) das Urteil
-der Portprüfung je Port. Er ist streng: Ein unbekannter Abschnitt oder Schlüssel ist ein Fehler
+der Portprüfung je Port, Version 5 (M11 Schritt 23) darin den Speicherschutz.
+Er ist streng: Ein unbekannter Abschnitt oder Schlüssel ist ein Fehler
 mit Zeilennummer — ein Bericht ist ein Beleg, und ein still überlesenes Feld
 wäre einer weniger.
 
@@ -40,7 +41,7 @@ wäre einer weniger.
 | `[kernel <name>]` | je Referenzkern | `takt`, `c` (Streuungen), `same_digest` (`true`/`false`), `implicit_checks` (3.4) |
 | `[native <name>]` | je kuratierter Native | `vectors` (gerechnete Vektoren aus `grammar/takt-native.md`), `same_result` (`true`, wenn jedes Ergebnis dem des Wirts gleicht), `stack` (größter gemessener Bedarf je Aufruf in Byte), `contract` (die Zusage `stack`, 4.5) |
 | `[corpus]` | höchstens | `programs`, `deviations` |
-| `[port <name>]` | je Port | `date` (`"JJJJ-MM-TT"`, Tag des Urteils), `passed` (`true`, wenn `takt port-test --judge` die Ausgabe annahm), `ticks` (Zeitzeilen ohne die ersten beiden), `drift_median_ns`, `drift_late_ns` (der späteste Tick über dem Median), `jitter_ns` (größte Verlängerung eines Tickabstands, wie `takt bench` sie rechnet), `foreign_rounds`, `foreign_errors` (Runden der fremden FPU-Last und davon falsche), `longest_job_ticks` (Start bis Fertigstellung), `stack`, `job_stack` (je Tiefe und Schranke in Byte), `job_stack_shared` (`true`, wenn die Jobs auf dem Schritt-Stack rechnen und seine Schranke sie deckt; dann fehlt `job_stack`), `journal_writes`; was die Ausgabe nicht nannte, fehlt |
+| `[port <name>]` | je Port | `date` (`"JJJJ-MM-TT"`, Tag des Urteils), `passed` (`true`, wenn `takt port-test --judge` die Ausgabe annahm), `ticks` (Zeitzeilen ohne die ersten beiden), `drift_median_ns`, `drift_late_ns` (der späteste Tick über dem Median), `jitter_ns` (größte Verlängerung eines Tickabstands, wie `takt bench` sie rechnet), `foreign_rounds`, `foreign_errors` (Runden der fremden FPU-Last und davon falsche), `longest_job_ticks` (Start bis Fertigstellung), `stack`, `job_stack` (je Tiefe und Schranke in Byte), `job_stack_shared` (`true`, wenn die Jobs auf dem Schritt-Stack rechnen und seine Schranke sie deckt; dann fehlt `job_stack`), `journal_writes`, `protection` (der Speicherschutz aus der Kopfzeile `Schutz` des Laufs, 12.11: `"Fenster"`, `"Partition"` oder `"keiner"`); was die Ausgabe nicht nannte, fehlt |
 
 `<name>` einer Probe ist der Schlüssel der Hardware-Konfiguration (`i32`,
 `mem`, `f64_div`, `f32_fma`, `f64_sqrt`); ein Kern heißt wie im Protokoll des
@@ -67,13 +68,15 @@ behält die Urteile, wenn es den Bericht neu schreibt.
 - **Ein Port gilt mit `passed = true`** (12.11): Trace gleich dem
   Interpreter, `foreign_errors = 0` bei mindestens einer Runde je Tick,
   `longest_job_ticks ≥ 2` ohne verspäteten Tick, beide Stacks unter ihrer
-  Schranke oder die Jobs auf dem Schritt-Stack, `journal_writes ≥ 1`. Drift und Jitter sind gemessen, nicht
-  bewertet.
+  Schranke oder die Jobs auf dem Schritt-Stack, `journal_writes ≥ 1`, ein
+  Speicherschutz, dem kein Nachweis des Kopfs widerspricht. Drift und Jitter
+  sind gemessen, nicht bewertet; der Speicherschutz ist genannt, nicht
+  bewertet: `keiner` besteht wie `Fenster`, und der Bericht zeigt es.
 
 ## R4 Vektor
 
 ```text
-# takt-conformance 4
+# takt-conformance 5
 [run]
 date = "2026-09-25"
 board = "stm32f401"
@@ -139,6 +142,7 @@ longest_job_ticks = 4
 stack = 3900 4500
 job_stack = 1100 2700
 journal_writes = 1
+protection = "Fenster"
 ```
 
 Geprüft von `report::tests::a_report_round_trips` (Schreiben und Lesen

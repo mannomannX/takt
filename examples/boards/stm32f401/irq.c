@@ -72,7 +72,7 @@ static void banner(void) {
     takt_trace_u64(&sink, BOARD_CORE_HZ);
     takt_trace_text(&sink, " Hz, Tick ");
     takt_trace_i64(&sink, APP_TICK_NS);
-    takt_trace_text(&sink, " ns\r\n  Form interrupt\r\n\r\n");
+    takt_trace_text(&sink, " ns\r\n  Form interrupt\r\n" TAKT_IRQ_PROTECTION "\r\n\r\n");
     takt_sink_mark(&sink);
 }
 

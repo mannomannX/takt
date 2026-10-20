@@ -94,7 +94,7 @@ use takt_board_stm32f401::{Tim2Tick, tick};
 use takt_embed::Context as _;
 #[cfg(timer = "periodic")]
 use takt_rt_baremetal::TimerClock;
-use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Stats, Trace};
+use takt_rt_baremetal::{Cadence, Console, DRAIN_ROUNDS, Guarded, JournalStats, Protection, Stats, Trace};
 #[cfg(form = "own")]
 use takt_rt_baremetal::{LogicalClock, Sleep};
 use takt_rt_core::{Clock, Journal, Loaded, NextRun, Policy, Profile, Runtime, Store as _, Unloaded};
@@ -1786,6 +1786,10 @@ fn banner(nominal_ns: i64) {
     // die Stack-Reserve zu (FB-513).
     uart.write("  Form ");
     uart.write(env!("TAKT_FORM"));
+    uart.newline();
+    // 12.11: Der Schutz, den die MPU herstellt; sie ist hier schon
+    // eingerichtet (`Mpu::arm`), sonst stuende das Board.
+    uart.write(<Mpu as Protection>::CASE.line());
     uart.newline();
     uart.write("  DWT ");
     uart.write(if cycles::running() { "laeuft" } else { "STEHT" });

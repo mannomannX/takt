@@ -1,0 +1,16 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5), erzeugt mit `UPDATE_PATHS` (M11 Schritte 28c, 29a)
+# ziel uebergang boot 1 DECIDE->SELFTEST @2345
+# ticks 7
+t=0 in previous_run WATCHDOG
+t=0 in on_trial false suspect
+t=1 in previous_run stale
+t=1 in on_trial true
+t=2 in previous_run WATCHDOG
+t=3 in previous_run WATCHDOG suspect
+t=3 in on_trial false
+t=4 in previous_run WATCHDOG stale
+t=4 in on_trial stale
+t=5 in previous_run WATCHDOG suspect
+t=5 in on_trial false suspect
+t=5 abort
+t=5 runtime Driver led

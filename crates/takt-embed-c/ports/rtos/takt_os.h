@@ -33,6 +33,12 @@
  *   `takt_rtos_depth`) malt und zaehlt von unten; eigenes braucht ein
  *   System, das den Stack beim Anlegen selbst fuellt oder seine
  *   Hochwassermarke selbst fuehrt.
+ *
+ * Dazu sagt der Adapter in `takt_os_types.h`, ob das System die Arena in
+ * einer Partition haelt, die nur der Schrittfaden beschreibt
+ * (`TAKT_OS_PARTITION` 1 oder 0, 12.11): aus der Konfiguration des Systems,
+ * nicht nach Wahl des Wirts. Der Kopf des Laufs nennt den Fall
+ * (`TAKT_RTOS_PROTECTION`, takt_rtos.h).
  */
 #ifndef TAKT_OS_H
 #define TAKT_OS_H
@@ -41,6 +47,10 @@
 #include <stdint.h>
 
 #include "takt_os_types.h"
+
+#ifndef TAKT_OS_PARTITION
+#error "TAKT_OS_PARTITION: 1, wenn das System die Arena in einer Partition haelt, sonst 0 (takt_os_types.h)"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
