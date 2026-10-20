@@ -140,6 +140,27 @@ static int64_t line_started;
 static bool line_first_noted;
 static bool line_second_noted;
 
+/* So oft sieht der Zeitgeber noch nach. */
+static uint32_t line_looks = 10U;
+
+/* Aus der ISR des Zeitgebers: der Faden, den sie unterbrach, mit seiner
+ * Prioritaet, und die Schritte bis jetzt. */
+static void line_look(struct k_timer *timer) {
+    printk("takt wache %ld ms: faden prio %d, schritte %ld\n", (long)k_uptime_get(),
+           k_thread_priority_get(k_current_get()), (long)atomic_get(&line_steps));
+    line_looks--;
+    if (line_looks == 0U) {
+        k_timer_stop(timer);
+    }
+}
+
+K_TIMER_DEFINE(line_watch_timer, line_look, NULL);
+
+void line_watch_arm(void) {
+    printk("takt start\n");
+    k_timer_start(&line_watch_timer, K_MSEC(100), K_MSEC(100));
+}
+
 void line_watch_alarm(void) {
     (void)k_msleep(1);
     printk("takt wecker\n");
@@ -167,6 +188,9 @@ void line_watch_round(void) {
 }
 
 #else
+
+void line_watch_arm(void) {
+}
 
 void line_watch_alarm(void) {
 }

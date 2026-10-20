@@ -19,6 +19,11 @@ int line_open(struct takt_line *line);
  * Interrupt des Systemzeitgebers kommt. */
 void line_watch_alarm(void);
 
+/* Vor `takt_rtos_start`, nach dem Kern: `takt start`; dazu sieht ein
+ * Zeitgeber unter dem Schritt zehnmal alle 100 ms nach, welcher Faden laeuft
+ * und wie viele Schritte der Kern meldete (`takt wache`). */
+void line_watch_arm(void);
+
 /* Nach `takt_rtos_start`: `takt lauf`. */
 void line_watch_start(void);
 

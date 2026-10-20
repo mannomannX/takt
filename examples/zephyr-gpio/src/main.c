@@ -68,6 +68,7 @@ static void drive(takt_core *core) {
     };
     struct takt_stacks stacks;
     const struct takt_stacks *measured = NULL;
+    line_watch_arm();
     if (takt_rtos_start(&rtos, core, &config) == 0) {
         line_watch_start();
         while (takt_rtos_running(&rtos) != 0) {

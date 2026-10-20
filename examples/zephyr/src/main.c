@@ -114,6 +114,7 @@ static void drive(takt_core *core) {
     takt_foreign foreign = {0U, 0U};
     struct takt_stacks stacks;
     const struct takt_stacks *measured = NULL;
+    line_watch_arm();
     if (takt_rtos_start(&rtos, core, &config) == 0) {
         line_watch_start();
 #if TAKT_PROBE_IN_RUN
