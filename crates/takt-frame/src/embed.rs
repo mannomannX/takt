@@ -185,7 +185,10 @@ pub fn c_header(
         // 12.3: Die Region beginnt an der Arena, die der Wirt an ihrer Groesse
         // ausrichtet, und deckt von vorn den aufgefuellten Programmbereich.
         let _ = writeln!(consts, "/* Die Schutzregion ueber dem Programmbereich (12.3): die Arena an");
-        let _ = writeln!(consts, " * `{upper}_PROTECT_ALIGN` ausgerichtet, die Region deckt `{upper}_PROTECT_BYTES` von vorn. */");
+        let _ = writeln!(
+            consts,
+            " * `{upper}_PROTECT_ALIGN` ausgerichtet, die Region deckt `{upper}_PROTECT_BYTES` von vorn. */"
+        );
         let _ = writeln!(consts, "#define {upper}_PROTECT_ALIGN {}u", w.size);
         let _ = writeln!(consts, "#define {upper}_PROTECT_BYTES {}u\n", w.protected);
     }
