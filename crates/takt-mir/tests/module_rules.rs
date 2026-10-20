@@ -153,7 +153,7 @@ machine m:
 fn a_requirement_collects_every_site_that_checks_it() {
     let p = compile(&format!(
         "{HEAD}
-input  p : int in 0..100 @ sim(\"i/p\")
+input  p : int in 0..100 @ hw(\"i/p\")
 
 machine m:
     initial A
