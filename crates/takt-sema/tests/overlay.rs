@@ -20,7 +20,7 @@ fn ok(body: &str) -> Program {
 
 /// Zwei Instanzen im selben Zustand, eine dritte im exklusiven.
 const THREE: &str = r#"
-input  mode : int in 0..2 @ sim("i/mode")
+input  mode : int in 0..2 @ hw("i/mode")
 
 output a : bool @ hw("o/a") with safe = false
 output b : bool @ hw("o/b") with safe = false
@@ -58,7 +58,7 @@ machine ctrl:
 
 /// Dasselbe Programm ohne die dritte Instanz — die Vergleichsgroesse.
 const TWO: &str = r#"
-input  mode : int in 0..2 @ sim("i/mode")
+input  mode : int in 0..2 @ hw("i/mode")
 
 output a : bool @ hw("o/a") with safe = false
 output b : bool @ hw("o/b") with safe = false
@@ -141,7 +141,7 @@ fn the_budget_is_the_peak_over_configurations_not_the_sum() {
 #[test]
 fn latches_are_never_overlaid() {
     let p = ok(r#"
-input  mode : int in 0..2 @ sim("i/mode")
+input  mode : int in 0..2 @ hw("i/mode")
 output a : bool @ hw("o/a") with safe = false
 
 machine keeper(o: output bool) every 1 ms:

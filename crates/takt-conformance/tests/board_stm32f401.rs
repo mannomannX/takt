@@ -17,12 +17,12 @@ use std::time::Duration;
 use common::board::{
     Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS,
     a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, agreement, agreement_with,
-    binds_no_driver, driver_edge_agrees, fits_the_poll_form, header_names, journal_costs_time_but_not_semantics,
-    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, persistence_survives, ran, runs_shared, simultaneous_jobs_finish_on_time,
-    the_flawed_port_fails, the_form_keeps_its_deadline, the_poll_form_keeps_its_round, the_port_passes,
-    the_port_passes_with_header, verdict, zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives,
-    zephyr_verdict, zephyr_wire_follows,
+    binds_no_driver, corpus, driver_edge_agrees, fits_the_poll_form, header_names,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
+    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict,
+    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -583,6 +583,47 @@ fn a_hostile_fpu_changes_nothing_on_the_board() {
     verdict(&failed);
 }
 
+/// **Ein Abbild beginnt wie nach einem Reset, auch wenn sein Vorgaenger eine
+/// Region der MPU stehen liess** (12.3, FB-752): Nach `leftover` belegt das
+/// Sprungbrett bei der Rueckgabe die letzte Region nur lesbar ueber dem Stack
+/// und laesst die MPU aus, wie Zephyrs Rueckgabe es tat. Danach laufen ein
+/// Rust-Abbild der Form own und, nach einem zweiten `leftover`, der C-Wirt
+/// ohne Schutzverletzung und mit einem Stack in der Schranke. Vorher schaltete
+/// jedes die MPU mit der fremden Region wieder ein, und das Bemalen des Stacks
+/// blieb an ihr haengen.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_region_left_by_the_previous_image_changes_nothing() {
+    let Some((mut rust, _guard)) = board() else { return };
+    // Ein Programm, das beide Wirte rechnen: ohne Treiber und ohne Profil.
+    let name = board::corpus()
+        .into_iter()
+        .find(|n| !TOO_BIG.contains(n) && binds_no_driver(n) && corpus(n).config.runtime_profile().is_none())
+        .expect("ein Programm fuer beide Wirte");
+    let program = board::corpus_path(name);
+    let (leftover, own, irq) =
+        (Options::leftover(), Options::fresh(TICKS), Options::fresh(TICKS).in_form(Form::Interrupt));
+    let mut c = Stm32f401C::on(Stm32f401::from_env().expect("TAKT_F401_PORT nennt kein Board"));
+    let left = rust.build(&program, &leftover).unwrap_or_else(|e| panic!("{e}"));
+    let rust_elf = rust.build(&program, &own).unwrap_or_else(|e| panic!("{e}"));
+    let c_elf = c.build(&program, &irq).unwrap_or_else(|e| panic!("{e}"));
+    let mut failed = Vec::new();
+    failed.extend(rust.run(&left, &leftover).err().map(|e| format!("leftover: {e}")));
+    failed.extend(after_leftover(&format!("{name}, Rust in der Form own"), rust.run(&rust_elf, &own)));
+    failed.extend(rust.run(&left, &leftover).err().map(|e| format!("leftover: {e}")));
+    failed.extend(after_leftover(&format!("{name}, C-Wirt"), c.run(&c_elf, &irq)));
+    verdict(&failed);
+}
+
+/// Was ein Lauf nach `leftover` falsch machte: kein Lauf, der die Pruefungen
+/// des Harness besteht, oder eine Verletzung des Speicherschutzes.
+fn after_leftover(who: &str, run: Result<String, String>) -> Option<String> {
+    match run {
+        Ok(text) => text.lines().find(|l| l.starts_with("takt schutz verletzungen")).map(|l| format!("{who}: {l}")),
+        Err(e) => Some(format!("{who}: {e}")),
+    }
+}
+
 /// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
 /// Schritt 29c): das Pruefgeraet des Bring-ups mit jedem Verstoss einmal.
 #[test]
@@ -719,7 +760,24 @@ fn the_zephyr_gpio_wire_follows_its_pin() {
     let example = takt_conformance::zephyr::ZEPHYR_GPIO;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::KEPT)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_wire_follows(board.name(), run));
+    verdict(&zephyr_wire_follows(board.name(), example, run));
+}
+
+/// **Ein analoger Eingang aus dem Devicetree liest die Drahtbruecke des
+/// F401** (8.10, 12.11; FB-735): `examples/zephyr-adc` mit dem Pin PA0 und
+/// PA1 als Eingang 1 von ADC1 aus `analog_zephyr.c`; jeder Tick sieht die
+/// halbe Versorgung genau dann ueberschritten, wenn der Tick davor `true`
+/// schrieb. Dieselbe Bruecke wie `the_zephyr_gpio_wire_follows_its_pin`,
+/// keine neue Verdrahtung.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_adc_follows_its_pin() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(ZEPHYR_WIRE_TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR_ADC;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::KEPT)
+        .and_then(|image| board.run(&image.elf, &options));
+    verdict(&zephyr_wire_follows(board.name(), example, run));
 }
 
 /// **Eine Schutzverletzung im Lauf wird auf dem F401 zum Fault des Kerns**

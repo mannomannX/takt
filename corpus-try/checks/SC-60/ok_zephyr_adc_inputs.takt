@@ -1,0 +1,18 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 60 unter `--zephyr` (8.10, Treiber aus dem Devicetree, FB-735):
+# `adc/micro` liefert ganze Mikrovolt ohne Kalibrierung, `adc/linear` Volt
+# ueber `linear(a, b)` aus den Mikrovolt des Treibers.
+
+input  micro  : int[uV] in 0..3300000 uV @ hw("adc/micro")  with max_age = 50 ms
+input  linear : float[V] in 0.0..3.3 V   @ hw("adc/linear") with max_age = 50 ms
+output above  : bool                     @ hw("spi0/cs")    with safe = true
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            above = micro.or(0 uV) > 1650000 uV and linear.or(0.0 V) > 1.65 V

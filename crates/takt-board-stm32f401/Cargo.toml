@@ -54,6 +54,11 @@ embassy-time-queue-utils = { version = "0.3", features = ["generic-queue-8"], op
 
 [features]
 embassy = ["dep:embassy-time-driver", "dep:embassy-time-queue-utils"]
+# Der Sprung in den ROM-Bootloader (`bootloader::enter`) und seine Abfrage
+# nach dem Reset: nur fuer `takt-trampoline-stm32f401`. Aus einer laufenden
+# Anwendung gerufen brachte er das USB des ROM-Bootloaders nicht hoch
+# (FB-758).
+trampoline = []
 
 [lints.rust]
 # `unsafe_code` fehlt hier bewusst: Es ist der Grund fuer den eigenen

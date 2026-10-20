@@ -1,0 +1,17 @@
+system:
+    language = 1
+    tick     = 1 ms
+
+# SC-13 (8.1, 12.10; FB-688): `sim` an einem Input steht nur fuer den
+# Schreibstrom eines Ports. Ein Input, an den von aussen geliefert wird,
+# bindet mit `hw`; einen anderen speiste niemand.
+
+input  p : int in 0..9 @ sim("i/p")  # ~ SC-13
+output v : bool        @ hw("o/v") with safe = false
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            v = p.or(0) > 1

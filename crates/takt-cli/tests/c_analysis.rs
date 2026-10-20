@@ -612,8 +612,9 @@ fn freertos(out: &Path, port: &str, variant: &[&str], extra: &[&str]) -> Option<
 /// Die Bindungen unter Zephyr: zweimal mit dem Rahmen von `port_test` und
 /// dem Geraet des Journals, `examples/zephyr` mit dem Zephyr-Adapter und
 /// `examples/cmsis-rtos2` mit dem Adapter fuer CMSIS-RTOS2, und
-/// `examples/zephyr-gpio` mit dem Rahmen von `wire` und den Treibern aus dem
-/// Devicetree, die `--zephyr` erzeugt (`wire_zephyr.c`, 8.10). Die Rueckgabe
+/// `examples/zephyr-gpio` und `examples/zephyr-adc` mit den Treibern aus dem
+/// Devicetree, die `--zephyr` erzeugt (`wire_zephyr.c`, `analog_zephyr.c`,
+/// 8.10). Die Rueckgabe
 /// des Boards an den Bootloader des F401 (`handback_stm32f401.c`) fehlt: Sie
 /// schreibt die Register ueber die Strukturen aus dem Kopf des Chips, und
 /// ohne ihn kennt cppcheck keines; die Bindungen nehmen den Neustart des C6.
@@ -649,20 +650,29 @@ fn zephyr(out: &Path) -> Vec<Link> {
     };
     let native = ["main.c", "line.c", "handback.c", "partition.c", "handback_reboot.c"].map(|s| shared.join(s));
     let cmsis = vec![root.join("examples/cmsis-rtos2/src/main.c"), shared.join("line.c"), shared.join("handback.c")];
-    vec![link("zephyr", native.to_vec()), link("cmsis-rtos2", cmsis), wire(out)]
+    vec![
+        link("zephyr", native.to_vec()),
+        link("cmsis-rtos2", cmsis),
+        devicetree(out, "zephyr-gpio", "wire"),
+        devicetree(out, "zephyr-adc", "analog"),
+    ]
 }
 
-/// `examples/zephyr-gpio` (8.10): die Lieferform von `wire` mit `--zephyr`,
-/// ihr Rahmen, ihre Treiber aus dem Devicetree, der Port mit dem
-/// Zephyr-Adapter und das Beispiel.
-fn wire(out: &Path) -> Link {
+/// Ein Beispiel mit Treibern aus dem Devicetree (8.10): die Lieferform von
+/// `prefix` aus `examples/<example>/takt/<prefix>.takt` mit `--zephyr`, ihr
+/// Rahmen, ihre Treiber, der Port mit dem Zephyr-Adapter und das Beispiel;
+/// `examples/zephyr-gpio` mit zwei Pins, `examples/zephyr-adc` mit einem Pin
+/// und einem analogen Eingang (FB-735).
+fn devicetree(out: &Path, example: &str, prefix: &str) -> Link {
     let root = root();
     let ports = root.join("crates/takt-embed-c/ports");
     let shared = root.join("examples/zephyr/src");
-    let dir = out.join("wire");
+    let dir = out.join(prefix);
+    let (source, hardware) =
+        (format!("examples/{example}/takt/{prefix}.takt"), format!("examples/{example}/takt/{prefix}.hw"));
     let run = takt(&[
         "build",
-        "examples/zephyr-gpio/takt/wire.takt",
+        &source,
         "--emit",
         "embed",
         "--form",
@@ -670,19 +680,19 @@ fn wire(out: &Path) -> Link {
         "--target",
         "x86_64-unknown-linux-gnu",
         "--prefix",
-        "wire",
+        prefix,
         "--hardware",
-        "examples/zephyr-gpio/takt/wire.hw",
+        &hardware,
         "--zephyr",
         "--out",
         dir.to_str().expect("Pfad"),
     ]);
-    assert!(run.status.success(), "wire: {}", String::from_utf8_lossy(&run.stderr));
-    let mut units = ["wire_frame.c", "wire_ops.c", "wire_zephyr.c"].map(|f| dir.join(f)).to_vec();
+    assert!(run.status.success(), "{prefix}: {}", String::from_utf8_lossy(&run.stderr));
+    let mut units = ["frame.c", "ops.c", "zephyr.c"].map(|f| dir.join(format!("{prefix}_{f}"))).to_vec();
     units.extend([
         ports.join("rtos/takt_rtos.c"),
         ports.join("zephyr/takt_os.c"),
-        root.join("examples/zephyr-gpio/src/main.c"),
+        root.join("examples").join(example).join("src/main.c"),
         shared.join("line.c"),
         shared.join("handback.c"),
         shared.join("handback_reboot.c"),

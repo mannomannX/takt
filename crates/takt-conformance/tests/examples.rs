@@ -46,8 +46,7 @@ const GAPS: &[(&str, &str, &str)] = &[];
 /// Faelle, deren Stimulus im Produkt keinen Weg hat (`differential.rs`,
 /// `GAPS`): Beispiel/Szenario und Grund. Eine Ratsche wie [`GAPS`]: Laeuft
 /// ein Fall wieder, scheitert der Test, bis er hier verschwindet.
-const NO_PATH: &[(&str, &str)] =
-    &[("63_scoped_instances/switch", "der Stimulus liefert an einen Eingang mit `sim`-Bindung (FB-688)")];
+const NO_PATH: &[(&str, &str)] = &[];
 
 /// Was das Modell an einem Beispiel nicht kodiert (FB-497): Beispiel, die
 /// Meldung von `takt_prove::encode` oder `Model::run` und was dahinter
