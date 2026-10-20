@@ -290,9 +290,9 @@ pub enum Bin {
     /// `natives`: die Vektoren der kuratierten Natives mit dem
     /// Stack-Bedarf je Aufruf (13.8); das Takt-Programm bleibt ungenutzt.
     Natives,
-    /// `leftover`: ein Vorgaenger, der eine Region der MPU stehen laesst
-    /// und ohne Reset in den Bootloader springt (FB-752); nur auf dem
-    /// F401, das Takt-Programm bleibt ungenutzt.
+    /// `leftover`: ein Vorgaenger, nach dem das Sprungbrett dem naechsten
+    /// Abbild eine Region der MPU hinterlaesst (FB-752); nur auf dem F401,
+    /// das Takt-Programm bleibt ungenutzt.
     Leftover,
 }
 

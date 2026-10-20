@@ -577,9 +577,9 @@ fn a_hostile_fpu_changes_nothing_on_the_board() {
 }
 
 /// **Ein Abbild beginnt wie nach einem Reset, auch wenn sein Vorgaenger eine
-/// Region der MPU stehen liess** (12.3, FB-752): `leftover` belegt die letzte
-/// Region nur lesbar ueber dem Stack, schaltet die MPU aus und springt ohne
-/// Reset in den Bootloader, wie Zephyrs Rueckgabe es tat. Danach laufen ein
+/// Region der MPU stehen liess** (12.3, FB-752): Nach `leftover` belegt das
+/// Sprungbrett bei der Rueckgabe die letzte Region nur lesbar ueber dem Stack
+/// und laesst die MPU aus, wie Zephyrs Rueckgabe es tat. Danach laufen ein
 /// Rust-Abbild der Form own und, nach einem zweiten `leftover`, der C-Wirt
 /// ohne Schutzverletzung und mit einem Stack in der Schranke. Vorher schaltete
 /// jedes die MPU mit der fremden Region wieder ein, und das Bemalen des Stacks

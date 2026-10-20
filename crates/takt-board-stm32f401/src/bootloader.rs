@@ -25,8 +25,9 @@
 //! ihr Reset-Bit zurueck. Der Bootloader findet den Chip so vor wie nach
 //! einem Start mit BOOT0.
 
-use cortex_m::peripheral::{NVIC, SCB, SYST};
+use cortex_m::peripheral::{MPU, NVIC, SCB, SYST};
 use stm32f4::stm32f401::{FLASH, RCC, SYSCFG};
+use takt_board_support::mpu::{Access, Region};
 
 use crate::platform::{backup, backup_read};
 
@@ -37,11 +38,37 @@ const SYSTEM_MEMORY: u32 = 0x1FFF_0000;
 const REQUESTED: u32 = u32::from_le_bytes(*b"DFU!");
 const WISH: usize = 4;
 
+/// Der Wunsch, dem naechsten Abbild eine Region der MPU zu hinterlassen
+/// ([`bequeath_region`]), im Backup-Register [`LEFTOVER`].
+const LEFT: u32 = u32::from_le_bytes(*b"MPU!");
+const LEFTOVER: usize = 5;
+
+/// Wo die hinterlassene Region liegt: 24 KiB unter dem Ende des RAM, wo
+/// Zephyrs `z_main_stack` begann. Dort bemalt jedes Abbild seinen Stack, in
+/// Rust wie in C.
+const LEFT_AT: u32 = 0x2000_A000;
+
 /// Der Host hat das Board zurueckverlangt: merkt es sich und setzt den
 /// Chip zurueck; kehrt nicht zurueck.
 pub fn request() -> ! {
     backup(WISH, REQUESTED);
     SCB::sys_reset()
+}
+
+/// Bei der naechsten Rueckgabe hinterlaesst das Sprungbrett dem naechsten
+/// Abbild eine Region der MPU (FB-752): die letzte, 32 Byte nur lesbar ueber
+/// [`LEFT_AT`], bei ausgeschalteter MPU, wie ein Vorgaenger sie stehen
+/// laesst, der ohne Reset in den Bootloader springt. Das Programm `leftover`
+/// des Bring-ups verlangt es fuer den Board-Test
+/// `a_region_left_by_the_previous_image_changes_nothing`.
+///
+/// Zurueck geht das Board wie jedes Abbild auf `TAKT` — Wunsch, Reset,
+/// HID-Bootloader, Sprungbrett, [`enter`] —, und erst das Sprungbrett
+/// beschreibt die Region, nach dem Reset, der sie sonst loeschte. Ein
+/// Sprung aus der laufenden Anwendung in den ROM-Bootloader brachte dessen
+/// USB nicht hoch (FB-758).
+pub fn bequeath_region() {
+    backup(LEFTOVER, LEFT);
 }
 
 /// Gibt das Board an den Bootloader, wenn die Anwendung davor es verlangt
@@ -55,9 +82,17 @@ pub fn enter_if_requested() {
     // SAFETY: die Register des RCC; vor der Anwendung fasst sie niemand an.
     let rcc = unsafe { &*RCC::ptr() };
     let clocked = rcc.apb1enr().read().pwren().bit_is_set();
+    // Der Wunsch nach einer Region gilt nur der naechsten Rueckgabe.
+    let bequeathed = backup_read(LEFTOVER) == LEFT;
+    if bequeathed {
+        backup(LEFTOVER, 0);
+    }
     if backup_read(WISH) == REQUESTED {
         backup(WISH, 0);
         crate::platform::previous_run();
+        if bequeathed {
+            leave_region();
+        }
         enter();
     }
     if !clocked {
@@ -65,8 +100,31 @@ pub fn enter_if_requested() {
     }
 }
 
+/// Belegt die letzte Region der MPU nur lesbar ueber [`LEFT_AT`] und laesst
+/// die MPU aus ([`bequeath_region`]).
+fn leave_region() {
+    // SAFETY: die Register der MPU; das Sprungbrett laeuft allein, und nach
+    // ihm kommt der Bootloader, der die MPU nicht einschaltet.
+    let mpu = unsafe { &*MPU::PTR };
+    let region = crate::mpu::regions(mpu).saturating_sub(1);
+    let left = Region { base: LEFT_AT, size: 32, eighths: 8 };
+    // SAFETY: die MPU aus; keine Region gilt, bis ein Abbild sie einschaltet.
+    unsafe { mpu.ctrl.write(0) };
+    // SAFETY: waehlt die letzte Region.
+    unsafe { mpu.rnr.write(region) };
+    // SAFETY: ihre Basis, an 32 Byte ausgerichtet.
+    unsafe { mpu.rbar.write(left.rbar(region)) };
+    // SAFETY: 32 Byte nur lesbar, die Region eingeschaltet.
+    unsafe { mpu.rasr.write(left.rasr(Access::ReadOnly)) };
+}
+
 /// Gibt das Board an den DFU-Bootloader des ROM; kehrt nicht zurueck. Das
-/// Sprungbrett ruft es, wenn keine Anwendung da ist (FB-385).
+/// Sprungbrett ruft es, wenn keine Anwendung da ist (FB-385), und nach dem
+/// Wunsch einer Anwendung, gleich nach Reset und HID-Bootloader. Nur dieser
+/// Weg ist erprobt: Aus einer laufenden Anwendung gerufen meldete sich der
+/// ROM-Bootloader nicht am USB an, und nur BOOT0 und NRST holten das Board
+/// zurueck (FB-758). Eine Anwendung verlangt den Bootloader darum mit
+/// [`request`].
 pub fn enter() -> ! {
     cortex_m::interrupt::disable();
     // Ab hier laeuft nichts mehr von der Anwendung: Interrupts sind aus, und
