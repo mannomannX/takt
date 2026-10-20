@@ -864,6 +864,13 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
 
 /// `P_init`: einmal vor dem ersten Tick.
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
+    // 5.4: die Abort-Phase eines Ticks, einmal fuer Tick 0 nach den
+    // Eintritten (FB-751) und fuer jeden weiteren nach den Schritten.
+    let _ = writeln!(s, "/* Die Abort-Phase des Ticks `k` (5.4). */");
+    let _ = writeln!(s, "static void takt_abort_phase(struct {x}_arena *a, int64_t k) {{");
+    let _ = writeln!(s, "    (void)k;");
+    crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
+    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
     let _ = writeln!(s, "static int32_t takt_persist_restore(struct {x}_arena *a, const void *in, int32_t len);");
     let _ = writeln!(s, "static void takt_sample(struct {x}_arena *a);");
@@ -923,6 +930,9 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "    a->outer = 0;");
     crate::parts::outer_fault(s, p, "    ");
     crate::parts::enter_machines(s, p, layout, driven, "    ", x);
+    // 5.4: Ein `abort` im Tick 0 erreicht jede andere Maschine in der
+    // Abort-Phase desselben Ticks, nach den Eintritten (FB-751).
+    let _ = writeln!(s, "    takt_abort_phase(a, 0);");
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).
     crate::parts::commit_sequence(s, p, driven, "    ", "0");
@@ -1037,7 +1047,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     // `apply_sim_bindings` im Interpreter.
     let _ = writeln!(s, "    takt_sim_streams(a, takt_ticks_ns(k));");
     crate::parts::steps(s, p, layout, driven, "    ", "k", x);
-    crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
+    let _ = writeln!(s, "    takt_abort_phase(a, k);");
     crate::parts::signal_lines(s, p, driven, "    ", "k");
     crate::parts::idle_drops(s, p, driven, "    ", x);
     crate::parts::commit_sequence(s, p, driven, "    ", "k");
@@ -1105,7 +1115,7 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "        int64_t age = 0, t = now;");
         let same = match b.ct {
             Some(ct) => {
-                let _ = writeln!(s, "        {ct} v = 0;");
+                let _ = writeln!(s, "        {ct} v = {};", zero(ct));
                 let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
                 format!("memcmp(&v, a->wake_v[{w}], sizeof v)")
             }
@@ -1922,7 +1932,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let buf = format!("a->edge_in{}", b.channel);
         let value = match b.ct {
             Some(ct) => {
-                let _ = writeln!(s, "        {ct} v = 0;");
+                let _ = writeln!(s, "        {ct} v = {};", zero(ct));
                 let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
                 "&v, (int)sizeof v".to_string()
             }
@@ -2084,7 +2094,7 @@ fn record(s: &mut String, p: &Program, x: &Prefix) {
         }
         let (f, ct) = (format!("{x}_in_{}", r.address.ident()), crate::drivers::recorded_value(r.value).c);
         let _ = writeln!(s, "    {{ /* {} */", r.name);
-        let _ = writeln!(s, "        {ct} v = 0;");
+        let _ = writeln!(s, "        {ct} v = {};", zero(ct));
         let _ = writeln!(s, "        uint8_t q = 0, r = 0;");
         let _ = writeln!(s, "        int64_t age = 0, t = now;");
         let _ = writeln!(
@@ -2330,6 +2340,17 @@ struct BoundStream {
 /// Die an Hardware gebundenen Eingabestroeme; in einen gekoppelten liefert
 /// der Treiber vor den Elementen des Modells, wie der Stimulus im
 /// Interpreter (8.3).
+/// Die Null fuer einen Wert vom C-Typ `ct` in dessen Wesensart: Ein
+/// Fliesskommawert beginnt bei `0.0`, nicht bei der ganzen Zahl `0` (MISRA
+/// C:2012 10.3).
+fn zero(ct: &str) -> &'static str {
+    match ct {
+        "float" => "0.0f",
+        "double" => "0.0",
+        _ => "0",
+    }
+}
+
 fn bound_streams(p: &Program, x: &Prefix) -> Vec<BoundStream> {
     use takt_mir::program::{Binding, Direction};
     use takt_mir::types::Type;

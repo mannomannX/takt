@@ -5,7 +5,7 @@ system:
 # Pruefung 53 (a), 5.11: Single-Writer gilt global. Die beiden Instanzen
 # laufen nie zugleich — den Konflikt rettet das nicht.
 
-input  mode : int in 0..1 @ sim("i/mode")
+input  mode : int in 0..1 @ hw("io/mode")
 output a    : bool        @ hw("o/a") with safe = false
 
 machine blip(o: output bool) every 1 ms:

@@ -5,7 +5,7 @@ system:
 # Pruefung 55 (7.5): `armed` ist Zustand genau einer Maschine. Zwei
 # Armierer haetten zwei Flags fuer einen Trigger.
 
-input  dut_log : stream<line<64>> @ sim("dut/log") with capacity = 8, max_rate = 200 Hz
+input  dut_log : stream<line<64>> @ hw("dut1/log") with capacity = 8, max_rate = 200 Hz
 output vbus    : bool             @ hw("o/vbus")   with safe = true
 output phase   : int in 0..9      @ hw("o/phase")  with safe = 0
 output other   : int in 0..9      @ hw("o/other")  with safe = 0

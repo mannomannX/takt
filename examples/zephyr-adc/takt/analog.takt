@@ -1,0 +1,24 @@
+# Ein analoger Eingang unter Zephyr mit den Treibern aus dem Devicetree
+# (8.10, 12.11; FB-735): Ein Pin schreibt je Tick den anderen Pegel, ein
+# analoger Eingang liest die Spannung, die er vor einem Tick anlegte. Steht
+# die Drahtbruecke vom Pin zum Eingang, sieht jeder Tick die Haelfte der
+# Versorgung ueberschritten genau dann, wenn der Tick davor `true` schrieb.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+output probe : bool                    @ hw("pin/out") with safe = false
+input  level : float[V] in -0.5..4.0 V @ hw("adc/in")  with max_age = 10 ms
+
+machine bridge:
+    pub var seen : bool = false
+    var high     : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            seen = level.or(0.0 V) > 1.65 V
+            high = not high
+            probe = high

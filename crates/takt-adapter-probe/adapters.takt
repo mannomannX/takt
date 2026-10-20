@@ -1,0 +1,28 @@
+# Die Adapter aus `takt-embed` am Treiberrand (plan/m11.md 2.7, 12.6, 13.8):
+# `takt driver-test --crate crates/takt-adapter-probe` besteht. Der Taster
+# schaltet je Tick um, die LED folgt ihm; die Schnittstelle bringt je Tick
+# eine Zeile, der Ring der ISR je Tick einen Rahmen aus zwei Bytes.
+
+system:
+    language = 1
+    tick     = 10 ms
+
+input  button : bool             @ hw("pins/button")
+output led    : bool             @ hw("pins/led") with safe = false
+input  rx     : stream<line<16>> @ hw("uart/rx")  with max_rate = 100 Hz, capacity = 4, framing = lines
+input  frames : stream<bytes<8>> @ hw("isr/rx")   with max_rate = 100 Hz, capacity = 4, framing = cobs
+output lines  : int in 0..1000   @ sim("o/lines")
+output got    : int in 0..10000  @ sim("o/got")
+
+machine watch:
+    initial RUN
+
+    state RUN:
+        loop:
+            led = button.or(false)
+
+        on rx as e:
+            lines = min(lines + 1, 1000)
+
+        on frames as f:
+            got = min(got + f.data.len, 10000)
