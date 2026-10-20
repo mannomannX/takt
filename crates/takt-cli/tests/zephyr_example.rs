@@ -49,7 +49,13 @@ const PORT: &[&str] = &["takt_core_service", "takt_rtos_start", "main"];
 const ZEPHYR_EXPECT: Expect = Expect {
     example: ZEPHYR,
     linked: &["takt_os_spawn", "partition_probe", "port_test_ops", "takt_core_init_journaled", "takt_zephyr_nvm_open"],
-    config: &[("TAKT", "y"), ("TAKT_PORT_ZEPHYR", "y"), ("USERSPACE", "y"), ("TAKT_JOURNAL_FLASH", "y")],
+    config: &[
+        ("TAKT", "y"),
+        ("TAKT_PORT_ZEPHYR", "y"),
+        ("USERSPACE", "y"),
+        ("TAKT_JOURNAL_FLASH", "y"),
+        ("TAKT_TIMER_COUNTER", "y"),
+    ],
     partition: true,
     variant: Variant::PROBE_IN_RUN,
 };

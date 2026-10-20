@@ -16,7 +16,7 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    Case, TICKS, ZEPHYR_WIRE_TICKS, agreement, agreement_with, corpus, driver_edge_agrees,
+    Case, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS, agreement, agreement_with, corpus, driver_edge_agrees,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
     natives_agree, overrun_reaches_every_machine, persistence_survives, ran, replayed, runs_shared,
     simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict,
@@ -528,7 +528,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::ZEPHYR;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, Variant::FRESH)
         .and_then(|image| zephyr_run(&mut board, &image, &options));
-    verdict(&zephyr_verdict(board.name(), example, Case::Partition, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Partition, Some(ZEPHYR_COUNTER_CLOCK), run));
 }
 
 /// Schreibt ein Zephyr-Abbild (`zephyr.bin` mit dem Kopf fuer den ROM-Lader,

@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
 
 #include "handback.h"
 #include "line.h"
@@ -35,6 +36,16 @@
 /* Der Watchdog des Wirts (12.11): Dieses Beispiel startet keinen. */
 static void kick(void *ctx) {
     ARG_UNUSED(ctx);
+}
+
+/* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733); hier der
+ * Systemtick, denn dieses Beispiel waehlt keinen Zaehler. */
+static void clock_line(void) {
+    char line[48];
+    uint32_t hz = 0U;
+    const char *source = takt_os_clock(&hz);
+    (void)snprintk(line, sizeof line, "takt uhr %s %u Hz\n", source, (unsigned int)hz);
+    takt_board_trace(line);
 }
 
 /* Faehrt den Kern `core` ueber den Port und schreibt die Bilanz. Verlangt
@@ -81,6 +92,7 @@ int main(void) {
     const char *channel = NULL;
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
         takt_board_trace("takt auf zephyr mit pins aus dem devicetree\n" TAKT_RTOS_PROTECTION "\n");
+        clock_line();
         if (wire_zephyr_init(&channel) != 0) {
             /* Die Pins vor dem Kern (8.10): Ein Kanal ohne Pin beginnt nicht. */
             takt_board_trace("takt pins: nicht eingerichtet: ");

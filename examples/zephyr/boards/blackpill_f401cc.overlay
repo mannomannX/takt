@@ -1,11 +1,25 @@
 /* Board 1: die Leitung auf USART1 (PA9/PA10) mit der Rate aller
- * F401-Programme, die der Host ohne Wissen um das laufende erreicht. Das
+ * F401-Programme, die der Host ohne Wissen um das laufende erreicht, und
+ * TIM2 als Uhr des Ports. Das
  * Journal in Sektor 2 und 3 (je 16 KiB ab 0x0800_8000), wo es auch die
  * Bring-ups halten: zwischen Sprungbrett und Anwendung, und kein Abbild
  * schreibt dorthin. */
 / {
 	chosen {
 		takt,line = &usart1;
+		takt,timer = &takt_timer;
+	};
+};
+
+/* Die Uhr des Ports (FB-733): TIM2, 32 Bit, mit 1 MHz wie die
+ * Interruptform in Rust (`takt_board_stm32f401::TIMER_HZ`); 84 MHz
+ * Timertakt durch 84. */
+&timers2 {
+	st,prescaler = <83>;
+	status = "okay";
+
+	takt_timer: counter {
+		status = "okay";
 	};
 };
 
