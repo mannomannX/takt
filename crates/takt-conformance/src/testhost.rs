@@ -139,7 +139,7 @@ pub fn sources(p: &Program, run: &Run<'_>, triple: &str, sanitized: bool) -> Res
             ..Default::default()
         },
     );
-    let header = takt_frame::embed::c_header(&frame.header, p, &x, 0, 0, frame.job_stack_bytes);
+    let header = takt_frame::embed::c_header(&frame.header, p, &x, 0, (0, frame.job_stack_bytes), None);
     let host = host(p, run)?;
     Ok(Sources {
         files: vec![

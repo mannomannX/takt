@@ -31,6 +31,12 @@
 //! Senken schreiben nie ineinander (FB-691). So rechnet kein C-Wirt
 //! Fliesskommazahlen selbst in Dezimalziffern um (4.2), und jeder C-Port
 //! schreibt, was die Portpruefung liest.
+//!
+//! **Der Schutz.** Gehoert dem Wirt eine Schutzeinheit, gibt er dem Kern vor
+//! dem ersten Tick seine Haken ([`takt_core_protect`]): Der Kern oeffnet
+//! den Programmbereich der Arena nur um die Aufrufe, die ihn schreiben, wie
+//! die Rust-Formen (`takt_rt_baremetal::Guarded`), und stellt eine gemeldete
+//! Verletzung im naechsten Tick als `Runtime(Hardware)` zu (12.3, FB-755).
 
 #![cfg_attr(
     not(test),
@@ -76,8 +82,9 @@ use core::mem::{MaybeUninit, align_of, size_of};
 use core::ptr::null;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use takt_rt_baremetal::{Cadence, JournalStats, Lead, Port, Stacks, Telemetry, Trace};
+use takt_rt_baremetal::{Cadence, Guarded, JournalStats, Lead, Port, Protection, Stacks, Telemetry, Trace, Violation};
 use takt_rt_core::port_test::{self, ForeignLoad};
+use takt_rt_core::protection::Case;
 use takt_rt_core::{
     Clock, Journal, Memory, NextRun, Nvm, NvmState, Outputs, Persist, Persisting, Policy, Profile, Runtime, Store,
     Tolerance, Tunables, Unloaded, Volatile, Watchdog,
@@ -113,8 +120,9 @@ extern "C" fn rust_eh_personality() {}
 /// (5.4). Fassung 4: die Senke je Kern ([`takt_sink_init`],
 /// [`takt_core_init`] mit ihr), `init` und `init_with` der Tabelle mit ihr
 /// und die Haken `takt_trace_*` mit ihr; die Leitung je Prozess
-/// (`takt_line_*`) entfaellt (12.11, FB-691).
-pub const ABI: u32 = 4;
+/// (`takt_line_*`) entfaellt (12.11, FB-691). Fassung 5: der Schutz des
+/// Wirts ([`takt_core_protect`], 12.3, FB-755).
+pub const ABI: u32 = 5;
 
 /// So viele Byte haelt `takt_core` fuer den Kern (`TAKT_CORE_BYTES`).
 pub const CORE_BYTES: usize = 1024;
@@ -142,6 +150,10 @@ pub mod status {
     /// des Trace stellt der Wirt ausdruecklich (12.11), einen Trace, der
     /// still verloren geht, gibt es nicht.
     pub const LINE: i32 = -6;
+    /// Der Lauf hat begonnen: Seine Haken gibt der Wirt dem Kern vor dem
+    /// ersten Tick ([`takt_core_protect`](super::takt_core_protect)), nicht
+    /// mitten im Lauf.
+    pub const STARTED: i32 = -7;
 }
 
 /// Die Einstiege einer Programmbibliothek, wie `P_ops` sie fuellt
@@ -876,6 +888,78 @@ impl Watchdog for HostWatchdog {
     }
 }
 
+/// Der Schutz des Wirts (`struct takt_protection`, 12.3, 12.11; FB-755):
+/// `open` macht den Programmbereich der Arena beschreibbar, `close` nur
+/// lesbar, und `take_violation` nennt die Verletzung seit der letzten Frage
+/// mit ihrer Adresse: 0 keine, [`violation::STATE`] im Programmbereich,
+/// [`violation::GUARD`] in einem Waechter, sonst anderswo.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ProtectionOps {
+    /// Der Zeiger des Wirts fuer seine Rueckrufe.
+    pub ctx: *mut c_void,
+    /// Der Programmbereich wird beschreibbar.
+    pub open: unsafe extern "C" fn(ctx: *mut c_void),
+    /// Er wird wieder nur lesbar.
+    pub close: unsafe extern "C" fn(ctx: *mut c_void),
+    /// Die Verletzung seit der letzten Frage und ihre Adresse nach `address`.
+    pub take_violation: unsafe extern "C" fn(ctx: *mut c_void, address: *mut u32) -> i32,
+}
+
+/// Wo eine Verletzung lag (`TAKT_VIOLATION_*`), wie `take_violation` sie nennt.
+pub mod violation {
+    /// Keine Verletzung seit der letzten Frage.
+    pub const NONE: i32 = 0;
+    /// Im Programmbereich der Arena.
+    pub const STATE: i32 = 1;
+    /// In einem Waechter unter einem Stack.
+    pub const GUARD: i32 = 2;
+}
+
+/// Der Schutz hinter seiner Tabelle; ohne sie, bis der Wirt sie gibt, tut er
+/// nichts und meldet nie.
+struct HostProtection(Option<ProtectionOps>);
+
+impl Protection for HostProtection {
+    /// Was der Kopf nennt, entscheidet der Wirt zur Laufzeit
+    /// ([`takt_core_protected`]); dieser Fall gilt nur mit Haken.
+    const CASE: Case = Case::Window;
+
+    fn open(&self) {
+        if let Some(p) = self.0 {
+            // SAFETY: Der Wirt sagt zu, dass die Rueckrufe so lange gelten wie der Kern.
+            unsafe { (p.open)(p.ctx) }
+        }
+    }
+
+    fn close(&self) {
+        if let Some(p) = self.0 {
+            // SAFETY: wie oben.
+            unsafe { (p.close)(p.ctx) }
+        }
+    }
+
+    fn take_violation(&self) -> Option<Violation> {
+        let p = self.0?;
+        let mut address = 0u32;
+        // SAFETY: wie oben; der Rueckruf schreibt nur `address`.
+        let region = match unsafe { (p.take_violation)(p.ctx, &mut address) } {
+            violation::NONE => return None,
+            violation::STATE => "Programmzustand",
+            violation::GUARD => "Waechter",
+            _ => "anderswo",
+        };
+        Some(Violation { region, address })
+    }
+
+    fn reports(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+/// Das Programm des Kerns: hinter dem Schutz des Wirts.
+type Guard<M> = Guarded<CProgram<M>, HostProtection>;
+
 /// Der Griff des Kerns auf seine Senke, je Aufruf.
 struct SinkLead(*mut TraceSink);
 
@@ -908,8 +992,8 @@ fn journal_stats<J: Store>(store: &J) -> JournalStats {
 /// Der Kern eines Programms ohne und mit Journal (5.9): Welches er hat,
 /// sagt die Tabelle erst zur Laufzeit.
 enum Engine {
-    Volatile(Runtime<CProgram<Volatile>, HostClock, HostWatchdog, HostSink>),
-    Persisting(Runtime<CProgram<Persisting>, HostClock, HostWatchdog, HostSink, Persist<'static, HostNvm>>),
+    Volatile(Runtime<Guard<Volatile>, HostClock, HostWatchdog, HostSink>),
+    Persisting(Runtime<Guard<Persisting>, HostClock, HostWatchdog, HostSink, Persist<'static, HostNvm>>),
 }
 
 impl Engine {
@@ -948,6 +1032,30 @@ impl Engine {
         };
     }
 
+    /// Der Schutz des Programms.
+    fn protection(&mut self) -> &mut HostProtection {
+        match self {
+            Engine::Volatile(rt) => &mut rt.program.protection,
+            Engine::Persisting(rt) => &mut rt.program.protection,
+        }
+    }
+
+    /// Hat der Kern die Haken des Wirts?
+    fn protected(&self) -> bool {
+        match self {
+            Engine::Volatile(rt) => rt.program.protection.reports(),
+            Engine::Persisting(rt) => rt.program.protection.reports(),
+        }
+    }
+
+    /// Wie viele Verletzungen der Schutz zustellte, und die letzte.
+    fn violations(&self) -> (u32, Option<Violation>) {
+        match self {
+            Engine::Volatile(rt) => (rt.program.violations, rt.program.last),
+            Engine::Persisting(rt) => (rt.program.violations, rt.program.last),
+        }
+    }
+
     /// Die Bilanz in die Senke `sink`, davor die Zeile der fremden Last.
     fn report(&mut self, sink: *mut TraceSink, stacks: &Stacks, foreign: Option<Foreign>) {
         // Erst der Abschluss, der noch Trace schreiben kann (12.7, 9.9), dann
@@ -956,6 +1064,7 @@ impl Engine {
             Engine::Volatile(rt) => (takt_rt_baremetal::stats(rt), *rt.overrun(), journal_stats(rt.journal())),
             Engine::Persisting(rt) => (takt_rt_baremetal::stats(rt), *rt.overrun(), journal_stats(rt.journal())),
         };
+        let (violations, last) = self.violations();
         // SAFETY: die Senke des Kerns; kein Schritt laeuft.
         let Some(t) = (unsafe { telemetry(sink) }) else { return };
         if let Some(f) = foreign {
@@ -963,6 +1072,19 @@ impl Engine {
             t.write_u64(f.rounds);
             t.write(port_test::ERRORS);
             t.write_u64(f.errors);
+            t.newline();
+        }
+        // 12.3: was der Schutz abgewiesen hat, wie die Bring-ups es nennen.
+        if let Some(v) = last {
+            t.write("takt schutz verletzungen ");
+            t.write_u64(u64::from(violations));
+            t.write(" region ");
+            t.write(v.region);
+            t.write(" adresse 0x");
+            for shift in [28u32, 24, 20, 16, 12, 8, 4, 0] {
+                let nibble = (v.address >> shift) & 0xF;
+                t.write_byte(b"0123456789abcdef".get(usize::try_from(nibble).unwrap_or(0)).copied().unwrap_or(b'0'));
+            }
             t.newline();
         }
         takt_rt_baremetal::report(t, &overrun, &stats, &journal, stacks);
@@ -982,6 +1104,9 @@ struct Parts {
     wake: AtomicBool,
     abort: AtomicBool,
     hardware: AtomicBool,
+    /// Der Schrittkontext hat `takt_core_service` gerufen: Der Lauf hat
+    /// begonnen, und der Schutz steht fest.
+    started: bool,
     engine: Engine,
 }
 
@@ -1101,9 +1226,10 @@ pub unsafe extern "C" fn takt_core_init(
     let tick_ns = unsafe { (*ops).tick_ns };
     let mut program = CProgram::new(ops, arena, user, sink);
     program.ensure_init();
+    let program = Guarded::new(program, HostProtection(None));
     let rt = Runtime::new(program, host_clock(), watchdog, host_sink(tick_ns, sink), profile, tick_ns, policy);
     let (wake, abort, hardware) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false));
-    let parts = Parts { ops, arena, sink, wake, abort, hardware, engine: Engine::Volatile(rt) };
+    let parts = Parts { ops, arena, sink, wake, abort, hardware, started: false, engine: Engine::Volatile(rt) };
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(parts) };
     status::OK
@@ -1160,10 +1286,11 @@ pub unsafe extern "C" fn takt_core_init_journaled(
     let mut program = CProgram::new(ops, arena, user, sink);
     let (persist, _, _) = Unloaded::new(journal, current, stored).load(&mut program);
     program.ensure_init();
+    let program = Guarded::new(program, HostProtection(None));
     let trace = host_sink(o.tick_ns, sink);
     let rt = Runtime::journaled(program, persist, host_clock(), watchdog, trace, profile, o.tick_ns, policy);
     let (wake, abort, hardware) = (AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(false));
-    let parts = Parts { ops, arena, sink, wake, abort, hardware, engine: Engine::Persisting(rt) };
+    let parts = Parts { ops, arena, sink, wake, abort, hardware, started: false, engine: Engine::Persisting(rt) };
     // SAFETY: `core` fasst `Parts` (Pruefung oben) und ist ausgerichtet.
     unsafe { core.cast::<Parts>().write(parts) };
     status::OK
@@ -1207,6 +1334,9 @@ pub unsafe extern "C" fn takt_core_service_with(
     // SAFETY: ebenso das Flag von `takt_core_hardware_fault`.
     let hardware = unsafe { &(*parts).hardware }.swap(false, Ordering::SeqCst);
     let outer = Outer { abort, hardware };
+    // SAFETY: Nur der Schrittkontext ruft, nie zwei Aufrufe zugleich, und
+    // `takt_core_protect` laeuft vor dem ersten.
+    unsafe { (*parts).started = true };
     // SAFETY: nur der Kern, nicht Tabelle, Arena und Flags, die andere Kontexte lesen.
     let engine = unsafe { &mut (*parts).engine };
     let source: Option<&mut dyn Tunables> = match source.as_mut() {
@@ -1214,6 +1344,52 @@ pub unsafe extern "C" fn takt_core_service_with(
         None => None,
     };
     engine.service(now_ns, wake, outer, source).into()
+}
+
+/// Gibt dem Kern den Schutz des Wirts (12.3, 12.11; FB-755): Ab jetzt ist
+/// der Programmbereich der Arena nur um die Aufrufe offen, die ihn
+/// schreiben, und eine Verletzung, die `take_violation` meldet, bekommt das
+/// Programm im naechsten Tick als `Runtime(Hardware)`. Der Kern schliesst
+/// ihn sofort; bis hierher durfte `init` schreiben. Nur vor dem ersten
+/// [`takt_core_service`]: danach `TAKT_ERR_STARTED`, und der Schutz bleibt,
+/// wie er war. Ohne diesen Aufruf schuetzt der Kern nichts, und
+/// [`takt_core_protected`] sagt es.
+///
+/// # Safety
+///
+/// `core` ist ein Kern aus [`takt_core_init`]; `protection` ist null oder
+/// zeigt auf eine Tabelle, deren Rueckrufe so lange gelten wie der Kern.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_core_protect(core: *mut Core, protection: *const ProtectionOps) -> i32 {
+    if core.is_null() {
+        return status::NULL;
+    }
+    // SAFETY: null oder gueltig, siehe oben.
+    let Some(ops) = (unsafe { protection.as_ref() }).copied() else { return status::NULL };
+    let parts = core.cast::<Parts>();
+    // SAFETY: Vor dem ersten `service` haelt niemand den Kern.
+    if unsafe { (*parts).started } {
+        return status::STARTED;
+    }
+    // SAFETY: wie oben.
+    let guard = unsafe { (*parts).engine.protection() };
+    *guard = HostProtection(Some(ops));
+    guard.close();
+    status::OK
+}
+
+/// 1, wenn der Kern den Schutz des Wirts hat ([`takt_core_protect`]), sonst
+/// 0: Danach richtet sich die Kopfzeile `Schutz` (12.11), nicht nach dem, was
+/// der Wirt vorhatte.
+///
+/// # Safety
+///
+/// `core` ist ein Kern aus [`takt_core_init`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn takt_core_protected(core: *const Core) -> i32 {
+    // SAFETY: liest nur, ob Haken gesetzt sind; die setzt nur `takt_core_protect`.
+    let engine = unsafe { &(*core.cast::<Parts>()).engine };
+    i32::from(engine.protected())
 }
 
 /// Ein Operator-Abort (5.4): Der Kern meldet ihn dem Programm vor dem
@@ -1340,8 +1516,8 @@ mod tests {
     use std::vec::Vec;
 
     use super::{
-        ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, SINK_BYTES, StackDepths, TunablesOps, WatchdogOps,
-        nvm, status,
+        ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, ProtectionOps, SINK_BYTES, StackDepths, TunablesOps,
+        WatchdogOps, nvm, status, violation,
     };
 
     const HEADER: &str = include_str!("../include/takt_sdk.h");
@@ -1437,6 +1613,13 @@ mod tests {
         assert_eq!(fields("struct takt_line {"), line);
         let watchdog = in_order(vec![("ctx", offset_of!(WatchdogOps, ctx)), ("kick", offset_of!(WatchdogOps, kick))]);
         assert_eq!(fields("struct takt_watchdog {"), watchdog);
+        let protection = in_order(vec![
+            ("ctx", offset_of!(ProtectionOps, ctx)),
+            ("open", offset_of!(ProtectionOps, open)),
+            ("close", offset_of!(ProtectionOps, close)),
+            ("take_violation", offset_of!(ProtectionOps, take_violation)),
+        ]);
+        assert_eq!(fields("struct takt_protection {"), protection);
         let tunables = in_order(vec![
             ("ctx", offset_of!(TunablesOps, ctx)),
             ("next", offset_of!(TunablesOps, next)),
@@ -1478,6 +1661,10 @@ mod tests {
             ("TAKT_ERR_PROFILE", status::PROFILE),
             ("TAKT_ERR_BOUND", status::BOUND),
             ("TAKT_ERR_LINE", status::LINE),
+            ("TAKT_ERR_STARTED", status::STARTED),
+            ("TAKT_VIOLATION_NONE", violation::NONE),
+            ("TAKT_VIOLATION_STATE", violation::STATE),
+            ("TAKT_VIOLATION_GUARD", violation::GUARD),
             ("TAKT_NVM_IDLE", nvm::IDLE),
             ("TAKT_NVM_BUSY", nvm::BUSY),
             ("TAKT_NVM_DONE", nvm::DONE),
@@ -1504,10 +1691,11 @@ mod core_abi {
     use std::vec::Vec;
 
     use super::{
-        ABI, Core, LineOps, NvmOps, Ops, TraceSink, TunablesOps, WatchdogOps, nvm, status, takt_core_abort,
-        takt_core_finish, takt_core_hardware_fault, takt_core_init, takt_core_init_journaled, takt_core_job_work,
-        takt_core_report, takt_core_service, takt_core_service_with, takt_core_wake, takt_sink_flush, takt_sink_init,
-        takt_sink_lossless, takt_trace_text,
+        ABI, Core, LineOps, NvmOps, Ops, ProtectionOps, TraceSink, TunablesOps, WatchdogOps, nvm, status,
+        takt_core_abort, takt_core_finish, takt_core_hardware_fault, takt_core_init, takt_core_init_journaled,
+        takt_core_job_work, takt_core_protect, takt_core_protected, takt_core_report, takt_core_service,
+        takt_core_service_with, takt_core_wake, takt_sink_flush, takt_sink_init, takt_sink_lossless, takt_trace_text,
+        violation,
     };
 
     const TICK_NS: i64 = 1_000_000;
@@ -2106,6 +2294,108 @@ mod core_abi {
         // Kein Kern laeuft mehr; der Puffer gehoert wieder dem Test.
         let text = String::from_utf8_lossy(&text).into_owned();
         assert!(text.contains("t= dump") && text.contains("takt end"), "{text}");
+    }
+
+    /// Der Schutz des Tests: zaehlt, wie oft der Kern oeffnet und schliesst,
+    /// und haelt eine Verletzung bereit.
+    #[derive(Default)]
+    struct Unit {
+        open: Cell<bool>,
+        opened: Cell<u32>,
+        closed: Cell<u32>,
+        pending: Cell<Option<u32>>,
+    }
+
+    /// # Safety
+    ///
+    /// `ctx` ist die Einheit des Tests, die den Kern ueberlebt.
+    unsafe fn unit<'a>(ctx: *mut c_void) -> &'a Unit {
+        // SAFETY: siehe oben.
+        unsafe { &*ctx.cast::<Unit>() }
+    }
+
+    unsafe extern "C" fn open(ctx: *mut c_void) {
+        // SAFETY: die Einheit des Tests.
+        let u = unsafe { unit(ctx) };
+        u.open.set(true);
+        u.opened.set(u.opened.get() + 1);
+    }
+
+    unsafe extern "C" fn close(ctx: *mut c_void) {
+        // SAFETY: die Einheit des Tests.
+        let u = unsafe { unit(ctx) };
+        u.open.set(false);
+        u.closed.set(u.closed.get() + 1);
+    }
+
+    unsafe extern "C" fn take_violation(ctx: *mut c_void, address: *mut u32) -> i32 {
+        // SAFETY: die Einheit des Tests; das Archiv reicht eine beschreibbare Stelle.
+        match unsafe { unit(ctx) }.pending.take() {
+            Some(a) => {
+                // SAFETY: wie oben.
+                unsafe { address.write(a) };
+                violation::STATE
+            }
+            None => violation::NONE,
+        }
+    }
+
+    /// **Der Schutz des Wirts oeffnet den Programmbereich nur, wo der Kern
+    /// ihn schreibt** (12.3, 12.11; FB-755): Nach `takt_core_protect` ist er
+    /// geschlossen, jeder Aufruf, der ihn oeffnet, schliesst ihn wieder, und
+    /// eine gemeldete Verletzung weckt den Schlaf und wird im Tick an der
+    /// ersten Grenze danach `Runtime(Hardware)`; die Bilanz nennt sie. Ohne
+    /// Setter schuetzt der Kern nichts und sagt es, und nach dem ersten Tick
+    /// nimmt er keinen Schutz mehr an.
+    #[test]
+    fn the_host_protection_holds_the_state_shut_outside_the_writes() {
+        let kicks = Cell::new(0u64);
+        let watchdog = WatchdogOps { ctx: core::ptr::from_ref(&kicks).cast_mut().cast(), kick };
+        let mut text = Vec::<u8>::new();
+        let mut ring = [0u8; 512];
+        let mut sink = MaybeUninit::<TraceSink>::uninit();
+        let sink = sink.as_mut_ptr();
+        let line = LineOps { ctx: (&raw mut text).cast(), try_write: put, flush: None };
+        // SAFETY: Tabelle, Leitung und Ring leben bis zum Ende des Tests; kein Schritt laeuft.
+        assert_eq!(unsafe { takt_sink_init(sink, &line, ring.as_mut_ptr(), 512) }, status::OK);
+        let u = Unit::default();
+        let protection = ProtectionOps { ctx: core::ptr::from_ref(&u).cast_mut().cast(), open, close, take_violation };
+        let mut guarding = ops(false);
+        guarding.idle = yes;
+        guarding.deadline = far;
+        guarding.hardware = hardware_fault;
+        let mut guarded = Counter::default();
+        let mut core = MaybeUninit::<Core>::uninit();
+        let c = core.as_mut_ptr();
+        // SAFETY: Kern, Tabelle, Arena, Senke, Watchdog und Einheit leben bis zum Ende des Tests.
+        unsafe {
+            assert_eq!(takt_core_init(c, &guarding, (&raw mut guarded).cast(), null_mut(), sink, 0, &watchdog), 0);
+            assert_eq!(takt_core_protected(c), 0, "ohne Setter schuetzt der Kern nichts");
+            assert_eq!(takt_core_protect(c, null()), status::NULL);
+            assert_eq!(takt_core_protect(c, &protection), status::OK);
+            assert_eq!(takt_core_protected(c), 1);
+        }
+        assert!(!u.open.get() && u.closed.get() == 1, "der Setter schliesst sofort");
+        // SAFETY: wie oben; nie zwei Aufrufe zugleich, die Verletzung kommt dazwischen.
+        unsafe {
+            takt_core_service(c, 0);
+            u.pending.set(Some(0x2000_0010));
+            takt_core_service(c, 6 * TICK_NS);
+            takt_core_service(c, 8 * TICK_NS);
+        }
+        assert!(u.opened.get() > 0 && !u.open.get(), "offen nur waehrend der Aufrufe");
+        assert_eq!(u.opened.get() + 1, u.closed.get(), "jedes Oeffnen schliesst wieder");
+        // Der Schutz ist eine Quelle von Weckereignissen: Die Schleife fragt
+        // ihn im Schlaf an jeder Grenze, und die erste nach der Meldung
+        // (1 ms, Tick 2 des Rahmens) bekommt sie.
+        assert_eq!(guarded.hardware_in, Some(2), "die Verletzung wirkt an der ersten Grenze danach");
+        // SAFETY: wie oben; danach die Bilanz, waehrend kein Schritt laeuft.
+        unsafe {
+            assert_eq!(takt_core_protect(c, &protection), status::STARTED, "nur vor dem ersten Tick");
+            takt_core_report(c, null(), null());
+        }
+        let text = String::from_utf8_lossy(&text);
+        assert!(text.contains("takt schutz verletzungen 1 region Programmzustand adresse 0x20000010"), "{text}");
     }
 
     /// **Zwei Kerne, zwei Senken** (12.11, FB-691): Zwei Programme in einem

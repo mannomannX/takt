@@ -146,7 +146,8 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
 
     let job_stack = frame.job_stack_bytes;
     let stacks = Stacks { tick: tick_stack.bytes(), job: job_stack };
-    let header = takt_frame::embed::c_header(&frame.header, e.program, x, e.nvm_blocking_ns, stacks.tick, stacks.job);
+    let header =
+        takt_frame::embed::c_header(&frame.header, e.program, x, e.nvm_blocking_ns, (stacks.tick, stacks.job), window);
     write(&e.out.join(format!("{x}.h")), &header)?;
     // M11 Schritt 18a: die Einstiege als Tabelle fuer das C-SDK, mit dessen Kopf.
     write(&e.out.join(SDK_HEADER_NAME), SDK_HEADER)?;

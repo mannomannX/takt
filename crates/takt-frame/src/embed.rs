@@ -154,15 +154,17 @@ pub fn output_names(p: &takt_mir::Program) -> Vec<String> {
 /// ([`crate::mcu::McuHarness::header`]) und die Konstanten des Programms,
 /// dieselben wie im Rust-Modul, mit dem Praefix; dazu die Tabelle `P_ops`
 /// fuer das C-SDK ([`c_ops`]). `tick_stack` und `job_stack` sind die Stacks,
-/// die der Wirt stellt (12.3).
+/// die der Wirt stellt (12.3); `window` die Schutzregion ueber dem
+/// Programmbereich, wenn das Ziel eine Schutzeinheit hat (12.3, FB-755).
 pub fn c_header(
     frame_header: &str,
     p: &takt_mir::Program,
     x: &Prefix,
     nvm_blocking_ns: i64,
-    tick_stack: u64,
-    job_stack: u64,
+    stacks: (u64, u64),
+    window: Option<takt_mir::hardware::Window>,
 ) -> String {
+    let (tick_stack, job_stack) = stacks;
     let upper = x.as_str().to_uppercase();
     let hash = takt_mir::hash::logic_hash(p);
     let key = hash.0.first_chunk::<8>().map_or(0, |b| u64::from_le_bytes(*b));
@@ -179,6 +181,14 @@ pub fn c_header(
     let _ = writeln!(consts, "#define {upper}_PERSIST_BOUND {}u", takt_mir::persist::max_payload(p).unwrap_or(0));
     let min = takt_mir::persist::min_interval_ns(p).unwrap_or(0);
     let _ = writeln!(consts, "#define {upper}_PERSIST_MIN_INTERVAL_NS {min}LL\n");
+    if let Some(w) = window {
+        // 12.3: Die Region beginnt an der Arena, die der Wirt an ihrer Groesse
+        // ausrichtet, und deckt von vorn den aufgefuellten Programmbereich.
+        let _ = writeln!(consts, "/* Die Schutzregion ueber dem Programmbereich (12.3): die Arena an");
+        let _ = writeln!(consts, " * `{upper}_PROTECT_ALIGN` ausgerichtet, die Region deckt `{upper}_PROTECT_BYTES` von vorn. */");
+        let _ = writeln!(consts, "#define {upper}_PROTECT_ALIGN {}u", w.size);
+        let _ = writeln!(consts, "#define {upper}_PROTECT_BYTES {}u\n", w.protected);
+    }
     let _ = writeln!(consts, "/* Die Ausgaenge in der Reihenfolge, die `{x}_output` erwartet. */");
     let outputs = output_names(p);
     for (index, name) in outputs.iter().enumerate() {

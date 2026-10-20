@@ -38,8 +38,9 @@ extern "C" {
  * `takt_core_init` nicht an. Fassung 2: Der Wirt nennt seinen Watchdog.
  * Fassung 3: Die Tabelle traegt `operator_abort` (`takt_core_abort`).
  * Fassung 4: die Senke je Kern (`takt_sink`), `init` und `init_with` mit ihr,
- * die Haken `takt_trace_*` mit ihr; `takt_line_*` entfaellt. */
-#define TAKT_SDK_ABI 4u
+ * die Haken `takt_trace_*` mit ihr; `takt_line_*` entfaellt. Fassung 5: der
+ * Schutz des Wirts (`takt_core_protect`, 12.3). */
+#define TAKT_SDK_ABI 5u
 
 /* So viele Byte haelt `takt_core`; das Archiv prueft beim Bau, dass sein
  * Kern hineinpasst. */
@@ -124,6 +125,7 @@ typedef struct takt_sink {
 #define TAKT_ERR_PROFILE (-4)
 #define TAKT_ERR_BOUND (-5) /* ein Puffer ist zu klein: `P_PERSIST_BOUND`, ein leerer Ring */
 #define TAKT_ERR_LINE (-6)  /* keine Senke (`takt_sink_init`) */
+#define TAKT_ERR_STARTED (-7) /* der Lauf hat begonnen: Schutz nur vor dem ersten Tick */
 
 /* Das Ende eines Laufs (12.7) in `takt_next.ended`; 0, solange er geht. */
 #define TAKT_NEXT_NOW 1
@@ -199,6 +201,36 @@ void takt_core_abort(takt_core *core);
  * Kontext, auch aus einem Fault-Handler oder einer ISR und waehrend eines
  * Schritts. */
 void takt_core_hardware_fault(takt_core *core);
+
+/* Der Schutz des Wirts (12.3, 12.11): `open` macht den Programmbereich der
+ * Arena beschreibbar, `close` nur lesbar; `take_violation` nennt die
+ * Verletzung seit der letzten Frage (TAKT_VIOLATION_*) und schreibt ihre
+ * Adresse nach `address`. Die Rueckrufe kommen aus dem Kontext, der den
+ * Kern gerade ruft. */
+struct takt_protection {
+    void *ctx;
+    void (*open)(void *ctx);
+    void (*close)(void *ctx);
+    int32_t (*take_violation)(void *ctx, uint32_t *address);
+};
+
+/* Wo eine Verletzung lag, wie `take_violation` sie nennt; jede andere Zahl
+ * heisst anderswo. */
+#define TAKT_VIOLATION_NONE 0
+#define TAKT_VIOLATION_STATE 1 /* im Programmbereich der Arena */
+#define TAKT_VIOLATION_GUARD 2 /* in einem Waechter unter einem Stack */
+
+/* Gibt dem Kern den Schutz des Wirts: Ab jetzt ist der Programmbereich nur
+ * um die Aufrufe offen, die ihn schreiben (Schritt, geschlafene Ticks,
+ * Journal laden, Tunable, Job-Ergebnis, Ende), und eine gemeldete
+ * Verletzung wird im naechsten Tick `Runtime(Hardware)`. Der Kern schliesst
+ * ihn sofort. Nur vor dem ersten `takt_core_service`, sonst
+ * TAKT_ERR_STARTED; ohne `protection` TAKT_ERR_NULL. */
+int32_t takt_core_protect(takt_core *core, const struct takt_protection *protection);
+
+/* 1, wenn der Kern den Schutz des Wirts hat, sonst 0: Danach richtet sich
+ * die Kopfzeile `Schutz` (12.11). */
+int32_t takt_core_protected(const takt_core *core);
 
 /* Rechnet die verteilten Jobs (4.5), unterbrechbar durch `takt_core_service`. */
 void takt_core_job_work(takt_core *core);

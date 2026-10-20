@@ -38,6 +38,13 @@ pub trait Protection {
 
     /// Die Verletzung seit der letzten Frage, falls es eine gab.
     fn take_violation(&self) -> Option<Violation>;
+
+    /// Kann dieser Schutz eine Verletzung melden? Nur dann ist er eine
+    /// Quelle von Weckereignissen (9.9). Ein Schutz, dessen Haken der Wirt
+    /// nicht gesetzt hat (`takt_core_protect`, FB-755), meldet nie.
+    fn reports(&self) -> bool {
+        true
+    }
 }
 
 /// Kein Speicherschutz: ein Ziel ohne MPU.
@@ -98,6 +105,12 @@ impl<P: Program, M: Protection> Program for Guarded<P, M> {
         self.program.raise_hardware();
     }
 
+    /// Wie `raise_overrun` und `raise_hardware` ein Ereignis der Runtime,
+    /// das der Rahmen hinter dem Programmbereich vormerkt (5.4).
+    fn raise_abort(&mut self) {
+        self.program.raise_abort();
+    }
+
     fn tick_tolerance(&self) -> Option<Tolerance> {
         self.program.tick_tolerance()
     }
@@ -151,9 +164,10 @@ impl<P: Program, M: Protection> Program for Guarded<P, M> {
         woken || self.held.get().is_some()
     }
 
-    /// Der Schutz ist selbst eine Quelle von Weckereignissen.
+    /// Ein Schutz, der Verletzungen meldet, ist selbst eine Quelle von
+    /// Weckereignissen.
     fn wake_sources(&self) -> bool {
-        true
+        self.protection.reports() || self.program.wake_sources()
     }
 
     fn job_done(&mut self, slot: u32, result: Option<&[u8]>) {
@@ -230,6 +244,9 @@ mod tests {
         }
         fn raise_hardware(&mut self) {
             self.mark(b'h');
+        }
+        fn raise_abort(&mut self) {
+            self.mark(b'b');
         }
         fn tick_tolerance(&self) -> Option<Tolerance> {
             Some(Tolerance { ns: 7, runs: 3 })
@@ -363,9 +380,36 @@ mod tests {
         g.trace(Outputs::All);
         g.raise_overrun();
         g.raise_hardware();
+        g.raise_abort();
         g.commit();
-        assert_eq!(&log.borrow()[..len.get()], b"TARUWJEsxohc");
+        assert_eq!(&log.borrow()[..len.get()], b"TARUWJEsxohbc");
         assert!(!open.get(), "danach wieder geschlossen");
+    }
+
+    /// Ein Schutz, dessen Haken niemand gesetzt hat: Er meldet nie.
+    struct Silent;
+
+    impl Protection for Silent {
+        const CASE: Case = Case::Window;
+
+        fn open(&self) {}
+        fn close(&self) {}
+        fn take_violation(&self) -> Option<Violation> {
+            None
+        }
+        fn reports(&self) -> bool {
+            false
+        }
+    }
+
+    /// **Ein Schutz ohne Meldungen weckt nicht** (9.9, FB-755): Ohne Haken
+    /// des Wirts ist das Programm hinter dem Schutz, was es davor war; ob es
+    /// eine Quelle von Weckereignissen hat, sagt es selbst.
+    #[test]
+    fn a_protection_that_never_reports_is_no_wake_source() {
+        let (log, len, open) = (RefCell::new([0; 16]), Cell::new(0), Cell::new(false));
+        let g = Guarded::new(Recorder { log: &log, len: &len, open: &open, sleepy: true }, Silent);
+        assert!(!g.wake_sources());
     }
 
     /// **Eine Verletzung im Schlaf weckt an der naechsten Grenze** (12.3,
