@@ -253,14 +253,6 @@ fn source(pins: &[Pin<'_>], adcs: &[Adc<'_>], alive: &[(&Driver, Vec<String>)], 
              #define {upper}_ZEPHYR_BAD 3U\n#define {upper}_ZEPHYR_DRIVER 3U\n"
         );
     }
-    if !adcs.is_empty() {
-        let _ = writeln!(
-            s,
-            "/* Ein Treiber legt eine Wandlung mit 16 oder 32 Bit an den Anfang des\n * Puffers; `sample` liest \
-             beide nur in Little Endian richtig. */\n#if defined(CONFIG_BIG_ENDIAN)\n#error \"takt: `{ZEPHYR_ADC}` \
-             liest den Puffer einer Wandlung nur in Little Endian\"\n#endif\n"
-        );
-    }
     for pin in pins {
         node(&mut s, &pin.channel, &pin.driver.address, &pin.label, "gpios");
         let _ = writeln!(
@@ -371,20 +363,32 @@ fn adc_driver(s: &mut String, adc: &Adc<'_>, x: &Prefix) {
          Rahmen\n     * sie vorgibt; scheitert ein Schritt oder passt der Wert nicht in den\n     * Typ des Kanals, \
          ist die Abtastung `BAD`. */"
     );
-    let _ = writeln!(s, "    uint32_t sample = 0U;");
-    let _ = writeln!(s, "    struct adc_sequence sequence = {{.buffer = &sample, .buffer_size = sizeof sample}};");
+    let _ = writeln!(s, "    uint16_t narrow = 0U;\n    uint32_t wide = 0U;");
+    let _ = writeln!(s, "    struct adc_sequence sequence = {{.buffer = &narrow, .buffer_size = sizeof narrow}};");
     let _ = writeln!(s, "    int32_t microvolts = 0;\n    uint8_t taken = 2U;");
-    let _ = writeln!(s, "    int rc = adc_sequence_init_dt(&{spec}, &sequence);");
     let _ = writeln!(s, "    (void)user;\n    (void)now;\n    (void)age;\n    (void)t;");
+    let _ = writeln!(
+        s,
+        "    /* Bis 16 Bit legt der Treiber eine Wandlung als `uint16_t` an, darueber\n     * als `uint32_t`, je in \
+         der Bytefolge der CPU; die Aufloesung steht im\n     * Devicetree. */"
+    );
+    let _ = writeln!(s, "    if ({spec}.resolution > 16U) {{");
+    let _ = writeln!(s, "        sequence.buffer = &wide;\n        sequence.buffer_size = sizeof wide;\n    }}");
+    let _ = writeln!(s, "    int rc = adc_sequence_init_dt(&{spec}, &sequence);");
     let _ = writeln!(s, "    if (rc == 0) {{\n        rc = adc_read_dt(&{spec}, &sequence);\n    }}");
     let _ = writeln!(s, "    if (rc == 0) {{");
-    let _ = writeln!(s, "        /* Ein differentieller Kanal liefert das Zweierkomplement in 16 Bit. */");
-    let _ = writeln!(s, "        if ({spec}.channel_cfg.differential != 0U) {{");
-    let _ = writeln!(s, "            const uint32_t bits = sample & 0xFFFFU;");
-    let _ = writeln!(s, "            const int32_t low = (int32_t)bits;");
+    let _ = writeln!(s, "        if ({spec}.resolution > 16U) {{");
+    let _ =
+        writeln!(s, "            /* Ueber 16 Bit ist der Kanal nie differentiell (`{}`). */", x.name("zephyr_init"));
+    let _ = writeln!(s, "            if (wide <= (uint32_t)INT32_MAX) {{");
+    let _ = writeln!(s, "                microvolts = (int32_t)wide;\n            }} else {{");
+    let _ = writeln!(s, "                rc = -ERANGE;\n            }}");
+    let _ = writeln!(s, "        }} else if ({spec}.channel_cfg.differential != 0U) {{");
+    let _ = writeln!(s, "            /* Ein differentieller Kanal liefert das Zweierkomplement. */");
+    let _ = writeln!(s, "            const int32_t low = (int32_t)narrow;");
     let _ = writeln!(s, "            microvolts = (low >= 0x8000) ? (low - 0x10000) : low;");
-    let _ = writeln!(s, "        }} else {{\n            microvolts = (int32_t)sample;\n        }}");
-    let _ = writeln!(s, "        rc = adc_raw_to_microvolts_dt(&{spec}, &microvolts);\n    }}");
+    let _ = writeln!(s, "        }} else {{\n            microvolts = (int32_t)narrow;\n        }}\n    }}");
+    let _ = writeln!(s, "    if (rc == 0) {{\n        rc = adc_raw_to_microvolts_dt(&{spec}, &microvolts);\n    }}");
     match &adc.linear {
         Some((gain, offset)) => {
             let _ = writeln!(s, "    if (rc == 0) {{");
@@ -466,7 +470,7 @@ fn init(s: &mut String, pins: &[Pin<'_>], adcs: &[Adc<'_>], x: &Prefix) {
         let _ = writeln!(s, "        rc = adc_is_ready_dt(adc->spec) ? adc_channel_setup_dt(adc->spec) : -ENODEV;");
         let _ = writeln!(
             s,
-            "        /* Ein differentieller Kanal ueber 16 Bit fasst nicht in die Wandlung oben. */\n        if ((rc \
+            "        /* Ein differentieller Kanal ueber 16 Bit: Das Zweierkomplement in 32 Bit\n         * waere nicht eindeutig. */\n        if ((rc \
              == 0) && (adc->spec->channel_cfg.differential != 0U) && (adc->spec->resolution > 16U)) {{\n            \
              rc = -ENOTSUP;\n        }}"
         );
