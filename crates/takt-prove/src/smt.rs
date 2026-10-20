@@ -676,38 +676,104 @@ fn lia_text(op: Op, a: &[String]) -> Option<String> {
 /// Ein Term ueber ganzen Zahlen mit `let` statt `define-fun`: In einer
 /// Horn-Klausel sind die Variablen gebunden, und eine Definition auf
 /// oberster Ebene saehe sie nicht. Jeder geteilte Knoten bekommt eine
-/// Bindung, der Text bleibt linear in der Groesse des Graphen; `Err` nennt
-/// den ersten Knoten ausserhalb des Fragments.
+/// Bindung, der Text bleibt linear in der Groesse des Graphen.
+///
+/// **Was ausserhalb des Fragments liegt, wird frei** (13.3, M11 Strang B2
+/// Schritt 2): Ein groesster Teilterm, der Fliesskomma, eine Bitoperation,
+/// eine Schiebung oder die Wickelung in eine Breite braucht und selbst ein
+/// Wahrheitswert oder eine ganze Zahl ist, wird eine frische Variable der
+/// Klausel, frei und unbeschraenkt. Das nimmt nur Ablaeufe hinzu, auch wenn
+/// ein Ziel den Term liest: Eine Invariante gilt dann auch fuer das genaue
+/// Modell, ein Pfad der Suche zaehlt nicht. Gleiche Terme derselben Klausel
+/// und desselben Ticks teilen ihre Variable.
 struct LetPrinter {
     tag: &'static str,
     binds: Vec<(String, String)>,
     names: HashMap<(usize, u32, u32), String>,
+    /// Die frischen Variablen dieser Klausel mit ihrer Sorte.
+    fresh: Vec<(String, &'static str)>,
+    /// Knoten ausserhalb des Fragments ohne eigene Sorte im Fragment: Sie
+    /// gehen im naechsten Knoten auf, der eine hat.
+    opaque: HashSet<(usize, u32, u32)>,
+    /// Was zuerst frei wurde, fuer den Bericht.
+    why: Option<String>,
 }
 
 impl LetPrinter {
     fn new(tag: &'static str) -> LetPrinter {
-        LetPrinter { tag, binds: Vec::new(), names: HashMap::new() }
+        LetPrinter {
+            tag,
+            binds: Vec::new(),
+            names: HashMap::new(),
+            fresh: Vec::new(),
+            opaque: HashSet::new(),
+            why: None,
+        }
+    }
+
+    /// Warum ein Argument ausserhalb des Fragments liegt; `None` darin.
+    fn outside(&self, t: &Term, state: u32, input: u32) -> Option<String> {
+        match &*t.0 {
+            Node::App(..) if self.opaque.contains(&(t.key(), state, input)) => Some(outside_sort(t.sort()).to_string()),
+            Node::Var(v, sort) if lia_sort(*sort).is_none() => Some(format!("`{v}` ist {}", outside_sort(*sort))),
+            Node::F32(_) | Node::F64(_) => Some(outside_sort(Sort::F64).to_string()),
+            _ => None,
+        }
     }
 
     /// Der Name eines Terms; innere Knoten bekommen eine Bindung, jeder
-    /// nach seinen Argumenten ([`post_order`]). `Err` ausserhalb des
-    /// Fragments.
+    /// nach seinen Argumenten ([`post_order`]). Ein Knoten ausserhalb des
+    /// Fragments wird frei; `Err` nur, wenn `t` selbst keine Sorte im
+    /// Fragment hat.
     fn name(&mut self, t: &Term, state: u32, input: u32) -> Result<String, String> {
-        for n in post_order(t, |n| self.names.contains_key(&(n.key(), state, input))) {
+        let known = |n: &Term| {
+            let key = (n.key(), state, input);
+            self.names.contains_key(&key) || self.opaque.contains(&key)
+        };
+        for n in post_order(t, known) {
             let Node::App(op, args) = &*n.0 else { continue };
-            let parts: Vec<String> = args.iter().map(|a| self.atom(a, state, input)).collect::<Result<_, _>>()?;
-            let name = format!("|l{}{}|", self.tag, self.binds.len());
-            let text = match op {
-                Op::ConstArray => match lia_sort(n.sort()) {
-                    Some(sort) => format!("((as const {sort}) {})", parts[0]),
-                    None => return Err(outside_sort(n.sort()).to_string()),
-                },
-                _ => lia_text(*op, &parts).ok_or_else(|| outside_op(*op).to_string())?,
+            let key = (n.key(), state, input);
+            let text = match args.iter().find_map(|a| self.outside(a, state, input)) {
+                Some(why) => Err(why),
+                None => {
+                    let parts: Vec<String> =
+                        args.iter().map(|a| self.atom(a, state, input)).collect::<Result<_, _>>()?;
+                    match op {
+                        Op::ConstArray => match lia_sort(n.sort()) {
+                            Some(sort) => Ok(format!("((as const {sort}) {})", parts[0])),
+                            None => Err(outside_sort(n.sort()).to_string()),
+                        },
+                        _ => lia_text(*op, &parts).ok_or_else(|| outside_op(*op).to_string()),
+                    }
+                }
             };
-            self.binds.push((name.clone(), text));
-            self.names.insert((n.key(), state, input), name);
+            match (text, lia_sort(n.sort())) {
+                (Ok(text), _) => {
+                    let name = format!("|l{}{}|", self.tag, self.binds.len());
+                    self.binds.push((name.clone(), text));
+                    self.names.insert(key, name);
+                }
+                (Err(why), Some(sort)) => {
+                    let name = format!("|f{}{}|", self.tag, self.fresh.len());
+                    self.fresh.push((name.clone(), sort));
+                    self.names.insert(key, name);
+                    self.why.get_or_insert(why);
+                }
+                (Err(why), None) => {
+                    self.opaque.insert(key);
+                    self.why.get_or_insert(why);
+                }
+            }
         }
-        self.atom(t, state, input)
+        match self.outside(t, state, input) {
+            Some(why) => Err(why),
+            None => self.atom(t, state, input),
+        }
+    }
+
+    /// Die frischen Variablen als Bindungen eines `forall`.
+    fn fresh_binders(&self) -> String {
+        self.fresh.iter().map(|(n, s)| format!(" ({n} {s})")).collect()
     }
 
     /// Der Name eines Blatts oder eines schon gebundenen Knotens.
@@ -740,18 +806,23 @@ impl LetPrinter {
 /// erreichbar, mit den Eingaben `i` des Ticks, der ihn ergab. z3 sucht mit
 /// Spacer (PDR) eine induktive Invariante — `sat` heisst, das Ziel gilt in
 /// jeder Tiefe. Arrays aus ganzen Zahlen und Wahrheitswerten traegt Spacer
-/// mit (FB-497). `Err` nennt, was im Kegel des Ziels ausserhalb des
-/// Fragments liegt (Fliesskomma, auch in Arrays, Bitoperationen, Schieben).
-pub fn horn(model: &Model, target: Target) -> Result<String, String> {
+/// mit (FB-497). Was im Kegel des Ziels ausserhalb des Fragments liegt
+/// (Fliesskomma, auch in Arrays, Bitoperationen, Schieben), wird frei
+/// ([`LetPrinter`]): Zustand und Eingaben ausserhalb fallen aus `Inv` und
+/// sind in jedem Tick frei; [`Horn::abstracted`] nennt das Erste.
+pub fn horn(model: &Model, target: Target) -> Result<Horn, String> {
     let Scope { state, inputs, constraints, invariants, .. } = scope(model, &[target], true);
     let before: Vec<&Term> = constraints.iter().chain(&invariants).copied().collect();
     let lia = lia_sort;
-    let sorts: Vec<&str> = state
+    let mut abstracted = state
         .iter()
         .map(|v| (v.name.as_str(), v.sort))
         .chain(inputs.iter().map(|(n, s)| (n.as_str(), *s)))
-        .map(|(n, s)| lia(s).ok_or_else(|| format!("`{n}` ist {}", outside_sort(s))))
-        .collect::<Result<_, _>>()?;
+        .find(|(_, s)| lia(*s).is_none())
+        .map(|(n, s)| format!("`{n}` ist {}", outside_sort(s)));
+    let state: Vec<&StateVar> = state.into_iter().filter(|v| lia(v.sort).is_some()).collect();
+    let inputs: Vec<&(String, Sort)> = inputs.into_iter().filter(|(_, s)| lia(*s).is_some()).collect();
+    let sorts: Vec<&str> = state.iter().map(|v| v.sort).chain(inputs.iter().map(|(_, s)| *s)).filter_map(lia).collect();
     let tag = "h";
     let args = |k: u32| -> String {
         state
@@ -796,43 +867,50 @@ pub fn horn(model: &Model, target: Target) -> Result<String, String> {
         body.extend(lp.all(&constraints, 1, 1)?);
         Ok(body)
     };
+    // Eine Klausel mit den Bindungen `steps` und den frischen Variablen
+    // ihres Koerpers.
+    let mut clause = |out: &mut String, lp: LetPrinter, steps: &[u32], body: String| {
+        abstracted = abstracted.take().or(lp.why.clone());
+        let vars = format!("{}{}", binders(steps), lp.fresh_binders());
+        let _ = writeln!(out, "{}", rule(vars, lp.wrap(body)));
+    };
     let mut lp = LetPrinter::new(tag);
     let body = start(&mut lp)?;
-    let _ = writeln!(
-        out,
-        "{}",
-        rule(binders(&[1]), lp.wrap(format!("(=> (and true {}) (Inv {}))", body.join(" "), args(1))))
-    );
+    clause(&mut out, lp, &[1], format!("(=> (and true {}) (Inv {}))", body.join(" "), args(1)));
     let mut lp = LetPrinter::new(tag);
     let body = step(&mut lp)?;
-    let _ = writeln!(
-        out,
-        "{}",
-        rule(binders(&[0, 1]), lp.wrap(format!("(=> (and {}) (Inv {}))", body.join(" "), args(1))))
-    );
+    clause(&mut out, lp, &[0, 1], format!("(=> (and {}) (Inv {}))", body.join(" "), args(1)));
     match target {
         Target::Property(i) => {
             let mut lp = LetPrinter::new(tag);
             let mut body = vec![format!("(Inv {})", args(0))];
             body.extend(lp.all(&before, 0, 0)?);
             body.push(format!("(not {})", lp.name(&model.properties[i].formula, 0, 0)?));
-            let _ = writeln!(out, "{}", rule(binders(&[0]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
+            clause(&mut out, lp, &[0], format!("(=> (and {}) false)", body.join(" ")));
         }
         Target::Check(_) | Target::Transition(_) | Target::Pass(_) => {
             let Some(site) = target.site(model) else { return Err("keine Pruefstelle".to_string()) };
             let mut lp = LetPrinter::new(tag);
             let mut body = start(&mut lp)?;
             body.push(lp.name(&site.init, 1, 1)?);
-            let _ = writeln!(out, "{}", rule(binders(&[1]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
+            clause(&mut out, lp, &[1], format!("(=> (and {}) false)", body.join(" ")));
             let mut lp = LetPrinter::new(tag);
             let mut body = step(&mut lp)?;
             body.push(lp.name(&site.fires, 0, 1)?);
-            let _ =
-                writeln!(out, "{}", rule(binders(&[0, 1]), lp.wrap(format!("(=> (and {}) false)", body.join(" ")))));
+            clause(&mut out, lp, &[0, 1], format!("(=> (and {}) false)", body.join(" ")));
         }
     }
     let _ = writeln!(out, "(check-sat)");
-    Ok(out)
+    Ok(Horn { text: out, abstracted })
+}
+
+/// Die Anfrage der Invariantensuche und was sie frei machte.
+pub struct Horn {
+    /// Der Text fuer den Solver.
+    pub text: String,
+    /// Was zuerst ausserhalb des Fragments lag und frei wurde; `None`, wenn
+    /// die Anfrage das genaue Modell ist.
+    pub abstracted: Option<String>,
 }
 
 /// Eine Pruefrunde nach Houdini (FB-375): `step = false` fragt je Kandidat,

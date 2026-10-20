@@ -746,10 +746,12 @@ fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> 
         Ok(q) => q,
         Err(why) => return Ok(Search::Outside(why)),
     };
-    let text = solver.run(&q, timeout_s, "horn")?;
-    Ok(match answer(&text) {
-        "sat" => Search::Invariant,
-        "unsat" => Search::Path,
+    let text = solver.run(&q.text, timeout_s, "horn")?;
+    Ok(match (answer(&text), q.abstracted) {
+        ("sat", _) => Search::Invariant,
+        ("unsat", None) => Search::Path,
+        // Ein Pfad durch freie Variablen ist keiner des Modells.
+        ("unsat", Some(why)) => Search::Abstract(why),
         _ => Search::Open,
     })
 }
@@ -764,6 +766,9 @@ enum Search {
     Open,
     /// Nicht gesucht: Der Kegel des Ziels liegt ausserhalb des Fragments.
     Outside(String),
+    /// Keine Invariante, wo Teilterme ausserhalb des Fragments frei wurden;
+    /// ein Pfad der Suche kann an ihnen liegen und zaehlt nicht.
+    Abstract(String),
 }
 
 /// Warum ein Induktionsschritt offen bleibt, und was er braucht.
@@ -780,6 +785,11 @@ fn open(model: &Model, depth: u32, search: &Search) -> String {
     };
     let outside = match search {
         Search::Outside(why) => format!("; keine Invariantensuche, ausserhalb ihres Fragments: {why}"),
+        Search::Abstract(why) => {
+            format!(
+                "; keine Invariante, auch nicht mit freien Variablen fuer, was ausserhalb ihres Fragments liegt: {why}"
+            )
+        }
         _ => String::new(),
     };
     format!("Induktionsschritt offen (k = {depth}){deadline}{outside}")

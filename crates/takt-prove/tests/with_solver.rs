@@ -388,14 +388,54 @@ fn block_contracts_are_proven_and_their_call_sites_classified() {
     let _ = p;
 }
 
+/// Wahr, aber nicht k-induktiv, mit Fliesskomma im Kegel: Die
+/// Invariantensuche macht es frei und beweist die Eigenschaft (13.3, M11
+/// Strang B2 Schritt 2); vorher blieb sie mit „Induktionsschritt offen“.
 #[test]
-fn a_true_but_not_inductive_property_stays_unproven_with_a_reason() {
+fn a_true_but_not_inductive_property_is_proven_by_an_invariant() {
     let Some(solver) = solver() else { return };
     let p = corpus_with("01_minimal.takt", "property never_both: never(vent and tank_guard.state == WATCH)");
     let model = encode(&p).expect("kodierbar");
     let reports = prove(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    assert!(matches!(reports[0].verdict, Verdict::Proven { k: 0, .. }), "{:?}", reports[0]);
+}
+
+/// **Ein Pfad durch eine freie Variable zaehlt nicht** (13.3): `a` und `b`
+/// zaehlen unter `x > 1.0` und `1.0 < x`, also gemeinsam; frei gemacht sind
+/// es zwei Variablen, und die Suche findet einen Pfad, den es nicht gibt.
+/// Die Eigenschaft bleibt unbewiesen, mit dem Grund, und `takt prove`
+/// folgt dem Pfad nicht.
+#[test]
+fn a_path_through_a_free_variable_is_not_followed() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+output y : int in 0..6 @ hw(\"o/y\") with safe = 0
+
+machine m:
+    pub var a : int in 0..6 = 0
+    pub var b : int in 0..6 = 0
+    var x : float = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            x = x * 0.5 + 1.0
+            if x > 1.0 and a < 6:
+                a = a + 1
+            if 1.0 < x and b < 6:
+                b = b + 1
+            y = a
+
+property apart: never(m.a == 3 and m.b == 5)
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let reports = prove(&model, &p, 3, &solver, 60).expect("Solver laeuft");
     let Verdict::Unproven { reason } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
-    assert!(reason.contains("Induktionsschritt offen"), "{reason}");
+    assert!(reason.contains("Induktionsschritt offen") && reason.contains("freien Variablen"), "{reason}");
 }
 
 /// P3 (11.3): Eine implizite Range-Pruefung, die ein Uebergang unerreichbar
@@ -1484,9 +1524,9 @@ machine m:
     state RUN:
         loop:
             x = x * 0.5 + 1.0
-            if x > 1.0:
-                a = (a + 1) % 7
-                b = (b + 1) % 7
+            if x > 1.0 and a < 6:
+                a = a + 1
+                b = b + 1
             check a != 3 or b != 5, \"nie\"
             y = a
 ",
