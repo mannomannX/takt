@@ -16,20 +16,42 @@ const TICKS: u64 = 60;
 /// Zwei Programme mit Faults, Folgen und einem Ausgabestrom.
 const PROGRAMS: [(&str, &str); 2] = [("pa", "03_sequences_and_faults.takt"), ("pb", "13_framing.takt")];
 
-/// Die Leitung des Boards fuer beide Rahmen: `current` waehlt die Datei des
-/// Programms, das gerade rechnet; die Zahlen wie in `takt-bringup-host`.
+/// Die Haken fuer alle Rahmen (12.11): Die Senke jedes Programms und jeder
+/// Instanz ist ihre Datei, die sie bei `init` bekommt; eine globale Wahl,
+/// wer gerade schreibt, gibt es nicht (FB-691). Eine Fliesskommazahl schreibt
+/// der Haken als Bits hinter einer Marke, wie die Haken in Rust und im SDK;
+/// [`t2`] setzt ihre Textform ein wie dort der Ring vor der Leitung (FB-750).
 const BOARD: &str = r#"#include <stdio.h>
 #include <string.h>
 
 static FILE *out[2];
-static int current;
 
-void takt_board_trace(const char *line) { fputs(line, out[current]); }
-void takt_board_trace_i64(long long v) { fprintf(out[current], "%lld ", v); }
-void takt_board_trace_u64(unsigned long long v) { fprintf(out[current], "%llu ", v); }
-void takt_board_trace_f64(double v) { fprintf(out[current], "%.17g ", v); }
-void takt_board_trace_hex8(unsigned char v) { fprintf(out[current], "0x%02x", v); }
+void takt_trace_text(void *s, const char *t) { fputs(t, (FILE *)s); }
+void takt_trace_i64(void *s, long long v) { fprintf((FILE *)s, "%lld", v); }
+void takt_trace_u64(void *s, unsigned long long v) { fprintf((FILE *)s, "%llu", v); }
+void takt_trace_f64(void *s, double v) {
+    unsigned long long bits;
+    memcpy(&bits, &v, sizeof bits);
+    fprintf((FILE *)s, "\x01%016llx", bits);
+}
+void takt_trace_hex8(void *s, unsigned char v) { fprintf((FILE *)s, "0x%02x", v); }
 "#;
+
+/// Setzt fuer jede Marke der Fliesskomma-Haken die Textform aus T2 ein
+/// (`takt_rt_core::digits::float64`, wie der Ring vor der Leitung).
+fn t2(trace: &str) -> String {
+    let mut out = String::with_capacity(trace.len());
+    let mut rest = trace;
+    while let Some(at) = rest.find('\u{1}') {
+        out.push_str(&rest[..at]);
+        let hex = rest.get(at + 1..at + 17).expect("16 Hexziffern hinter der Marke");
+        let bits = u64::from_str_radix(hex, 16).expect("Hexziffern");
+        out.push_str(&takt_interp::trace::float_text(f64::from_bits(bits)));
+        rest = &rest[at + 17..];
+    }
+    out.push_str(rest);
+    out
+}
 
 /// **Zwei Programme in einem Wirtsprozess rechnen wie allein.** Jedes hat
 /// sein Praefix, seine Arena und seinen MCU-Rahmen; ein `main` startet beide
@@ -51,7 +73,7 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
     let mut main = String::from(BOARD);
     let mut calls = String::new();
     let mut programs = Vec::new();
-    for (i, (name, file)) in PROGRAMS.iter().enumerate() {
+    for (name, file) in &PROGRAMS {
         let prefix = Prefix::new(name).expect("Praefix");
         let p = common::board::corpus(file);
         let ir = takt_llvm::lower::program(&p, host.triple, &prefix).ir;
@@ -65,8 +87,7 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
         heads.push_str(&format!("#include \"{name}.h\"\n"));
         main.push_str(&format!("static struct {name}_arena {name}_arena;\n"));
         calls.push_str(&format!(
-            "        current = {i}; {name}_tick(&{name}_arena, k); {name}_commit(&{name}_arena); \
-             {name}_dump(&{name}_arena, 0);\n"
+            "        {name}_tick(&{name}_arena, k); {name}_commit(&{name}_arena); {name}_dump(&{name}_arena, 0);\n"
         ));
         programs.push((name, p, dir.join(format!("{name}.trace"))));
     }
@@ -74,7 +95,7 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
     for (i, (name, _, trace)) in programs.iter().enumerate() {
         let path = trace.display().to_string().replace('\\', "/");
         main.push_str(&format!("    out[{i}] = fopen(\"{path}\", \"w\");\n    if (!out[{i}]) return 1;\n"));
-        main.push_str(&format!("    current = {i}; {name}_init(&{name}_arena, 0); {name}_dump(&{name}_arena, 1);\n"));
+        main.push_str(&format!("    {name}_init(&{name}_arena, 0, out[{i}]); {name}_dump(&{name}_arena, 1);\n"));
     }
     main.push_str(&format!("    for (long long k = 1; k <= {TICKS}; k++) {{\n{calls}    }}\n"));
     main.push_str("    fclose(out[0]);\n    fclose(out[1]);\n    return 0;\n}\n");
@@ -98,7 +119,7 @@ fn two_programs_run_side_by_side_like_the_interpreter() {
     assert!(run.status.success(), "der Lauf brach ab: {}", run.status);
 
     for (name, p, trace) in &programs {
-        let native = std::fs::read_to_string(trace).expect("Trace");
+        let native = t2(&std::fs::read_to_string(trace).expect("Trace"));
         let interpreted = common::board::run_interpreted(p);
         let diffs = compare(&interpreted, &native);
         assert!(
@@ -153,13 +174,13 @@ fn instances_of_one_program_share_nothing() {
         let path = dir.join(format!("i{i}.trace")).display().to_string().replace('\\', "/");
         main.push_str(&format!("    out[{i}] = fopen(\"{path}\", \"w\");\n    if (!out[{i}]) return 1;\n"));
         main.push_str(&format!("    memset(&arena{i}, 0xA5, sizeof arena{i});\n"));
-        main.push_str(&format!("    current = {i}; {name}_init(&arena{i}, 0); {name}_dump(&arena{i}, 1);\n"));
+        main.push_str(&format!("    {name}_init(&arena{i}, 0, out[{i}]); {name}_dump(&arena{i}, 1);\n"));
     }
     main.push_str(&format!("    for (long long k = 1; k <= {TICKS}; k++) {{\n"));
     for (i, (name, _, every)) in instances.iter().enumerate() {
         main.push_str(&format!(
-            "        if (k % {every} == 0) {{ current = {i}; {name}_tick(&arena{i}, k / {every}); \
-             {name}_commit(&arena{i}); {name}_dump(&arena{i}, 0); }}\n"
+            "        if (k % {every} == 0) {{ {name}_tick(&arena{i}, k / {every}); {name}_commit(&arena{i}); \
+             {name}_dump(&arena{i}, 0); }}\n"
         ));
     }
     main.push_str("    }\n    for (int i = 0; i < 3; i++) fclose(out[i]);\n    return 0;\n}\n");
@@ -182,7 +203,7 @@ fn instances_of_one_program_share_nothing() {
     assert!(run.status.success(), "der Lauf brach ab: {}", run.status);
     for (i, (name, n, every)) in instances.iter().enumerate() {
         let p = &compiled[usize::from(*name == "nb")];
-        let native = std::fs::read_to_string(dir.join(format!("i{i}.trace"))).expect("Trace");
+        let native = t2(&std::fs::read_to_string(dir.join(format!("i{i}.trace"))).expect("Trace"));
         let options = takt_interp::RunOptions { ticks: TICKS / every, ..Default::default() };
         let interpreted = takt_interp::run(p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
         let interpreted = takt_conformance::run::widen_f32(&interpreted, &takt_conformance::run::f32_outputs(p));

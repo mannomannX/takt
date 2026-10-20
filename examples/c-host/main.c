@@ -40,8 +40,8 @@ uint8_t valve_alive_tank(void *user, int64_t now) {
  * nirgendwohin. */
 static void kick(void *ctx) { (void)ctx; }
 
-/* Die Leitung des Traces (12.5): stdout. Den Trace schreibt der Rahmen ueber
- * das SDK; dieses nimmt jedes Byte, das `fputc` annimmt. */
+/* Die Leitung des Traces (12.5): stdout. Den Trace schreibt der Rahmen in
+ * die Senke des SDK; sie nimmt jedes Byte, das `fputc` annimmt. */
 static uint8_t put(void *ctx, uint8_t byte) {
     FILE *out = ctx;
     return (fputc((int)byte, out) != EOF) ? 1u : 0u;
@@ -87,15 +87,16 @@ int main(int argc, char **argv) {
         static uint8_t ring[4096];
         static struct valve_arena arena;
         static takt_core core;
+        static takt_sink sink;
         struct tank tank = {0u};
         const struct takt_line line = {stdout, put, NULL};
         const struct takt_watchdog watchdog = {NULL, kick};
-        int32_t status = takt_line_init(&line, ring, sizeof ring);
+        int32_t status = takt_sink_init(&sink, &line, ring, sizeof ring);
         if (status == TAKT_OK) {
-            status = takt_core_init(&core, &valve_ops, &arena, &tank, TAKT_PROFILE_BAREMETAL, &watchdog);
+            status = takt_core_init(&core, &valve_ops, &arena, &tank, &sink, TAKT_PROFILE_BAREMETAL, &watchdog);
         }
         if (status != TAKT_OK) {
-            (void)fprintf(stderr, "takt: Leitung oder Kern: %d\n", (int)status);
+            (void)fprintf(stderr, "takt: Senke oder Kern: %d\n", (int)status);
         } else {
             drive(&core, ticks * VALVE_TICK_NS);
             rc = 0;

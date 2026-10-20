@@ -24,6 +24,11 @@
 /* So viele Ticks faehrt der Port: `takt_conformance::port::TICKS`. */
 #define TICKS 2000U
 
+/* Die Senke des Programms (12.5, 12.11): ein Ring vor der Leitung des
+ * Wirts, gebunden mit `takt_sink_init`; in ihr stehen Kopf, Trace und
+ * Bilanz. */
+static takt_sink sink;
+
 /* Der Watchdog des Wirts (12.11): Dieses Beispiel startet keinen. */
 static void kick(void *ctx) {
     ARG_UNUSED(ctx);
@@ -82,7 +87,7 @@ static void drive(takt_core *core) {
             measured = &stacks;
         }
     } else {
-        takt_board_trace("takt port: kein Start\n");
+        takt_trace_text(&sink, "takt port: kein Start\n");
     }
     takt_core_report(core, measured, &foreign);
 }
@@ -96,11 +101,11 @@ int main(void) {
     static struct takt_nvm nvm;
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
-    if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
-        takt_board_trace("takt auf zephyr mit cmsis-rtos2\n" TAKT_RTOS_PROTECTION "\n");
-        takt_line_mark();
+    if ((line_open(&line) == 0) && (takt_sink_init(&sink, &line, ring, sizeof ring) == TAKT_OK)) {
+        takt_trace_text(&sink, "takt auf zephyr mit cmsis-rtos2\n" TAKT_RTOS_PROTECTION "\n");
+        takt_sink_mark(&sink);
         if ((journal_open(&nvm) == 0) &&
-            (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
+            (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog, &nvm,
                                       current, stored, PORT_TEST_PERSIST_BOUND) == TAKT_OK)) {
             drive(&core);
         }

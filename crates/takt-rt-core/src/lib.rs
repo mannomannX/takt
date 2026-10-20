@@ -58,6 +58,7 @@
     )
 )]
 
+pub mod digits;
 pub mod journal;
 pub mod loopcore;
 pub mod overrun;
