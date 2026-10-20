@@ -12,7 +12,7 @@ rust-version = "1.85"
 
 [dependencies]
 # Der Weg in den DFU-Bootloader des ROM, wenn keine Anwendung da ist.
-takt-board-stm32f401 = { path = "../takt-board-stm32f401" }
+takt-board-stm32f401 = { path = "../takt-board-stm32f401", features = ["trampoline"] }
 cortex-m = "0.7"
 # Ohne `set-vtor`: Das Sprungbrett nimmt keinen Interrupt an, und die
 # Anwendung setzt `VTOR` selbst.
