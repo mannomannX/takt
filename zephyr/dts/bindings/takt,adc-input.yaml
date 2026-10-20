@@ -1,0 +1,16 @@
+# Ein analoger Eingang eines Takt-Programms (8.10, „Treiber aus dem
+# Devicetree“, FB-735): Ein Kanal an einem Geraet mit `driver =
+# "zephyr-adc"` nennt mit `port` das Label eines solchen Knotens. Der
+# Knoten traegt nur `io-channels`; Aufloesung, Verstaerkung und Referenz
+# stehen im Kanal des ADC (`channel@N`). Ohne Bindung erzeugte Zephyr fuer
+# `io-channels` keine Makros, und `ADC_DT_SPEC_GET` faende den Kanal nicht.
+
+description: Ein analoger Eingang eines Takt-Programms; der Kanal des ADC steht in io-channels.
+
+compatible: "takt,adc-input"
+
+include: base.yaml
+
+properties:
+  io-channels:
+    required: true

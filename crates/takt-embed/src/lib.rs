@@ -23,6 +23,13 @@
 //! der Wirt ihr gibt ([`Line`], die Haken dazu aus [`hooks!`]). Die Testhilfe
 //! ([`testing`], Merkmal `testing`) faehrt das Programm in logischer Zeit
 //! und vergleicht seinen Trace mit dem Interpreter (13.1).
+//!
+//! **Adapter** (2.7 in plan/m11.md). Fuer die haeufigen Kanaele schreibt
+//! niemand einen Treiber: [`hal::Pin`] macht einen Pin aus `embedded-hal`
+//! zum Eingang oder Ausgang (Merkmal `hal`), [`io::Serial`] eine
+//! Schnittstelle aus `embedded-io` zur Quelle eines Stroms (Merkmal `io`),
+//! und [`ring::Ring`] nimmt die Bytes auf, die eine ISR empfaengt. Ein
+//! Rahmer aus [`frame`] macht aus jeder Quelle einen Eingabestrom.
 
 #![cfg_attr(
     not(test),
@@ -61,11 +68,17 @@
     )
 )]
 
-#[cfg(any(feature = "build", feature = "testing"))]
+#[cfg(any(test, feature = "build", feature = "testing"))]
 extern crate std;
 
 #[cfg(feature = "build")]
 pub mod build;
+pub mod frame;
+#[cfg(feature = "hal")]
+pub mod hal;
+#[cfg(feature = "io")]
+pub mod io;
+pub mod ring;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod trace;
@@ -212,7 +225,8 @@ impl<T> Sample<T> {
 
 /// Ein Element eines Eingabestroms, das der Treiber in den Puffer des
 /// Rahmens geschrieben hat: wie viele Bytes, wann, mit welcher Folgenummer.
-/// Ohne Folgenummer gilt die, die der Rahmen erwartet (12.6 Zeile 2).
+/// Ohne Folgenummer gilt die, die der Rahmen erwartet (12.6 Zeile 2); eine
+/// eigene Folge beginnt in jedem Lauf bei 0 (8.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Piece {
     /// Die Bytes im Puffer; mehr als seine Laenge zaehlen nicht.
