@@ -15,7 +15,7 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_WIRE_TICKS,
+    Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS,
     a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, agreement, agreement_with,
     binds_no_driver, corpus, driver_edge_agrees, fits_the_poll_form, header_names,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
@@ -402,7 +402,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::ZEPHYR;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, Case::Partition, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Partition, Some(ZEPHYR_COUNTER_CLOCK), run));
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart des F401 und ein neues
@@ -447,7 +447,7 @@ fn the_cmsis_rtos2_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::CMSIS_RTOS2;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, Case::Unprotected, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Unprotected, None, run));
 }
 
 /// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,

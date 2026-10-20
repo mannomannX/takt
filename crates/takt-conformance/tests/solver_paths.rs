@@ -292,11 +292,10 @@ struct Open {
 }
 
 /// Die Gruppen einer Stelle, die kein Modell fuehrt, und warum keines sie
-/// fuehrt: eine Funktion, die keine Maschine ruft (die Analyse nach 3.4
-/// kennt sie nicht); eine bewiesene Range, die Modell und Codegen nicht
-/// pruefen; der Platzhalter einer Meldung, die nur beim Verletzen entsteht;
-/// Bedingung oder Wert einer Beobachtung (13.2).
-const WITHOUT_MODEL: [&str; 4] = ["nie gerufen", "Range bewiesen", "in einer Meldung", "in einer Beobachtung"];
+/// fuehrt: eine bewiesene Range, die Modell und Codegen nicht pruefen; der
+/// Platzhalter einer Meldung, die nur beim Verletzen entsteht; Bedingung
+/// oder Wert einer Beobachtung (13.2).
+const WITHOUT_MODEL: [&str; 3] = ["Range bewiesen", "in einer Meldung", "in einer Beobachtung"];
 
 impl Open {
     fn is_empty(&self) -> bool {
@@ -315,23 +314,14 @@ fn open_items(name: &str, p: &Program) -> Open {
     }
     let proven = paths::proof(name).map(|pr| pr.tags()).unwrap_or_default();
     let unfired = paths::unfired(name).map(|u| u.transitions).unwrap_or_default();
-    let source = |f: &&takt_mir::fns::Fn| f.span.file.0 == takt_mir::analysis::proof::SOURCE;
-    let called: Vec<takt_diag::Span> =
-        takt_mir::analysis::reachable_fns(p).iter().map(|f| p.fns[f.index()].span).collect();
-    let inside = |s: &takt_diag::Span, a: u32, b: u32| s.start <= a && b <= s.end;
-    let uncalled = |a: u32, b: u32| {
-        p.fns.iter().filter(source).any(|f| inside(&f.span, a, b))
-            && !called.iter().any(|s| s.file.0 == takt_mir::analysis::proof::SOURCE && inside(s, a, b))
-    };
     let mut out = Open::default();
     for item in takt_interp::coverage::items(p) {
         let kind = item.key.split(' ').next().unwrap_or("").to_string();
         let (a, b) = (item.span.start, item.span.end);
         let reason = match item.silent {
-            _ if uncalled(a, b) => Some(WITHOUT_MODEL[0]),
-            Some(Silent::Proven) => Some(WITHOUT_MODEL[1]),
-            Some(Silent::Message) => Some(WITHOUT_MODEL[2]),
-            Some(Silent::Observe) => Some(WITHOUT_MODEL[3]),
+            Some(Silent::Proven) => Some(WITHOUT_MODEL[0]),
+            Some(Silent::Message) => Some(WITHOUT_MODEL[1]),
+            Some(Silent::Observe) => Some(WITHOUT_MODEL[2]),
             None => None,
         };
         if let Some(why) = reason.filter(|_| item.kind != CoverKind::Transition) {
