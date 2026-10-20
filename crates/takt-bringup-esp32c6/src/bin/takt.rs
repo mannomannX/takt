@@ -524,6 +524,10 @@ fn main() -> ! {
     telemetry.write("  Form ");
     telemetry.write(env!("TAKT_FORM"));
     telemetry.newline();
+    // 12.3, 12.11: Takt schaltet die PMP des C6 im Lauf nicht um; die Arena
+    // schuetzt niemand, nur unter den Stacks liegt ein Waechter.
+    telemetry.write(takt_rt_core::protection::Case::Unprotected.line());
+    telemetry.newline();
     telemetry.mark();
     let telemetry = if LOGICAL { telemetry.lossless() } else { telemetry };
     // SAFETY: vor dem ersten Tick und vor jeder Freigabe eines Interrupts,

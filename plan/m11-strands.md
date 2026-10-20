@@ -91,7 +91,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G (Helfer, seit 2026-10-12, Zweig `g-20-freertos`): 20a Adapter `ports/freertos` und Wirt unter FreeRTOS umgesetzt, der Board-Lauf steht aus; 20b FreeRTOS-MPU (Zweig `g-20b-freertos-mpu`) umgesetzt bis auf die Board-Läufe |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
-| 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | Strang F (seit 2026-10-13, Zweig `f-23-protection`): Kopfzeile `Schutz`, Tests je Fall, TCB-Zeilen in `plan/cert.md`; der Fall ESP-IDF (PMP) folgt nach 21a |
+| 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | Strang F (seit 2026-10-13, Zweig `f-23-protection`): Kopfzeile `Schutz` in jedem Kopf, Urteil und Bericht, Tests je Fall, TCB-Zeilen in `plan/cert.md`, umgesetzt bis auf die Board-Läufe; offen ESP-IDF (FB-756, nach 21a) und das Fenster der Interruptform in C (FB-755) |
 | 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a bis 33c umgesetzt (33b/33c Strang C, gemergt 7b924a3; Board-Crates Strang E, gemergt 0a57fe7a); offen der Board-Lauf über den neuen Stand (Strang A) |
 | 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34e umgesetzt (34d Strang B, 34e Strang A); offen der neue Bench nach dem Umbau der Runtime (Stack-Reserve `rtos` auf dem F401). Strang H (Helfer, seit 2026-10-12, Zweig `h-bench-split`): der Bench in Teilen mit Mindestreserve je Abbild (FB-740) und der Lastkern in Echtzeit, der nur seine Bilanz belegt (FB-741), umgesetzt, CI grün (38312676185), `boards.yml` baut beide Boards samt Bench-Abbildern (38312679018); gemergt (8a6b9d03), der Bench am Board bestanden (38320906796). Danach Zweig `h-fb742-clock` (PR #3): die Uhr des eigenen Kerns auf der Zeitachse von TIM2 und die Tickperiode je Ereignis (FB-742), `angehalten` in der Bilanz (FB-530); am Board bestanden (38331645022), main nachgeholt, wartet auf den Merge. Danach T1, die präfigierten Haken des Trace (Schritt 16) |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
@@ -736,6 +736,27 @@ So arbeitet jeder Strang, als wäre er allein:
     Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
     unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
     38320906796); das zeigt der nächste Lauf.
+
+### 23 — Speicherschutz neben fremdem Code
+
+- **Stand 23 (Strang F, 2026-10-14, Zweig `f-23-protection`):**
+  - **Kopfzeile:** `  Schutz: Fenster|Partition|keiner` vor der Marke,
+    eingerückt wie `  Form …`. Rust: `takt_rt_core::protection::Case`,
+    `takt_rt_baremetal::Protection::CASE`; die Bring-ups schreiben den Fall
+    ihres Schutzes. C: `TAKT_OS_PARTITION` je Adapter,
+    `TAKT_RTOS_PROTECTION` (`ports/rtos/takt_rtos.h`) und
+    `TAKT_IRQ_PROTECTION` (`ports/irq/takt_irq.h`); jeder C-Wirt schreibt
+    sie in seinem Kopf mit einem Aufruf. Nach T1 (Senke als Argument der
+    Trace-Haken) ziehen nur diese Aufrufe nach.
+  - **Urteil und Bericht:** `port::judge` verlangt die Kopfzeile, nimmt die
+    letzte vor der Marke und prüft sie gegen den Nachweis der Probe;
+    `PortEntry::protection`, Bericht Version 5.
+  - **Board-Tests:** `the_port_passes(board, form, Case)`,
+    `zephyr_verdict(…, Case, …)`; der Fall je Port wie in `plan/cert.md`.
+    Der Zugriff der TCB zwischen zwei Ticks läuft in jeder Form des F401.
+  - **Offen:** ESP-IDF (FB-756), das Fenster der Interruptform in C
+    (FB-755). `examples/zephyr-gpio` (nach PR #4) nennt `keiner`, und
+    `the_zephyr_gpio_wire_follows_its_pin` verlangt es.
 
 ### 15, 16, 18, 9, 19 bis 23
 

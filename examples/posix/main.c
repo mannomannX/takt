@@ -178,7 +178,7 @@ static int run(uint64_t ticks) {
     if (status != TAKT_OK) {
         (void)fprintf(stderr, "takt_line_init: %d\n", (int)status);
     } else {
-        takt_board_trace("takt auf posix\n");
+        takt_board_trace("takt auf posix\n" TAKT_RTOS_PROTECTION "\n");
         takt_line_mark();
         (void)memset(slots, 0xff, sizeof slots);
         status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
