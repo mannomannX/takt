@@ -536,6 +536,85 @@ fn a_port_that_is_no_label_and_a_raw_type_other_than_bool_fail_check_60() {
     }
 }
 
+/// Zwei analoge Eingaenge an `zephyr-adc` (8.10, FB-735): Volt ueber
+/// `linear(a, b)` und ganze Mikrovolt ohne Kalibrierung.
+const ANALOG: &str = "
+input  level : float[V] in -0.5..4.0 V   @ hw(\"adc/level\") with max_age = 10 ms
+input  micro : int[uV] in 0..4000000 uV @ hw(\"adc/micro\") with max_age = 10 ms
+output led   : bool                     @ hw(\"ui/led\")    with safe = false
+
+machine m:
+    initial RUN
+    state RUN:
+        loop:
+            led = level.or(0.0 V) > 1.0 V and micro.or(0 uV) > 5 uV
+";
+
+/// Die Konfiguration der Eingaenge: Rohtyp und Kalibrierung von
+/// `adc/level`, Treiber der LED.
+fn analog(raw: &str, calibration: &str, led_driver: &str) -> Hardware {
+    hw(&format!(
+        "
+[device.adc]
+driver = \"zephyr-adc\"
+
+[device.out]
+driver = \"{led_driver}\"
+
+[channel adc/level]
+direction = input
+raw = {raw}
+unit = V
+{calibration}
+device = adc
+port = \"takt_level\"
+
+[channel adc/micro]
+direction = input
+raw = i32
+unit = uV
+device = adc
+port = \"takt_micro\"
+
+[channel ui/led]
+direction = output
+raw = bool
+safe = false
+device = out
+port = \"takt_led\"
+"
+    ))
+}
+
+/// **Ein analoger Eingang liefert `i32` in Mikrovolt** (Pruefung 60,
+/// FB-735): ohne Kalibrierung als `int[uV]`, mit `linear(a, b)` als
+/// `float`.
+#[test]
+fn microvolt_and_linear_inputs_pass_check_60_under_zephyr() {
+    let calibrated = "calibration = \"linear(0.000001, 0)\"";
+    let diags = check_zephyr(&compile(ANALOG), &analog("i32", calibrated, "zephyr-gpio"));
+    assert!(diags.is_empty(), "{:?}", codes(&diags));
+}
+
+/// Ein Ausgang, ein anderer Rohtyp, eine fehlende oder unlesbare
+/// Kalibrierung und `table(…)` sind Fehler; `table(…)` nennt die offene
+/// Zeile FB-780.
+#[test]
+fn an_analog_channel_outside_its_form_fails_check_60() {
+    let linear = "calibration = \"linear(0.000001, 0)\"";
+    for (raw, calibration, led, want) in [
+        ("i32", linear, "zephyr-adc", "`led` an `ui/led`: `zephyr-adc` liest nur Eingaenge"),
+        ("u16", linear, "zephyr-gpio", "liefert Rohtyp `i32` in Mikrovolt, die Konfiguration nennt `u16`"),
+        ("i32", "", "zephyr-gpio", "`level` an `adc/level`: ohne `calibration` liefert `zephyr-adc` ganze Mikrovolt"),
+        ("i32", "calibration = \"table(0 0, 3300000 3.3)\"", "zephyr-gpio", "(FB-780)"),
+        ("i32", "calibration = \"linear(1 / 3, 0)\"", "zephyr-gpio", "ist weder `linear(a, b)`"),
+    ] {
+        let diags = check_zephyr(&compile(ANALOG), &analog(raw, calibration, led));
+        let found = codes(&diags);
+        assert!(found.iter().any(|d| d.starts_with("SC-60") && d.contains(want)), "{raw}, {calibration}: {found:?}");
+    }
+}
+
 /// **Ohne `zephyr-gpio` deutet die Pruefung `port` nicht** (9.5): Ein Geraet
 /// mit einem anderen Treiber bleibt undurchsichtig.
 #[test]

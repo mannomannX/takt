@@ -677,6 +677,55 @@ impl Hardware {
 /// Treiber seiner Kanaele.
 pub const ZEPHYR_GPIO: &str = "zephyr-gpio";
 
+/// Der Treibertyp der analogen Eingaenge aus dem Devicetree (8.10, FB-735):
+/// Der Rohwert ist `i32` in Mikrovolt, die `calibration` der Konfiguration
+/// gilt ab ihm.
+pub const ZEPHYR_ADC: &str = "zephyr-adc";
+
+/// Die Kalibrierung eines Kanals (8.10), wie ein Treiber aus dem Devicetree
+/// sie liest. Die Zahlen bleiben der Text ihrer Literale: Wer sie in Code
+/// schreibt, uebernimmt sie ohne eigene Dezimalumwandlung.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Calibration<'a> {
+    /// `linear(a, b)`: der Wert ist `a · Rohwert + b`.
+    Linear {
+        /// `a`.
+        gain: &'a str,
+        /// `b`.
+        offset: &'a str,
+    },
+    /// `table(…)`: Stuetzstellen, zwischen denen der Treiber interpoliert.
+    Table,
+}
+
+/// Die Kalibrierung in `text`: `linear(a, b)` mit zwei Dezimalliteralen
+/// oder `table(…)`; `None` fuer alles andere.
+pub fn calibration(text: &str) -> Option<Calibration<'_>> {
+    let text = text.trim();
+    if let Some(args) = text.strip_prefix("linear(").and_then(|r| r.strip_suffix(')')) {
+        let (gain, offset) = args.split_once(',')?;
+        let (gain, offset) = (gain.trim(), offset.trim());
+        return (is_decimal(gain) && is_decimal(offset)).then_some(Calibration::Linear { gain, offset });
+    }
+    (text.starts_with("table(") && text.ends_with(')')).then_some(Calibration::Table)
+}
+
+/// Ist `text` ein Dezimalliteral, das C und Takt gleich lesen: Vorzeichen,
+/// Ziffern, wahlweise ein Bruch und ein Exponent (`-5`, `0.01`, `2.5e-3`)?
+pub fn is_decimal(text: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let unsigned = text.strip_prefix(['-', '+']).unwrap_or(text);
+    let (mantissa, exponent) = match unsigned.split_once(['e', 'E']) {
+        Some((m, e)) => (m, Some(e.strip_prefix(['-', '+']).unwrap_or(e))),
+        None => (unsigned, None),
+    };
+    let mantissa_ok = match mantissa.split_once('.') {
+        Some((whole, fraction)) => digits(whole) && digits(fraction),
+        None => digits(mantissa),
+    };
+    mantissa_ok && exponent.is_none_or(digits)
+}
+
 /// Ist `text` ein Label des Devicetree: Kleinbuchstaben, Ziffern und `_`,
 /// nicht mit einer Ziffer am Anfang (8.10)?
 pub fn is_devicetree_label(text: &str) -> bool {
@@ -1454,6 +1503,20 @@ call = 47600
 native = 0
 t_io = 120000
 ";
+
+    /// **Eine Kalibrierung liest sich als Text ihrer Literale** (8.10,
+    /// FB-735): `linear(a, b)` mit Dezimalliteralen, `table(…)`, sonst
+    /// nichts; die Zahlen werden nicht umgewandelt.
+    #[test]
+    fn a_calibration_keeps_the_text_of_its_literals() {
+        assert_eq!(calibration("linear(0.01, -5)"), Some(Calibration::Linear { gain: "0.01", offset: "-5" }));
+        assert_eq!(calibration(" linear(2.5e-3,+1) "), Some(Calibration::Linear { gain: "2.5e-3", offset: "+1" }));
+        assert_eq!(calibration("table(0 0, 3300 100)"), Some(Calibration::Table));
+        for wrong in ["linear(0.01)", "linear(a, 1)", "linear(1., 2)", "linear(.5, 2)", "linear(1e, 2)", "scale(1, 2)"]
+        {
+            assert_eq!(calibration(wrong), None, "{wrong}");
+        }
+    }
 
     #[test]
     fn a_calibration_reads_back() {

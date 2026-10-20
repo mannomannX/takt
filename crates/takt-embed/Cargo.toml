@@ -18,6 +18,10 @@ build = []
 # Die Testhilfe: das Programm in logischer Zeit, sein Trace gegen den
 # Interpreter (13.1).
 testing = ["dep:takt-sema", "dep:takt-interp", "dep:takt-diag", "dep:takt-conformance"]
+# Ein Pin aus `embedded-hal` 1.0 als Eingang oder Ausgang (plan/m11.md 2.7).
+hal = ["dep:embedded-hal"]
+# Eine Schnittstelle aus `embedded-io` als Quelle eines Stroms (plan/m11.md 2.7).
+io = ["dep:embedded-io"]
 # Die Jobs aus `takt-crypto` (4.5), fuer Programme, die sie rufen.
 ecdsa = ["takt-native-abi/ecdsa"]
 rsa = ["takt-native-abi/rsa"]
@@ -32,6 +36,9 @@ takt-sema = { path = "../takt-sema", optional = true }
 takt-interp = { path = "../takt-interp", optional = true }
 takt-diag = { path = "../takt-diag", optional = true }
 takt-conformance = { path = "../takt-conformance", default-features = false, optional = true }
+# Die Adapter (plan/m11.md 2.7): nur mit ihrem Merkmal.
+embedded-hal = { version = "1.0.0", optional = true }
+embedded-io = { version = "0.7.1", optional = true }
 
 [lints.rust]
 missing_docs = "warn"

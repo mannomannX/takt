@@ -1000,9 +1000,17 @@ pub fn binds_no_driver(name: &str) -> bool {
 /// rechnet. Danach laeuft der Lauf ohne Reset zu Ende, und der Interpreter
 /// spielt ihn mit der Zeile `runtime` als Stimulus nach (12.5).
 pub fn overrun_reaches_every_machine(board: &mut dyn Board) -> Vec<String> {
+    overrun_reaches_every_machine_with(board, "overrun.takt", Form::Own)
+}
+
+/// [`overrun_reaches_every_machine`] mit dem Programm `name` aus
+/// `tests/programs` in der Form `form` (12.11): Ein C-Wirt stellt keine
+/// Treiber und nimmt `overrun_sim.takt`; in der Interruptform liegt nach dem
+/// langen Tick jede Frist schon zurueck, wenn der Port den Alarm stellt.
+pub fn overrun_reaches_every_machine_with(board: &mut dyn Board, name: &str, form: Form) -> Vec<String> {
     const RUN: u64 = 300;
-    let path = board::root().join("crates/takt-conformance/tests/programs/overrun.takt");
-    let options = Options::timed(RUN);
+    let path = board::root().join("crates/takt-conformance/tests/programs").join(name);
+    let options = Options::timed(RUN).in_form(form);
     let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
         Ok(t) => t,
         Err(e) => return vec![format!("kein Lauf: {e}")],
@@ -1427,32 +1435,34 @@ pub fn natives_agree(board: &mut dyn Board) -> Vec<String> {
     }
 }
 
-/// So viele Ticks faehrt `examples/zephyr-gpio` (`src/main.c`).
+/// So viele Ticks faehren `examples/zephyr-gpio` und `examples/zephyr-adc`
+/// (`src/main.c`).
 pub const ZEPHYR_WIRE_TICKS: u64 = 2_000;
 
-/// **Die Pins aus dem Devicetree treiben und lesen die Drahtbruecke** (8.10,
-/// 12.11; M11 Schritt 19): das Urteil ueber den Lauf `run` von
-/// `examples/zephyr-gpio` auf dem Board `name`. Die Messschleife schreibt je
+/// **Die Treiber aus dem Devicetree treiben und lesen die Drahtbruecke**
+/// (8.10, 12.11; M11 Schritt 19, FB-735): das Urteil ueber den Lauf `run` von
+/// `examples/<example>` auf dem Board `name`, `zephyr-gpio` mit zwei Pins
+/// oder `zephyr-adc` mit einem Pin und einem analogen Eingang. Die Messschleife schreibt je
 /// Tick den anderen Pegel nach `wire/out` (`out probe`) und liest `wire/in`
 /// (`pub bridge seen`). Steht die Bruecke, sieht jeder Tick den Pegel des
 /// Ticks davor und Tick 0 den `safe`-Wert, auf den `wire_zephyr_init` den
 /// Ausgang stellte; kein Fault, keine Zeile des Treiberrands (12.6), und der
 /// Ausgang wechselt bis zum letzten Tick. Ohne `CONFIG_USERSPACE` nennt der
 /// Kopf `Schutz: keiner` (M11 Schritt 23). Der Lauf steht unter
-/// `<target>/port-test/<name>-zephyr-gpio.log`.
-pub fn zephyr_wire_follows(name: &str, run: Result<String, String>) -> Vec<String> {
+/// `<target>/port-test/<name>-<example>.log`.
+pub fn zephyr_wire_follows(name: &str, example: &str, run: Result<String, String>) -> Vec<String> {
     let text = match run {
         Ok(text) => text,
-        Err(e) => return vec![format!("zephyr-gpio: kein Lauf: {e}")],
+        Err(e) => return vec![format!("{example}: kein Lauf: {e}")],
     };
-    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-zephyr-gpio.log"));
+    let log = takt_conformance::target_dir().join("port-test").join(format!("{name}-{example}.log"));
     if let Err(e) = log.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&log, &text)) {
         return vec![format!("{}: {e}", log.display())];
     }
     let trace = text.find(board::MARK).map_or("", |at| &text[at..]);
     let (mut probe, mut seen) = (BTreeMap::new(), BTreeMap::new());
     let mut failed: Vec<String> =
-        header_names(&text, Case::Unprotected).into_iter().map(|f| format!("zephyr-gpio: {f}")).collect();
+        header_names(&text, Case::Unprotected).into_iter().map(|f| format!("{example}: {f}")).collect();
     for line in trace.lines().map(str::trim_end) {
         let mut words = line.split_whitespace();
         let Some(tick) = words.next().and_then(|w| w.strip_prefix("t=")).and_then(|k| k.parse::<u64>().ok()) else {
@@ -1465,25 +1475,25 @@ pub fn zephyr_wire_follows(name: &str, run: Result<String, String>) -> Vec<Strin
             ["pub", "bridge", "seen", level] => {
                 seen.insert(tick, *level == "true");
             }
-            ["fault" | "driver" | "runtime", ..] => failed.push(format!("zephyr-gpio: `{line}`")),
+            ["fault" | "driver" | "runtime", ..] => failed.push(format!("{example}: `{line}`")),
             _ => {}
         }
     }
     let at = |levels: &BTreeMap<u64, bool>, tick: u64| levels.range(..=tick).next_back().is_some_and(|(_, l)| *l);
     if probe.len() < usize::try_from(ZEPHYR_WIRE_TICKS).unwrap_or(usize::MAX) {
-        failed.push(format!("zephyr-gpio: der Ausgang wechselte in {} von {ZEPHYR_WIRE_TICKS} Ticks", probe.len()));
+        failed.push(format!("{example}: der Ausgang wechselte in {} von {ZEPHYR_WIRE_TICKS} Ticks", probe.len()));
     }
     if at(&seen, 0) {
-        failed.push("zephyr-gpio: Tick 0 las `true`, der Ausgang stand auf `safe = false`".to_string());
+        failed.push(format!("{example}: Tick 0 las `true`, der Ausgang stand auf `safe = false`"));
     }
     let wrong: Vec<u64> = (1..ZEPHYR_WIRE_TICKS).filter(|&k| at(&seen, k) != at(&probe, k - 1)).collect();
     if let Some(first) = wrong.first() {
         failed.push(format!(
-            "zephyr-gpio: in {} Ticks las der Eingang nicht den Pegel des Ticks davor, zuerst in Tick {first}",
+            "{example}: in {} Ticks las der Eingang nicht den Pegel des Ticks davor, zuerst in Tick {first}",
             wrong.len()
         ));
     }
-    eprintln!("{name}-zephyr-gpio: {}", log.display());
+    eprintln!("{name}-{example}: {}", log.display());
     failed
 }
 

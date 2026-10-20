@@ -2,7 +2,11 @@
 # crates/takt-embed-c/ports/zephyr und `takt_add_program` aus tools/cmake.
 # Eine Anwendung nimmt es ueber ihr west-Manifest oder mit
 # `-DZEPHYR_EXTRA_MODULES=<Wurzel von Takt>` und schaltet `CONFIG_TAKT=y`.
+# Die Bindungen unter zephyr/dts/bindings beschreiben die Knoten, die die
+# Treiber aus dem Devicetree lesen (`takt,adc-input`, FB-735).
 name: takt
 build:
   cmake: zephyr
   kconfig: zephyr/Kconfig
+  settings:
+    dts_root: zephyr

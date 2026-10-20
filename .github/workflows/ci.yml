@@ -67,6 +67,11 @@ jobs:
           cargo clippy --manifest-path crates/takt-embed-c/Cargo.toml --all-targets -- -D warnings
           cargo clippy --manifest-path crates/takt-native-abi/Cargo.toml --features host,ecdsa,rsa,aes-gcm --lib -- -D warnings
           cargo clippy --manifest-path crates/takt-native-abi/Cargo.toml --all-targets -- -D warnings
+      # Die Einheitentests von `takt-embed` mit den Adaptern (plan/m11.md 2.7):
+      # Ring, Rahmer, Pin und Schnittstelle; ohne `testing`, das den
+      # Interpreter mitbringt.
+      - name: Tests von takt-embed
+        run: cargo test --manifest-path crates/takt-embed/Cargo.toml --features hal,io
 
   # Die Board-Crates, das Sprungbrett und die Bring-ups (M11 Schritt 33a):
   # eigene Workspaces fuer ihre Ziele, neben dem Haupt-Workspace. Die

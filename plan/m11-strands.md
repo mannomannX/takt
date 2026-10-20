@@ -93,7 +93,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 9b | Offene Befunde aus Schritt 9 (FB-686 bis FB-694) | C, E, R | beide (FB-687) | 9 | Strang I (Helfer, seit 2026-10-13): FB-687 und FB-693 gemergt (PR #9); FB-688 und FB-689 auf Zweig `i-688-admissible-inputs` (PR #14) umgesetzt, dabei FB-751 (Abort-Phase in Tick 0) gefunden und behoben, CI grün (38586622065), Analyse (38586622205), Board-Lauf ausstehend; FB-752 (Regionen der MPU, die ein Vorgänger stehen ließ) Empfängerseite auf `i-752-mpu-regions`; FB-694 entschieden (Laufende an der Achse, Revision von FB-614), vorbereitet auf `i-694-duration-end`, der Produktteil auf T1; FB-686 und FB-692 nach T1 (Strang H); FB-690 und FB-691 bei Strang H |
 | 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards, gemergt cea0c88c; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`). 19b: Partition umgesetzt bis auf den Board-Lauf, Format des Devicetree-Adapters in der Referenz (FB-734), gemergt 9f0673d1; der Erzeuger `P_zephyr.c` nach Schritt 9 (Strang D). 19c: Vertrag `takt_os.h` erweitert (60aa91d0), Adapter `ports/cmsis-rtos2` und `examples/cmsis-rtos2` bauen für den F401; Portprüfung am Board offen |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G (Helfer, seit 2026-10-12, Zweig `g-20-freertos`): 20a Adapter `ports/freertos` und Wirt unter FreeRTOS umgesetzt, der Board-Lauf steht aus; 20b FreeRTOS-MPU (Zweig `g-20b-freertos-mpu`) umgesetzt bis auf die Board-Läufe |
-| 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
+| 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | Strang G (Helfer, seit 2026-10-13, Zweig `g-21a-esp-idf`): 21a Komponente `esp-idf/takt`, Adapter `ports/irq/esp-idf`, Gerät `ports/esp-idf-nvm` und Wirt `examples/esp-idf` umgesetzt bis auf den Board-Lauf; 21b offen |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
 | 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | Strang F (seit 2026-10-13, Zweig `f-23-protection`): Kopfzeile `Schutz` in jedem Kopf, Urteil und Bericht, Tests je Fall, TCB-Zeilen in `plan/cert.md`, umgesetzt bis auf die Board-Läufe; offen ESP-IDF (FB-756, nach 21a) und das Fenster der Interruptform in C (FB-755) |
 | 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a bis 33c umgesetzt (33b/33c Strang C, gemergt 7b924a3; Board-Crates Strang E, gemergt 0a57fe7a); offen der Board-Lauf über den neuen Stand (Strang A) |
@@ -159,6 +159,13 @@ So arbeitet jeder Strang, als wäre er allein:
    mitbringt, hatte seine eigenen Board-Läufe, und das Zusammenspiel prüft
    CI auf dem Merge. Neue Abbilder braucht es nur, wenn das Lösen eines
    Konflikts Code ändert, der ins Abbild geht.
+
+   Steht ein grüner Pull Request nur in Plan-Dateien in Konflikt
+   (`feedback.csv`, `features.csv`, `definition.md`, `m11*.md`), löst die
+   Koordination ihn selbst: main in den Zweig, beide Seiten behalten, eine
+   Zeile, die nur eine Seite änderte, in deren Fassung. Gemergt wird, wenn
+   der Code-Diff des Zweigs gegenüber seinem vorigen Kopf genau der von
+   main ist.
 
 ## Prüfmatrix
 
@@ -461,7 +468,28 @@ So arbeitet jeder Strang, als wäre er allein:
     an denselben Stellen (Runner, Fristen von 60 s). Eine Zeile trägt
     deshalb die Gruppe ihres jüngsten Laufs.
   - Weiter: Schritt 2, Invarianten für „nicht k-induktiv“ und „Fragment“,
-    dann der Speicher (FB-612).
+    dann der Speicher (FB-612); er beginnt, sobald FB-694 auf main ist.
+  - **Geplante Abstraktion für „Fragment“ (Schritt 2):** Die Invariantensuche
+    (`horn()` in `takt-prove/src/smt.rs`) lehnt heute jedes Ziel ab, in
+    dessen Kegel Fließkomma, eine Schiebung oder die Wickelung in eine
+    Breite steht. Künftig ersetzt sie jeden größten Teilterm außerhalb des
+    Fragments, dessen eigene Sorte im Fragment liegt (ein Vergleich über
+    Fließkomma ist ein Wahrheitswert, eine Wickelung eine ganze Zahl), durch
+    eine frische Variable der jeweiligen Klausel, frei und unbeschränkt. Zustandsvariablen außerhalb
+    des Fragments fallen aus `Inv` heraus und sind in jedem Schritt frei.
+    - Soundness: Jeder ersetzte Term ist frei und unbeschränkt, also lässt
+      jede Ersetzung nur Abläufe hinzu, auch wenn ein Ziel den Term liest.
+      Schlimmstenfalls wird ein Beweis unmöglich, falsch wird keiner. Findet
+      Spacer eine Invariante, gilt sie auch für das genaue Modell, und die
+      Stelle ist bewiesen unerreichbar. Eine Prüfung auf Antitonie wie bei
+      FB-694 braucht es nicht: Dort wurde ein Bit fest gesetzt, hier wird
+      ein Term frei.
+    - Findet Spacer einen Pfad, kann er an der Abstraktion liegen. Dann
+      folgt die BMC am genauen Modell (`deeper`); bestätigt der Interpreter
+      keinen Pfad, bleibt die Stelle unentschieden, mit dem Grund
+      „Abstraktion“ statt „Fragment“.
+    - BMC, Pfade und Houdini sehen weiter das genaue Modell, wie beim
+      offenen Ende aus FB-694 (`proving`).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
@@ -784,6 +812,22 @@ So arbeitet jeder Strang, als wäre er allein:
   - **Offen:** ESP-IDF (FB-756), das Fenster der Interruptform in C
     (FB-755). `examples/zephyr-gpio` (nach PR #4) nennt `keiner`, und
     `the_zephyr_gpio_wire_follows_its_pin` verlangt es.
+- **Stand FB-735 (Strang F, 2026-10-20, Zweig `f-735-dt-adc`):**
+  - **ADC:** `zephyr-adc` in `takt_frame::zephyr` neben `zephyr-gpio`:
+    `adc_dt_spec` aus dem Knoten mit `io-channels` (Bindung
+    `takt,adc-input`, `zephyr/dts`, `dts_root` in `zephyr/module.yml`), eine
+    Wandlung je Tick, Mikrovolt mit `adc_raw_to_microvolts_dt`, ein
+    differentieller Kanal als Zweierkomplement in 16 Bit; `linear(a, b)`
+    als Literale in Fließkomma, ohne Kalibrierung `int[uV]` mit
+    Bereichsprüfung des Typs. Prüfung 60 (`check_zephyr`) hält Eingang,
+    Rohtyp `i32` und Typ fest; `table(…)` lehnt sie ab (FB-780).
+  - **Beispiel:** `examples/zephyr-adc` (Pin PA0 an PA1 = ADC1 Kanal 1 am
+    F401, GPIO7 und ADC-Kanal 0 am C6), Schutz `keiner`. Bau-Test
+    `the_zephyr_adc_example_builds_for_both_boards`, Board-Test
+    `the_zephyr_adc_follows_its_pin` nur am F401 (der C6 hat die Brücke
+    an GPIO17, keinem ADC-Pin); C-Analyse bindet das Beispiel mit.
+  - **Offen:** Board-Lauf am F401; UART nach dem Ring aus Schritt 22a
+    (Strang B).
 
 ### 15, 16, 18, 9, 19 bis 23
 

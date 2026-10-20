@@ -9,7 +9,10 @@
 //! 2. die Arena unter `arena_symbol`, mindestens `arena_bytes` gross und an
 //!    `arena_align` ausgerichtet, und kein beschreibbares Symbol aus Takt
 //!    ausserhalb der Arenen — aus der Bibliothek, mit dem Praefix, aus den
-//!    geteilten Crates oder der Huelle;
+//!    geteilten Crates oder der Huelle. Was die Bibliothek nur lesend anlegt,
+//!    bleibt eine Konstante, wo der Wirt es auch hinlegt: Unter ESP-IDF liegen
+//!    die Konstanten des Tick-Pfads im DRAM, damit er waehrend eines
+//!    Flash-Zugriffs rechnet, und dort traegt sie die Symboltabelle als Daten;
 //! 3. unter `xip_flash`: Jede Funktion, die von einem Einstieg des
 //!    Tick-Pfads aus erreichbar ist, liegt im RAM oder im ROM, auch die
 //!    Treiber des Wirts. Ausgenommen sind Wege, die nur in eine Panik
@@ -222,6 +225,32 @@ pub(crate) struct Image {
     pub(crate) graph: Option<CallGraph>,
 }
 
+/// Was die Bibliothek eines Programms definiert (`nm` auf `libP.a`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Library {
+    /// Jeder Name, den sie definiert.
+    pub(crate) names: BTreeSet<String>,
+    /// Die Namen, die sie nur lesend anlegt (`R`, `r`) und nirgends
+    /// beschreibbar.
+    pub(crate) constants: BTreeSet<String>,
+}
+
+impl Library {
+    pub(crate) fn of(symbols: &[Symbol]) -> Library {
+        let read_only = |s: &&Symbol| matches!(s.kind, 'R' | 'r');
+        let other: BTreeSet<&str> = symbols.iter().filter(|s| !read_only(s)).map(|s| s.name.as_str()).collect();
+        Library {
+            names: symbols.iter().map(|s| s.name.clone()).collect(),
+            constants: symbols
+                .iter()
+                .filter(read_only)
+                .filter(|s| !other.contains(s.name.as_str()))
+                .map(|s| s.name.clone())
+                .collect(),
+        }
+    }
+}
+
 /// Wie sicher eine Zeile ist (11.5); ein Befund laesst die Pruefung scheitern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Origin {
@@ -262,10 +291,9 @@ fn finding(text: String) -> Line {
     Line { origin: Origin::Finding, text }
 }
 
-/// Prueft ein Programm im Abbild. `library` sind die Symbole, die seine
-/// Bibliothek definiert (`nm` auf `libP.a`); `arenas` die Adressbereiche
-/// aller Arenen des Abbilds.
-pub(crate) fn check(image: &Image, m: &Manifest, library: &BTreeSet<String>, arenas: &[(u64, u64)]) -> Vec<Line> {
+/// Prueft ein Programm im Abbild. `library` ist, was seine Bibliothek
+/// definiert; `arenas` die Adressbereiche aller Arenen des Abbilds.
+pub(crate) fn check(image: &Image, m: &Manifest, library: &Library, arenas: &[(u64, u64)]) -> Vec<Line> {
     let x = &m.prefix;
     if m.bench {
         return if m.xip_flash {
@@ -331,7 +359,8 @@ pub(crate) fn check(image: &Image, m: &Manifest, library: &BTreeSet<String>, are
         .iter()
         .filter(|s| matches!(s.kind, 'D' | 'd' | 'B' | 'b' | 'G' | 'g' | 'S' | 's'))
         .filter(|s| s.name != m.arena_symbol && s.name != m.tick_stack.0 && s.name != m.job_stack.0 && !in_arena(s))
-        .filter(|s| takt_owned(&s.name, x, library))
+        .filter(|s| !library.constants.contains(&s.name))
+        .filter(|s| takt_owned(&s.name, x, &library.names))
         .collect();
     if stray.is_empty() {
         out.push(exact(format!("{x}: kein beschreibbares Symbol aus Takt ausserhalb der Arenen")));
@@ -748,11 +777,11 @@ pub(crate) fn run(image_path: &Path, manifests: &[&str]) -> bool {
     let arenas = regions(&image, &parsed.iter().map(|(_, m)| m).collect::<Vec<_>>());
     let mut lines = Vec::new();
     for (path, m) in &parsed {
-        let library: BTreeSet<String> = match library_of(path, &m.prefix) {
-            Some(lib) => tools.symbols_demangled(&lib).unwrap_or_default().into_iter().map(|s| s.name).collect(),
+        let library = match library_of(path, &m.prefix) {
+            Some(lib) => Library::of(&tools.symbols_demangled(&lib).unwrap_or_default()),
             None => {
                 lines.push(open(format!("{}: keine Bibliothek neben {}", m.prefix, path.display())));
-                BTreeSet::new()
+                Library::default()
             }
         };
         lines.extend(check(&image, m, &library, &arenas));
@@ -855,7 +884,7 @@ mod tests {
 
     #[test]
     fn a_clean_image_has_no_finding() {
-        let lines = check(&clean(), &manifest(), &BTreeSet::new(), &[(0x4080_8000, 256)]);
+        let lines = check(&clean(), &manifest(), &Library::default(), &[(0x4080_8000, 256)]);
         assert_eq!(findings(&lines), Vec::<&str>::new(), "{lines:#?}");
         assert!(lines.iter().any(|l| l.text.contains("Tick-Pfad 5 Funktionen")), "{lines:#?}");
     }
@@ -869,7 +898,7 @@ mod tests {
         let driver = graph.functions.remove(&0x4080_0400).expect("Treiber");
         graph.functions.insert(0x4200_4000, driver);
         graph.functions.get_mut(&0x4080_0300).expect("Kleber").calls = [0x4200_4000].into();
-        let lines = check(&image, &manifest(), &BTreeSet::new(), &[(0x4080_8000, 256)]);
+        let lines = check(&image, &manifest(), &Library::default(), &[(0x4080_8000, 256)]);
         assert_eq!(
             findings(&lines),
             ["app: Tick-Pfad im Flash: `<takt::Rig as takt::app::Drivers>::in_x` (app_tick → app_in_x → \
@@ -886,7 +915,7 @@ mod tests {
         image.symbols.push(symbol("g_frame_state", 0x4080_9100, 4, 'b'));
         image.symbols.push(symbol("app_shadow", 0x4080_9200, 4, 'D'));
         image.symbols.push(symbol("takt_rt_core::loopcore::SCRATCH", 0x4080_9300, 4, 'b'));
-        let library: BTreeSet<String> = ["g_frame_state".to_string()].into();
+        let library = Library { names: ["g_frame_state".to_string()].into(), ..Library::default() };
         let lines = check(&image, &manifest(), &library, &[(0x4080_8000, 256)]);
         let found = findings(&lines);
         assert_eq!(found.len(), 3, "{found:#?}");
@@ -894,16 +923,38 @@ mod tests {
         assert!(!found.iter().any(|f| f.contains("takt::RIG")), "der Pruefstand gehoert dem Wirt");
     }
 
+    /// **Eine Konstante der Bibliothek im RAM ist nicht beschreibbar** (M11
+    /// Schritt 21a): Unter ESP-IDF legt das Fragment des Programms auch seine
+    /// Konstanten in den DRAM, und die Symboltabelle des Abbilds traegt sie
+    /// dort als Daten. Was die Bibliothek lesend anlegt, zaehlt nicht; was sie
+    /// unter demselben Namen auch beschreibbar anlegt, schon.
+    #[test]
+    fn a_constant_of_the_library_in_ram_is_not_writable() {
+        let mut image = clean();
+        image.symbols.push(symbol("g_alert_base", 0x4080_9100, 24, 'd'));
+        image.symbols.push(symbol("app_ops", 0x4080_9200, 64, 'D'));
+        image.symbols.push(symbol("g_twice", 0x4080_9300, 4, 'd'));
+        let library = Library::of(&[
+            symbol("g_alert_base", 0, 24, 'r'),
+            symbol("app_ops", 0, 64, 'R'),
+            symbol("g_twice", 0, 4, 'r'),
+            symbol("g_twice", 0, 4, 'b'),
+        ]);
+        let found = findings(&check(&image, &manifest(), &library, &[(0x4080_8000, 256)])).join("\n");
+        assert!(!found.contains("g_alert_base") && !found.contains("app_ops"), "{found}");
+        assert!(found.contains("beschreibbar ausserhalb der Arena: `g_twice`"), "{found}");
+    }
+
     /// **Eine zu kleine Arena** und eine schief ausgerichtete.
     #[test]
     fn a_too_small_or_misaligned_arena_is_reported() {
         let mut m = manifest();
         m.arena_bytes = 512;
-        let lines = check(&clean(), &m, &BTreeSet::new(), &[(0x4080_8000, 256)]);
+        let lines = check(&clean(), &m, &Library::default(), &[(0x4080_8000, 256)]);
         assert_eq!(findings(&lines), ["app: Arena `app_arena` hat 256 Byte, das Programm braucht 512"]);
         let mut m = manifest();
         m.arena_align = 0x10000;
-        let lines = check(&clean(), &m, &BTreeSet::new(), &[(0x4080_8000, 256)]);
+        let lines = check(&clean(), &m, &Library::default(), &[(0x4080_8000, 256)]);
         assert!(findings(&lines)[0].contains("nicht an 65536 Byte ausgerichtet"), "{lines:#?}");
     }
 
@@ -913,11 +964,11 @@ mod tests {
         let mut m = manifest();
         m.logic_hash = "cd34".into();
         let found: Vec<String> =
-            findings(&check(&clean(), &m, &BTreeSet::new(), &[])).iter().map(|s| s.to_string()).collect();
+            findings(&check(&clean(), &m, &Library::default(), &[])).iter().map(|s| s.to_string()).collect();
         assert!(found.iter().any(|f| f.contains("ein anderes Programm (Logik-Hash ab12)")), "{found:#?}");
         let mut m = manifest();
         m.abi = "5".into();
-        assert!(findings(&check(&clean(), &m, &BTreeSet::new(), &[]))[0].contains("`app_abi_5` fehlt"));
+        assert!(findings(&check(&clean(), &m, &Library::default(), &[]))[0].contains("`app_abi_5` fehlt"));
     }
 
     /// **Punkt 4:** Ein Stack unter seinem Namen ist mindestens so gross wie
@@ -931,7 +982,7 @@ mod tests {
             symbols: vec![symbol("app_tick_stack", 0x2000_1000, tick, 'B'), symbol("app_job_stack", job_at, 1056, 'B')],
             ..Image::default()
         };
-        let lines = |i: &Image| check(i, &m, &BTreeSet::new(), &regions(i, &[&m]));
+        let lines = |i: &Image| check(i, &m, &Library::default(), &regions(i, &[&m]));
         let fine = lines(&image(2048, 0x2000_2000));
         assert!(
             fine.iter().any(|l| l.origin == Origin::Exact && l.text.contains("Schritt-Stack `app_tick_stack` 2048"))
@@ -945,7 +996,7 @@ mod tests {
             skewed.iter().any(|l| l.origin == Origin::Finding && l.text.contains("nicht an 32 Byte")),
             "{skewed:?}"
         );
-        let none = check(&Image::default(), &m, &BTreeSet::new(), &[]);
+        let none = check(&Image::default(), &m, &Library::default(), &[]);
         assert!(none.iter().any(|l| l.origin == Origin::Open && l.text.contains("ohne Symbol `app_tick_stack`")));
     }
 
@@ -958,7 +1009,7 @@ mod tests {
         let m = Manifest::parse(text).expect("lesbar");
         assert!(m.bench && m.xip_flash);
         assert_eq!(m.tick_path, ["takt_bench_measure"]);
-        let lines = check(&Image::default(), &m, &BTreeSet::new(), &[]);
+        let lines = check(&Image::default(), &m, &Library::default(), &[]);
         assert!(lines.iter().all(|l| !l.text.contains("Arena") && !l.text.contains("ABI")), "{lines:?}");
     }
 
@@ -969,7 +1020,7 @@ mod tests {
         image.sections.iter_mut().for_each(|s| s.name = ".text".into());
         let mut m = manifest();
         m.xip_flash = false;
-        let lines = check(&image, &m, &BTreeSet::new(), &[(0x4080_8000, 256)]);
+        let lines = check(&image, &m, &Library::default(), &[(0x4080_8000, 256)]);
         assert!(!lines.iter().any(|l| l.text.contains("Tick-Pfad")), "{lines:#?}");
     }
 

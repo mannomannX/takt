@@ -37,6 +37,57 @@ safe = 0
 device = pins
 port = "takt_level"
 
+# Analoge Eingaenge aus dem Devicetree (FB-735): Rohtyp `i32` in
+# Mikrovolt, Volt ueber `linear(a, b)`; `table(…)` ist unter Zephyr offen
+# (FB-780).
+[device.adc]
+driver = "zephyr-adc"
+
+[channel adc/micro]
+direction = input
+raw = i32
+unit = uV
+device = adc
+port = "takt_micro"
+
+[channel adc/linear]
+direction = input
+raw = i32
+unit = V
+calibration = "linear(0.000001, 0)"
+device = adc
+port = "takt_linear"
+
+[channel adc/out]
+direction = output
+raw = i32
+unit = uV
+safe = 0
+device = adc
+port = "takt_out"
+
+[channel adc/narrow]
+direction = input
+raw = u16
+unit = uV
+device = adc
+port = "takt_narrow"
+
+[channel adc/volts]
+direction = input
+raw = i32
+unit = V
+device = adc
+port = "takt_volts"
+
+[channel adc/table]
+direction = input
+raw = i32
+unit = V
+calibration = "table(0 0, 3300000 3.3)"
+device = adc
+port = "takt_table"
+
 [channel pair/seen]
 direction = input
 from = "pair/last"
