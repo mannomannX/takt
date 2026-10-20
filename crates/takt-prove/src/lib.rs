@@ -39,6 +39,6 @@ pub use run::{Stop, UNMODELLED, mismatches};
 pub use smt::export;
 pub use solve::{
     CheckReport, CheckVerdict, ContractReport, ContractVerdict, DEEPEST, Report, Solver, TransitionReport, Verdict,
-    classify, classify_compositional, classify_sites, classify_transitions, fault_at, find, named, prove, taken_at,
-    verify_contracts,
+    classify, classify_compositional, classify_passes, classify_sites, classify_transitions, fault_at, find, named,
+    prove, taken_at, verify_contracts,
 };

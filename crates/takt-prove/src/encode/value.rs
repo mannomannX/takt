@@ -565,7 +565,8 @@ impl Enc<'_> {
     /// Ein Fault-Zweig an einer Pruefstelle, wie in `checked`.
     fn fault(&mut self, kind: &CheckedKind, span: Span, fail: Term, cx: &Cx<'_>, flow: &mut Flow) {
         let cond = Term::and(vec![flow.alive.clone(), fail.clone()]);
-        self.site(kind, span, Fire { fires: cond.clone(), fail: fail.clone() }, cx);
+        let passes = Term::and(vec![flow.alive.clone(), fail.clone().not()]);
+        self.site(kind, span, Fire { fires: cond.clone(), fail: fail.clone(), passes }, cx);
         flow.exits.push(Exit { cond, kind: ExitKind::Fault(None, self.cause(kind.fault(), span)) });
         flow.alive = Term::and(vec![flow.alive.clone(), fail.not()]);
     }
@@ -1180,7 +1181,7 @@ impl Enc<'_> {
                 let first = flow.exits.len();
                 let v = self.value(inner, cx, env, flow)?;
                 let fires = Term::or(flow.exits[first..].iter().map(|x| x.cond.clone()).collect());
-                self.site(kind, node.span, Fire::whole(fires), cx);
+                self.site(kind, node.span, Fire::whole(fires, flow.alive.clone()), cx);
                 Ok(v)
             }
             CheckedKind::Range(_)

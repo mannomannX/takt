@@ -166,6 +166,9 @@ where
     let Some(head) = line() else { return ExitCode::FAILURE };
     head.write("takt auf dem wirt");
     head.newline();
+    // 12.11: Ein Prozess des Wirts hat keine Schutzeinheit fuer die Arena.
+    head.write(takt_rt_core::protection::Case::Unprotected.line());
+    head.newline();
     head.mark();
 
     let policy = if alert { Policy::Alert } else { Policy::Fault };

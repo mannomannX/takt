@@ -156,7 +156,7 @@ static void banner(void) {
     takt_trace_u64(&sink, BOARD_CORE_HZ);
     takt_trace_text(&sink, " Hz, Tick ");
     takt_trace_i64(&sink, APP_TICK_NS);
-    takt_trace_text(&sink, " ns\r\n  Form rtos\r\n\r\n");
+    takt_trace_text(&sink, " ns\r\n  Form rtos\r\n" TAKT_RTOS_PROTECTION "\r\n\r\n");
 #if TAKT_FREERTOS_MPU
     takt_trace_text(&sink, guard_line(guard_state));
     takt_trace_text(&sink,

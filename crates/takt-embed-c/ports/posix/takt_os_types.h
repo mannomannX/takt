@@ -8,6 +8,9 @@
 #include <pthread.h>
 #include <time.h>
 
+/* Faeden eines Prozesses teilen seinen Speicher (12.11). */
+#define TAKT_OS_PARTITION 0
+
 /* Ein binaeres Ereignis: das Flag unter der Sperre, die Bedingung wartet auf
  * `CLOCK_MONOTONIC`. */
 struct takt_os_event {
