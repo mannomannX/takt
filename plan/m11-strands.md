@@ -32,6 +32,10 @@ Plan; `plan/m11.md` bleibt die Quelle für Ziel und Abnahme je Schritt.
 - **FB-Nummern in Blöcken**: Strang A nimmt FB-512 bis FB-599, Strang B
   FB-600 bis FB-699. `tests.csv` nach demselben Muster mit dem Präfix des
   Bereichs; im Zweifel fragt der Strang die Koordination.
+  Ab FB-760 (2026-10-20) je Strang zwanzig Nummern: I FB-760 bis FB-779,
+  F FB-780 bis FB-799, B FB-800 bis FB-819, H FB-820 bis FB-839, G FB-840
+  bis FB-859, die Koordination FB-860 bis FB-879. Ist ein Block
+  aufgebraucht, vergibt die Koordination den nächsten.
 - `feedback.csv` und `tests.csv` nur zeilenweise ändern oder anhängen, nie
   ganz neu schreiben (sonst ändert sich das Quoting fremder Zeilen).
   Angehängte Zeilen beider Stränge kollidieren beim Merge am Dateiende; die
@@ -91,7 +95,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G (Helfer, seit 2026-10-12, Zweig `g-20-freertos`): 20a Adapter `ports/freertos` und Wirt unter FreeRTOS umgesetzt, der Board-Lauf steht aus; 20b FreeRTOS-MPU (Zweig `g-20b-freertos-mpu`) umgesetzt bis auf die Board-Läufe |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
 | 22 | Adapter und Senken | S | beide | 14, 19 | frei |
-| 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | Strang F (seit 2026-10-13, Zweig `f-23-protection`): Kopfzeile `Schutz`, Tests je Fall, TCB-Zeilen in `plan/cert.md`; der Fall ESP-IDF (PMP) folgt nach 21a |
+| 23 | Speicherschutz neben fremdem Code; `plan/cert.md` | S, R | beide | 10, 19, 21 | Strang F (seit 2026-10-13, Zweig `f-23-protection`): Kopfzeile `Schutz` in jedem Kopf, Urteil und Bericht, Tests je Fall, TCB-Zeilen in `plan/cert.md`, umgesetzt bis auf die Board-Läufe; offen ESP-IDF (FB-756, nach 21a) und das Fenster der Interruptform in C (FB-755) |
 | 33 | Regelwerk für den eigenen Code (33a Katalog und Rust-Stufen, 33b C-Teil, 33c Miri) | E, R, S; Stufe 1 in allen | – | 33b: 18a | 33a bis 33c umgesetzt (33b/33c Strang C, gemergt 7b924a3; Board-Crates Strang E, gemergt 0a57fe7a); offen der Board-Lauf über den neuen Stand (Strang A) |
 | 34 | Suite auf Runnern von GitHub (34a Linux, 34b Windows, 34c Solver-Läufe, 34d Board-Abbilder, 34e Board-Läufe ohne lokalen Bau) | C, W | – | – | 34a bis 34e umgesetzt (34d Strang B, 34e Strang A); offen der neue Bench nach dem Umbau der Runtime (Stack-Reserve `rtos` auf dem F401). Strang H (Helfer, seit 2026-10-12, Zweig `h-bench-split`): der Bench in Teilen mit Mindestreserve je Abbild (FB-740) und der Lastkern in Echtzeit, der nur seine Bilanz belegt (FB-741), umgesetzt, CI grün (38312676185), `boards.yml` baut beide Boards samt Bench-Abbildern (38312679018); gemergt (8a6b9d03), der Bench am Board bestanden (38320906796). Danach Zweig `h-fb742-clock` (PR #3): die Uhr des eigenen Kerns auf der Zeitachse von TIM2 und die Tickperiode je Ereignis (FB-742), `angehalten` in der Bilanz (FB-530); am Board bestanden (38331645022), main nachgeholt, wartet auf den Merge. Danach T1, die präfigierten Haken des Trace (Schritt 16) |
 | 30 | Wachsamkeit: `tools/mutants.sh`, Ratsche je Crate | alle (lesend), exklusiv | – | 28, 29, B2 | frei, möglichst spät |
@@ -386,6 +390,65 @@ So arbeitet jeder Strang, als wäre er allein:
     337 → 286, Programme 97. Der Vergleich der drei Ausführer bestätigt
     jeden neuen Beweis: Der Codegen lässt die Prüfung aus, der Interpreter
     prüft weiter, und kein Lauf weicht ab.
+- **Stand nach Schritt 5 (2026-10-14, Zweig `b5-groups`):**
+  - Jede Zeile von `UNREACHED` trägt jetzt für alle drei Spalten ihre
+    Gruppen als Grund: Übergänge, nie bestandene und nie verletzte
+    Prüfstellen. Geprüft wird das wie bisher, jetzt in
+    `every_unreached_item_has_a_group`.
+  - Das Modell kennt das Bestehen einer Prüfstelle, so wie die Coverage es
+    zählt (13.2: ausgewertet ohne Fault, ein `check` ausgewertet):
+    `Model::passes`, Ziel `Target::Pass`, `classify_passes`. Die Einordnung
+    (`CLASSIFY_UNREACHED`, `CLASSIFY_WHAT`, `solver.yml` Eingabe `what`)
+    fragt Übergänge und nie bestandene Stellen wie die Prüfstellen. Für eine
+    Stelle, die kein Modell führt, nennt sie den Grund: eine Funktion, die
+    keine Maschine ruft, eine bewiesene Range, eine Meldung oder eine
+    Beobachtung.
+  - Sieht Spacer einen Pfad jenseits der Tiefe, folgt die BMC ihm jetzt auch
+    für Übergänge und das Bestehen einer Stelle. Neue Pfade:
+    - `40_jobs`: RUN.S0->FAILED bei t = 100.
+    - `87_fault_kinds`: RUN.S1->FAILED bei t = 101.
+    - `63_scoped_instances`: HIGH->LOW je Instanz p, q und r. Geteilte
+      Übergänge tragen die Maschine im Label; vorher blieb nur ein Pfad.
+    - `sim/12_7`: drei Übergänge zu SELFTEST und weiter.
+  - Die Einordnung fand zwei Fehler im Modell:
+    - FB-617: Eine Lieferung eines Enums war im Modell jeder Code. Der
+      Interpreter las den Stimulus nicht, die Pfade zu SELFTEST in
+      `sim/12_7` blieben unbestätigt.
+    - FB-618: Unter seiner Beweisdatei aus Schritt 4 war `sim/14_7` nicht
+      mehr kodierbar (`cell_v.min()` direkt am Input).
+  - Offen ist FB-619: Die Coverage zählt die Stellen einer Funktion, die
+    keine Maschine ruft. Diese Frage liegt beim Nutzer.
+  - Einordnung in den Läufen 38320013325 (alle Programme, Übergänge und
+    Bestehen), 38319891273 und 38336280659 (`02_units_and_data`,
+    `98_last_fault`, `sim/12_7`, `sim/14_7`, `63_scoped_instances`, alle
+    drei Spalten). Pfade aus den Läufen 38319880152 und 38331751010.
+  - `UNREACHED`: Übergänge 101 → 93, nie bestanden 56 → 53, nie verletzt
+    286. Die Zeilen von `40_jobs` und `63_scoped_instances` entfallen, 95
+    Programme. Die Gruppen:
+
+    | Gruppe | Übergänge | nie bestanden | nie verletzt |
+    |---|---|---|---|
+    | Speicher (FB-612) | 13 | – | 96 |
+    | Frist | 27 | 25 | 80 |
+    | ohne Teilmodell (FB-604) | 31 | 5 | 70 |
+    | Fragment | 16 | 6 | 12 |
+    | nicht k-induktiv | 2 | – | 12 |
+    | bewiesen, nicht nachgerechnet | 4 | – | 5 |
+    | Range bewiesen | – | 6 | – |
+    | in einer Meldung | – | 4 | – |
+    | nie gerufen (FB-619) | – | 3 | 3 |
+    | faultet stets | – | 3 | – |
+    | unbestätigt (`inv`, `sha256`) | – | 1 | – |
+    | Zeitschranke (FB-614, FB-694) | – | – | 3 |
+    | jenseits `MAX_TICKS` | – | – | 2 |
+    | außerhalb `beweiser` | – | – | 2 |
+    | bewiesen, explizit | – | – | 1 |
+
+  - Die Gruppen „Frist“ und „nicht k-induktiv“ schwanken von Lauf zu Lauf
+    an denselben Stellen (Runner, Fristen von 60 s). Eine Zeile trägt
+    deshalb die Gruppe ihres jüngsten Laufs.
+  - Weiter: Schritt 2, Invarianten für „nicht k-induktiv“ und „Fragment“,
+    dann der Speicher (FB-612).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
@@ -677,6 +740,27 @@ So arbeitet jeder Strang, als wäre er allein:
     Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
     unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
     38320906796); das zeigt der nächste Lauf.
+
+### 23 — Speicherschutz neben fremdem Code
+
+- **Stand 23 (Strang F, 2026-10-14, Zweig `f-23-protection`):**
+  - **Kopfzeile:** `  Schutz: Fenster|Partition|keiner` vor der Marke,
+    eingerückt wie `  Form …`. Rust: `takt_rt_core::protection::Case`,
+    `takt_rt_baremetal::Protection::CASE`; die Bring-ups schreiben den Fall
+    ihres Schutzes. C: `TAKT_OS_PARTITION` je Adapter,
+    `TAKT_RTOS_PROTECTION` (`ports/rtos/takt_rtos.h`) und
+    `TAKT_IRQ_PROTECTION` (`ports/irq/takt_irq.h`); jeder C-Wirt schreibt
+    sie in seinem Kopf mit einem Aufruf. Nach T1 (Senke als Argument der
+    Trace-Haken) ziehen nur diese Aufrufe nach.
+  - **Urteil und Bericht:** `port::judge` verlangt die Kopfzeile, nimmt die
+    letzte vor der Marke und prüft sie gegen den Nachweis der Probe;
+    `PortEntry::protection`, Bericht Version 5.
+  - **Board-Tests:** `the_port_passes(board, form, Case)`,
+    `zephyr_verdict(…, Case, …)`; der Fall je Port wie in `plan/cert.md`.
+    Der Zugriff der TCB zwischen zwei Ticks läuft in jeder Form des F401.
+  - **Offen:** ESP-IDF (FB-756), das Fenster der Interruptform in C
+    (FB-755). `examples/zephyr-gpio` (nach PR #4) nennt `keiner`, und
+    `the_zephyr_gpio_wire_follows_its_pin` verlangt es.
 
 ### 15, 16, 18, 9, 19 bis 23
 
