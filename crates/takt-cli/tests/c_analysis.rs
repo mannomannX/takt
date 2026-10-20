@@ -5,7 +5,9 @@
 //! Wirt, fuer `thumbv7em` der C-Wirt der Black Pill mit dem Port der
 //! Interruptform, und die Adapter und Beispiele unter Zephyr: mit cppcheck
 //! ohne die Koepfe von Zephyr (FB-731 (B)) und mit clang-tidy ueber die Baue
-//! von `zephyr_example.rs` (FB-731 (A), Teil [`ZEPHYR_BUILD`]).
+//! von `zephyr_example.rs` (FB-731 (A), Teil [`ZEPHYR_BUILD`]), dazu Adapter,
+//! Geraet und Beispiel unter ESP-IDF mit beiden Werkzeugen ueber den Bau von
+//! `esp_idf_example.rs` (M11 Schritt 21a, Teil [`IDF_BUILD`]).
 //!
 //! **Der Katalog ist die Quelle.** Wie die Werkzeuge gerufen werden und
 //! welche Befunde als Abweichung stehen, liest dieser Test aus
@@ -90,6 +92,8 @@ struct Catalog {
     zephyr: Tool,
     /// Was clang-tidy ueber einen Bau unter Zephyr dazu bekommt.
     zephyr_tidy: Tool,
+    /// Was clang-tidy ueber den Bau unter ESP-IDF dazu bekommt.
+    idf_tidy: Tool,
     /// Die ausgeschalteten Pruefungen von clang-tidy mit ihrer Regel.
     off: BTreeMap<String, String>,
     deviations: BTreeMap<(String, String), Deviation>,
@@ -118,6 +122,7 @@ fn catalog() -> Catalog {
         cppcheck: tool("cppcheck"),
         zephyr: tool("cppcheck unter Zephyr"),
         zephyr_tidy: tool("clang-tidy unter Zephyr"),
+        idf_tidy: tool("clang-tidy unter ESP-IDF"),
         off,
         deviations,
     }
@@ -220,7 +225,7 @@ impl Link {
 /// der erzeugten Lieferformen.
 fn part(path: &str, out: &Path) -> &'static str {
     const ZEPHYR: [&str; 4] = ["/ports/zephyr", "/ports/cmsis-rtos2/", "/examples/zephyr/", "/examples/cmsis-rtos2/"];
-    if path.ends_with("/takt_sdk.h") {
+    if path.ends_with("/takt_sdk.h") || path.ends_with("/takt_ring.h") {
         "SDK"
     } else if ZEPHYR.iter().any(|dir| path.contains(dir)) {
         "Zephyr"
@@ -235,11 +240,11 @@ fn part(path: &str, out: &Path) -> &'static str {
     }
 }
 
-/// Ein Befund aus einer Zeile `DATEI:ZEILE:SPALTE: …`; der Kopf des SDK
-/// steht in jeder Lieferform und im Crate, er zaehlt einmal je Stelle.
+/// Ein Befund aus einer Zeile `DATEI:ZEILE:SPALTE: …`; die Koepfe des SDK
+/// stehen in jeder Lieferform und im Crate, sie zaehlen einmal je Stelle.
 fn finding(id: &str, file: &str, line: &str, column: &str, out: &Path) -> Finding {
     let part = part(file, out);
-    let file = if part == "SDK" { "takt_sdk.h" } else { file };
+    let file = if part == "SDK" { file.rsplit(['/', '\\']).next().unwrap_or(file) } else { file };
     Finding { id: id.to_string(), part, at: format!("{file}:{line}:{column}") }
 }
 
@@ -296,6 +301,19 @@ fn tidy_findings(text: &str) -> Vec<(&str, &str, &str, &str)> {
 /// Datei des C-Teils ein Befund steht.
 const ZEPHYR_BUILD: &str = "Zephyr-Bau";
 
+/// Der Teil des Katalogs fuer den Bau unter ESP-IDF (M11 Schritt 21a): Seine
+/// Zeilen urteilt nur [`the_esp_idf_build_deviates_only_as_the_catalog_says`].
+const IDF_BUILD: &str = "IDF-Bau";
+
+/// Gehoeren die Zeilen eines Teils einem Test ueber einen Bau, nicht dem
+/// ueber die Lieferformen?
+fn of_a_build(part: &str) -> bool {
+    part == ZEPHYR_BUILD || part == IDF_BUILD
+}
+
+/// Der Bau, den `esp_idf_example.rs` in `target/tmp` liegen laesst.
+const IDF_BUILD_DIR: &str = "takt-esp-idf-port-test";
+
 /// Die Baue unter Zephyr, die `zephyr_example.rs` in `target/tmp` liegen
 /// laesst (`takt-<beispiel>-<tripel>`), je mit `compile_commands.json`.
 const ZEPHYR_BUILDS: &[&str] = &[
@@ -333,12 +351,12 @@ fn compiled(build: &Path) -> Vec<PathBuf> {
 }
 
 /// `clang-tidy` ueber die eigenen Quellen des Baus `build` — Ports,
-/// Beispiele und was er unter `takt/` erzeugt —, mit den Aufrufen seiner
-/// `compile_commands.json`. Ein Befund zaehlt unter [`ZEPHYR_BUILD`], seine
-/// Stelle relativ zur Wurzel: Dieselbe Datei in zwei Bauen ist eine Stelle.
-fn run_tidy_build(tool: &Path, args: &[String], build: &Path) -> Vec<Finding> {
+/// Beispiele und was er unter `generated` erzeugt —, mit den Aufrufen seiner
+/// `compile_commands.json`. Ein Befund zaehlt unter `part`, seine Stelle
+/// relativ zur Wurzel: Dieselbe Datei in zwei Bauen ist eine Stelle.
+fn run_tidy_build(tool: &Path, args: &[String], build: &Path, generated: &Path, part: &'static str) -> Vec<Finding> {
     let root = root();
-    let generated = std::fs::canonicalize(build.join("takt")).unwrap_or_else(|_| build.join("takt"));
+    let generated = std::fs::canonicalize(generated).unwrap_or_else(|_| generated.to_path_buf());
     let ours = |f: &Path| {
         f.starts_with(root.join("crates/takt-embed-c/ports"))
             || f.starts_with(root.join("examples"))
@@ -362,7 +380,7 @@ fn run_tidy_build(tool: &Path, args: &[String], build: &Path) -> Vec<Finding> {
         for (id, file, line, column) in tidy_findings(&String::from_utf8_lossy(&run.stdout)) {
             let path = std::fs::canonicalize(file).unwrap_or_else(|_| PathBuf::from(file));
             let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
-            found.push(Finding { id: id.to_string(), part: ZEPHYR_BUILD, at: format!("{shown}:{line}:{column}") });
+            found.push(Finding { id: id.to_string(), part, at: format!("{shown}:{line}:{column}") });
         }
     }
     found
@@ -558,6 +576,9 @@ fn deliveries(out: &Path) -> Vec<Link> {
         }
         links.push(link);
     }
+    // Der Ring fuer Stream-Treiber (plan/m11.md 2.7) mit seinem Pruefprogramm.
+    let ring = Link::host(vec![root.join("examples/c-ring/main.c")], vec![root.join("crates/takt-embed-c/include")]);
+    links.push(ring);
     links.extend(freertos(out, "ARM_CM4F", FREERTOS_PLAIN, &[]));
     links.extend(freertos(out, "ARM_CM4_MPU", FREERTOS_MPU, &["freertos_mpu.c"]));
     links.extend(zephyr(out));
@@ -609,8 +630,9 @@ fn freertos(out: &Path, port: &str, variant: &[&str], extra: &[&str]) -> Option<
 /// Die Bindungen unter Zephyr: zweimal mit dem Rahmen von `port_test` und
 /// dem Geraet des Journals, `examples/zephyr` mit dem Zephyr-Adapter und
 /// `examples/cmsis-rtos2` mit dem Adapter fuer CMSIS-RTOS2, und
-/// `examples/zephyr-gpio` mit dem Rahmen von `wire` und den Treibern aus dem
-/// Devicetree, die `--zephyr` erzeugt (`wire_zephyr.c`, 8.10). Die Rueckgabe
+/// `examples/zephyr-gpio` und `examples/zephyr-adc` mit den Treibern aus dem
+/// Devicetree, die `--zephyr` erzeugt (`wire_zephyr.c`, `analog_zephyr.c`,
+/// 8.10). Die Rueckgabe
 /// des Boards an den Bootloader des F401 (`handback_stm32f401.c`) fehlt: Sie
 /// schreibt die Register ueber die Strukturen aus dem Kopf des Chips, und
 /// ohne ihn kennt cppcheck keines; die Bindungen nehmen den Neustart des C6.
@@ -646,20 +668,29 @@ fn zephyr(out: &Path) -> Vec<Link> {
     };
     let native = ["main.c", "line.c", "handback.c", "partition.c", "handback_reboot.c"].map(|s| shared.join(s));
     let cmsis = vec![root.join("examples/cmsis-rtos2/src/main.c"), shared.join("line.c"), shared.join("handback.c")];
-    vec![link("zephyr", native.to_vec()), link("cmsis-rtos2", cmsis), wire(out)]
+    vec![
+        link("zephyr", native.to_vec()),
+        link("cmsis-rtos2", cmsis),
+        devicetree(out, "zephyr-gpio", "wire"),
+        devicetree(out, "zephyr-adc", "analog"),
+    ]
 }
 
-/// `examples/zephyr-gpio` (8.10): die Lieferform von `wire` mit `--zephyr`,
-/// ihr Rahmen, ihre Treiber aus dem Devicetree, der Port mit dem
-/// Zephyr-Adapter und das Beispiel.
-fn wire(out: &Path) -> Link {
+/// Ein Beispiel mit Treibern aus dem Devicetree (8.10): die Lieferform von
+/// `prefix` aus `examples/<example>/takt/<prefix>.takt` mit `--zephyr`, ihr
+/// Rahmen, ihre Treiber, der Port mit dem Zephyr-Adapter und das Beispiel;
+/// `examples/zephyr-gpio` mit zwei Pins, `examples/zephyr-adc` mit einem Pin
+/// und einem analogen Eingang (FB-735).
+fn devicetree(out: &Path, example: &str, prefix: &str) -> Link {
     let root = root();
     let ports = root.join("crates/takt-embed-c/ports");
     let shared = root.join("examples/zephyr/src");
-    let dir = out.join("wire");
+    let dir = out.join(prefix);
+    let (source, hardware) =
+        (format!("examples/{example}/takt/{prefix}.takt"), format!("examples/{example}/takt/{prefix}.hw"));
     let run = takt(&[
         "build",
-        "examples/zephyr-gpio/takt/wire.takt",
+        &source,
         "--emit",
         "embed",
         "--form",
@@ -667,19 +698,19 @@ fn wire(out: &Path) -> Link {
         "--target",
         "x86_64-unknown-linux-gnu",
         "--prefix",
-        "wire",
+        prefix,
         "--hardware",
-        "examples/zephyr-gpio/takt/wire.hw",
+        &hardware,
         "--zephyr",
         "--out",
         dir.to_str().expect("Pfad"),
     ]);
-    assert!(run.status.success(), "wire: {}", String::from_utf8_lossy(&run.stderr));
-    let mut units = ["wire_frame.c", "wire_ops.c", "wire_zephyr.c"].map(|f| dir.join(f)).to_vec();
+    assert!(run.status.success(), "{prefix}: {}", String::from_utf8_lossy(&run.stderr));
+    let mut units = ["frame.c", "ops.c", "zephyr.c"].map(|f| dir.join(format!("{prefix}_{f}"))).to_vec();
     units.extend([
         ports.join("rtos/takt_rtos.c"),
         ports.join("zephyr/takt_os.c"),
-        root.join("examples/zephyr-gpio/src/main.c"),
+        root.join("examples").join(example).join("src/main.c"),
         shared.join("line.c"),
         shared.join("handback.c"),
         shared.join("handback_reboot.c"),
@@ -709,7 +740,7 @@ fn the_c_part_deviates_only_as_the_catalog_says() {
     let Some(found) = analyse(&catalog, &links, &out) else { return };
     let strangers: Vec<&Finding> = found.iter().filter(|f| f.part == "fremd").collect();
     assert!(strangers.is_empty(), "Befunde ausserhalb des C-Teils: {strangers:?}");
-    if let Err(rows) = judge(&found, &catalog, |part| part != ZEPHYR_BUILD) {
+    if let Err(rows) = judge(&found, &catalog, |part| !of_a_build(part)) {
         panic!("Befunde gegen den Katalog (plan/cert.md, „Der C-Teil“); die Zeilen, wie sie stehen muessten:\n{rows}");
     }
 }
@@ -737,9 +768,127 @@ fn the_zephyr_build_deviates_only_as_the_catalog_says() {
             "{}: kein Bau unter Zephyr; zuerst `zephyr_example.rs` mit --run-ignored all",
             build.display()
         );
-        found.extend(run_tidy_build(&tidy, &args, &build));
+        found.extend(run_tidy_build(&tidy, &args, &build, &build.join("takt"), ZEPHYR_BUILD));
     }
     if let Err(rows) = judge(&found, &catalog, |part| part == ZEPHYR_BUILD) {
+        panic!("Befunde gegen den Katalog (plan/cert.md, „Der C-Teil“); die Zeilen, wie sie stehen muessten:\n{rows}");
+    }
+}
+
+/// Ein Text ohne seine Escapes: `\x` wird `x`.
+fn unescaped(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.extend(chars.next()),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Die Aufrufe der `compile_commands.json` von `build`: je Quelle, aufgeloest,
+/// ihr Aufruf als Woerter, die Escapes von JSON und danach die der Shell
+/// aufgeloest (aus `-DIDF_VER=\\\"v6.1\\\"` wird `-DIDF_VER="v6.1"`). Die
+/// Pfade eines Baus unter Linux haben weder Leerzeichen noch `\`.
+fn commands(build: &Path) -> Vec<(PathBuf, Vec<String>)> {
+    let db = read(&build.join("compile_commands.json"));
+    let mut out = Vec::new();
+    let mut command: Option<Vec<String>> = None;
+    for line in db.lines().map(|l| l.trim().trim_end_matches(',')) {
+        if let Some(c) = line.strip_prefix("\"command\": \"").and_then(|c| c.strip_suffix('"')) {
+            command = Some(unescaped(&unescaped(c)).split_whitespace().map(str::to_string).collect());
+        } else if let Some(f) = line.strip_prefix("\"file\": \"").and_then(|f| f.strip_suffix('"')) {
+            let file = PathBuf::from(unescaped(f));
+            let file = std::fs::canonicalize(&file).unwrap_or(file);
+            out.push((file, command.take().unwrap_or_default()));
+        }
+    }
+    out
+}
+
+/// Liegt eine Stelle (relativ zur Wurzel) in den eigenen Quellen eines
+/// Baus, in Ports und Beispielen? Kopf des SDK und erzeugter Rahmen gehoeren
+/// den Teilen der Lieferformen und zaehlen dort.
+fn in_own_sources(at: &str) -> bool {
+    at.starts_with("crates/takt-embed-c/ports/") || at.starts_with("examples/")
+}
+
+/// Die eigenen Quellen des Baus unter ESP-IDF als eine Bindung fuer
+/// cppcheck: die Einheiten, die Kopfpfade (`-I`, `-isystem`) und die Werte
+/// (`-D`) ihrer Aufrufe. Dazu die Koepfe von picolibc, die die GCC von
+/// ESP-IDF ueber `-specs=picolibc.specs` findet und clang nicht: neben ihrem
+/// `bin`.
+fn idf_link(build: &Path) -> (Link, PathBuf) {
+    let root = root();
+    let ours = |f: &Path| f.starts_with(root.join("crates/takt-embed-c/ports")) || f.starts_with(root.join("examples"));
+    let mut link = Link::host(Vec::new(), Vec::new());
+    link.platform = "unix32";
+    let mut picolibc = None;
+    for (file, words) in commands(build).into_iter().filter(|(f, _)| ours(f)) {
+        if picolibc.is_none() {
+            let compiler = PathBuf::from(words.first().expect("ein Aufruf ohne Compiler"));
+            picolibc = compiler.parent().and_then(Path::parent).map(|dir| dir.join("picolibc").join("include"));
+        }
+        let mut words = words.iter();
+        while let Some(w) = words.next() {
+            let dir = match w.as_str() {
+                "-I" | "-isystem" => words.next().map(PathBuf::from),
+                _ => w.strip_prefix("-I").map(PathBuf::from),
+            };
+            match dir {
+                Some(dir) if !link.include.contains(&dir) => link.include.push(dir),
+                None if w.starts_with("-D") && !link.defines.contains(w) => link.defines.push(w.clone()),
+                _ => {}
+            }
+        }
+        link.units.push(file);
+    }
+    assert!(!link.units.is_empty(), "{}: keine eigene Quelle im Bau", build.display());
+    (link, picolibc.expect("der Compiler des Baus"))
+}
+
+/// **Der Bau unter ESP-IDF weicht nur ab, wie der Katalog sagt** (M11
+/// Schritt 21a): clang-tidy ueber die eigenen Quellen des Baus von
+/// `esp_idf_example.rs` mit den Aufrufen seiner `compile_commands.json` und
+/// dem, was der Katalog dafuer nennt (`clang-tidy unter ESP-IDF`: was clang
+/// von der GCC nicht kennt), und cppcheck ueber dieselben Quellen als eine
+/// Bindung mit den echten Koepfen von ESP-IDF. Was in ESP-IDF, im Kopf des SDK
+/// oder im erzeugten Rahmen steht, zaehlt hier nicht; die beiden letzten
+/// prueft [`the_c_part_deviates_only_as_the_catalog_says`]. Gegen die Zeilen
+/// des Teils [`IDF_BUILD`]. Laeuft nach `esp_idf_example.rs` im Job `esp-idf`
+/// von `.github/workflows/boards.yml`.
+#[test]
+#[ignore = "der Bau von esp_idf_example.rs, clang-tidy und cppcheck: auf CI im Job `esp-idf` von boards.yml"]
+fn the_esp_idf_build_deviates_only_as_the_catalog_says() {
+    let catalog = catalog();
+    let (Some(tidy), Some(cpp)) = (clang_tidy(), cppcheck()) else { return };
+    check_version(&tidy, &catalog.tidy.version);
+    check_version(&cpp, &catalog.cppcheck.version);
+    let build = Path::new(env!("CARGO_TARGET_TMPDIR")).join(IDF_BUILD_DIR);
+    assert!(
+        build.join("compile_commands.json").is_file(),
+        "{}: kein Bau unter ESP-IDF; zuerst `esp_idf_example.rs` mit --run-ignored all",
+        build.display()
+    );
+    let (link, picolibc) = idf_link(&build);
+    let mut args: Vec<String> = catalog.tidy.args.iter().chain(&catalog.idf_tidy.args).cloned().collect();
+    args.extend(["--extra-arg=-isystem".to_string(), format!("--extra-arg={}", picolibc.display())]);
+    let generated = build.join("esp-idf").join("main").join("takt");
+    let mut found: BTreeSet<Finding> = run_tidy_build(&tidy, &args, &build, &generated, IDF_BUILD)
+        .into_iter()
+        .filter(|f| in_own_sources(&f.at))
+        .collect();
+    let out = scratch("takt-c-esp-idf");
+    let root = root();
+    for f in run_cppcheck(&cpp, &catalog.cppcheck.args, &link, &out, &out.join("cppcheck.txt")) {
+        let at = Path::new(&f.at).strip_prefix(&root).map_or_else(|_| f.at.clone(), |p| p.display().to_string());
+        if in_own_sources(&at) {
+            found.insert(Finding { id: f.id, part: IDF_BUILD, at });
+        }
+    }
+    if let Err(rows) = judge(&found, &catalog, |part| part == IDF_BUILD) {
         panic!("Befunde gegen den Katalog (plan/cert.md, „Der C-Teil“); die Zeilen, wie sie stehen muessten:\n{rows}");
     }
 }
@@ -765,7 +914,7 @@ fn a_planted_cert_c_violation_is_caught() {
     assert!(ids.contains("cert-err34-c"), "clang-tidy fand den Verstoss nicht: {found:?}");
     assert!(ids.contains("misra-c2012-21.7"), "cppcheck fand den Verstoss nicht: {found:?}");
     let verdict =
-        judge(&found, &catalog, |part| part != ZEPHYR_BUILD).expect_err("der Katalog laesst den Verstoss nicht zu");
+        judge(&found, &catalog, |part| !of_a_build(part)).expect_err("der Katalog laesst den Verstoss nicht zu");
     assert!(verdict.contains("| `cert-err34-c` | Beispiele | 1 |"), "{verdict}");
 }
 
@@ -791,7 +940,7 @@ fn every_deviation_of_the_c_part_names_its_rule() {
             );
         }
         assert!(
-            ["Rahmen", "SDK", "Port", "Beispiele", "Zephyr", ZEPHYR_BUILD].contains(&part.as_str()),
+            ["Rahmen", "SDK", "Port", "Beispiele", "Zephyr", ZEPHYR_BUILD, IDF_BUILD].contains(&part.as_str()),
             "{id}: Teil `{part}`"
         );
         assert!(d.count > 0 && !d.reason.is_empty(), "{id} ({part}): Zahl und Grund");

@@ -147,3 +147,26 @@ fn the_host_serves_the_wall_clock() {
     assert!(text.contains("t=0 out known true") && text.contains("t=0 out late true"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// **Die Adapter am Treiberrand** (plan/m11.md 2.7, M11 Schritt 22a): ein
+/// Treiberobjekt aus nachgebauten HAL-Objekten (`takt-adapter-probe`). Der
+/// Rand meldet keinen Verstoss, die LED folgt dem Taster, der je Tick
+/// umschaltet, die Schnittstelle bringt je Tick eine Zeile und der Ring der
+/// ISR je Tick einen Rahmen aus zwei Bytes.
+#[test]
+fn the_adapters_deliver_through_the_driver_edge_on_the_host() {
+    if common::clang_path().is_none() {
+        return;
+    }
+    let dir = board::root().join("crates/takt-adapter-probe");
+    let mut host = Host::with_driver(dir.clone());
+    let options = board::Options::fresh(8);
+    let program = dir.join("adapters.takt");
+    let text =
+        host.build(&program, &options).and_then(|exe| host.run(&exe, &options)).unwrap_or_else(|e| panic!("{e}"));
+    let found = board::violations(&text);
+    assert!(found.is_empty(), "{found:?}\n{text}");
+    for line in ["out led 1", "out led 0", "out lines 4", "out got 8"] {
+        assert!(text.contains(line), "ohne `{line}`:\n{text}");
+    }
+}
