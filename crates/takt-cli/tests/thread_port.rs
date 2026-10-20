@@ -73,6 +73,10 @@ fn a_posix_port_passes_the_port_test() {
         .output()
         .expect("clang startet");
     assert!(build.status.success(), "{}", String::from_utf8_lossy(&build.stderr));
+    if let Ok(n) = std::env::var("TAKT_PROBE_RUNS") {
+        probe(&exe, &embed, n.parse().expect("Zahl"));
+        return;
+    }
     let ran = Command::new(&exe).arg(takt_conformance::port::TICKS.to_string()).output().expect("der Port startet");
     let log = String::from_utf8_lossy(&ran.stdout);
     assert!(ran.status.success(), "der Port brach ab ({}): {}", ran.status, String::from_utf8_lossy(&ran.stderr));
@@ -110,6 +114,57 @@ fn the_port_template_compiles_with_the_thread_port() {
         .output()
         .expect("clang startet");
     assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stderr));
+}
+
+/// Sonde FB-860: je Variante `runs` Laeufe, je Lauf Ueberlaeufe, Verspaetungen,
+/// Overrun-Zeilen, spaetester Tick und Jitter.
+fn probe(exe: &Path, embed: &Path, runs: usize) {
+    let source = std::fs::read_to_string(embed.join("port_test.takt")).expect("Quelle");
+    let ticks = takt_conformance::port::TICKS.to_string();
+    let exe = exe.to_str().expect("Pfad");
+    let variants: [(&str, Vec<&str>); 4] = [
+        ("wie bisher", vec![exe]),
+        ("mlockall", vec!["env", "TAKT_PROBE_MLOCK=1", exe]),
+        ("sudo chrt -f 80 + mlockall", vec!["sudo", "env", "TAKT_PROBE_MLOCK=1", "chrt", "-f", "80", exe]),
+        ("sudo, Schrittfaden FIFO 80 + mlockall", vec!["sudo", "env", "TAKT_PROBE_MLOCK=1", "TAKT_PROBE_PRIO=80", exe]),
+    ];
+    for (name, command) in variants {
+        let mut rows = Vec::new();
+        for _ in 0..runs {
+            let ran = Command::new(command[0]).args(&command[1..]).arg(&ticks).output().expect("startet");
+            let log = String::from_utf8_lossy(&ran.stdout);
+            let v = takt_conformance::port::judge(&log, &source);
+            let count = |label: &str| takt_conformance::board::counter(&log, label).unwrap_or(0);
+            let overruns = log.lines().filter(|l| l.contains(" runtime Overrun")).count();
+            rows.push((
+                count("ueberlaeufe"),
+                count("verspaetet"),
+                overruns,
+                v.drift.late,
+                v.drift.jitter.unwrap_or(-1),
+            ));
+            if !ran.status.success() || rows.len() == 1 {
+                eprintln!("SONDE {name}: Status {} stderr {}", ran.status, String::from_utf8_lossy(&ran.stderr).trim());
+            }
+        }
+        let bad = rows.iter().filter(|r| r.0 > 0 || r.1 > 0 || r.2 > 0).count();
+        let mut late: Vec<i64> = rows.iter().map(|r| r.3).collect();
+        late.sort_unstable();
+        let mut jitter: Vec<i64> = rows.iter().map(|r| r.4).collect();
+        jitter.sort_unstable();
+        let sum = |f: fn(&(u64, u64, usize, i64, i64)) -> u64| rows.iter().map(f).sum::<u64>();
+        eprintln!(
+            "SONDE {name}: {runs} Laeufe, {bad} mit Zeitbefund; ueberlaeufe {} verspaetet {} Overrun {}; \
+             spaetester Tick ns Median {} max {}; Jitter ns Median {} max {}",
+            sum(|r| r.0),
+            sum(|r| r.1),
+            sum(|r| r.2 as u64),
+            late[late.len() / 2],
+            late[late.len() - 1],
+            jitter[jitter.len() / 2],
+            jitter[jitter.len() - 1]
+        );
+    }
 }
 
 /// Was ein Lauf, der durchfiel, vom Port zeigt: der Kopf, die Zeilen der

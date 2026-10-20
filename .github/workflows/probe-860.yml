@@ -1,0 +1,36 @@
+# Sonde FB-860 (Strang I), nie gemergt: die POSIX-Portpruefung auf dem
+# gehosteten Runner in vier Varianten.
+name: Sonde FB-860
+
+on:
+  push:
+    branches: [i-860-probe]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: test-ubuntu-24.04
+          save-if: false
+      - name: Kern und Grenzen
+        run: |
+          uname -a
+          cat /sys/kernel/realtime 2>/dev/null || echo "kein /sys/kernel/realtime"
+          cat /proc/sys/kernel/sched_rt_runtime_us
+          nproc
+      - name: Sonde
+        env:
+          TAKT_PROBE_RUNS: "60"
+        run: cargo nextest run -p takt-cli --test thread_port --no-capture -E 'test(=a_posix_port_passes_the_port_test)'

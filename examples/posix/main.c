@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include "port_test.h"
 #include "takt_rtos.h"
@@ -137,7 +138,7 @@ static int drive(takt_core *core, uint64_t ticks) {
         .tick_stack_bytes = sizeof tick_stack,
         .job_stack = job_stack,
         .job_stack_bytes = sizeof job_stack,
-        .step_priority = 0,
+        .step_priority = (getenv("TAKT_PROBE_PRIO") != NULL) ? atoi(getenv("TAKT_PROBE_PRIO")) : 0,
         .job_priority = 0,
     };
     int rc = takt_rtos_start(&port, core, &config);
@@ -193,6 +194,13 @@ static int run(uint64_t ticks) {
 }
 
 int main(int argc, char **argv) {
+    if (getenv("TAKT_PROBE_MLOCK") != NULL) {
+        if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+            perror("mlockall");
+        } else {
+            (void)fprintf(stderr, "mlockall ok\n");
+        }
+    }
     uint64_t ticks = 2000u;
     const int flags = fcntl(STDOUT_FILENO, F_GETFL);
     int rc = 2;
