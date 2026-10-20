@@ -50,18 +50,6 @@ pub const LIMITS: &[Limit] = &[
         row: "KON1-021",
     },
     Limit {
-        was: "Fehler, die alle Ausfuehrer teilen, ausserhalb der Relationen",
-        warum: "Interpreter, Produktrahmen und Boards teilen Sema, MIR, den Kern des Treiberrands \
-                (`takt-hal`) und die Natives. Was dort falsch ist, sehen nur die Relationen \
-                (`relations.rs`: Schrittordnung, Schlaf, `sim` gegen `hw`) und die Golden-Traces \
-                der Referenzprogramme — wenn es eine Relation bricht oder einen Golden-Trace \
-                aendert. IEEE-Umgebung, Praefix und eine gefuellte Arena laufen ueber jeden Fall \
-                der Suite `ieee` (`embed.rs`), mehrere Instanzen im SDK nur ueber den Korpus ohne \
-                Eingaben (`several_programs.rs`): Das SDK hat eine Leitung je Prozess.",
-        wann: "M11: zwei Instanzen im Testwirt, sobald das SDK eine Leitung je Kern hat (FB-691).",
-        row: "FB-382",
-    },
-    Limit {
         was: "aarch64 und armv7 auf einem Geraet (12.8: 64-Bit Linux, 32-Bit mit f64-FPU)",
         warum: "aarch64 laeuft unter qemu gegen x86-64 und den Interpreter (`targets.rs`, im \
                 Container aus `tools/Dockerfile.linux`); armv7 belegt die Abnahme nur ueber IR und \
