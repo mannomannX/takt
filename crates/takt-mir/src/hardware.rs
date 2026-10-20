@@ -37,6 +37,12 @@
 //! tick_jitter_ns = 1500
 //! ram = 65536
 //! flash = 262144
+//! foreign_block_ns = 2000      # die laengste Sperre durch fremden Code (12.11)
+//!
+//! [target.thumbv7em.isr.uart]  # ein Stoerer ueber den Schritten
+//! cost_ns = 1100
+//! period_ns = 10850
+//! origin = gemessen            # sonst `Vertrag` (11.5)
 //!
 //! [device.gpio]
 //! driver = "stm32-gpio"
@@ -101,8 +107,11 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// 12.11); eine aeltere Datei kennt beide nicht und baut keine Pollform.
 /// 17: die Stack-Reserve je Form (`stack_reserve_interrupt`,
 /// `stack_reserve_poll`, `stack_reserve_rtos`; FB-513); `stack_reserve`
-/// gilt dem eigenen Kern.
-pub const FORMAT_VERSION: u32 = 17;
+/// gilt dem eigenen Kern. 18: die fremde Last je Ziel (`foreign_block_ns`,
+/// `foreign_block_origin`, Abschnitte `[target.<z>.isr.<name>]`; 8.10,
+/// 12.11, M11 Schritt 16); eine aeltere Datei nennt keine, und die
+/// Antwortzeiten mehrerer Programme rechnen ohne fremde Last.
+pub const FORMAT_VERSION: u32 = 18;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -267,6 +276,58 @@ pub struct Target {
     pub memory: Memory,
     /// Die Hauptschleife des Wirts in der Pollform (12.11).
     pub host: Host,
+    /// Was ueber den Schrittkontexten laeuft (8.10: „Fremde Last", 12.11).
+    pub foreign: Foreign,
+}
+
+/// Woher ein Wert der fremden Last stammt (11.5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Provenance {
+    /// Vom Wirt eingetragen, nicht bewiesen.
+    #[default]
+    Contract,
+    /// Von `takt bench` gemessen.
+    Measured,
+}
+
+impl Provenance {
+    /// Der Name in der Datei und im Bericht.
+    pub fn name(self) -> &'static str {
+        match self {
+            Provenance::Contract => "Vertrag",
+            Provenance::Measured => "gemessen",
+        }
+    }
+
+    /// Die Herkunft zu ihrem Namen.
+    pub fn by_name(name: &str) -> Option<Provenance> {
+        [Provenance::Contract, Provenance::Measured].into_iter().find(|p| p.name() == name)
+    }
+}
+
+/// Ein Stoerer ueber den Schrittkontexten (8.10, 12.11): eine ISR des Wirts
+/// oder der Plattform, die bis zu einmal je `period_ns` laeuft und dann
+/// `cost_ns` kostet.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Interferer {
+    /// Was ein Lauf der ISR kostet, in Nanosekunden.
+    pub cost_ns: i64,
+    /// Der kleinste Abstand zweier Laeufe, in Nanosekunden.
+    pub period_ns: i64,
+    /// Woher beide Werte stammen.
+    pub origin: Provenance,
+}
+
+/// Die fremde Last eines Ziels (8.10): die laengste Sperre und die Stoerer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Foreign {
+    /// So lange sperrt fremder Code die Interrupts von Takt oder haelt den
+    /// Kern an, hoechstens; `None`, wenn die Datei es nicht nennt.
+    pub block_ns: Option<i64>,
+    /// Woher `block_ns` stammt.
+    pub block_origin: Provenance,
+    /// Die Stoerer nach Namen.
+    pub isrs: BTreeMap<String, Interferer>,
 }
 
 /// Die Hauptschleife des Wirts (8.10: „Hauptschleife"): Was die Pollform
@@ -615,6 +676,8 @@ pub fn is_devicetree_label(text: &str) -> bool {
 /// Welcher Abschnitt gerade gelesen wird.
 enum Section {
     Target(String),
+    /// Ein Stoerer eines Ziels: Ziel, Name.
+    Isr(String, String),
     Device(String),
     Channel(String),
 }
@@ -652,6 +715,9 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
     let mut current: Option<Section> = None;
     let mut seen_magic = false;
     let (mut sections, mut keys) = (BTreeSet::new(), BTreeSet::new());
+    // Jeder Stoerer braucht Kosten und Periode; geprueft am Ende, mit der
+    // Zeile seines Abschnitts.
+    let mut isr_lines: Vec<(String, String, u32)> = Vec::new();
 
     for (i, raw) in text.lines().enumerate() {
         let line_no = i as u32 + 1;
@@ -696,7 +762,11 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
                 return Err(ParseError { line: line_no, message: format!("Abschnitt `[{name}]` steht doppelt") });
             }
             keys.clear();
-            current = Some(section(name, &mut out, line_no)?);
+            let s = section(name, &mut out, line_no)?;
+            if let Section::Isr(target, isr) = &s {
+                isr_lines.push((target.clone(), isr.clone(), line_no));
+            }
+            current = Some(s);
             continue;
         }
 
@@ -715,6 +785,11 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
             Some(Section::Target(name)) => {
                 let target = out.targets.get_mut(name).expect("Abschnitt angelegt");
                 target_key(target, key, value, line_no)?;
+            }
+            Some(Section::Isr(target, name)) => {
+                let t = out.targets.get_mut(target).expect("Abschnitt angelegt");
+                let isr = t.foreign.isrs.get_mut(name).expect("Abschnitt angelegt");
+                isr_key(isr, key, value, line_no)?;
             }
             Some(Section::Device(name)) => {
                 let device = out.devices.get_mut(name).expect("Abschnitt angelegt");
@@ -736,6 +811,17 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
     if !seen_magic {
         return Err(ParseError { line: 1, message: format!("die Datei muss mit `# {MAGIC} <version>` beginnen") });
     }
+    for (target, name, line) in isr_lines {
+        let isr = out.targets.get(&target).and_then(|t| t.foreign.isrs.get(&name)).copied().unwrap_or_default();
+        if isr.cost_ns <= 0 || isr.period_ns <= 0 {
+            return Err(ParseError {
+                line,
+                message: format!(
+                    "der Stoerer `{name}` braucht `cost_ns` und `period_ns`, beide groesser als null (8.10)"
+                ),
+            });
+        }
+    }
     Ok(out)
 }
 
@@ -747,6 +833,17 @@ fn nvm_of(target: &mut Target) -> &mut NvmGeometry {
 /// Legt den Abschnitt an: `target.<name>`, `device.<name>`, `channel <adresse>`.
 fn section(name: &str, out: &mut Hardware, line: u32) -> Result<Section, ParseError> {
     if let Some(target) = name.strip_prefix("target.") {
+        if let Some((target, isr)) = target.split_once(".isr.") {
+            if target.is_empty() || isr.is_empty() {
+                return Err(ParseError { line, message: "`target.<ziel>.isr.<name>` ohne Ziel oder Namen".into() });
+            }
+            let t = out
+                .targets
+                .entry(target.to_string())
+                .or_insert_with(|| Target { name: target.to_string(), ..Target::default() });
+            t.foreign.isrs.insert(isr.to_string(), Interferer::default());
+            return Ok(Section::Isr(target.to_string(), isr.to_string()));
+        }
         if target.is_empty() {
             return Err(ParseError { line, message: "`target.` ohne Namen".into() });
         }
@@ -777,7 +874,8 @@ fn section(name: &str, out: &mut Hardware, line: u32) -> Result<Section, ParseEr
     Err(ParseError {
         line,
         message: format!(
-            "unbekannter Abschnitt `{name}`; bekannt: `target.<name>`, `device.<name>`, `channel <adresse>`"
+            "unbekannter Abschnitt `{name}`; bekannt: `target.<name>`, `target.<name>.isr.<stoerer>`, \
+             `device.<name>`, `channel <adresse>`"
         ),
     })
 }
@@ -851,6 +949,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
         }
         "main_loop_ns" => target.host.main_loop_ns = Some(field::<i64>(value, line)?),
         "job_interrupt" => target.host.job_interrupt = boolean(value, line)?,
+        "foreign_block_ns" => target.foreign.block_ns = Some(field::<i64>(value, line)?),
+        "foreign_block_origin" => target.foreign.block_origin = provenance(value, line)?,
         _ => {
             if let Some((h, c)) = heavy_pairs().find(|(h, c)| heavy_key(*h, *c).as_deref() == Some(key)) {
                 target.c_target.set_heavy(h, c, number(value, line)?);
@@ -861,7 +961,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: cost_model, core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
                      stack_reserve, stack_reserve_interrupt, stack_reserve_poll, stack_reserve_rtos, stack_margin, \
-                     job_stack_reserve, protect, main_loop_ns, job_interrupt, nvm_sector_bytes, \
+                     job_stack_reserve, protect, main_loop_ns, job_interrupt, foreign_block_ns, \
+                     foreign_block_origin, nvm_sector_bytes, \
                      nvm_sectors, nvm_min_interval, nvm_erase_ns, \
                      nvm_program_ns, nvm_blocking, die Klassen {} und die eigenen Gewichte {}",
                     CostClass::ALL.iter().map(|c| c.name()).collect::<Vec<_>>().join(", "),
@@ -869,6 +970,27 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 ),
             })?;
             target.c_target.set(*class, number(value, line)?);
+        }
+    }
+    Ok(())
+}
+
+/// Die Herkunft eines Werts der fremden Last (11.5).
+fn provenance(value: &str, line: u32) -> Result<Provenance, ParseError> {
+    Provenance::by_name(&text(value))
+        .ok_or_else(|| ParseError { line, message: format!("`{value}` ist keine Herkunft (gemessen, Vertrag)") })
+}
+
+fn isr_key(isr: &mut Interferer, key: &str, value: &str, line: u32) -> Result<(), ParseError> {
+    match key {
+        "cost_ns" => isr.cost_ns = field::<i64>(value, line)?,
+        "period_ns" => isr.period_ns = field::<i64>(value, line)?,
+        "origin" => isr.origin = provenance(value, line)?,
+        _ => {
+            return Err(ParseError {
+                line,
+                message: format!("unbekannter Schluessel `{key}`; bekannt: cost_ns, period_ns, origin"),
+            });
         }
     }
     Ok(())
@@ -1174,6 +1296,17 @@ pub fn render(hw: &Hardware) -> String {
         if target.host.job_interrupt {
             s.push_str("job_interrupt = true\n");
         }
+        let f = &target.foreign;
+        if let Some(n) = f.block_ns {
+            s.push_str(&format!("foreign_block_ns = {n}\n"));
+            s.push_str(&format!("foreign_block_origin = {}\n", f.block_origin.name()));
+        }
+        for (name, isr) in &f.isrs {
+            s.push_str(&format!("\n[target.{}.isr.{name}]\n", target.name));
+            s.push_str(&format!("cost_ns = {}\n", isr.cost_ns));
+            s.push_str(&format!("period_ns = {}\n", isr.period_ns));
+            s.push_str(&format!("origin = {}\n", isr.origin.name()));
+        }
     }
     for d in hw.devices.values() {
         s.push_str(&format!("\n[device.{}]\n", d.name));
@@ -1321,6 +1454,45 @@ t_io = 120000
         assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
         let bare = parse(&format!("# {MAGIC} 15\n[target.thumbv7em]\nram = 1024\n")).expect("Version 15");
         assert_eq!(bare.target("thumbv7em").expect("Ziel").host, Host::default());
+    }
+
+    /// **Die fremde Last** (8.10, 12.11, Version 18): die laengste Sperre und
+    /// die Stoerer, jeder mit seiner Herkunft, gelesen, geschrieben und
+    /// wieder gelesen. Ohne Angabe ist ein Wert `Vertrag`; eine aeltere
+    /// Datei nennt keine fremde Last.
+    #[test]
+    fn the_foreign_load_round_trips_with_its_origin() {
+        let text = format!(
+            "# {MAGIC} 18\n[target.thumbv7em]\nram = 1024\nforeign_block_ns = 2000\n\n\
+             [target.thumbv7em.isr.uart]\ncost_ns = 1100\nperiod_ns = 10850\norigin = gemessen\n\n\
+             [target.thumbv7em.isr.radio]\ncost_ns = 40000\nperiod_ns = 1000000\n"
+        );
+        let hw = parse(&text).expect("lesbar");
+        let foreign = &hw.target("thumbv7em").expect("Ziel").foreign;
+        assert_eq!((foreign.block_ns, foreign.block_origin), (Some(2000), Provenance::Contract));
+        assert_eq!(
+            foreign.isrs.get("uart"),
+            Some(&Interferer { cost_ns: 1100, period_ns: 10850, origin: Provenance::Measured })
+        );
+        assert_eq!(foreign.isrs.get("radio").map(|i| i.origin), Some(Provenance::Contract));
+        assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
+        let bare = parse(&format!("# {MAGIC} 17\n[target.thumbv7em]\nram = 1024\n")).expect("Version 17");
+        assert_eq!(bare.target("thumbv7em").expect("Ziel").foreign, Foreign::default());
+    }
+
+    /// Ein Stoerer ohne Kosten oder Periode, eine unbekannte Herkunft und ein
+    /// unbekannter Schluessel im Abschnitt eines Stoerers sind Fehler mit
+    /// ihrer Zeile.
+    #[test]
+    fn an_incomplete_interferer_is_refused() {
+        let missing =
+            format!("# {MAGIC} 18\n[target.thumbv7em]\nram = 1024\n[target.thumbv7em.isr.uart]\ncost_ns = 5\n");
+        assert_eq!(parse(&missing).map_err(|e| e.line), Err(4));
+        let origin =
+            format!("# {MAGIC} 18\n[target.thumbv7em.isr.uart]\ncost_ns = 5\nperiod_ns = 9\norigin = geraten\n");
+        assert_eq!(parse(&origin).map_err(|e| e.line), Err(5));
+        let key = format!("# {MAGIC} 18\n[target.thumbv7em.isr.uart]\ncost_ns = 5\nperiod_ns = 9\nprio = 3\n");
+        assert!(parse(&key).is_err_and(|e| e.line == 5 && e.message.contains("cost_ns, period_ns, origin")));
     }
 
     /// **Die Region der ARMv7-M-MPU** (12.3): eine Zweierpotenz ab 32 Byte;

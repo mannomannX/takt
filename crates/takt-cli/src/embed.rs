@@ -422,7 +422,43 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
             let _ = writeln!(s, "protect = none");
         }
     }
-    let _ = writeln!(s, "persist_bytes = {}", takt_mir::persist::max_payload(p).unwrap_or(0));
+    let persist_bytes = takt_mir::persist::max_payload(p).unwrap_or(0);
+    let _ = writeln!(s, "persist_bytes = {persist_bytes}");
+    // 12.11: was `takt check-image` fuer die Antwortzeiten mehrerer Programme
+    // eines Kerns braucht, jeder Wert mit seiner Herkunft (11.5).
+    let target = e.hardware.and_then(|hw| hw.target(e.target.name));
+    let budget = target.filter(|t| t.fits_cost_model()).and_then(|t| {
+        let verdict = takt_mir::analysis::schedulability::load(p).judge(&t.c_target, t.t_io_ps)?;
+        Some(verdict.needed_ps.saturating_add(t.t_io_ps))
+    });
+    let _ = writeln!(s, "# Schrittbudget = Rechenlast eines Ticks mit der Kalibrierung + T_IO (7.2), in ps");
+    match budget {
+        Some(ps) => {
+            let _ = writeln!(s, "step_budget_ps = {ps}");
+            let _ = writeln!(s, "step_budget_origin = gemessen");
+        }
+        None => {
+            let _ = writeln!(s, "step_budget_ps = none");
+            let _ = writeln!(s, "step_budget_origin = offen");
+        }
+    }
+    let _ = writeln!(s, "journal_block_ns = {}", if persist_bytes > 0 { e.nvm_blocking_ns } else { 0 });
+    let foreign = target.map(|t| t.foreign.clone()).unwrap_or_default();
+    match foreign.block_ns {
+        Some(n) => {
+            let _ = writeln!(s, "foreign_block_ns = {n}");
+            let _ = writeln!(s, "foreign_block_origin = {}", foreign.block_origin.name());
+        }
+        None => {
+            let _ = writeln!(s, "foreign_block_ns = none");
+        }
+    }
+    let isrs: Vec<String> = foreign
+        .isrs
+        .iter()
+        .map(|(name, i)| format!("{name}:{}:{}:{}", i.cost_ns, i.period_ns, i.origin.name()))
+        .collect();
+    let _ = writeln!(s, "isrs = {}", if isrs.is_empty() { "none".to_string() } else { isrs.join(", ") });
     let jobs = !takt_frame::parts::job_slots(p).is_empty();
     let _ = writeln!(s, "jobs = {jobs}");
     let mut services = Vec::new();
