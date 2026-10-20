@@ -215,7 +215,8 @@ fn disarm(rtc: &rtc::RegisterBlock) {
     rtc.bkpr(0).write(|w| unsafe { w.bits(0) });
 }
 
-/// Liest das Backup-Register `n`.
+/// Liest das Backup-Register `n`; nur das Sprungbrett fragt seine Wuensche ab.
+#[cfg(feature = "trampoline")]
 pub(crate) fn backup_read(n: usize) -> u32 {
     let (rcc, _, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
