@@ -154,7 +154,7 @@ fn eq_does_not_hold_for_float() {
 fn same[type T: eq](a: T, b: T) -> bool:
     return a == b
 
-input  x : float[V] in 0..5 V @ sim(\"i/x\")
+input  x : float[V] in 0..5 V @ hw(\"i/x\")
 output n : bool               @ hw(\"o/n\") with safe = false
 
 machine m:
