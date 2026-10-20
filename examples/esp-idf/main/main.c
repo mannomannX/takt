@@ -129,7 +129,7 @@ static void banner(int loaded) {
     if (loaded == 0) {
         load_banner();
     } else {
-        takt_board_trace("  Last: ESP-IDF legt sie nicht an\r\n");
+        takt_board_trace("  Last: ESP-IDF legt sie nicht an, oder sie laeuft nicht an\r\n");
     }
     takt_line_mark();
 }
@@ -182,8 +182,9 @@ static int32_t start_core(takt_core *core) {
 }
 
 /* Faehrt den Kern ueber den Port, waehrend `app_main` die fremde Last
- * rechnet, und schreibt danach die Bilanz. */
-static void run(takt_core *core) {
+ * rechnet, und schreibt danach, was die Last des Baus tat (`loaded` 0: sie
+ * lief), und die Bilanz. */
+static void run(takt_core *core, int loaded) {
     static struct takt_irq port;
     const struct takt_irq_config config = {TAKT_TICKS, PROGRAM_TICK_NS, TIMER_HZ, STEP_PRIORITY, TAKT_LOGICAL};
     takt_foreign foreign = {0u, 0u};
@@ -206,6 +207,9 @@ static void run(takt_core *core) {
         if (takt_irq_esp_idf_job_depth(&stacks.job) != 0) {
             stacks.job = 0u;
         }
+        if (loaded == 0) {
+            load_report();
+        }
         takt_core_report(core, &stacks, &foreign);
     }
 }
@@ -222,14 +226,15 @@ void app_main(void) {
     }
 #endif
     if (ready == TAKT_OK) {
-        banner(load_start());
+        const int loaded = load_start();
+        banner(loaded);
         const int32_t status = start_core(&core);
         if (status != TAKT_OK) {
             takt_board_trace("takt: der Kern nimmt nicht an: ");
             takt_board_trace_i64(status);
             takt_board_trace("\r\n");
         } else {
-            run(&core);
+            run(&core, loaded);
         }
     }
     /* Was im Ring blieb, geht hinaus; `flush` liest dabei den Wunsch des

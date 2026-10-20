@@ -120,6 +120,8 @@ int load_start(void) {
     return rc;
 }
 
+void load_report(void) {}
+
 void load_banner(void) {
     takt_board_trace("takt aussetzen baustein ");
     takt_board_trace((probe_can_suspend != 0U) ? "ja" : "nein");

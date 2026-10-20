@@ -77,7 +77,7 @@ pub(crate) fn complete(text: String, options: &Options) -> Result<String, String
 
 /// Legt den Text eines verworfenen Laufs unter `takt-board-failed` im
 /// Zielverzeichnis ab und nennt die Datei.
-fn kept(text: &str) -> String {
+pub(crate) fn kept(text: &str) -> String {
     let dir = crate::target_dir().join("takt-board-failed");
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let path = dir.join(format!("{stamp}-{}.log", std::process::id()));

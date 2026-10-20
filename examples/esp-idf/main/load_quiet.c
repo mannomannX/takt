@@ -5,3 +5,5 @@
 int load_start(void) { return 0; }
 
 void load_banner(void) {}
+
+void load_report(void) {}

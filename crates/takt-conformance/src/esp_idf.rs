@@ -158,6 +158,81 @@ impl Load {
     }
 }
 
+/// Die Zeile, mit der der Wirt vor der Bilanz zaehlt, was die Last tat, seit
+/// sie steht (`load_report`, examples/esp-idf/main/load.h): die Dauer in
+/// Millisekunden, dann Paare `<zaehler> <n>`.
+pub const LOAD_COUNTS: &str = "takt last dauer ";
+
+/// Ein Rahmen von ESP-NOW alle so viele Millisekunden (`WIFI_PERIOD_MS`,
+/// load_wifi.c).
+const ESP_NOW_PERIOD_MS: u64 = 5;
+
+/// Die Pause zwischen zwei Scans (`WIFI_SCAN_PAUSE_MS`) und eine obere
+/// Schranke fuer einen aktiven Scan aller Kanaele: 13 Kanaele zu hoechstens
+/// 120 ms (die Vorgabe von ESP-IDF) und die Wechsel.
+const SCAN_PAUSE_MS: u64 = 10_000;
+const SCAN_BOUND_MS: u64 = 3_000;
+
+/// Ein Datensatz von NVS je Sekunde (`NVS_PERIOD_MS`, load_nvs.c) und ein
+/// Zyklus der Werbung je Sekunde (`BLE_CYCLE_MS`, load_ble.c).
+const NVS_PERIOD_MS: u64 = 1_000;
+const ADV_CYCLE_MS: u64 = 1_000;
+
+/// So viel des Erwarteten muss die Last mindestens getan haben, in Prozent.
+const PRESENT_PERCENT: u64 = 80;
+
+/// **Die Last war da** (12.8, M11 Schritt 21b): Die Zeile [`LOAD_COUNTS`]
+/// steht im Lauf, und jeder Zaehler erreicht seinen Mindestwert aus der Dauer
+/// und dem Takt der Last — ein Funk, der nicht anlaeuft oder nie sendet, faellt
+/// so auf, statt dass die Pruefung still besteht:
+///
+/// - WLAN: 80 % der Rahmen von ESP-NOW ausserhalb der Scans (`scanzeit`);
+///   nach dem ersten Scan, den `load_start` abwartet, mindestens so viele, wie
+///   Pause und Schranke in die Dauer passen;
+/// - BLE: 80 % der Zyklen der Werbung;
+/// - NVS unter beiden: 80 % der Datensaetze.
+///
+/// Gibt die Zeile fuer den Bericht; ohne Last ist nichts zu belegen.
+pub fn load_present(text: &str, load: Load) -> Result<String, String> {
+    if matches!(load, Load::Quiet | Load::Suspend) {
+        return Ok(String::new());
+    }
+    let line = text.lines().rev().find_map(|l| l.trim_end().strip_prefix(LOAD_COUNTS)).ok_or_else(|| {
+        format!("die Last `{}` zaehlte nichts: die Zeile `{}` fehlt", load.name(), LOAD_COUNTS.trim_end())
+    })?;
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let ms: u64 = words.first().and_then(|w| w.parse().ok()).ok_or_else(|| format!("keine Dauer in `{line}`"))?;
+    let counts: std::collections::BTreeMap<&str, u64> =
+        words[1..].chunks(2).filter_map(|p| Some((*p.first()?, p.get(1)?.parse().ok()?))).collect();
+    let percent = |n: u64| n * PRESENT_PERCENT / 100;
+    let nvs = ("nvs", percent(ms) / NVS_PERIOD_MS);
+    let minima = match load {
+        Load::Wifi => {
+            let scan_ms = counts.get("scanzeit").copied().unwrap_or(0);
+            vec![
+                ("espnow", percent(ms.saturating_sub(scan_ms) / ESP_NOW_PERIOD_MS)),
+                ("scans", ms / (SCAN_PAUSE_MS + SCAN_BOUND_MS)),
+                nvs,
+            ]
+        }
+        Load::Ble => vec![("werbung", percent(ms) / ADV_CYCLE_MS), nvs],
+        Load::Quiet | Load::Suspend => Vec::new(),
+    };
+    let short: Vec<String> = minima
+        .iter()
+        .filter_map(|(name, min)| match counts.get(name) {
+            Some(n) if n >= min => None,
+            Some(n) => Some(format!("`{name}` {n}, verlangt mindestens {min}")),
+            None => Some(format!("`{name}` fehlt")),
+        })
+        .collect();
+    if short.is_empty() {
+        Ok(format!("Last `{}` in {ms} ms: {}", load.name(), words[1..].join(" ")))
+    } else {
+        Err(format!("die Last `{}` lief nicht wie verlangt ({ms} ms): {}", load.name(), short.join("; ")))
+    }
+}
+
 /// Was ein Bau von `examples/esp-idf` faehrt.
 #[derive(Clone, Copy, Debug)]
 pub struct Spec<'a> {
@@ -425,10 +500,20 @@ impl Board for Esp32c6Idf {
     }
 
     /// Das Abbild am Stueck ab 0x0; den Tick fuer den Blick ueber JTAG nennt
-    /// das Manifest neben dem ELF ([`tick_address`]).
+    /// das Manifest neben dem ELF ([`tick_address`]). Ein Lauf unter einer
+    /// Last belegt sie ([`load_present`]), sonst ist er keiner.
     fn run(&mut self, elf: &Path, options: &Options) -> Result<String, String> {
         let tick = tick_address(elf, &elf.with_extension("manifest"))?;
-        self.board.run_raw(&elf.with_extension("bin"), 0, Tick::At(tick), options)
+        let text = self.board.run_raw(&elf.with_extension("bin"), 0, Tick::At(tick), options)?;
+        match load_present(&text, self.load) {
+            Ok(present) => {
+                if !present.is_empty() {
+                    eprintln!("{}: {present}", self.name());
+                }
+                Ok(text)
+            }
+            Err(e) => Err(format!("{e}\n{}", crate::board::kept(&text))),
+        }
     }
 
     fn forms(&self) -> &'static [Form] {
@@ -442,6 +527,31 @@ mod tests {
 
     fn symbol(name: &str, address: u64) -> takt_llvm::inspect::Symbol {
         takt_llvm::inspect::Symbol { name: name.to_string(), address, size: 4, kind: 'T' }
+    }
+
+    /// **Die Last war da, oder der Lauf scheitert mit Grund** (M11 Schritt
+    /// 21b): WLAN mit genug Rahmen, Scans und Datensaetzen in 2,5 s; ohne
+    /// Rahmen, mit einem fehlenden Zaehler oder ohne die Zeile nicht. Ohne
+    /// Last ist nichts zu belegen.
+    #[test]
+    fn a_load_proves_itself_by_its_counts() {
+        let run = |counts: &str| format!("takt trace\r\nt=0 time\r\n{LOAD_COUNTS}{counts}\r\ntakt schlief 0\r\n");
+        let wifi = run("2500 espnow 470 scans 0 scanzeit 0 nvs 2 ");
+        assert!(load_present(&wifi, Load::Wifi).is_ok_and(|s| s.contains("espnow 470")), "{wifi}");
+        let silent = run("2500 espnow 0 scans 0 scanzeit 0 nvs 2");
+        let e = load_present(&silent, Load::Wifi).expect_err("ohne Rahmen");
+        assert!(e.contains("`espnow` 0, verlangt mindestens 400"), "{e}");
+        // In 26 s passen zwei Scans nach dem ersten; 400 ms davon scannte er.
+        let long = run("26000 espnow 4100 scans 1 scanzeit 400 nvs 25");
+        let e = load_present(&long, Load::Wifi).expect_err("ein Scan zu wenig");
+        assert!(e.contains("`scans` 1, verlangt mindestens 2") && !e.contains("espnow"), "{e}");
+        let ble = run("2500 werbung 2 nvs 2");
+        assert!(load_present(&ble, Load::Ble).is_ok(), "{ble}");
+        let e = load_present(&run("2500 nvs 2"), Load::Ble).expect_err("ohne Werbung");
+        assert!(e.contains("`werbung` fehlt"), "{e}");
+        let e = load_present("takt trace\r\ntakt schlief 0\r\n", Load::Ble).expect_err("ohne Zeile");
+        assert!(e.contains("zaehlte nichts"), "{e}");
+        assert_eq!(load_present("", Load::Quiet), Ok(String::new()));
     }
 
     /// **Was der Schritt ruft, liegt im IRAM, oder der Bau nennt es** (12.3):

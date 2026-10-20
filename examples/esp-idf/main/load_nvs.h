@@ -6,11 +6,16 @@
 #ifndef LOAD_NVS_H
 #define LOAD_NVS_H
 
+#include <stdint.h>
+
 /* Die Prioritaet der Aufgaben der Last: ueber `app_main` (1), das die
  * fremde Rechenlast traegt, unter den Jobs (20) und dem Journal (19). */
 #define LOAD_PRIORITY 5U
 
 /* Richtet NVS ein und startet die Aufgabe; 0, oder -1. */
 int load_nvs_start(void);
+
+/* Wie viele Datensaetze NVS bisher bestaetigte. */
+uint32_t load_nvs_commits(void);
 
 #endif /* LOAD_NVS_H */

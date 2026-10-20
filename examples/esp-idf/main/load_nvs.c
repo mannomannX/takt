@@ -22,6 +22,9 @@
 /* Der Namensraum `takt` in NVS; nur die Aufgabe schreibt hinein. */
 static nvs_handle_t load_nvs_handle;
 
+/* Atomar: die bestaetigten Datensaetze. */
+static uint32_t load_nvs_committed;
+
 static void load_nvs(void *arg) {
     static uint8_t record[NVS_RECORD_BYTES];
     (void)arg;
@@ -30,8 +33,10 @@ static void load_nvs(void *arg) {
     for (;;) {
         record[n % NVS_RECORD_BYTES] = (uint8_t)n;
         n++;
-        (void)nvs_set_blob(load_nvs_handle, "last", record, sizeof record);
-        (void)nvs_commit(load_nvs_handle);
+        if ((nvs_set_blob(load_nvs_handle, "last", record, sizeof record) == ESP_OK) &&
+            (nvs_commit(load_nvs_handle) == ESP_OK)) {
+            (void)__atomic_add_fetch(&load_nvs_committed, 1U, __ATOMIC_RELAXED);
+        }
         vTaskDelayUntil(&wake, pdMS_TO_TICKS(NVS_PERIOD_MS));
     }
 }
@@ -50,3 +55,5 @@ int load_nvs_start(void) {
     }
     return rc;
 }
+
+uint32_t load_nvs_commits(void) { return __atomic_load_n(&load_nvs_committed, __ATOMIC_RELAXED); }
