@@ -1,5 +1,6 @@
-//! `takt check-image ABBILD --manifest P.manifest …` (12.11, 13.8; M11
-//! Schritt 11): prueft das fertig gebundene Abbild, nicht die Annahmen davor.
+//! `takt check-image ABBILD --manifest P.manifest … [--library ARCHIV …]`
+//! (12.11, 13.8; M11 Schritt 11): prueft das fertig gebundene Abbild, nicht
+//! die Annahmen davor.
 //!
 //! Je Programm, dessen Manifest genannt ist:
 //!
@@ -9,10 +10,12 @@
 //! 2. die Arena unter `arena_symbol`, mindestens `arena_bytes` gross und an
 //!    `arena_align` ausgerichtet, und kein beschreibbares Symbol aus Takt
 //!    ausserhalb der Arenen — aus der Bibliothek, mit dem Praefix, aus den
-//!    geteilten Crates oder der Huelle. Was die Bibliothek nur lesend anlegt,
-//!    bleibt eine Konstante, wo der Wirt es auch hinlegt: Unter ESP-IDF liegen
-//!    die Konstanten des Tick-Pfads im DRAM, damit er waehrend eines
-//!    Flash-Zugriffs rechnet, und dort traegt sie die Symboltabelle als Daten;
+//!    geteilten Crates oder der Huelle. Was die Bibliothek oder eine weitere
+//!    gebundene Takt-Bibliothek (`--library`, das SDK-Archiv) nur lesend
+//!    anlegt, bleibt eine Konstante, wo der Wirt es auch hinlegt: Unter
+//!    ESP-IDF liegen die Konstanten des Tick-Pfads im DRAM, damit er waehrend
+//!    eines Flash-Zugriffs rechnet, und dort traegt sie die Symboltabelle als
+//!    Daten;
 //! 3. unter `xip_flash`: Jede Funktion, die von einem Einstieg des
 //!    Tick-Pfads aus erreichbar ist, liegt im RAM oder im ROM, auch die
 //!    Treiber des Wirts. Ausgenommen sind Wege, die nur in eine Panik
@@ -126,24 +129,28 @@ pub(crate) struct Image {
     pub(crate) graph: Option<CallGraph>,
 }
 
-/// Was die Bibliothek eines Programms definiert (`nm` auf `libP.a`).
+/// Was die Bibliothek eines Programms definiert (`nm` auf `libP.a`), mit den
+/// Konstanten der weiteren gebundenen Takt-Bibliotheken.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Library {
     /// Jeder Name, den sie definiert.
     pub(crate) names: BTreeSet<String>,
-    /// Die Namen, die sie nur lesend anlegt (`R`, `r`) und nirgends
-    /// beschreibbar.
+    /// Die Namen, die sie oder eine weitere gebundene Takt-Bibliothek nur
+    /// lesend anlegt (`R`, `r`) und keine von ihnen beschreibbar.
     pub(crate) constants: BTreeSet<String>,
 }
 
 impl Library {
-    pub(crate) fn of(symbols: &[Symbol]) -> Library {
+    /// `own` aus `libP.a`, `bound` aus den weiteren gebundenen
+    /// Takt-Bibliotheken: Deren Namen gehoeren nicht dem Programm, ihre
+    /// Konstanten bleiben aber Konstanten.
+    pub(crate) fn of(own: &[Symbol], bound: &[Symbol]) -> Library {
         let read_only = |s: &&Symbol| matches!(s.kind, 'R' | 'r');
-        let other: BTreeSet<&str> = symbols.iter().filter(|s| !read_only(s)).map(|s| s.name.as_str()).collect();
+        let all = || own.iter().chain(bound);
+        let other: BTreeSet<&str> = all().filter(|s| !read_only(s)).map(|s| s.name.as_str()).collect();
         Library {
-            names: symbols.iter().map(|s| s.name.clone()).collect(),
-            constants: symbols
-                .iter()
+            names: own.iter().map(|s| s.name.clone()).collect(),
+            constants: all()
                 .filter(read_only)
                 .filter(|s| !other.contains(s.name.as_str()))
                 .map(|s| s.name.clone())
@@ -407,8 +414,8 @@ fn library_of(manifest: &Path, prefix: &str) -> Option<PathBuf> {
     [format!("lib{prefix}.a"), format!("{prefix}.lib")].into_iter().map(|f| dir.join(f)).find(|p| p.is_file())
 }
 
-/// `takt check-image ABBILD --manifest P.manifest …`.
-pub(crate) fn run(image_path: &Path, manifests: &[&str]) -> bool {
+/// `takt check-image ABBILD --manifest P.manifest … [--library ARCHIV …]`.
+pub(crate) fn run(image_path: &Path, manifests: &[&str], libraries: &[&str]) -> bool {
     if manifests.is_empty() {
         eprintln!("takt check-image: mindestens ein `--manifest P.manifest`");
         return false;
@@ -436,15 +443,25 @@ pub(crate) fn run(image_path: &Path, manifests: &[&str]) -> bool {
         eprintln!("{}: kein `nm`/`objdump` liest das Abbild", image_path.display());
         return false;
     };
+    let mut bound = Vec::new();
+    for lib in libraries {
+        match tools.symbols_demangled(Path::new(lib)) {
+            Some(symbols) => bound.extend(symbols),
+            None => {
+                eprintln!("{lib}: kein `nm` liest die Bibliothek");
+                return false;
+            }
+        }
+    }
     let image = Image { symbols, sections, graph: tools.call_graph(image_path) };
     let arenas = regions(&image, &parsed.iter().map(|(_, m)| m).collect::<Vec<_>>());
     let mut lines = Vec::new();
     for (path, m) in &parsed {
         let library = match library_of(path, &m.prefix) {
-            Some(lib) => Library::of(&tools.symbols_demangled(&lib).unwrap_or_default()),
+            Some(lib) => Library::of(&tools.symbols_demangled(&lib).unwrap_or_default(), &bound),
             None => {
                 lines.push(open(format!("{}: keine Bibliothek neben {}", m.prefix, path.display())));
-                Library::default()
+                Library::of(&[], &bound)
             }
         };
         lines.extend(check(&image, m, &library, &arenas));
@@ -582,15 +599,42 @@ mod tests {
         image.symbols.push(symbol("g_alert_base", 0x4080_9100, 24, 'd'));
         image.symbols.push(symbol("app_ops", 0x4080_9200, 64, 'D'));
         image.symbols.push(symbol("g_twice", 0x4080_9300, 4, 'd'));
-        let library = Library::of(&[
-            symbol("g_alert_base", 0, 24, 'r'),
-            symbol("app_ops", 0, 64, 'R'),
-            symbol("g_twice", 0, 4, 'r'),
-            symbol("g_twice", 0, 4, 'b'),
-        ]);
+        let library = Library::of(
+            &[
+                symbol("g_alert_base", 0, 24, 'r'),
+                symbol("app_ops", 0, 64, 'R'),
+                symbol("g_twice", 0, 4, 'r'),
+                symbol("g_twice", 0, 4, 'b'),
+            ],
+            &[],
+        );
         let found = findings(&check(&image, &manifest(), &library, &[(0x4080_8000, 256)])).join("\n");
         assert!(!found.contains("g_alert_base") && !found.contains("app_ops"), "{found}");
         assert!(found.contains("beschreibbar ausserhalb der Arena: `g_twice`"), "{found}");
+    }
+
+    /// **Eine Konstante des SDK-Archivs im RAM ist nicht beschreibbar**
+    /// (FB-844): Das Fragment `esp-idf/takt/takt.lf` legt das SDK-Archiv
+    /// unter ESP-IDF ganz in den RAM, die Tabellen von `libtaktm` in den
+    /// DRAM. Aus einem geteilten Crate gehoeren sie zu Takt; Konstanten sind
+    /// sie nur, weil das Archiv sie lesend anlegt. Ohne das Archiv bleiben
+    /// sie ein Befund, ebenso ein `static` desselben Crates, das es
+    /// beschreibbar anlegt.
+    #[test]
+    fn a_constant_of_the_sdk_archive_in_ram_is_not_writable() {
+        let mut image = clean();
+        image.symbols.push(symbol("libtaktm::table::ATAN64", 0x4080_9100, 2600, 'd'));
+        image.symbols.push(symbol("libtaktm::table::SCRATCH", 0x4080_9c00, 8, 'b'));
+        let sdk = [
+            symbol("libtaktm::table::ATAN64", 0, 2600, 'R'),
+            symbol("libtaktm::table::SCRATCH", 0, 8, 'b'),
+        ];
+        let found = |library: &Library| findings(&check(&image, &manifest(), library, &[(0x4080_8000, 256)])).join("\n");
+        let with = found(&Library::of(&[], &sdk));
+        assert!(!with.contains("ATAN64"), "{with}");
+        assert!(with.contains("beschreibbar ausserhalb der Arena: `libtaktm::table::SCRATCH`"), "{with}");
+        let without = found(&Library::default());
+        assert!(without.contains("beschreibbar ausserhalb der Arena: `libtaktm::table::ATAN64`"), "{without}");
     }
 
     /// **Eine zu kleine Arena** und eine schief ausgerichtete.

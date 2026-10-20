@@ -218,19 +218,22 @@ pub fn build(idf: &Path, spec: &Spec, dir: &Path, takt: &Path) -> Result<Image, 
         bin: dir.join("merged-binary.bin"),
         manifest: dir.join("esp-idf").join("main").join("takt").join("program").join("program.manifest"),
     };
-    resident(takt, &image)?;
+    resident(takt, &image, &sdk)?;
     Ok(image)
 }
 
 /// Die Residenz im RAM am Abbild: `takt check-image` fuer den Tick-Pfad des
 /// Programms, [`RESIDENT`] und [`RESIDENT_JOURNAL`] fuer das, was der Schritt
-/// sonst ruft.
-pub fn resident(takt: &Path, image: &Image) -> Result<(), String> {
+/// sonst ruft. `sdk` ist das gebundene SDK-Archiv: Das Fragment der
+/// Komponente legt es ganz in den RAM, auch seine Konstanten (FB-844).
+pub fn resident(takt: &Path, image: &Image, sdk: &Path) -> Result<(), String> {
     let checked = Command::new(takt)
         .arg("check-image")
         .arg(&image.elf)
         .arg("--manifest")
         .arg(&image.manifest)
+        .arg("--library")
+        .arg(sdk)
         .output()
         .map_err(|e| format!("{}: {e}", takt.display()))?;
     if !checked.status.success() {

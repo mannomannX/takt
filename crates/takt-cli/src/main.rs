@@ -71,7 +71,7 @@ use takt_interp::{RunOptions, Trace, Verdict};
 use takt_syntax::fmt::{insert_edition, verify};
 use takt_syntax::{Edition, TokenKind, format, format_snippet, parse_file, parse_snippet, sexpr, tokenize};
 
-const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt check-image ABBILD --manifest P.manifest | takt bench --board NAME | takt port-test --emit embed|--judge LOG (siehe crates/takt-cli/src/main.rs)";
+const USAGE: &str = "takt check|build|sim|run|replay|verify-trace|timing|test|driver-test|campaign|prove|tune|size|cost|latency|graph|mir|fmt|parse|tokens|tcb DATEI… | takt check-image ABBILD --manifest P.manifest [--library ARCHIV] | takt bench --board NAME | takt port-test --emit embed|--judge LOG (siehe crates/takt-cli/src/main.rs)";
 
 /// Die Schalter je Unterbefehl, genau die, die er liest (11.1): Ein
 /// unbekannter Schalter ist ein Fehler, kein still uebergangener Tippfehler
@@ -265,7 +265,7 @@ const FLAGS: &[(&str, &[&str])] = &[
             "--target",
         ],
     ),
-    ("check-image", &["--manifest"]),
+    ("check-image", &["--library", "--manifest"]),
     (
         "port-test",
         &[
@@ -461,15 +461,16 @@ fn command() -> ExitCode {
     if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-/// `takt check-image ABBILD --manifest P.manifest …` (12.11, 13.8): prueft
-/// das gebundene Abbild gegen die Manifeste seiner Programme
-/// ([`check_image`]).
+/// `takt check-image ABBILD --manifest P.manifest … [--library ARCHIV …]`
+/// (12.11, 13.8): prueft das gebundene Abbild gegen die Manifeste seiner
+/// Programme; `--library` nennt weitere gebundene Takt-Bibliotheken, etwa das
+/// SDK-Archiv ([`check_image`]).
 fn check_image(args: &Args) -> bool {
     let [image] = args.files.as_slice() else {
         eprintln!("takt check-image ABBILD --manifest P.manifest …");
         return false;
     };
-    check_image::run(std::path::Path::new(image), &args.values("--manifest"))
+    check_image::run(std::path::Path::new(image), &args.values("--manifest"), &args.values("--library"))
 }
 
 /// Das Board aus `--board`; der Port kommt aus der Umgebung wie in der
