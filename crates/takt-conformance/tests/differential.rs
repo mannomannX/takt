@@ -526,25 +526,29 @@ property forward: never(now < 0 s) with monitor = true
 /// 30 000 Tage in Nanosekunden.
 const LIMIT_TICK_NS: i64 = 30_000 * 86_400 * 1_000_000_000;
 
-/// **`now` bleibt an der Grenze von `Duration` stehen, auch im erzeugten
-/// Code** (3.3, FB-614): Der Rahmen saettigt `now`, der erzeugte Code
+/// **Der Lauf endet an der Grenze von `Duration`, in jedem Ausfuehrer**
+/// (3.3, 12.7, FB-694): Bis dahin saettigt `now`, der erzeugte Code
 /// `time_in_state` und das `now` des Monitors, und `now + 1 ns` faultet im
-/// selben Tick wie im Interpreter. Vorher rechnete der Rahmen `tick * T0`
-/// als `long long`, ein Ueberlauf und in C undefiniert, und der Monitor sah
-/// eine negative Zeit.
-///
-/// Vier Ticks: Der Produktrahmen rechnet Tick `k` an der Grenze `k - 1` des
-/// Kerns, und dessen Zeitachse endet bei 2^63 − 1 ns. Tick 4 liegt bei 3 · T0
-/// noch darauf, Tick 5 nicht mehr (FB-694).
+/// selben Tick wie im Interpreter (FB-614). Tick 4 erreicht 2^63 − 1 ns, und
+/// mit ihm endet der Lauf: im Interpreter, im Modell und im Produktrahmen
+/// mit `end duration`, obwohl sieben Ticks verlangt sind. Vorher rechnete der
+/// Produktrahmen nur bis Tick 4, weil die Frist danach saettigt, und ein
+/// Lauf ueber sieben Ticks lag jenseits seiner Zeitachse.
 #[test]
-fn now_stops_at_the_largest_duration_in_the_generated_code() {
+fn the_run_ends_at_the_largest_duration_in_every_executor() {
     let Some(clang) = common::clang() else { return };
     let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
     let out = takt_sema::compile(AT_THE_LIMIT, &options);
     let mut p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
     p.config.tick = LIMIT_TICK_NS;
-    let options = takt_interp::RunOptions { ticks: 4, ..Default::default() };
-    let interpreted = takt_interp::run(&p, &takt_interp::Trace::default(), &options).expect("Lauf").trace.render();
+    let stimulus = takt_interp::Trace::default();
+    let options = takt_interp::RunOptions { ticks: 7, inputs: true, ..Default::default() };
+    let result = takt_interp::run(&p, &stimulus, &options).expect("Lauf");
+    let interpreted = result.trace.render();
+    let model = takt_prove::encode(&p).unwrap_or_else(|e| panic!("{}", e.what));
+    let traced = model.run(&p, &stimulus, &result, 7).unwrap_or_else(|e| panic!("Modell: {e}"));
+    let modelled = traced.render();
+    let native = common::run_native_all(&clang, &p, "at_the_limit", 7).unwrap_or_else(|e| panic!("{e}"));
     for line in [
         "t=4 out clock 9223372036854775807 ns",
         "t=4 out since 9223372036854775807 ns",
@@ -554,7 +558,12 @@ fn now_stops_at_the_largest_duration_in_the_generated_code() {
         assert!(interpreted.contains(line), "`{line}` fehlt:\n{interpreted}");
     }
     assert!(!interpreted.contains("violated"), "{interpreted}");
-    let native = common::run_native_all(&clang, &p, "at_the_limit", 4).unwrap_or_else(|e| panic!("{e}"));
+    for (who, trace) in [("Interpreter", &interpreted), ("Modell", &modelled), ("nativ", &native)] {
+        assert!(trace.contains("t=4 end duration"), "{who}: kein Ende an der Achse:\n{trace}");
+        assert!(!trace.contains("t=5 "), "{who} rechnet nach dem Ende weiter:\n{trace}");
+    }
+    let diffs = takt_prove::mismatches(&result.trace, &traced);
+    assert!(diffs.is_empty(), "Interpreter und Modell weichen ab:\n{}", diffs.join("\n"));
     if let Some(e) = disagreement("AT_THE_LIMIT", "Interpreter", &interpreted, "nativ", &native) {
         panic!("{e}");
     }
