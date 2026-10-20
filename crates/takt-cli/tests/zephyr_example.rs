@@ -15,7 +15,9 @@
 
 use std::path::{Path, PathBuf};
 
-use takt_conformance::zephyr::{self, Board, CMSIS_RTOS2, ESP32C6, Image, STM32F401, Variant, ZEPHYR, ZEPHYR_GPIO};
+use takt_conformance::zephyr::{
+    self, Board, CMSIS_RTOS2, ESP32C6, Image, STM32F401, Variant, ZEPHYR, ZEPHYR_ADC, ZEPHYR_GPIO,
+};
 use takt_llvm::inspect::Binutils;
 use takt_llvm::target::Target;
 
@@ -90,6 +92,25 @@ const GPIO_EXPECT: Expect = Expect {
         "wire_alive_wire",
     ],
     config: &[("TAKT", "y"), ("TAKT_PORT_ZEPHYR", "y"), ("GPIO", "y")],
+    partition: false,
+    variant: Variant::KEPT,
+};
+
+/// `examples/zephyr-adc`: der Pin und der analoge Eingang aus
+/// `analog_zephyr.c` mit dem Heartbeat des Pins; ein Geraet nur mit
+/// Eingaengen hat keinen (12.4; 8.10, FB-735).
+const ADC_EXPECT: Expect = Expect {
+    example: ZEPHYR_ADC,
+    linked: &[
+        "analog_ops",
+        "takt_core_init",
+        "takt_os_spawn",
+        "analog_zephyr_init",
+        "analog_in_adc_in",
+        "analog_out_pin_out",
+        "analog_alive_pin",
+    ],
+    config: &[("TAKT", "y"), ("TAKT_PORT_ZEPHYR", "y"), ("GPIO", "y"), ("ADC", "y")],
     partition: false,
     variant: Variant::KEPT,
 };
@@ -222,5 +243,17 @@ fn the_cmsis_rtos2_example_builds_for_the_f401() {
 #[ignore = "Zephyr: TAKT_WEST und die Umgebung aus activate.ps1 (D:/takt-tools); mit --ignored"]
 fn the_zephyr_gpio_example_builds_for_both_boards() {
     let failed = builds(&GPIO_EXPECT, &[STM32F401, ESP32C6]);
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
+}
+
+/// **Das Beispiel mit einem analogen Eingang baut fuer beide Boards** (8.10,
+/// 12.11; FB-735): `takt_add_program` gibt unter Zephyr `--zephyr`, das
+/// Modul bringt die Bindung `takt,adc-input` und uebersetzt
+/// `analog_zephyr.c` mit den Koepfen von Zephyr; die Knoten der Overlays
+/// tragen Pin und Kanal des ADC.
+#[test]
+#[ignore = "Zephyr: TAKT_WEST und die Umgebung aus activate.ps1 (D:/takt-tools); mit --ignored"]
+fn the_zephyr_adc_example_builds_for_both_boards() {
+    let failed = builds(&ADC_EXPECT, &[STM32F401, ESP32C6]);
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }

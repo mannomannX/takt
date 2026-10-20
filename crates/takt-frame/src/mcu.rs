@@ -1115,7 +1115,7 @@ fn wake(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "        int64_t age = 0, t = now;");
         let same = match b.ct {
             Some(ct) => {
-                let _ = writeln!(s, "        {ct} v = 0;");
+                let _ = writeln!(s, "        {ct} v = {};", zero(ct));
                 let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
                 format!("memcmp(&v, a->wake_v[{w}], sizeof v)")
             }
@@ -1932,7 +1932,7 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
         let buf = format!("a->edge_in{}", b.channel);
         let value = match b.ct {
             Some(ct) => {
-                let _ = writeln!(s, "        {ct} v = 0;");
+                let _ = writeln!(s, "        {ct} v = {};", zero(ct));
                 let _ = writeln!(s, "        uint8_t got = {}(a->user, now, &v, &q, &r, &age, &t);", b.function);
                 "&v, (int)sizeof v".to_string()
             }
@@ -2094,7 +2094,7 @@ fn record(s: &mut String, p: &Program, x: &Prefix) {
         }
         let (f, ct) = (format!("{x}_in_{}", r.address.ident()), crate::drivers::recorded_value(r.value).c);
         let _ = writeln!(s, "    {{ /* {} */", r.name);
-        let _ = writeln!(s, "        {ct} v = 0;");
+        let _ = writeln!(s, "        {ct} v = {};", zero(ct));
         let _ = writeln!(s, "        uint8_t q = 0, r = 0;");
         let _ = writeln!(s, "        int64_t age = 0, t = now;");
         let _ = writeln!(
@@ -2340,6 +2340,17 @@ struct BoundStream {
 /// Die an Hardware gebundenen Eingabestroeme; in einen gekoppelten liefert
 /// der Treiber vor den Elementen des Modells, wie der Stimulus im
 /// Interpreter (8.3).
+/// Die Null fuer einen Wert vom C-Typ `ct` in dessen Wesensart: Ein
+/// Fliesskommawert beginnt bei `0.0`, nicht bei der ganzen Zahl `0` (MISRA
+/// C:2012 10.3).
+fn zero(ct: &str) -> &'static str {
+    match ct {
+        "float" => "0.0f",
+        "double" => "0.0",
+        _ => "0",
+    }
+}
+
 fn bound_streams(p: &Program, x: &Prefix) -> Vec<BoundStream> {
     use takt_mir::program::{Binding, Direction};
     use takt_mir::types::Type;

@@ -808,11 +808,24 @@ const WIRE: &str = "examples/zephyr-gpio/takt/wire.takt";
 /// Ihre Konfiguration: beide Kanaele an `zephyr-gpio`.
 const WIRE_HW: &str = "examples/zephyr-gpio/takt/wire.hw";
 
+/// Die Messschleife mit einem analogen Eingang (`examples/zephyr-adc`,
+/// FB-735).
+const ANALOG: &str = "examples/zephyr-adc/takt/analog.takt";
+
+/// Ihre Konfiguration: der Pin an `zephyr-gpio`, der Eingang an `zephyr-adc`
+/// mit `linear(0.000001, 0)`.
+const ANALOG_HW: &str = "examples/zephyr-adc/takt/analog.hw";
+
+/// Die Lieferform von `program` nach `dir`, mit `extra` am Aufruf.
+fn delivery(program: &str, dir: &Path, extra: &[&str]) -> Output {
+    let out = dir.to_str().expect("Pfad");
+    let args = ["build", program, "--emit", "embed", "--target", host_triple(), "--form", "logical", "--out", out];
+    takt(&[&args[..], extra].concat())
+}
+
 /// Die Lieferform der Messschleife nach `dir`, mit `extra` am Aufruf.
 fn wire_delivery(dir: &Path, extra: &[&str]) -> Output {
-    let out = dir.to_str().expect("Pfad");
-    let args = ["build", WIRE, "--emit", "embed", "--target", host_triple(), "--form", "logical", "--out", out];
-    takt(&[&args[..], extra].concat())
+    delivery(WIRE, dir, extra)
 }
 
 /// **`--zephyr` legt die Treiber aus dem Devicetree dazu** (8.10, 12.11):
@@ -850,6 +863,73 @@ fn zephyr_brings_the_devicetree_drivers() {
     let run = wire_delivery(&plain, &["--hardware", WIRE_HW]);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     assert!(!plain.join("wire_zephyr.c").exists() && !plain.join("wire_zephyr.h").exists(), "ohne --zephyr");
+}
+
+/// **Ein analoger Eingang kommt aus dem Devicetree** (8.10, FB-735):
+/// `analog_zephyr.c` sichert den Knoten mit `io-channels` zu, liest im Tick
+/// eine Wandlung, rechnet sie mit den Angaben des Devicetree in Mikrovolt und
+/// mit dem Text von `linear(a, b)` weiter; `analog_zephyr_init` richtet den
+/// Kanal ein. Einen Heartbeat hat nur das Geraet des Pins (12.4).
+#[test]
+fn zephyr_brings_an_analog_input_from_the_devicetree() {
+    let dir = scratch("takt-embed-zephyr-adc");
+    let run = delivery(ANALOG, &dir, &["--hardware", ANALOG_HW, "--zephyr"]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let source = std::fs::read_to_string(dir.join("analog_zephyr.c")).expect("analog_zephyr.c");
+    for want in [
+        "#include <zephyr/drivers/adc.h>",
+        "#if !DT_NODE_HAS_PROP(DT_NODELABEL(takt_adc_in), io_channels)",
+        "#error \"takt: Kanal `level` an `adc/in`: kein Knoten `takt_adc_in` mit `io-channels` im Devicetree\"",
+        "static const struct adc_dt_spec analog_adc_in_adc_in = ADC_DT_SPEC_GET(DT_NODELABEL(takt_adc_in));",
+        "uint8_t analog_in_adc_in(void *user, int64_t now, ",
+        "int rc = adc_sequence_init_dt(&analog_adc_in_adc_in, &sequence);",
+        "rc = adc_read_dt(&analog_adc_in_adc_in, &sequence);",
+        "rc = adc_raw_to_microvolts_dt(&analog_adc_in_adc_in, &microvolts);",
+        "const double scaled = ((double)(0.000001) * (double)microvolts) + (double)(0);",
+        "*quality = ANALOG_ZEPHYR_BAD;",
+        "{&analog_pin_out_pin_out, GPIO_OUTPUT_INACTIVE, \"probe\"},",
+        "{&analog_adc_in_adc_in, \"level\"},",
+        "rc = adc_is_ready_dt(adc->spec) ? adc_channel_setup_dt(adc->spec) : -ENODEV;",
+        "int analog_zephyr_init(const char **channel) {",
+    ] {
+        assert!(source.contains(want), "`{want}` fehlt in analog_zephyr.c:\n{source}");
+    }
+    assert!(source.contains("uint8_t analog_alive_pin(") && !source.contains("analog_alive_adc"), "{source}");
+}
+
+/// **Ohne `calibration` liefert der Eingang ganze Mikrovolt** (8.10,
+/// FB-735): Der Kanal ist `int[uV]`, der Treiber gibt die Mikrovolt des
+/// Devicetree ohne Fliesskomma weiter. `table(…)` lehnt der Bau mit der
+/// offenen Zeile FB-780 ab.
+#[test]
+fn zephyr_passes_microvolts_and_refuses_a_table() {
+    let dir = scratch("takt-embed-zephyr-adc-micro");
+    let program = std::fs::read_to_string(root().join(ANALOG))
+        .expect("analog.takt")
+        .replace("float[V] in -0.5..4.0 V", "int[uV] in -500000..4000000 uV")
+        .replace("level.or(0.0 V) > 1.65 V", "level.or(0 uV) > 1650000 uV");
+    let hardware = std::fs::read_to_string(root().join(ANALOG_HW)).expect("analog.hw");
+    let micro = hardware.replace("unit = V\ncalibration = \"linear(0.000001, 0)\"\n", "unit = uV\n");
+    assert_ne!(micro, hardware, "die Kalibrierung steht in analog.hw");
+    std::fs::write(dir.join("micro.takt"), program).expect("micro.takt");
+    std::fs::write(dir.join("micro.hw"), &micro).expect("micro.hw");
+    let (source, hw) = (dir.join("micro.takt"), dir.join("micro.hw"));
+    let run = delivery(
+        source.to_str().expect("Pfad"),
+        &dir.join("out"),
+        &["--hardware", hw.to_str().expect("Pfad"), "--zephyr"],
+    );
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let generated = std::fs::read_to_string(dir.join("out/micro_zephyr.c")).expect("micro_zephyr.c");
+    assert!(generated.contains("adc_raw_to_microvolts_dt(&micro_adc_in_adc_in, &microvolts);"), "{generated}");
+    assert!(generated.contains("microvolts;\n        taken = 1U;") && !generated.contains("double"), "{generated}");
+
+    let table = hardware.replace("linear(0.000001, 0)", "table(0 0, 3300000 3.3)");
+    std::fs::write(dir.join("table.hw"), table).expect("table.hw");
+    let hw = dir.join("table.hw");
+    let run = delivery(ANALOG, &dir.join("table"), &["--hardware", hw.to_str().expect("Pfad"), "--zephyr"]);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success() && stderr.contains("SC-60") && stderr.contains("(FB-780)"), "{stderr}");
 }
 
 /// **Unter `--zephyr` scheitert der Bau an Pruefung 60** (8.10): Ein `port`,

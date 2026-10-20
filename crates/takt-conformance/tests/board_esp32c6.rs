@@ -660,7 +660,7 @@ fn the_zephyr_gpio_wire_follows_its_pin() {
     let example = takt_conformance::zephyr::ZEPHYR_GPIO;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::ESP32C6, Variant::KEPT)
         .and_then(|image| zephyr_run(&mut board, &image, &options));
-    verdict(&zephyr_wire_follows(board.name(), run));
+    verdict(&zephyr_wire_follows(board.name(), example, run));
 }
 
 /// **Eine Schutzverletzung im Lauf wird auf dem C6 zum Fault des Kerns**

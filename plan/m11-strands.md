@@ -784,6 +784,22 @@ So arbeitet jeder Strang, als wäre er allein:
   - **Offen:** ESP-IDF (FB-756), das Fenster der Interruptform in C
     (FB-755). `examples/zephyr-gpio` (nach PR #4) nennt `keiner`, und
     `the_zephyr_gpio_wire_follows_its_pin` verlangt es.
+- **Stand FB-735 (Strang F, 2026-10-20, Zweig `f-735-dt-adc`):**
+  - **ADC:** `zephyr-adc` in `takt_frame::zephyr` neben `zephyr-gpio`:
+    `adc_dt_spec` aus dem Knoten mit `io-channels` (Bindung
+    `takt,adc-input`, `zephyr/dts`, `dts_root` in `zephyr/module.yml`), eine
+    Wandlung je Tick, Mikrovolt mit `adc_raw_to_microvolts_dt`, ein
+    differentieller Kanal als Zweierkomplement in 16 Bit; `linear(a, b)`
+    als Literale in Fließkomma, ohne Kalibrierung `int[uV]` mit
+    Bereichsprüfung des Typs. Prüfung 60 (`check_zephyr`) hält Eingang,
+    Rohtyp `i32` und Typ fest; `table(…)` lehnt sie ab (FB-780).
+  - **Beispiel:** `examples/zephyr-adc` (Pin PA0 an PA1 = ADC1 Kanal 1 am
+    F401, GPIO7 und ADC-Kanal 0 am C6), Schutz `keiner`. Bau-Test
+    `the_zephyr_adc_example_builds_for_both_boards`, Board-Test
+    `the_zephyr_adc_follows_its_pin` nur am F401 (der C6 hat die Brücke
+    an GPIO17, keinem ADC-Pin); C-Analyse bindet das Beispiel mit.
+  - **Offen:** Board-Lauf am F401; UART nach dem Ring aus Schritt 22a
+    (Strang B).
 
 ### 15, 16, 18, 9, 19 bis 23
 
