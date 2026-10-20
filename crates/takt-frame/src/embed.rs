@@ -5,7 +5,8 @@
 //! Konstanten, die Arena als Typ, den Trait `Drivers` mit dem Kleber zum
 //! Treiberobjekt des Wirts und die sichere Huelle `Program`, die die
 //! Einstiege der Bibliothek dem Kern ohne Warten gibt
-//! (`takt_embed::rt::Program`).
+//! (`takt_embed::rt::Program`). Den Trace schreibt das Programm in die
+//! Senke, die der Wirt der Huelle gibt (`takt_embed::Sink`).
 //!
 //! **Was die Huelle zusichert.** Sie haelt Arena und Treiberobjekt als
 //! Ausleihe `&'a mut`: Zwei Programme auf derselben Arena, ein Zugriff des
@@ -24,8 +25,9 @@ use crate::drivers::Driver;
 /// Sie steht im Symbol `P_abi_<n>` und im Manifest. Fassung 5: Grund und
 /// Alter je Abtastung und eine Abtastung ohne Wert (Rueckgabe 2),
 /// Eingaenge zusammengesetzten Typs, Commands des Wirts, `P_operator_abort`
-/// (M11 Schritt 9).
-pub const ABI: u32 = 5;
+/// (M11 Schritt 9). Fassung 6: die Senke des Trace bei `init` und die
+/// geteilten Haken `takt_trace_*` mit ihr (12.11, M11 Schritt 16).
+pub const ABI: u32 = 6;
 
 /// Was das Modul braucht.
 pub struct Module<'a> {
@@ -96,9 +98,10 @@ fn ffi(x: &Prefix, logic: &str) -> String {
     let _ = writeln!(s, "    unsafe extern \"C\" {{");
     let lines = [
         format!(
-            "pub(super) fn {x}_init_with(a: *mut c_void, user: *mut c_void, persist: *const c_void, len: i32) -> i32;"
+            "pub(super) fn {x}_init_with(a: *mut c_void, user: *mut c_void, sink: *mut c_void, persist: *const c_void, \
+             len: i32) -> i32;"
         ),
-        format!("pub(super) fn {x}_init(a: *mut c_void, user: *mut c_void);"),
+        format!("pub(super) fn {x}_init(a: *mut c_void, user: *mut c_void, sink: *mut c_void);"),
         format!("pub(super) fn {x}_tick(a: *mut c_void, k: i64);"),
         format!("pub(super) fn {x}_commit(a: *mut c_void);"),
         format!("pub(super) fn {x}_idle(a: *mut c_void) -> u8;"),
@@ -196,8 +199,13 @@ pub fn c_header(
 pub fn c_ops(x: &Prefix) -> String {
     let upper = x.as_str().to_uppercase();
     let with_arena: [(&str, &str, &str, &str); 20] = [
-        ("void", "init", "void *a, void *user", "A(a), user"),
-        ("int32_t", "init_with", "void *a, void *user, const void *bytes, int32_t len", "A(a), user, bytes, len"),
+        ("void", "init", "void *a, void *user, void *sink", "A(a), user, sink"),
+        (
+            "int32_t",
+            "init_with",
+            "void *a, void *user, void *sink, const void *bytes, int32_t len",
+            "A(a), user, sink, bytes, len",
+        ),
         ("void", "tick", "void *a, int64_t k", "A(a), k"),
         ("void", "commit", "void *a", "A(a)"),
         ("uint8_t", "idle", "void *a", "A(a)"),
@@ -251,16 +259,19 @@ pub fn c_ops(x: &Prefix) -> String {
 fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str, persists: bool, jobs: bool) -> String {
     let memory = if persists { "Persisting" } else { "Volatile" };
     let work = if jobs { "WithJobs" } else { "NoJobs" };
-    let args = if drivers_type.is_some() { ", drivers" } else { "" };
+    let args = if drivers_type.is_some() { ", drivers, sink" } else { ", sink" };
+    // 12.11: die Senke des Trace, eine Art je Abbild (`takt_embed::hooks!`).
     let (param, user, borrow) = match drivers_type {
         Some(ty) => (
-            format!(", drivers: &'a mut {ty}"),
+            format!(", drivers: &'a mut {ty}, sink: &'a S"),
             "core::ptr::from_mut(drivers).cast()".to_string(),
             format!("core::marker::PhantomData<(&'a mut Arena, &'a mut {ty})>"),
         ),
-        None => {
-            (String::new(), "core::ptr::null_mut()".to_string(), "core::marker::PhantomData<&'a mut Arena>".to_string())
-        }
+        None => (
+            ", sink: &'a S".to_string(),
+            "core::ptr::null_mut()".to_string(),
+            "core::marker::PhantomData<&'a mut Arena>".to_string(),
+        ),
     };
     // FB-385: Ein Programm mit `persist` beginnt ueber sein Journal; einen
     // Start ohne es bietet die Huelle dann nicht an.
@@ -271,7 +282,7 @@ fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str, persists: bool, job
     } else {
         format!(
             "    /// Das Programm nach Tick 0 (9.4).
-    pub fn init(arena: &'a mut Arena{param}) -> Program<'a> {{
+    pub fn init<S: takt_embed::Sink>(arena: &'a mut Arena{param}) -> Program<'a> {{
                      let mut p = Program::new(arena{args});
         p.ensure_init();
         p
@@ -282,11 +293,12 @@ fn hull(x: &Prefix, drivers_type: Option<&str>, logic: &str, persists: bool, job
     format!(
         r#"
 /// Das Programm auf seiner Arena (12.11), fuer den Kern ohne Warten
-/// (`takt_embed::rt::Runtime::service`). Es haelt Arena und Treiberobjekt
-/// geliehen, solange es lebt.
+/// (`takt_embed::rt::Runtime::service`). Es haelt Arena, Treiberobjekt und
+/// die Senke seines Trace geliehen, solange es lebt.
 pub struct Program<'a> {{
     arena: *mut core::ffi::c_void,
     user: *mut core::ffi::c_void,
+    sink: *mut core::ffi::c_void,
     initialized: bool,
     jobs_taken: bool,
     dispatch_taken: bool,
@@ -296,7 +308,7 @@ pub struct Program<'a> {{
 impl<'a> Program<'a> {{
     /// Das Programm vor Tick 0: Das Journal darf noch laden
     /// (`takt_embed::rt::Unloaded::load`), sonst beginnt `ensure_init`.
-    pub fn new(arena: &'a mut Arena{param}) -> Program<'a> {{
+    pub fn new<S: takt_embed::Sink>(arena: &'a mut Arena{param}) -> Program<'a> {{
         // Bibliothek und Huelle muessen dieselbe Schnittstelle sprechen und
         // dasselbe Programm meinen; ohne `{x}_abi_{ABI}` und
         // `{x}_logic_{logic}` bindet das Programm nicht (12.11).
@@ -307,6 +319,7 @@ impl<'a> Program<'a> {{
         Program {{
             arena: core::ptr::from_mut(arena).cast(),
             user: {user},
+            sink: takt_embed::trace::as_ffi(sink),
             initialized: false,
             jobs_taken: false,
             dispatch_taken: false,
@@ -318,8 +331,8 @@ impl<'a> Program<'a> {{
     /// Tick 0 ohne geladene Werte, wenn das Journal keine hatte.
     pub fn ensure_init(&mut self) {{
         if !self.initialized {{
-            // SAFETY: die Arena und das Treiberobjekt aus `new`, geliehen fuer `'a`.
-            unsafe {{ ffi::{x}_init(self.arena, self.user) }};
+            // SAFETY: Arena, Treiberobjekt und Senke aus `new`, geliehen fuer `'a`.
+            unsafe {{ ffi::{x}_init(self.arena, self.user, self.sink) }};
             self.initialized = true;
         }}
     }}
@@ -527,8 +540,8 @@ impl takt_embed::rt::Program for Program<'_> {{
         }} else {{
             self.initialized = true;
             // SAFETY: Der Rahmen liest `len` Byte ab `bytes` und beginnt
-            // damit, mit dem Treiberobjekt aus `new`.
-            unsafe {{ ffi::{x}_init_with(self.arena, self.user, bytes.as_ptr().cast(), len) }}
+            // damit, mit Treiberobjekt und Senke aus `new`.
+            unsafe {{ ffi::{x}_init_with(self.arena, self.user, self.sink, bytes.as_ptr().cast(), len) }}
         }};
         usize::try_from(n).unwrap_or(0)
     }}
@@ -556,7 +569,7 @@ impl takt_embed::rt::Program for Program<'_> {{
             takt_embed::rt::Outputs::Changed => 0,
             takt_embed::rt::Outputs::All => 1,
         }};
-        // SAFETY: liest die Arena und schreibt den Trace ueber die Leitung des Wirts.
+        // SAFETY: liest die Arena und schreibt den Trace in die Senke aus `new`.
         unsafe {{ ffi::{x}_dump(self.arena, all) }};
         // SAFETY: ebenso die Zustandspfade.
         unsafe {{ ffi::{x}_pc(self.arena, all) }};

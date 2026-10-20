@@ -10,8 +10,8 @@ use takt_llvm::symbols::Prefix;
 use takt_llvm::toolchain::Clang;
 use takt_mir::program::{Config, Program};
 
-/// Ein `main`, dessen Trace-Leitung beim ersten Zeichen eines Ticks den Tick
-/// noch einmal ruft — wie eine ISR, die den laufenden Schritt unterbricht.
+/// Ein `main`, dessen Senke beim ersten Zeichen eines Ticks den Tick noch
+/// einmal ruft — wie eine ISR, die den laufenden Schritt unterbricht.
 const MAIN: &str = r#"
 #include <stdio.h>
 #include <stdint.h>
@@ -20,20 +20,20 @@ const MAIN: &str = r#"
 static struct app_arena arena;
 static int reenter;
 
-void takt_board_trace(const char *text) {
+void takt_trace_text(void *sink, const char *text) {
     if (reenter) {
         reenter = 0;
         app_tick(&arena, 99);
     }
-    fputs(text, stdout);
+    fputs(text, (FILE *)sink);
 }
-void takt_board_trace_i64(long long v) { printf("%lld ", v); }
-void takt_board_trace_u64(unsigned long long v) { printf("%llu ", v); }
-void takt_board_trace_f64(double v) { printf("%g ", v); }
-void takt_board_trace_hex8(uint8_t v) { printf("%02x", v); }
+void takt_trace_i64(void *sink, long long v) { fprintf((FILE *)sink, "%lld", v); }
+void takt_trace_u64(void *sink, unsigned long long v) { fprintf((FILE *)sink, "%llu", v); }
+void takt_trace_f64(void *sink, double v) { fprintf((FILE *)sink, "%g", v); }
+void takt_trace_hex8(void *sink, unsigned char v) { fprintf((FILE *)sink, "0x%02x", v); }
 
 int main(void) {
-    app_init(&arena, 0);
+    app_init(&arena, 0, stdout);
     app_overrun(&arena);
     reenter = 1;
     app_tick(&arena, 1);

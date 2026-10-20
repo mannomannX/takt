@@ -114,6 +114,11 @@ _Static_assert(sizeof(struct exchange) == EXCHANGE_BYTES, "der Austauschblock fu
 
 static _Alignas(EXCHANGE_BYTES) struct exchange exchange;
 
+/* Die Senke des Programms (12.5, 12.11): ein Ring vor der Leitung des
+ * Wirts, gebunden mit `takt_sink_init`; in ihr stehen Kopf, Trace und
+ * Bilanz. */
+static takt_sink sink;
+
 /* Der Watchdog des Wirts (12.11): Ein Konformitaetslauf wartet auf die
  * Leitung und ist kein Betrieb (12.3); der Kern meldet, und die Meldung geht
  * ausdruecklich nirgendwohin. */
@@ -147,16 +152,17 @@ static const char *guard_line(int state) {
 
 /* Der Kopf des Laufs, dann die Marke, ab der die Bilanz zaehlt. */
 static void banner(void) {
-    takt_board_trace("\r\ntakt auf stm32f401 in C unter FreeRTOS " tskKERNEL_VERSION_NUMBER "\r\n  Kerntakt ");
-    takt_board_trace_u64(BOARD_CORE_HZ);
-    takt_board_trace("Hz, Tick ");
-    takt_board_trace_i64(APP_TICK_NS);
-    takt_board_trace("ns\r\n  Form rtos\r\n" TAKT_RTOS_PROTECTION "\r\n\r\n");
+    takt_trace_text(&sink, "\r\ntakt auf stm32f401 in C unter FreeRTOS " tskKERNEL_VERSION_NUMBER "\r\n  Kerntakt ");
+    takt_trace_u64(&sink, BOARD_CORE_HZ);
+    takt_trace_text(&sink, " Hz, Tick ");
+    takt_trace_i64(&sink, APP_TICK_NS);
+    takt_trace_text(&sink, " ns\r\n  Form rtos\r\n" TAKT_RTOS_PROTECTION "\r\n\r\n");
 #if TAKT_FREERTOS_MPU
-    takt_board_trace(guard_line(guard_state));
-    takt_board_trace((mpu_refused() != 0) ? "takt schutz partition verweigert\r\n" : "takt schutz partition offen\r\n");
+    takt_trace_text(&sink, guard_line(guard_state));
+    takt_trace_text(&sink,
+                    (mpu_refused() != 0) ? "takt schutz partition verweigert\r\n" : "takt schutz partition offen\r\n");
 #endif
-    takt_line_mark();
+    takt_sink_mark(&sink);
 }
 
 /* Der Kern des Programms auf seiner Arena; mit `persist` ueber das Journal
@@ -171,13 +177,13 @@ static int32_t start_core(takt_core *core, struct app_arena *arena) {
                                         board_nvm_write, board_nvm_poll, board_nvm_read};
 #if TAKT_FRESH_JOURNAL
     if (board_nvm_wipe() != 0) {
-        takt_board_trace("journal: loeschen scheiterte\r\n");
+        takt_trace_text(&sink, "journal: loeschen scheiterte\r\n");
     }
 #endif
-    status = takt_core_init_journaled(core, &app_ops, arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm, current,
-                                      stored, APP_PERSIST_BOUND);
+    status = takt_core_init_journaled(core, &app_ops, arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog, &nvm,
+                                      current, stored, APP_PERSIST_BOUND);
 #else
-    status = takt_core_init(core, &app_ops, arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
+    status = takt_core_init(core, &app_ops, arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog);
 #endif
     return status;
 }
@@ -264,11 +270,11 @@ static void drive(TaskHandle_t worker, takt_core *core, struct app_arena *arena)
     struct takt_stacks stacks = {0u, 0u, 0u, 0u, 0u, 0u};
     const int32_t status = start_core(core, arena);
     if (status != TAKT_OK) {
-        takt_board_trace("takt: der Kern nimmt nicht an: ");
-        takt_board_trace_i64(status);
-        takt_board_trace("\r\n");
+        takt_trace_text(&sink, "takt: der Kern nimmt nicht an: ");
+        takt_trace_i64(&sink, status);
+        takt_trace_text(&sink, "\r\n");
     } else if (takt_rtos_start(&port, core, &config) != 0) {
-        takt_board_trace("takt: der Port startet nicht\r\n");
+        takt_trace_text(&sink, "takt: der Port startet nicht\r\n");
     } else {
 #if TAKT_FREERTOS_MPU
         mpu_core_running();
@@ -281,7 +287,7 @@ static void drive(TaskHandle_t worker, takt_core *core, struct app_arena *arena)
             vTaskDelay(HOST_POLL_TICKS);
         }
         if (takt_rtos_join(&port, &stacks) != 0) {
-            takt_board_trace("takt: die Faeden des Ports enden nicht sauber\r\n");
+            takt_trace_text(&sink, "takt: die Faeden des Ports enden nicht sauber\r\n");
         }
         __atomic_store_n(&exchange.running, 0, __ATOMIC_SEQ_CST);
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -306,13 +312,13 @@ static void host(void *arg) {
 #endif
     const TaskHandle_t worker = spawn_foreign();
     if (worker == NULL) {
-        takt_board_trace("takt: die fremde Aufgabe entsteht nicht\r\n");
+        takt_trace_text(&sink, "takt: die fremde Aufgabe entsteht nicht\r\n");
     } else {
         (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         banner();
         drive(worker, &core, &arena);
     }
-    takt_line_flush();
+    takt_sink_flush(&sink);
     board_park();
 }
 
@@ -331,7 +337,7 @@ int main(void) {
     int32_t status = TAKT_ERR_LINE;
     if (board_init() == 0) {
         static uint8_t ring[RING_BYTES];
-        status = takt_line_init(&line, ring, RING_BYTES);
+        status = takt_sink_init(&sink, &line, ring, RING_BYTES);
     }
     if (status == TAKT_OK) {
         /* Der Waechter unter dem Stack der Interrupts (12.3): unter
@@ -344,13 +350,13 @@ int main(void) {
 #endif
         if (xTaskCreateStatic(host, "wirt", HOST_STACK_WORDS, NULL, HOST_PRIORITY | portPRIVILEGE_BIT, host_stack,
                               &host_tcb) == NULL) {
-            takt_board_trace("takt: die Aufgabe des Wirts entsteht nicht\r\n");
+            takt_trace_text(&sink, "takt: die Aufgabe des Wirts entsteht nicht\r\n");
         } else {
             /* Kehrt nur zurueck, wenn FreeRTOS nicht startet. */
             vTaskStartScheduler();
-            takt_board_trace("takt: FreeRTOS startet nicht\r\n");
+            takt_trace_text(&sink, "takt: FreeRTOS startet nicht\r\n");
         }
-        takt_line_flush();
+        takt_sink_flush(&sink);
     }
     board_park();
     return 0;

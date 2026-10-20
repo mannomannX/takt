@@ -188,7 +188,8 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         write(&e.out.join(format!("{x}_ram.x")), &takt_frame::linker::ld_fragment(x))?;
         write(&e.out.join(format!("{x}.lf")), &takt_frame::linker::ldgen_fragment(x))?;
     }
-    let placement = Placement { bytes, align, tick_at: frame.tick_at, protect: memory.protect.zip(window) };
+    let placement =
+        Placement { bytes, align, tick_at: frame.tick_at, sink_at: frame.sink_at, protect: memory.protect.zip(window) };
     let layout_lines = Layout { arena: &placement, tick_stack: &tick_stack, job_stack, xip };
     write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &layout_lines))?;
     let count = |kind| drivers.iter().filter(|d| d.kind == kind).count();
@@ -284,12 +285,13 @@ fn tick_stack(e: &Embed<'_>, obj: &Path, memory: &takt_mir::hardware::Memory) ->
     Ok(stack)
 }
 
-/// Wie die Arena liegt: Groesse, Ausrichtung, die Stelle des Ticks und die
-/// Schutzregion (12.11).
+/// Wie die Arena liegt: Groesse, Ausrichtung, die Stellen des Ticks und der
+/// Senke und die Schutzregion (12.11).
 struct Placement {
     bytes: u64,
     align: u64,
     tick_at: u64,
+    sink_at: u64,
     protect: Option<(takt_mir::hardware::Protect, takt_mir::hardware::Window)>,
 }
 
@@ -408,6 +410,8 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
     let _ = writeln!(s, "job_stack_symbol = {x}_job_stack");
     // Wo der Tick in der Arena steht: Eine Probe liest ihn, wenn die Leitung schweigt.
     let _ = writeln!(s, "tick_at = {}", arena.tick_at);
+    // 12.11: der Slot der Senke, ausserhalb des Programmbereichs.
+    let _ = writeln!(s, "sink_at = {}", arena.sink_at);
     // 12.3: die Schutzregion und wie viel der Arena sie deckt.
     match arena.protect {
         Some((unit, w)) => {

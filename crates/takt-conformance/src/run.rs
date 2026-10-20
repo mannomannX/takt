@@ -40,23 +40,17 @@ impl std::fmt::Display for Difference {
 /// Die Zeilen `t=<tick> out <name> <wert>`, je Tick und Output in der
 /// Reihenfolge des Traces.
 ///
-/// Der Wert ohne Leerraum vor `,`, `)` und `]`: Der Produktrahmen schreibt
-/// jede Zahl mit einem Leerzeichen dahinter (`takt_board_trace_i64`), auch
-/// in einem Record oder einer Liste (`Timing(90 min, 0 )`, FB-690). Das ist
-/// Schreibweise, kein Wert; verglichen wird Zeichen fuer Zeichen danach.
+/// Der Wert ist der genaue Rest der Zeile (`grammar/trace.md` T1, T2): Beide
+/// Seiten schreiben ihn gleich, jeden Trenner eingeschlossen (FB-690). Nur
+/// ein `\r` am Ende faellt weg, das die Leitung eines Boards anhaengt.
 fn outputs(text: &str) -> BTreeMap<(u64, String), Vec<String>> {
     let mut out = BTreeMap::new();
     for line in text.lines() {
-        let mut w = line.split_whitespace();
-        let Some(t) = w.next().and_then(|s| s.strip_prefix("t=")).and_then(|s| s.parse::<u64>().ok()) else {
-            continue;
-        };
-        if w.next() != Some("out") {
-            continue;
-        }
-        let Some(name) = w.next() else { continue };
-        let value = w.collect::<Vec<&str>>().join(" ").replace(" ,", ",").replace(" )", ")").replace(" ]", "]");
-        out.entry((t, name.to_string())).or_insert_with(Vec::new).push(value);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let Some((tick, rest)) = line.strip_prefix("t=").and_then(|r| r.split_once(' ')) else { continue };
+        let (Ok(t), Some(rest)) = (tick.parse::<u64>(), rest.strip_prefix("out ")) else { continue };
+        let Some((name, value)) = rest.split_once(' ') else { continue };
+        out.entry((t, name.to_string())).or_insert_with(Vec::new).push(value.to_string());
     }
     out
 }
@@ -88,20 +82,20 @@ pub fn f32_outputs(p: &takt_mir::Program) -> std::collections::BTreeSet<String> 
 }
 
 /// Schreibt die `f32`-Werte eines Interpreter-Traces so, wie der erzeugte
-/// Code sie schreibt: als ihren Wert in `f64`.
+/// Code sie schreibt: als ihren Wert in `f64`, in der Textform aus T2.
 ///
 /// Der Interpreter schreibt ein `f32` in seiner kuerzesten Form, der
-/// Produktrahmen in der kuerzesten Form des `f64`; [`compare`] liest beide
-/// als `f64` und
-/// vergliche sonst Schreibweisen statt Bits. Nur die genannten Outputs: Fuer
-/// einen `f64`-Output waere dieselbe Lesart eine Lockerung.
+/// Produktrahmen den Wert nach `(double)` in der kuerzesten Form des `f64`
+/// (4.2, FB-356); danach vergleicht [`compare`] Zeichen fuer Zeichen. Nur
+/// die genannten Outputs und nur Fliesskommazahlen, die T2 immer mit Punkt
+/// schreibt: Eine Ganzzahl im selben Record bleibt, wie sie ist.
 pub fn widen_f32(trace: &str, outputs: &std::collections::BTreeSet<String>) -> String {
     let widen = |value: &str| -> String {
         let mut out = String::with_capacity(value.len());
         let mut token = String::new();
         let flush = |token: &mut String, out: &mut String| {
             match token.parse::<f32>() {
-                Ok(x) if token.chars().any(|c| c.is_ascii_digit()) => out.push_str(&format!("{}", f64::from(x))),
+                Ok(x) if token.contains('.') => out.push_str(&takt_interp::trace::float_text(f64::from(x))),
                 _ => out.push_str(token),
             }
             token.clear();
@@ -178,9 +172,7 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
         for (name, ws) in &now_a {
             let Some(hs) = now_b.get(name) else { continue };
             let (ws, hs) = (changes(ws, want.get(name)), changes(hs, have.get(name)));
-            if (ws.len() > 1 || hs.len() > 1)
-                && (ws.len() != hs.len() || ws.iter().zip(&hs).any(|(w, h)| !same_number(w, h)))
-            {
+            if (ws.len() > 1 || hs.len() > 1) && (ws.len() != hs.len() || ws.iter().zip(&hs).any(|(w, h)| w != h)) {
                 out.push(Difference {
                     tick,
                     output: name.to_string(),
@@ -194,7 +186,7 @@ pub fn compare(interpreter: &str, native: &str) -> Vec<Difference> {
         have.extend(now_b.iter().filter_map(|(n, v)| Some((*n, *v.last()?))));
         for (name, w) in &want {
             let Some(h) = have.get(name) else { continue };
-            if !reported.contains(name) && !same_number(w, h) {
+            if !reported.contains(name) && w != h {
                 out.push(Difference {
                     tick,
                     output: name.to_string(),
@@ -474,7 +466,7 @@ fn changes<'a>(values: &[&'a str], current: Option<&&str>) -> Vec<&'a str> {
     let mut last = current.copied();
     let mut out = Vec::new();
     for v in values {
-        if last.is_none_or(|l| !same_number(l, v)) {
+        if last.is_none_or(|l| l != *v) {
             out.push(*v);
         }
         last = Some(v);
@@ -482,81 +474,25 @@ fn changes<'a>(values: &[&'a str], current: Option<&&str>) -> Vec<&'a str> {
     out
 }
 
-/// Sind zwei Ausgaben derselbe Wert?
-///
-/// Der Interpreter schreibt `true`/`false` und Zahlen mit Einheit, der
-/// Rahmen Zahlen. Verglichen wird darum der Zahlenwert — und bei
-/// Fliesskomma **bitgenau**, nicht mit Toleranz: Satz 9.4.4 verlangt
-/// dasselbe Bit, und eine Toleranz waere genau die Abweichung, die zu
-/// finden der Test da ist.
-fn same_number(interpreter: &str, native: &str) -> bool {
-    // Arrays elementweise (T2): der Interpreter schreibt `[3.75 V, …]`,
-    // der Rahmen `[3.75, …]`.
-    if let (Some(x), Some(y)) = (interpreter.strip_prefix('['), native.strip_prefix('[')) {
-        let items = |s: &str| s.trim_end_matches(']').split(',').map(str::trim).map(String::from).collect::<Vec<_>>();
-        let (xs, ys) = (items(x), items(y));
-        return xs.len() == ys.len() && xs.iter().zip(&ys).all(|(a, b)| same_number(a, b));
-    }
-    // Varianten mit Feldern: `RECT(3.0, 1.5)` gegen `RECT(3, 1.5)`.
-    if let (Some((na, xa)), Some((nb, xb))) = (interpreter.split_once('('), native.split_once('('))
-        && na == nb
-        && xa.ends_with(')')
-        && xb.ends_with(')')
-    {
-        let items = |s: &str| s.trim_end_matches(')').split(',').map(str::trim).map(String::from).collect::<Vec<_>>();
-        let (xs, ys) = (items(xa), items(xb));
-        return xs.len() == ys.len() && xs.iter().zip(&ys).all(|(a, b)| same_number(a, b));
-    }
-    let mut wa = interpreter.split_whitespace();
-    let mut wb = native.split_whitespace();
-    let (a, b) = (wa.next().unwrap_or(interpreter), wb.next().unwrap_or(native));
-    // Der Interpreter schreibt Groessen mit Einheit, der Rahmen ohne; eine
-    // Dauer schreiben beide mit (T2), und dann zaehlt auch sie.
-    if let (Some(ua), Some(ub)) = (wa.next(), wb.next())
-        && ua != ub
-    {
-        return false;
-    }
-    if a == b {
-        return true;
-    }
-    // `-0` ist eine Fliesskommazahl — eine Ganzzahl schreibt so niemand —
-    // und gegen `0` ein anderes Bit (4.2); als Ganzzahl gelesen waeren
-    // beide gleich.
-    let float = |s: &str| s == "-0" || s.contains(['.', 'e', 'E', 'n', 'N', 'i', 'I']);
-    if (float(a) || float(b))
-        && let (Ok(x), Ok(y)) = (a.parse::<f64>(), b.parse::<f64>())
-    {
-        return x.to_bits() == y.to_bits();
-    }
-    // `true`/`false` gegen 1/0.
-    let as_bool = |s: &str| match s {
-        "true" => Some(1i64),
-        "false" => Some(0),
-        _ => s.parse::<i64>().ok(),
-    };
-    if let (Some(x), Some(y)) = (as_bool(a), as_bool(b)) {
-        return x == y;
-    }
-    match (a.parse::<f64>(), b.parse::<f64>()) {
-        (Ok(x), Ok(y)) => x.to_bits() == y.to_bits(),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Ein `f32` des Interpreters gleicht dem Wert, den der Rahmen nach
-    /// `(double)` schreibt; ein `f64`-Output bleibt streng.
+    /// `(double)` schreibt, in der Textform aus T2; eine Ganzzahl daneben und
+    /// die Einheit bleiben, und ein `f64`-Output bleibt streng.
     #[test]
     fn f32_outputs_compare_by_value() {
         let names: std::collections::BTreeSet<String> = ["s".to_string(), "v".to_string()].into();
-        let interp = "t=0 out s 0.9997293\nt=0 out v [0.1, 2.5 V]\nt=0 out d 0.1\n";
-        let native =
-            "t=0 out s 0.99972927570343018\nt=0 out v [0.10000000149011612, 2.5]\nt=0 out d 0.10000000149011612\n";
-        let d = compare(&widen_f32(interp, &names), native);
+        let interp = "t=0 out s 0.9997293\nt=0 out v Rec(3, [0.1 V, 2.5 V])\nt=0 out d 0.1\n";
+        let wide = |x: f32| takt_interp::trace::float_text(f64::from(x));
+        let native = format!(
+            "t=0 out s {}\nt=0 out v Rec(3, [{} V, 2.5 V])\nt=0 out d {}\n",
+            wide(0.9997293),
+            wide(0.1),
+            wide(0.1)
+        );
+        let d = compare(&widen_f32(interp, &names), &native);
         assert_eq!(d.len(), 1, "{d:?}");
         assert_eq!(d[0].output, "d");
     }
@@ -577,14 +513,14 @@ mod tests {
         assert_eq!((d.len(), d[0].output.as_str(), d[0].interpreter.as_str()), (1, "b", "fehlt"), "{d:?}");
     }
 
-    /// Das Vorzeichen der Null zaehlt (4.2): `-0` gegen `0` ist ein anderes
-    /// Bit, auch wenn `widen_f32` ein `f32` ohne Dezimalpunkt schreibt.
+    /// Das Vorzeichen der Null zaehlt (4.2): `-0.0` gegen `0.0` ist ein
+    /// anderes Bit, auch nach `widen_f32`.
     #[test]
     fn the_sign_of_zero_counts() {
         let names: std::collections::BTreeSet<String> = ["s".to_string()].into();
-        assert_eq!(compare(&widen_f32("t=0 out s -0\n", &names), "t=0 out s 0\n").len(), 1);
-        assert_eq!(compare("t=0 out d -0.0\n", "t=0 out d 0\n").len(), 1);
-        assert!(compare("t=0 out d -0.0\n", "t=0 out d -0\n").is_empty());
+        assert_eq!(compare(&widen_f32("t=0 out s -0.0\n", &names), "t=0 out s 0.0\n").len(), 1);
+        assert!(compare(&widen_f32("t=0 out s -0.0\n", &names), "t=0 out s -0.0\n").is_empty());
+        assert_eq!(compare("t=0 out d -0.0\n", "t=0 out d 0.0\n").len(), 1);
         assert!(compare("t=0 out n 0\n", "t=0 out n 0\n").is_empty());
     }
 
@@ -602,9 +538,10 @@ mod tests {
     /// (9.3), wie oft ein Rahmen ihn auch schreibt.
     #[test]
     fn a_repeated_value_is_no_change() {
-        assert!(compare("t=5 out led false\n", "t=5 out led 0\nt=5 out led 0\n").is_empty());
+        assert!(compare("t=5 out led false\n", "t=5 out led false\nt=5 out led false\n").is_empty());
         let interpreted = "t=0 out led true\nt=2 out led false\n";
-        assert!(compare(interpreted, "t=0 out led 1\nt=1 out led 1\nt=2 out led 1\nt=2 out led 0\n").is_empty());
+        let native = "t=0 out led true\nt=1 out led true\nt=2 out led true\nt=2 out led false\n";
+        assert!(compare(interpreted, native).is_empty());
     }
 
     /// Alerts vergleichen sich an ihren Flanken (5.6): Maschine, Flanke und
@@ -706,13 +643,16 @@ mod tests {
         }
     }
 
-    /// Leerraum vor `,`, `)` und `]` ist Schreibweise des Produktrahmens,
-    /// kein Wert (FB-690); ein anderer Wert bleibt eine Abweichung.
+    /// **Der Wert ist der Rest der Zeile** (`grammar/trace.md` T1, FB-690):
+    /// Leerraum vor `,`, `)` und `]` ist eine Abweichung wie ein anderer
+    /// Wert; nur das `\r` der Leitung eines Boards zaehlt nicht.
     #[test]
-    fn spaces_inside_a_composite_value_are_no_value() {
+    fn spaces_inside_a_composite_value_are_a_difference() {
         let want = "t=1 out r UartData(0, [0, 0, 0])\n";
-        assert!(compare(want, "t=1 out r UartData(0 , [0 , 0 , 0 ]) \n").is_empty());
-        assert_eq!(compare(want, "t=1 out r UartData(0 , [0 , 1 , 0 ]) \n").len(), 1);
+        assert_eq!(compare(want, "t=1 out r UartData(0 , [0 , 0 , 0 ]) \n").len(), 1);
+        assert_eq!(compare(want, "t=1 out r UartData(0 , [0 , 0 , 0 ])\n").len(), 1);
+        assert_eq!(compare(want, "t=1 out r UartData(0, [0, 1, 0])\n").len(), 1);
+        assert!(compare(want, "t=1 out r UartData(0, [0, 0, 0])\r\n").is_empty());
     }
 
     /// Das Ende eines Szenarios waehlt der Interpreter (13.6); der Rahmen
@@ -722,12 +662,17 @@ mod tests {
         assert!(compare("t=0 out a 1\nt=4 end scenario\n", "t=0 out a 1\nt=4 out a 1\n").is_empty());
     }
 
-    /// Eine Dauer traegt ihre Einheit auf beiden Seiten; eine Groesse nur
-    /// im Interpreter.
+    /// **Ein Wert ist seine Schreibweise** (T2, FB-750): Dauer und Groesse
+    /// tragen ihre Einheit auf beiden Seiten, ein Wahrheitswert ist `true`
+    /// oder `false`, eine Fliesskommazahl hat ihren Punkt; jede andere
+    /// Schreibweise ist eine Abweichung.
     #[test]
-    fn a_duration_keeps_its_unit() {
+    fn a_value_is_its_spelling() {
         assert_eq!(compare("t=1 out d 10 min\n", "t=1 out d 10 s\n").len(), 1);
         assert!(compare("t=1 out d 10 min\n", "t=1 out d 10 min\n").is_empty());
-        assert!(compare("t=1 out u 3.75 V\n", "t=1 out u 3.75\n").is_empty());
+        assert!(compare("t=1 out u 3.75 V\n", "t=1 out u 3.75 V\n").is_empty());
+        assert_eq!(compare("t=1 out u 3.75 V\n", "t=1 out u 3.75\n").len(), 1);
+        assert_eq!(compare("t=1 out b true\n", "t=1 out b 1\n").len(), 1);
+        assert_eq!(compare("t=1 out f 3.0\n", "t=1 out f 3\n").len(), 1);
     }
 }

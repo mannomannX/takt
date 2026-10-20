@@ -33,6 +33,11 @@
  * meldet (12.3). */
 #define STACK_SLACK 1024U
 
+/* Die Senke des Programms (12.5, 12.11): ein Ring vor der Leitung des
+ * Wirts, gebunden mit `takt_sink_init`; in ihr stehen Kopf, Trace und
+ * Bilanz. */
+static takt_sink sink;
+
 /* Der Watchdog des Wirts (12.11): Dieses Beispiel startet keinen. */
 static void kick(void *ctx) {
     ARG_UNUSED(ctx);
@@ -45,17 +50,17 @@ static void clock_line(void) {
     uint32_t hz = 0U;
     const char *source = takt_os_clock(&hz);
     (void)snprintk(line, sizeof line, "takt uhr %s %u Hz\n", source, (unsigned int)hz);
-    takt_board_trace(line);
+    takt_trace_text(&sink, line);
 }
 
 /* Ein Schritt vor dem Lauf scheiterte: Er steht mit seinem Code auf der
- * Leitung, bevor das Board auf den Host wartet. Ohne `takt_line_flush`
+ * Leitung, bevor das Board auf den Host wartet. Ohne `takt_sink_flush`
  * bliebe er im Ring, denn den gibt der Kern erst nach einem Tick ab. */
 static void refused(const char *what, int32_t code) {
-    takt_board_trace(what);
-    takt_board_trace_i64(code);
-    takt_board_trace("\n");
-    takt_line_flush();
+    takt_trace_text(&sink, what);
+    takt_trace_i64(&sink, code);
+    takt_trace_text(&sink, "\n");
+    takt_sink_flush(&sink);
 }
 
 /* Faehrt den Kern `core` ueber den Port und schreibt die Bilanz. Verlangt
@@ -88,7 +93,7 @@ static void drive(takt_core *core) {
             measured = &stacks;
         }
     } else {
-        takt_board_trace("takt port: kein Start\n");
+        takt_trace_text(&sink, "takt port: kein Start\n");
     }
     takt_core_report(core, measured, NULL);
 }
@@ -100,22 +105,24 @@ int main(void) {
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     const char *channel = NULL;
-    if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
+    if ((line_open(&line) == 0) && (takt_sink_init(&sink, &line, ring, sizeof ring) == TAKT_OK)) {
         /* Der Kopf geht gleich an die Leitung. */
-        takt_board_trace("takt auf zephyr mit einem analogen eingang aus dem devicetree\n" TAKT_RTOS_PROTECTION "\n");
+        takt_trace_text(&sink,
+                        "takt auf zephyr mit einem analogen eingang aus dem devicetree\n" TAKT_RTOS_PROTECTION "\n");
         clock_line();
-        takt_line_flush();
+        takt_sink_flush(&sink);
         if (analog_zephyr_init(&channel) != 0) {
             /* Pin und Eingang vor dem Kern (8.10): Ein Kanal ohne Geraet
              * beginnt nicht. */
-            takt_board_trace("takt devicetree: nicht eingerichtet: ");
-            takt_board_trace(channel);
-            takt_board_trace("\n");
-            takt_line_flush();
+            takt_trace_text(&sink, "takt devicetree: nicht eingerichtet: ");
+            takt_trace_text(&sink, channel);
+            takt_trace_text(&sink, "\n");
+            takt_sink_flush(&sink);
         } else {
-            takt_line_mark();
-            takt_line_flush();
-            const int32_t status = takt_core_init(&core, &analog_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
+            takt_sink_mark(&sink);
+            takt_sink_flush(&sink);
+            const int32_t status =
+                takt_core_init(&core, &analog_ops, &arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog);
             if (status != TAKT_OK) {
                 refused("takt kern: nicht bereit ", status);
             } else {

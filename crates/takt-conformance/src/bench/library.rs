@@ -18,8 +18,8 @@
 //!
 //! **Die Kerne schreiben keinen Trace** (7.2: `record_and_telemeter`
 //! gehoert nicht zum Tick). Ihre Rahmen sind mit [`TRACE`] auf die Stummel
-//! des Laeufers uebersetzt; die Leitung des Wirts bleibt fuer seine
-//! Programme frei, und beide binden in dasselbe Abbild.
+//! des Laeufers uebersetzt; die Haken des Wirts bleiben fuer seine
+//! Programme, und beide binden in dasselbe Abbild.
 //!
 //! **Ein Teil je Abbild** (FB-740). Passt das Messprogramm nicht in einen
 //! Wirt, baut `--part I/N` nur die Kerne eines Teils ([`Contents`]); der
@@ -35,14 +35,14 @@ use crate::math::{FUNCTIONS, Vector};
 /// vorbei, Caches und Vorabrufpuffer sind gefuellt — auch fuer die Haken.
 pub const WARMUP: u32 = 8;
 
-/// Die Namen der Leitung (12.5), wie die Rahmen der Kerne sie rufen, und
-/// wie der Laeufer sie stellt: als `-D` beim Uebersetzen der Rahmen.
+/// Die Namen der Haken des Trace (12.5), wie die Rahmen der Kerne sie rufen,
+/// und wie der Laeufer sie stellt: als `-D` beim Uebersetzen der Rahmen.
 pub const TRACE: [(&str, &str); 5] = [
-    ("takt_board_trace", "takt_bench_trace"),
-    ("takt_board_trace_i64", "takt_bench_trace_i64"),
-    ("takt_board_trace_u64", "takt_bench_trace_u64"),
-    ("takt_board_trace_f64", "takt_bench_trace_f64"),
-    ("takt_board_trace_hex8", "takt_bench_trace_hex8"),
+    ("takt_trace_text", "takt_bench_trace_text"),
+    ("takt_trace_i64", "takt_bench_trace_i64"),
+    ("takt_trace_u64", "takt_bench_trace_u64"),
+    ("takt_trace_f64", "takt_bench_trace_f64"),
+    ("takt_trace_hex8", "takt_bench_trace_hex8"),
 ];
 
 /// Was jede C-Referenz zusaetzlich bekommt: Takt zieht nie stillschweigend
@@ -170,12 +170,12 @@ pub fn runner(contents: &Contents<'_>) -> String {
         }
     }
     s.push_str(
-        "\n/* Die Leitung der Kerne: Ein Messkern schreibt keinen Trace (7.2). */\n\
-         void takt_bench_trace(const char *line) { (void)line; }\n\
-         void takt_bench_trace_i64(long long value) { (void)value; }\n\
-         void takt_bench_trace_u64(unsigned long long value) { (void)value; }\n\
-         void takt_bench_trace_f64(double value) { (void)value; }\n\
-         void takt_bench_trace_hex8(unsigned char value) { (void)value; }\n\n\
+        "\n/* Die Haken der Kerne: Ein Messkern schreibt keinen Trace (7.2). */\n\
+         void takt_bench_trace_text(void *sink, const char *text) { (void)sink; (void)text; }\n\
+         void takt_bench_trace_i64(void *sink, long long value) { (void)sink; (void)value; }\n\
+         void takt_bench_trace_u64(void *sink, unsigned long long value) { (void)sink; (void)value; }\n\
+         void takt_bench_trace_f64(void *sink, double value) { (void)sink; (void)value; }\n\
+         void takt_bench_trace_hex8(void *sink, unsigned char value) { (void)sink; (void)value; }\n\n\
          /* Eine Messreihe in Zyklen; `digest` ist, was der Kern danach ergab. */\n\
          struct series {\n    uint32_t min;\n    uint32_t max;\n    uint64_t total;\n    uint32_t n;\n    \
          uint64_t digest;\n};\n\n\
@@ -275,7 +275,7 @@ fn kernel_step(s: &mut String, step: usize, k: &Kernel) {
         s,
         "static void measure_{step}(void *user, uint32_t runs) {{\n    \
          struct series *s = &takt_series[{step}];\n    int64_t k = 1;\n    reset(s);\n    \
-         {x}_init({a}, (void *)0);\n    \
+         {x}_init({a}, (void *)0, (void *)0);\n    \
          for (uint32_t i = 0u; i < WARMUP + runs; i++) {{\n        \
          uint32_t start = takt_bench_cycles(user);\n        {x}_tick({a}, k);\n        {x}_commit({a});\n        \
          uint32_t spent = takt_bench_cycles(user) - start;\n        k++;\n        \
@@ -692,6 +692,6 @@ mod tests {
         let names = reference_names(k);
         let d = defines(names.iter().map(|(a, b)| (a.as_str(), b.as_str())));
         assert_eq!(d, ["-Dtakt_bench_reference=bench_pid_c", "-Dtakt_bench_reference_digest=bench_pid_c_digest"]);
-        assert_eq!(defines(TRACE)[0], "-Dtakt_board_trace=takt_bench_trace");
+        assert_eq!(defines(TRACE)[0], "-Dtakt_trace_text=takt_bench_trace_text");
     }
 }

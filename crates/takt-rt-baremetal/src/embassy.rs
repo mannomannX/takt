@@ -21,7 +21,7 @@ use embassy_time::{Instant, Timer};
 use takt_rt_core::{Clock, Program, Runtime, Store, Tunables, Watchdog};
 
 use crate::interrupt::{Alarm, Form};
-use crate::run::{Stats, Trace};
+use crate::run::{Lead, Stats, Trace};
 use crate::telemetry::{Port, Telemetry};
 
 /// Was die Takt-Aufgabe weckt: eine neue Frist und ein gerechneter Auftrag
@@ -91,7 +91,7 @@ where
     G: Program,
     C: Clock,
     W: Watchdog,
-    F: FnMut() -> Option<&'static mut Telemetry<P>>,
+    F: Lead<P>,
     S: Store,
     P: Port + 'static,
     J: FnMut(),

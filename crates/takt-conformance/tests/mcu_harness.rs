@@ -54,7 +54,7 @@ fn board_provides(symbol: &str) -> bool {
         "app_idle_",
         "app_alive_",
         "app_cmd_",
-        "takt_board_",
+        "takt_trace_",
         "takt_edge_",
         "takt_native_",
         "takt_m_",
@@ -458,24 +458,23 @@ fn the_mcu_trace_can_be_compared_with_the_interpreter() {
     let p = corpus("29_heartbeat.takt");
     let src = takt_frame::mcu::build(&p).source;
 
-    assert!(src.contains(r#"takt_board_trace("t=")"#), "die Zeile beginnt mit der Tickzahl:\n{src}");
-    assert!(src.contains("takt_board_trace_i64(a->tick)"), "und zwar mit dem laufenden Tick");
+    assert!(src.contains(r#"takt_trace_text(a->sink, "t=")"#), "die Zeile beginnt mit der Tickzahl:\n{src}");
+    assert!(src.contains("takt_trace_i64(a->sink, a->tick)"), "und zwar mit dem laufenden Tick");
 
     // Die Gegenprobe am Vergleich selbst: Eine Zeile in der erzeugten
     // Form muss ankommen, eine ohne `t=` nicht.
     let want = "t=0 out led true\n";
-    assert!(takt_conformance::run::compare(want, "t=0 out led 1\n").is_empty(), "true gegen 1 ist gleich (9.3)");
-    assert!(!takt_conformance::run::compare(want, "t=0 out led 0\n").is_empty(), "true gegen 0 ist ein Unterschied");
-    assert!(!takt_conformance::run::compare(want, "out led 1\n").is_empty(), "eine Zeile ohne `t=` kommt nicht an");
+    assert!(takt_conformance::run::compare(want, "t=0 out led true\n").is_empty(), "dieselbe Zeile");
+    assert!(!takt_conformance::run::compare(want, "t=0 out led 1\n").is_empty(), "true gegen 1 ist eine (T2)");
+    assert!(!takt_conformance::run::compare(want, "out led true\n").is_empty(), "eine Zeile ohne `t=` kommt nicht an");
 }
 
 /// Ein Enum-Ausgang traegt seinen Namen, nicht seine Diskriminante.
 ///
-/// Der Interpreter schreibt den Variantennamen (9.3). `same_number`
-/// vergleicht Zahlen und gliche `CLOSED` gegen `0` nicht aus — der
-/// Unterschied waere einer der Schreibweise, und der Test faende ihn als
-/// Wertunterschied. Der MCU-Rahmen fuehrt dafuer je Enum-Ausgang eine
-/// Tabelle der Varianten mit Diskriminante und Namen.
+/// Der Interpreter schreibt den Variantennamen (9.3), und `compare`
+/// vergleicht Zeichen fuer Zeichen: `CLOSED` gegen `0` waere eine
+/// Abweichung. Der MCU-Rahmen fuehrt dafuer je Enum-Ausgang eine Tabelle
+/// der Varianten mit Diskriminante und Namen.
 #[test]
 fn an_enum_output_carries_its_name() {
     let p = corpus("33_enum_param.takt");
@@ -516,9 +515,9 @@ fn a_record_output_is_in_the_table() {
 /// Der Linker kann sie nicht entfernen, weil der Rahmen sie exportiert.
 ///
 /// Die Bits kosten nichts und sagen mehr. 4.2 verlangt bitgleiche
-/// Ergebnisse ueber alle Targets, und `same_number` vergleicht
-/// Fliesskomma ohnehin bitweise (9.4.4) — eine Multiplikation waere eine
-/// zweite Rundungsquelle unmittelbar vor diesem Vergleich.
+/// Ergebnisse ueber alle Targets, und der Vergleich liest eine Messung
+/// ohnehin als Bitmuster (9.4.4) — eine Multiplikation waere eine zweite
+/// Rundungsquelle unmittelbar vor diesem Vergleich.
 #[test]
 fn the_harness_does_no_floating_point_arithmetic() {
     for name in ["19_faults.takt", "29_heartbeat.takt"] {
@@ -575,16 +574,16 @@ fn every_observation_line_carries_its_tick() {
             // Eine Verletzung schreibt der Rahmen mit ihrem Namen aus einer
             // Tabelle (FB-391).
             let at = src
-                .find(&format!("takt_board_trace(\"{kind} "))
-                .or_else(|| src.find(&format!("takt_board_trace(\"{kind}\\n")))
-                .or_else(|| (*kind == "property").then(|| src.find("takt_board_trace(names[i]);")).flatten())
+                .find(&format!("takt_trace_text(a->sink, \" {kind} "))
+                .or_else(|| src.find(&format!("takt_trace_text(a->sink, \" {kind}\\n")))
+                .or_else(|| (*kind == "property").then(|| src.find("takt_trace_text(a->sink, names[i]);")).flatten())
                 .unwrap_or_else(|| panic!("{name}: `{kind}` fehlt im Rahmen"));
             // Die beiden Aufrufe davor schreiben `t=` und den Tick.
             let before: Vec<&str> = src[..at].lines().rev().skip(1).take(2).map(str::trim).collect();
             assert!(
                 before.len() == 2
-                    && before[0].starts_with("takt_board_trace_i64(")
-                    && before[1] == "takt_board_trace(\"t=\");",
+                    && before[0].starts_with("takt_trace_i64(a->sink, ")
+                    && before[1] == "takt_trace_text(a->sink, \"t=\");",
                 "{name}: `{kind}` ohne Tickzahl davor: {before:?}"
             );
         }
@@ -858,13 +857,13 @@ fn a_missing_driver_fails_the_link_by_name() {
         std::fs::write(
             &main,
             "#include \"app.h\"\n\
-             void takt_board_trace(const char *line) { (void)line; }\n\
-             void takt_board_trace_i64(long long v) { (void)v; }\n\
-             void takt_board_trace_u64(unsigned long long v) { (void)v; }\n\
-             void takt_board_trace_f64(double v) { (void)v; }\n\
-             void takt_board_trace_hex8(unsigned char v) { (void)v; }\n\
+             void takt_trace_text(void *s, const char *t) { (void)s; (void)t; }\n\
+             void takt_trace_i64(void *s, long long v) { (void)s; (void)v; }\n\
+             void takt_trace_u64(void *s, unsigned long long v) { (void)s; (void)v; }\n\
+             void takt_trace_f64(void *s, double v) { (void)s; (void)v; }\n\
+             void takt_trace_hex8(void *s, unsigned char v) { (void)s; (void)v; }\n\
              static struct app_arena arena;\n\
-             int main(void) { app_init(&arena, 0); app_tick(&arena, 1); app_commit(&arena); return 0; }\n",
+             int main(void) { app_init(&arena, 0, 0); app_tick(&arena, 1); app_commit(&arena); return 0; }\n",
         )
         .expect("main");
         let natives = takt_conformance::harness::native_library().expect("Natives");
@@ -1085,11 +1084,11 @@ fn now_saturates_in_the_mcu_frame_without_overflow() {
         &main,
         format!(
             "#include <stdio.h>\n#include \"app.h\"\n\
-             void takt_board_trace(const char *line) {{ (void)line; }}\n\
-             void takt_board_trace_i64(long long v) {{ (void)v; }}\n\
-             void takt_board_trace_u64(unsigned long long v) {{ (void)v; }}\n\
-             void takt_board_trace_f64(double v) {{ (void)v; }}\n\
-             void takt_board_trace_hex8(unsigned char v) {{ (void)v; }}\n\
+             void takt_trace_text(void *s, const char *t) {{ (void)s; (void)t; }}\n\
+             void takt_trace_i64(void *s, long long v) {{ (void)s; (void)v; }}\n\
+             void takt_trace_u64(void *s, unsigned long long v) {{ (void)s; (void)v; }}\n\
+             void takt_trace_f64(void *s, double v) {{ (void)s; (void)v; }}\n\
+             void takt_trace_hex8(void *s, unsigned char v) {{ (void)s; (void)v; }}\n\
              long long app_now(struct app_arena *a);\n\
              long long app_tick_count(const struct app_arena *a);\n\
              static struct app_arena arena;\n\
@@ -1227,10 +1226,10 @@ fn an_unread_input_is_read_for_the_recording() {
         assert!(frame.contains(&decl), "{decl}:\n{frame}");
     }
     assert!(!frame.contains("edge_r_lamp"), "ein Output hat nichts aufzuzeichnen:\n{frame}");
-    assert!(frame.contains("takt_board_trace_f64((double)v); takt_board_trace(\"degC \");"), "{frame}");
+    assert!(frame.contains("takt_trace_f64(a->sink, (double)v); takt_trace_text(a->sink, \" degC\");"), "{frame}");
     assert!(
         frame.contains(
-            "case 2: takt_board_trace(\"ERROR \"); break; default: takt_board_trace(\"bad reason=OutOfRange \");"
+            "case 2: takt_trace_text(a->sink, \"ERROR\"); break; default: takt_trace_text(a->sink, \"bad reason=OutOfRange\");"
         ),
         "{frame}"
     );

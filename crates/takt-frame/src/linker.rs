@@ -32,8 +32,8 @@ const SHARED_CRATES: [&str; 7] =
 const CORE_MODULES: [&str; 2] = ["4core3num", "4core3str"];
 
 /// Die C-Einstiege der geteilten Bibliotheken: `libtaktm`, die kuratierten
-/// Natives und der Randkern.
-const SHARED_C: [&str; 3] = ["takt_m_", "takt_native_", "takt_edge_"];
+/// Natives, der Randkern und die Haken des Trace (`takt_embed::trace`).
+const SHARED_C: [&str; 4] = ["takt_m_", "takt_native_", "takt_edge_", "takt_trace_"];
 
 /// Ein Bezeichner, wie er im Namen eines Symbols steht: Laenge und Name,
 /// danach der Rest des Pfads.
@@ -142,6 +142,7 @@ mod tests {
         assert!(s.contains(".text.*12takt_rt_core[0-9A-Z_]*"), "{s}");
         assert!(s.contains(".text.*4core3num[0-9A-Z_]*"), "die Mathematik ruft `isqrt`: {s}");
         assert!(s.contains(".text.*4core3str[0-9A-Z_]*"), "die Natives pruefen UTF-8: {s}");
+        assert!(s.contains(".text.takt_trace_*"), "die Haken des Trace laufen im Tick: {s}");
         assert!(!s.contains("app"), "kein fremdes Praefix: {s}");
     }
 
