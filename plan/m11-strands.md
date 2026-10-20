@@ -458,11 +458,15 @@ So arbeitet jeder Strang, als wäre er allein:
     Breite steht. Künftig ersetzt sie jeden größten Teilterm außerhalb des
     Fragments, dessen eigene Sorte im Fragment liegt (ein Vergleich über
     Fließkomma ist ein Wahrheitswert, eine Wickelung eine ganze Zahl), durch
-    eine freie Variable der jeweiligen Klausel. Zustandsvariablen außerhalb
+    eine frische Variable der jeweiligen Klausel, frei und unbeschränkt. Zustandsvariablen außerhalb
     des Fragments fallen aus `Inv` heraus und sind in jedem Schritt frei.
-    - Soundness: Jede Ersetzung lässt mehr Abläufe zu, als das Modell hat.
-      Findet Spacer eine Invariante, gilt sie auch für das genaue Modell, und
-      die Stelle ist bewiesen unerreichbar.
+    - Soundness: Jeder ersetzte Term ist frei und unbeschränkt, also lässt
+      jede Ersetzung nur Abläufe hinzu, auch wenn ein Ziel den Term liest.
+      Schlimmstenfalls wird ein Beweis unmöglich, falsch wird keiner. Findet
+      Spacer eine Invariante, gilt sie auch für das genaue Modell, und die
+      Stelle ist bewiesen unerreichbar. Eine Prüfung auf Antitonie wie bei
+      FB-694 braucht es nicht: Dort wurde ein Bit fest gesetzt, hier wird
+      ein Term frei.
     - Findet Spacer einen Pfad, kann er an der Abstraktion liegen. Dann
       folgt die BMC am genauen Modell (`deeper`); bestätigt der Interpreter
       keinen Pfad, bleibt die Stelle unentschieden, mit dem Grund
