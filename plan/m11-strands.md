@@ -32,6 +32,10 @@ Plan; `plan/m11.md` bleibt die Quelle für Ziel und Abnahme je Schritt.
 - **FB-Nummern in Blöcken**: Strang A nimmt FB-512 bis FB-599, Strang B
   FB-600 bis FB-699. `tests.csv` nach demselben Muster mit dem Präfix des
   Bereichs; im Zweifel fragt der Strang die Koordination.
+  Ab FB-760 (2026-10-20) je Strang zwanzig Nummern: I FB-760 bis FB-779,
+  F FB-780 bis FB-799, B FB-800 bis FB-819, H FB-820 bis FB-839, G FB-840
+  bis FB-859, die Koordination FB-860 bis FB-879. Ist ein Block
+  aufgebraucht, vergibt die Koordination den nächsten.
 - `feedback.csv` und `tests.csv` nur zeilenweise ändern oder anhängen, nie
   ganz neu schreiben (sonst ändert sich das Quoting fremder Zeilen).
   Angehängte Zeilen beider Stränge kollidieren beim Merge am Dateiende; die
