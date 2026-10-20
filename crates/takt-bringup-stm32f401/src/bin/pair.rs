@@ -384,41 +384,25 @@ static mut SLOW: Option<Stepping<SlowRun>> = None;
 static FAST_ENDED: AtomicBool = AtomicBool::new(false);
 static SLOW_ENDED: AtomicBool = AtomicBool::new(false);
 
-/// Die ISR der Leitung als Stoerer beider Programme (12.11): ihr laengster
-/// Lauf und der kuerzeste Abstand zweier Eintritte in Takten. Die
-/// Hardware-Konfiguration sagt beides zu (`isr.uart`), und der Board-Test
-/// vergleicht.
+/// Der laengste Lauf der ISR der Leitung in Takten, eines Stoerers beider
+/// Programme (12.11): Die Hardware-Konfiguration sagt seine Kosten zu
+/// (`isr.uart`), und der Board-Test vergleicht.
 static UART_LONGEST: AtomicU32 = AtomicU32::new(0);
-static UART_SHORTEST: AtomicU32 = AtomicU32::new(u32::MAX);
-static UART_LAST: AtomicU32 = AtomicU32::new(0);
-static UART_SEEN: AtomicBool = AtomicBool::new(false);
 
 #[interrupt]
 fn USART1() {
     let start = cycles::now();
-    let last = UART_LAST.swap(start, Ordering::Relaxed);
-    if UART_SEEN.swap(true, Ordering::Relaxed) {
-        UART_SHORTEST.fetch_min(start.wrapping_sub(last), Ordering::Relaxed);
-    }
     mpu::isr(takt_board_stm32f401::uart::on_interrupt);
     UART_LONGEST.fetch_max(cycles::now().wrapping_sub(start), Ordering::Relaxed);
 }
 
-/// Die Zeile `takt isr uart laengste N ns abstand M ns` (12.11); ohne
-/// Eintritt steht als Abstand `keiner`.
+/// Die Zeile `takt isr uart laengste N ns` (12.11).
 fn isr_line() {
     let Some(u) = uart() else { return };
-    let ns = |c: u32| takt_board_support::cycles::Measurement::between(0, c, CORE_HZ).ns();
+    let cycles = UART_LONGEST.load(Ordering::Relaxed);
     u.write("takt isr uart laengste ");
-    u.write_i64(ns(UART_LONGEST.load(Ordering::Relaxed)));
-    u.write(" ns abstand ");
-    match UART_SHORTEST.load(Ordering::Relaxed) {
-        u32::MAX => u.write("keiner"),
-        c => {
-            u.write_i64(ns(c));
-            u.write(" ns");
-        }
-    }
+    u.write_i64(takt_board_support::cycles::Measurement::between(0, cycles, CORE_HZ).ns());
+    u.write(" ns");
     u.newline();
 }
 

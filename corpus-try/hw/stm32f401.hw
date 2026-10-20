@@ -84,13 +84,14 @@ call_hook = 1499256
 f32_math = 395222097
 f64_math = 878439483
 
-# Die ISR der Leitung (USART1) liegt ueber jedem Schritt: hoechstens ein
-# Eintritt je Byte bei 921 600 Baud. Zugesagt; das Binary `pair` misst
-# laengsten Lauf und kuerzesten Abstand, und sein Board-Test vergleicht
+# Die ISR der Leitung (USART1) liegt ueber jedem Schritt. Ein Byte dauert
+# bei 921 600 Baud 10,85 us; zugesagt sind zwei Eintritte je Byte, denn
+# `TXE` ist doppelt gepuffert und der Empfang kommt dazu. Die Kosten misst
+# das Binary `pair`, und sein Board-Test vergleicht
 # (`two_programs_share_a_core`).
 [target.thumbv7em.isr.uart]
 cost_ns = 3000
-period_ns = 10850
+period_ns = 5425
 origin = Vertrag
 
 [device.gpio]
