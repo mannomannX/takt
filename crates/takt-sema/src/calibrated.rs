@@ -21,7 +21,7 @@
 use takt_diag::{Diagnostic, Severity, Span};
 use takt_mir::analysis::schedulability::{self, Load};
 use takt_mir::expr::{Expr, ExprKind};
-use takt_mir::hardware::{Form, Hardware, HwChannel, Target};
+use takt_mir::hardware::{Calibration, Form, Hardware, HwChannel, Target, ZEPHYR_ADC, ZEPHYR_GPIO, calibration};
 use takt_mir::machine::MachineKind;
 use takt_mir::program::{Binding, Direction, OverrunPolicy, Program, Sweep};
 use takt_mir::review::Review;
@@ -345,60 +345,103 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
 }
 
 /// Pruefung 60 unter `--zephyr` (8.10, „Treiber aus dem Devicetree“): Ein
-/// Kanal an einem Geraet mit `zephyr-gpio` nennt mit `port` ein Label des
-/// Devicetree, und Rohtyp wie Typ im Programm sind `bool`. Ob es den Knoten
-/// gibt, weiss erst der Bau unter Zephyr; dort steht die Zusicherung im
-/// erzeugten Code. Ohne `--zephyr` ruft niemand diese Pruefung: Dann ist
-/// `port` undurchsichtig wie bei jedem Treiber (9.5).
+/// Kanal an einem Geraet mit `zephyr-gpio` oder `zephyr-adc` nennt mit
+/// `port` ein Label des Devicetree. Ein Pin hat Rohtyp und Typ `bool`. Ein
+/// analoger Eingang (FB-735) ist ein Eingang mit Rohtyp `i32` in Mikrovolt:
+/// ohne `calibration` ein `int[uV]`, mit `linear(a, b)` ein `float`;
+/// `table(…)` ist unter Zephyr offen (FB-780). Ob es den Knoten gibt, weiss
+/// erst der Bau unter Zephyr; dort steht die Zusicherung im erzeugten Code.
+/// Ohne `--zephyr` ruft niemand diese Pruefung: Dann ist `port`
+/// undurchsichtig wie bei jedem Treiber (9.5).
 pub fn check_zephyr(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     for c in &p.channels {
         let Binding::Hw(addr) = &c.binding else { continue };
         let address = addr.text();
         let Some(entry) = hw.channel(&address) else { continue };
-        if hw.driver_of(entry) != Some(takt_mir::hardware::ZEPHYR_GPIO) {
-            continue;
-        }
-        let driver = takt_mir::hardware::ZEPHYR_GPIO;
+        let (driver, property) = match hw.driver_of(entry) {
+            Some(ZEPHYR_GPIO) => (ZEPHYR_GPIO, "gpios"),
+            Some(ZEPHYR_ADC) => (ZEPHYR_ADC, "io-channels"),
+            _ => continue,
+        };
+        let at = format!("`{}` an `{address}`", c.name);
         match entry.port.as_deref() {
             Some(port) if takt_mir::hardware::is_devicetree_label(port) => {}
             Some(port) => out.push(
                 Diagnostic::error(
                     SC60,
                     c.span,
-                    format!(
-                        "`{}` an `{address}`: `port = \"{port}\"` ist kein Label des Devicetree ({driver})",
-                        c.name
-                    ),
+                    format!("{at}: `port = \"{port}\"` ist kein Label des Devicetree ({driver})"),
                 )
-                .with_suggestion(
-                    "das Label des Knotens mit `gpios`: Kleinbuchstaben, Ziffern und `_`, nicht mit einer Ziffer am \
-                     Anfang (8.10)"
-                        .to_string(),
-                ),
+                .with_suggestion(format!(
+                    "das Label des Knotens mit `{property}`: Kleinbuchstaben, Ziffern und `_`, nicht mit einer Ziffer \
+                     am Anfang (8.10)"
+                )),
             ),
             None => out.push(Diagnostic::error(
                 SC60,
                 c.span,
-                format!("`{}` an `{address}`: `{driver}` braucht `port`, das Label des Knotens im Devicetree", c.name),
+                format!("{at}: `{driver}` braucht `port`, das Label des Knotens im Devicetree"),
             )),
         }
         let raw = entry.raw.as_deref();
-        let typed = matches!(p.types.list.get(c.ty.index()), Some(Type::Bool));
-        if raw.is_some_and(|r| r != "bool") || !typed {
-            let shown = match raw {
-                Some(r) if r != "bool" => format!("Rohtyp `{r}`"),
-                _ => "einen anderen Typ als `bool` im Programm".to_string(),
-            };
-            out.push(Diagnostic::error(
-                SC60,
-                c.span,
-                format!(
-                    "`{}` an `{address}`: `{driver}` bedient Kanaele mit Rohtyp `bool`, der Kanal hat {shown}",
-                    c.name
-                ),
-            ));
+        if driver == ZEPHYR_GPIO {
+            let typed = matches!(p.types.list.get(c.ty.index()), Some(Type::Bool));
+            if raw.is_some_and(|r| r != "bool") || !typed {
+                let shown = match raw {
+                    Some(r) if r != "bool" => format!("Rohtyp `{r}`"),
+                    _ => "einen anderen Typ als `bool` im Programm".to_string(),
+                };
+                out.push(Diagnostic::error(
+                    SC60,
+                    c.span,
+                    format!("{at}: `{driver}` bedient Kanaele mit Rohtyp `bool`, der Kanal hat {shown}"),
+                ));
+            }
+            continue;
         }
+        out.extend(adc_check(p, c, entry, &at));
+    }
+    out
+}
+
+/// Ein analoger Eingang aus dem Devicetree (8.10, FB-735): Eingang, Rohtyp
+/// `i32` in Mikrovolt, und der Typ im Programm passt zur Kalibrierung.
+fn adc_check(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel, at: &str) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    let error = |text: String| Diagnostic::error(SC60, c.span, text);
+    if c.dir != Direction::Input {
+        out.push(error(format!("{at}: `{ZEPHYR_ADC}` liest nur Eingaenge")));
+    }
+    if let Some(raw) = entry.raw.as_deref().filter(|r| *r != "i32") {
+        out.push(error(format!(
+            "{at}: `{ZEPHYR_ADC}` liefert Rohtyp `i32` in Mikrovolt, die Konfiguration nennt `{raw}`"
+        )));
+    }
+    let ty = p.types.list.get(c.ty.index());
+    match entry.calibration.as_deref().map(|text| (text, calibration(text))) {
+        None => {
+            let micro = matches!(ty, Some(Type::Int { .. })) && unit_name(p, c.ty).as_deref() == Some("uV");
+            if !micro {
+                out.push(
+                    error(format!("{at}: ohne `calibration` liefert `{ZEPHYR_ADC}` ganze Mikrovolt"))
+                        .with_suggestion("der Kanal ist `int[uV]`, oder die Konfiguration nennt `linear(a, b)`"),
+                );
+            }
+        }
+        Some((_, Some(Calibration::Linear { .. }))) => {
+            if !matches!(ty, Some(Type::Float { .. })) {
+                out.push(error(format!(
+                    "{at}: mit `linear(a, b)` rechnet `{ZEPHYR_ADC}` in Fliesskomma, der Kanal ist kein `float`"
+                )));
+            }
+        }
+        Some((_, Some(Calibration::Table))) => out.push(error(format!(
+            "{at}: `table(…)` rechnet `{ZEPHYR_ADC}` noch nicht (FB-780); `linear(a, b)` oder `int[uV]`"
+        ))),
+        Some((text, None)) => out.push(error(format!(
+            "{at}: `calibration = \"{text}\"` ist weder `linear(a, b)` mit zwei Dezimalzahlen noch `table(…)`"
+        ))),
     }
     out
 }

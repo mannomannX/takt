@@ -48,6 +48,7 @@ pub mod board;
 pub mod bringup;
 pub mod cases;
 mod deliveries;
+pub mod esp_idf;
 pub mod generated;
 pub mod harness;
 pub mod limits;

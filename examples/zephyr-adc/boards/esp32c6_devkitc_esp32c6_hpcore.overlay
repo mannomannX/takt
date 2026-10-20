@@ -1,0 +1,48 @@
+/* Board 2 (plan/esp32c6.md): ein ESP32-C6-DevKitM-1-N4 mit 4 MB Flash wie in
+ * examples/zephyr, die Leitung auf dem USB-Serial-JTAG. Der Pin ist GPIO7
+ * wie in examples/zephyr-gpio, der analoge Eingang Kanal 0 von ADC1 auf
+ * GPIO0 mit 11 dB Daempfung (`ADC_GAIN_1_4`). Die Drahtbruecke des C6 endet
+ * an GPIO17, und der ist kein Eingang des ADC: Auf dem C6 baut das Beispiel
+ * nur. */
+#include <zephyr/dt-bindings/adc/adc.h>
+
+/ {
+	chosen {
+		takt,line = &usb_serial;
+	};
+
+	takt-wire-out {
+		compatible = "gpio-leds";
+
+		takt_wire_out: wire-out {
+			gpios = <&gpio0 7 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	takt_adc_in: takt-adc-in {
+		compatible = "takt,adc-input";
+		io-channels = <&adc0 0>;
+	};
+};
+
+&adc0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@0 {
+		reg = <0>;
+		zephyr,gain = "ADC_GAIN_1_4";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+	};
+};
+
+&flash0 {
+	reg = <0x0 DT_SIZE_M(4)>;
+};
+
+&usb_serial {
+	status = "okay";
+};

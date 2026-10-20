@@ -1,0 +1,9 @@
+# Die Verdrahtung der Adapter (plan/m11.md 2.7, 12.6): je Adresse das
+# Geraet, fuer einen Heartbeat je Geraet der Typ, der ihn meldet.
+
+"pins/button" = "takt_adapter_probe::Button"
+"pins/led" = "takt_adapter_probe::Led"
+"pins" = "takt_adapter_probe::Pins"
+"uart/rx" = "takt_adapter_probe::UartRx"
+"uart" = "takt_adapter_probe::UartDevice"
+"isr/rx" = "takt_adapter_probe::IsrRx"

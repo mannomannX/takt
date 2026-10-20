@@ -98,13 +98,7 @@ const UNUSED: &[(&str, &[&str])] = &[
     (
         "nur in Programmen, die die Sema ablehnt (08_reserved_future, 10_nuances, checks/SC-3); ein \
          uebersetzbares Korpusprogramm fehlt (KOR-006)",
-        &[
-            "Feature(FramingCobs)",
-            "Feature(FramingLengthPrefixed)",
-            "Feature(FramingFixed)",
-            "Feature(Display)",
-            "Feature(Group)",
-        ],
+        &["Feature(FramingLengthPrefixed)", "Feature(FramingFixed)", "Feature(Display)", "Feature(Group)"],
     ),
 ];
 
