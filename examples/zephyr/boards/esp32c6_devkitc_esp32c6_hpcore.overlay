@@ -12,6 +12,19 @@
 / {
 	chosen {
 		takt,line = &usb_serial;
+		takt,timer = &takt_timer;
+	};
+};
+
+/* Die Uhr des Ports (FB-733): Timer 0 der Gruppe 0 mit 1 MHz, 80 MHz
+ * Takt der Quelle durch 80; ein Tick ist 1000 ns. Der Treiber der
+ * `counter`-API haengt am Kind `counter`, den Teiler traegt der Timer. */
+&timer0 {
+	prescaler = <80>;
+	status = "okay";
+
+	takt_timer: counter {
+		status = "okay";
 	};
 };
 

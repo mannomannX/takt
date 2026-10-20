@@ -43,6 +43,21 @@ config TAKT_PORT_CMSIS_RTOS2
 
 endchoice
 
+DT_CHOSEN_TAKT_TIMER := takt,timer
+
+config TAKT_TIMER_COUNTER
+	def_bool $(dt_chosen_enabled,$(DT_CHOSEN_TAKT_TIMER))
+	depends on TAKT_PORT_ZEPHYR && COUNTER
+	help
+	  Uhr und Fristen des Adapters ueber die `counter`-API, wenn der
+	  Devicetree einen Zaehler als `takt,timer` waehlt (FB-733): feiner als
+	  der Systemtick, und Drift und Jitter messen in seinem Takt. Eine Frist
+	  wartet auf einen absoluten Alarm des Zaehlers. Ohne die Wahl rechnet
+	  der Adapter in Systemticks. `COUNTER` setzt die Anwendung; ein
+	  `select` hier schloesse eine Schleife in den Abhaengigkeiten von
+	  Zephyr. Waehlt der Devicetree den Zaehler ohne `COUNTER`, scheitert
+	  der Bau am Adapter, statt still den Systemtick zu nehmen.
+
 config TAKT_JOURNAL_FLASH
 	bool "Das Journal im Flash (ports/zephyr-nvm)"
 	select FLASH
