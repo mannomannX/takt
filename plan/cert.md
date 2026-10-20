@@ -413,7 +413,8 @@ was clang von den Schaltern der GCC nicht kennt, nimmt die Zeile
 Quellen als eine Bindung mit den Kopfpfaden und Werten ihrer Aufrufe und
 der Plattform `unix32`; `tools/c-analysis/esp-idf.cfg` (Zeile „cppcheck
 unter ESP-IDF“) nennt ihm `__has_attribute` und die Listen aus `sys/queue.h`,
-ohne die es an Köpfen von ESP-IDF und NimBLE abbräche. Seit Schritt 21b
+ohne die es an Köpfen von ESP-IDF und NimBLE abbräche, und das Builtin
+`__atomic_add_fetch`, mit dem die Lasten zählen. Seit Schritt 21b
 prüfen beide Werkzeuge vier Baue: ohne fremde Last und mit WLAN, mit BLE und
 mit der Messung des automatischen Aussetzens; dieselbe Stelle in zwei Bauen
 zählt einmal. Was in ESP-IDF steht, zählt nicht, und Kopf des SDK
@@ -516,7 +517,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-12.2` | IDF-Bau | 2 | MISRA C:2012 12.2 (R) | wie 10.1: `ESP_INTR_FLAG_IRAM` ist `(1<<10)`, ein Flag in `WIFI_INIT_CONFIG_DEFAULT` ebenso, und das Modell der wesentlichen Typen misst die Breite an der Eins; der Wert ist ein `int`, die Verschiebung ohne Überlauf |
 | `misra-c2012-11.4` | IDF-Bau | 3 | MISRA C:2012 11.4 (A) | Der Adapter setzt und löscht den Software-Interrupt `FROM_CPU_INTR3` über `WRITE_PERI_REG` an seinem Register aus `soc/intpri_reg.h`; ESP-IDF bietet dafür keine Funktion. Die Leitung liest den Wunsch des Hosts aus LP_AON STORE0 an seiner Adresse aus `soc/lp_aon_reg.h` (`line_store0`, eine Stelle) |
 | `misra-c2012-11.5` | IDF-Bau | 5 | MISRA C:2012 11.5 (A) | Das Gerät des Journals bekommt sich als `void *`: seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`) und der Einstieg seiner Aufgabe (`xTaskCreateStatic`) |
-| `constParameterCallback` | IDF-Bau | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt von `read` des Geräts gibt `struct takt_nvm` vor (`takt_sdk.h`); die übrigen Rückrufe schreiben in das Gerät |
+| `constParameterCallback` | IDF-Bau | 3 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt der Rückrufe ist vorgegeben: `read` des Geräts von `struct takt_nvm` (`takt_sdk.h`; die übrigen Rückrufe schreiben in das Gerät), der Rückruf auf ein Ereignis von ESP-IDF (`esp_event_handler_t`, der Abschluss eines Scans) und der auf eines von GAP in NimBLE (`ble_gap_event_fn`) |
 | `clang-analyzer-security.ArrayBound` | Rahmen | 2 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |
 | `constParameterPointer` | Rahmen | 83 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
 | `knownConditionTrueFalse` | Rahmen | 16 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |

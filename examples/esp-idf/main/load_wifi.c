@@ -118,7 +118,9 @@ static void wifi_scan(void *arg) {
 
 /* Der erste Scan ist fertig, und der erste Rahmen ist hinaus. */
 static bool wifi_ready(void) {
-    return (__atomic_load_n(&wifi_scans, __ATOMIC_RELAXED) > 0U) && (__atomic_load_n(&wifi_sent, __ATOMIC_RELAXED) > 0U);
+    const uint32_t scans = __atomic_load_n(&wifi_scans, __ATOMIC_RELAXED);
+    const uint32_t sent = __atomic_load_n(&wifi_sent, __ATOMIC_RELAXED);
+    return (scans > 0U) && (sent > 0U);
 }
 
 int load_start(void) {
@@ -166,9 +168,12 @@ void load_banner(void) {
 
 void load_report(void) {
     const int64_t ms = (esp_timer_get_time() - wifi_since) / 1000;
-    const uint32_t sent = __atomic_load_n(&wifi_sent, __ATOMIC_RELAXED) - wifi_base_sent;
-    const uint32_t scans = __atomic_load_n(&wifi_scans, __ATOMIC_RELAXED) - wifi_base_scans;
-    const uint32_t scan_ms = __atomic_load_n(&wifi_scan_ms, __ATOMIC_RELAXED) - wifi_base_scan_ms;
+    const uint32_t sent_now = __atomic_load_n(&wifi_sent, __ATOMIC_RELAXED);
+    const uint32_t scans_now = __atomic_load_n(&wifi_scans, __ATOMIC_RELAXED);
+    const uint32_t scan_ms_now = __atomic_load_n(&wifi_scan_ms, __ATOMIC_RELAXED);
+    const uint32_t sent = sent_now - wifi_base_sent;
+    const uint32_t scans = scans_now - wifi_base_scans;
+    const uint32_t scan_ms = scan_ms_now - wifi_base_scan_ms;
     const uint32_t commits = load_nvs_commits() - wifi_base_nvs;
     takt_board_trace("takt last dauer ");
     takt_board_trace_u64((uint64_t)ms);

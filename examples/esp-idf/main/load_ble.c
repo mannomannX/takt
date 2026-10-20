@@ -112,7 +112,8 @@ static void ble_host(void *arg) {
 
 /* Werbung und Scan laufen, und der erste Zyklus ist abgelaufen. */
 static bool ble_ready(void) {
-    return (__atomic_load_n(&ble_state, __ATOMIC_SEQ_CST) == 1) && (__atomic_load_n(&ble_cycles, __ATOMIC_RELAXED) > 0U);
+    const uint32_t cycles = __atomic_load_n(&ble_cycles, __ATOMIC_RELAXED);
+    return (__atomic_load_n(&ble_state, __ATOMIC_SEQ_CST) == 1) && (cycles > 0U);
 }
 
 int load_start(void) {
@@ -143,7 +144,8 @@ void load_banner(void) {
 
 void load_report(void) {
     const int64_t ms = (esp_timer_get_time() - ble_since) / 1000;
-    const uint32_t cycles = __atomic_load_n(&ble_cycles, __ATOMIC_RELAXED) - ble_base_cycles;
+    const uint32_t cycles_now = __atomic_load_n(&ble_cycles, __ATOMIC_RELAXED);
+    const uint32_t cycles = cycles_now - ble_base_cycles;
     const uint32_t commits = load_nvs_commits() - ble_base_nvs;
     takt_board_trace("takt last dauer ");
     takt_board_trace_u64((uint64_t)ms);
