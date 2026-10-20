@@ -39,8 +39,9 @@ void TIM2_IRQHandler(void);
 void PendSV_Handler(void);
 void MemManage_Handler(void) __attribute__((naked));
 
-/* Der Rumpf von `MemManage_Handler`, mit dem gestapelten Rahmen. */
-void takt_irq_chip_mem_manage(uint32_t *frame);
+/* Der Rumpf von `MemManage_Handler`, mit dem gestapelten Rahmen; nur der
+ * Sprung aus dem Einstieg ruft ihn. */
+static void takt_irq_chip_mem_manage(uint32_t *frame) __attribute__((used));
 
 /* Der Takt von TIM2 (RCC_APB1ENR.TIM2EN). */
 #define RCC_APB1ENR 0x40023840u
@@ -349,7 +350,7 @@ void PendSV_Handler(void) {
     }
 }
 
-int takt_irq_chip_protect(void *arena, uint32_t align, uint32_t bytes, struct takt_protection *protection) {
+int takt_irq_chip_protect(const uint8_t *arena, uint32_t align, uint32_t bytes, struct takt_protection *protection) {
     const uint32_t start = (uint32_t)(uintptr_t)arena;
     int rc = TAKT_STM32F4_REGION;
     if ((arena == NULL) || (protection == NULL)) {
@@ -415,7 +416,7 @@ void MemManage_Handler(void) {
 
 /* Merkt sich, wo der Zugriff lag, und uebergeht den Befehl: Index 6 des
  * Rahmens ist der PC des Befehls, der die Verletzung ausloeste. */
-void takt_irq_chip_mem_manage(uint32_t *frame) {
+static void takt_irq_chip_mem_manage(uint32_t *frame) {
     const uint32_t mmfsr = *takt_reg(SCB_CFSR) & SCB_MMFSR;
     if (mmfsr != SCB_MMFSR_DATA) {
         /* Ohne verlaesslichen Rahmen geht es nicht weiter. */

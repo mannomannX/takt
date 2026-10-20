@@ -65,7 +65,7 @@ void takt_irq_chip_pend_jobs(void);
  * bekommt die Haken fuer `takt_core_protect`. 0, TAKT_IRQ_INVALID oder ein
  * Fehler des Chips, wenn keine Region die Arena so deckt; dann gibt es
  * keine, und der Kern bleibt ohne Schutz. */
-int takt_irq_chip_protect(void *arena, uint32_t align, uint32_t bytes, struct takt_protection *protection);
+int takt_irq_chip_protect(const uint8_t *arena, uint32_t align, uint32_t bytes, struct takt_protection *protection);
 
 /* Am Anfang einer ISR des Wirts: Der Programmbereich ist fuer sie nur
  * lesbar; die Rueckgabe ist, was vorher galt. Ohne Region tut sie nichts. */

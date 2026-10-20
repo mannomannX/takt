@@ -87,7 +87,7 @@ static int guard_arena(struct app_arena *arena) {
     int armed = 0;
     board_protect_stack();
 #ifdef APP_PROTECT_ALIGN
-    if (takt_irq_chip_protect(arena, APP_PROTECT_ALIGN, APP_PROTECT_BYTES, &protection) == 0) {
+    if (takt_irq_chip_protect((const uint8_t *)arena, APP_PROTECT_ALIGN, APP_PROTECT_BYTES, &protection) == 0) {
         board_isr_frame(takt_irq_chip_isr_enter, takt_irq_chip_isr_leave);
         armed = 1;
     }
