@@ -469,7 +469,7 @@ main_loop_ns = 1000
 /// **Das Manifest nennt, was die Antwortzeiten brauchen** (11.5, 12.11, M11
 /// Schritt 16): mit der Kalibrierung des F401 das Schrittbudget als
 /// `gemessen`, dazu die fremde Last der Hardware-Konfiguration mit ihrer
-/// Herkunft.
+/// Herkunft: die Sperre, die der F401 zusagt, und ein gemessener Stoerer.
 #[test]
 fn the_manifest_names_budget_and_foreign_load() {
     if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
@@ -485,8 +485,8 @@ fn the_manifest_names_budget_and_foreign_load() {
     std::fs::write(
         &hw,
         format!(
-            "# takt-hw 18\n{section}foreign_block_ns = 2000\n\n\
-             [target.thumbv7em.isr.uart]\ncost_ns = 1100\nperiod_ns = 10850\norigin = gemessen\n"
+            "# takt-hw 18\n{section}\n[target.thumbv7em.isr.uart]\ncost_ns = 1100\nperiod_ns = 10850\n\
+             origin = gemessen\n"
         ),
     )
     .expect("hw");
@@ -509,7 +509,7 @@ fn the_manifest_names_budget_and_foreign_load() {
     assert_eq!(manifest_value(&out, "step_budget_origin"), "gemessen");
     let budget: u64 = manifest_value(&out, "step_budget_ps").parse().expect("Zahl");
     assert!(budget > 8_869_048, "das Budget enthaelt T_IO: {budget}");
-    assert_eq!(manifest_value(&out, "foreign_block_ns"), "2000");
+    assert_eq!(manifest_value(&out, "foreign_block_ns"), "1000");
     assert_eq!(manifest_value(&out, "foreign_block_origin"), "Vertrag");
     assert_eq!(manifest_value(&out, "isrs"), "uart:1100:10850:gemessen");
 }

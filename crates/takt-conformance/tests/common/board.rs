@@ -1672,6 +1672,27 @@ fn response_times(elf: &std::path::Path) -> Result<BTreeMap<String, Option<u64>>
         .collect())
 }
 
+/// Die ISR der Leitung, wie das Binary `pair` sie misst: laengster Lauf und
+/// kuerzester Abstand in Nanosekunden; der Abstand fehlt ohne zweiten
+/// Eintritt.
+fn measured_isr(text: &str) -> Option<(u64, Option<u64>)> {
+    let line = text.lines().find_map(|l| l.trim_end().strip_prefix("takt isr uart laengste "))?;
+    let (longest, rest) = line.split_once(" ns abstand ")?;
+    Some((longest.parse().ok()?, rest.strip_suffix(" ns").and_then(|n| n.parse().ok())))
+}
+
+/// Die Zusage der Hardware-Konfiguration fuer die ISR der Leitung aus dem
+/// Manifest: Kosten und Periode in Nanosekunden.
+fn declared_isr(elf: &std::path::Path) -> Option<(u64, u64)> {
+    let text = std::fs::read_to_string(board::pair_manifest(elf, "fast")).ok()?;
+    let entry = manifest_value(&text, "isrs")?;
+    let fields: Vec<&str> = entry.split(',').map(str::trim).find(|e| e.starts_with("uart:"))?.split(':').collect();
+    match fields.as_slice() {
+        [_, cost, period, _] => Some((cost.parse().ok()?, period.parse().ok()?)),
+        _ => None,
+    }
+}
+
 /// Die laengste gemessene Antwort eines Programms: Rueckstand und Dauer
 /// seines Schritts, aus den Zeitzeilen (7.3).
 fn measured_response(trace: &str) -> Option<i64> {
@@ -1755,6 +1776,15 @@ fn pair_verdict(
             }
         }
         Err(e) => failed.push(format!("pair: keine Antwortzeiten: {e}")),
+    }
+    // Die Last der Leitung ist zugesagt (`Vertrag`); der Lauf misst sie.
+    match (measured_isr(text), declared_isr(elf)) {
+        (Some((longest, shortest)), Some((cost, period)))
+            if longest <= cost && shortest.is_none_or(|s| s >= period) => {}
+        (measured, declared) => failed.push(format!(
+            "pair: die ISR der Leitung, gemessen (laengste, Abstand) {measured:?} ns, zugesagt (Kosten, Periode) \
+             {declared:?} ns (12.11)"
+        )),
     }
     if !failed.is_empty() {
         failed.push(text.lines().take(40).collect::<Vec<_>>().join("\n"));
