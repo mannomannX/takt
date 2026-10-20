@@ -48,6 +48,18 @@ extern "C" {
 /* So viele Byte haelt `takt_sink`, ebenso geprueft. */
 #define TAKT_SINK_BYTES 128u
 
+/* Die Namen vor Fassung 4 gibt es nicht mehr. Ein Wirt nach altem SDK
+ * scheitert hier beim Uebersetzen, statt still eine Funktion ohne
+ * Deklaration zu rufen. Statt `takt_line_init`, `_mark`, `_flush` und
+ * `_lossless` stehen `takt_sink_init`, `_mark`, `_flush` und `_lossless`,
+ * statt `takt_board_trace…` die Haken `takt_trace_text`, `takt_trace_i64`,
+ * `takt_trace_u64`, `takt_trace_f64` und `takt_trace_hex8`, jeweils mit der
+ * Senke als erstem Argument. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC poison takt_line_init takt_line_mark takt_line_flush takt_line_lossless
+#pragma GCC poison takt_board_trace takt_board_trace_i64 takt_board_trace_u64 takt_board_trace_f64 takt_board_trace_hex8
+#endif
+
 /* Die Einstiege einer Programmbibliothek (`P_ops`); `arena` ist ihre Arena. */
 struct takt_ops {
     uint32_t abi;
