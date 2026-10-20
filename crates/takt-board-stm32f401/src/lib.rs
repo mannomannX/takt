@@ -210,7 +210,7 @@ pub enum InitError {
 
 /// Setzt Takte und Tickquelle auf und gibt die Board-Teile zurueck. Hat
 /// der Host das Board zurueckverlangt, kam der Start nicht bis hier: Das
-/// Sprungbrett gab es an den Bootloader ([`bootloader::enter_if_requested`]).
+/// Sprungbrett gab es an den Bootloader (`bootloader::enter_if_requested`).
 ///
 /// `tick_ns` ist die Periode aus `system: tick`. TIM2 laeuft frei als
 /// Zeitachse, und ein Wecker steht auf jeder Tickgrenze ([`tick`]). Die
