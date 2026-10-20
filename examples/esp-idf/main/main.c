@@ -104,6 +104,11 @@ _Alignas(32) StackType_t program_job_stack[PROGRAM_JOB_STACK_BYTES / sizeof(Stac
 /* ESP-IDF ruft sie aus seiner Hauptaufgabe. */
 void app_main(void);
 
+/* Die Senke des Programms (12.5, 12.11): ein Ring vor der Leitung des
+ * Wirts, gebunden mit `takt_sink_init`; in ihr stehen Kopf, Trace und
+ * Bilanz. */
+static takt_sink sink;
+
 /* Der Watchdog des Wirts (12.11): Ein Konformitaetslauf ist kein Betrieb
  * (12.3); der Kern meldet, und die Meldung geht ausdruecklich nirgendwohin.
  * Der Schritt ruft ihn in seiner ISR. */
@@ -111,14 +116,14 @@ static IRAM_ATTR void kick(void *ctx) { (void)ctx; }
 
 /* Der Kopf des Laufs, dann die Marke, ab der die Bilanz zaehlt. */
 static void banner(void) {
-    takt_board_trace("\r\ntakt auf esp32c6 in C unter ESP-IDF\r\n  Kerntakt ");
-    takt_board_trace_u64((uint64_t)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1000000U);
-    takt_board_trace("Hz, Tick ");
-    takt_board_trace_i64(PROGRAM_TICK_NS);
+    takt_trace_text(&sink, "\r\ntakt auf esp32c6 in C unter ESP-IDF\r\n  Kerntakt ");
+    takt_trace_u64(&sink, (uint64_t)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1000000U);
+    takt_trace_text(&sink, "Hz, Tick ");
+    takt_trace_i64(&sink, PROGRAM_TICK_NS);
     /* Die PMP des C6 gehoert ESP-IDF, und Takt schaltet sie im Lauf nicht um
      * (plan/m11.md 2.11): `Schutz: keiner`. */
-    takt_board_trace("ns\r\n  Form interrupt\r\n" TAKT_IRQ_PROTECTION "\r\n\r\n");
-    takt_line_mark();
+    takt_trace_text(&sink, "ns\r\n  Form interrupt\r\n" TAKT_IRQ_PROTECTION "\r\n\r\n");
+    takt_sink_mark(&sink);
 }
 
 /* Bemalt den Stack der Interrupts von unten bis kurz unter sein oberes Ende;
@@ -155,15 +160,15 @@ static int32_t start_core(takt_core *core) {
     static uint8_t stored[PROGRAM_PERSIST_BOUND];
     if (takt_idf_nvm_open(&journal, "takt_journal", PROGRAM_NVM_BLOCKING_NS, buffer, sizeof buffer, stack, sizeof stack,
                           NVM_PRIORITY, &nvm) != 0) {
-        takt_board_trace("journal: die Partition `takt_journal` fehlt\r\n");
+        takt_trace_text(&sink, "journal: die Partition `takt_journal` fehlt\r\n");
     } else if ((TAKT_FRESH_JOURNAL != 0) && (takt_idf_nvm_clear(&journal) != 0)) {
-        takt_board_trace("journal: loeschen scheiterte\r\n");
+        takt_trace_text(&sink, "journal: loeschen scheiterte\r\n");
     } else {
-        status = takt_core_init_journaled(core, &program_ops, &program_arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
-                                          current, stored, PROGRAM_PERSIST_BOUND);
+        status = takt_core_init_journaled(core, &program_ops, &program_arena, NULL, &sink, TAKT_PROFILE_SHARED,
+                                          &watchdog, &nvm, current, stored, PROGRAM_PERSIST_BOUND);
     }
 #else
-    status = takt_core_init(core, &program_ops, &program_arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
+    status = takt_core_init(core, &program_ops, &program_arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog);
 #endif
     return status;
 }
@@ -181,7 +186,7 @@ static void run(takt_core *core) {
 #endif
     paint_isr_stack();
     if (takt_irq_start(&port, core, &config) != 0) {
-        takt_board_trace("takt: der Port startet nicht\r\n");
+        takt_trace_text(&sink, "takt: der Port startet nicht\r\n");
     } else {
         while (takt_irq_running(&port) != 0) {
             takt_foreign_round(&foreign);
@@ -199,13 +204,13 @@ void app_main(void) {
     static takt_core core;
     static struct takt_line line;
     line_open(&line);
-    if (takt_line_init(&line, ring, RING_BYTES) == TAKT_OK) {
+    if (takt_sink_init(&sink, &line, ring, RING_BYTES) == TAKT_OK) {
         banner();
         const int32_t status = start_core(&core);
         if (status != TAKT_OK) {
-            takt_board_trace("takt: der Kern nimmt nicht an: ");
-            takt_board_trace_i64(status);
-            takt_board_trace("\r\n");
+            takt_trace_text(&sink, "takt: der Kern nimmt nicht an: ");
+            takt_trace_i64(&sink, status);
+            takt_trace_text(&sink, "\r\n");
         } else {
             run(&core);
         }
@@ -213,7 +218,7 @@ void app_main(void) {
     /* Was im Ring blieb, geht hinaus; `flush` liest dabei den Wunsch des
      * Hosts, der den Chip zuruecksetzt. */
     for (;;) {
-        takt_line_flush();
+        takt_sink_flush(&sink);
         vTaskDelay(1);
     }
 }

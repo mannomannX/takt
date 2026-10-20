@@ -102,6 +102,34 @@ fn ran(exe: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
+/// **Ein Wirt nach altem SDK scheitert beim Uebersetzen** (12.11,
+/// SDK-Fassung 4): `takt_sdk.h` vergiftet die Namen vor der Senke, und clang
+/// nennt die Stelle, statt eine Funktion ohne Deklaration still zu rufen.
+#[test]
+fn the_names_before_the_sink_do_not_compile() {
+    let Some(clang) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
+        return;
+    };
+    let dir = scratch("takt-c-old-sdk");
+    let include = root().join("crates/takt-embed-c/include");
+    for (name, call) in
+        [("takt_line_init", "takt_line_init(0, 0, 0)"), ("takt_board_trace_i64", "takt_board_trace_i64(1)")]
+    {
+        let src = dir.join(format!("{name}.c"));
+        std::fs::write(&src, format!("#include \"takt_sdk.h\"\nvoid host(void) {{ {call}; }}\n")).expect("C schreiben");
+        let out = Command::new(&clang)
+            .args(["-std=c11", "-fsyntax-only", "-I"])
+            .arg(&include)
+            .arg(&src)
+            .output()
+            .expect("clang startet");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success() && err.contains("poisoned") && err.contains(name), "{name}:\n{err}");
+    }
+}
+
 /// **Ein C-Wirt rechnet wie der Interpreter** (12.11, 13.1): `main.c` aus
 /// `examples/c-host`, mit clang aus der Lieferform und dem SDK-Archiv
 /// gebunden, faehrt das Ventil in logischer Zeit ueber `takt_core_service`.
