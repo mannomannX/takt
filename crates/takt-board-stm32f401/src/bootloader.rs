@@ -15,7 +15,7 @@
 //! einrichtet; das Backup-Register laesst er stehen, RAM haette keinen
 //! sicheren Platz. Danach springt er ins Sprungbrett in Sektor 1
 //! (`takt-trampoline-stm32f401`), und das fragt den Wunsch als Erstes ab
-//! ([`enter_if_requested`]) und springt. So gibt jede Anwendung das Board
+//! (`enter_if_requested`) und springt. So gibt jede Anwendung das Board
 //! auf demselben Weg zurueck, ob in Rust oder in C
 //! (`examples/boards/stm32f401`): Sie schreibt den Wunsch und setzt den Chip
 //! zurueck, den Rest tut das Sprungbrett. Der Sprung
@@ -24,14 +24,27 @@
 //! Takt zurueck auf HSI, PLL und HSE aus —, und setzt jede Peripherie ueber
 //! ihr Reset-Bit zurueck. Der Bootloader findet den Chip so vor wie nach
 //! einem Start mit BOOT0.
+//!
+//! **Den Sprung gibt es nur im Sprungbrett** (Merkmal `trampoline`, das nur
+//! `takt-trampoline-stm32f401` einschaltet): Aus einer laufenden Anwendung
+//! gerufen meldete sich der ROM-Bootloader nicht am USB an, und nur BOOT0
+//! und NRST holten das Board zurueck (FB-758). Ein Bring-up, das `enter`
+//! riefe, uebersetzt nicht.
 
-use cortex_m::peripheral::{MPU, NVIC, SCB, SYST};
+use cortex_m::peripheral::SCB;
+#[cfg(feature = "trampoline")]
+use cortex_m::peripheral::{MPU, NVIC, SYST};
+#[cfg(feature = "trampoline")]
 use stm32f4::stm32f401::{FLASH, RCC, SYSCFG};
+#[cfg(feature = "trampoline")]
 use takt_board_support::mpu::{Access, Region};
 
-use crate::platform::{backup, backup_read};
+use crate::platform::backup;
+#[cfg(feature = "trampoline")]
+use crate::platform::backup_read;
 
 /// Der Systemspeicher des F401 mit dem Bootloader von ST (AN2606).
+#[cfg(feature = "trampoline")]
 const SYSTEM_MEMORY: u32 = 0x1FFF_0000;
 
 /// Der Wunsch nach dem Bootloader, im Backup-Register [`WISH`].
@@ -46,6 +59,7 @@ const LEFTOVER: usize = 5;
 /// Wo die hinterlassene Region liegt: 24 KiB unter dem Ende des RAM, wo
 /// Zephyrs `z_main_stack` begann. Dort bemalt jedes Abbild seinen Stack, in
 /// Rust wie in C.
+#[cfg(feature = "trampoline")]
 const LEFT_AT: u32 = 0x2000_A000;
 
 /// Der Host hat das Board zurueckverlangt: merkt es sich und setzt den
@@ -57,13 +71,13 @@ pub fn request() -> ! {
 
 /// Bei der naechsten Rueckgabe hinterlaesst das Sprungbrett dem naechsten
 /// Abbild eine Region der MPU (FB-752): die letzte, 32 Byte nur lesbar ueber
-/// [`LEFT_AT`], bei ausgeschalteter MPU, wie ein Vorgaenger sie stehen
+/// `LEFT_AT`, bei ausgeschalteter MPU, wie ein Vorgaenger sie stehen
 /// laesst, der ohne Reset in den Bootloader springt. Das Programm `leftover`
 /// des Bring-ups verlangt es fuer den Board-Test
 /// `a_region_left_by_the_previous_image_changes_nothing`.
 ///
 /// Zurueck geht das Board wie jedes Abbild auf `TAKT` — Wunsch, Reset,
-/// HID-Bootloader, Sprungbrett, [`enter`] —, und erst das Sprungbrett
+/// HID-Bootloader, Sprungbrett, `enter` —, und erst das Sprungbrett
 /// beschreibt die Region, nach dem Reset, der sie sonst loeschte. Ein
 /// Sprung aus der laufenden Anwendung in den ROM-Bootloader brachte dessen
 /// USB nicht hoch (FB-758).
@@ -75,9 +89,12 @@ pub fn bequeath_region() {
 /// hat; sonst kehrt sie zurueck und laesst den Takt von PWR, wie sie ihn
 /// fand. Das Sprungbrett ruft sie als Erstes.
 ///
+/// Nur fuer das Sprungbrett (Merkmal `trampoline`).
+///
 /// Die Reset-Ursache dieses Starts gilt dem Wunsch, nicht dem Programm,
 /// das danach kommt: Sie wird geloescht, und das naechste Programm beginnt
 /// wie nach dem Einschalten (12.7).
+#[cfg(feature = "trampoline")]
 pub fn enter_if_requested() {
     // SAFETY: die Register des RCC; vor der Anwendung fasst sie niemand an.
     let rcc = unsafe { &*RCC::ptr() };
@@ -102,6 +119,7 @@ pub fn enter_if_requested() {
 
 /// Belegt die letzte Region der MPU nur lesbar ueber [`LEFT_AT`] und laesst
 /// die MPU aus ([`bequeath_region`]).
+#[cfg(feature = "trampoline")]
 fn leave_region() {
     // SAFETY: die Register der MPU; das Sprungbrett laeuft allein, und nach
     // ihm kommt der Bootloader, der die MPU nicht einschaltet.
@@ -124,7 +142,8 @@ fn leave_region() {
 /// Weg ist erprobt: Aus einer laufenden Anwendung gerufen meldete sich der
 /// ROM-Bootloader nicht am USB an, und nur BOOT0 und NRST holten das Board
 /// zurueck (FB-758). Eine Anwendung verlangt den Bootloader darum mit
-/// [`request`].
+/// [`request`]; uebersetzt wird `enter` nur mit dem Merkmal `trampoline`.
+#[cfg(feature = "trampoline")]
 pub fn enter() -> ! {
     cortex_m::interrupt::disable();
     // Ab hier laeuft nichts mehr von der Anwendung: Interrupts sind aus, und
@@ -181,6 +200,7 @@ pub fn enter() -> ! {
 }
 
 /// Takte und Peripherie wie nach dem Einschalten (RM0368, Resetwerte).
+#[cfg(feature = "trampoline")]
 fn restore_reset_state(rcc: &stm32f4::stm32f401::rcc::RegisterBlock, flash: &stm32f4::stm32f401::flash::RegisterBlock) {
     // Scheitert der Wechsel auf HSI, bleibt die PLL der Systemtakt, und die
     // Hardware verweigert ihr Abschalten; der Bootloader richtet den Takt
