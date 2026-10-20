@@ -47,6 +47,14 @@
 #define TAKT_OS_STEP_PRIORITY TAKT_OS_PRIORITY(K_PRIO_COOP(CONFIG_TAKT_STEP_PRIORITY))
 #define TAKT_OS_JOB_PRIORITY TAKT_OS_PRIORITY(K_PRIO_PREEMPT(CONFIG_TAKT_JOB_PRIORITY))
 
+/* Mit `CONFIG_USERSPACE` erreicht ein Faden im Benutzermodus nur die
+ * Partitionen seiner Domaene, die Arena also nicht (12.11). */
+#if defined(CONFIG_USERSPACE)
+#define TAKT_OS_PARTITION 1
+#else
+#define TAKT_OS_PARTITION 0
+#endif
+
 /* Ein Faden: sein Objekt und was er ausfuehrt. */
 struct takt_os_thread {
     struct k_thread thread;

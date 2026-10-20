@@ -22,6 +22,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use cortex_m::peripheral::{MPU, SCB};
 use takt_board_support::mpu::{Access, Region, instruction_bytes};
 use takt_rt_baremetal::{Protection, Violation};
+use takt_rt_core::protection::Case;
 
 unsafe extern "C" {
     static __takt_state_start: u8;
@@ -187,7 +188,11 @@ impl Mpu {
     }
 }
 
+/// Die MPU gehoert Takt: Die Arena ist ihre Region, beschreibbar nur im
+/// Schritt (12.3).
 impl Protection for Mpu {
+    const CASE: Case = Case::Window;
+
     fn open(&self) {
         self.set(Access::ReadWrite);
     }

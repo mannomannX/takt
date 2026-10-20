@@ -81,6 +81,8 @@ fn a_posix_port_passes_the_port_test() {
     // Die gemessenen Tiefen sind die Reserven der Hardware-Konfiguration.
     eprintln!("{verdict}");
     assert!(verdict.passed(), "{verdict}\n{}{}", String::from_utf8_lossy(&run.stdout), excerpt(&log));
+    // 12.11: Faeden eines Prozesses teilen seinen Speicher.
+    assert_eq!(verdict.protection.map(|c| c.name()), Some("keiner"), "{verdict}");
 }
 
 /// **Die Vorlage `c-port` passt zum Port** (12.11, 2.9): `ports/template`

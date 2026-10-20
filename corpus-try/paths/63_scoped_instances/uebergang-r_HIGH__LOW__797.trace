@@ -1,0 +1,12 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5, vertieft bis 10), erzeugt mit `UPDATE_PATHS` (M11 Strang B2, Schritt 3)
+# ziel uebergang r 10 HIGH->LOW @797
+# ticks 12
+t=0 in mode 1
+t=2 in mode 0
+t=2 runtime Driver c
+t=3 in mode 1
+t=4 in mode 1
+t=5 in mode 2
+t=6 in mode 1 suspect
+t=9 in mode 2
+t=10 in mode 2 stale

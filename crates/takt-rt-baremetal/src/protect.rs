@@ -11,6 +11,7 @@
 
 use core::cell::Cell;
 
+use takt_rt_core::protection::Case;
 use takt_rt_core::{NextRun, Outputs, Program, Tolerance};
 
 /// Eine Region, deren Regel ein Zugriff verletzt hat.
@@ -25,6 +26,10 @@ pub struct Violation {
 /// Was ein Board zum Schutz beitraegt: Programmzustand oeffnen und
 /// schliessen, und die letzte gemeldete Verletzung abholen.
 pub trait Protection {
+    /// Der Fall, den dieser Schutz herstellt; der Kopf des Laufs nennt ihn
+    /// (`Schutz: …`, 12.11).
+    const CASE: Case;
+
     /// Der Programmzustand wird beschreibbar.
     fn open(&self);
 
@@ -39,6 +44,8 @@ pub trait Protection {
 pub struct Unprotected;
 
 impl Protection for Unprotected {
+    const CASE: Case = Case::Unprotected;
+
     fn open(&self) {}
     fn close(&self) {}
     fn take_violation(&self) -> Option<Violation> {
@@ -268,6 +275,8 @@ mod tests {
     }
 
     impl Protection for Board<'_> {
+        const CASE: Case = Case::Window;
+
         fn open(&self) {
             self.open.set(true);
         }
