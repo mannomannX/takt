@@ -250,12 +250,14 @@ pub fn sites(p: &Program) -> Vec<Site> {
         let order = out.len();
         out.push(Site { start: e.span.start, end: e.span.end, tag, operand, order, silent });
     };
-    let counted = |m: &&Machine| !matches!(m.kind, MachineKind::Template | MachineKind::Scenario);
-    for m in p.machines.iter().filter(counted) {
+    let counted = |m: &Machine| !matches!(m.kind, MachineKind::Template | MachineKind::Scenario);
+    for m in p.machines.iter().filter(|m| counted(m)) {
         takt_mir::visit::for_each_expr_machine(m, &mut look);
     }
-    for f in &p.fns {
-        takt_mir::visit::for_each_expr_block(&f.body, &mut look);
+    // 13.2: Eine Funktion, die keine laufende Maschine ruft, ist kein Pfad
+    // des Laufs (3.4, FB-619).
+    for f in takt_mir::analysis::reachable_fns_from(p, counted) {
+        takt_mir::visit::for_each_expr_block(&p.fns[f.index()].body, &mut look);
     }
     for b in &p.blocks {
         for v in &b.state_vars {

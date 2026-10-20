@@ -1,0 +1,4 @@
+# Pfad des Solvers (z3 4.13.4, Tiefe 5, vertieft bis 100), erzeugt mit `UPDATE_PATHS` (M11 Strang B2, Schritt 3)
+# ziel uebergang m 100 RUN.S0->FAILED @848
+# ticks 102
+t=266384455160 job m v done start=0

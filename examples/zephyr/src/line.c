@@ -11,11 +11,14 @@
 #include "line.h"
 
 #include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
 #include <zephyr/sys/ring_buffer.h>
 
 #include "handback.h"
@@ -122,3 +125,59 @@ int line_open(struct takt_line *line) {
     }
     return rc;
 }
+
+/* TODO(FB-757): die Vermerke (line.h), nur mit einer Konsole neben der
+ * Leitung. */
+#if DT_HAS_CHOSEN(zephyr_console) && !DT_SAME_NODE(DT_CHOSEN(zephyr_console), DT_CHOSEN(takt_line))
+
+/* Die Schritte, die der Kern dem Watchdog meldete. */
+static atomic_t line_steps;
+
+/* Der Start des Laufs in Millisekunden seit dem Einschalten. */
+static int64_t line_started;
+
+/* Schon vermerkt: der erste Schritt, die Schritte nach einer Sekunde. */
+static bool line_first_noted;
+static bool line_second_noted;
+
+void line_watch_alarm(void) {
+    (void)k_msleep(1);
+    printk("takt wecker\n");
+}
+
+void line_watch_start(void) {
+    line_started = k_uptime_get();
+    printk("takt lauf\n");
+}
+
+void line_watch_step(void) {
+    (void)atomic_inc(&line_steps);
+}
+
+void line_watch_round(void) {
+    const atomic_val_t steps = atomic_get(&line_steps);
+    if ((!line_first_noted) && (steps > 0)) {
+        printk("takt erster schritt\n");
+        line_first_noted = true;
+    }
+    if ((!line_second_noted) && ((k_uptime_get() - line_started) >= 1000)) {
+        printk("takt nach 1 s: %ld schritte\n", (long)steps);
+        line_second_noted = true;
+    }
+}
+
+#else
+
+void line_watch_alarm(void) {
+}
+
+void line_watch_start(void) {
+}
+
+void line_watch_step(void) {
+}
+
+void line_watch_round(void) {
+}
+
+#endif

@@ -63,6 +63,19 @@ struct takt_rtos {
  * positiv. */
 #define TAKT_RTOS_INVALID (-1)
 
+/* Die Kopfzeile `Schutz` des Laufs (11.3, 12.11), ohne Zeilenende; der Wirt
+ * schreibt sie vor die Marke. Unter einem RTOS gehoert die Schutzeinheit
+ * ihm: Haelt es die Arena in einer Partition (TAKT_OS_PARTITION), ist sie
+ * gegen Aufgaben ohne Privileg geschuetzt, sonst schuetzt sie niemand. Ein
+ * Fenster nur im Schritt braeuchte je Tick Aufrufe des RTOS (plan/m11.md
+ * 2.11). Dieselben Zeilen schreiben die Rust-Formen
+ * (`takt_rt_core::protection`). */
+#if TAKT_OS_PARTITION
+#define TAKT_RTOS_PROTECTION "  Schutz: Partition"
+#else
+#define TAKT_RTOS_PROTECTION "  Schutz: keiner"
+#endif
+
 /* Startet den Lauf des Kerns `core` (aus `takt_core_init`): Tick 0 liegt
  * jetzt. 0, TAKT_RTOS_INVALID oder der Fehler des Adapters; bei einem Fehler
  * laeuft kein Faden. */

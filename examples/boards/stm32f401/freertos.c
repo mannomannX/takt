@@ -151,7 +151,7 @@ static void banner(void) {
     takt_board_trace_u64(BOARD_CORE_HZ);
     takt_board_trace("Hz, Tick ");
     takt_board_trace_i64(APP_TICK_NS);
-    takt_board_trace("ns\r\n  Form rtos\r\n\r\n");
+    takt_board_trace("ns\r\n  Form rtos\r\n" TAKT_RTOS_PROTECTION "\r\n\r\n");
 #if TAKT_FREERTOS_MPU
     takt_board_trace(guard_line(guard_state));
     takt_board_trace((mpu_refused() != 0) ? "takt schutz partition verweigert\r\n" : "takt schutz partition offen\r\n");

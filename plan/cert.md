@@ -60,6 +60,30 @@ Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,
 die Messschleife von `driver-test` —, steht in `takt-board-support`,
 im Workspace, unter `forbid` und mit Tests auf dem Wirt.
 
+### Einbettung: wem die Schutzeinheit gehört (12.11, M11 Schritt 23)
+
+Neben fremdem Code entscheidet der Besitzer der Schutzeinheit, was die
+Arena schützt (plan/m11.md 2.11). Der Fall steht im Kopf jedes Laufs
+(`Schutz: Fenster`, `Partition` oder `keiner`) und im Konformitätsbericht
+(`protection` je Port); die Portprüfung verlangt die Kopfzeile, und ein
+Nachweis der Probe darf ihr nicht widersprechen
+(`takt_conformance::port`). Den Fall nennt, wer ihn herstellt: der
+Speicherschutz des Boards (`Protection::CASE`), der Adapter eines RTOS
+aus dessen Konfiguration (`TAKT_OS_PARTITION`), nicht der Wirt nach Wahl.
+Was der Schutz nicht abweist, gehört zur TCB:
+
+| Fall | Läufe | Fremder Code im Adressraum | Treiber des Wirts | RTOS | Port | Nachweis am Board |
+|---|---|---|---|---|---|---|
+| `Schutz: Fenster` | Bring-up des F401 in jeder Form (eigener Kern, Interrupt, Poll, RTIC, Embassy) | außerhalb des Schritts abgewiesen, im nächsten Tick `Runtime(Hardware)`; eine fremde ISR, die den Schritt unterbricht, findet die Arena offen und gehört zur TCB | gehören zur TCB; die Output-Treiber laufen im Commit bei geschlossener Arena (12.3) | RTIC und der Executor von Embassy gehören zur TCB (12.8) | `takt-rt-baremetal` (`Guarded`) und der Bring-up | `the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware` in jeder Form, `every_port_passes_the_port_test` |
+| `Schutz: Partition` | Zephyr mit `CONFIG_USERSPACE` (F401, C6), FreeRTOS-MPU (F401) | Aufgaben ohne Privileg abgewiesen; privilegierter Code — ISRs, Kern, Fäden im Supervisor-Modus — gehört zur TCB | rechnen im privilegierten Schrittfaden und gehören zur TCB | gehört zur TCB, es besitzt die Schutzeinheit | `ports/rtos` mit seinem Adapter | `the_zephyr_port_passes_the_port_test` (Probe `takt schutz partition verweigert`), `the_freertos_mpu_port_passes_the_port_test`, `the_freertos_mpu_turns_a_foreign_write_into_runtime_hardware` |
+| `Schutz: keiner` | Bring-ups des C6 (Takt schaltet die PMP im Lauf nicht um, 12.3), die Interruptform in C (FB-755), FreeRTOS ohne MPU, CMSIS-RTOS2 und Zephyr ohne `CONFIG_USERSPACE` (`examples/zephyr-gpio`), POSIX, `takt-bringup-host` | gehört ganz zur TCB | gehören zur TCB | gehört zur TCB | gehört zur TCB | die Kopfzeile in `every_port_passes_the_port_test` (C6), `the_c_interrupt_port_passes_the_port_test`, `the_freertos_port_passes_the_port_test`, `the_cmsis_rtos2_port_passes_the_port_test`, `the_zephyr_gpio_wire_follows_its_pin`, `a_posix_port_passes_the_port_test` |
+| ESP-IDF (PMP) | offen bis Schritt 21a (FB-756) | — | — | — | — | — |
+
+Unter jedem Stack liegt in allen drei Fällen ein Wächter (12.3, Zeile
+`takt waechter …`); er schützt den Stack, nicht die Arena. Für
+sicherheitsrelevante Produkte bleibt die Empfehlung aus 12.8: Takt auf
+einem eigenen Chip.
+
 ### Native Funktionen
 
 Die kuratierte Menge (4.5, 13.8). Jede ist bitgleich über alle Ziele,
@@ -450,7 +474,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-21.2` | Beispiele | 3 | MISRA C:2012 21.2 (R) | `abort` im C-Wirt der Black Pill: Die Panik des SDK-Archivs ruft `abort` der C-Laufzeit, und ein Wirt ohne C-Bibliothek stellt sie mit der Signatur des Standards. Sie hält das Board an und lässt es für `TAKT` erreichbar. Unter FreeRTOS deklariert `libc/string.h` `memcpy` und `memset`, die der Kern ruft, mit der Signatur des Standards; ihren Code stellt das SDK-Archiv |
 | `misra-c2012-8.7` | Beispiele | 7 | MISRA C:2012 8.7 (A) | `abort` ruft das SDK-Archiv, `vApplicationStackOverflowHook` und `vApplicationGetIdleTaskMemory` der Kern von FreeRTOS, alle außerhalb der Analyse; ohne externe Bindung bänden sie nicht. `board_paint_stack` und `board_stack_depth` ruft der Wirt der Interruptform (`irq.c`); unter FreeRTOS misst der Kern die Stacks, und niemand ruft sie. Den Wächter unter dem Stack der Interrupts legt ohne FreeRTOS-MPU `board_protect_stack` an, mit ihm `board_watch_stack`; jede Bindung ruft eine der beiden |
 | `misra-c2012-2.5` | Beispiele | 10 | MISRA C:2012 2.5 (A) | Die Einstellungen in `FreeRTOSConfig.h`, die nur die Quellen des Kerns lesen (außerhalb der Analyse: Takt, Priorität des Kerns, die Namen der Handler, unter FreeRTOS-MPU der Vorrat an Objekten und die kritischen Abschnitte); das Addon zählt die Einstellungen von FreeRTOS-MPU auch in der Bindung ohne MPU, die sie nicht übersetzt. `BOARD_TIMER_HZ` braucht nur die Interruptform |
-| `misra-c2012-11.5` | Zephyr | 7 | MISRA C:2012 11.5 (A) | Was ein Rückruf bekommt, kommt als `void *`: das Gerät des Journals an seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`), der Faden an den Einstieg des Adapters (`k_thread_create`, `osThreadNew`) und das Ziel an die Probe der Partition |
+| `misra-c2012-11.5` | Zephyr | 8 | MISRA C:2012 11.5 (A) | Was ein Rückruf bekommt, kommt als `void *`: das Gerät des Journals an seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`), der Faden an den Einstieg des Adapters (`k_thread_create`, `osThreadNew`) und das Ziel an die Probe der Partition |
 | `constParameterCallback` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt der Rückrufe ist vorgegeben: der Einstieg eines Fadens (`k_thread_entry_t`, `osThreadFunc_t`) und `read` des Geräts (`struct takt_nvm`) |
 | `constParameterPointer` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Der Vertrag `takt_os.h` gilt jedem Adapter: `takt_os_now` des Zephyr-Adapters liest den Zustand nur, der für CMSIS-RTOS2 erweitert darin die Uhr; `takt_os_give` und `takt_os_depth` für CMSIS-RTOS2 gehen über Kennungen, der Zephyr-Adapter gibt in das Semaphor in seinem Zustand |
 | `compareValueOutOfTypeRangeError` | Zephyr | 1 | MISRA C:2012 14.3 (R) | `takt_os_depth` des Adapters für CMSIS-RTOS2 begrenzt die Tiefe aus `size_t` auf `uint32_t`: Der Text gilt jeder Implementierung, auch einer mit 64-Bit-`size_t` |

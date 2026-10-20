@@ -27,6 +27,7 @@
 /* Der Watchdog des Wirts (12.11): Dieses Beispiel startet keinen. */
 static void kick(void *ctx) {
     ARG_UNUSED(ctx);
+    line_watch_step();
 }
 
 /* Oeffnet das Geraet des Journals (5.9): zwei Slots im Flash, in der
@@ -71,10 +72,12 @@ static void drive(takt_core *core) {
     struct takt_stacks stacks;
     const struct takt_stacks *measured = NULL;
     if (takt_rtos_start(&rtos, core, &config) == 0) {
+        line_watch_start();
         /* Die fremde Aufgabe: rechnet mit der FPU, solange Takt laeuft. */
         while (takt_rtos_running(&rtos) != 0) {
             takt_foreign_round(&foreign);
             handback_serve();
+            line_watch_round();
         }
         if (takt_rtos_join(&rtos, &stacks) == 0) {
             stacks.tick_bound = PORT_TEST_TICK_STACK_BYTES;
@@ -110,9 +113,10 @@ int main(void) {
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
         int rc;
         /* Der Kopf geht gleich an die Leitung (FB-757). */
-        takt_board_trace("takt auf zephyr mit cmsis-rtos2\n");
+        takt_board_trace("takt auf zephyr mit cmsis-rtos2\n" TAKT_RTOS_PROTECTION "\n");
         takt_line_mark();
         takt_line_flush();
+        line_watch_alarm();
         rc = journal_open(&nvm);
         if (rc != 0) {
             refused("takt journal: nicht offen ", rc);

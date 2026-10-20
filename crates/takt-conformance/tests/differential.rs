@@ -26,9 +26,12 @@ fn korpus() -> Vec<&'static str> {
 /// wenig genug, dass ein Fehlschlag noch zu lesen ist.
 const TICKS: u64 = 60;
 
-/// Eine Zeile von [`UNREACHED`]: das Programm, die sechs Zahlen und je
-/// Gruppe aus [`GROUPS`] die Zahl ihrer Stellen in Spalte drei.
-type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, &'static [(&'static str, usize)]);
+/// Je Gruppe aus [`GROUPS`] die Zahl ihrer Stellen in einer Spalte.
+type Groups = &'static [(&'static str, usize)];
+
+/// Eine Zeile von [`UNREACHED`]: das Programm, die sechs Zahlen und die
+/// Gruppen der Spalten eins bis drei.
+type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, Groups, Groups, Groups);
 
 /// Was ueber alle Laeufe eines Korpusprogramms unerreicht bleibt (M11
 /// Schritt 29a; Coverage aus 13.2, [`takt_conformance::cases`]): Programm,
@@ -47,112 +50,189 @@ type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, &'stat
 /// Die Spalten vier bis sechs zaehlen die Pruefstellen, die nie faulten
 /// koennen, je Grund (13.2, `takt_interp::coverage::Silent`): `proven`,
 /// `message`, `observe`. Sie stehen nicht in Spalte drei, und die Ratsche
-/// haelt sie ebenso genau. Die letzte Spalte teilt Spalte drei nach dem
-/// Grund auf, der Gruppe aus [`GROUPS`] (FB-511 Schritt 5).
+/// haelt sie ebenso genau. Die letzten drei Spalten teilen die Spalten eins
+/// bis drei nach dem Grund auf, der Gruppe aus [`GROUPS`] (FB-511 Schritt 5).
 const UNREACHED: &[Unreached] = &[
-    ("01_minimal.takt", 0, 0, 0, 0, 1, 0, &[]),
-    ("02_units_and_data.takt", 0, 3, 5, 0, 1, 0, &[("Frist", 2), ("ohne Urteil", 3)]),
-    ("03_sequences_and_faults.takt", 10, 3, 2, 0, 1, 1, &[("Fragment", 2)]),
-    ("04_blocks_and_multirate.takt", 2, 1, 2, 2, 0, 0, &[("Speicher", 1), ("Fragment", 1)]),
-    ("05_streams_and_protocol.takt", 3, 0, 7, 0, 0, 0, &[("Speicher", 7)]),
-    ("06_test_harness.takt", 2, 0, 0, 0, 0, 3, &[]),
-    ("07_embedded_field.takt", 13, 3, 8, 0, 1, 0, &[("Frist", 8)]),
-    ("11_foc_drive.takt", 4, 21, 32, 3, 0, 2, &[("Speicher", 32)]),
-    ("12_bitfields.takt", 1, 0, 2, 1, 0, 0, &[("Frist", 2)]),
-    ("13_framing.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("13_protocol_analysis.takt", 0, 0, 6, 3, 0, 0, &[("Frist", 6)]),
-    ("14_latency.takt", 1, 0, 0, 0, 0, 0, &[]),
-    ("17_nested.takt", 2, 0, 0, 0, 1, 0, &[]),
-    ("18_blocks.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("23_patterns.takt", 0, 0, 3, 0, 0, 0, &[("Speicher", 3)]),
-    ("24_send_has.takt", 0, 0, 1, 0, 0, 0, &[("Speicher", 1)]),
-    ("26_samples.takt", 0, 0, 1, 1, 0, 0, &[("Frist", 1)]),
-    ("27_every.takt", 0, 0, 1, 0, 0, 0, &[("nicht k-induktiv", 1)]),
-    ("28_scheduled.takt", 0, 0, 1, 0, 0, 0, &[("Zeitschranke", 1)]),
-    ("35_persist.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("36_int_units.takt", 0, 0, 4, 1, 0, 0, &[("Frist", 3), ("bewiesen, nicht nachgerechnet", 1)]),
-    ("37_follows.takt", 0, 0, 1, 0, 0, 0, &[("nicht k-induktiv", 1)]),
-    ("40_jobs.takt", 1, 0, 0, 0, 0, 0, &[]),
-    ("41_tunables.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("42_map.takt", 0, 0, 1, 1, 0, 0, &[("Frist", 1)]),
-    ("43_sent.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("44_campaign.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("45_journal_cut.takt", 14, 2, 26, 0, 0, 0, &[("ohne Teilmodell", 26)]), // FB-604: ohne Teilmodell keine Pfade des Solvers
-    ("46_matrices.takt", 0, 0, 28, 0, 0, 0, &[("Speicher", 27), ("bewiesen, nicht nachgerechnet", 1)]),
-    ("47_monitors.takt", 0, 0, 1, 0, 0, 0, &[("jenseits MAX_TICKS", 1)]),
-    ("49_record_streams.takt", 0, 0, 2, 0, 0, 0, &[("Speicher", 2)]),
-    ("51_text_into_bytes.takt", 0, 0, 1, 2, 0, 0, &[("Frist", 1)]),
-    ("52_padding_fields.takt", 0, 0, 0, 3, 0, 0, &[]),
-    ("53_stream_kinds.takt", 1, 0, 3, 2, 0, 0, &[("Frist", 2), ("Fragment", 1)]),
-    ("54_inout.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("55_frames_with_bytes.takt", 0, 0, 1, 3, 0, 0, &[("Speicher", 1)]),
-    ("57_persist_often.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("58_persist_alert.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("59_persist_idle.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("61_requirements.takt", 1, 3, 2, 0, 0, 0, &[("Fragment", 2)]),
-    ("62_type_generics.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("63_scoped_instances.takt", 3, 0, 0, 0, 0, 0, &[]),
-    ("68_uart_port.takt", 0, 0, 1, 0, 0, 0, &[("Frist", 1)]),
-    ("69_qp_box.takt", 0, 0, 1, 0, 0, 0, &[("Frist", 1)]),
-    ("70_padded_record.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("71_places.takt", 0, 0, 6, 1, 0, 0, &[("Frist", 6)]),
-    ("72_handler_levels.takt", 0, 0, 0, 6, 0, 0, &[]),
-    ("73_after_levels.takt", 0, 0, 4, 0, 0, 0, &[("nicht k-induktiv", 3), ("jenseits MAX_TICKS", 1)]),
-    ("74_instance_index.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("75_implicit_checks.takt", 0, 0, 0, 6, 0, 0, &[]),
-    ("76_stream_views.takt", 0, 0, 3, 9, 0, 0, &[("Frist", 3)]),
-    ("77_float_faults.takt", 0, 0, 2, 0, 0, 0, &[("Frist", 2)]),
-    ("78_length_guards.takt", 0, 0, 0, 7, 0, 0, &[]),
-    ("79_byte_literals.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("80_payload_variants.takt", 0, 0, 1, 3, 0, 0, &[("Frist", 1)]),
-    ("81_persist_variants.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("83_durations.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("84_defaults.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("85_observe_invalid.takt", 0, 0, 0, 1, 1, 3, &[]),
-    ("86_units.takt", 0, 0, 9, 2, 0, 0, &[("Speicher", 9)]),
+    ("01_minimal.takt", 0, 0, 0, 0, 1, 0, &[], &[], &[]),
+    ("02_units_and_data.takt", 0, 0, 2, 0, 1, 0, &[], &[], &[("Frist", 1), ("bewiesen, nicht nachgerechnet", 1)]),
+    ("03_sequences_and_faults.takt", 10, 3, 2, 0, 1, 1, &[("Fragment", 10)], &[("Fragment", 3)], &[("Fragment", 2)]),
+    (
+        "04_blocks_and_multirate.takt",
+        2,
+        1,
+        2,
+        2,
+        0,
+        0,
+        &[("Frist", 2)],
+        &[("Frist", 1)],
+        &[("Speicher", 1), ("Fragment", 1)],
+    ),
+    ("05_streams_and_protocol.takt", 3, 0, 7, 0, 0, 0, &[("Speicher", 3)], &[], &[("Speicher", 7)]),
+    ("06_test_harness.takt", 2, 0, 0, 0, 0, 3, &[("Fragment", 2)], &[], &[]),
+    (
+        "07_embedded_field.takt",
+        13,
+        3,
+        8,
+        0,
+        1,
+        0,
+        &[("Frist", 13)],
+        &[("Frist", 2), ("in einer Meldung", 1)],
+        &[("Frist", 8)],
+    ),
+    (
+        "11_foc_drive.takt",
+        4,
+        21,
+        32,
+        3,
+        0,
+        2,
+        &[("Speicher", 4)],
+        &[("Frist", 18), ("Range bewiesen", 3)],
+        &[("Speicher", 32)],
+    ),
+    ("12_bitfields.takt", 1, 0, 2, 1, 0, 0, &[("Frist", 1)], &[], &[("Frist", 2)]),
+    ("13_framing.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("13_protocol_analysis.takt", 0, 0, 6, 3, 0, 0, &[], &[], &[("Frist", 6)]),
+    ("14_latency.takt", 1, 0, 0, 0, 0, 0, &[("Fragment", 1)], &[], &[]),
+    ("17_nested.takt", 2, 0, 0, 0, 1, 0, &[("Fragment", 2)], &[], &[]),
+    ("18_blocks.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("23_patterns.takt", 0, 0, 3, 0, 0, 0, &[], &[], &[("Speicher", 3)]),
+    ("24_send_has.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("Speicher", 1)]),
+    ("26_samples.takt", 0, 0, 1, 1, 0, 0, &[], &[], &[("Frist", 1)]),
+    ("27_every.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("nicht k-induktiv", 1)]),
+    ("28_scheduled.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("Zeitschranke", 1)]),
+    ("35_persist.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("36_int_units.takt", 0, 0, 4, 1, 0, 0, &[], &[], &[("Frist", 3), ("bewiesen, nicht nachgerechnet", 1)]),
+    ("37_follows.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("nicht k-induktiv", 1)]),
+    ("41_tunables.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("42_map.takt", 0, 0, 1, 1, 0, 0, &[], &[], &[("Frist", 1)]),
+    ("43_sent.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("44_campaign.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    (
+        "45_journal_cut.takt",
+        14,
+        2,
+        26,
+        0,
+        0,
+        0,
+        &[("ohne Teilmodell", 14)],
+        &[("ohne Teilmodell", 2)],
+        &[("ohne Teilmodell", 26)],
+    ), // FB-604: ohne Teilmodell keine Pfade des Solvers
+    ("46_matrices.takt", 0, 0, 28, 0, 0, 0, &[], &[], &[("Speicher", 27), ("bewiesen, nicht nachgerechnet", 1)]),
+    ("47_monitors.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("jenseits MAX_TICKS", 1)]),
+    ("49_record_streams.takt", 0, 0, 2, 0, 0, 0, &[], &[], &[("Speicher", 2)]),
+    ("51_text_into_bytes.takt", 0, 0, 1, 2, 0, 0, &[], &[], &[("Frist", 1)]),
+    ("52_padding_fields.takt", 0, 0, 0, 3, 0, 0, &[], &[], &[]),
+    (
+        "53_stream_kinds.takt",
+        1,
+        0,
+        3,
+        2,
+        0,
+        0,
+        &[("bewiesen, nicht nachgerechnet", 1)],
+        &[],
+        &[("Frist", 2), ("Fragment", 1)],
+    ),
+    ("54_inout.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("55_frames_with_bytes.takt", 0, 0, 1, 3, 0, 0, &[], &[], &[("Speicher", 1)]),
+    ("57_persist_often.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("58_persist_alert.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("59_persist_idle.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("61_requirements.takt", 1, 3, 2, 0, 0, 0, &[("Fragment", 1)], &[("Fragment", 3)], &[("Fragment", 2)]),
+    ("62_type_generics.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("68_uart_port.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("Frist", 1)]),
+    ("69_qp_box.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("Frist", 1)]),
+    ("70_padded_record.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("71_places.takt", 0, 0, 6, 1, 0, 0, &[], &[], &[("Frist", 6)]),
+    ("72_handler_levels.takt", 0, 0, 0, 6, 0, 0, &[], &[], &[]),
+    ("73_after_levels.takt", 0, 0, 4, 0, 0, 0, &[], &[], &[("nicht k-induktiv", 3), ("jenseits MAX_TICKS", 1)]),
+    ("74_instance_index.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("75_implicit_checks.takt", 0, 0, 0, 6, 0, 0, &[], &[], &[]),
+    ("76_stream_views.takt", 0, 0, 3, 9, 0, 0, &[], &[], &[("Frist", 3)]),
+    ("77_float_faults.takt", 0, 0, 2, 0, 0, 0, &[], &[], &[("Frist", 2)]),
+    ("78_length_guards.takt", 0, 0, 0, 7, 0, 0, &[], &[], &[]),
+    ("79_byte_literals.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("80_payload_variants.takt", 0, 0, 1, 3, 0, 0, &[], &[], &[("Frist", 1)]),
+    ("81_persist_variants.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("83_durations.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("84_defaults.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("85_observe_invalid.takt", 0, 0, 0, 1, 1, 3, &[], &[], &[]),
+    ("86_units.takt", 0, 0, 9, 2, 0, 0, &[], &[], &[("Speicher", 9)]),
     (
         "87_fault_kinds.takt",
-        1,
+        0,
         1,
         8,
         4,
         0,
         0,
+        &[],
+        &[("unbestaetigt", 1)],
         &[("Frist", 1), ("bewiesen, nicht nachgerechnet", 1), ("nicht k-induktiv", 6)],
     ),
-    ("88_capture_segments.takt", 3, 0, 2, 7, 0, 0, &[("Fragment", 2)]),
-    ("89_fault_paths.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("90_abort.takt", 0, 0, 0, 5, 0, 0, &[]),
-    ("91_subnormals.takt", 0, 0, 4, 0, 0, 0, &[("Frist", 4)]),
-    ("92_idle_streams.takt", 1, 0, 1, 3, 0, 0, &[("Speicher", 1)]),
-    ("93_confirmations.takt", 0, 0, 0, 3, 0, 0, &[]),
-    ("94_float_ranges.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("95_boundary_ranges.takt", 0, 0, 0, 3, 0, 0, &[]),
-    ("96_record_outputs.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("97_fast_math.takt", 0, 0, 2, 3, 0, 0, &[("Speicher", 2)]),
-    ("98_last_fault.takt", 0, 5, 2, 2, 0, 0, &[("bewiesen, nicht nachgerechnet", 1), ("nicht k-induktiv", 1)]),
-    ("100_dispatch.takt", 0, 0, 1, 7, 0, 0, &[("Speicher", 1)]),
-    ("101_correct_math.takt", 0, 0, 2, 3, 0, 0, &[("Speicher", 2)]),
-    ("102_correct_math_f32.takt", 0, 0, 2, 3, 0, 0, &[("Frist", 2)]),
-    ("103_math_domains.takt", 0, 0, 1, 0, 0, 0, &[("Frist", 1)]),
-    ("104_linear_has.takt", 0, 0, 0, 5, 0, 0, &[]),
-    ("105_subnormals_f32.takt", 0, 0, 5, 0, 0, 0, &[("Frist", 5)]),
-    ("106_machine_handler.takt", 0, 0, 0, 2, 0, 0, &[]),
-    ("107_cancel_and_pulse.takt", 0, 0, 1, 1, 0, 0, &[("Zeitschranke", 1)]),
-    ("108_singular_solve.takt", 0, 0, 3, 0, 0, 0, &[("Frist", 3)]),
-    ("109_narrow_bounds.takt", 0, 0, 0, 3, 0, 0, &[]),
-    ("110_journal_log.takt", 17, 3, 44, 1, 0, 0, &[("ohne Teilmodell", 44)]), // FB-604: ohne Teilmodell keine Pfade des Solvers
-    ("111_assign_mul.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("112_assign_div.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("113_case_ranges.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("114_for_pairs.takt", 0, 0, 4, 0, 0, 0, &[("Fragment", 4)]),
-    ("115_affine_unit.takt", 0, 0, 2, 0, 0, 0, &[("Frist", 2)]),
-    ("116_sequence_timeout.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("117_many_text_handlers.takt", 0, 2, 1, 2, 0, 0, &[("Speicher", 1)]),
-    ("118_tx_idle.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("120_port_writes.takt", 0, 0, 0, 4, 0, 0, &[]),
-    ("122_owner_reads_instance.takt", 0, 0, 0, 1, 0, 0, &[]),
-    ("123_fifo_port.takt", 0, 0, 0, 9, 0, 0, &[]),
+    ("88_capture_segments.takt", 3, 0, 2, 7, 0, 0, &[("bewiesen, nicht nachgerechnet", 3)], &[], &[("Fragment", 2)]),
+    ("89_fault_paths.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("90_abort.takt", 0, 0, 0, 5, 0, 0, &[], &[], &[]),
+    ("91_subnormals.takt", 0, 0, 4, 0, 0, 0, &[], &[], &[("Frist", 4)]),
+    ("92_idle_streams.takt", 1, 0, 1, 3, 0, 0, &[("Speicher", 1)], &[], &[("Speicher", 1)]),
+    ("93_confirmations.takt", 0, 0, 0, 3, 0, 0, &[], &[], &[]),
+    ("94_float_ranges.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("95_boundary_ranges.takt", 0, 0, 0, 3, 0, 0, &[], &[], &[]),
+    ("96_record_outputs.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("97_fast_math.takt", 0, 0, 2, 3, 0, 0, &[], &[], &[("Speicher", 2)]),
+    (
+        "98_last_fault.takt",
+        0,
+        5,
+        2,
+        2,
+        0,
+        0,
+        &[],
+        &[("faultet stets", 3), ("Range bewiesen", 2)],
+        &[("bewiesen, nicht nachgerechnet", 1), ("nicht k-induktiv", 1)],
+    ),
+    ("100_dispatch.takt", 0, 0, 1, 7, 0, 0, &[], &[], &[("Speicher", 1)]),
+    ("101_correct_math.takt", 0, 0, 2, 3, 0, 0, &[], &[], &[("Speicher", 2)]),
+    ("102_correct_math_f32.takt", 0, 0, 2, 3, 0, 0, &[], &[], &[("Frist", 2)]),
+    ("103_math_domains.takt", 0, 0, 1, 0, 0, 0, &[], &[], &[("Frist", 1)]),
+    ("104_linear_has.takt", 0, 0, 0, 5, 0, 0, &[], &[], &[]),
+    ("105_subnormals_f32.takt", 0, 0, 5, 0, 0, 0, &[], &[], &[("Frist", 5)]),
+    ("106_machine_handler.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
+    ("107_cancel_and_pulse.takt", 0, 0, 1, 1, 0, 0, &[], &[], &[("Zeitschranke", 1)]),
+    ("108_singular_solve.takt", 0, 0, 3, 0, 0, 0, &[], &[], &[("Frist", 3)]),
+    ("109_narrow_bounds.takt", 0, 0, 0, 3, 0, 0, &[], &[], &[]),
+    (
+        "110_journal_log.takt",
+        17,
+        3,
+        44,
+        1,
+        0,
+        0,
+        &[("ohne Teilmodell", 17)],
+        &[("ohne Teilmodell", 3)],
+        &[("ohne Teilmodell", 44)],
+    ), // FB-604: ohne Teilmodell keine Pfade des Solvers
+    ("111_assign_mul.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("112_assign_div.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("113_case_ranges.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("114_for_pairs.takt", 0, 0, 4, 0, 0, 0, &[], &[], &[("Fragment", 4)]),
+    ("115_affine_unit.takt", 0, 0, 2, 0, 0, 0, &[], &[], &[("Frist", 2)]),
+    ("116_sequence_timeout.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("117_many_text_handlers.takt", 0, 2, 1, 2, 0, 0, &[], &[("Frist", 1), ("Range bewiesen", 1)], &[("Speicher", 1)]),
+    ("118_tx_idle.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("120_port_writes.takt", 0, 0, 0, 4, 0, 0, &[], &[], &[]),
+    ("122_owner_reads_instance.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
+    ("123_fifo_port.takt", 0, 0, 0, 9, 0, 0, &[], &[], &[]),
     (
         "124_port_test.takt",
         8,
@@ -161,28 +241,44 @@ const UNREACHED: &[Unreached] = &[
         6,
         0,
         0,
+        &[("Frist", 5), ("nicht k-induktiv", 2), ("Speicher", 1)],
+        &[],
         &[("Speicher", 3), ("Frist", 4), ("ausserhalb beweiser", 2), ("Zeitschranke", 1)],
     ),
-    ("sim/12_7/program.takt", 3, 3, 1, 1, 0, 0, &[("bewiesen, explizit", 1)]),
-    ("sim/14_7/program.takt", 10, 6, 22, 0, 4, 0, &[("Speicher", 4), ("Frist", 18)]),
+    ("sim/12_7/program.takt", 0, 0, 1, 1, 0, 0, &[], &[], &[("bewiesen, explizit", 1)]),
+    (
+        "sim/14_7/program.takt",
+        10,
+        6,
+        22,
+        0,
+        4,
+        0,
+        &[("Frist", 6), ("Speicher", 4)],
+        &[("Frist", 3), ("in einer Meldung", 3)],
+        &[("Frist", 19), ("Speicher", 3)],
+    ),
 ];
 
-/// Die Gruppen der Pruefstellen in Spalte drei von [`UNREACHED`], mit ihrem
-/// Grund (FB-511): die Einordnung des Solvers (Schritt 1, `solver.yml`, Lauf
-/// 38188098609; fuer `11_foc_drive`, `46_matrices` und `sim/14_7` nach
-/// Schritt 2 Lauf 38199208294) und was Schritt 3 an den Stellen fand, die
-/// k-Induktion nicht schliesst (FB-613). Eine Stelle hat die Gruppe ihrer
-/// tiefsten Anfrage. Was die Einordnung bewies, fuehren seit Schritt 4 die
-/// Beweisdateien; die drei Gruppen mit „bewiesen“ sagen, warum eine solche
-/// Stelle noch hier steht.
+/// Die Gruppen des Unerreichten in [`UNREACHED`], mit ihrem Grund (FB-511):
+/// die Einordnung des Solvers und was Schritt 3 an den Stellen fand, die
+/// k-Induktion nicht schliesst (FB-613). Spalte drei aus Schritt 1
+/// (`solver.yml`, Lauf 38188098609; fuer `11_foc_drive`, `46_matrices` nach
+/// Schritt 2 Lauf 38199208294), die Spalten eins und zwei aus Schritt 5
+/// (Lauf 38320013325, fuer `02_units_and_data`, `sim/12_7` und `sim/14_7`
+/// nach FB-617 und FB-618 die Laeufe 38319891273 und 38336280659). Eine
+/// Stelle hat die Gruppe ihrer tiefsten Anfrage; was kein Modell fuehrt,
+/// hat den Grund dafuer. Was die Einordnung bewies, fuehren seit Schritt 4
+/// die Beweisdateien und `.unfired`; die Gruppen mit „bewiesen“ sagen,
+/// warum eine solche Stelle noch hier steht.
 const GROUPS: &[(&str, &str)] = &[
     ("Speicher", "z3 braucht mehr als 6 GB, schon mit k = 1 oder in der Tiefe (FB-612)"),
     ("Frist", "der Solver entscheidet sie in 60 s nicht"),
     ("ohne Teilmodell", "keine Maschine laesst sich allein kodieren, das Gesamtmodell entscheidet z3 nicht (FB-604)"),
     (
         "bewiesen, nicht nachgerechnet",
-        "die Einordnung bewies sie (Tiefe 10 oder Spacer, 6 GB); die Pfade des Solvers (Tiefe 5, 60 s, 4 GB) \
-         bestaetigen es nicht, die Beweisdatei fuehrt sie darum nicht (FB-511 Schritt 4)",
+        "die Einordnung bewies sie (Tiefe 10 oder 20 oder Spacer, 6 GB); die Pfade des Solvers (Tiefe 5, 60 s, \
+         4 GB) bestaetigen es nicht, Beweisdatei und `.unfired` fuehren sie darum nicht (FB-511 Schritt 4)",
     ),
     (
         "bewiesen, explizit",
@@ -199,7 +295,22 @@ const GROUPS: &[(&str, &str)] = &[
          frueherer Fault derselben Maschine die Stelle (FB-613, Schritt 2)",
     ),
     ("Fragment", "Induktionsschritt offen, die Invariantensuche kennt kein Fliesskomma und keine Bitoperationen"),
-    ("ohne Urteil", "kein Modell fuehrt die Stelle"),
+    (
+        "Range bewiesen",
+        "eine bewiesene Range (13.2 `proven`), die Modell und Codegen nicht pruefen: Sie besteht, sobald ihr \
+         Ausdruck ohne Fault ausgewertet ist, und das ist er in keinem Lauf",
+    ),
+    (
+        "in einer Meldung",
+        "in der Meldung eines `check` (13.2 `message`), die erst beim Verletzen entsteht; der `check` faultet in \
+         keinem Lauf",
+    ),
+    ("faultet stets", "bewiesen: jede Auswertung faultet, die Stelle besteht in keinem Lauf"),
+    (
+        "unbestaetigt",
+        "der Solver fand einen Pfad, den der Interpreter nicht geht: `inv` und `sha256` sieht er uninterpretiert \
+         (13.3)",
+    ),
     ("jenseits MAX_TICKS", "erreichbar, aber erst nach `cases::MAX_TICKS` Ticks (FB-613)"),
     (
         "Zeitschranke",
@@ -207,29 +318,33 @@ const GROUPS: &[(&str, &str)] = &[
     ),
 ];
 
-/// **Jede nie verletzte Pruefstelle hat einen Grund** (FB-511 Schritt 5):
-/// Die Gruppen einer Zeile von [`UNREACHED`] stehen in [`GROUPS`] und
-/// zaehlen zusammen Spalte drei; jede Gruppe kommt vor. Dass die Zahlen
-/// stimmen, haelt `the_three_executors_agree` gegen die Coverage.
+/// **Alles Unerreichte hat einen Grund** (FB-511 Schritt 5): Die Gruppen
+/// einer Zeile von [`UNREACHED`] stehen in [`GROUPS`] und zaehlen zusammen
+/// ihre Spalte — Uebergaenge, nie bestandene und nie verletzte
+/// Pruefstellen; jede Gruppe kommt vor. Dass die Zahlen stimmen, haelt
+/// `the_three_executors_agree` gegen die Coverage.
 #[test]
-fn every_never_failed_site_has_a_group() {
+fn every_unreached_item_has_a_group() {
     let mut failed = Vec::new();
-    for (name, _, _, never_failed, _, _, _, groups) in UNREACHED {
-        let sum: usize = groups.iter().map(|(_, n)| n).sum();
-        if sum != *never_failed {
-            failed.push(format!("{name}: die Gruppen zaehlen {sum}, Spalte drei {never_failed}"));
-        }
-        for (group, n) in *groups {
-            if !GROUPS.iter().any(|(g, _)| g == group) {
-                failed.push(format!("{name}: `{group}` ist keine Gruppe aus `GROUPS`"));
+    for &(name, transitions, passes, faults, _, _, _, g1, g2, g3) in UNREACHED {
+        for (column, count, groups) in [(1, transitions, g1), (2, passes, g2), (3, faults, g3)] {
+            let sum: usize = groups.iter().map(|(_, n)| n).sum();
+            if sum != count {
+                failed.push(format!("{name}: die Gruppen der Spalte {column} zaehlen {sum}, die Spalte {count}"));
             }
-            if *n == 0 || groups.iter().filter(|(g, _)| g == group).count() > 1 {
-                failed.push(format!("{name}: `{group}` ohne Stelle oder doppelt"));
+            for (group, n) in groups {
+                if !GROUPS.iter().any(|(g, _)| g == group) {
+                    failed.push(format!("{name}: `{group}` ist keine Gruppe aus `GROUPS`"));
+                }
+                if *n == 0 || groups.iter().filter(|(g, _)| g == group).count() > 1 {
+                    failed.push(format!("{name}, Spalte {column}: `{group}` ohne Stelle oder doppelt"));
+                }
             }
         }
     }
     for (group, _) in GROUPS {
-        if !UNREACHED.iter().any(|row| row.7.iter().any(|(g, _)| g == group)) {
+        let used = |row: &Unreached| [row.7, row.8, row.9].iter().any(|gs| gs.iter().any(|(g, _)| g == group));
+        if !UNREACHED.iter().any(used) {
             failed.push(format!("`{group}` kommt in keiner Zeile vor"));
         }
     }
@@ -481,18 +596,27 @@ fn a_running_job_keeps_the_native_system_awake() {
 /// ausserhalb der Suite `beweiser` nennt seinen Grund im Manifest.
 const GAPS: &[(&str, &str, &str, &str)] = &[
     ("03_sequences_and_faults.takt", "pfad uebergang-SAFE__IDLE__2561", "nativ", RUNTIME_NODE),
-    ("40_jobs.takt", "stimulus", "nativ", "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach"),
+    ("40_jobs.takt", "pfad uebergang-RUN_S0__FAILED__848", "nativ", JOB_RECORD),
+    ("40_jobs.takt", "stimulus", "nativ", JOB_RECORD),
     ("62_type_generics.takt", "pfad valid-1111", "nativ", SIM_INPUT),
     ("62_type_generics.takt", "pfad valid-1310", "nativ", SIM_INPUT),
     ("62_type_generics.takt", "stimulus", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad uebergang-FIRST__SECOND__942", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad uebergang-LOW__HIGH__715", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad uebergang-SECOND__FIRST__1029", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-p_HIGH__LOW__797", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-q_HIGH__LOW__797", "nativ", SIM_INPUT),
+    ("63_scoped_instances.takt", "pfad uebergang-r_HIGH__LOW__797", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "pfad valid-1034", "nativ", SIM_INPUT),
     ("63_scoped_instances.takt", "stimulus", "nativ", SIM_INPUT),
+    ("87_fault_kinds.takt", "pfad uebergang-RUN_S1__FAILED__3270", "nativ", JOB_RECORD),
     ("99_exit_fault.takt", "pfad range-983", "nativ", RUNTIME_NODE),
     ("120_port_writes.takt", "pfad index-1857", "nativ", SIM_INPUT),
+    ("sim/12_7/program.takt", "pfad uebergang-SELFTEST_S0__SELFTEST_S1__2487", "nativ", RUNTIME_NODE),
 ];
+
+/// Eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach (4.5).
+const JOB_RECORD: &str = "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach";
 
 /// Ein Eingang mit `sim`-Bindung hat im Produkt keinen Treiber; nur der
 /// Interpreter nimmt dort einen Stimulus an (8.3, FB-688).
@@ -636,7 +760,7 @@ fn compare_program(clang: &takt_llvm::toolchain::Clang, name: &'static str, mode
     let allowed = UNREACHED
         .iter()
         .find(|(n, ..)| *n == name)
-        .map_or([0; 6], |&(_, t, ps, f, proven, message, observe, _)| [t, ps, f, proven, message, observe]);
+        .map_or([0; 6], |&(_, t, ps, f, proven, message, observe, ..)| [t, ps, f, proven, message, observe]);
     if counts != allowed {
         let list: Vec<String> = [
             "Uebergang",

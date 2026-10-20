@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
 
 #include "handback.h"
 #include "line.h"
@@ -30,6 +31,7 @@
  * Hardware (`wdt_feed`). */
 static void kick(void *ctx) {
     ARG_UNUSED(ctx);
+    line_watch_step();
 }
 
 /* Oeffnet das Geraet des Journals (5.9): zwei Slots im Flash, in der
@@ -80,6 +82,16 @@ static void refused(const char *what, int32_t code) {
     takt_line_flush();
 }
 
+/* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733), etwa
+ * `takt uhr counter 1000000 Hz`. */
+static void clock_line(void) {
+    char line[48];
+    uint32_t hz = 0U;
+    const char *source = takt_os_clock(&hz);
+    (void)snprintk(line, sizeof line, "takt uhr %s %u Hz\n", source, (unsigned int)hz);
+    takt_board_trace(line);
+}
+
 /* Faehrt den Kern `core` ueber den Port, waehrend `main` die fremde Last
  * rechnet, und schreibt die Bilanz. Verlangt der Host das Board zurueck,
  * gibt `main` es sofort ab. Startet der Port nicht oder misst er die Stacks
@@ -103,6 +115,7 @@ static void drive(takt_core *core) {
     struct takt_stacks stacks;
     const struct takt_stacks *measured = NULL;
     if (takt_rtos_start(&rtos, core, &config) == 0) {
+        line_watch_start();
 #if TAKT_PROBE_IN_RUN
         /* Ein Bau mit `TAKT_PROBE_IN_RUN` probt die Partition noch einmal im
          * Lauf: Die Schutzeinheit weist den Zugriff ab, und der Kern meldet
@@ -113,6 +126,7 @@ static void drive(takt_core *core) {
         while (takt_rtos_running(&rtos) != 0) {
             takt_foreign_round(&foreign);
             handback_serve();
+            line_watch_round();
         }
         if (takt_rtos_join(&rtos, &stacks) == 0) {
             stacks.tick_bound = PORT_TEST_TICK_STACK_BYTES;
@@ -137,11 +151,13 @@ int main(void) {
         int rc;
         /* Jede Zeile des Kopfs geht gleich an die Leitung: Steht der Start
          * danach, zeigt sie, wie weit er kam (FB-757). */
-        takt_board_trace("takt auf zephyr\n");
+        takt_board_trace("takt auf zephyr\n" TAKT_RTOS_PROTECTION "\n");
         takt_line_flush();
         takt_board_trace(protection());
+        clock_line();
         takt_line_mark();
         takt_line_flush();
+        line_watch_alarm();
         rc = journal_open(&nvm);
         if (rc != 0) {
             refused("takt journal: nicht offen ", rc);
