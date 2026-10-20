@@ -416,8 +416,12 @@ So arbeitet jeder Strang, als wäre er allein:
       `sim/12_7` blieben unbestätigt.
     - FB-618: Unter seiner Beweisdatei aus Schritt 4 war `sim/14_7` nicht
       mehr kodierbar (`cell_v.min()` direkt am Input).
-  - Offen ist FB-619: Die Coverage zählt die Stellen einer Funktion, die
-    keine Maschine ruft. Diese Frage liegt beim Nutzer.
+  - FB-619 (entschieden: Option a, Zweig `b6-fb619`): Die Coverage zählt
+    nur, was eine laufende Maschine erreichen kann (13.2). Eine Funktion,
+    die keine Maschine ruft, ist kein Pfad des Laufs. In
+    `02_units_and_data` fallen die drei Stellen von `shunt_current` weg,
+    ebenso die Gruppe „nie gerufen“: nie bestanden 53 → 50, nie verletzt
+    286 → 283.
   - Einordnung in den Läufen 38320013325 (alle Programme, Übergänge und
     Bestehen), 38319891273 und 38336280659 (`02_units_and_data`,
     `98_last_fault`, `sim/12_7`, `sim/14_7`, `63_scoped_instances`, alle
@@ -436,7 +440,6 @@ So arbeitet jeder Strang, als wäre er allein:
     | bewiesen, nicht nachgerechnet | 4 | – | 5 |
     | Range bewiesen | – | 6 | – |
     | in einer Meldung | – | 4 | – |
-    | nie gerufen (FB-619) | – | 3 | 3 |
     | faultet stets | – | 3 | – |
     | unbestätigt (`inv`, `sha256`) | – | 1 | – |
     | Zeitschranke (FB-614, FB-694) | – | – | 3 |
@@ -740,6 +743,16 @@ So arbeitet jeder Strang, als wäre er allein:
     Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
     unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
     38320906796); das zeigt der nächste Lauf.
+- **Stand 19g (Strang F, 2026-10-13, Zweig `f-19i-counter`):**
+  - **Der Zähler als Uhr (FB-733):** Wählt der Devicetree `takt,timer`,
+    rechnet der Zephyr-Adapter über die `counter`-API
+    (`CONFIG_TAKT_TIMER_COUNTER`, hängt an `COUNTER`, das die Anwendung
+    setzt; ohne es scheitert der Bau an einer Zusicherung): die Uhr auf
+    64 Bit erweitert, die Frist als absoluter Alarm in Stücken von einem
+    Viertel des Umlaufs, gelöscht nach dem Aufwachen. `examples/zephyr`
+    wählt TIM2 (F401) und Timer 0 (C6) mit 1 MHz; die Kopfzeile `takt uhr
+    counter 1000000 Hz` verlangt die Portprüfung auf beiden Boards. Die
+    übrigen Beispiele bleiben beim Systemtick und nennen ihn ebenso.
 
 ### 23 — Speicherschutz neben fremdem Code
 

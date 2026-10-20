@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # clang-tidy kommt mit LLVM 22.1.8 aus der Setup-Aktion.
       - uses: ./.github/actions/setup
 
@@ -36,7 +36,7 @@ jobs:
       # an einem Befund scheitern darf.
       - name: cppcheck 2.22.0 aus dem Cache
         id: cppcheck
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/cppcheck-2.22.0
           key: cppcheck-2.22.0-linux-x64-1
@@ -58,7 +58,7 @@ jobs:
 
       - name: cppcheck 2.22.0 in den Cache
         if: steps.cppcheck.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/cppcheck-2.22.0
           key: cppcheck-2.22.0-linux-x64-1
@@ -104,7 +104,7 @@ jobs:
       # Ein Nightly mit Miri, fest: Ein anderes urteilt anders.
       NIGHTLY: nightly-2026-10-01
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Nightly mit Miri
         shell: bash
         run: |

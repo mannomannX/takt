@@ -54,18 +54,7 @@ type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, Groups
 /// bis drei nach dem Grund auf, der Gruppe aus [`GROUPS`] (FB-511 Schritt 5).
 const UNREACHED: &[Unreached] = &[
     ("01_minimal.takt", 0, 0, 0, 0, 1, 0, &[], &[], &[]),
-    (
-        "02_units_and_data.takt",
-        0,
-        3,
-        5,
-        0,
-        1,
-        0,
-        &[],
-        &[("nie gerufen", 3)],
-        &[("Frist", 1), ("bewiesen, nicht nachgerechnet", 1), ("nie gerufen", 3)],
-    ),
+    ("02_units_and_data.takt", 0, 0, 2, 0, 1, 0, &[], &[], &[("Frist", 1), ("bewiesen, nicht nachgerechnet", 1)]),
     ("03_sequences_and_faults.takt", 10, 3, 2, 0, 1, 1, &[("Fragment", 10)], &[("Fragment", 3)], &[("Fragment", 2)]),
     (
         "04_blocks_and_multirate.takt",
@@ -306,7 +295,6 @@ const GROUPS: &[(&str, &str)] = &[
          frueherer Fault derselben Maschine die Stelle (FB-613, Schritt 2)",
     ),
     ("Fragment", "Induktionsschritt offen, die Invariantensuche kennt kein Fliesskomma und keine Bitoperationen"),
-    ("nie gerufen", "in einer Funktion, die keine Maschine ruft (3.4); ob die Coverage sie zaehlt, fragt FB-619"),
     (
         "Range bewiesen",
         "eine bewiesene Range (13.2 `proven`), die Modell und Codegen nicht pruefen: Sie besteht, sobald ihr \
