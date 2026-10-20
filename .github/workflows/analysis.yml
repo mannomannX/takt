@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # clang-tidy kommt mit LLVM 22.1.8 aus der Setup-Aktion.
       - uses: ./.github/actions/setup
 
@@ -67,7 +67,7 @@ jobs:
       # Ein Nightly mit Miri, fest: Ein anderes urteilt anders.
       NIGHTLY: nightly-2026-10-01
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Nightly mit Miri
         shell: bash
         run: |

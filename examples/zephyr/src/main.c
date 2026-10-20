@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/sys/printk.h>
 
 #include "handback.h"
 #include "line.h"
@@ -67,6 +68,16 @@ static const char *protection(void) {
         /* Die Probe endete nicht: kein Urteil. */
     }
     return line;
+}
+
+/* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733), etwa
+ * `takt uhr counter 1000000 Hz`. */
+static void clock_line(void) {
+    char line[48];
+    uint32_t hz = 0U;
+    const char *source = takt_os_clock(&hz);
+    (void)snprintk(line, sizeof line, "takt uhr %s %u Hz\n", source, (unsigned int)hz);
+    takt_board_trace(line);
 }
 
 /* Faehrt den Kern `core` ueber den Port, waehrend `main` die fremde Last
@@ -125,6 +136,7 @@ int main(void) {
     if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
         takt_board_trace("takt auf zephyr\n" TAKT_RTOS_PROTECTION "\n");
         takt_board_trace(protection());
+        clock_line();
         takt_line_mark();
         if ((journal_open(&nvm) == 0) &&
             (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
