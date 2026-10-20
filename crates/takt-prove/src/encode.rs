@@ -765,7 +765,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
             fail: either(&tick_sites, key, |f| &f.fail),
         })
         .collect();
-    let transitions = std::mem::take(&mut enc.transitions)
+    let transitions: Vec<CheckSite> = std::mem::take(&mut enc.transitions)
         .into_iter()
         .map(|((machine, key), (span, takes))| {
             let fires = Term::or(takes);
