@@ -833,6 +833,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "takt-adapter-probe"
+version = "0.1.0"
+dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-io",
+ "takt-embed",
+]
+
+[[package]]
 name = "takt-board-support"
 version = "0.1.0"
 
@@ -902,6 +911,8 @@ dependencies = [
 name = "takt-embed"
 version = "0.1.0"
 dependencies = [
+ "embedded-hal 1.0.0",
+ "embedded-io",
  "takt-native-abi",
  "takt-rt-core",
 ]

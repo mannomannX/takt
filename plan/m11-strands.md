@@ -468,7 +468,28 @@ So arbeitet jeder Strang, als wäre er allein:
     an denselben Stellen (Runner, Fristen von 60 s). Eine Zeile trägt
     deshalb die Gruppe ihres jüngsten Laufs.
   - Weiter: Schritt 2, Invarianten für „nicht k-induktiv“ und „Fragment“,
-    dann der Speicher (FB-612).
+    dann der Speicher (FB-612); er beginnt, sobald FB-694 auf main ist.
+  - **Geplante Abstraktion für „Fragment“ (Schritt 2):** Die Invariantensuche
+    (`horn()` in `takt-prove/src/smt.rs`) lehnt heute jedes Ziel ab, in
+    dessen Kegel Fließkomma, eine Schiebung oder die Wickelung in eine
+    Breite steht. Künftig ersetzt sie jeden größten Teilterm außerhalb des
+    Fragments, dessen eigene Sorte im Fragment liegt (ein Vergleich über
+    Fließkomma ist ein Wahrheitswert, eine Wickelung eine ganze Zahl), durch
+    eine frische Variable der jeweiligen Klausel, frei und unbeschränkt. Zustandsvariablen außerhalb
+    des Fragments fallen aus `Inv` heraus und sind in jedem Schritt frei.
+    - Soundness: Jeder ersetzte Term ist frei und unbeschränkt, also lässt
+      jede Ersetzung nur Abläufe hinzu, auch wenn ein Ziel den Term liest.
+      Schlimmstenfalls wird ein Beweis unmöglich, falsch wird keiner. Findet
+      Spacer eine Invariante, gilt sie auch für das genaue Modell, und die
+      Stelle ist bewiesen unerreichbar. Eine Prüfung auf Antitonie wie bei
+      FB-694 braucht es nicht: Dort wurde ein Bit fest gesetzt, hier wird
+      ein Term frei.
+    - Findet Spacer einen Pfad, kann er an der Abstraktion liegen. Dann
+      folgt die BMC am genauen Modell (`deeper`); bestätigt der Interpreter
+      keinen Pfad, bleibt die Stelle unentschieden, mit dem Grund
+      „Abstraktion“ statt „Fragment“.
+    - BMC, Pfade und Houdini sehen weiter das genaue Modell, wie beim
+      offenen Ende aus FB-694 (`proving`).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
