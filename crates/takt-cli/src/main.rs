@@ -373,6 +373,7 @@ impl Args {
             "--runs",
             "--conformance",
             "--manifest",
+            "--library",
             "--logs",
             "--loop",
             "--load",

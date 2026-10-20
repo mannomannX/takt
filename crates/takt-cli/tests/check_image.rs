@@ -5,7 +5,8 @@
 //! stellt — Randkern, Leitung —, bleibt ungeloest: Geprueft wird das Abbild,
 //! nicht sein Lauf. Ein Abbild ohne Befund, und die drei absichtlichen
 //! Fehler: ein Treiber im Flash, eine zweite beschreibbare Variable, eine zu
-//! kleine Arena.
+//! kleine Arena. Dazu eine Konstante einer weiteren Takt-Bibliothek, die der
+//! Wirt in den RAM legt (FB-844).
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -26,11 +27,12 @@ const PROGRAM: &str = "system:\n    language = 1\n    tick     = 10 ms\n\n\
                        machine m:\n    initial RUN\n\n    state RUN:\n        loop:\n            y = x\n";
 
 /// Das Skript des Wirts: RAM ab `0x4080_0000` mit dem Fragment in `.rwtext`,
-/// Flash ab `0x4200_0000` fuer alles andere — die Karte des C6.
+/// Flash ab `0x4200_0000` fuer alles andere — die Karte des C6. Die
+/// Konstanten von `sdk.o` legt es wie `noflash` unter ESP-IDF in den RAM.
 const SCRIPT: &str = "ENTRY(_start)\n\
 MEMORY {\n  IRAM (rwx) : ORIGIN = 0x40800000, LENGTH = 512K\n  FLASH (rx) : ORIGIN = 0x42000000, LENGTH = 4M\n}\n\
 SECTIONS {\n  .rwtext : { INCLUDE app_ram.x\n    *(.rwtext .rwtext.*) } > IRAM\n\
-  .data : { *(.data .data.* .sdata .sdata.*) } > IRAM\n\
+  .data : { *sdk.o(.rodata .rodata.*) *(.data .data.* .sdata .sdata.*) } > IRAM\n\
   .bss (NOLOAD) : { *(.bss .bss.* .sbss .sbss.* COMMON) } > IRAM\n\
   .text : { *(.text .text.*) } > FLASH\n  .rodata : { *(.rodata .rodata.* .srodata .srodata.*) } > FLASH\n}\n";
 
@@ -42,6 +44,9 @@ enum Host {
     SecondWritable,
     SmallArena,
     SmallTickStack,
+    /// Bindet `sdk.o`, eine weitere Takt-Bibliothek mit einer Tabelle von
+    /// `libtaktm` unter ihrem Rust-Namen (v0), wie das SDK-Archiv.
+    SdkTable,
 }
 
 /// Die Lieferform in `dir`; `None` ohne die Werkzeuge, die das Abbild braucht.
@@ -85,6 +90,20 @@ fn value<'a>(manifest: &'a str, key: &str) -> &'a str {
 
 /// Bindet das Abbild mit dem Wirt `host` und prueft es.
 fn checked(name: &str, host: Host) -> Option<Output> {
+    linked(name, host).map(|dir| check(&dir, &[]))
+}
+
+/// `takt check-image` auf das Abbild in `dir`, mit `extra` dahinter.
+fn check(dir: &Path, extra: &[&str]) -> Output {
+    let image = dir.join("image.elf");
+    let manifest = dir.join("app.manifest");
+    let mut args = vec!["check-image", image.to_str().expect("Pfad"), "--manifest", manifest.to_str().expect("Pfad")];
+    args.extend(extra);
+    takt(&args)
+}
+
+/// Bindet das Abbild mit dem Wirt `host` in sein Verzeichnis.
+fn linked(name: &str, host: Host) -> Option<PathBuf> {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("takt-check-image-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("Verzeichnis");
@@ -110,23 +129,39 @@ fn checked(name: &str, host: Host) -> Option<Output> {
     let tick: u64 = value(&manifest, "tick_stack_bytes").parse().expect("Zahl");
     let tick = if host == Host::SmallTickStack { tick / 2 } else { tick };
     main.push_str(&format!("unsigned char app_tick_stack[{tick}] __attribute__((aligned(16)));\n"));
+    let mut sources = vec!["main.c"];
+    if host == Host::SdkTable {
+        // `host_count` liegt im selben Abschnitt wie die Tabelle, wie die Daten
+        // des Wirts in `.dram0.data` unter ESP-IDF; erst sie machen ihn
+        // beschreibbar.
+        main.push_str(
+            "extern const unsigned int sdk_table[16];\nunsigned int host_count = 1u;\n\
+             unsigned int sdk_first(void) { return sdk_table[0] + host_count; }\n",
+        );
+        let table = "const unsigned int sdk_table[16] __asm__(\"_RNvNtCs82MkY5m9hZT_8libtaktm5table5PROBE\") = {1u};\n";
+        std::fs::write(dir.join("sdk.c"), table).expect("Tabelle");
+        let compiled = Command::new(&clang)
+            .args(["--target=riscv32-unknown-elf", "-march=rv32imac", "-mabi=ilp32", "-ffreestanding"])
+            .args(["-c", "-o", "sdk.o", "sdk.c"])
+            .current_dir(&dir)
+            .output()
+            .expect("clang startet");
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        sources.push("sdk.o");
+    }
     std::fs::write(dir.join("main.c"), main).expect("Wirt");
     std::fs::write(dir.join("image.ld"), SCRIPT).expect("Skript");
-    let image = dir.join("image.elf");
     let link = Command::new(&clang)
         .args(["--target=riscv32-unknown-elf", "-march=rv32imac", "-mabi=ilp32", "-nostdlib", "-ffreestanding"])
         .args(["-fuse-ld=lld", "-Wl,-T,image.ld", "-Wl,-L,.", "-Wl,--unresolved-symbols=ignore-all"])
-        .args(["-o", "image.elf", "main.c", "libapp.a"])
+        .args(["-o", "image.elf"])
+        .args(&sources)
+        .arg("libapp.a")
         .current_dir(&dir)
         .output()
         .expect("clang startet");
     assert!(link.status.success(), "{}", String::from_utf8_lossy(&link.stderr));
-    Some(takt(&[
-        "check-image",
-        image.to_str().expect("Pfad"),
-        "--manifest",
-        dir.join("app.manifest").to_str().expect("Pfad"),
-    ]))
+    Some(dir)
 }
 
 fn report(out: &Output) -> String {
@@ -191,4 +226,21 @@ fn a_too_small_arena_is_a_finding() {
     let text = report(&out);
     assert!(!out.status.success(), "{text}");
     assert!(text.contains("Arena `app_arena` hat") && text.contains("das Programm braucht"), "{text}");
+}
+
+/// **Eine Konstante des SDK-Archivs im RAM** (FB-844): Unter ESP-IDF legt
+/// das Fragment der Komponente das SDK-Archiv ganz in den RAM, die Tabellen
+/// von `libtaktm` in den DRAM, und die Symboltabelle des Abbilds fuehrt sie
+/// dort als Daten. Ohne die Bibliothek ist die Tabelle ein Befund; mit
+/// `--library`, die sie nur lesend anlegt, eine Konstante.
+#[test]
+fn a_table_of_a_bound_library_in_ram_is_a_constant() {
+    let Some(dir) = linked("sdk", Host::SdkTable) else { return };
+    let without = check(&dir, &[]);
+    let text = report(&without);
+    assert!(!without.status.success(), "{text}");
+    assert!(text.contains("beschreibbar ausserhalb der Arena: `libtaktm::table::PROBE`"), "{text}");
+    let with = check(&dir, &["--library", dir.join("sdk.o").to_str().expect("Pfad")]);
+    let text = report(&with);
+    assert!(with.status.success() && text.contains("0 Befunde"), "{text}");
 }
