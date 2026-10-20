@@ -1,9 +1,10 @@
 # Das schnelle Programm eines Paars auf einem Kern (12.11, M11 Schritt 16):
-# 1 kHz, die hoehere Prioritaet. Es zaehlt seine Ticks und gibt den Zaehler
-# ueber die Mailbox an das langsame Programm (`pair_slow.takt`); den Wert
-# eines Ticks schreibt es mit dessen Commit. Zurueck liest es, was das
-# langsame zuletzt freigegeben hat (`back`), eine Grenze des langsamen
-# spaeter.
+# 1 kHz, die hoehere Prioritaet. Es zaehlt seine Ticks und gibt ueber die
+# Mailbox den Zehnerstand an das langsame Programm (`pair_slow.takt`): Er
+# wechselt genau an den gemeinsamen Grenzen, alle 10 ms, und eine falsche
+# Reihenfolge dort saehe das langsame als den vorigen Stand. Zurueck liest
+# es, was das langsame zuletzt freigegeben hat (`back`), eine Grenze des
+# langsamen spaeter.
 
 system:
     language = 1
@@ -22,5 +23,5 @@ machine counter:
         loop:
             if n < 999999:
                 n = n + 1
-            count = n
+            count = (n - 1) / 10
             echo = back if back.valid else 0

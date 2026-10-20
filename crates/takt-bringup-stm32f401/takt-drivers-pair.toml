@@ -1,0 +1,14 @@
+# Die Verdrahtung des Binarys `pair` (12.6, 12.11; M11 Schritt 16): je
+# Adresse das Geraet in `src/bin/pair.rs`. `fast` schreibt `pair/count`,
+# `slow` liest ihn als `pair/seen`; `slow` schreibt `pair/last`, `fast` liest
+# ihn als `pair/back`. Die Ausgaenge, die nur der Trace zeigt, sind Stummel.
+
+"pair/count" = "crate::devices::PairCount"
+"pair/seen" = "crate::devices::PairSeen"
+"pair/last" = "crate::devices::PairLast"
+"pair/back" = "crate::devices::PairBack"
+"test/foreign_arena" = "crate::devices::ForeignArena"
+
+# Geraete, die fest am Board sitzen (12.4).
+"pair" = "crate::devices::Fixed"
+"test" = "crate::devices::Fixed"

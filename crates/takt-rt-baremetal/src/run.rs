@@ -230,6 +230,21 @@ pub fn report<P: Port>(
     journal: &JournalStats,
     stacks: &Stacks,
 ) {
+    balance(t, overrun, stats, journal, stacks);
+    t.write("takt end");
+    t.newline();
+    t.drain(DRAIN_ROUNDS);
+}
+
+/// Die Bilanz als Zeile, ohne `takt end`: Teilen sich mehrere Programme eine
+/// Leitung (12.11), schreibt jedes seine, und `takt end` steht einmal danach.
+pub fn balance<P: Port>(
+    t: &mut Telemetry<P>,
+    overrun: &Overrun,
+    stats: &Stats,
+    journal: &JournalStats,
+    stacks: &Stacks,
+) {
     let (dropped, sent) = (u64::from(t.dropped()), u64::from(t.sent()));
     let counts = [
         ("takt schlief ", stats.slept),
@@ -283,9 +298,6 @@ pub fn report<P: Port>(
         t.write(" jobstack geteilt");
     }
     t.newline();
-    t.write("takt end");
-    t.newline();
-    t.drain(DRAIN_ROUNDS);
 }
 
 #[cfg(test)]

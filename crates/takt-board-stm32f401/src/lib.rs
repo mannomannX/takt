@@ -90,6 +90,7 @@ pub mod cycles;
 pub mod guard;
 pub mod jobs;
 pub mod led;
+pub mod mailbox;
 pub mod mpu;
 pub mod nvm;
 pub mod platform;

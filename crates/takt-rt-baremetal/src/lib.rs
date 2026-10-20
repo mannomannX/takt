@@ -80,6 +80,6 @@ pub use board::{Sleep, TickSource};
 pub use clock::{LogicalClock, TimerClock};
 pub use console::Console;
 pub use protect::{Guarded, Protection, Unprotected, Violation};
-pub use run::{Cadence, JournalStats, Lead, NoWatchdog, Stacks, Stats, Trace, report, run, stats};
+pub use run::{Cadence, JournalStats, Lead, NoWatchdog, Stacks, Stats, Trace, balance, report, run, stats};
 pub use telemetry::{DRAIN_ROUNDS, Port, Telemetry};
 pub use tolerance::Period;

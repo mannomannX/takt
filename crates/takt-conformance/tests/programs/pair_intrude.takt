@@ -1,0 +1,28 @@
+# Das schnelle Programm eines Paars, das in die Arena des anderen schreiben
+# laesst (12.3, 12.11; M11 Schritt 16): wie `pair_fast.takt`, dazu der
+# Ausgang `intrude` am Pruefgeraet `test/foreign_arena`. Mit dem Commit von
+# Tick 5 schreibt das Geraet in die Arena von `slow`; die MPU weist es ab,
+# und `fast` bekommt `Runtime(Hardware)` in Tick 6. `slow` rechnet weiter
+# wie der Interpreter.
+
+system:
+    language = 1
+    tick     = 1 ms
+
+input  back    : int in 0..1000000 @ hw("pair/back")          with max_age = 30 ms
+output count   : int in 0..1000000 @ hw("pair/count")         with safe = 0
+output echo    : int in 0..1000000 @ hw("pair/echo")          with safe = 0
+output intrude : bool              @ hw("test/foreign_arena") with safe = false
+
+machine counter:
+    var n : int in 0..1000000 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            if n < 999999:
+                n = n + 1
+            count = (n - 1) / 10
+            echo = back if back.valid else 0
+            intrude = n == 6

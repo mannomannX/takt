@@ -23,6 +23,12 @@
 //! **Die Treiber** (12.6) erzeugt `bringup::rig` als Pruefstand nach der
 //! Verdrahtung des Boards und des Pruefgeraets.
 //!
+//! **Zwei Programme auf einem Kern** (12.11, M11 Schritt 16): Mit dem
+//! Merkmal `pair` baut das Skript statt eines Programms zwei, `fast` aus
+//! `TAKT_PROGRAM` und `slow` aus `TAKT_PAIR_SLOW`, ohne sie `pair_fast.takt`
+//! und `pair_slow.takt` der Konformanztests, jedes mit seinem Praefix,
+//! Pruefstand und Abschnitt der Arena, fuer das Binary `pair`.
+//!
 //! **Das Messprogramm von `takt bench`** (13.8) bindet das Merkmal `bench`
 //! wie jeder Wirt: `takt bench --emit embed` ueber den Bauhelfer. Der F401
 //! fuehrt aus dem Flash aus, und eine Messung haengt an der Lage des Codes
@@ -57,7 +63,12 @@ fn main() {
         println!("cargo:rustc-env=TAKT_HOSTILE_FPU=1");
     }
 
-    build_takt_program(&out, form());
+    let form = form();
+    if env::var_os("CARGO_FEATURE_PAIR").is_some() {
+        build_pair(&out);
+    } else {
+        build_takt_program(&out, form);
+    }
     bench();
     native_vectors(&out);
     math_vectors(&out);
@@ -149,6 +160,76 @@ fn build_takt_program(out: &Path, form: &str) {
     // von der Tiefe ab.
     println!("cargo:rustc-env=TAKT_TICK_STACK_PROGRAM={}", built.value("tick_stack_program"));
     println!("cargo:rustc-link-arg=--icf=all");
+}
+
+/// Zwei Programme fuer das Binary `pair` (12.11, M11 Schritt 16): `fast` und
+/// `slow` in der Interruptform, jedes mit seinem Praefix und Pruefstand
+/// (`takt-drivers-pair.toml`), gebaut gegen die Hardware-Konfiguration des
+/// Boards mit den Kopplungen aus `takt-pair.hw`. Die Arena von `fast` liegt
+/// in `.takt_state`, die von `slow` in `.takt_state2`, jede eine Region der
+/// MPU (`takt_state_pair.x`); der Hauptstack traegt beide Schritte, denn der
+/// von `fast` unterbricht den von `slow`.
+fn build_pair(out: &Path) {
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let programs = here.join("../takt-conformance/tests/programs");
+    let given = |var: &str, default: &str| {
+        println!("cargo:rerun-if-env-changed={var}");
+        env::var(var).unwrap_or_else(|_| programs.join(default).display().to_string())
+    };
+    let (fast, slow) = (given("TAKT_PROGRAM", "pair_fast.takt"), given("TAKT_PAIR_SLOW", "pair_slow.takt"));
+    let wiring = bringup::wiring(&[&here.join("takt-drivers-pair.toml")]);
+    let hw = pair_hardware(out, here);
+    let mut built = Vec::new();
+    for (prefix, program) in [("fast", fast), ("slow", slow)] {
+        println!("cargo:rerun-if-changed={program}");
+        let Some(p) = bringup::compile(&program) else { panic!("{program}: uebersetzt nicht; die Fehler stehen oben") };
+        bringup::rig_in(&p, &wiring, &out.join(format!("{prefix}_rig.rs")), prefix);
+        let drivers = format!("crate::{prefix}_drivers::Rig");
+        let b = takt_embed::build::Program::new(&program)
+            .tool(bringup::takt())
+            .prefix(prefix)
+            .form("interrupt")
+            .build_for(bringup::build_name())
+            .drivers(&drivers)
+            .hardware(hw.clone())
+            .build();
+        assert_eq!(b.value("protect"), "armv7m_mpu", "{prefix}: das F401 schuetzt jede Arena mit seiner MPU (12.3)");
+        built.push(b);
+    }
+    let [fast, slow] = built.as_slice() else { panic!("zwei Programme") };
+    let number = |b: &takt_embed::build::Built, key: &str| -> u64 {
+        b.value(key).parse().unwrap_or_else(|_| panic!("{key}: keine Zahl"))
+    };
+    println!("cargo:rerun-if-changed=takt_state_pair.x");
+    fs::write(out.join("takt_state_pair.x"), include_bytes!("takt_state_pair.x")).expect("takt_state_pair.x schreiben");
+    let (fast_bytes, slow_bytes) = (number(fast, "protect_bytes"), number(slow, "protect_bytes"));
+    // Eine Region ist an ihrer Groesse ausgerichtet, einer Zweierpotenz ab
+    // 32 Byte, die den geschuetzten Teil deckt.
+    let slow_region = slow_bytes.next_power_of_two().max(32);
+    println!("cargo:rustc-link-arg-bin=pair=--defsym=__takt_state_size={fast_bytes}");
+    println!("cargo:rustc-link-arg-bin=pair=--defsym=__takt_state2_size={slow_bytes}");
+    println!("cargo:rustc-link-arg-bin=pair=--defsym=__takt_state2_align={slow_region}");
+    println!("cargo:rustc-link-arg-bin=pair=-Ttakt_state_pair.x");
+    let stack = number(fast, "tick_stack_bytes").saturating_add(number(slow, "tick_stack_bytes"));
+    println!("cargo:rerun-if-changed=takt_stack.x");
+    fs::write(out.join("takt_stack.x"), include_bytes!("takt_stack.x")).expect("takt_stack.x schreiben");
+    println!("cargo:rustc-link-arg-bin=pair=--defsym=__takt_tick_stack_bytes={stack}");
+    println!("cargo:rustc-link-arg-bin=pair=-Ttakt_stack.x");
+    println!("cargo:rustc-link-arg-bin=pair=--icf=all");
+}
+
+/// Die Hardware-Konfiguration fuer `pair`: die des Boards und dahinter die
+/// Kopplungen aus `takt-pair.hw` (8.10, 12.11).
+fn pair_hardware(out: &Path, here: &Path) -> String {
+    let board = hardware();
+    let fragment = here.join("takt-pair.hw");
+    println!("cargo:rerun-if-changed={}", fragment.display());
+    let text = fs::read_to_string(&board).unwrap_or_else(|e| panic!("{board}: {e}"))
+        + "\n"
+        + &fs::read_to_string(&fragment).unwrap_or_else(|e| panic!("{}: {e}", fragment.display()));
+    let path = out.join("pair.hw");
+    fs::write(&path, text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    path.display().to_string()
 }
 
 /// Die Form des Ports (12.11) aus den Merkmalen: `interrupt`, `poll`,

@@ -124,8 +124,8 @@ jobs:
         id: takt
         if: ${{ !cancelled() }}
         run: cargo build --release -p takt-cli
-      # Die eigene Form mit allen Binaries und dem Messprogramm, dann `takt`
-      # in jeder weiteren Form.
+      # Die eigene Form mit allen Binaries und dem Messprogramm, das Paar
+      # zweier Programme am F401, dann `takt` in jeder weiteren Form.
       - name: Clippy der Bring-ups
         if: ${{ !cancelled() && steps.takt.outcome == 'success' }}
         shell: bash
@@ -135,6 +135,7 @@ jobs:
           f401=(--manifest-path crates/takt-bringup-stm32f401/Cargo.toml --release --target thumbv7em-none-eabihf)
           c6=(--manifest-path crates/takt-bringup-esp32c6/Cargo.toml --release --target riscv32imac-unknown-none-elf)
           check "${f401[@]}" --bins --features bench
+          check "${f401[@]}" --bin pair --features pair
           for form in interrupt poll rtic embassy; do
             check "${f401[@]}" --bin takt --features "$form"
           done

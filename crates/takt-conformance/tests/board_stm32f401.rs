@@ -16,13 +16,13 @@ use std::time::Duration;
 
 use common::board::{
     Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_WIRE_TICKS,
-    a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, agreement, agreement_with,
-    binds_no_driver, driver_edge_agrees, fits_the_poll_form, header_names, journal_costs_time_but_not_semantics,
-    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, persistence_survives, ran, runs_shared, simultaneous_jobs_finish_on_time,
-    the_flawed_port_fails, the_form_keeps_its_deadline, the_poll_form_keeps_its_round, the_port_passes,
-    the_port_passes_with_header, verdict, zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives,
-    zephyr_verdict, zephyr_wire_follows,
+    a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, a_write_into_the_other_arena_is_refused,
+    agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form, header_names,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
+    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, two_programs_share_a_core, verdict,
+    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -734,4 +734,25 @@ fn the_zephyr_partition_turns_an_access_in_the_run_into_a_fault() {
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::PROBE_IN_RUN)
         .and_then(|image| board.run(&image.elf, &options));
     verdict(&zephyr_access_in_the_run_faults(board.name(), run));
+}
+
+/// **Zwei Programme auf einem Kern** (12.11, M11 Schritt 16): `pair_fast`
+/// (1 kHz) und `pair_slow` (100 Hz) im Binary `pair`, gekoppelt ueber die
+/// Mailbox in beide Richtungen; beide Traces gleich dem Interpreter, keine
+/// Antwort laenger als berichtet ([`two_programs_share_a_core`]).
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn two_programs_share_the_core() {
+    let Some((mut board, _guard)) = board() else { return };
+    verdict(&two_programs_share_a_core(&mut board, "pair_fast.takt"));
+}
+
+/// **Kein Programm schreibt in die Arena des anderen** (12.3, 12.11, M11
+/// Schritt 16): Die MPU weist den Zugriff ab, und nur das schreibende
+/// Programm bekommt `Runtime(Hardware)` ([`a_write_into_the_other_arena_is_refused`]).
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_program_cannot_write_into_the_other_arena() {
+    let Some((mut board, _guard)) = board() else { return };
+    verdict(&a_write_into_the_other_arena_is_refused(&mut board));
 }

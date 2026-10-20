@@ -1,0 +1,17 @@
+# Die Kopplungen des Binarys `pair` (8.10, 12.11; M11 Schritt 16): `build.rs`
+# haengt diese Abschnitte an die Hardware-Konfiguration des Boards. Jeder
+# gekoppelte Eingang nennt den Ausgang, der ihn speist, mit Tick und
+# `output_timing` seines Schreibers; daraus prueft der Rahmen des Lesers den
+# Zeitstempel jedes Werts.
+
+[channel pair/seen]
+direction = input
+from = "pair/count"
+from_tick_ns = 1000000
+from_timing = asap
+
+[channel pair/back]
+direction = input
+from = "pair/last"
+from_tick_ns = 10000000
+from_timing = boundary

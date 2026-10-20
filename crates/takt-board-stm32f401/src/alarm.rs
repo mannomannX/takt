@@ -3,6 +3,11 @@
 //! und der Ueberlauf als Epoche der Zeitachse. Die Rechnung dazu steht in
 //! `takt_board_support::alarm`; hier stehen die Register.
 //!
+//! **Zwei Programme auf einem Kern** (12.11, M11 Schritt 16) teilen die
+//! Zeitachse: Jedes hat seinen Vergleichskanal ([`CHANNELS`], CC1 und CC2),
+//! und die ISR von TIM2 sagt je Kanal, ob seine Frist erreicht ist
+//! ([`on_interrupt_all`]).
+//!
 //! TIM2 gehoert in dieser Form dem Alarm: Die ISR des Boards ruft
 //! [`on_interrupt`], und ist die Frist erreicht, rechnet sie den Schritt.
 //! Den Job-Interrupt waehlt das Bring-up: eine freie Leitung niedrigster
@@ -22,9 +27,12 @@ use takt_board_support::clock::Scale;
 /// Wie oft TIM2 uebergelaufen ist; die ISR zaehlt.
 static EPOCH: AtomicU32 = AtomicU32::new(0);
 
-/// Der Zielstand des Alarms auf der 64-Bit-Zeitachse; `None` ohne Alarm.
+/// So viele Vergleichskanaele stellt der Alarm: CC1 und CC2.
+pub const CHANNELS: usize = 2;
+
+/// Der Zielstand je Kanal auf der 64-Bit-Zeitachse; `None` ohne Alarm.
 /// 64 Bit hat der Cortex-M4 nicht atomar: ein kritischer Abschnitt.
-static TARGET: Mutex<Cell<Option<u64>>> = Mutex::new(Cell::new(None));
+static TARGET: [Mutex<Cell<Option<u64>>>; CHANNELS] = [const { Mutex::new(Cell::new(None)) }; CHANNELS];
 
 /// TIM2 als freilaufender Zaehler mit `prescaler`: von 0 bis `u32::MAX`,
 /// der Ueberlauf meldet sich, der Vergleich erst, wenn ein Alarm steht.
@@ -67,45 +75,78 @@ pub fn now_counts() -> u64 {
     }
 }
 
-/// Stellt den Vergleich auf `target`: in dieser Epoche ueber `CCR1`, hinter
-/// dem naechsten Ueberlauf gar nicht — dessen Interrupt fragt erneut —, und
-/// eine Frist, die schon da ist oder beim Stellen verstrich, laesst die ISR
-/// sofort anstehen.
-fn aim(target: u64) {
+/// Das Flag `CCxIF` von Kanal `ch` in `SR`: CC1IF ist Bit 1, CC2IF Bit 2.
+fn flag(ch: usize) -> u32 {
+    if ch == 0 { 0b010 } else { 0b100 }
+}
+
+/// Der Zielstand von Kanal `ch`.
+fn target_of(ch: usize) -> &'static Mutex<Cell<Option<u64>>> {
+    let [first, second] = &TARGET;
+    if ch == 0 { first } else { second }
+}
+
+/// Schaltet den Interrupt des Vergleichs von Kanal `ch` ein oder aus.
+fn enable(ch: usize, on: bool) {
+    let t = tim2();
+    match ch {
+        0 => t.dier().modify(|_, w| w.cc1ie().bit(on)),
+        _ => t.dier().modify(|_, w| w.cc2ie().bit(on)),
+    };
+}
+
+/// Stellt den Vergleich von Kanal `ch` auf `target`: in dieser Epoche ueber
+/// `CCR1` bzw. `CCR2`, hinter dem naechsten Ueberlauf gar nicht — dessen
+/// Interrupt fragt erneut —, und eine Frist, die schon da ist oder beim
+/// Stellen verstrich, laesst die ISR sofort anstehen.
+fn aim(ch: usize, target: u64) {
     let t = tim2();
     match compare(target, now_counts()) {
         Compare::Due => NVIC::pend(Interrupt::TIM2),
         Compare::At(low) => {
-            // SAFETY: `CCR1` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
-            t.ccr1().write(|w| unsafe { w.bits(low) });
-            // SAFETY: `SR` ist `rc_w0`; das Muster loescht nur `CC1IF`.
-            t.sr().write(|w| unsafe { w.bits(!(1 << 1)) });
-            t.dier().modify(|_, w| w.cc1ie().set_bit());
+            match ch {
+                // SAFETY: `CCR1` von TIM2 ist 32 Bit breit und nimmt jeden Wert.
+                0 => t.ccr1().write(|w| unsafe { w.bits(low) }),
+                // SAFETY: ebenso `CCR2`.
+                _ => t.ccr2().write(|w| unsafe { w.bits(low) }),
+            };
+            // SAFETY: `SR` ist `rc_w0`; das Muster loescht nur `CCxIF` dieses Kanals.
+            t.sr().write(|w| unsafe { w.bits(!flag(ch)) });
+            enable(ch, true);
             if passed(target, now_counts()) {
                 NVIC::pend(Interrupt::TIM2);
             }
         }
-        Compare::Later => {
-            t.dier().modify(|_, w| w.cc1ie().clear_bit());
-        }
+        Compare::Later => enable(ch, false),
     }
 }
 
-/// Stellt den Alarm auf `target` auf der Zeitachse, oder nimmt ihn zurueck.
+/// Stellt den Alarm des ersten Kanals auf `target`, oder nimmt ihn zurueck.
 pub(crate) fn set_target(target: Option<u64>) {
-    cortex_m::interrupt::free(|cs| TARGET.borrow(cs).set(target));
+    set_target_on(0, target);
+}
+
+/// Stellt den Alarm von Kanal `ch` auf `target` auf der Zeitachse, oder
+/// nimmt ihn zurueck.
+fn set_target_on(ch: usize, target: Option<u64>) {
+    cortex_m::interrupt::free(|cs| target_of(ch).borrow(cs).set(target));
     match target {
-        Some(target) => aim(target),
-        None => {
-            tim2().dier().modify(|_, w| w.cc1ie().clear_bit());
-        }
+        Some(target) => aim(ch, target),
+        None => enable(ch, false),
     }
 }
 
-/// Aus der ISR von TIM2: zaehlt einen Ueberlauf, loescht den Vergleich und
-/// sagt, ob die Frist erreicht ist. Ist sie es, steht danach kein Alarm
-/// mehr; der Schritt stellt den naechsten.
+/// Aus der ISR von TIM2, wenn nur der erste Kanal einen Alarm stellt: wie
+/// [`on_interrupt_all`] fuer ihn.
 pub fn on_interrupt() -> bool {
+    let [first, _] = on_interrupt_all();
+    first
+}
+
+/// Aus der ISR von TIM2: zaehlt einen Ueberlauf, loescht die Vergleiche und
+/// sagt je Kanal, ob seine Frist erreicht ist. Ist sie es, steht auf ihm
+/// danach kein Alarm mehr; der Schritt stellt den naechsten.
+pub fn on_interrupt_all() -> [bool; CHANNELS] {
     let t = tim2();
     let sr = t.sr().read();
     if sr.uif().bit_is_set() {
@@ -114,24 +155,25 @@ pub fn on_interrupt() -> bool {
         t.sr().write(|w| unsafe { w.bits(!1) });
         EPOCH.fetch_add(1, Ordering::SeqCst);
     }
-    if sr.cc1if().bit_is_set() {
-        // SAFETY: wie `UIF`, hier nur `CC1IF`.
-        t.sr().write(|w| unsafe { w.bits(!(1 << 1)) });
-    }
-    let target = cortex_m::interrupt::free(|cs| TARGET.borrow(cs).get());
-    match target {
-        Some(target) if passed(target, now_counts()) => {
-            cortex_m::interrupt::free(|cs| TARGET.borrow(cs).set(None));
-            t.dier().modify(|_, w| w.cc1ie().clear_bit());
-            true
+    let mut due = [false; CHANNELS];
+    for (ch, d) in due.iter_mut().enumerate() {
+        if sr.bits() & flag(ch) != 0 {
+            // SAFETY: wie `UIF`, hier nur `CCxIF` dieses Kanals.
+            t.sr().write(|w| unsafe { w.bits(!flag(ch)) });
         }
-        // Nach einem Ueberlauf liegt das Ziel vielleicht in dieser Epoche.
-        Some(target) => {
-            aim(target);
-            false
+        let target = cortex_m::interrupt::free(|cs| target_of(ch).borrow(cs).get());
+        match target {
+            Some(target) if passed(target, now_counts()) => {
+                cortex_m::interrupt::free(|cs| target_of(ch).borrow(cs).set(None));
+                enable(ch, false);
+                *d = true;
+            }
+            // Nach einem Ueberlauf liegt das Ziel vielleicht in dieser Epoche.
+            Some(target) => aim(ch, target),
+            None => {}
         }
-        None => false,
     }
+    due
 }
 
 /// Der Alarm des Boards fuer `takt_rt_baremetal::interrupt` und die Uhr
@@ -141,12 +183,20 @@ pub struct Tim2Alarm {
     scale: Scale,
     /// Die Leitung des Job-Interrupts.
     jobs: Interrupt,
+    /// Der Vergleichskanal, `0` fuer CC1.
+    channel: usize,
 }
 
 impl Tim2Alarm {
     /// Der Alarm auf TIM2 mit `timer_hz`; Jobs laufen im Interrupt `jobs`.
     pub fn new(timer_hz: u32, jobs: Interrupt) -> Tim2Alarm {
-        Tim2Alarm { scale: Scale::of(timer_hz), jobs }
+        Tim2Alarm { scale: Scale::of(timer_hz), jobs, channel: 0 }
+    }
+
+    /// Derselbe Alarm auf Vergleichskanal `channel` (unter [`CHANNELS`]),
+    /// fuer ein zweites Programm auf dem Kern (12.11).
+    pub fn on_channel(self, channel: usize) -> Tim2Alarm {
+        Tim2Alarm { channel: if channel == 0 { 0 } else { 1 }, ..self }
     }
 
     /// Jetzt, in Nanosekunden seit dem Start des Zaehlers.
@@ -157,7 +207,7 @@ impl Tim2Alarm {
 
 impl takt_rt_baremetal::interrupt::Alarm for Tim2Alarm {
     fn arm(&mut self, at: i64) {
-        set_target(Some(self.scale.counts_at(at)));
+        set_target_on(self.channel, Some(self.scale.counts_at(at)));
     }
 
     fn pend_jobs(&mut self) {

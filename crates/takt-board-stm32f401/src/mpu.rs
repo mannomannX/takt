@@ -16,8 +16,16 @@
 //! Ausnahme, wenn ein Stack in seinen Waechter gewachsen ist —, setzt den
 //! Chip zurueck: Weiterzulaufen hiesse, auf einem zerstoerten Stack zu
 //! rechnen.
+//!
+//! **Zwei Programme auf einem Kern** (12.11, M11 Schritt 16): Jede Arena hat
+//! ihre Region ([`Mpu::arm_pair`]), und ein Schritt oeffnet nur die eigene.
+//! Jede ISR schliesst beide und stellt danach wieder her, was sie vorfand;
+//! unterbricht der Schritt des einen Programms den des anderen, ist dessen
+//! Arena fuer ihn nur lesbar. Ein Schreiben in die fremde Arena ist darum
+//! eine Verletzung, die der Handler dem Programm zuschreibt, dessen Region
+//! gerade offen ist.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use cortex_m::peripheral::{MPU, SCB};
 use takt_board_support::mpu::{Access, Region, instruction_bytes};
@@ -35,6 +43,28 @@ unsafe extern "C" {
 const STATE: u32 = 0;
 const GUARD: u32 = 1;
 const JOB_GUARD: u32 = 2;
+/// Der Programmzustand des zweiten Programms auf dem Kern (12.11).
+const STATE_SECOND: u32 = 3;
+
+/// Die Regionen der Programmzustaende, nach ihrem Platz.
+const STATES: [u32; 2] = [STATE, STATE_SECOND];
+
+/// So viele Programmzustaende hat die MPU: 1, mit [`Mpu::arm_pair`] 2.
+static IN_USE: AtomicUsize = AtomicUsize::new(1);
+
+/// Die Bereiche der Programmzustaende nach ihrem Platz, Anfang und Ende;
+/// `arm` traegt sie ein, 0 ohne. Der Handler kennt sie nur hierher: Ein
+/// Binary, das die MPU nie einrichtet, wie das Sprungbrett, braucht keinen
+/// Abschnitt `.takt_state`.
+static ARENAS: [[AtomicU32; 2]; 2] = [[AtomicU32::new(0), AtomicU32::new(0)], [AtomicU32::new(0), AtomicU32::new(0)]];
+
+/// Traegt den Bereich des Programmzustands auf `slot` ein.
+fn enter_arena(slot: usize, (start, end): (u32, u32)) {
+    if let Some([low, high]) = ARENAS.get(slot) {
+        low.store(start, Ordering::SeqCst);
+        high.store(end, Ordering::SeqCst);
+    }
+}
 
 /// Die Prioritaet der Geraete-Interrupts: unter der von `MemoryManagement`
 /// (0). Eine Verletzung in einer ISR gleicher Prioritaet eskalierte zum
@@ -42,9 +72,17 @@ const JOB_GUARD: u32 = 2;
 pub const ISR_PRIORITY: u8 = 0x10;
 
 /// Region der letzten Verletzung (0 keine, 1 Programmzustand, 2 Waechter,
-/// 3 anderswo) und ihre Adresse; der Handler schreibt, die Schleife liest.
-static REGION: AtomicU32 = AtomicU32::new(0);
-static ADDRESS: AtomicU32 = AtomicU32::new(0);
+/// 3 anderswo) und ihre Adresse, je Programm: dem, dessen Region bei der
+/// Verletzung offen war, sonst dem ersten. Der Handler schreibt, die Schleife
+/// des Programms liest.
+static REGION: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+static ADDRESS: [AtomicU32; 2] = [AtomicU32::new(0), AtomicU32::new(0)];
+
+/// Die Verletzung des Programms auf `slot`: Region und Adresse.
+fn violation_of(slot: usize) -> (&'static AtomicU32, &'static AtomicU32) {
+    let ([r0, r1], [a0, a1]) = (&REGION, &ADDRESS);
+    if slot == 0 { (r0, a0) } else { (r1, a1) }
+}
 
 /// Das untere Ende des Job-Stacks, 0 ohne Job-Kontext.
 static JOB_STACK: AtomicU32 = AtomicU32::new(0);
@@ -100,29 +138,59 @@ pub fn state_address() -> u32 {
 /// eine ISR, die eine Umschaltung der Schleife unterbricht, hinterlaesst
 /// Auswahl und Rechte, wie sie sie vorfand.
 pub fn isr<R>(f: impl FnOnce() -> R) -> R {
-    // SAFETY: ein Registerpaar der MPU, das die ISR vor ihrer Rueckkehr
+    // SAFETY: Registerpaare der MPU, die die ISR vor ihrer Rueckkehr
     // wiederherstellt.
     let mpu = unsafe { &*MPU::PTR };
-    // SAFETY: wie oben.
-    unsafe { mpu.rnr.write(STATE) };
-    let before = mpu.rasr.read();
-    // SAFETY: wie oben; nur das Feld `AP` aendert sich.
-    unsafe { mpu.rasr.write(before & !(0b111 << 24) | Access::ReadOnly.ap() << 24) };
+    let in_use = IN_USE.load(Ordering::SeqCst);
+    let mut before = [0u32; 2];
+    for (region, kept) in STATES.iter().zip(before.iter_mut()).take(in_use) {
+        // SAFETY: wie oben.
+        unsafe { mpu.rnr.write(*region) };
+        *kept = mpu.rasr.read();
+        // SAFETY: wie oben; nur das Feld `AP` aendert sich.
+        unsafe { mpu.rasr.write(*kept & !(0b111 << 24) | Access::ReadOnly.ap() << 24) };
+    }
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
     let r = f();
-    // SAFETY: wie oben; die ISR hat `RNR` vielleicht umgestellt.
-    unsafe { mpu.rnr.write(STATE) };
-    // SAFETY: wie oben; die Rechte von vorher.
-    unsafe { mpu.rasr.write(before) };
+    // In umgekehrter Folge: `RNR` steht danach wieder auf dem ersten
+    // Programmzustand, wie `arm` ihn hinterliess.
+    for (region, kept) in STATES.iter().zip(before.iter()).take(in_use).rev() {
+        // SAFETY: wie oben; die ISR hat `RNR` vielleicht umgestellt.
+        unsafe { mpu.rnr.write(*region) };
+        // SAFETY: wie oben; die Rechte von vorher.
+        unsafe { mpu.rasr.write(*kept) };
+    }
     cortex_m::asm::dsb();
     cortex_m::asm::isb();
     r
 }
 
-/// Die MPU mit ihren Regionen, der Programmzustand zunaechst offen.
+/// Die eingeschalteten Regionen der MPU, nach Nummer (12.11: der Bericht
+/// zaehlt sie ab). Ausserhalb jeder ISR zu rufen; `RNR` steht danach wieder
+/// auf dem ersten Programmzustand.
+pub fn enabled_regions() -> [bool; 8] {
+    // SAFETY: liest die Regionen der Reihe nach und stellt `RNR` zurueck.
+    let mpu = unsafe { &*MPU::PTR };
+    let mut out = [false; 8];
+    cortex_m::interrupt::free(|_| {
+        for (n, on) in (0u32..).zip(out.iter_mut()) {
+            // SAFETY: waehlt Region `n`, nur zum Lesen.
+            unsafe { mpu.rnr.write(n) };
+            *on = mpu.rasr.read() & 1 != 0;
+        }
+        // SAFETY: wie `arm` sie hinterliess.
+        unsafe { mpu.rnr.write(STATE) };
+    });
+    out
+}
+
+/// Die MPU mit ihren Regionen, der Programmzustand zunaechst offen. Mit zwei
+/// Programmen hat jedes seinen Griff auf seine Region ([`Mpu::arm_pair`]).
 pub struct Mpu {
     state: Region,
+    /// Der Platz in [`STATES`].
+    slot: usize,
 }
 
 impl Mpu {
@@ -135,6 +203,7 @@ impl Mpu {
     pub fn arm(mpu: &mut MPU, scb: &mut SCB, job_stack: Option<u32>) -> Option<Mpu> {
         let (start, end) = state_range();
         let state = Region::covering(start, end.checked_sub(start)?)?;
+        enter_arena(0, (start, end));
         JOB_STACK.store(job_stack.unwrap_or(0), Ordering::SeqCst);
         let guard = guard();
         // Konfiguration der eigenen MPU vor dem ersten Tick; kein anderer
@@ -171,7 +240,34 @@ impl Mpu {
         scb.enable(cortex_m::peripheral::scb::Exception::MemoryManagement);
         cortex_m::asm::dsb();
         cortex_m::asm::isb();
-        Some(Mpu { state })
+        Some(Mpu { state, slot: 0 })
+    }
+
+    /// Wie [`Mpu::arm`], fuer zwei Programme auf dem Kern (12.11): Der
+    /// Abschnitt `.takt_state` traegt die Arena des ersten, `second` (Anfang,
+    /// Ende) die des zweiten, jede in ihrer Region. Beide zunaechst offen.
+    /// `None`, wenn eine der beiden keine Region tragen kann.
+    pub fn arm_pair(mpu: &mut MPU, scb: &mut SCB, second: (u32, u32)) -> Option<(Mpu, Mpu)> {
+        let other = Region::covering(second.0, second.1.checked_sub(second.0)?)?;
+        let first = Mpu::arm(mpu, scb, None)?;
+        // SAFETY: schaltet die MPU fuer die zweite Region kurz aus; vor dem
+        // ersten Tick, kein anderer Code benutzt sie.
+        unsafe { mpu.ctrl.write(0) };
+        // SAFETY: waehlt die Region des zweiten Programmzustands.
+        unsafe { mpu.rnr.write(STATE_SECOND) };
+        // SAFETY: ihre Basis aus `Region::covering`, passend ausgerichtet.
+        unsafe { mpu.rbar.write(other.rbar(STATE_SECOND)) };
+        // SAFETY: zunaechst offen, wie die erste.
+        unsafe { mpu.rasr.write(other.rasr(Access::ReadWrite)) };
+        // SAFETY: wie `arm`; `RNR` zurueck auf den ersten Programmzustand.
+        unsafe { mpu.rnr.write(STATE) };
+        enter_arena(1, second);
+        IN_USE.store(2, Ordering::SeqCst);
+        // SAFETY: wie `arm`.
+        unsafe { mpu.ctrl.write(0b101) };
+        cortex_m::asm::dsb();
+        cortex_m::asm::isb();
+        Some((first, Mpu { state: other, slot: 1 }))
     }
 
     fn set(&self, access: Access) {
@@ -179,8 +275,8 @@ impl Mpu {
         // geschrieben; eine ISR stellt es wieder her (`isr`).
         // SAFETY: die Register der MPU, siehe oben.
         let mpu = unsafe { &*MPU::PTR };
-        // SAFETY: waehlt die Region des Programmzustands, siehe oben.
-        unsafe { mpu.rnr.write(STATE) };
+        // SAFETY: waehlt die Region dieses Programmzustands, siehe oben.
+        unsafe { mpu.rnr.write(if self.slot == 0 { STATE } else { STATE_SECOND }) };
         // SAFETY: aendert nur ihre Rechte, siehe oben.
         unsafe { mpu.rasr.write(self.state.rasr(access)) };
         cortex_m::asm::dsb();
@@ -202,13 +298,14 @@ impl Protection for Mpu {
     }
 
     fn take_violation(&self) -> Option<Violation> {
-        let region = match REGION.swap(0, Ordering::SeqCst) {
+        let (region, address) = violation_of(self.slot);
+        let region = match region.swap(0, Ordering::SeqCst) {
             0 => return None,
             1 => "Programmzustand",
             2 => "Waechter",
             _ => "anderswo",
         };
-        Some(Violation { region, address: ADDRESS.load(Ordering::SeqCst) })
+        Some(Violation { region, address: address.load(Ordering::SeqCst) })
     }
 }
 
@@ -248,17 +345,36 @@ unsafe extern "C" fn takt_mem_manage(frame: *mut u32) {
         SCB::sys_reset();
     }
     let address = scb.mmfar.read();
-    let (start, end) = state_range();
     let hit = |g: Region| (g.base..g.base.saturating_add(g.size)).contains(&address);
-    let region = if (start..end).contains(&address) {
+    let in_arena = ARENAS
+        .iter()
+        .any(|[low, high]| (low.load(Ordering::SeqCst)..high.load(Ordering::SeqCst)).contains(&address));
+    let region = if in_arena {
         1
     } else if hit(guard()) || job_guard().is_some_and(hit) {
         2
     } else {
         3
     };
-    ADDRESS.store(address, Ordering::SeqCst);
-    REGION.store(region, Ordering::SeqCst);
+    // Wem die Verletzung gehoert: dem Programm, dessen Region offen ist.
+    // SAFETY: Register der MPU im Handler; `RNR` kommt zurueck, wie er war.
+    let mpu = unsafe { &*MPU::PTR };
+    let rnr = mpu.rnr.read();
+    let in_use = IN_USE.load(Ordering::SeqCst);
+    let owner = STATES
+        .iter()
+        .take(in_use)
+        .position(|r| {
+            // SAFETY: waehlt die Region nur zum Lesen.
+            unsafe { mpu.rnr.write(*r) };
+            (mpu.rasr.read() >> 24) & 0b111 == Access::ReadWrite.ap()
+        })
+        .unwrap_or(0);
+    // SAFETY: wie oben.
+    unsafe { mpu.rnr.write(rnr) };
+    let (kind, at) = violation_of(owner);
+    at.store(address, Ordering::SeqCst);
+    kind.store(region, Ordering::SeqCst);
     let slot = frame.wrapping_add(6);
     // SAFETY: `frame` zeigt auf den gestapelten Rahmen (siehe oben); an
     // Index 6 steht der PC des verletzenden Befehls.
