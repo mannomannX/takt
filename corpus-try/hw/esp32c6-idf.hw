@@ -1,0 +1,64 @@
+# takt-hw 17 edition 1 compiler 0.1.0
+# ESP32-C6-DevKitM-1-N4 unter ESP-IDF v6.1-beta1 (M11 Schritt 21a): der
+# C-Wirt `examples/esp-idf` in der Interruptform. Dieselbe Hardware wie
+# `esp32c6.hw`, und Kosten, Speicher und Stack-Reserven sind die dort
+# gemessenen: Der Schritt rechnet wie im Bring-up aus dem RAM (die Komponente
+# legt Port, SDK-Archiv und Programm dorthin, `esp-idf/takt/takt.lf`). Die
+# Reserve der Interruptform ist die des Bring-ups; unter ESP-IDF misst sie der
+# Bench in Schritt 21b.
+#
+# **Was anders ist: Das Journal haelt den Kern nicht an** (12.3 (2),
+# `nvm_blocking = false`). Unter ESP-IDF schreibt eine Aufgabe das Journal in
+# seine Partition (`ports/esp-idf-nvm`), und waehrend ESP-IDF den Flash
+# loescht oder beschreibt, laeuft der Schritt in seiner IRAM-ISR weiter; der
+# Kern stoesst den Vorgang an und fragt ihn ab. `takt size --object`
+# verlangt dafuer die RAM-Residenz aller Symbole des Programms. `nvm_erase_ns`
+# und `nvm_program_ns` bleiben die gemessenen Zeiten des Flash: Sie sagen,
+# wie lange ein Vorgang dauert, nicht mehr, wie lange er den Kern haelt.
+#
+# Treiber stellt dieser Wirt keine; die Geraete von `esp32c6.hw` fehlen hier.
+[target.riscv32imac]
+cost_model = 2
+core_hz = 160000000
+ram = 451600
+flash = 4194304
+iram = 451600
+nvm_sector_bytes = 4096
+nvm_sectors = 2
+nvm_erase_ns = 60000000
+nvm_program_ns = 200000
+nvm_blocking = false
+i32 = 7305
+i64 = 24732
+f32 = 332793
+f64 = 531914
+mem = 28164
+call = 44063
+native = 0
+i32_div = 60350
+i64_div = 1042737
+f32_div = 1204023
+f64_div = 2338593
+f32_fma = 4290078
+f64_fma = 2774355
+f32_sqrt = 458417
+f64_sqrt = 1286836
+t_io = 4293750
+tick_jitter_ns = 0
+# Stack-Reserve je Form (12.3, 13.8, FB-513): die tiefste Hochwassermarke
+# des Lastkerns (`bench/load.takt`) in Echtzeit und logischer Zeit, gemalt
+# ab der Tickschleife, ohne seinen Programmanteil. Aus den Protokollen des
+# Bench vom 2026-10-11 je Form zugeordnet; der naechste Bench schreibt sie
+# selbst. Seit FB-458 liegt der Ring der Telemetrie nicht mehr im Rahmen von
+# `main`. Die Form `rtos` ist Embassy (M11 Schritt 14d), gemessen am
+# 2026-10-11 mit dem Lastkern allein: 3716 Byte tief, davon 96 Programm.
+stack_reserve = 3044
+stack_reserve_interrupt = 3588
+stack_reserve_rtos = 3668
+# Interrupts laufen auf dem Stack des unterbrochenen Fadens, also auch auf
+# dem des Jobs; Trap-Rahmen, Verteiler und die Handler einer
+# Prioritaetsstufe brauchen unter 1 KiB, die Reserve verdoppelt das (4.5).
+job_stack_reserve = 2048
+call_hook = 528828
+f32_math = 203387500
+f64_math = 495831250

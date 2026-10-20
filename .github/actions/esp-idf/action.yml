@@ -1,0 +1,62 @@
+name: ESP-IDF
+description: >-
+  ESP-IDF v6.1-beta1 mit den Werkzeugen fuer den ESP32-C6: dieselbe Fassung
+  wie unter G:\esp\v6.1-beta1 (M11 Schritt 21a). Setzt TAKT_IDF und die
+  Umgebung, die export.sh setzt.
+
+# Der Baum liegt mit seinen Untermodulen im Cache, flach geklont; die
+# Werkzeuge unter ~/.espressif ebenso. Der Tag zeigt auf den Commit, der
+# lokal baut; ein verschobener Tag bricht ab. `install.sh` laedt die
+# Werkzeuge ueber HTTPS und prueft jede Datei gegen die Pruefsumme in
+# `tools/tools.json` des Baums; die Python-Pakete kommen ueber HTTPS von
+# PyPI, wie ESP-IDF sie selbst nennt, ohne Pruefsumme. Es laeuft in jedem Lauf
+# und laedt nur, was fehlt: Die Python-Umgebung haengt am Python des Runners.
+
+runs:
+  using: composite
+  steps:
+    - name: ESP-IDF aus dem Cache
+      id: cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/esp-idf
+          ~/.espressif
+        key: esp-idf-v6.1-beta1-esp32c6-linux-x64-1
+
+    - name: ESP-IDF v6.1-beta1 laden
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        git clone --depth 1 --branch v6.1-beta1 --recursive --shallow-submodules \
+          https://github.com/espressif/esp-idf "$HOME/esp-idf"
+        test "$(git -C "$HOME/esp-idf" rev-parse HEAD)" = b1d13e9fe441c4f75e240c98a26fd631b7b3232f
+        du -sh "$HOME/esp-idf"
+
+    - name: Werkzeuge fuer den C6
+      shell: bash
+      run: |
+        "$HOME/esp-idf/install.sh" esp32c6
+        du -sh "$HOME/.espressif"
+
+    # Was export.sh dem PATH voranstellt und an Variablen setzt, fuer die
+    # folgenden Schritte.
+    - name: ESP-IDF freischalten
+      shell: bash
+      run: |
+        before="$PATH"
+        . "$HOME/esp-idf/export.sh" > /dev/null
+        echo "$PATH" | tr ':' '\n' | while read -r dir; do
+          case ":$before:" in
+            *":$dir:"*) ;;
+            *) echo "$dir" ;;
+          esac
+        done | tac >> "$GITHUB_PATH"
+        {
+          echo "IDF_PATH=$IDF_PATH"
+          echo "IDF_PYTHON_ENV_PATH=$IDF_PYTHON_ENV_PATH"
+          echo "IDF_TOOLS_PATH=${IDF_TOOLS_PATH:-$HOME/.espressif}"
+          echo "TAKT_IDF=$IDF_PATH/tools/idf.py"
+        } >> "$GITHUB_ENV"
+        idf.py --version
+        riscv32-esp-elf-gcc --version | head -1
