@@ -235,7 +235,9 @@ mod tests {
     #[test]
     fn one_writer_and_one_reader_on_two_threads_agree() {
         static RING: Ring<16> = Ring::new();
-        const COUNT: u32 = 20_000;
+        // Unter Miri reicht ein Bruchteil: Jeder Schritt der beiden Faeden ist
+        // dort tausendfach teurer.
+        const COUNT: u32 = if cfg!(miri) { 300 } else { 20_000 };
         let byte = |i: u32| u8::try_from(i % 251).unwrap_or(0);
         let writer = std::thread::spawn(move || {
             let mut i = 0u32;
