@@ -124,7 +124,7 @@ pub struct CHost {
     pub bindings: &'static [Binding],
     /// Was jedes Abbild erfuellen muss, bevor es in den Zwischenspeicher
     /// kommt ([`super::Bringup::checked`]).
-    pub checked: Option<fn(&Path) -> Result<(), String>>,
+    pub checked: Option<super::Check>,
 }
 
 /// Was jeder C-Wirt mit clang braucht: C11 freistehend ohne C-Bibliothek

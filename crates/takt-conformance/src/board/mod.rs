@@ -649,6 +649,9 @@ fn slot_dir(slot: usize) -> PathBuf {
 /// Bau und Kopie ueberschrieben hat (KON1-009).
 pub(crate) const ATTEMPTS: usize = 5;
 
+/// Eine Pruefung am fertigen Abbild; `Err` nennt, was es bricht.
+pub type Check = fn(&Path) -> Result<(), String>;
+
 /// Das Bring-up eines Boards, wie `cargo` es baut.
 pub(crate) struct Bringup {
     /// Das Crate, relativ zur Wurzel.
@@ -664,7 +667,7 @@ pub(crate) struct Bringup {
     pub env: &'static [(&'static str, &'static str)],
     /// Was jedes Abbild erfuellen muss, bevor es in den Zwischenspeicher
     /// kommt; ein Abbild, das es bricht, bleibt draussen.
-    pub checked: Option<fn(&Path) -> Result<(), String>>,
+    pub checked: Option<Check>,
 }
 
 impl Bringup {
