@@ -150,6 +150,16 @@ So arbeitet jeder Strang, als wäre er allein:
    kommt im selben Zug in `plan/m11.md`. Die anderen Stränge ziehen `main`
    beim nächsten Halt nach.
 
+   **Abbilder für den Board-Lauf** baut nur ein Lauf von `boards.yml` mit
+   dem Ereignis `workflow_dispatch`; ein Lauf aus Push oder Pull Request
+   fährt nur den Job `zephyr` und überspringt die Abbilder. Bestellt wird
+   erst, wenn der Lint-Job der Board-Crates auf dem Kopf grün ist. Nach
+   einem Merge von `main` in den Zweig gelten die Abbilder des Zweigs
+   weiter: Am Board geprüft werden seine eigenen Änderungen, was `main`
+   mitbringt, hatte seine eigenen Board-Läufe, und das Zusammenspiel prüft
+   CI auf dem Merge. Neue Abbilder braucht es nur, wenn das Lösen eines
+   Konflikts Code ändert, der ins Abbild geht.
+
 ## Prüfmatrix
 
 | Geändert | Mindestens |
