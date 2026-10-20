@@ -108,7 +108,8 @@ static inline uint8_t takt_ring_pop(struct takt_ring *r, uint8_t *byte)
 {
     uint8_t ok = 0u;
     uint32_t tail = __atomic_load_n(&r->tail, __ATOMIC_SEQ_CST);
-    if (tail != __atomic_load_n(&r->head, __ATOMIC_SEQ_CST)) {
+    uint32_t head = __atomic_load_n(&r->head, __ATOMIC_SEQ_CST);
+    if (tail != head) {
         *byte = r->slots[tail % r->size];
         __atomic_store_n(&r->tail, takt_ring_next(r, tail), __ATOMIC_SEQ_CST);
         ok = 1u;

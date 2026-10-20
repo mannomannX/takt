@@ -8,9 +8,9 @@ system:
     tick     = 10 ms
 
 input  button : bool             @ hw("pins/button")
-output led    : bool             @ hw("pins/led")  with safe = false
-input  rx     : stream<line<16>> @ hw("uart/rx")   with max_rate = 100 Hz, capacity = 4, framing = lines
-input  frames : stream<bytes<8>> @ hw("isr/rx")    with max_rate = 100 Hz, capacity = 4, framing = cobs
+output led    : bool             @ hw("pins/led") with safe = false
+input  rx     : stream<line<16>> @ hw("uart/rx")  with max_rate = 100 Hz, capacity = 4, framing = lines
+input  frames : stream<bytes<8>> @ hw("isr/rx")   with max_rate = 100 Hz, capacity = 4, framing = cobs
 output lines  : int in 0..1000   @ sim("o/lines")
 output got    : int in 0..10000  @ sim("o/got")
 

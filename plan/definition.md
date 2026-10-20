@@ -1858,6 +1858,7 @@ takt-bringup-stm32f401  Bring-up-Programme der Black Pill — TCB, eigener Works
 takt-trampoline-stm32f401  Sprungbrett der Black Pill in Sektor 1: startet die Anwendung in Sektor 4, ohne sie den DFU-Bootloader des ROM — TCB, eigener Workspace
 takt-bringup-host   die Schleife auf dem Wirt, in logischer Zeit, für `driver-test --crate` (13.8) — TCB, eigener Workspace
 takt-driver-probe   das Prüfgerät des Treiberrands als Treiber-Crate: Geräte über die Traits aus `takt-embed` (12.6)
+takt-adapter-probe  die Adapter aus `takt-embed` als Treiber-Crate über nachgebauten HAL-Objekten, für `driver-test --crate` (12.6)
 takt-native         kuratierte native Funktionen (4.5): Prüfsummen, Hashes, MACs; Konformitätstests
 takt-native-abi     die C-Einstiege der kuratierten Natives für den erzeugten Code (4.5) — TCB, eigener Workspace
 takt-crypto         Kryptographie mit geprüfter Abhängigkeit (4.5): ECDSA P-256 über `p256`, hinter einem Feature, im TCB-Manifest

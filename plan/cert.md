@@ -304,12 +304,13 @@ im Katalog:
 
 Der C-Teil ist, was ein C-Wirt übersetzt: der Rahmen, den `takt build
 --emit embed` je Programm schreibt (`P_frame.c`, `P_ops.c`, `P.h`; erzeugt
-von `takt-frame`), der Kopf des SDK (`takt_sdk.h`), der Port für Systeme
+von `takt-frame`), der Kopf des SDK (`takt_sdk.h`) mit dem Ring für
+Stream-Treiber (`takt_ring.h`, M11 Schritt 22a), der Port für Systeme
 mit Fäden (`crates/takt-embed-c/ports/rtos`) mit seinem POSIX-Adapter
 (`ports/posix`) und seinem Adapter für FreeRTOS (`ports/freertos`), der
 Port der Interruptform (`ports/irq`) mit seinem Adapter für STM32F4
 (`ports/irq/stm32f4`) und die Beispiele (`examples/c-host/main.c`,
-`examples/posix/main.c`, der C-Wirt der Black Pill in
+`examples/posix/main.c`, das Prüfprogramm des Rings `examples/c-ring/main.c`, der C-Wirt der Black Pill in
 `examples/boards/stm32f401` mit seinem Wirt unter FreeRTOS). Für ihn gelten
 CERT C und MISRA C:2012 unmittelbar (FB-524). Der Kern von FreeRTOS gehört
 nicht dazu: Er bringt seine eigene Dokumentation nach MISRA C mit
@@ -328,7 +329,8 @@ der Interruptform und dem C-Wirt der Black Pill (M11 Schritt 18b); die
 Lieferform für `thumbv7em` bindet er auch an den Wirt der Black Pill unter
 FreeRTOS mit dem Kern V11.3.1 aus der Setup-Aktion (`FREERTOS_KERNEL_PATH`,
 M11 Schritt 20), einmal ohne MPU und einmal als FreeRTOS-MPU mit dem
-Handler der Partition (`freertos_mpu.c`, Schritt 20b). Jede Bindung, also
+Handler der Partition (`freertos_mpu.c`, Schritt 20b), dazu das
+Prüfprogramm des Rings (`examples/c-ring`) auf dem Wirt. Jede Bindung, also
 die Quellen eines Programms des Wirts, prüft er mit beiden Werkzeugen. Die
 Bindungen für `thumbv7em` prüft clang-tidy für ihr Ziel
 (`--target=thumbv7em-none-eabihf`, freistehend) und cppcheck mit der
@@ -438,18 +440,18 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-17.3` | Port | 2 | MISRA C:2012 17.3 (M) | Fehlmeldung: Das Addon hält `__asm__ volatile(…)` für den Aufruf einer Funktion ohne Deklaration; es ist Inline-Assembler für PRIMASK im Adapter für STM32F4 (`takt_lock`, `takt_unlock`), gekapselt in je einer Funktion (D.4.3). Ein Builtin von clang an seiner Stelle übersetzte ein fremdes Projekt mit GCC nicht |
 | `misra-c2012-2.7` | Port | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `takt_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
 | `misra-c2012-8.7` | Port | 2 | MISRA C:2012 8.7 (A) | `takt_rtos_paint` und `takt_rtos_depth` sind die Vorgabe des Ports für jeden Adapter (`takt_rtos.h`); wer den Stack selbst bemalt und misst, ruft sie aus seiner Einheit. Die Adapter für FreeRTOS (`uxTaskGetStackHighWaterMark2`) und CMSIS-RTOS2 messen mit ihrem System, und in ihren Bindungen ruft sie niemand |
-| `cert-dcl37-c` | Beispiele | 1 | CERT C DCL37-C | wie im Port: `_POSIX_C_SOURCE` |
+| `cert-dcl37-c` | Beispiele | 2 | CERT C DCL37-C | wie im Port: `_POSIX_C_SOURCE`, in `examples/posix` und `examples/c-ring` |
 | `misra-c2012-1.4` | Beispiele | 4 | MISRA C:2012 1.4 (R) | `_Alignas(64)` an den Stacks der Fäden: `pthread_attr_setstack` verlangt einen ausgerichteten Stack. Unter FreeRTOS-MPU ist eine Region der MPU an ihrer Größe ausgerichtet: der Stack der fremden Aufgabe und ihr Austauschblock |
 | `misra-c2012-11.5` | Beispiele | 4 | MISRA C:2012 11.5 (A) | Die Rückrufe der Leitung und der Treiber bekommen den Zeiger des Wirts als `void *` (`takt_sdk.h`); nur der Wirt weiß, was dahinter liegt |
 | `misra-c2012-17.3` | Beispiele | 7 | MISRA C:2012 17.3 (M) | Fehlmeldung: `fcntl` ist in `<fcntl.h>` deklariert; `posix.cfg` kennt die Form mit drei Argumenten nicht. Im C-Wirt der Black Pill hält das Addon `__asm__ volatile(…)` für Aufrufe: PRIMASK, Barrieren, `wfi` und der Einstieg von MemManage unter FreeRTOS-MPU, je in einer Funktion oder einer Zeile des Starts gekapselt (D.4.3) |
-| `misra-c2012-21.1` | Beispiele | 1 | MISRA C:2012 21.1 (R) | wie im Port: `_POSIX_C_SOURCE` |
+| `misra-c2012-21.1` | Beispiele | 2 | MISRA C:2012 21.1 (R) | wie im Port: `_POSIX_C_SOURCE`, in `examples/posix` und `examples/c-ring` |
 | `misra-c2012-21.6` | Beispiele | 9 | MISRA C:2012 21.6 (R) | Ein Wirt auf dem Rechner schreibt den Trace nach stdout und Fehler nach stderr; auf einem Ziel ist die Leitung ein UART (`struct takt_line`). Die Ein- und Ausgabe gehört zum Beispiel, nicht zum SDK |
 | `misra-c2012-11.4` | Beispiele | 7 | MISRA C:2012 11.4 (A) | Der C-Wirt der Black Pill (`examples/boards/stm32f401`) liest und schreibt Register an ihrer Adresse aus dem Referenzhandbuch, kopiert `.data`, nullt `.bss`, bemalt den Stack und legt den Wächter an Adressen aus dem Linker-Skript; unter FreeRTOS-MPU liest der Handler von MemManage den Befehl am gestapelten PC. Die Zahl wird nur in Helfern zum Zeiger (`board_reg`, `board_reg8`, `board_word`, `mpu_reg`, `mpu_halfword`) und die Adresse nur in Helfern zur Zahl (`board_address`, `board_start_address`) |
 | `misra-c2012-11.6` | Beispiele | 1 | MISRA C:2012 11.6 (R) | Unter FreeRTOS-MPU vergleicht der Handler von MemManage die Adresse aus MMFAR, eine Zahl, mit der Arena: `mpu_arena` macht ihre Adresse einmal zur Zahl. Den Typ der Arena kennt nur das Programm (`app.h`) |
 | `misra-c2012-2.7` | Beispiele | 1 | MISRA C:2012 2.7 (A) | Fehlmeldung: `board_unlock` gibt seinen Parameter an den Inline-Assembler, den das Addon nicht liest |
 | `misra-c2012-21.2` | Beispiele | 3 | MISRA C:2012 21.2 (R) | `abort` im C-Wirt der Black Pill: Die Panik des SDK-Archivs ruft `abort` der C-Laufzeit, und ein Wirt ohne C-Bibliothek stellt sie mit der Signatur des Standards. Sie hält das Board an und lässt es für `TAKT` erreichbar. Unter FreeRTOS deklariert `libc/string.h` `memcpy` und `memset`, die der Kern ruft, mit der Signatur des Standards; ihren Code stellt das SDK-Archiv |
 | `misra-c2012-8.7` | Beispiele | 7 | MISRA C:2012 8.7 (A) | `abort` ruft das SDK-Archiv, `vApplicationStackOverflowHook` und `vApplicationGetIdleTaskMemory` der Kern von FreeRTOS, alle außerhalb der Analyse; ohne externe Bindung bänden sie nicht. `board_paint_stack` und `board_stack_depth` ruft der Wirt der Interruptform (`irq.c`); unter FreeRTOS misst der Kern die Stacks, und niemand ruft sie. Den Wächter unter dem Stack der Interrupts legt ohne FreeRTOS-MPU `board_protect_stack` an, mit ihm `board_watch_stack`; jede Bindung ruft eine der beiden |
-| `misra-c2012-2.5` | Beispiele | 10 | MISRA C:2012 2.5 (A) | Die Einstellungen in `FreeRTOSConfig.h`, die nur die Quellen des Kerns lesen (außerhalb der Analyse: Takt, Priorität des Kerns, die Namen der Handler, unter FreeRTOS-MPU der Vorrat an Objekten und die kritischen Abschnitte); das Addon zählt die Einstellungen von FreeRTOS-MPU auch in der Bindung ohne MPU, die sie nicht übersetzt. `BOARD_TIMER_HZ` braucht nur die Interruptform |
+| `misra-c2012-2.5` | Beispiele | 11 | MISRA C:2012 2.5 (A) | `_POSIX_C_SOURCE` in `examples/c-ring`, das nur die C-Bibliothek liest (wie im Port); die Einstellungen in `FreeRTOSConfig.h`, die nur die Quellen des Kerns lesen (außerhalb der Analyse: Takt, Priorität des Kerns, die Namen der Handler, unter FreeRTOS-MPU der Vorrat an Objekten und die kritischen Abschnitte); das Addon zählt die Einstellungen von FreeRTOS-MPU auch in der Bindung ohne MPU, die sie nicht übersetzt. `BOARD_TIMER_HZ` braucht nur die Interruptform |
 | `misra-c2012-11.5` | Zephyr | 7 | MISRA C:2012 11.5 (A) | Was ein Rückruf bekommt, kommt als `void *`: das Gerät des Journals an seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`), der Faden an den Einstieg des Adapters (`k_thread_create`, `osThreadNew`) und das Ziel an die Probe der Partition |
 | `constParameterCallback` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt der Rückrufe ist vorgegeben: der Einstieg eines Fadens (`k_thread_entry_t`, `osThreadFunc_t`) und `read` des Geräts (`struct takt_nvm`) |
 | `constParameterPointer` | Zephyr | 3 | MISRA C:2012 8.13 (A) | Der Vertrag `takt_os.h` gilt jedem Adapter: `takt_os_now` des Zephyr-Adapters liest den Zustand nur, der für CMSIS-RTOS2 erweitert darin die Uhr; `takt_os_give` und `takt_os_depth` für CMSIS-RTOS2 gehen über Kennungen, der Zephyr-Adapter gibt in das Semaphor in seinem Zustand |

@@ -21,7 +21,6 @@
 #define COUNT 200000u
 
 static uint8_t g_small[3];
-static uint8_t g_big[16];
 static struct takt_ring g_ring;
 
 /* Das `i`-te Byte der Folge. */
@@ -108,14 +107,15 @@ static void *isr(void *arg)
  * einmal und in seiner Reihenfolge ankommt. */
 static int two_threads(void)
 {
+    static uint8_t big[16];
     pthread_t writer;
-    uint32_t seen = 0u;
-    uint8_t b = 0u;
     int failed = 0;
-    (void)takt_ring_init(&g_ring, g_big, (uint32_t)sizeof g_big);
+    (void)takt_ring_init(&g_ring, big, (uint32_t)sizeof big);
     if (pthread_create(&writer, NULL, isr, NULL) != 0) {
         failed = 20;
     } else {
+        uint32_t seen = 0u;
+        uint8_t b = 0u;
         /* Auch nach einem Fehler bis zum Ende: Sonst wartete der Faden der
          * ISR auf einen Ring, den niemand mehr leert. */
         while (seen < COUNT) {

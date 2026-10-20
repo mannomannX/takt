@@ -12,6 +12,25 @@
 //! - `isr/rx` ist ein [`takt_embed::ring::Ring`], den eine nachgebaute ISR
 //!   zwischen den Ticks fuellt, gerahmt nach `cobs`: je Tick ein Rahmen.
 
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::todo,
+        clippy::unimplemented,
+        clippy::dbg_macro,
+        clippy::exit,
+        deprecated,
+        unreachable_code,
+        unused_must_use,
+        unused_assignments,
+        unused_mut,
+        unfulfilled_lint_expectations,
+        reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
+    )
+)]
+#![no_std]
+
 use core::convert::Infallible;
 
 use embedded_hal::digital::{ErrorType, InputPin, OutputPin};

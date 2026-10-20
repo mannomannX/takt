@@ -369,7 +369,7 @@ mod tests {
         let mut framer = Cobs::<1024>::new();
         for payload in &payloads {
             let out = elements(&mut framer, &cobs_encode(payload));
-            assert_eq!(out, [payload.clone()], "Nutzlast {payload:?}");
+            assert_eq!(out, core::slice::from_ref(payload), "Nutzlast {payload:?}");
         }
     }
 
