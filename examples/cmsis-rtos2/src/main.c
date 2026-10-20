@@ -102,7 +102,7 @@ int main(void) {
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     if ((line_open(&line) == 0) && (takt_sink_init(&sink, &line, ring, sizeof ring) == TAKT_OK)) {
-        takt_trace_text(&sink, "takt auf zephyr mit cmsis-rtos2\n");
+        takt_trace_text(&sink, "takt auf zephyr mit cmsis-rtos2\n" TAKT_RTOS_PROTECTION "\n");
         takt_sink_mark(&sink);
         if ((journal_open(&nvm) == 0) &&
             (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog, &nvm,
