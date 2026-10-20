@@ -190,10 +190,20 @@ fn the_window_of_a_tick_ends_at_its_boundary() {
 #[test]
 fn a_gap_in_seq_breaks_the_contract() {
     let mut t = Track::new(0);
-    assert!(t.element(1_100, 7, &W).is_ok(), "das erste Element setzt die Folge");
-    assert!(t.element(1_200, 8, &W).is_ok());
-    assert_eq!(t.element(1_300, 10, &W), Err(Contract::Sequence));
-    assert_eq!(t.element(1_400, 10, &W), Err(Contract::Sequence), "Wiederholung ist keine Folge");
+    assert!(t.element(1_100, 0, &W).is_ok());
+    assert!(t.element(1_200, 1, &W).is_ok());
+    assert_eq!(t.element(1_300, 3, &W), Err(Contract::Sequence));
+    assert_eq!(t.element(1_400, 3, &W), Err(Contract::Sequence), "Wiederholung ist keine Folge");
+}
+
+/// **Die Folge beginnt bei 0** (8.6, FB-801): Traegt das erste Element eines
+/// Laufs eine hoehere Nummer, fehlt davor etwas, und der Rand sieht die
+/// Luecke wie jede andere; danach folgt der Stand der Lieferung.
+#[test]
+fn a_first_element_above_zero_is_a_gap() {
+    let mut t = Track::new(0);
+    assert_eq!(t.element(1_100, 1, &W), Err(Contract::Sequence));
+    assert!(t.element(1_200, 2, &W).is_ok());
 }
 
 /// Nach einer Verletzung folgt der Stand der Lieferung: Die naechste
@@ -201,7 +211,7 @@ fn a_gap_in_seq_breaks_the_contract() {
 #[test]
 fn after_a_gap_the_next_gapless_seq_is_fine() {
     let mut t = Track::new(0);
-    t.element(1_100, 1, &W).ok();
+    t.element(1_100, 0, &W).ok();
     assert_eq!(t.element(1_200, 5, &W), Err(Contract::Sequence));
     assert!(t.element(1_300, 6, &W).is_ok());
 }
@@ -210,9 +220,9 @@ fn after_a_gap_the_next_gapless_seq_is_fine() {
 #[test]
 fn timestamps_may_repeat_but_not_fall() {
     let mut t = Track::new(0);
-    t.element(1_500, 1, &W).ok();
-    assert!(t.element(1_500, 2, &W).is_ok());
-    assert_eq!(t.element(1_400, 3, &W), Err(Contract::Timestamp));
+    t.element(1_500, 0, &W).ok();
+    assert!(t.element(1_500, 1, &W).is_ok());
+    assert_eq!(t.element(1_400, 2, &W), Err(Contract::Timestamp));
     let mut s = Track::new(0);
     s.reading(1_500, 0, false, &W).ok();
     assert_eq!(s.reading(1_499, 0, false, &W), Err(Contract::Timestamp));
@@ -358,12 +368,12 @@ fn a_gap_drops_the_elements_of_the_driver() {
     let p = program();
     let mut e = edge(&p, 10_000_000);
     let el = |seq| Element { channel: IN, t: 1_500, seq, value: Num(1.0) };
-    let first = e.contract::<Num>(&[], &[el(1), el(2)], (1_000, 2_000), &p);
+    let first = e.contract::<Num>(&[], &[el(0), el(1)], (1_000, 2_000), &p);
     assert_eq!(first.elements, vec![Some(1_500), Some(1_500)]);
-    let gap = e.contract::<Num>(&[], &[el(4)], (1_000, 2_000), &p);
+    let gap = e.contract::<Num>(&[], &[el(3)], (1_000, 2_000), &p);
     assert_eq!(gap.elements, vec![None]);
     assert!(matches!(gap.alerts[0], Alert::DriverDegraded { what: Contract::Sequence, .. }));
-    let back = e.contract::<Num>(&[], &[el(5)], (1_000, 2_000), &p);
+    let back = e.contract::<Num>(&[], &[el(4)], (1_000, 2_000), &p);
     assert_eq!(back.elements, vec![Some(1_500)], "lueckenlos ab dem Gelieferten");
 }
 
@@ -602,7 +612,7 @@ fn the_window_of_tick_zero_and_of_the_last_tick() {
 #[test]
 fn nothing_follows_the_largest_seq() {
     let mut t = Track::new(0);
-    assert!(t.element(1_500, i64::MAX - 1, &W).is_ok());
+    assert_eq!(t.element(1_500, i64::MAX - 1, &W), Err(Contract::Sequence), "erst ab 0");
     assert!(t.element(1_500, i64::MAX, &W).is_ok());
     assert_eq!(t.element(1_500, i64::MIN + 1, &W), Err(Contract::Sequence), "kein Umschlagen");
 }

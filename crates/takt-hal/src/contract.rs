@@ -196,13 +196,15 @@ impl Track {
         broken.map_or(Ok(placed), Err)
     }
 
-    /// Ein Stromelement: `seq` streng steigend und lueckenlos, Zeitstempel
-    /// nicht fallend. Die Menge prueft [`Track::finish`].
+    /// Ein Stromelement: `seq` streng steigend und lueckenlos, beginnend bei
+    /// 0 in jedem Lauf (8.6, FB-801), Zeitstempel nicht fallend. Die Menge
+    /// prueft [`Track::finish`].
     pub fn element(&mut self, t: i64, seq: i64, w: &Window) -> Result<Placement, Contract> {
         let placed = w.place(t);
+        let expected = if self.last_seq == NONE { Some(0) } else { self.last_seq.checked_add(1) };
         let broken = if placed == Placement::Outside {
             Some(Contract::TimeWindow)
-        } else if self.last_seq != NONE && Some(seq) != self.last_seq.checked_add(1) {
+        } else if Some(seq) != expected {
             Some(Contract::Sequence)
         } else if self.last_t != NONE && t < self.last_t {
             Some(Contract::Timestamp)

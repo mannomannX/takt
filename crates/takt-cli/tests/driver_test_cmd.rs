@@ -208,3 +208,85 @@ fn the_adapters_pass_the_driver_test() {
     assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
     assert!(stdout.contains("0 Verstoesse gegen den Treibervertrag"), "{stdout}");
 }
+
+/// Ein Treiber-Crate, dessen Strom mit der Folgenummer 1 beginnt (FB-801).
+const LATE_LIB: &str = "//! Ein Strom, dessen Folge bei 1 beginnt (FB-801).
+#![no_std]
+
+use takt_embed::{Device, Piece, StreamInput};
+
+/// Je Tick ein Byte, das erste mit der Nummer 1.
+#[derive(Default)]
+pub struct Late {
+    at: Option<i64>,
+    next: i64,
+}
+
+impl StreamInput for Late {
+    fn poll(&mut self, buf: &mut [u8], now: i64) -> Option<Piece> {
+        if self.at == Some(now) {
+            return None;
+        }
+        self.at = Some(now);
+        *buf.first_mut()? = 7;
+        self.next += 1;
+        Some(Piece { len: 1, t: now, seq: Some(self.next) })
+    }
+}
+
+/// Das Geraet `late`.
+#[derive(Default)]
+pub struct Alive;
+
+impl Device for Alive {
+    fn alive(&mut self, _now: i64) -> bool {
+        true
+    }
+}
+";
+
+/// Das Programm dazu: ein Strom aus `late/rx`.
+const LATE_PROGRAM: &str = "system:
+    language = 1
+    tick     = 10 ms
+
+input  rx    : stream<u8>     @ hw(\"late/rx\") with max_rate = 100 Hz, capacity = 4
+output count : int in 0..1000 @ sim(\"o/count\")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        on rx as e:
+            count = min(count + 1, 1000)
+";
+
+/// **Eine Folge beginnt bei 0** (8.6, 12.6 Zeile 2; FB-801): Ein Treiber,
+/// dessen erstes Element die Nummer 1 traegt, faellt in `takt driver-test`
+/// als Luecke auf. Ohne clang uebersprungen.
+#[test]
+fn a_stream_driver_starting_at_one_fails_the_driver_test() {
+    let found = takt_llvm::toolchain::find().path().cloned();
+    let Some(_) = takt_testkit::require("clang", found, "`TAKT_CLANG` setzen oder LLVM installieren") else { return };
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("late-seq-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).expect("Verzeichnis");
+    let embed = root().join("crates/takt-embed").canonicalize().expect("takt-embed");
+    let embed = embed.to_string_lossy().replace('\\', "/");
+    let manifest = format!(
+        "[package]\nname = \"late-seq\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
+         [dependencies]\ntakt-embed = {{ path = \"{}\" }}\n",
+        embed.trim_start_matches("//?/")
+    );
+    std::fs::write(dir.join("Cargo.toml"), manifest).expect("schreibbar");
+    std::fs::write(dir.join("src/lib.rs"), LATE_LIB).expect("schreibbar");
+    std::fs::write(dir.join("takt-drivers.toml"), "\"late/rx\" = \"late_seq::Late\"\n\"late\" = \"late_seq::Alive\"\n")
+        .expect("schreibbar");
+    let program = dir.join("late.takt");
+    std::fs::write(&program, LATE_PROGRAM).expect("schreibbar");
+    let (dir_text, program_text) = (dir.to_string_lossy().to_string(), program.to_string_lossy().to_string());
+    let out = takt(&["driver-test", "--crate", &dir_text, &program_text, "--ticks", "4"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("driver late degraded seq"), "{stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

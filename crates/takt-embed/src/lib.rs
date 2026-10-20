@@ -221,7 +221,8 @@ impl<T> Sample<T> {
 
 /// Ein Element eines Eingabestroms, das der Treiber in den Puffer des
 /// Rahmens geschrieben hat: wie viele Bytes, wann, mit welcher Folgenummer.
-/// Ohne Folgenummer gilt die, die der Rahmen erwartet (12.6 Zeile 2).
+/// Ohne Folgenummer gilt die, die der Rahmen erwartet (12.6 Zeile 2); eine
+/// eigene Folge beginnt in jedem Lauf bei 0 (8.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Piece {
     /// Die Bytes im Puffer; mehr als seine Laenge zaehlen nicht.
