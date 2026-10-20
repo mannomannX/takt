@@ -42,6 +42,7 @@ pub(super) const BRINGUP: Bringup = Bringup {
     ],
     // 12.3: RAM-Residenz des Takt-Programms.
     env: &[("ESP_HAL_CONFIG_USE_RWTEXT_LD_HOOK", "true"), ("ESP_HAL_CONFIG_PLACE_SWITCH_TABLES_IN_RAM", "false")],
+    checked: None,
 };
 
 /// LP_AON STORE0, das einen Reset ueberlebt: Hier liest der Start den
