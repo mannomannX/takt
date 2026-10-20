@@ -31,6 +31,7 @@ members = [
     "crates/takt-rt-baremetal",
     "crates/takt-board-support",
     "crates/takt-driver-probe",
+    "crates/takt-adapter-probe",
     "crates/takt-llvm",
     "crates/takt-frame",
     "crates/takt-conformance",
