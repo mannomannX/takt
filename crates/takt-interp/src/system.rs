@@ -956,6 +956,7 @@ impl<'p> Sim<'p> {
         // 5.11: Eine gescopte Instanz betritt nichts, solange ihr Scope
         // steht nicht — der Besitzer sagt es erst mit seinem `init`.
         let scoped_ids: Vec<MachineId> = self.scoped.iter().map(|(_, si)| si.machine).collect();
+        let mut aborted = false;
         for id in self.order.clone() {
             if scoped_ids.contains(&id) {
                 continue;
@@ -964,12 +965,22 @@ impl<'p> Sim<'p> {
             let mut env =
                 MachineEnv::new(&self.loaded, id, &mut self.states[id.index()], &mut self.image, &mut out, tick_ns);
             machine::init(&self.loaded, &mut env, 0)?;
+            aborted |= env.aborted;
             self.observations.extend(out.into_iter().map(|o| (id, o)));
             self.publish_one(id);
             self.image.set_fresh(id);
         }
         self.scoped_lifecycle(tick_ns)?;
         self.image.clear_fresh();
+        // 5.4: Ein `abort` im Tick 0 erreicht jede andere Maschine in der
+        // Abort-Phase desselben Ticks, nach den Eintritten (FB-751). Jede
+        // Maschine ist eingetreten, also gilt jede als aktiv.
+        if aborted {
+            self.raise_all();
+            let entered = self.order.clone();
+            self.abort_phase(tick_ns, &entered)?;
+            self.scoped_lifecycle(tick_ns)?;
+        }
         // Tick 0 aktiviert jede Maschine mit `phase = 0` (7.2); der Zaehler
         // wird wie am Ende jedes Ticks fortgeschrieben.
         let active: Vec<MachineId> =

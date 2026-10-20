@@ -8,7 +8,7 @@ system:
 # global (Pruefung 7). Beim Austritt gehen die Outputs auf `safe`, beim
 # Wiedereintritt beginnt die Instanz frisch: `initial`, neue Timer.
 
-input  mode : int in 0..2 @ sim("i/mode")
+input  mode : int in 0..2 @ hw("io/mode")
 
 output a : bool @ hw("o/a") with safe = false
 output b : bool @ hw("o/b") with safe = false

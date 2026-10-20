@@ -138,6 +138,7 @@ void abort(void);
 #define SCB_AIRCR_SYSRESETREQ 0x00000004u
 #define SCB_SHCSR 0xE000ED24u
 #define SCB_SHCSR_MEMFAULTENA 0x00010000u
+#define MPU_TYPE 0xE000ED90u
 #define MPU_CTRL 0xE000ED94u
 #define MPU_RNR 0xE000ED98u
 #define MPU_RBAR 0xE000ED9Cu
@@ -568,6 +569,15 @@ int board_nvm_wipe(void) {
 }
 
 void board_protect_stack(void) {
+    /* Jede Region aus, bevor die eigene kommt: Wer ohne Reset in den
+     * Bootloader sprang, liess seine stehen, und das Einschalten unten
+     * machte sie wieder wirksam (FB-752). */
+    const uint32_t regions = (*board_reg(MPU_TYPE) >> 8u) & 0xFFu;
+    *board_reg(MPU_CTRL) = 0u;
+    for (uint32_t region = 0u; region < regions; region++) {
+        *board_reg(MPU_RNR) = region;
+        *board_reg(MPU_RASR) = 0u;
+    }
     *board_reg(MPU_RNR) = 0u;
     *board_reg(MPU_RBAR) = (uint32_t)board_address(&board_stack_guard);
     *board_reg(MPU_RASR) = MPU_RASR_GUARD;

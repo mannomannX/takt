@@ -71,6 +71,7 @@ pub mod requirements;
 pub mod review;
 pub mod sample;
 pub mod scan;
+pub mod stimulus;
 pub mod stmt;
 pub mod sys;
 pub mod types;
