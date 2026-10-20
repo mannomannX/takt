@@ -160,6 +160,13 @@ So arbeitet jeder Strang, als wäre er allein:
    CI auf dem Merge. Neue Abbilder braucht es nur, wenn das Lösen eines
    Konflikts Code ändert, der ins Abbild geht.
 
+   Steht ein grüner Pull Request nur in Plan-Dateien in Konflikt
+   (`feedback.csv`, `features.csv`, `definition.md`, `m11*.md`), löst die
+   Koordination ihn selbst: main in den Zweig, beide Seiten behalten, eine
+   Zeile, die nur eine Seite änderte, in deren Fassung. Gemergt wird, wenn
+   der Code-Diff des Zweigs gegenüber seinem vorigen Kopf genau der von
+   main ist.
+
 ## Prüfmatrix
 
 | Geändert | Mindestens |
