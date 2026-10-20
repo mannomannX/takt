@@ -115,7 +115,9 @@ static void banner(void) {
     takt_board_trace_u64((uint64_t)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1000000U);
     takt_board_trace("Hz, Tick ");
     takt_board_trace_i64(PROGRAM_TICK_NS);
-    takt_board_trace("ns\r\n  Form interrupt\r\n\r\n");
+    /* Die PMP des C6 gehoert ESP-IDF, und Takt schaltet sie im Lauf nicht um
+     * (plan/m11.md 2.11): `Schutz: keiner`. */
+    takt_board_trace("ns\r\n  Form interrupt\r\n" TAKT_IRQ_PROTECTION "\r\n\r\n");
     takt_line_mark();
 }
 

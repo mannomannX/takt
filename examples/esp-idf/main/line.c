@@ -13,7 +13,8 @@
  * Ohne Interrupt: Das Rohflag liest die Leitung bei jedem Aufruf selbst.
  * Ein Interrupt, der es quittierte, nahme ihr das Abholen; eine ISR, die
  * aus einem eigenen FIFO nachschiebt, verstummte, sobald es leer lief und
- * kein Paket mehr unterwegs war, das den naechsten Interrupt ausloest.
+ * kein Paket mehr unterwegs war, das den naechsten Interrupt ausloest
+ * (FB-842).
  */
 #include "line.h"
 
@@ -49,7 +50,8 @@ static uint8_t line_stalled;
 
 /* Setzt den Chip auf RTC-Ebene zurueck, wie der EN-Pin: Auch der
  * USB-Serial-JTAG faengt neu an, und der Host sieht ein Abstecken. Ein
- * Neustart von ESP-IDF (`esp_restart`) setzte nur das HP-System zurueck. */
+ * Neustart von ESP-IDF (`esp_restart`) setzte nur das HP-System zurueck
+ * (FB-843). */
 static IRAM_ATTR void line_chip_reset(void) {
     wdt_hal_context_t rwdt = RWDT_HAL_CONTEXT_DEFAULT();
     wdt_hal_init(&rwdt, WDT_RWDT, 0U, false);

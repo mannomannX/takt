@@ -543,7 +543,8 @@ fn the_zephyr_port_passes_the_port_test() {
 #[ignore = "Board: TAKT_ESP32C6_PORT; ESP-IDF: TAKT_IDF; mit --ignored"]
 fn the_esp_idf_port_passes_the_port_test() {
     let Some((board, _guard)) = board() else { return };
-    let failed = the_port_passes(&mut Esp32c6Idf::on(board), Form::Interrupt);
+    // Die PMP gehoert ESP-IDF, Takt schaltet sie nicht um (12.3): `Schutz: keiner`.
+    let failed = the_port_passes(&mut Esp32c6Idf::on(board), Form::Interrupt, Case::Unprotected);
     verdict(&failed);
 }
 

@@ -152,7 +152,7 @@ int takt_irq_chip_start(struct takt_irq *irq) {
     const uint32_t hz = irq->config.timer_hz;
     const uint8_t level = irq->config.step_priority;
     /* Die Stufen 1 bis 3 rechnen in C (`ESP_INTR_FLAG_LOWMED`). Ohne Jobs
-     * gibt es keinen Job-Stack und keine Aufgabe. */
+     * gibt es keinen Job-Stack und keine Aufgabe (FB-841). */
     const int jobs = (takt_jobs_bytes != 0U) ? 1 : 0;
     if ((hz != 0U) && ((TAKT_NS_PER_S % hz) == 0U) && ((jobs == 0) || (takt_jobs_stack != NULL)) && (level >= 1U) &&
         (level <= 3U)) {
