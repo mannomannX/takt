@@ -625,11 +625,9 @@ mod tests {
         let mut image = clean();
         image.symbols.push(symbol("libtaktm::table::ATAN64", 0x4080_9100, 2600, 'd'));
         image.symbols.push(symbol("libtaktm::table::SCRATCH", 0x4080_9c00, 8, 'b'));
-        let sdk = [
-            symbol("libtaktm::table::ATAN64", 0, 2600, 'R'),
-            symbol("libtaktm::table::SCRATCH", 0, 8, 'b'),
-        ];
-        let found = |library: &Library| findings(&check(&image, &manifest(), library, &[(0x4080_8000, 256)])).join("\n");
+        let sdk = [symbol("libtaktm::table::ATAN64", 0, 2600, 'R'), symbol("libtaktm::table::SCRATCH", 0, 8, 'b')];
+        let found =
+            |library: &Library| findings(&check(&image, &manifest(), library, &[(0x4080_8000, 256)])).join("\n");
         let with = found(&Library::of(&[], &sdk));
         assert!(!with.contains("ATAN64"), "{with}");
         assert!(with.contains("beschreibbar ausserhalb der Arena: `libtaktm::table::SCRATCH`"), "{with}");
