@@ -1460,3 +1460,39 @@ fn the_chunk_natives_prove_their_width_and_keep_their_paths_open() {
     let Verdict::Unproven { reason } = &magic.verdict else { panic!("{magic:?}") };
     assert!(reason.contains("`sha256_final`") && reason.contains("uninterpretiert"), "{reason}");
 }
+
+/// **Fliesskomma im Kegel, frei gemacht** (13.3, M11 Strang B2 Schritt 2):
+/// `a` und `b` zaehlen gemeinsam, wenn `x > 1.0`; dass sie nie `3` und `5`
+/// zugleich sind, ist wahr, aber nicht k-induktiv, und `x` liegt im Kegel.
+/// Die Invariantensuche ersetzt den Vergleich ueber Fliesskomma durch eine
+/// freie Variable und findet die Invariante `a == b` trotzdem.
+#[test]
+fn an_invariant_is_found_with_a_float_in_the_cone() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+output y : int in 0..6 @ hw(\"o/y\") with safe = 0
+
+machine m:
+    var a : int in 0..6 = 0
+    var b : int in 0..6 = 0
+    var x : float = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            x = x * 0.5 + 1.0
+            if x > 1.0:
+                a = (a + 1) % 7
+                b = (b + 1) % 7
+            check a != 3 or b != 5, \"nie\"
+            y = a
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 3, &solver, 60).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "check").expect("die Pruefstelle");
+    assert_eq!(site.verdict, CheckVerdict::Unreachable { k: 0 }, "{}", site.text());
+}
