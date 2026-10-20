@@ -76,7 +76,7 @@ Was der Schutz nicht abweist, gehört zur TCB:
 |---|---|---|---|---|---|---|
 | `Schutz: Fenster` | Bring-up des F401 in jeder Form (eigener Kern, Interrupt, Poll, RTIC, Embassy) | außerhalb des Schritts abgewiesen, im nächsten Tick `Runtime(Hardware)`; eine fremde ISR, die den Schritt unterbricht, findet die Arena offen und gehört zur TCB | gehören zur TCB; die Output-Treiber laufen im Commit bei geschlossener Arena (12.3) | RTIC und der Executor von Embassy gehören zur TCB (12.8) | `takt-rt-baremetal` (`Guarded`) und der Bring-up | `the_mpu_turns_a_write_of_the_tcb_into_runtime_hardware` in jeder Form, `every_port_passes_the_port_test` |
 | `Schutz: Partition` | Zephyr mit `CONFIG_USERSPACE` (F401, C6), FreeRTOS-MPU (F401) | Aufgaben ohne Privileg abgewiesen; privilegierter Code — ISRs, Kern, Fäden im Supervisor-Modus — gehört zur TCB | rechnen im privilegierten Schrittfaden und gehören zur TCB | gehört zur TCB, es besitzt die Schutzeinheit | `ports/rtos` mit seinem Adapter | `the_zephyr_port_passes_the_port_test` (Probe `takt schutz partition verweigert`), `the_freertos_mpu_port_passes_the_port_test`, `the_freertos_mpu_turns_a_foreign_write_into_runtime_hardware` |
-| `Schutz: keiner` | Bring-ups des C6 (Takt schaltet die PMP im Lauf nicht um, 12.3), die Interruptform in C (FB-755), FreeRTOS ohne MPU, CMSIS-RTOS2 und Zephyr ohne `CONFIG_USERSPACE` (`examples/zephyr-gpio`), POSIX, `takt-bringup-host` | gehört ganz zur TCB | gehören zur TCB | gehört zur TCB | gehört zur TCB | die Kopfzeile in `every_port_passes_the_port_test` (C6), `the_c_interrupt_port_passes_the_port_test`, `the_freertos_port_passes_the_port_test`, `the_cmsis_rtos2_port_passes_the_port_test`, `the_zephyr_gpio_wire_follows_its_pin`, `a_posix_port_passes_the_port_test` |
+| `Schutz: keiner` | Bring-ups des C6 (Takt schaltet die PMP im Lauf nicht um, 12.3), die Interruptform in C (FB-755), FreeRTOS ohne MPU, CMSIS-RTOS2 und Zephyr ohne `CONFIG_USERSPACE` (`examples/zephyr-gpio`, `examples/zephyr-adc`), POSIX, `takt-bringup-host` | gehört ganz zur TCB | gehören zur TCB | gehört zur TCB | gehört zur TCB | die Kopfzeile in `every_port_passes_the_port_test` (C6), `the_c_interrupt_port_passes_the_port_test`, `the_freertos_port_passes_the_port_test`, `the_cmsis_rtos2_port_passes_the_port_test`, `the_zephyr_gpio_wire_follows_its_pin`, `a_posix_port_passes_the_port_test` |
 | ESP-IDF (PMP) | offen bis Schritt 21a (FB-756) | — | — | — | — | — |
 
 Unter jedem Stack liegt in allen drei Fällen ein Wächter (12.3, Zeile
@@ -365,10 +365,11 @@ Linux (die Kopfdateien von POSIX), auf CI in
 **Unter Zephyr** bindet der Test `port_test` noch zweimal, wie die
 Beispiele es bauen: mit dem Zephyr-Adapter und `examples/zephyr`, mit dem
 Adapter für CMSIS-RTOS2 und `examples/cmsis-rtos2`, beide mit dem Gerät des
-Journals (FB-731). Dazu kommt eine fünfte Lieferform,
-`examples/zephyr-gpio/takt/wire.takt` mit `--zephyr`. Ihr Rahmen und ihre
-Treiber aus dem Devicetree (`wire_zephyr.c`, 8.10) zählen als Rahmen; sie
-wird mit dem Zephyr-Adapter und `examples/zephyr-gpio` gebunden. Diese
+Journals (FB-731). Dazu kommen zwei Lieferformen mit `--zephyr`:
+`examples/zephyr-gpio/takt/wire.takt` und `examples/zephyr-adc/takt/analog.takt`
+(FB-735). Ihre Rahmen und ihre Treiber aus dem Devicetree (`wire_zephyr.c`,
+`analog_zephyr.c`, 8.10) zählen als Rahmen; jede wird mit dem
+Zephyr-Adapter und ihrem Beispiel gebunden. Diese
 Bindungen prüft nur cppcheck, mit der Plattform
 `unix32` (beide Ziele haben 32 Bit) und mit `tools/c-analysis/zephyr.cfg`
 statt der Köpfe von Zephyr: Die entstehen erst in einem Bau unter Zephyr,

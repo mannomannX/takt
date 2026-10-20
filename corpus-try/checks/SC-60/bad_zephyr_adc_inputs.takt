@@ -1,0 +1,29 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 60 unter `--zephyr` (8.10, Treiber aus dem Devicetree, FB-735):
+# Ein Kanal an einem Geraet mit `zephyr-adc` ist ein Eingang mit Rohtyp
+# `i32` in Mikrovolt; ohne `calibration` ist er `int[uV]`, mit
+# `linear(a, b)` ein `float`. Die Konfiguration liest an `adc/out` einen
+# Ausgang, nennt fuer `adc/narrow` den Rohtyp `u16`, laesst an `adc/volts`
+# die Kalibrierung weg und gibt `adc/table` eine Tabelle, die unter Zephyr
+# noch offen ist (FB-780).
+
+output dac : int[uV] in 0..3300000 uV @ hw("adc/out") with safe = 0  # ~ SC-60
+
+input  narrow : int[uV] in 0..3300000 uV @ hw("adc/narrow") with max_age = 50 ms  # ~ SC-60
+
+input  volts : float[V] in 0.0..3.3 V @ hw("adc/volts") with max_age = 50 ms  # ~ SC-60
+
+input  table : float[V] in 0.0..3.3 V @ hw("adc/table") with max_age = 50 ms  # ~ SC-60
+
+machine m:
+    pub var seen : bool = false
+
+    initial RUN
+
+    state RUN:
+        loop:
+            dac = narrow.or(0 uV)
+            seen = volts.or(0.0 V) > table.or(0.0 V)

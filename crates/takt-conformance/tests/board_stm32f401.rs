@@ -719,7 +719,24 @@ fn the_zephyr_gpio_wire_follows_its_pin() {
     let example = takt_conformance::zephyr::ZEPHYR_GPIO;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::KEPT)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_wire_follows(board.name(), run));
+    verdict(&zephyr_wire_follows(board.name(), example, run));
+}
+
+/// **Ein analoger Eingang aus dem Devicetree liest die Drahtbruecke des
+/// F401** (8.10, 12.11; FB-735): `examples/zephyr-adc` mit dem Pin PA0 und
+/// PA1 als Eingang 1 von ADC1 aus `analog_zephyr.c`; jeder Tick sieht die
+/// halbe Versorgung genau dann ueberschritten, wenn der Tick davor `true`
+/// schrieb. Dieselbe Bruecke wie `the_zephyr_gpio_wire_follows_its_pin`,
+/// keine neue Verdrahtung.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; Zephyr: TAKT_WEST; mit --ignored"]
+fn the_zephyr_adc_follows_its_pin() {
+    let Some((mut board, _guard)) = board() else { return };
+    let options = Options::timed(ZEPHYR_WIRE_TICKS).judged();
+    let example = takt_conformance::zephyr::ZEPHYR_ADC;
+    let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::KEPT)
+        .and_then(|image| board.run(&image.elf, &options));
+    verdict(&zephyr_wire_follows(board.name(), example, run));
 }
 
 /// **Eine Schutzverletzung im Lauf wird auf dem F401 zum Fault des Kerns**

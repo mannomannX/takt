@@ -134,6 +134,12 @@ pub const CMSIS_RTOS2: &str = "cmsis-rtos2";
 /// Messschleife auf der Drahtbruecke (`examples/zephyr-gpio`, 8.10).
 pub const ZEPHYR_GPIO: &str = "zephyr-gpio";
 
+/// Das Beispiel mit einem analogen Eingang aus dem Devicetree: dieselbe
+/// Messschleife, gelesen ueber den ADC (`examples/zephyr-adc`, 8.10,
+/// FB-735); am Board nur auf dem F401, wo die Bruecke an einem Eingang des
+/// ADC endet.
+pub const ZEPHYR_ADC: &str = "zephyr-adc";
+
 /// Was ein Bau eines Beispiels ueber CMake waehlt.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Variant {
@@ -224,6 +230,7 @@ const TREES: &[&str] = &[
     "examples/zephyr",
     "examples/cmsis-rtos2",
     "examples/zephyr-gpio",
+    "examples/zephyr-adc",
 ];
 
 /// Die Dateien, die die Beispiele ausserhalb ihrer Verzeichnisse lesen: das
