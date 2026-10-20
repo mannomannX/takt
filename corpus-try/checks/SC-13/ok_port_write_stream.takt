@@ -1,0 +1,28 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# SC-13 (12.10; FB-688): Der Schreibstrom eines Ports ist der eine Input,
+# der `sim` traegt; ihn speisen die Schreibvorgaenge des Ports, nie der
+# Rand.
+
+record Reg layout little:
+    flags : u8 with bits:
+        ready : bool at 0
+        fail  : bool at 1
+    count : u16
+
+port dev : Reg @ mmio(0x40000000)
+
+input  dev_w : stream<bytes<4>> @ sim("mmio/0x40000000/w") with capacity = 2, max_rate = 200 Hz
+output got   : int in 0..999    @ hw("o/got")              with safe = 0
+
+driver machine drv:
+    initial RUN
+
+    state RUN:
+        loop:
+            dev.count = 7
+
+        on dev_w as w:
+            got = w.data.len
