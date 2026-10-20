@@ -31,11 +31,7 @@ use crate::Line;
 use takt_rt_core::{Clock, Fits, NoJournal, Outputs, Policy, Profile, Runtime, Sink, Store, Tick, Tunables, Watchdog};
 
 thread_local! {
-    static LINE: RefCell<String> = const { RefCell::new(String::new()) };
-}
-
-fn push(text: &str) {
-    LINE.with(|l| l.borrow_mut().push_str(text));
+    static LINE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Der Puffer des Fadens als Senke: Was das Programm schreibt, liefert
@@ -45,7 +41,7 @@ pub struct Thread;
 
 impl Line for Thread {
     fn write(&self, bytes: &[u8]) {
-        push(&String::from_utf8_lossy(bytes));
+        LINE.with(|l| l.borrow_mut().extend_from_slice(bytes));
     }
 }
 
@@ -56,9 +52,13 @@ pub fn sink() -> &'static Thread {
     &Thread
 }
 
-/// Der Trace dieses Fadens seit dem letzten Aufruf.
+/// Der Trace dieses Fadens seit dem letzten Aufruf, jede Fliesskommazahl in
+/// ihrer Textform (`takt_rt_core::digits::expand`).
 pub fn take() -> String {
-    LINE.with(|l| core::mem::take(&mut *l.borrow_mut()))
+    let bytes = LINE.with(|l| core::mem::take(&mut *l.borrow_mut()));
+    let mut text = Vec::new();
+    takt_rt_core::digits::expand(&bytes, |b| text.extend_from_slice(b));
+    String::from_utf8_lossy(&text).into_owned()
 }
 
 /// Die logische Zeit (12.11, Form `logical`): Die Uhr steht, bis die

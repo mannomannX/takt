@@ -335,3 +335,36 @@ fn an_unknown_scenario_names_itself() {
     let e = run(&p, &Trace::default(), &options).expect_err("unbekannt");
     assert!(format!("{e:?}").contains("Szenario `nope` gibt es nicht"), "{e:?}");
 }
+
+/// **FB-619.** Gezaehlt wird nur, was eine laufende Maschine erreichen kann
+/// (13.2): Die Division einer Funktion, die keine Maschine ruft, ist kein
+/// Pfad des Laufs und keine Luecke; die einer gerufenen zaehlt.
+#[test]
+fn a_function_no_machine_calls_leaves_no_gap() {
+    let body = format!(
+        "{PROGRAM}
+fn used(a: int) -> int:
+    return 100 / a
+
+fn unused(b: int) -> int:
+    return 7 / b
+
+machine caller:
+    var n : int in 0..1000 = 0
+    initial RUN
+    state RUN:
+        loop:
+            n = used(5)
+"
+    );
+    let src = format!("{HEAD}{body}");
+    let p = ok(&body);
+    let items = takt_interp::coverage::items(&p);
+    let text = |i: &takt_interp::coverage::Item| src[i.span.start as usize..i.span.end as usize].to_string();
+    let divisions: Vec<String> =
+        items.iter().filter(|i| i.kind == CoverKind::Site && i.key.starts_with("div ")).map(text).collect();
+    assert_eq!(divisions, ["a"], "nur die Division der gerufenen Funktion");
+    let c = run_scenario(&p, "pressure rises").coverage;
+    let gaps: Vec<String> = c.missing(&items).into_iter().map(text).collect();
+    assert!(!gaps.iter().any(|g| g == "b"), "{gaps:?}");
+}
