@@ -129,7 +129,7 @@ const SCOPED: &str = "system:
     language = 1
     tick = 10 ms
 
-input  mode : int in 0..2 @ sim(\"i/mode\")
+input  mode : int in 0..2 @ hw(\"i/mode\")
 output c : bool @ hw(\"o/c\") with safe = false
 
 machine blip(o: output bool):

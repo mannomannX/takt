@@ -814,6 +814,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
     assumptions.extend(enc.psi_assumptions.clone());
     assumptions.extend(enc.tune_assumptions.clone());
     assumptions.extend(enc.job_assumptions.clone());
+    assumptions.extend(enc.runtime_assumptions());
     assumptions.extend(enc.stream_assumptions()?);
     let scoped = enc.scope.is_some();
     for prop in p.properties.iter().filter(|_| !scoped) {
@@ -3473,7 +3474,7 @@ impl Enc<'_> {
         for (i, kind) in RUNTIME_KINDS.iter().enumerate() {
             let code = stream::RUNTIME + i as i64;
             // `Driver` trifft, wer den Output im Lauf besitzt (FB-602).
-            let raised: Vec<(Option<ChannelId>, String)> = match kind {
+            let mut raised: Vec<(Option<ChannelId>, String)> = match kind {
                 RuntimeKind::Driver => self
                     .p
                     .channels
@@ -3484,6 +3485,7 @@ impl Enc<'_> {
                     .collect(),
                 _ => vec![(None, runtime_input(*kind, None))],
             };
+            raised.retain(|(output, _)| self.has_source(*kind, *output));
             for (output, name) in raised {
                 let meant = |m: MachineId| output.is_none_or(|c| self.p.owns(m, c));
                 if !self.order.iter().any(|&m| meant(m)) {
@@ -3512,16 +3514,42 @@ impl Enc<'_> {
         let mut any = vec![self.input(OPERATOR_ABORT.into(), Sort::Bool)];
         for kind in RUNTIME_KINDS {
             if kind == RuntimeKind::Driver {
-                let outputs: Vec<String> =
-                    self.p.channels.iter().filter(|c| c.dir == Direction::Output).map(|c| c.name.clone()).collect();
-                for o in outputs {
+                let outputs: Vec<(ChannelId, String)> = (0..self.p.channels.len())
+                    .map(|i| ChannelId(i as u32))
+                    .filter(|&c| self.has_source(kind, Some(c)))
+                    .map(|c| (c, self.p.channels[c.index()].name.clone()))
+                    .collect();
+                for (_, o) in outputs {
                     any.push(self.input(runtime_input(kind, Some(&o)), Sort::Bool));
                 }
-            } else {
+            } else if self.has_source(kind, None) {
                 any.push(self.input(runtime_input(kind, None), Sort::Bool));
             }
         }
         Term::or(any)
+    }
+
+    /// Hat ein Runtime-Fault der Art `kind` im Produkt eine Quelle (12.5,
+    /// FB-689; `takt_mir::stimulus::runtime`)? `Driver` je Ausgang mit
+    /// Treiber, `Overrun` nicht unter `overrun = alert`, `Node` nur mit
+    /// Knoten. Nur diese waehlt der Solver frei.
+    fn has_source(&self, kind: RuntimeKind, output: Option<ChannelId>) -> bool {
+        let channel = output.map(|c| &self.p.channels[c.index()]);
+        takt_mir::stimulus::runtime(self.p, kind, channel).is_ok()
+    }
+
+    /// Ein Ueberlauf meldet den Schritt des Ticks davor (7.3): frei erst ab
+    /// Tick 2 (`takt_mir::stimulus::first_tick`), wo `now` mindestens zwei
+    /// Perioden steht; im Tick 1 kaeme er von `init`, das kein Schritt ist.
+    fn runtime_assumptions(&mut self) -> Vec<Term> {
+        if !self.has_source(RuntimeKind::Overrun, None) {
+            return Vec::new();
+        }
+        let first = takt_mir::stimulus::first_tick(takt_mir::stimulus::Event::Runtime(RuntimeKind::Overrun));
+        let since = i64::try_from(first).unwrap_or(i64::MAX).saturating_mul(self.p.config.tick.max(1));
+        let overrun = self.input(runtime_input(RuntimeKind::Overrun, None), Sort::Bool);
+        let later = Term::bin(Op::Ge, Term::var(NOW, Sort::Int), Term::int(since));
+        vec![Term::or(vec![overrun.not(), later])]
     }
 
     /// Die Abort-Phase (5.4): jede nicht gelatchte Maschine nimmt ihren
@@ -3984,6 +4012,18 @@ impl Enc<'_> {
         }
         let faults = self.faults_now();
         self.scoped_lifecycle(&mut env, &actives, &faults)?;
+        // 5.4: Ein `abort` im Tick 0 erreicht jede andere Maschine in der
+        // Abort-Phase desselben Ticks, nach den Eintritten (FB-751).
+        if self.scope.is_some() {
+            let foreign = self.input("i.abort.foreign".into(), Sort::Bool);
+            self.aborts.push(foreign);
+        }
+        let raised = Term::or(std::mem::take(&mut self.aborts));
+        if !raised.is_bool(false) {
+            self.abort_phase(&raised, &psi, &actives, &mut env)?;
+            let faults = self.faults_now();
+            self.scoped_lifecycle(&mut env, &actives, &faults)?;
+        }
         self.flush_sends(&mut env)?;
         // Tick 0 aktiviert jede Maschine mit `phase = 0` (7.2).
         let started: BTreeMap<MachineId, Term> =
@@ -4620,6 +4660,12 @@ impl Enc<'_> {
                 out.push(self.held(&edge).not());
                 out.push(Term::eq(self.input(format!("i.{}", edge.name), edge.sort), fault));
                 continue;
+            }
+            // 12.5 (FB-688): An einen Input ohne `hw`-Bindung liefert der
+            // Rand nichts; die Abtastung vor dem ersten Tick (`Bad`) gilt
+            // weiter, wie im Interpreter ohne Stimulus.
+            if takt_mir::stimulus::input(&self.p.channels[edge.channel.index()]).is_err() {
+                out.push(self.held(&edge));
             }
             if edge.samples.is_some() {
                 self.samples_assumptions(&edge, &mut out);

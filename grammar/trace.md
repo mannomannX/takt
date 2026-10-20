@@ -55,6 +55,8 @@ Leerzeichen, außer im Rest einer Meldung.
 
 Maschinennamen sind ein Wort: Ein Szenario `scenario "no image"` heißt in der Trace `no_image` (13.6, FB-167).
 
+Ein Stimulus enthält nur, was das Produkt erleben kann (Referenz 12.5): `in` an einen Input mit `hw`-Bindung, je Tick eine Zeile je skalarem Input; `runtime Driver <output>` für einen Output mit `hw`-Bindung, `runtime Overrun` nur unter `overrun = fault` und ab Tick 2, `runtime Node` nur in einem Programm mit Knoten (12.9); `abort` und `runtime` nicht in Tick 0; `tune` in Tick 0 nennt den Startwert. Der Interpreter lehnt eine andere Zeile beim Lesen ab; die Scheibe einer Maschine (`#! maschine M`) ist kein Stimulus eines Laufs.
+
 ## T2 Werte
 
 Werte stehen in der Literalschreibweise der Sprache (2.3): `true`, `42`,

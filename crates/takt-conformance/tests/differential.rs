@@ -604,35 +604,13 @@ fn a_running_job_keeps_the_native_system_awake() {
 /// Luecke scheitert ebenso wie eine, die es nicht mehr gibt. Ein Programm
 /// ausserhalb der Suite `beweiser` nennt seinen Grund im Manifest.
 const GAPS: &[(&str, &str, &str, &str)] = &[
-    ("03_sequences_and_faults.takt", "pfad uebergang-SAFE__IDLE__2561", "nativ", RUNTIME_NODE),
     ("40_jobs.takt", "pfad uebergang-RUN_S0__FAILED__848", "nativ", JOB_RECORD),
     ("40_jobs.takt", "stimulus", "nativ", JOB_RECORD),
-    ("62_type_generics.takt", "pfad valid-1111", "nativ", SIM_INPUT),
-    ("62_type_generics.takt", "pfad valid-1310", "nativ", SIM_INPUT),
-    ("62_type_generics.takt", "stimulus", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-FIRST__SECOND__942", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-LOW__HIGH__715", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-SECOND__FIRST__1029", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-p_HIGH__LOW__797", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-q_HIGH__LOW__797", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad uebergang-r_HIGH__LOW__797", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "pfad valid-1034", "nativ", SIM_INPUT),
-    ("63_scoped_instances.takt", "stimulus", "nativ", SIM_INPUT),
     ("87_fault_kinds.takt", "pfad uebergang-RUN_S1__FAILED__3270", "nativ", JOB_RECORD),
-    ("99_exit_fault.takt", "pfad range-983", "nativ", RUNTIME_NODE),
-    ("120_port_writes.takt", "pfad index-1857", "nativ", SIM_INPUT),
-    ("sim/12_7/program.takt", "pfad uebergang-SELFTEST_S0__SELFTEST_S1__2487", "nativ", RUNTIME_NODE),
 ];
 
 /// Eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach (4.5).
 const JOB_RECORD: &str = "eine aufgezeichnete Job-Fertigstellung spielt der Rahmen nicht nach";
-
-/// Ein Eingang mit `sim`-Bindung hat im Produkt keinen Treiber; nur der
-/// Interpreter nimmt dort einen Stimulus an (8.3, FB-688).
-const SIM_INPUT: &str = "der Stimulus liefert an einen Eingang mit `sim`-Bindung (FB-688)";
-
-/// Einen Knotenausfall meldet im Produkt kein Weg des Wirts (12.3, FB-689).
-const RUNTIME_NODE: &str = "`runtime Node` hat im Produkt keinen Weg (FB-689)";
 
 /// **Die Abnahme: ein Vergleich, drei Ausfuehrer** (Satz 9.4.4, M11
 /// Schritte 28, 29). Je Korpusprogramm und Lauf ([`takt_conformance::cases`])
@@ -1801,6 +1779,87 @@ t=31 runtime Hardware
         diffs.len(),
         diffs.iter().take(8).map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n")
     );
+}
+
+/// Zwei Maschinen ohne Abort: `b` steht in `RUN` mit `b_out = 2`; ein
+/// Fault fuehrt nach `SAFE` mit `b_out = 9`.
+const MACHINE_B: &str = "machine b:
+    fault -> SAFE
+    initial RUN
+
+    state RUN:
+        enter:
+            b_out = 2
+
+    state SAFE:
+        enter:
+            b_out = 9
+";
+
+/// Die Programme zu FB-751: `abort` im Eintritt des Anfangszustands, dasselbe
+/// neben zwei Instanzen einer Vorlage, und ein `abort` im Eintritt eines
+/// Fault-Ziels, das erst ein Fault-Uebergang im Tick 0 erreicht.
+fn tick_zero_aborts() -> [(&'static str, String); 3] {
+    let head = "system:\n    language = 1\n    tick     = 10 ms\n\n";
+    let a_start = "machine a:\n    fault -> SAFE\n    initial START\n\n    state START:\n        enter:\n            \
+                   a_out = 1\n        loop:\n            abort \"Halt im Start\"\n\n    state SAFE:\n        enter:\n            \
+                   a_out = 8\n";
+    let plain = format!(
+        "{head}output a_out : int in 0..9 @ hw(\"o/a\") with safe = 0\n\
+         output b_out : int in 0..9 @ hw(\"o/b\") with safe = 0\n\n{a_start}\n{MACHINE_B}"
+    );
+    let instances = format!(
+        "{head}output a_out : int in 0..9 @ hw(\"o/a\") with safe = 0\n\
+         output o1    : int in 0..9 @ hw(\"o/1\") with safe = 0\n\
+         output o2    : int in 0..9 @ hw(\"o/2\") with safe = 0\n\n{a_start}\n\
+         machine valve(o: output int in 0..9):\n    fault -> SAFE\n    initial RUN\n\n    state RUN:\n        enter:\n            \
+         o = 2\n\n    state SAFE:\n        enter:\n            o = 9\n\n\
+         instance v1 = valve(o = o1)\ninstance v2 = valve(o = o2)\n"
+    );
+    let reached = format!(
+        "{head}input  p     : int in 0..9 @ hw(\"i/p\")\n\
+         output a_out : int in 0..9 @ hw(\"o/a\") with safe = 0\n\
+         output b_out : int in 0..9 @ hw(\"o/b\") with safe = 0\n\n\
+         machine a:\n    fault -> ALARM\n    initial START\n\n    state START:\n        loop:\n            \
+         check p.or(0) > 5, \"zu klein\"\n\n    state ALARM:\n        enter:\n            a_out = 7\n        loop:\n            \
+         abort \"Alarm\"\n\n{MACHINE_B}"
+    );
+    [("eintritt", plain), ("instanzen", instances), ("fault-ziel", reached)]
+}
+
+/// **Ein `abort` im Tick 0 erreicht jede andere Maschine im Tick 0** (5.4:
+/// in der Abort-Phase desselben Ticks, auch nach den Eintritten; FB-751):
+/// im Eintritt des Anfangszustands, neben zwei Instanzen einer Vorlage und im
+/// Eintritt eines Fault-Ziels, das ein Fault-Uebergang im Tick 0 erreicht.
+/// Interpreter und Modell stellten ihn nie zu, der erzeugte Code erst im
+/// Tick 1 nach dessen planmaessigen Schritten.
+#[test]
+fn an_abort_in_tick_zero_reaches_every_machine_in_tick_zero() {
+    let Some(clang) = common::clang() else { return };
+    for (label, src) in tick_zero_aborts() {
+        let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+        let out = takt_sema::compile(&src, &options);
+        let p = out.program.unwrap_or_else(|| panic!("{label}: {:?}", out.diagnostics));
+        let stimulus = takt_interp::Trace::default();
+        let options = takt_interp::RunOptions { ticks: 3, inputs: true, ..Default::default() };
+        let result = takt_interp::run(&p, &stimulus, &options).unwrap_or_else(|e| panic!("{label}: {e:?}"));
+        let interpreted = result.trace.render();
+        let others: &[&str] = if label == "instanzen" { &["v1", "v2"] } else { &["b"] };
+        for m in others {
+            let line = format!("t=0 fault {m} Abort");
+            assert!(interpreted.contains(&line), "{label}: `{line}` fehlt:\n{interpreted}");
+        }
+        assert!(!interpreted.contains("t=1 fault"), "{label}: ein zweiter Abort im Tick 1:\n{interpreted}");
+        let native = common::run_native_all(&clang, &p, &format!("abort_tick0_{label}"), 3)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        if let Some(e) = disagreement(label, "Interpreter", &interpreted, "nativ", &native) {
+            panic!("{e}");
+        }
+        let model = takt_prove::encode(&p).unwrap_or_else(|e| panic!("{label}: {}", e.what));
+        let traced = model.run(&p, &stimulus, &result, 3).unwrap_or_else(|e| panic!("{label}: Modell: {e}"));
+        let diffs = takt_prove::mismatches(&result.trace, &traced);
+        assert!(diffs.is_empty(), "{label}: Interpreter und Modell: {diffs:?}\n{interpreted}\n{}", traced.render());
+    }
 }
 
 /// Ein Byteblock als Takt-Funktion aus einer Hexfolge.

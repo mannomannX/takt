@@ -890,6 +890,13 @@ fn jobs(t: &mut Text, p: &Program, x: &Prefix) {
 
 /// `P_init`: einmal vor dem ersten Tick.
 fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
+    // 5.4: die Abort-Phase eines Ticks, einmal fuer Tick 0 nach den
+    // Eintritten (FB-751) und fuer jeden weiteren nach den Schritten.
+    let _ = writeln!(s, "/* Die Abort-Phase des Ticks `k` (5.4). */");
+    let _ = writeln!(s, "static void takt_abort_phase(struct {x}_arena *a, int64_t k) {{");
+    let _ = writeln!(s, "    (void)k;");
+    crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
+    let _ = writeln!(s, "}}");
     let _ = writeln!(s, "/* Einmal vor dem ersten Tick (12.1, Schritt 1). */");
     let _ = writeln!(s, "static int32_t takt_persist_restore(struct {x}_arena *a, const void *in, int32_t len);");
     let _ = writeln!(s, "static void takt_sample(struct {x}_arena *a);");
@@ -953,6 +960,9 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
     let _ = writeln!(s, "    a->outer = 0;");
     crate::parts::outer_fault(s, p, "    ");
     crate::parts::enter_machines(s, p, layout, driven, "    ", x);
+    // 5.4: Ein `abort` im Tick 0 erreicht jede andere Maschine in der
+    // Abort-Phase desselben Ticks, nach den Eintritten (FB-751).
+    let _ = writeln!(s, "    takt_abort_phase(a, 0);");
     // Was `enter` und das erste `loop:` im Tick 0 senden, wird hier
     // sichtbar (FB-269).
     crate::parts::commit_sequence(s, p, driven, "    ", "0");
@@ -1067,7 +1077,7 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     // `apply_sim_bindings` im Interpreter.
     let _ = writeln!(s, "    takt_sim_streams(a, takt_ticks_ns(k));");
     crate::parts::steps(s, p, layout, driven, "    ", "k", x);
-    crate::parts::abort_phase(s, p, layout, driven, "    ", "k", x);
+    let _ = writeln!(s, "    takt_abort_phase(a, k);");
     crate::parts::signal_lines(s, p, driven, "    ", "k");
     crate::parts::idle_drops(s, p, driven, "    ", x);
     crate::parts::commit_sequence(s, p, driven, "    ", "k");

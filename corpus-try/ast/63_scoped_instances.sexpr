@@ -1,7 +1,7 @@
 (system
   (language 1)
   (tick 1ms))
-(input mode :int in 0..2 @sim("i/mode"))
+(input mode :int in 0..2 @hw("io/mode"))
 (output a :bool @hw("o/a") safe=false)
 (output b :bool @hw("o/b") safe=false)
 (output c :bool @hw("o/c") safe=false)
