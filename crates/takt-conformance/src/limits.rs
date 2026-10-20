@@ -62,17 +62,20 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Pruefstellen und Uebergaenge, die weder ein Lauf erreicht noch der Solver ausschliesst",
-        warum: "`UNREACHED` (`differential.rs`) haelt 101 Uebergaenge, 56 nie bestandene und 286 nie verletzte \
-                Pruefstellen in 97 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
+        warum: "`UNREACHED` (`differential.rs`) haelt 93 Uebergaenge, 53 nie bestandene und 286 nie verletzte \
+                Pruefstellen in 95 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
                 bis Tiefe 5 in 60 s keinen Pfad, k-Induktion beweist sie nicht unerreichbar, und der lange Lauf \
-                ohne Stimulus ueber `MAX_TICKS` (`paths::from_run`) faultet dort nicht. Die nie verletzten stehen \
-                je Programm mit ihrer Gruppe als Grund (`GROUPS`): Speicher 97, Frist 80, ohne Teilmodell 70 \
-                (FB-604), nicht k-induktiv 12, Fragment 12, bewiesen und nicht nachgerechnet 4, ohne Urteil 3, \
-                Zeitschranke 3 (FB-614), jenseits `MAX_TICKS` 2, ausserhalb der Suite `beweiser` 2, ein \
+                ohne Stimulus ueber `MAX_TICKS` (`paths::from_run`) faultet dort nicht. Jede Spalte steht je \
+                Programm mit ihren Gruppen als Grund (`GROUPS`). Uebergaenge: ohne Teilmodell 31 (FB-604), Frist \
+                27, Fragment 16, Speicher 13, bewiesen und nicht nachgerechnet 4, nicht k-induktiv 2. Nie \
+                bestanden: Frist 25, Fragment 6, bewiesene Range 6, ohne Teilmodell 5, in einer Meldung 4, nie \
+                gerufen 3 (FB-619), faultet stets 3, unbestaetigt 1. Nie verletzt: Speicher 96, Frist 80, ohne \
+                Teilmodell 70, Fragment 12, nicht k-induktiv 12, bewiesen und nicht nachgerechnet 5, nie gerufen \
+                3, Zeitschranke 3 (FB-614), jenseits `MAX_TICKS` 2, ausserhalb der Suite `beweiser` 2, ein \
                 bewiesener `check` 1. Dazu 186 Stellen, die nie faulten koennen (13.2: 167 `proven`, 10 \
                 `message`, 9 `observe`).",
-        wann: "M11 Schritt 29, Nachtrag (Strang B2): induktive Invarianten je Stelle (Schritt 2), Gruppen auch \
-               fuer Uebergaenge und nie bestandene Stellen (Schritt 5).",
+        wann: "M11 Schritt 29, Nachtrag (Strang B2): induktive Invarianten je Stelle (Schritt 2), dann der \
+               Speicher (FB-612).",
         row: "FB-511",
     },
     Limit {
