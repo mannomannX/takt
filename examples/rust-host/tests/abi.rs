@@ -38,16 +38,16 @@ fn link_reading(version: u32) -> (bool, String) {
     (out.status.success(), text)
 }
 
-/// **Eine Huelle der Version 5 bindet nicht gegen eine Bibliothek der
-/// Version 6** (sie gaebe dem Rahmen bei `init` keine Senke, M11 Schritt 16),
+/// **Eine Huelle der Version 6 bindet nicht gegen eine Bibliothek der
+/// Version 7** (sie kennte das Ende an der Achse nicht, 12.7, FB-694),
 /// und die Meldung nennt das Symbol. Die Gegenprobe: Mit dem Symbol der
 /// Bibliothek fehlt es nicht (andere Symbole des Wirts fehlen diesem
 /// Programm ohnehin).
 #[test]
 fn a_hull_of_another_abi_version_does_not_link() {
-    let (linked, text) = link_reading(5);
+    let (linked, text) = link_reading(6);
     assert!(!linked, "eine fremde Version band:\n{text}");
-    assert!(text.contains("valve_abi_5"), "die Meldung nennt das Symbol:\n{text}");
-    let (_, text) = link_reading(6);
-    assert!(!text.contains("valve_abi_6"), "die eigene Version fehlt nicht:\n{text}");
+    assert!(text.contains("valve_abi_6"), "die Meldung nennt das Symbol:\n{text}");
+    let (_, text) = link_reading(7);
+    assert!(!text.contains("valve_abi_7"), "die eigene Version fehlt nicht:\n{text}");
 }

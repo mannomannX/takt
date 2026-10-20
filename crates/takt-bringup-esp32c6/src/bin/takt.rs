@@ -447,7 +447,7 @@ fn platform(next: Option<NextRun>) {
     match next {
         NextRun::Now => platform::restart(),
         NextRun::After(delay) => platform::deep_sleep(Some(delay)),
-        NextRun::OnWake | NextRun::OnStart => platform::deep_sleep(None),
+        NextRun::OnWake | NextRun::OnStart | NextRun::Duration => platform::deep_sleep(None),
     }
 }
 

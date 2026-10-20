@@ -595,13 +595,13 @@ impl Clock for Logical {
 #[test]
 fn every_end_of_a_run_comes_back_from_its_code() {
     use takt_rt_core::NextRun;
-    let ends = [NextRun::Now, NextRun::After(5), NextRun::OnWake, NextRun::OnStart];
+    let ends = [NextRun::Now, NextRun::After(5), NextRun::OnWake, NextRun::OnStart, NextRun::Duration];
     for (i, end) in ends.into_iter().enumerate() {
         assert_eq!(end.code(), i as i32 + 1, "{end:?}");
         assert_eq!(NextRun::from_code(end.code(), 5), Some(end));
     }
     assert_eq!(NextRun::from_code(0, 5), None, "0 heisst weiter");
-    assert_eq!(NextRun::from_code(5, 5), None);
+    assert_eq!(NextRun::from_code(6, 5), None);
 }
 
 // --- Ueberlaeufe in Folge und an Grenzen (7.3) --------------------------

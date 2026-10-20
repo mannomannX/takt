@@ -294,6 +294,9 @@ pub enum NextRun {
     OnWake,
     /// `ON_START`: mit dem naechsten Start der Plattform.
     OnStart,
+    /// Ohne eigenes Ende: `now` hat die groesste `Duration` erreicht (3.3,
+    /// FB-694). Den naechsten Lauf beginnt die Plattform wie nach `ON_START`.
+    Duration,
 }
 
 impl NextRun {
@@ -307,12 +310,15 @@ impl NextRun {
             NextRun::After(_) => 2,
             NextRun::OnWake => 3,
             NextRun::OnStart => 4,
+            NextRun::Duration => 5,
         }
     }
 
     /// Das Ende zu einer Nummer von `P_next_run`; `delay` gilt fuer `AFTER`.
     pub fn from_code(code: i32, delay: i64) -> Option<NextRun> {
-        [NextRun::Now, NextRun::After(delay), NextRun::OnWake, NextRun::OnStart].into_iter().find(|n| n.code() == code)
+        [NextRun::Now, NextRun::After(delay), NextRun::OnWake, NextRun::OnStart, NextRun::Duration]
+            .into_iter()
+            .find(|n| n.code() == code)
     }
 }
 

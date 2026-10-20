@@ -38,8 +38,9 @@ extern "C" {
  * `takt_core_init` nicht an. Fassung 2: Der Wirt nennt seinen Watchdog.
  * Fassung 3: Die Tabelle traegt `operator_abort` (`takt_core_abort`).
  * Fassung 4: die Senke je Kern (`takt_sink`), `init` und `init_with` mit ihr,
- * die Haken `takt_trace_*` mit ihr; `takt_line_*` entfaellt. */
-#define TAKT_SDK_ABI 4u
+ * die Haken `takt_trace_*` mit ihr; `takt_line_*` entfaellt.
+ * Fassung 5: `TAKT_NEXT_DURATION`, das Ende an der Achse (12.7). */
+#define TAKT_SDK_ABI 5u
 
 /* So viele Byte haelt `takt_core`; das Archiv prueft beim Bau, dass sein
  * Kern hineinpasst. */
@@ -130,6 +131,7 @@ typedef struct takt_sink {
 #define TAKT_NEXT_AFTER 2
 #define TAKT_NEXT_ON_WAKE 3
 #define TAKT_NEXT_ON_START 4
+#define TAKT_NEXT_DURATION 5 /* `now` hat die groesste `Duration` erreicht (3.3) */
 
 /* Was `takt_core_service` dem Wirt sagt. */
 typedef struct takt_next {

@@ -568,7 +568,10 @@ fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
         })
         .collect();
     let last_call = plan.calls.keys().next_back().copied().unwrap_or(0);
-    let horizon = boundary(run.ticks, p.config.tick)?.max(last_call);
+    // Jenseits der Zeitachse rechnet der Kern keinen Tick mehr: Der Lauf endet
+    // dort mit `end duration` (12.7, FB-694). Die gesaettigte Frist `i64::MAX`
+    // ist keine Grenze des Kerns; an ihr hoert der Wirt auf.
+    let horizon = boundary(run.ticks, p.config.tick).unwrap_or(i64::MAX - 1).max(last_call);
     let _ = writeln!(s, "/* Die Aufrufe, die der Stimulus verlangt: Zeit, Wecken, Abbruch, zu spaet. */");
     let _ = writeln!(s, "struct host_call {{ int64_t at; uint8_t wake, abort, hardware, late; }};");
     let _ = writeln!(

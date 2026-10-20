@@ -27,7 +27,8 @@ use crate::drivers::Driver;
 /// Eingaenge zusammengesetzten Typs, Commands des Wirts, `P_operator_abort`
 /// (M11 Schritt 9). Fassung 6: die Senke des Trace bei `init` und die
 /// geteilten Haken `takt_trace_*` mit ihr (12.11, M11 Schritt 16).
-pub const ABI: u32 = 6;
+/// Fassung 7: `P_next_run` meldet das Ende an der Achse (5, 12.7, FB-694).
+pub const ABI: u32 = 7;
 
 /// Was das Modul braucht.
 pub struct Module<'a> {

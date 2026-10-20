@@ -1215,10 +1215,15 @@ fn next_run_code(end: takt_mir::sys::NextRun) -> i32 {
 
 /// `P_next_run` und `P_end`: das Ende des Laufs (12.7), wie im
 /// Interpreter — die Zeile `end`, dann alle Ausgaenge auf `safe`. Was
-/// zwischen zwei Laeufen geschieht, fuehrt das Board aus.
+/// zwischen zwei Laeufen geschieht, fuehrt das Board aus. Ohne eigenes
+/// Ende endet der Lauf mit dem Tick, in dem `now` die groesste `Duration`
+/// erreicht (3.3, FB-694).
 fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
     let next = crate::parts::next_run_slot(p, layout);
-    let _ = writeln!(s, "/* 12.7: 0 weiter, 1 NOW, 2 AFTER (`delay` in ns), 3 ON_WAKE, 4 ON_START. */");
+    let _ = writeln!(
+        s,
+        "/* 12.7: 0 weiter, 1 NOW, 2 AFTER (`delay` in ns), 3 ON_WAKE, 4 ON_START, 5 Ende der Achse (3.3). */"
+    );
     let _ = writeln!(s, "int32_t {x}_next_run(struct {x}_arena *a, int64_t *delay) {{");
     let _ = writeln!(s, "    *delay = -1;");
     if let Some(n) = &next {
@@ -1239,11 +1244,14 @@ fn platform(s: &mut String, p: &Program, layout: &Layout, x: &Prefix) {
         let _ = writeln!(s, "    default: break;");
         let _ = writeln!(s, "    }}");
     }
-    let _ = writeln!(s, "    return 0;");
+    let (max, duration) = (i64::MAX, takt_rt_core::NextRun::Duration.code());
+    let _ = writeln!(s, "    return (takt_ticks_ns(a->done) == {max}LL) ? {duration} : 0;");
     let _ = writeln!(s, "}}");
-    let mut ends = takt_mir::sys::NextRun::ALL;
-    ends.sort_by_key(|e| next_run_code(*e));
-    let words: Vec<String> = ends.iter().map(|c| format!("\" end {}\\n\"", c.word())).collect();
+    let mut ends: Vec<(i32, &str)> =
+        takt_mir::sys::NextRun::ALL.iter().map(|e| (next_run_code(*e), e.word())).collect();
+    ends.push((duration, takt_interp::Ended::Duration.name()));
+    ends.sort_by_key(|e| e.0);
+    let words: Vec<String> = ends.iter().map(|(_, w)| format!("\" end {w}\\n\"")).collect();
     let _ = writeln!(s, "void {x}_end(struct {x}_arena *a) {{");
     let _ = writeln!(s, "    static const char *const words[] = {{ {} }};", words.join(", "));
     let _ = writeln!(s, "    int64_t delay;");

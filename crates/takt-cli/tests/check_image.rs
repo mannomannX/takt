@@ -142,7 +142,7 @@ fn a_well_linked_image_has_no_finding() {
     let text = report(&out);
     assert!(out.status.success(), "{text}");
     for want in [
-        "ABI 6 gebunden",
+        "ABI 7 gebunden",
         "Logik-Hash",
         "Arena `app_arena`",
         "alle im RAM oder ROM",

@@ -113,8 +113,9 @@ extern "C" fn rust_eh_personality() {}
 /// (5.4). Fassung 4: die Senke je Kern ([`takt_sink_init`],
 /// [`takt_core_init`] mit ihr), `init` und `init_with` der Tabelle mit ihr
 /// und die Haken `takt_trace_*` mit ihr; die Leitung je Prozess
-/// (`takt_line_*`) entfaellt (12.11, FB-691).
-pub const ABI: u32 = 4;
+/// (`takt_line_*`) entfaellt (12.11, FB-691). Fassung 5: das Ende an der
+/// Achse, `TAKT_NEXT_DURATION` (12.7, FB-694).
+pub const ABI: u32 = 5;
 
 /// So viele Byte haelt `takt_core` fuer den Kern (`TAKT_CORE_BYTES`).
 pub const CORE_BYTES: usize = 1024;
@@ -1340,8 +1341,8 @@ mod tests {
     use std::vec::Vec;
 
     use super::{
-        ABI, CORE_BYTES, Foreign, LineOps, NextStep, NvmOps, Ops, SINK_BYTES, StackDepths, TunablesOps, WatchdogOps,
-        nvm, status,
+        ABI, CORE_BYTES, Foreign, LineOps, NextRun, NextStep, NvmOps, Ops, SINK_BYTES, StackDepths, TunablesOps,
+        WatchdogOps, nvm, status,
     };
 
     const HEADER: &str = include_str!("../include/takt_sdk.h");
@@ -1482,6 +1483,11 @@ mod tests {
             ("TAKT_NVM_BUSY", nvm::BUSY),
             ("TAKT_NVM_DONE", nvm::DONE),
             ("TAKT_NVM_FAILED", nvm::FAILED),
+            ("TAKT_NEXT_NOW", NextRun::Now.code()),
+            ("TAKT_NEXT_AFTER", NextRun::After(0).code()),
+            ("TAKT_NEXT_ON_WAKE", NextRun::OnWake.code()),
+            ("TAKT_NEXT_ON_START", NextRun::OnStart.code()),
+            ("TAKT_NEXT_DURATION", NextRun::Duration.code()),
         ] {
             assert_eq!(define(name), i64::from(value), "{name}");
         }
