@@ -35,7 +35,7 @@ use core::convert::Infallible;
 
 use embedded_hal::digital::{ErrorType, InputPin, OutputPin};
 use takt_embed::Device;
-use takt_embed::frame::{Cobs, Framed, Lines, Source};
+use takt_embed::frame::{Cobs, Framed, Lines, Pull, Source};
 use takt_embed::hal::Pin;
 use takt_embed::io::Serial;
 use takt_embed::ring::Ring;
@@ -165,17 +165,18 @@ pub struct Isr {
 }
 
 impl Source for Isr {
-    fn take(&mut self) -> Option<u8> {
+    fn pull(&mut self) -> Pull {
         if RX.is_empty() && !core::mem::replace(&mut self.fed, true) {
             for byte in FRAME {
-                RX.push(byte);
+                // Der Ring fasst den Rahmen; ein voller meldete die Luecke.
+                let _ = RX.push(byte);
             }
         }
-        let byte = RX.pop();
-        if byte.is_none() {
+        let pulled = (&RX).pull();
+        if pulled == Pull::Empty {
             self.fed = false;
         }
-        byte
+        pulled
     }
 }
 
