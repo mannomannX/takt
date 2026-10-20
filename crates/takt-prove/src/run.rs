@@ -168,7 +168,7 @@ impl Runner {
         };
         let sites = model.checks.iter().flat_map(|c| [&c.fires, &c.fail]);
         Runner {
-            next: plan(model.state.iter().map(|v| &v.next).chain(sites).collect(), true),
+            next: plan(model.state.iter().map(|v| model.exact_next(v)).chain(sites).collect(), true),
             invariants: plan(model.invariants.iter().collect(), false),
             assumptions: plan(model.assumptions.iter().collect(), true),
             goals: plan(model.properties.iter().map(|g| &g.formula).collect(), true),

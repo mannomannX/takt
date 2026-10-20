@@ -228,33 +228,26 @@ pub struct Model {
     /// Kegel einer Anfrage (`smt::cone`): beim ersten Kegel einmal ueber den
     /// geteilten Graphen gesammelt statt je Anfrage (FB-603).
     pub(crate) deps: std::cell::OnceCell<std::rc::Rc<Vec<std::collections::BTreeSet<String>>>>,
-    /// Das Ende an der Achse, offen fuer Beweisanfragen (3.3, FB-694): ohne
-    /// eigenes Ende (`sys/next_run`) der Ort `s.run.ended`, sein Folgewert
-    /// mit einer freien Eingabe statt `now = 2^63 − 1` und diese Eingabe.
-    /// BMC, Pfade und [`Model::run`] bleiben exakt; Induktion und
-    /// Invariantensuche sehen [`crate::smt`] zufolge das offene Ende.
-    pub open_end: Option<OpenEnd>,
-    /// Das Modell mit offenem Ende, einmal gebaut (`smt::proving`).
-    pub(crate) proving: std::cell::OnceCell<std::rc::Rc<Model>>,
-}
-
-/// Das Ende an der Achse, offen (FB-694): Jeder Lauf ist ein Pfad des
-/// offenen Modells, denn die freie Eingabe kann genau im Tick wahr sein, in
-/// dem `now` die groesste `Duration` erreicht. Ein frueheres Ende auf einem
-/// anderen Pfad haelt die Maschinen an und macht jedes Ziel leer
-/// ([`after_end`]); es verletzt keines. Kein Pfad einer Tiefe erreicht das
-/// Ende an der Achse, und der Kegel eines Ziels braucht `now` nicht mehr.
-#[derive(Clone, Debug)]
-pub struct OpenEnd {
-    /// Der Ort des Endes.
-    pub var: String,
-    /// Sein Folgewert: geendet, oder die freie Eingabe.
-    pub next: Term,
-    /// Die freie Eingabe.
-    pub input: (String, Sort),
+    /// Der Folgewert von `s.run.ended` mit dem Ende an der Achse (3.3,
+    /// FB-694), fuer die konkrete Ausfuehrung ([`Model::run`],
+    /// [`Model::simulate`]). Der Zustand [`Model::state`], den der Solver
+    /// sieht, kennt dieses Ende nicht: Er rechnet, als liefe der Lauf weiter.
+    /// Bis zum Tick des Endes ist das derselbe Lauf, und danach muss nichts
+    /// gelten; jeder Zustand, in dem etwas gelten muss, ist also einer des
+    /// Solvers, und `now` liegt nur im Kegel eines Ziels, das es liest.
+    pub exact_end: Option<Term>,
 }
 
 impl Model {
+    /// Der Folgewert von `v` in der konkreten Ausfuehrung: fuer
+    /// `s.run.ended` mit dem Ende an der Achse ([`Model::exact_end`]).
+    pub fn exact_next<'a>(&'a self, v: &'a StateVar) -> &'a Term {
+        match &self.exact_end {
+            Some(next) if v.name == ENDED => next,
+            _ => &v.next,
+        }
+    }
+
     /// Der Name eines Blattcodes.
     pub fn leaf_name(&self, machine: &str, code: i64) -> Option<&str> {
         self.leaves.get(machine)?.iter().find(|(c, _)| *c == code).map(|(_, n)| n.as_str())
@@ -276,7 +269,7 @@ impl Model {
             for (name, sort) in &self.inputs {
                 env.insert(name.clone(), input(k, name).unwrap_or(eval::Val::zero(*sort)));
             }
-            state = names().zip(eval::eval_all(self.state.iter().map(|v| &v.next), &env)).collect();
+            state = names().zip(eval::eval_all(self.state.iter().map(|v| self.exact_next(v)), &env)).collect();
             out.push(state.clone());
         }
         out
@@ -468,6 +461,9 @@ struct Enc<'p> {
     notes: Vec<String>,
     /// `abort` in diesem Tick, je Stelle.
     aborts: Vec<Term>,
+    /// Der Folgewert von `s.run.ended` mit dem Ende an der Achse
+    /// (`Model::exact_end`), aus dem Tick.
+    exact_end: Option<Term>,
     /// Feuerbedingungen der Pruefstellen der laufenden Phase, je Stelle.
     sites: BTreeMap<SiteKey, Vec<Fire>>,
     /// Position und Maschine je Pruefstelle.
@@ -854,13 +850,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
             .collect();
         (m.name.clone(), done)
     });
-    // 3.3: Ohne eigenes Ende endet ein Lauf nur an der Achse; Beweisanfragen
-    // lassen dieses Ende offen (FB-694).
-    let open_end = enc.run_end().is_none().then(|| OpenEnd {
-        var: ENDED.to_string(),
-        next: Term::or(vec![Term::var(ENDED, Sort::Bool), Term::var(AXIS, Sort::Bool)]),
-        input: (AXIS.to_string(), Sort::Bool),
-    });
+    let exact_end = enc.exact_end.take();
     let mut notes = enc.notes;
     notes.sort();
     notes.dedup();
@@ -882,8 +872,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
         observed,
         scenario,
         deps: Default::default(),
-        open_end,
-        proving: Default::default(),
+        exact_end,
     })
 }
 
@@ -919,6 +908,7 @@ impl<'p> Enc<'p> {
             monitors: Vec::new(),
             confirms: Vec::new(),
             now: Term::int(0),
+            exact_end: None,
             ticks: Term::int(0),
             streams: Vec::new(),
             txs: Vec::new(),
@@ -3740,14 +3730,11 @@ impl Enc<'_> {
         Some((loc, ending.collect()))
     }
 
-    /// Beendet der committete Zustand `env` den Lauf: eine Variante von
-    /// `sys/next_run`, die ihn beendet, oder `now` an der groessten
-    /// `Duration` (3.3)?
+    /// Beendet der committete Zustand `env` den Lauf selbst, mit einer
+    /// Variante von `sys/next_run`, die ihn beendet (12.7)?
     fn ends(&self, env: &Env) -> Term {
-        let axis = Term::eq(env[NOW].clone(), Term::int(i64::MAX));
-        let Some((loc, ending)) = self.run_end() else { return axis };
-        let own = ending.iter().map(|i| Term::eq(env[&loc].clone(), Term::int(*i)));
-        Term::or(own.chain([axis]).collect())
+        let Some((loc, ending)) = self.run_end() else { return Term::bool(false) };
+        Term::or(ending.iter().map(|i| Term::eq(env[&loc].clone(), Term::int(*i))).collect())
     }
 
     /// Die Outputs, wie sie zu Beginn und nach dem Ende eines Laufs stehen:
@@ -3849,12 +3836,17 @@ impl Enc<'_> {
         self.apply_scheduled(&mut cur)?;
         self.drain_tx(&mut cur)?;
         self.edges_next(pre, &mut cur)?;
-        let now = self.ends(&cur);
+        let own = self.ends(&cur);
         for (loc, ty, safe) in self.safe_outputs()? {
             self.put(&mut cur, &loc, ty, safe, &ended, Span::default())?;
         }
         cur.insert(OVER.into(), ended.clone());
-        cur.insert(ENDED.into(), Term::or(vec![ended, now]));
+        // 3.3: Mit dem Tick, in dem `now` die groesste `Duration` erreicht,
+        // endet der Lauf; das weiss nur die konkrete Ausfuehrung
+        // (`Model::exact_end`), der Solver rechnet weiter (FB-694).
+        let axis = Term::eq(cur[NOW].clone(), Term::int(i64::MAX));
+        self.exact_end = Some(Term::or(vec![ended.clone(), own.clone(), axis]));
+        cur.insert(ENDED.into(), Term::or(vec![ended, own]));
         let monitors = self.monitors.clone();
         self.monitors_next(&monitors, Some(pre), &mut cur)?;
         Ok(cur)
@@ -4810,15 +4802,11 @@ const ENDED: &str = "s.run.ended";
 /// Hatte er schon vor diesem Tick geendet? Dann ist der Tick keiner des Laufs.
 const OVER: &str = "s.run.over";
 
-/// Die freie Eingabe des offenen Endes ([`OpenEnd`]): Der Lauf erreicht in
-/// diesem Tick das Ende der Achse. Nur Beweisanfragen kennen sie.
-const AXIS: &str = "i.run.axis";
-
 /// Ein Ziel nach dem Ende eines Laufs (12.7, 3.3; FB-694): `over ∨ c`, und `c`
 /// liest das Ende nicht. Nur in dieser Form wird ein Ziel nach dem Ende
-/// hoechstens leerer; darauf baut das offene Ende der Beweisanfragen
-/// ([`OpenEnd`]). Ein Ziel, das vom Ende abhinge, ist ein Fehler der
-/// Kodierung und wird nicht gebaut.
+/// hoechstens leerer, und der Solver, der das Ende an der Achse nicht kennt
+/// ([`Model::exact_end`]), verliert an ihm nichts. Ein Ziel, das vom Ende
+/// abhinge, ist ein Fehler der Kodierung und wird nicht gebaut.
 fn after_end(over: &Term, c: Term) -> R<Term> {
     Ok(Term::or(vec![over.clone(), unread_end(c)?]))
 }

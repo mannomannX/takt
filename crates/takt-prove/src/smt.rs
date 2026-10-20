@@ -530,7 +530,7 @@ pub fn export(model: &Model, depth: u32) -> String {
     let _ = writeln!(out);
     block(&mut out, model, "@", Query::Bmc, depth, &all, false);
     let _ = writeln!(out);
-    block(&mut out, proving(model), "#", Query::Induction, depth, &all, false);
+    block(&mut out, model, "#", Query::Induction, depth, &all, false);
     out
 }
 
@@ -735,7 +735,6 @@ impl LetPrinter {
 /// mit (FB-497). `Err` nennt, was im Kegel des Ziels ausserhalb des
 /// Fragments liegt (Fliesskomma, auch in Arrays, Bitoperationen, Schieben).
 pub fn horn(model: &Model, target: Target) -> Result<String, String> {
-    let model = proving(model);
     let Scope { state, inputs, constraints, invariants, .. } = scope(model, &[target], true);
     let before: Vec<&Term> = constraints.iter().chain(&invariants).copied().collect();
     let lia = lia_sort;
@@ -935,28 +934,9 @@ pub fn fail_query(model: &Model, target: Target) -> Option<String> {
     Some(out)
 }
 
-/// Das Modell, wie Induktion und Invariantensuche es sehen (3.3, FB-694):
-/// Ohne eigenes Ende ist das Ende an der Achse offen ([`crate::encode::OpenEnd`]),
-/// eine freie Eingabe statt `now = 2^63 − 1`. Jeder Lauf ist ein Pfad davon;
-/// so braucht der Kegel eines Ziels `now` nicht. BMC bleibt exakt.
-fn proving(model: &Model) -> &Model {
-    let Some(open) = &model.open_end else { return model };
-    model.proving.get_or_init(|| {
-        let mut m = model.clone();
-        for v in m.state.iter_mut().filter(|v| v.name == open.var) {
-            v.next = open.next.clone();
-        }
-        m.inputs.push(open.input.clone());
-        m.open_end = None;
-        m.deps = Default::default();
-        std::rc::Rc::new(m)
-    })
-}
-
 /// Die Anfrage eines Ziels fuer den Solver; BMC fragt nach den Eingaben
 /// des Gegenbeispiels.
 pub fn query(model: &Model, depth: u32, target: Target, kind: Query) -> String {
-    let model = if kind == Query::Induction { proving(model) } else { model };
     let mut out = head(model);
     let tag = match kind {
         Query::Bmc => "@",
