@@ -66,7 +66,7 @@ fn guard() -> Region {
 }
 
 /// Wie viele Regionen die MPU hat (`MPU_TYPE.DREGION`; der Cortex-M4 hat 8).
-pub fn regions(mpu: &MPU) -> u32 {
+pub fn regions(mpu: &cortex_m::peripheral::mpu::RegisterBlock) -> u32 {
     (mpu._type.read() >> 8) & 0xFF
 }
 
