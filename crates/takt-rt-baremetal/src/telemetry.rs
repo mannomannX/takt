@@ -11,9 +11,20 @@
 //!
 //! Das Board liefert nur die Leitung ([`Port`]): ein Byte, wenn Platz
 //! ist, und den Abschluss eines Pakets.
+//!
+//! **Fliesskomma formatiert der Leitungspfad** (12.5): Ein Haken legt Marke
+//! und Bits in den Ring ([`takt_rt_core::digits::float_record`]), und erst
+//! [`Telemetry::flush`] schreibt die Textform, wenn die Zahl an der Reihe
+//! ist. Was die Leitung von ihr noch nicht nahm, wartet im Ueberhang. Im
+//! Schritt bleibt so je Wert feste Arbeit; der Formatierer laeuft am Ende des
+//! Ticks ([`Telemetry::after_tick`]). Nur im Lauf in logischer Zeit, der
+//! nichts verwerfen darf, laeuft er schon im Schritt, wenn der Trace eines
+//! einzigen Ticks den Ring fuellt. Gezaehlt wird darum, was an die Leitung
+//! ging, nicht, was in den Ring kam.
 
 use takt_rt_core::Tick;
 pub(crate) use takt_rt_core::digits::hex as hex_digit;
+use takt_rt_core::digits::{self, FLOAT_MARK, FLOAT_RECORD};
 
 /// Anlaeufe, den Ring zu leeren, wo der Tick nicht mehr zaehlt (Ende,
 /// Panic): reichlich fuer einen lesenden Host, endlich ohne ihn.
@@ -47,6 +58,17 @@ pub struct Telemetry<P: Port> {
     ring: &'static mut [u8],
     head: usize,
     len: usize,
+    /// So viele Byte am Anfang des Rings kamen vor der Marke `takt trace`
+    /// und zaehlen nicht ([`Telemetry::sent`]).
+    uncounted: usize,
+    /// Die Textform der Zahl, die zuletzt an der Reihe war, und wie viel
+    /// davon die Leitung schon nahm.
+    spill: digits::Text,
+    spilled: u8,
+    /// Ob der Ueberhang nach der Marke kam und zaehlt.
+    spill_counts: bool,
+    /// So viele Byte einer verworfenen Zahl folgen noch und fallen mit weg.
+    skipping: u8,
     dropped: u32,
     sent: u32,
     lossless: bool,
@@ -57,7 +79,20 @@ impl<P: Port> Telemetry<P> {
     /// der Telemetrie liegen nicht in der Arena (12.11), und als Wert
     /// laege der Ring auf dem Stack, unter jedem Tick (FB-458).
     pub fn new(port: P, ring: &'static mut [u8]) -> Self {
-        Telemetry { port, ring, head: 0, len: 0, dropped: 0, sent: 0, lossless: false }
+        Telemetry {
+            port,
+            ring,
+            head: 0,
+            len: 0,
+            uncounted: 0,
+            spill: digits::Text::default(),
+            spilled: 0,
+            spill_counts: false,
+            skipping: 0,
+            dropped: 0,
+            sent: 0,
+            lossless: false,
+        }
     }
 
     /// Verlustfrei: Ist der Ring voll, wartet [`Telemetry::write_byte`], bis
@@ -71,50 +106,133 @@ impl<P: Port> Telemetry<P> {
     }
 
     /// Ein Byte in den Ring; ist er voll, geht erst die Leitung, dann
-    /// faellt es weg.
+    /// faellt es weg. Eine Zahl, [`FLOAT_MARK`] und ihre Bits, kommt ganz
+    /// hinein oder gar nicht: Halb gelesen waere sie eine andere.
     pub fn write_byte(&mut self, b: u8) {
-        let cap = self.ring.len();
-        if self.len == cap {
+        if self.skipping > 0 {
+            self.skipping = self.skipping.saturating_sub(1);
+            self.dropped = self.dropped.saturating_add(1);
+            return;
+        }
+        let need = if b == FLOAT_MARK { FLOAT_RECORD } else { 1 };
+        if self.room() < need {
             if self.lossless {
                 self.drain(DRAIN_ROUNDS);
             } else {
-                self.flush();
+                // Im Betrieb formatiert der Schritt nie: Die Leitung bekommt
+                // nur, was schon Text ist.
+                self.pass(false);
+                self.port.flush();
             }
-            if self.len == cap {
+            if self.room() < need {
                 self.dropped = self.dropped.saturating_add(1);
+                self.skipping = u8::try_from(need.saturating_sub(1)).unwrap_or(u8::MAX);
                 return;
             }
         }
-        // `head` und `len` liegen unter `cap`: Ein Abzug genuegt, und eine
-        // Division mit veraenderlichem Teiler waere auf RV32 ein Aufruf.
-        let at = self.head.saturating_add(self.len);
-        match self.ring.get_mut(if at >= cap { at.saturating_sub(cap) } else { at }) {
+        match self.ring.get_mut(self.index(self.len)) {
             Some(slot) => {
                 *slot = b;
                 self.len = self.len.saturating_add(1);
-                self.sent = self.sent.saturating_add(1);
             }
             None => self.dropped = self.dropped.saturating_add(1),
         }
     }
 
+    /// Eine Fliesskommazahl: Marke und Bits, die Textform schreibt
+    /// [`Telemetry::flush`].
+    pub fn write_f64(&mut self, x: f64) {
+        for b in digits::float_record(x) {
+            self.write_byte(b);
+        }
+    }
+
+    /// Der freie Platz im Ring.
+    fn room(&self) -> usize {
+        self.ring.len().saturating_sub(self.len)
+    }
+
+    /// Die Stelle im Ring `i` Byte hinter dem Kopf, fuer `i` hoechstens die
+    /// Groesse des Rings: `head` liegt darunter, ein Abzug genuegt, und eine
+    /// Division mit veraenderlichem Teiler waere auf RV32 ein Aufruf.
+    fn index(&self, i: usize) -> usize {
+        let (cap, at) = (self.ring.len(), self.head.saturating_add(i));
+        if at >= cap { at.saturating_sub(cap) } else { at }
+    }
+
     /// Gibt an die Leitung, was sie nimmt, und schliesst das Paket ab.
     pub fn flush(&mut self) {
-        while self.len > 0 && self.ring.get(self.head).is_some_and(|b| self.port.try_write(*b)) {
-            self.head = self.head.saturating_add(1);
-            if self.head == self.ring.len() {
-                self.head = 0;
-            }
-            self.len = self.len.saturating_sub(1);
-        }
+        self.pass(true);
         self.port.flush();
+    }
+
+    /// Am Ende eines Ticks (12.2): gibt an die Leitung, was sie nimmt.
+    /// Verlustfrei wartet es, bis der Ring leer ist; so schreibt der naechste
+    /// Tick in einen leeren und formatiert seine Zahlen nicht schon selbst.
+    pub fn after_tick(&mut self) {
+        if self.lossless {
+            self.drain(DRAIN_ROUNDS);
+        } else {
+            self.flush();
+        }
+    }
+
+    /// Gibt der Leitung Byte, solange sie nimmt. Ist eine Zahl an der
+    /// Reihe, schreibt nur mit `numbers` ihre Textform in den Ueberhang.
+    fn pass(&mut self, numbers: bool) {
+        loop {
+            if let Some(&b) = self.spill.as_bytes().get(usize::from(self.spilled)) {
+                if !self.port.try_write(b) {
+                    return;
+                }
+                self.spilled = self.spilled.saturating_add(1);
+                if self.spill_counts {
+                    self.sent = self.sent.saturating_add(1);
+                }
+                continue;
+            }
+            let Some(&b) = self.ring.get(self.head).filter(|_| self.len > 0) else { return };
+            if b == FLOAT_MARK {
+                if !numbers || self.len < FLOAT_RECORD {
+                    return;
+                }
+                let mut bits = [0u8; 8];
+                for (i, slot) in (1..).zip(bits.iter_mut()) {
+                    *slot = self.ring.get(self.index(i)).copied().unwrap_or(0);
+                }
+                self.spill_counts = self.take(FLOAT_RECORD);
+                self.spill = digits::float64_text(f64::from_le_bytes(bits));
+                self.spilled = 0;
+            } else if self.port.try_write(b) {
+                if self.take(1) {
+                    self.sent = self.sent.saturating_add(1);
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    /// Nimmt `n` Byte vom Kopf des Rings; wahr, wenn sie nach der Marke
+    /// kamen und zaehlen.
+    fn take(&mut self, n: usize) -> bool {
+        let counts = self.uncounted == 0;
+        self.uncounted = self.uncounted.saturating_sub(n);
+        self.head = self.index(n);
+        self.len = self.len.saturating_sub(n);
+        counts
+    }
+
+    /// Ob nichts mehr auf die Leitung wartet, weder im Ring noch im Ueberhang.
+    fn is_empty(&self) -> bool {
+        self.len == 0 && usize::from(self.spilled) >= self.spill.as_bytes().len()
     }
 
     /// Leert den Ring mit hoechstens `rounds` Anlaeufen; wahr, wenn er leer ist.
     pub fn drain(&mut self, rounds: u32) -> bool {
         for _ in 0..rounds {
             self.flush();
-            if self.len == 0 {
+            if self.is_empty() {
                 return true;
             }
         }
@@ -127,7 +245,7 @@ impl<P: Port> Telemetry<P> {
     pub fn finish(&mut self, rounds: u32) -> bool {
         for _ in 0..rounds {
             self.flush();
-            if self.len == 0 && self.port.idle() {
+            if self.is_empty() && self.port.idle() {
                 return true;
             }
         }
@@ -150,11 +268,14 @@ impl<P: Port> Telemetry<P> {
     pub fn mark(&mut self) {
         self.write("takt trace");
         self.newline();
+        self.uncounted = self.len;
+        self.spill_counts = false;
         self.sent = 0;
     }
 
-    /// Wie viele Bytes seit [`Telemetry::mark`] in den Ring gingen; die
+    /// Wie viele Bytes seit [`Telemetry::mark`] an die Leitung gingen; die
     /// Abschlusszeile nennt sie, und der Wirt vergleicht mit dem, was ankam.
+    /// Eine Zahl zaehlt mit ihrer Textform, erst wenn sie hinaus ist.
     pub fn sent(&self) -> u32 {
         self.sent
     }
@@ -214,8 +335,8 @@ impl<P: Port> Telemetry<P> {
     }
 }
 
-/// Fuer `write!`: Fliesskommazahlen kommen aus `core::fmt`, das die
-/// kuerzeste Ziffernfolge druckt, die den Wert eindeutig zurueckgibt (4.2).
+/// Fuer `write!` des Wirts ausserhalb des Schritts, etwa im Kopf oder vor der
+/// Bilanz; der Trace des Programms kommt ueber die Haken.
 impl<P: Port> core::fmt::Write for Telemetry<P> {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         self.write(s);
@@ -335,6 +456,43 @@ mod tests {
         assert_eq!(t.dropped(), 0);
     }
 
+    /// **Fliesskomma formatiert der Leitungspfad** (12.5, FB-750): Im Ring
+    /// stehen Marke und Bits; die Leitung bekommt die Textform aus T2, auch
+    /// wenn sie je Paket nur drei Byte nimmt. `gesendet` zaehlt, was nach der
+    /// Marke an die Leitung ging, mit der Textform jeder Zahl.
+    #[test]
+    fn the_line_path_writes_the_text_of_a_float() {
+        let mut t = Telemetry::new(line(3), ring(64));
+        t.write_f64(-0.5);
+        t.mark();
+        t.write("x ");
+        t.write_f64(1.5e-7);
+        t.write(" ");
+        t.write_f64(1e30);
+        assert_eq!(t.pending(), 9 + 12 + 2 + 9 + 1 + 9);
+        assert!(t.drain(20));
+        assert_eq!(text(&t), "-0.5takt trace\r\nx 1.5e-7 1.0e30");
+        assert_eq!(t.sent(), 15);
+    }
+
+    /// **Eine Zahl kommt ganz in den Ring oder gar nicht**: Im Betrieb
+    /// verwirft ein voller Ring die Zahl mit ihren Bits, und was danach kommt,
+    /// liest sich weiter; formatiert wird dabei nichts.
+    #[test]
+    fn a_full_ring_drops_a_float_whole() {
+        let mut t = Telemetry::new(line(0), ring(13));
+        t.write("abcd");
+        t.write_f64(2.5);
+        t.write_f64(3.0);
+        t.write("e");
+        assert_eq!((t.pending(), t.dropped(), t.spill.as_bytes()), (13, 10, &[][..]));
+        t.port.cap = 64;
+        assert!(t.drain(4));
+        t.write("f");
+        assert!(t.drain(4));
+        assert_eq!(text(&t), "abcd2.5f");
+    }
+
     /// Ein leerer Ring heisst nicht, dass alles hinaus ist: `finish` wartet
     /// auch auf den Puffer der Leitung, begrenzt wie `drain`.
     #[test]
@@ -348,19 +506,25 @@ mod tests {
         assert!(!stuck.finish(10));
     }
 
-    /// Die Bilanz zaehlt ab der Marke, was in den Ring ging — Verworfenes
-    /// nicht, denn das kommt nie an.
+    /// Die Bilanz zaehlt ab der Marke, was an die Leitung ging — Verworfenes
+    /// nicht, denn das kommt nie an, und was noch im Ring steht, erst, wenn es
+    /// hinaus ist.
     #[test]
     fn the_count_starts_at_the_mark_and_skips_dropped_bytes() {
         let mut t = Telemetry::new(line(64), ring(64));
         t.write("Kopf\r\n");
         t.mark();
         t.write("t=1 out a 1\r\n");
+        assert_eq!(t.sent(), 0);
+        assert!(t.drain(4));
         assert_eq!(t.sent(), 13);
         let mut full = Telemetry::new(line(0), ring(16));
         full.mark();
         full.write("0123456789");
-        assert_eq!((full.sent(), full.dropped()), (4, 6));
+        assert_eq!((full.sent(), full.dropped()), (0, 6));
+        full.port.cap = 64;
+        assert!(full.drain(4));
+        assert_eq!(full.sent(), 4);
     }
 
     /// **Die Zeitzeile nennt den Tick des Traces** (grammar/trace.md T1,

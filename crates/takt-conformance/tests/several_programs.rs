@@ -19,8 +19,8 @@ const PROGRAMS: [(&str, &str); 2] = [("pa", "03_sequences_and_faults.takt"), ("p
 /// Die Haken fuer alle Rahmen (12.11): Die Senke jedes Programms und jeder
 /// Instanz ist ihre Datei, die sie bei `init` bekommt; eine globale Wahl,
 /// wer gerade schreibt, gibt es nicht (FB-691). Eine Fliesskommazahl schreibt
-/// der Haken als Bits hinter einer Marke; [`t2`] setzt ihre Textform ein, wie
-/// sie die Haken in Rust und im SDK schreiben (FB-750).
+/// der Haken als Bits hinter einer Marke, wie die Haken in Rust und im SDK;
+/// [`t2`] setzt ihre Textform ein wie dort der Ring vor der Leitung (FB-750).
 const BOARD: &str = r#"#include <stdio.h>
 #include <string.h>
 
@@ -38,7 +38,7 @@ void takt_trace_hex8(void *s, unsigned char v) { fprintf((FILE *)s, "0x%02x", v)
 "#;
 
 /// Setzt fuer jede Marke der Fliesskomma-Haken die Textform aus T2 ein
-/// (`takt_rt_core::digits::float64`, wie die Haken in Rust und im SDK).
+/// (`takt_rt_core::digits::float64`, wie der Ring vor der Leitung).
 fn t2(trace: &str) -> String {
     let mut out = String::with_capacity(trace.len());
     let mut rest = trace;
