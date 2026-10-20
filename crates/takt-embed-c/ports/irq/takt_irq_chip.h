@@ -19,6 +19,13 @@
  *   (12.11).
  * - Was ISR und Hauptschleife teilen, ist ein Wort; jedes andere Datum
  *   gehoert einem Kontext.
+ * - Hat der Chip eine Schutzeinheit, setzt `takt_irq_chip_protect` eine
+ *   Region ueber den Programmbereich der Arena und fuellt die Haken fuer
+ *   `takt_core_protect` (12.3): beschreibbar nur, waehrend der Kern ihn
+ *   schreibt. Ein Zugriff ausserhalb wird abgewiesen, uebergangen und dem
+ *   Kern gemeldet. Jede ISR des Wirts, die den Schritt unterbrechen kann,
+ *   laeuft zwischen `takt_irq_chip_isr_enter` und `takt_irq_chip_isr_leave`:
+ *   Fuer sie ist der Programmbereich nur lesbar, auch mitten im Schritt.
  */
 #ifndef TAKT_IRQ_CHIP_H
 #define TAKT_IRQ_CHIP_H
@@ -51,6 +58,21 @@ void takt_irq_chip_pend_step(void);
 
 /* Laesst den Job-Interrupt anstehen. */
 void takt_irq_chip_pend_jobs(void);
+
+/* Die Region ueber dem Programmbereich ab `arena`, `align` Byte gross und
+ * an `align` ausgerichtet (`P_PROTECT_ALIGN`), die `bytes` davon von vorn
+ * deckt (`P_PROTECT_BYTES`), offen, bis der Kern sie schliesst; `protection`
+ * bekommt die Haken fuer `takt_core_protect`. 0, TAKT_IRQ_INVALID oder ein
+ * Fehler des Chips, wenn keine Region die Arena so deckt; dann gibt es
+ * keine, und der Kern bleibt ohne Schutz. */
+int takt_irq_chip_protect(void *arena, uint32_t align, uint32_t bytes, struct takt_protection *protection);
+
+/* Am Anfang einer ISR des Wirts: Der Programmbereich ist fuer sie nur
+ * lesbar; die Rueckgabe ist, was vorher galt. Ohne Region tut sie nichts. */
+uint32_t takt_irq_chip_isr_enter(void);
+
+/* Am Ende derselben ISR: Es gilt wieder `before`. */
+void takt_irq_chip_isr_leave(uint32_t before);
 
 #ifdef __cplusplus
 }

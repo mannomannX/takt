@@ -747,21 +747,47 @@ pub fn header_names(text: &str, protection: Case) -> Vec<String> {
     }
 }
 
-/// **Ein Schreibzugriff ohne Privileg auf die Arena wird `Runtime(Hardware)`**
-/// (12.3, 12.11; M11 Schritt 20b): Der Wirt `board` schreibt aus einer
-/// Aufgabe ohne Privileg waehrend des Laufs in die Arena; die MPU weist den
-/// Zugriff ab, der Wirt meldet ihn dem Kern, und im naechsten Tick bekommt
-/// jede Maschine `Runtime(Hardware)`. Das Pruefprogramm der Portpruefung,
-/// 100 Ticks in Echtzeit.
-pub fn a_foreign_write_becomes_runtime_hardware(board: &mut dyn Board) -> Vec<String> {
+/// Wie ein fremder Schreibzugriff auf die Arena abgewiesen wird: die Form
+/// des Wirts, der Fall des Schutzes im Kopf, die Zeilen, die der Kopf dazu
+/// nennt, und die Region, die die Bilanz nennt, wenn der Kern die
+/// Verletzung selbst abholt (FB-755).
+pub struct ForeignWrite<'a> {
+    pub form: Form,
+    pub case: Case,
+    pub header: &'a [&'a str],
+    pub region: Option<&'a str>,
+}
+
+/// Unter FreeRTOS-MPU (M11 Schritt 20b): Die Partition wies die Probe vor
+/// dem Lauf ab, und der Handler des Wirts meldet die Verletzung im Lauf.
+pub const FREERTOS_PARTITION: ForeignWrite<'static> =
+    ForeignWrite { form: Form::Rtos, case: Case::Partition, header: &[PARTITION_REFUSED], region: None };
+
+/// In der Interruptform in C (FB-755): Das Fenster des Kerns ist zu, die
+/// Bilanz nennt den Programmzustand.
+pub const C_INTERRUPT_WINDOW: ForeignWrite<'static> =
+    ForeignWrite { form: Form::Interrupt, case: Case::Window, header: &[], region: Some("Programmzustand") };
+
+/// **Ein fremder Schreibzugriff auf die Arena wird `Runtime(Hardware)`**
+/// (12.3, 12.11; M11 Schritt 20b, FB-755): Der Wirt `board` schreibt
+/// waehrend des Laufs von ausserhalb des Kerns in die Arena; die MPU weist
+/// den Zugriff ab, der Kern erfaehrt es, und im naechsten Tick bekommt jede
+/// Maschine `Runtime(Hardware)`. Das Pruefprogramm der Portpruefung, 100
+/// Ticks in Echtzeit, in der Form und mit dem Kopf aus `write`.
+pub fn a_foreign_write_becomes_runtime_hardware(board: &mut dyn Board, write: &ForeignWrite<'_>) -> Vec<String> {
     let path = board::corpus_path(port::CORPUS_NAME);
-    let options = Options::timed(100).in_form(Form::Rtos);
+    let options = Options::timed(100).in_form(write.form);
     let text = match board.build(&path, &options).and_then(|elf| board.run(&elf, &options)) {
         Ok(text) => text,
         Err(e) => return vec![format!("kein Lauf: {e}")],
     };
-    let mut failed = header_has(&text, &[PARTITION_REFUSED]);
-    failed.extend(header_names(&text, Case::Partition));
+    let mut failed = header_has(&text, write.header);
+    failed.extend(header_names(&text, write.case));
+    if let Some(region) = write.region
+        && !text.lines().any(|l| l.starts_with(&format!("takt schutz verletzungen 1 region {region} ")))
+    {
+        failed.push(format!("die Bilanz nennt keine Verletzung in `{region}`"));
+    }
     let tick = text.lines().find_map(|l| l.strip_prefix("t=")?.strip_suffix(" runtime Hardware"));
     match tick {
         Some(t) if t != "0" => {

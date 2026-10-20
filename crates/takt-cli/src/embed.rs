@@ -195,8 +195,18 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
     write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &layout_lines))?;
     let count = |kind| drivers.iter().filter(|d| d.kind == kind).count();
     let (sys, commands) = (count(takt_frame::drivers::Kind::Sys), count(takt_frame::drivers::Kind::Command));
+    // 12.3: Was die Region ueber dem Programmbereich kostet, steht im Bericht.
+    let region = window.map_or_else(String::new, |w| {
+        let program = takt_llvm::arena::of(e.program).bytes;
+        format!(
+            ", Schutzregion {} Byte ueber {} Byte, davon {} Byte Auffuellung",
+            w.size,
+            w.protected,
+            w.protected - program
+        )
+    });
     println!(
-        "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}), {} Treiber, {sys} sys-Kanaele, \
+        "{}: `{x}` fuer {} als {}, Arena {bytes} Byte (Ausrichtung {align}){region}, {} Treiber, {sys} sys-Kanaele, \
          {commands} Commands",
         e.out.display(),
         e.triple,

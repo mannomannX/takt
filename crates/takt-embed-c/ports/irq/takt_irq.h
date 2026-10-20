@@ -65,10 +65,12 @@ struct takt_irq {
 #define TAKT_IRQ_INVALID (-1)
 
 /* Die Kopfzeile `Schutz` des Laufs (11.3, 12.11), ohne Zeilenende; der Wirt
- * schreibt sie vor die Marke. Ohne RTOS gehoert die Schutzeinheit Takt, doch
- * dieser Port oeffnet und schliesst keine Region um den Schritt: Der Kern
- * des SDK ruft den Wirt dafuer nicht (FB-755). Die Arena schuetzt niemand. */
-#define TAKT_IRQ_PROTECTION "  Schutz: keiner"
+ * schreibt sie vor die Marke. Ohne RTOS gehoert die Schutzeinheit Takt: Hat
+ * der Kern `core` den Schutz des Wirts (`takt_core_protect`, etwa mit den
+ * Haken aus `takt_irq_chip_protect`), ist die Arena ausserhalb des Kerns nur
+ * lesbar, `Fenster`; sonst schuetzt sie niemand, `keiner`. Die Zeile folgt
+ * dem Kern, nicht dem, was der Wirt vorhatte. */
+const char *takt_irq_protection(const takt_core *core);
 
 /* Startet den Lauf des Kerns `core` (aus `takt_core_init`): Tick 0 liegt
  * jetzt. 0, TAKT_IRQ_INVALID oder der Fehler des Adapters; bei einem Fehler

@@ -37,6 +37,14 @@ SECTIONS
     *(.rodata .rodata.*)
   } > FLASH
 
+  /* Die Arena am Anfang des RAM (12.3, FB-755): Die Region der MPU ueber
+   * ihrem Programmbereich ist an ihrer Groesse ausgerichtet, und hier kostet
+   * die Ausrichtung nichts. `init` beschreibt die Arena ganz. */
+  .takt_state (NOLOAD) :
+  {
+    *(.takt_state)
+  } > RAM
+
   .data : ALIGN(8)
   {
     board_data_start = .;

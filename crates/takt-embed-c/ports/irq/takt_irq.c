@@ -67,6 +67,14 @@ int takt_irq_start(struct takt_irq *irq, takt_core *core, const struct takt_irq_
 
 int takt_irq_running(const struct takt_irq *irq) { return __atomic_load_n(&irq->running, __ATOMIC_SEQ_CST); }
 
+const char *takt_irq_protection(const takt_core *core) {
+    const char *line = "  Schutz: keiner";
+    if ((core != NULL) && (takt_core_protected(core) != 0)) {
+        line = "  Schutz: Fenster";
+    }
+    return line;
+}
+
 void takt_irq_release(struct takt_irq *irq) {
     if (__atomic_exchange_n(&irq->gate, 0, __ATOMIC_SEQ_CST) != 0) {
         __atomic_store_n(&irq->open, 1, __ATOMIC_SEQ_CST);

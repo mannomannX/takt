@@ -774,6 +774,20 @@ So arbeitet jeder Strang, als wäre er allein:
   - **Offen:** ESP-IDF (FB-756), das Fenster der Interruptform in C
     (FB-755). `examples/zephyr-gpio` (nach PR #4) nennt `keiner`, und
     `the_zephyr_gpio_wire_follows_its_pin` verlangt es.
+- **Stand FB-755 (Strang F, 2026-10-20, Zweig `f-755-irq-window` auf #11):**
+  - **SDK, Fassung 5:** `struct takt_protection` (open, close,
+    take_violation), `takt_core_protect` nur vor dem ersten
+    `takt_core_service` (sonst `TAKT_ERR_STARTED`), `takt_core_protected`;
+    der Kern faehrt `Guarded<CProgram, HostProtection>`, die Bilanz nennt
+    `takt schutz verletzungen`. `Guarded` reicht den Operator-Abort weiter,
+    ohne Haken meldet der Schutz nichts (`Protection::reports`).
+  - **Adapter und Wirt:** Region 1 der MPU ueber `P_PROTECT_BYTES` ab der
+    Arena (an `P_PROTECT_ALIGN`, `.takt_state` am Anfang des RAM),
+    `MemManage_Handler` uebergeht den Zugriff, `takt_irq_chip_isr_enter`/
+    `_leave` um die ISR der Leitung. `init` schreibt bei offener Region
+    (Phase des Wirts), der Kopf nennt `Fenster` nur mit Region, und ohne
+    Schutz des Kerns laeuft nichts. Der Bau nennt die Auffuellung.
+  - **Offen:** Board-Lauf am F401; Merge nach #11.
 
 ### 15, 16, 18, 9, 19 bis 23
 

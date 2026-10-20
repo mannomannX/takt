@@ -60,6 +60,12 @@ void board_led(int on);
 /* Der Waechter unter dem Stack (12.3): eine Region der MPU ohne Zugriff. */
 void board_protect_stack(void);
 
+/* Der Rahmen jeder ISR dieses Boards (12.3): `enter` am Anfang, `leave` mit
+ * seiner Rueckgabe am Ende, etwa `takt_irq_chip_isr_enter` und `_leave`. So
+ * ist der Programmbereich der Arena fuer die ISR nur lesbar, auch wenn sie
+ * den Schritt unterbricht. Ohne Rahmen laeuft sie, wie sie vorfindet. */
+void board_isr_frame(uint32_t (*enter)(void), void (*leave)(uint32_t before));
+
 /* Derselbe Waechter ohne Region, wenn die MPU einem RTOS gehoert (12.11):
  * ein Watchpoint der DWT auf jedes Lesen und Schreiben darin. Ein Treffer
  * loest DebugMonitor aus, und das Board haelt an. Der Monitor wirkt nur,

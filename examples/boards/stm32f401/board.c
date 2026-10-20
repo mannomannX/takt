@@ -208,6 +208,10 @@ static uint32_t board_tx_tail;
 /* Atomar: Der Adapter sandte XOFF und noch kein XON. */
 static int board_paused;
 
+/* Der Rahmen der ISRs (`board_isr_frame`); gesetzt mit gesperrten Interrupts. */
+static uint32_t (*board_enter)(void);
+static void (*board_leave)(uint32_t before);
+
 /* Atomar: Der Host verlangte das Board zurueck. */
 static int board_handback;
 
@@ -406,7 +410,7 @@ void board_line_flush(void *ctx) {
  * Leitung angehalten, schweigt der Sende-Interrupt bis zum naechsten
  * `board_line_flush` oder XON. Den Wunsch des Hosts fuehrt nicht die ISR
  * aus, sondern das naechste `board_line_flush`: nie mitten in einem Schritt. */
-void USART1_IRQHandler(void) {
+static void board_line_isr(void) {
     uint32_t reading = 1u;
     for (uint32_t i = 0u; (i < 4u) && (reading != 0u); i++) {
         const uint32_t sr = *board_reg(USART1_SR);
@@ -565,6 +569,27 @@ int board_nvm_wipe(void) {
         rc = 0;
     }
     return rc;
+}
+
+/* Die ISR der Leitung im Rahmen, den der Wirt gesetzt hat. */
+void USART1_IRQHandler(void) {
+    uint32_t (*const enter)(void) = board_enter;
+    void (*const leave)(uint32_t before) = board_leave;
+    uint32_t before = 0u;
+    if (enter != NULL) {
+        before = enter();
+    }
+    board_line_isr();
+    if (leave != NULL) {
+        leave(before);
+    }
+}
+
+void board_isr_frame(uint32_t (*enter)(void), void (*leave)(uint32_t before)) {
+    const uint32_t primask = board_lock();
+    board_enter = enter;
+    board_leave = leave;
+    board_unlock(primask);
 }
 
 void board_protect_stack(void) {

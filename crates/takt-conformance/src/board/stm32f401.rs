@@ -180,6 +180,24 @@ pub const C_HOST_MPU_PROBE: CHost = CHost {
     ..C_HOST_MPU
 };
 
+/// Der C-Wirt der Interruptform mit Probe (12.3, FB-755): Die Hauptschleife
+/// schreibt 20 ms nach dem Start in den Programmbereich der Arena, und der
+/// Kern muss die Verletzung, die der Adapter abholt, im naechsten Tick allen
+/// Maschinen als `Runtime(Hardware)` zustellen.
+pub const C_HOST_PROBE: CHost = CHost {
+    name: "f401-probe",
+    bindings: &[Binding {
+        form: Form::Interrupt,
+        main: "irq.c",
+        sources: &["crates/takt-embed-c/ports/irq/takt_irq.c", "crates/takt-embed-c/ports/irq/stm32f4/takt_irq_chip.c"],
+        include: &["crates/takt-embed-c/ports/irq"],
+        defines: &["TAKT_PROBE_NS=20000000"],
+        interrupt_stack: None,
+        kernel: None,
+    }],
+    ..C_HOST
+};
+
 /// Das Sprungbrett im Stand des Bring-ups.
 const TRAMPOLINE_IMAGE: &str = "trampoline.bin";
 
@@ -404,7 +422,7 @@ impl Board for Stm32f401 {
     }
 }
 
-/// Board 1 mit einem C-Wirt ([`C_HOST`], [`C_HOST_MPU`],
+/// Board 1 mit einem C-Wirt ([`C_HOST`], [`C_HOST_PROBE`], [`C_HOST_MPU`],
 /// [`C_HOST_MPU_PROBE`]): geschrieben, gestartet und gelesen wie das
 /// Bring-up in Rust ([`Stm32f401`]), gebaut als C-Projekt.
 #[derive(Clone, Debug)]
@@ -424,6 +442,12 @@ impl Stm32f401C {
     /// Das Board `board` mit dem C-Wirt unter FreeRTOS-MPU.
     pub fn mpu(board: Stm32f401) -> Stm32f401C {
         Stm32f401C { board, host: &C_HOST_MPU, name: "stm32f401-c-mpu", forms: &[Form::Rtos] }
+    }
+
+    /// Das Board `board` mit dem C-Wirt der Interruptform, dessen
+    /// Hauptschleife im Lauf in die Arena schreibt.
+    pub fn probe(board: Stm32f401) -> Stm32f401C {
+        Stm32f401C { board, host: &C_HOST_PROBE, name: "stm32f401-c-probe", forms: &[Form::Interrupt] }
     }
 
     /// Das Board `board` mit dem C-Wirt unter FreeRTOS-MPU, dessen fremde

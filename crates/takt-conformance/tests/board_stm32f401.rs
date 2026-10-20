@@ -15,14 +15,14 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS,
-    a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, agreement, agreement_with,
-    binds_no_driver, driver_edge_agrees, fits_the_poll_form, header_names, journal_costs_time_but_not_semantics,
-    journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick, natives_agree,
-    overrun_reaches_every_machine, persistence_survives, ran, runs_shared, simultaneous_jobs_finish_on_time,
-    the_flawed_port_fails, the_form_keeps_its_deadline, the_poll_form_keeps_its_round, the_port_passes,
-    the_port_passes_with_header, verdict, zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives,
-    zephyr_verdict, zephyr_wire_follows,
+    C_INTERRUPT_WINDOW, Case, Drift, FREERTOS_PARTITION, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS,
+    ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS, a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing,
+    agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form, header_names,
+    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
+    natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
+    simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
+    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict,
+    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
@@ -492,13 +492,26 @@ fn simultaneous_jobs_finish_on_time_on_the_board() {
 /// 13.8; M11 Schritt 18b): der C-Wirt der Black Pill mit dem SDK-Archiv,
 /// `ports/irq` und seinem Adapter fuer STM32F4. Den Schritt rechnet die ISR
 /// von TIM2, die Jobs PendSV, darunter rechnet die Hauptschleife die fremde
-/// Last mit der FPU. Die MPU bewacht nur den Stack; ein Fenster um den
-/// Schritt oeffnet der Port nicht (FB-755): `Schutz: keiner`.
+/// Last mit der FPU. Die MPU gehoert Takt: Der Programmbereich der Arena
+/// ist nur offen, waehrend der Kern ihn schreibt (FB-755), `Schutz: Fenster`.
 #[test]
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_c_interrupt_port_passes_the_port_test() {
     let Some((board, _guard)) = board() else { return };
-    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Interrupt, Case::Unprotected);
+    let failed = the_port_passes(&mut Stm32f401C::on(board), Form::Interrupt, Case::Window);
+    verdict(&failed);
+}
+
+/// **In der Interruptform in C wird ein Schreibzugriff der Hauptschleife auf
+/// die Arena `Runtime(Hardware)`** (12.3; FB-755): Die Hauptschleife schreibt
+/// 20 ms nach dem Start in den Programmbereich, die Region weist den Zugriff
+/// ab, der Adapter uebergeht ihn, und im naechsten Tick faulten die
+/// Maschinen; die Bilanz nennt die Verletzung im Programmzustand.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn the_c_interrupt_port_turns_a_foreign_write_into_runtime_hardware() {
+    let Some((board, _guard)) = board() else { return };
+    let failed = a_foreign_write_becomes_runtime_hardware(&mut Stm32f401C::probe(board), &C_INTERRUPT_WINDOW);
     verdict(&failed);
 }
 
@@ -561,7 +574,7 @@ fn the_freertos_mpu_port_passes_the_port_test() {
 #[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
 fn the_freertos_mpu_turns_a_foreign_write_into_runtime_hardware() {
     let Some((board, _guard)) = board() else { return };
-    let failed = a_foreign_write_becomes_runtime_hardware(&mut Stm32f401C::mpu_probe(board));
+    let failed = a_foreign_write_becomes_runtime_hardware(&mut Stm32f401C::mpu_probe(board), &FREERTOS_PARTITION);
     verdict(&failed);
 }
 
