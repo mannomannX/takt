@@ -516,3 +516,31 @@ machine m:
     // dem zweiten Abort in 34 dann 35..43 und 45..59 bis zum Ende.
     assert_eq!(slept, 9 + 19 + 9 + 15, "{asleep}");
 }
+
+/// **Auch im Schlaf endet der Lauf mit dem Tick, in dem `now` die groesste
+/// `Duration` erreicht** (3.3, 9.9, FB-694): Die Maschine ruht in einem
+/// `idle`-Zustand, und die Schleife schlaeft bis an das Ende der Achse. Der
+/// Trace ist derselbe wie ohne Schlaf und endet in Tick 4 mit `end duration`.
+/// Die Sema laesst Ticks bis 1 s zu; der Test setzt T0 in der MIR auf
+/// 30 000 Tage.
+#[test]
+fn a_sleeping_run_ends_where_now_reaches_the_largest_duration() {
+    let mut p = compile(
+        "\
+output led : bool @ hw(\"ui/led\") with safe = false
+
+machine m:
+    initial WAIT
+
+    state WAIT idle:
+        enter:
+            led = true
+",
+    );
+    p.config.tick = 30_000 * 86_400 * 1_000_000_000;
+    let (awake, _) = looped(&p, "", false, 7);
+    let (asleep, slept) = looped(&p, "", true, 7);
+    assert_eq!(awake, asleep, "Satz 9.9.1: der Schlaf ist im Trace sichtbar");
+    assert!(awake.contains("t=4 end duration"), "{awake}");
+    assert!(slept > 0, "die Schleife hat nicht geschlafen:\n{awake}");
+}

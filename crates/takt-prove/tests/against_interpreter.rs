@@ -2538,12 +2538,14 @@ machine n:
 /// 30 000 Tage in Nanosekunden.
 const LIMIT_TICK_NS: i64 = 30_000 * 86_400 * 1_000_000_000;
 
-/// **`now` bleibt an der Grenze von `Duration` stehen** (3.3, FB-614):
-/// Interpreter und Modell saettigen `now` und `time_in_state` im selben
-/// Tick, `now + 1 ns` faultet dort in beiden, und `last_fault.tick` zaehlt
-/// die Ticks weiter, obwohl `now` steht. Das Modell wickelte `now` vorher.
+/// **Der Lauf endet mit dem Tick, in dem `now` die groesste `Duration`
+/// erreicht** (3.3, 12.7, FB-694): Interpreter und Modell saettigen `now`
+/// und `time_in_state` in diesem Tick, `now + 1 ns` faultet dort in beiden,
+/// `last_fault.tick` ist der Tick, und der Lauf endet mit `end duration`,
+/// obwohl sieben Ticks verlangt sind. Vorher lief er mit stehendem `now`
+/// weiter (FB-614), und das Modell wickelte `now` davor.
 #[test]
-fn now_stops_at_the_largest_duration_in_the_model_too() {
+fn the_run_ends_where_now_reaches_the_largest_duration() {
     let mut p = compile("AT_THE_LIMIT", AT_THE_LIMIT);
     p.config.tick = LIMIT_TICK_NS;
     let r = run(&p, &Trace::default(), &RunOptions { ticks: 7, ..Default::default() }).expect("Lauf");
@@ -2554,8 +2556,48 @@ fn now_stops_at_the_largest_duration_in_the_model_too() {
         "t=4 out since 9223372036854775807 ns",
         "t=4 fault n Arithmetic(Overflow)",
         "t=4 out stamp 4",
+        "t=4 end duration",
     ] {
         assert!(trace.contains(line), "`{line}` fehlt:\n{trace}");
     }
+    assert!(!trace.contains("t=5 "), "{trace}");
+    assert_eq!(r.ended, takt_interp::Ended::Duration);
     agree_program("AT_THE_LIMIT", &p, "", 7);
+}
+
+/// Ein Programm, das nur `now` ausgibt.
+const NOW_ONLY: &str = "system:
+    language = 1
+    tick     = 1 s
+
+output clock : Duration @ sim(\"clock\")
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            clock = now
+";
+
+/// **Teilt T0 die Zahl 2^63 − 1, endet der Lauf dort, wo `now` sie genau
+/// erreicht** (3.3, FB-694): 2^63 − 1 = 7 · 1 317 624 576 693 539 401. Mit
+/// diesem T0 erreicht Tick 7 die Grenze genau, und der Tick, der an ihr
+/// begaenne, laeuft nicht mehr. Eine Nanosekunde mehr saettigt im selben
+/// Tick, eine weniger endet erst in Tick 8.
+#[test]
+fn a_tick_that_divides_the_largest_duration_ends_the_run_there() {
+    let seventh = i64::MAX / 7;
+    assert_eq!(seventh * 7, i64::MAX);
+    for (tick, last) in [(seventh, 7), (seventh + 1, 7), (seventh - 1, 8)] {
+        let mut p = compile("NOW_ONLY", NOW_ONLY);
+        p.config.tick = tick;
+        let r = run(&p, &Trace::default(), &RunOptions { ticks: 10, ..Default::default() }).expect("Lauf");
+        let trace = r.trace.render();
+        for line in [format!("t={last} out clock 9223372036854775807 ns"), format!("t={last} end duration")] {
+            assert!(trace.contains(&line), "T0 = {tick} ns: `{line}` fehlt:\n{trace}");
+        }
+        assert!(!trace.contains(&format!("t={} ", last + 1)), "T0 = {tick} ns:\n{trace}");
+        agree_program("NOW_ONLY", &p, "", 10);
+    }
 }

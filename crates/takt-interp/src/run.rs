@@ -124,6 +124,8 @@ pub enum Ended {
     /// Das Programm hat seinen Lauf beendet (`next_run`); der Wert sagt,
     /// wann der naechste beginnt.
     NextRun(takt_mir::sys::NextRun),
+    /// `now` hat die groesste `Duration` erreicht (3.3, 12.7).
+    Duration,
     /// Das Szenario hat seinen letzten Zustand erreicht (13.6).
     Scenario,
 }
@@ -134,6 +136,7 @@ impl Ended {
         match self {
             Ended::Ticks => "ticks",
             Ended::NextRun(next) => next.word(),
+            Ended::Duration => "duration",
             Ended::Scenario => "scenario",
         }
     }
@@ -344,8 +347,10 @@ impl<'p> Run<'p> {
         self.writer.changes(&self.sim, tick);
         observe_properties(&mut self.monitors, &self.sim, tick, &mut self.writer, &mut self.fail);
         self.last = tick;
-        // 12.7: nach dem Commit, wenn alle Outputs stehen.
-        if let Some(e) = end_of(&self.sim) {
+        // 12.7: nach dem Commit, wenn alle Outputs stehen. Ohne eigenes
+        // Ende endet der Lauf mit dem Tick, in dem `now` die groesste
+        // `Duration` erreicht (3.3).
+        if let Some(e) = end_of(&self.sim).or_else(|| end_of_time(self.sim.loaded.program, tick)) {
             self.ended = e;
             self.writer.lines.push(TraceLine { tick, kind: LineKind::End { reason: e.name().to_string() } });
             // Die Zeile markiert die Entscheidung, das `safe` danach die
@@ -500,6 +505,13 @@ fn end_of(sim: &Sim<'_>) -> Option<Ended> {
     let (output, variants) = takt_mir::sys::next_run(sim.loaded.program)?;
     let Value::Enum { variant, .. } = sim.image.outputs.get(output)? else { return None };
     variants.get(*variant as usize)?.1.map(Ended::NextRun)
+}
+
+/// Erreicht `now` im Tick `tick` die groesste `Duration` (3.3)? `now`
+/// saettigt dort; teilt T0 die Zahl 2^63 − 1, erreicht es sie genau.
+pub fn end_of_time(program: &Program, tick: u64) -> Option<Ended> {
+    let now = i64::try_from(tick).unwrap_or(i64::MAX).saturating_mul(program.config.tick);
+    (now == i64::MAX).then_some(Ended::Duration)
 }
 
 /// Die Zeilen der Scheibe, die fremde Maschinen beschreiben (12.5):
