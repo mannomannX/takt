@@ -23,7 +23,7 @@ runs:
       shell: bash
       run: |
         cd "$RUNNER_TEMP"
-        curl -fsSLo cppcheck-2.22.0.tar.gz https://github.com/danmar/cppcheck/archive/refs/tags/2.22.0.tar.gz
+        curl --proto '=https' --tlsv1.2 -fsSLo cppcheck-2.22.0.tar.gz https://github.com/danmar/cppcheck/archive/refs/tags/2.22.0.tar.gz
         echo "d74945deb2d50393430e07596b766f8a779512c7f60dac2a30ea64e059ece57b  cppcheck-2.22.0.tar.gz" | sha256sum -c -
         tar -xzf cppcheck-2.22.0.tar.gz
         dest="$HOME/cppcheck-2.22.0"
