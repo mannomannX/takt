@@ -232,9 +232,11 @@ pub struct Model {
     /// FB-694), fuer die konkrete Ausfuehrung ([`Model::run`],
     /// [`Model::simulate`]). Der Zustand [`Model::state`], den der Solver
     /// sieht, kennt dieses Ende nicht: Er rechnet, als liefe der Lauf weiter.
-    /// Bis zum Tick des Endes ist das derselbe Lauf, und danach muss nichts
-    /// gelten; jeder Zustand, in dem etwas gelten muss, ist also einer des
-    /// Solvers, und `now` liegt nur im Kegel eines Ziels, das es liest.
+    /// Bis zum Tick des Endes ist das derselbe Lauf bis auf `s.run.ended`,
+    /// das im Tick des Endes falsch bleibt, und danach muss nichts gelten.
+    /// Das traegt nur, weil jedes Ziel in `over` und `ended` antiton ist
+    /// ([`after_end`]): Dort hat der Solver dann hoechstens mehr Pflichten
+    /// als der Lauf. `now` liegt so nur im Kegel eines Ziels, das es liest.
     pub exact_end: Option<Term>,
 }
 
@@ -4803,10 +4805,13 @@ const ENDED: &str = "s.run.ended";
 const OVER: &str = "s.run.over";
 
 /// Ein Ziel nach dem Ende eines Laufs (12.7, 3.3; FB-694): `over ∨ c`, und `c`
-/// liest das Ende nicht. Nur in dieser Form wird ein Ziel nach dem Ende
-/// hoechstens leerer, und der Solver, der das Ende an der Achse nicht kennt
-/// ([`Model::exact_end`]), verliert an ihm nichts. Ein Ziel, das vom Ende
-/// abhinge, ist ein Fehler der Kodierung und wird nicht gebaut.
+/// liest das Ende nicht. Nur in dieser Form ist das Ziel antiton in `over`
+/// und `ended` — nach dem Ende hoechstens leerer —, und nur dann ist ein
+/// Beweis des Solvers, der das Ende an der Achse nicht kennt
+/// ([`Model::exact_end`]), einer fuer den Lauf: Im Tick des Endes ist dort
+/// `ended` falsch, und ein Ziel, das mit dem Ende erst entstuende ("ist der
+/// Lauf vorbei, gilt X"), waere leer wahr. Ein solches Ziel baut die
+/// Kodierung darum nicht; das ist eine Bedingung der Soundness.
 fn after_end(over: &Term, c: Term) -> R<Term> {
     Ok(Term::or(vec![over.clone(), unread_end(c)?]))
 }
@@ -4895,10 +4900,10 @@ mod tests {
     use super::*;
 
     /// **Ein Ziel, das vom Ende des Laufs abhaengt, wird nicht gebaut**
-    /// (FB-694): Beweisanfragen lassen das Ende an der Achse offen, und das
-    /// traegt nur fuer Ziele der Form `over ∨ c`, deren `c` das Ende nicht
-    /// liest. Eines, das nach dem Ende etwas verlangte, scheitert beim Bau,
-    /// statt still einen Pfad zu melden, den es nicht gibt.
+    /// (FB-694): Der Solver kennt das Ende an der Achse nicht, und das traegt
+    /// nur fuer Ziele der Form `over ∨ c`, deren `c` das Ende nicht liest.
+    /// Eines, das mit dem Ende erst entstuende, waere dort leer wahr und ein
+    /// Beweis falsch; es scheitert beim Bau.
     #[test]
     fn a_goal_that_reads_the_end_of_the_run_is_refused() {
         let over = Term::var(OVER, Sort::Bool);
