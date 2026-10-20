@@ -298,6 +298,10 @@ pub enum Bin {
         /// Das zweite Programm, mit dem laengeren Tick.
         slow: PathBuf,
     },
+    /// `leftover`: ein Vorgaenger, nach dem das Sprungbrett dem naechsten
+    /// Abbild eine Region der MPU hinterlaesst (FB-752); nur auf dem F401,
+    /// das Takt-Programm bleibt ungenutzt.
+    Leftover,
 }
 
 /// Das Manifest des Programms `prefix` (`fast` oder `slow`) neben dem ELF
@@ -526,6 +530,11 @@ impl Options {
     /// Die Vektoren der kuratierten Natives.
     pub fn natives() -> Options {
         Options { bin: Bin::Natives, ..Options::default() }
+    }
+
+    /// Der Vorgaenger, der eine Region der MPU stehen laesst ([`Bin::Leftover`]).
+    pub fn leftover() -> Options {
+        Options { bin: Bin::Leftover, ..Options::default() }
     }
 }
 
@@ -774,6 +783,7 @@ impl Bringup {
             Bin::Bench { .. } => "bench",
             Bin::Natives => "natives",
             Bin::Pair { .. } => "pair",
+            Bin::Leftover => "leftover",
         };
         let target = crate::target_dir();
         let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
@@ -916,6 +926,7 @@ pub(crate) fn image_key(triple: &str, program: &Path, options: &Options) -> Resu
             f.str("pair");
             hash_program(slow, &mut f)?;
         }
+        Bin::Leftover => f.str("leftover"),
     }
     Ok(f.finish())
 }

@@ -143,7 +143,7 @@ where
         if self.cadence.conformance() && tick.traced().checked_rem(self.time_every) == Some(0) {
             t.write_time(tick);
         }
-        t.flush();
+        t.after_tick();
     }
 }
 
@@ -245,6 +245,9 @@ pub fn balance<P: Port>(
     journal: &JournalStats,
     stacks: &Stacks,
 ) {
+    // `gesendet` zaehlt, was an die Leitung ging: Bis zur Bilanz muss alles
+    // davor hinaus sein.
+    t.drain(DRAIN_ROUNDS);
     let (dropped, sent) = (u64::from(t.dropped()), u64::from(t.sent()));
     let counts = [
         ("takt schlief ", stats.slept),

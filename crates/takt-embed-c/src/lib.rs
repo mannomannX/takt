@@ -486,8 +486,10 @@ pub unsafe extern "C" fn takt_trace_u64(sink: *mut c_void, value: u64) {
     }
 }
 
-/// Vom Rahmen gerufen: eine Fliesskommazahl in der Textform aus T2, wie der
-/// Interpreter sie schreibt (4.2, 3.9, FB-750).
+/// Vom Rahmen gerufen: eine Fliesskommazahl, als Marke und Bits in den Ring
+/// der Senke; die Textform aus T2, wie der Interpreter sie schreibt (4.2,
+/// 3.9), schreibt der Ring beim Senden (FB-750). Im Schritt bleibt so je
+/// Wert feste Arbeit.
 ///
 /// # Safety
 ///
@@ -496,7 +498,7 @@ pub unsafe extern "C" fn takt_trace_u64(sink: *mut c_void, value: u64) {
 pub unsafe extern "C" fn takt_trace_f64(sink: *mut c_void, value: f64) {
     // SAFETY: siehe oben.
     if let Some(t) = unsafe { telemetry(sink.cast()) } {
-        let _ = takt_rt_core::digits::float64(value, t);
+        t.write_f64(value);
     }
 }
 

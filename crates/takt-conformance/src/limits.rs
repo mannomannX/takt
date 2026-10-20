@@ -31,18 +31,6 @@ pub struct Limit {
 /// wird, ist schlechter als keine, weil ihr jemand glaubt.
 pub const LIMITS: &[Limit] = &[
     Limit {
-        was: "Laeufe, deren Stimulus an einen Eingang ohne `hw`-Bindung liefert",
-        warum: "Im Produkt hat nur ein `hw`-gebundener Eingang einen Treiber; einen Eingang mit                 `sim(...)` oder ohne Bindung treibt im Sim-Build allein der Interpreter mit dem                 Stimulus (8.3), und die Referenz kennt `sim(...)` nur an Outputs (8.1). Die Spalte                 `nativ` faellt fuer diese Laeufe aus (`GAPS` in `differential.rs`).",
-        wann: "M11: Klaerung der Referenz und ein Weg im Sim-Build des Produkts (FB-688).",
-        row: "FB-688",
-    },
-    Limit {
-        was: "`runtime Node` im erzeugten Code",
-        warum: "Einen Knotenausfall meldet im Produkt kein Weg des Wirts; die Laeufe der Pfade, die                 ihn brauchen, rechnet nur der Interpreter (`GAPS` in `differential.rs`).",
-        wann: "M9: Der Knotenbuild meldet den Ausfall eines Knotens (FB-689).",
-        row: "FB-689",
-    },
-    Limit {
         was: "Das Profil `shared` auf dem ESP32-C6",
         warum: "`shared` wird nur auf dem F401 unter RTIC mit nachgebildeter Funk-ISR geprueft; \
                 auf dem C6, dem Board mit Funk, laeuft es nicht.",
@@ -62,17 +50,17 @@ pub const LIMITS: &[Limit] = &[
     },
     Limit {
         was: "Pruefstellen und Uebergaenge, die weder ein Lauf erreicht noch der Solver ausschliesst",
-        warum: "`UNREACHED` (`differential.rs`) haelt 93 Uebergaenge, 53 nie bestandene und 286 nie verletzte \
+        warum: "`UNREACHED` (`differential.rs`) haelt 93 Uebergaenge, 50 nie bestandene und 283 nie verletzte \
                 Pruefstellen in 95 Programmen fest, vor allem `range`, `fin`, `valid` und `ovf`: Der Solver findet \
                 bis Tiefe 5 in 60 s keinen Pfad, k-Induktion beweist sie nicht unerreichbar, und der lange Lauf \
                 ohne Stimulus ueber `MAX_TICKS` (`paths::from_run`) faultet dort nicht. Jede Spalte steht je \
                 Programm mit ihren Gruppen als Grund (`GROUPS`). Uebergaenge: ohne Teilmodell 31 (FB-604), Frist \
                 27, Fragment 16, Speicher 13, bewiesen und nicht nachgerechnet 4, nicht k-induktiv 2. Nie \
-                bestanden: Frist 25, Fragment 6, bewiesene Range 6, ohne Teilmodell 5, in einer Meldung 4, nie \
-                gerufen 3 (FB-619), faultet stets 3, unbestaetigt 1. Nie verletzt: Speicher 96, Frist 80, ohne \
-                Teilmodell 70, Fragment 12, nicht k-induktiv 12, bewiesen und nicht nachgerechnet 5, nie gerufen \
-                3, Zeitschranke 3 (FB-614), jenseits `MAX_TICKS` 2, ausserhalb der Suite `beweiser` 2, ein \
-                bewiesener `check` 1. Dazu 186 Stellen, die nie faulten koennen (13.2: 167 `proven`, 10 \
+                bestanden: Frist 25, Fragment 6, bewiesene Range 6, ohne Teilmodell 5, in einer Meldung 4, \
+                faultet stets 3, unbestaetigt 1. Nie verletzt: Speicher 96, Frist 80, ohne Teilmodell 70, \
+                Fragment 12, nicht k-induktiv 12, bewiesen und nicht nachgerechnet 5, Zeitschranke 3 (FB-614), \
+                jenseits `MAX_TICKS` 2, ausserhalb der Suite `beweiser` 2, ein bewiesener `check` 1. Eine \
+                Funktion, die keine Maschine ruft, zaehlt nicht (13.2, FB-619). Dazu 186 Stellen, die nie faulten koennen (13.2: 167 `proven`, 10 \
                 `message`, 9 `observe`).",
         wann: "M11 Schritt 29, Nachtrag (Strang B2): induktive Invarianten je Stelle (Schritt 2), dann der \
                Speicher (FB-612).",

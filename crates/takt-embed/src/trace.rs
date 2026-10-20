@@ -16,9 +16,14 @@
 //!
 //! **Was ein Haken schreibt.** Genau das Stueck, ohne Trenner: Leerzeichen
 //! und Zeilenende schreibt der Rahmen selbst (`grammar/trace.md` T1,
-//! FB-690). Eine Fliesskommazahl steht in der Textform aus T2, wie der
-//! Interpreter sie schreibt (FB-750), ein Byte als `0x` und zwei Ziffern. Ganzzahlen und Bytes gehen ohne `core::fmt` ueber
-//! `takt_rt_core::digits`, wie auf der Leitung der Boards.
+//! FB-690). Ganzzahlen und Bytes gehen ohne `core::fmt` ueber
+//! `takt_rt_core::digits`, ein Byte als `0x` und zwei Ziffern. Eine
+//! Fliesskommazahl formatiert der Haken nicht: Er schreibt Marke und Bits
+//! (`digits::float_record`), feste Arbeit und fester Stack je Wert, und wer
+//! die Senke liest, setzt die Textform aus T2 ein, wie der Interpreter sie
+//! schreibt (FB-750): der Ring vor einer Leitung beim Senden
+//! (`takt_rt_baremetal::Telemetry`), ein Leser des ganzen Stroms mit
+//! `digits::expand`.
 
 #![allow(unsafe_code, reason = "die Haken des Rahmens als C-Funktionen (12.5); 9.5 fuehrt sie in der TCB")]
 
@@ -32,6 +37,9 @@ use takt_rt_core::digits;
 /// `write` nimmt `&self`: Der Wirt darf die Senke lesen, solange das
 /// Programm sie haelt, etwa zwischen zwei Ticks. Er sagt zu, dass nie zwei
 /// Kontexte zugleich in dieselbe Senke schreiben.
+///
+/// Eine Fliesskommazahl kommt als `digits::FLOAT_MARK` und acht Byte Bits in
+/// einem Stueck; wer die Senke liest, setzt ihre Textform ein.
 pub trait Line {
     /// Nimmt ein Stueck einer Zeile.
     fn write(&self, bytes: &[u8]);
@@ -62,16 +70,6 @@ pub fn as_ffi<S: Sink>(sink: &S) -> *mut c_void {
 unsafe fn line<'s, L: Line>(sink: *mut c_void) -> Option<&'s L> {
     // SAFETY: siehe oben.
     unsafe { sink.cast_const().cast::<L>().as_ref() }
-}
-
-/// Schreibt Formatiertes in eine Senke.
-struct Fmt<'s, L: Line>(&'s L);
-
-impl<L: Line> core::fmt::Write for Fmt<'_, L> {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        self.0.write(s.as_bytes());
-        Ok(())
-    }
 }
 
 /// Ein Text im Trace, fuer `takt_trace_text`.
@@ -119,9 +117,9 @@ pub unsafe fn unsigned<L: Line>(sink: *mut c_void, value: u64) {
     }
 }
 
-/// Eine Fliesskommazahl in der Textform aus T2 (4.2, 3.9), wie der
-/// Interpreter sie schreibt (`takt_rt_core::digits::float64`), fuer
-/// `takt_trace_f64`.
+/// Eine Fliesskommazahl als Marke und Bits (`digits::float_record`), fuer
+/// `takt_trace_f64`; die Textform aus T2 (4.2, 3.9) setzt der Leser der
+/// Senke ein.
 ///
 /// # Safety
 ///
@@ -129,7 +127,7 @@ pub unsafe fn unsigned<L: Line>(sink: *mut c_void, value: u64) {
 pub unsafe fn float<L: Line>(sink: *mut c_void, value: f64) {
     // SAFETY: siehe oben.
     if let Some(line) = unsafe { line::<L>(sink) } {
-        let _ = digits::float64(value, &mut Fmt(line));
+        line.write(&digits::float_record(value));
     }
 }
 
@@ -246,8 +244,11 @@ mod tests {
     }
 
     impl Text {
+        /// Was die Senke hielt, mit der Textform jeder Zahl.
         fn text(&self) -> String {
-            String::from_utf8(self.0.borrow().clone()).expect("UTF-8")
+            let mut out = Vec::new();
+            digits::expand(&self.0.borrow(), |b| out.extend_from_slice(b));
+            String::from_utf8(out).expect("UTF-8")
         }
 
         fn ffi(&self) -> *mut c_void {
@@ -304,6 +305,21 @@ mod tests {
         // SAFETY: wie oben.
         unsafe { text::<Text>(t.ffi(), long.as_ptr().cast()) };
         assert_eq!(t.text().as_bytes(), &long[..300]);
+    }
+
+    /// **Der Haken formatiert keine Fliesskommazahl** (12.5, FB-750): Er
+    /// schreibt Marke und Bits, neun Byte, fuer jeden Wert dieselben Schritte;
+    /// die Textform setzt erst der Leser ein.
+    #[test]
+    fn the_float_hook_writes_mark_and_bits() {
+        for x in [2.5, 1.5e-7, -1e300, f64::NAN] {
+            let t = Text::default();
+            // SAFETY: wie oben.
+            unsafe { float::<Text>(t.ffi(), x) };
+            let mut want = Vec::from([digits::FLOAT_MARK]);
+            want.extend(x.to_le_bytes());
+            assert_eq!(*t.0.borrow(), want, "{x:?}");
+        }
     }
 
     /// Ohne Senke schreibt kein Haken, und ein Text ohne Zeiger ist keiner.

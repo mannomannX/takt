@@ -32,6 +32,10 @@ Plan; `plan/m11.md` bleibt die Quelle für Ziel und Abnahme je Schritt.
 - **FB-Nummern in Blöcken**: Strang A nimmt FB-512 bis FB-599, Strang B
   FB-600 bis FB-699. `tests.csv` nach demselben Muster mit dem Präfix des
   Bereichs; im Zweifel fragt der Strang die Koordination.
+  Ab FB-760 (2026-10-20) je Strang zwanzig Nummern: I FB-760 bis FB-779,
+  F FB-780 bis FB-799, B FB-800 bis FB-819, H FB-820 bis FB-839, G FB-840
+  bis FB-859, die Koordination FB-860 bis FB-879. Ist ein Block
+  aufgebraucht, vergibt die Koordination den nächsten.
 - `feedback.csv` und `tests.csv` nur zeilenweise ändern oder anhängen, nie
   ganz neu schreiben (sonst ändert sich das Quoting fremder Zeilen).
   Angehängte Zeilen beider Stränge kollidieren beim Merge am Dateiende; die
@@ -86,7 +90,7 @@ keinen schweren Lauf braucht. Die Koordination trägt Strang und Datum ein.
 | 16 | Zwei Programme auf einem Kern; Antwortzeiten in `check-image` | R, W | beide | 11, 14 | Strang H (seit 2026-10-13): Entwurf entschieden; T1 vorab auf `h-t1-trace-hooks` (die Senke des Trace, ABI 6, SDK Fassung 4, FB-690, FB-691), PR #11; FB-750 auf `h-fb750-exact-trace` (PR nach #11), dann FB-691 auf `h-fb691-instances` (Instanzen im Testwirt, PR nach FB-750); die zwei Programme auf `h-16-pair`: Teil A am Wirt (Referenz, fremde Last, Manifest, `check-image`), Teil B `pair` am F401 |
 | 18 | C-SDK und CMake; C-Ports Interruptform und POSIX (18a Wirt, 18b F401, 18c Linux) | S, W | F401 | 11, 15 | Strang A: 18a und 18c umgesetzt, der Watchdog als Dienst (Fassung 2 des SDK, 33f64ed1), Tunables und Weckereignis (3e1460c0), die Vorlage `c-port` als Adapter des gemeinsamen Ports mit Fäden (`ports/rtos`); 18b bei Strang G (Helfer, seit 2026-10-12, Zweig `g-18b-c-irq`): Port `ports/irq` mit Adapter STM32F4, C-Wirt `examples/boards/stm32f401`, der Board-Lauf steht aus |
 | 9 | Ein Rahmen: Wirtsdifferential über den Produktrahmen | C, R, E | – | 8, 18a | Strang D (Helfer, seit 2026-10-12, Zweig `d-9-one-frame`): umgesetzt, CI grün auf `ubuntu-24.04` und `windows-2025` (Lauf 38302979240), Analyse grün (38303421868); FB-391 und FB-402 geschlossen, FB-382 bis auf Instanzen (FB-691); wartet auf den Merge; gemergt 2026-10-12 |
-| 9b | Offene Befunde aus Schritt 9 (FB-686 bis FB-694) | C, E, R | beide (FB-687) | 9 | Strang I (Helfer, seit 2026-10-13, Zweig `i-9-findings`): FB-687 und FB-693 umgesetzt, CI grün (38336355678), Analyse (38336357334), Board-Lauf ausstehend; FB-686 und FB-692 nach T1 (Strang H); FB-690 und FB-691 bei Strang H; FB-688 und FB-689 entschieden (A), FB-694 entschieden (Laufende an der Achse, Revision von FB-614), je ein eigener Zweig |
+| 9b | Offene Befunde aus Schritt 9 (FB-686 bis FB-694) | C, E, R | beide (FB-687) | 9 | Strang I (Helfer, seit 2026-10-13): FB-687 und FB-693 gemergt (PR #9); FB-688 und FB-689 auf Zweig `i-688-admissible-inputs` (PR #14) umgesetzt, dabei FB-751 (Abort-Phase in Tick 0) gefunden und behoben, CI grün (38586622065), Analyse (38586622205), Board-Lauf ausstehend; FB-752 (Regionen der MPU, die ein Vorgänger stehen ließ) Empfängerseite auf `i-752-mpu-regions`; FB-694 entschieden (Laufende an der Achse, Revision von FB-614), vorbereitet auf `i-694-duration-end`, der Produktteil auf T1; FB-686 und FB-692 nach T1 (Strang H); FB-690 und FB-691 bei Strang H |
 | 19 | Zephyr-Modul, Partition, Devicetree-Adapter; CMSIS-RTOS2 | S | beide | 18 | Strang F (Helfer, seit 2026-10-12, Zweig `f-19-zephyr`): 19a umgesetzt bis auf den Board-Lauf — Modul, Adapter `ports/zephyr` hinter `ports/rtos/takt_os.h`, `examples/zephyr` baut für beide Boards, gemergt cea0c88c; die Portprüfung auf den Boards fährt Strang A (`the_zephyr_port_passes_the_port_test`). 19b: Partition umgesetzt bis auf den Board-Lauf, Format des Devicetree-Adapters in der Referenz (FB-734), gemergt 9f0673d1; der Erzeuger `P_zephyr.c` nach Schritt 9 (Strang D). 19c: Vertrag `takt_os.h` erweitert (60aa91d0), Adapter `ports/cmsis-rtos2` und `examples/cmsis-rtos2` bauen für den F401; Portprüfung am Board offen |
 | 20 | FreeRTOS auf dem F401, FreeRTOS-MPU | S | F401 | 18 | Strang G (Helfer, seit 2026-10-12, Zweig `g-20-freertos`): 20a Adapter `ports/freertos` und Wirt unter FreeRTOS umgesetzt, der Board-Lauf steht aus; 20b FreeRTOS-MPU (Zweig `g-20b-freertos-mpu`) umgesetzt bis auf die Board-Läufe |
 | 21 | ESP-IDF auf dem C6 (21a Komponente und Port, 21b Funk und Messung) | S | C6 | 11, 18 | frei |
@@ -145,6 +149,16 @@ So arbeitet jeder Strang, als wäre er allein:
    Gemergt wird bei Grün mit einem Merge-Commit; der Text der Statuszeile
    kommt im selben Zug in `plan/m11.md`. Die anderen Stränge ziehen `main`
    beim nächsten Halt nach.
+
+   **Abbilder für den Board-Lauf** baut nur ein Lauf von `boards.yml` mit
+   dem Ereignis `workflow_dispatch`; ein Lauf aus Push oder Pull Request
+   fährt nur den Job `zephyr` und überspringt die Abbilder. Bestellt wird
+   erst, wenn der Lint-Job der Board-Crates auf dem Kopf grün ist. Nach
+   einem Merge von `main` in den Zweig gelten die Abbilder des Zweigs
+   weiter: Am Board geprüft werden seine eigenen Änderungen, was `main`
+   mitbringt, hatte seine eigenen Board-Läufe, und das Zusammenspiel prüft
+   CI auf dem Merge. Neue Abbilder braucht es nur, wenn das Lösen eines
+   Konflikts Code ändert, der ins Abbild geht.
 
 ## Prüfmatrix
 
@@ -412,8 +426,12 @@ So arbeitet jeder Strang, als wäre er allein:
       `sim/12_7` blieben unbestätigt.
     - FB-618: Unter seiner Beweisdatei aus Schritt 4 war `sim/14_7` nicht
       mehr kodierbar (`cell_v.min()` direkt am Input).
-  - Offen ist FB-619: Die Coverage zählt die Stellen einer Funktion, die
-    keine Maschine ruft. Diese Frage liegt beim Nutzer.
+  - FB-619 (entschieden: Option a, Zweig `b6-fb619`): Die Coverage zählt
+    nur, was eine laufende Maschine erreichen kann (13.2). Eine Funktion,
+    die keine Maschine ruft, ist kein Pfad des Laufs. In
+    `02_units_and_data` fallen die drei Stellen von `shunt_current` weg,
+    ebenso die Gruppe „nie gerufen“: nie bestanden 53 → 50, nie verletzt
+    286 → 283.
   - Einordnung in den Läufen 38320013325 (alle Programme, Übergänge und
     Bestehen), 38319891273 und 38336280659 (`02_units_and_data`,
     `98_last_fault`, `sim/12_7`, `sim/14_7`, `63_scoped_instances`, alle
@@ -432,7 +450,6 @@ So arbeitet jeder Strang, als wäre er allein:
     | bewiesen, nicht nachgerechnet | 4 | – | 5 |
     | Range bewiesen | – | 6 | – |
     | in einer Meldung | – | 4 | – |
-    | nie gerufen (FB-619) | – | 3 | 3 |
     | faultet stets | – | 3 | – |
     | unbestätigt (`inv`, `sha256`) | – | 1 | – |
     | Zeitschranke (FB-614, FB-694) | – | – | 3 |
@@ -736,6 +753,16 @@ So arbeitet jeder Strang, als wäre er allein:
     Bau-Test verlangt das für jedes Beispiel und Board. Offen: warum am C6
     unter Zephyr kein `takt end` auf der Leitung kam (erster Board-Lauf aus
     38320906796); das zeigt der nächste Lauf.
+- **Stand 19g (Strang F, 2026-10-13, Zweig `f-19i-counter`):**
+  - **Der Zähler als Uhr (FB-733):** Wählt der Devicetree `takt,timer`,
+    rechnet der Zephyr-Adapter über die `counter`-API
+    (`CONFIG_TAKT_TIMER_COUNTER`, hängt an `COUNTER`, das die Anwendung
+    setzt; ohne es scheitert der Bau an einer Zusicherung): die Uhr auf
+    64 Bit erweitert, die Frist als absoluter Alarm in Stücken von einem
+    Viertel des Umlaufs, gelöscht nach dem Aufwachen. `examples/zephyr`
+    wählt TIM2 (F401) und Timer 0 (C6) mit 1 MHz; die Kopfzeile `takt uhr
+    counter 1000000 Hz` verlangt die Portprüfung auf beiden Boards. Die
+    übrigen Beispiele bleiben beim Systemtick und nennen ihn ebenso.
 
 ### 23 — Speicherschutz neben fremdem Code
 

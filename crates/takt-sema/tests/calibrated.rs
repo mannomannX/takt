@@ -168,7 +168,7 @@ fn scoped_instances_in_exclusive_states_count_with_their_maximum() {
         format!(
             "{KOPF}output a : bool @ hw(\"o/a\") with safe = false\n\
              output b : bool @ hw(\"o/b\") with safe = false\n\
-             input  mode : int in 0..1 @ sim(\"i/mode\")\n\n\
+             input  mode : int in 0..1 @ hw(\"i/mode\")\n\n\
              machine heavy(o: output bool):\n    var acc : float = 0.0\n\n    initial S\n\n    state S:\n        \
              loop:\n            for i in range(5000):\n                acc = acc + 1.5\n            o = acc > 0.0\n\n\
              machine ctrl:\n    initial FIRST\n\n    state FIRST:\n        instance p = heavy(o = a)\n{second}\n        \

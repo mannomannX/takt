@@ -171,6 +171,7 @@ impl Lowerer<'_> {
         self.check_reachability();
         self.check_termination();
         self.check_simulation();
+        self.check_sim_inputs();
         self.check_unbound();
         self.check_params_profile();
         self.check_unused();
@@ -1523,6 +1524,35 @@ impl Lowerer<'_> {
                 }
             }
         }
+        self.diags.extend(diags);
+    }
+
+    /// Pruefung 13 in jedem Build: `sim` an einem Input steht nur fuer den
+    /// Schreibstrom eines Ports (8.1, 12.10; FB-688). Sonst speiste den Input
+    /// niemand: Von aussen liefert nur der Treiber einer `hw`-Adresse (8.3),
+    /// und auf dem Ziel bliebe er still `Bad`.
+    fn check_sim_inputs(&mut self) {
+        let p = &self.program;
+        let diags: Vec<Diagnostic> = p
+            .channels
+            .iter()
+            .filter(|c| c.dir == Direction::Input && matches!(c.binding, Binding::Sim(_)))
+            .filter(|c| !takt_mir::stimulus::port_write_stream(p, c))
+            .map(|c| {
+                Diagnostic::error(
+                    SC13,
+                    c.span,
+                    format!(
+                        "Input `{}` mit `sim`-Bindung: `sim` an einem Input steht nur fuer den Schreibstrom eines \
+                         Ports (8.1, 12.10)",
+                        c.name
+                    ),
+                )
+                .with_suggestion(
+                    "mit `@ hw(\"…\")` binden; was von aussen kommt, liefert der Treiber einer Adresse (8.3)",
+                )
+            })
+            .collect();
         self.diags.extend(diags);
     }
 

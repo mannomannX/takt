@@ -15,9 +15,9 @@ mod common;
 use std::time::Duration;
 
 use common::board::{
-    Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_WIRE_TICKS,
+    Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS,
     a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, a_write_into_the_other_arena_is_refused,
-    agreement, agreement_with, binds_no_driver, driver_edge_agrees, fits_the_poll_form, header_names,
+    agreement, agreement_with, binds_no_driver, corpus, driver_edge_agrees, fits_the_poll_form, header_names,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
     natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
     simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
@@ -402,7 +402,7 @@ fn the_zephyr_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::ZEPHYR;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, Case::Partition, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Partition, Some(ZEPHYR_COUNTER_CLOCK), run));
 }
 
 /// **`persist` ueberlebt unter Zephyr einen Neustart des F401 und ein neues
@@ -447,7 +447,7 @@ fn the_cmsis_rtos2_port_passes_the_port_test() {
     let example = takt_conformance::zephyr::CMSIS_RTOS2;
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::FRESH)
         .and_then(|image| board.run(&image.elf, &options));
-    verdict(&zephyr_verdict(board.name(), example, Case::Unprotected, run));
+    verdict(&zephyr_verdict(board.name(), example, Case::Unprotected, None, run));
 }
 
 /// **Ein Port, der die FPU-Register nicht sichert, faellt durch** (12.11,
@@ -581,6 +581,47 @@ fn a_hostile_fpu_changes_nothing_on_the_board() {
     let Some((mut board, _guard)) = board() else { return };
     let failed = a_hostile_fpu_changes_nothing(&mut board);
     verdict(&failed);
+}
+
+/// **Ein Abbild beginnt wie nach einem Reset, auch wenn sein Vorgaenger eine
+/// Region der MPU stehen liess** (12.3, FB-752): Nach `leftover` belegt das
+/// Sprungbrett bei der Rueckgabe die letzte Region nur lesbar ueber dem Stack
+/// und laesst die MPU aus, wie Zephyrs Rueckgabe es tat. Danach laufen ein
+/// Rust-Abbild der Form own und, nach einem zweiten `leftover`, der C-Wirt
+/// ohne Schutzverletzung und mit einem Stack in der Schranke. Vorher schaltete
+/// jedes die MPU mit der fremden Region wieder ein, und das Bemalen des Stacks
+/// blieb an ihr haengen.
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_region_left_by_the_previous_image_changes_nothing() {
+    let Some((mut rust, _guard)) = board() else { return };
+    // Ein Programm, das beide Wirte rechnen: ohne Treiber und ohne Profil.
+    let name = board::corpus()
+        .into_iter()
+        .find(|n| !TOO_BIG.contains(n) && binds_no_driver(n) && corpus(n).config.runtime_profile().is_none())
+        .expect("ein Programm fuer beide Wirte");
+    let program = board::corpus_path(name);
+    let (leftover, own, irq) =
+        (Options::leftover(), Options::fresh(TICKS), Options::fresh(TICKS).in_form(Form::Interrupt));
+    let mut c = Stm32f401C::on(Stm32f401::from_env().expect("TAKT_F401_PORT nennt kein Board"));
+    let left = rust.build(&program, &leftover).unwrap_or_else(|e| panic!("{e}"));
+    let rust_elf = rust.build(&program, &own).unwrap_or_else(|e| panic!("{e}"));
+    let c_elf = c.build(&program, &irq).unwrap_or_else(|e| panic!("{e}"));
+    let mut failed = Vec::new();
+    failed.extend(rust.run(&left, &leftover).err().map(|e| format!("leftover: {e}")));
+    failed.extend(after_leftover(&format!("{name}, Rust in der Form own"), rust.run(&rust_elf, &own)));
+    failed.extend(rust.run(&left, &leftover).err().map(|e| format!("leftover: {e}")));
+    failed.extend(after_leftover(&format!("{name}, C-Wirt"), c.run(&c_elf, &irq)));
+    verdict(&failed);
+}
+
+/// Was ein Lauf nach `leftover` falsch machte: kein Lauf, der die Pruefungen
+/// des Harness besteht, oder eine Verletzung des Speicherschutzes.
+fn after_leftover(who: &str, run: Result<String, String>) -> Option<String> {
+    match run {
+        Ok(text) => text.lines().find(|l| l.starts_with("takt schutz verletzungen")).map(|l| format!("{who}: {l}")),
+        Err(e) => Some(format!("{who}: {e}")),
+    }
 }
 
 /// **Der Treiberrand urteilt auf dem Board wie im Interpreter** (12.6, M10
