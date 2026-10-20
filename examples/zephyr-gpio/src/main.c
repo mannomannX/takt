@@ -36,7 +36,6 @@
 /* Der Watchdog des Wirts (12.11): Dieses Beispiel startet keinen. */
 static void kick(void *ctx) {
     ARG_UNUSED(ctx);
-    line_watch_step();
 }
 
 /* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733); hier der
@@ -68,23 +67,28 @@ static void drive(takt_core *core) {
     };
     struct takt_stacks stacks;
     const struct takt_stacks *measured = NULL;
-    line_watch_arm();
+    line_watch_arm(0);
     if (takt_rtos_start(&rtos, core, &config) == 0) {
-        line_watch_start();
         while (takt_rtos_running(&rtos) != 0) {
             handback_serve();
-            line_watch_round();
             (void)k_msleep(POLL_MS);
         }
+        line_watch_end("lauf vorbei");
         if (takt_rtos_join(&rtos, &stacks) == 0) {
             stacks.tick_bound = WIRE_TICK_STACK_BYTES;
             stacks.job_bound = WIRE_JOB_STACK_BYTES;
             measured = &stacks;
         }
+        line_watch_end("faeden zurueck");
     } else {
         takt_board_trace("takt port: kein Start\n");
     }
     takt_core_report(core, measured, NULL);
+    line_watch_end("bilanz geschrieben");
+    takt_line_flush();
+    line_watch_end("geleert");
+    (void)k_msleep(100);
+    line_watch_end("nach 100 ms");
 }
 
 /* Ein Schritt vor dem Lauf scheiterte: Er steht mit seinem Code auf der

@@ -13,26 +13,21 @@ int line_open(struct takt_line *line);
  * Zephyr; fort, sobald die Ursache behoben ist. Sie gehen nur an eine
  * Konsole neben der Leitung (auf dem C6 UART0), damit der Trace auf der
  * Leitung bleibt, wie das Urteil ihn liest; ohne eine solche tun sie
- * nichts. */
+ * nichts. Waehrend des Laufs schreiben sie nichts: `printk` auf UART0 haelt
+ * den Rufenden Millisekunden lang auf und machte Ueberlaeufe. */
 
-/* Vor dem Lauf: `takt wecker`, wenn ein Faden mit Frist aufwacht, also der
+/* Vor dem Kern: `takt wecker`, wenn ein Faden mit Frist aufwacht, also der
  * Interrupt des Systemzeitgebers kommt. */
 void line_watch_alarm(void);
 
-/* Vor `takt_rtos_start`, nach dem Kern: `takt start`; dazu sieht ein
- * Zeitgeber unter dem Schritt zehnmal alle 100 ms nach, welcher Faden laeuft
- * und wie viele Schritte der Kern meldete (`takt wache`). */
-void line_watch_arm(void);
+/* Vor `takt_rtos_start`, nach dem Kern: `takt start`. Mit `ticking` laeuft
+ * dazu ein stiller Zeitgeber alle 100 ms, ohne etwas zu schreiben: Haengt
+ * der Lauf ohne ihn und laeuft mit ihm, verlor der Systemzeitgeber eine
+ * Frist, und erst die naechste Frist eines anderen weckte. */
+void line_watch_arm(int ticking);
 
-/* Nach `takt_rtos_start`: `takt lauf`. */
-void line_watch_start(void);
-
-/* Aus dem `kick` des Watchdogs, nach jedem Schritt des Kerns. */
-void line_watch_step(void);
-
-/* Aus der Schleife von `main` waehrend des Laufs: `takt erster schritt`,
- * sobald der Kern einen meldete, und eine Sekunde nach dem Start, wie viele
- * es waren. */
-void line_watch_round(void);
+/* Am Ende des Laufs: `takt ende: <what>` und wie viele Byte der Ring der
+ * Leitung noch haelt. */
+void line_watch_end(const char *what);
 
 #endif /* LINE_H */

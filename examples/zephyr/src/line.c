@@ -130,78 +130,40 @@ int line_open(struct takt_line *line) {
  * Leitung. */
 #if DT_HAS_CHOSEN(zephyr_console) && !DT_SAME_NODE(DT_CHOSEN(zephyr_console), DT_CHOSEN(takt_line))
 
-/* Die Schritte, die der Kern dem Watchdog meldete. */
-static atomic_t line_steps;
-
-/* Der Start des Laufs in Millisekunden seit dem Einschalten. */
-static int64_t line_started;
-
-/* Schon vermerkt: der erste Schritt, die Schritte nach einer Sekunde. */
-static bool line_first_noted;
-static bool line_second_noted;
-
-/* So oft sieht der Zeitgeber noch nach. */
-static uint32_t line_looks = 10U;
-
-/* Aus der ISR des Zeitgebers: der Faden, den sie unterbrach, mit seiner
- * Prioritaet, und die Schritte bis jetzt. */
-static void line_look(struct k_timer *timer) {
-    printk("takt wache %ld ms: faden prio %d, schritte %ld\n", (long)k_uptime_get(),
-           k_thread_priority_get(k_current_get()), (long)atomic_get(&line_steps));
-    line_looks--;
-    if (line_looks == 0U) {
-        k_timer_stop(timer);
-    }
+/* Der stille Zeitgeber: Er weckt nur. */
+static void line_tick(struct k_timer *timer) {
+    ARG_UNUSED(timer);
 }
 
-K_TIMER_DEFINE(line_watch_timer, line_look, NULL);
-
-void line_watch_arm(void) {
-    printk("takt start\n");
-    k_timer_start(&line_watch_timer, K_MSEC(100), K_MSEC(100));
-}
+K_TIMER_DEFINE(line_watch_timer, line_tick, NULL);
 
 void line_watch_alarm(void) {
     (void)k_msleep(1);
     printk("takt wecker\n");
 }
 
-void line_watch_start(void) {
-    line_started = k_uptime_get();
-    printk("takt lauf\n");
+void line_watch_arm(int ticking) {
+    printk("takt start, zeitgeber %s\n", (ticking != 0) ? "ja" : "nein");
+    if (ticking != 0) {
+        k_timer_start(&line_watch_timer, K_MSEC(100), K_MSEC(100));
+    }
 }
 
-void line_watch_step(void) {
-    (void)atomic_inc(&line_steps);
-}
-
-void line_watch_round(void) {
-    const atomic_val_t steps = atomic_get(&line_steps);
-    if ((!line_first_noted) && (steps > 0)) {
-        printk("takt erster schritt\n");
-        line_first_noted = true;
-    }
-    if ((!line_second_noted) && ((k_uptime_get() - line_started) >= 1000)) {
-        printk("takt nach 1 s: %ld schritte\n", (long)steps);
-        line_second_noted = true;
-    }
+void line_watch_end(const char *what) {
+    printk("takt ende: %s, leitung haelt %u byte\n", what, (unsigned int)ring_buf_size_get(&line_ring));
 }
 
 #else
 
-void line_watch_arm(void) {
-}
-
 void line_watch_alarm(void) {
 }
 
-void line_watch_start(void) {
+void line_watch_arm(int ticking) {
+    ARG_UNUSED(ticking);
 }
 
-void line_watch_step(void) {
-}
-
-void line_watch_round(void) {
+void line_watch_end(const char *what) {
+    ARG_UNUSED(what);
 }
 
 #endif
