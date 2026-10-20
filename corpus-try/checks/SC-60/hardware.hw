@@ -36,3 +36,15 @@ raw = u8
 safe = 0
 device = pins
 port = "takt_level"
+
+[channel pair/seen]
+direction = input
+from = "pair/last"
+from_tick_ns = 100000000
+from_timing = asap
+
+[channel pair/sent]
+direction = output
+from = "pair/last"
+from_tick_ns = 100000000
+from_timing = boundary

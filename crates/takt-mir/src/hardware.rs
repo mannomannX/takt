@@ -108,8 +108,9 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// 17: die Stack-Reserve je Form (`stack_reserve_interrupt`,
 /// `stack_reserve_poll`, `stack_reserve_rtos`; FB-513); `stack_reserve`
 /// gilt dem eigenen Kern. 18: die fremde Last je Ziel (`foreign_block_ns`,
-/// `foreign_block_origin`, Abschnitte `[target.<z>.isr.<name>]`; 8.10,
-/// 12.11, M11 Schritt 16); eine aeltere Datei nennt keine, und die
+/// `foreign_block_origin`, Abschnitte `[target.<z>.isr.<name>]`) und
+/// `from` am Kanal, die Kopplung zweier Programme eines Kerns (8.10,
+/// 12.11, M11 Schritt 16); eine aeltere Datei nennt beides nicht, und die
 /// Antwortzeiten mehrerer Programme rechnen ohne fremde Last.
 pub const FORMAT_VERSION: u32 = 18;
 
@@ -564,6 +565,16 @@ pub struct HwChannel {
     /// und das letzte Bit draussen (8.8)? Ohne Angabe `true` (8.10); `false`
     /// macht `tx.idle` an diesem Kanal zum Fehler (Pruefung 60).
     pub tx_idle: Option<bool>,
+    /// Bei einem Input: die Adresse des Ausgangs eines anderen Programms
+    /// desselben Kerns, der ihn ueber einen Treiber speist (12.11).
+    pub from: Option<String>,
+    /// Der Tick des Schreibers in Nanosekunden; mit `from` verlangt.
+    pub from_tick_ns: Option<i64>,
+    /// `output_timing` des Schreibers; mit `from` verlangt.
+    pub from_timing: Option<crate::program::OutputTiming>,
+    /// Bei gleichem Tick: Rechnet der Schreiber an einer gemeinsamen Grenze
+    /// zuerst? Ohne Angabe nein.
+    pub from_first: Option<bool>,
 }
 
 impl HwChannel {
@@ -718,6 +729,8 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
     // Jeder Stoerer braucht Kosten und Periode; geprueft am Ende, mit der
     // Zeile seines Abschnitts.
     let mut isr_lines: Vec<(String, String, u32)> = Vec::new();
+    // Ebenso braucht jede Kopplung Tick und Timing ihres Schreibers (12.11).
+    let mut channel_lines: Vec<(String, u32)> = Vec::new();
 
     for (i, raw) in text.lines().enumerate() {
         let line_no = i as u32 + 1;
@@ -766,6 +779,9 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
             if let Section::Isr(target, isr) = &s {
                 isr_lines.push((target.clone(), isr.clone(), line_no));
             }
+            if let Section::Channel(address) = &s {
+                channel_lines.push((address.clone(), line_no));
+            }
             current = Some(s);
             continue;
         }
@@ -810,6 +826,20 @@ pub fn parse(text: &str) -> Result<Hardware, ParseError> {
 
     if !seen_magic {
         return Err(ParseError { line: 1, message: format!("die Datei muss mit `# {MAGIC} <version>` beginnen") });
+    }
+    for (address, line) in channel_lines {
+        let Some(c) = out.channels.get(&address) else { continue };
+        let writer = [c.from_tick_ns.is_some(), c.from_timing.is_some(), c.from_first.is_some()];
+        let complete = c.from.is_some() && c.from_tick_ns.is_some_and(|t| t > 0) && c.from_timing.is_some();
+        if (c.from.is_some() || writer.iter().any(|w| *w)) && !complete {
+            return Err(ParseError {
+                line,
+                message: format!(
+                    "die Kopplung an `{address}` braucht `from`, `from_tick_ns` (groesser als null) und `from_timing` \
+                     (12.11)"
+                ),
+            });
+        }
     }
     for (target, name, line) in isr_lines {
         let isr = out.targets.get(&target).and_then(|t| t.foreign.isrs.get(&name)).copied().unwrap_or_default();
@@ -1064,13 +1094,28 @@ fn channel_key(channel: &mut HwChannel, key: &str, value: &str, line: u32) -> Re
         "deep_wake" => channel.deep_wake = Some(boolean(value, line)?),
         "tick_granular" => channel.tick_granular = Some(boolean(value, line)?),
         "tx_idle" => channel.tx_idle = Some(boolean(value, line)?),
+        "from" => channel.from = Some(text(value)),
+        "from_tick_ns" => channel.from_tick_ns = Some(field::<i64>(value, line)?),
+        "from_timing" => {
+            channel.from_timing = Some(match text(value).as_str() {
+                "asap" => crate::program::OutputTiming::Asap,
+                "boundary" => crate::program::OutputTiming::Boundary,
+                other => {
+                    return Err(ParseError {
+                        line,
+                        message: format!("`{other}` ist kein `output_timing` (asap, boundary)"),
+                    });
+                }
+            });
+        }
+        "from_first" => channel.from_first = Some(boolean(value, line)?),
         _ => {
             return Err(ParseError {
                 line,
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: direction, raw, unit, range, safe, device, port, \
                      rate_hz, max_rate_hz, framing, calibration, guard_ns, jitter_ns, tick_granular, latency_ns, \
-                     deep_wake, tx_idle"
+                     deep_wake, tx_idle, from, from_tick_ns, from_timing, from_first"
                 ),
             });
         }
@@ -1372,6 +1417,22 @@ pub fn render(hw: &Hardware) -> String {
                 s.push_str(&format!("{key} = {v}\n"));
             }
         }
+        if let Some(v) = &c.from {
+            s.push_str(&format!("from = \"{v}\"\n"));
+        }
+        if let Some(v) = c.from_tick_ns {
+            s.push_str(&format!("from_tick_ns = {v}\n"));
+        }
+        if let Some(v) = c.from_timing {
+            let name = match v {
+                crate::program::OutputTiming::Asap => "asap",
+                crate::program::OutputTiming::Boundary => "boundary",
+            };
+            s.push_str(&format!("from_timing = {name}\n"));
+        }
+        if let Some(v) = c.from_first {
+            s.push_str(&format!("from_first = {v}\n"));
+        }
     }
     s
 }
@@ -1478,6 +1539,27 @@ t_io = 120000
         assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
         let bare = parse(&format!("# {MAGIC} 17\n[target.thumbv7em]\nram = 1024\n")).expect("Version 17");
         assert_eq!(bare.target("thumbv7em").expect("Ziel").foreign, Foreign::default());
+    }
+
+    /// **Die Kopplung zweier Programme** (8.10, 12.11, Version 18): Ein
+    /// Eingang nennt mit `from` den Ausgang, der ihn speist.
+    #[test]
+    fn a_coupled_input_names_its_source() {
+        let text = format!(
+            "# {MAGIC} 18\n[channel pair/seen]\ndirection = input\nfrom = \"pair/count\"\nfrom_tick_ns = 1000000\n\
+             from_timing = asap\n"
+        );
+        let hw = parse(&text).expect("lesbar");
+        let c = hw.channel("pair/seen").expect("Kanal");
+        assert_eq!(c.from.as_deref(), Some("pair/count"));
+        assert_eq!(
+            (c.from_tick_ns, c.from_timing, c.from_first),
+            (Some(1_000_000), Some(crate::program::OutputTiming::Asap), None)
+        );
+        assert_eq!(parse(&render(&hw)).expect("wieder lesbar").channels, hw.channels);
+        // Ohne Tick oder Timing des Schreibers ist die Kopplung unvollstaendig.
+        assert!(parse(&text.replace("from_timing = asap\n", "")).is_err_and(|e| e.line == 2));
+        assert!(parse(&text.replace("from = \"pair/count\"\n", "")).is_err());
     }
 
     /// Ein Stoerer ohne Kosten oder Periode, eine unbekannte Herkunft und ein

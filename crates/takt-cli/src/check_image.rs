@@ -91,6 +91,46 @@ pub(crate) struct Timing {
     /// nennt.
     pub(crate) foreign_block: Option<(u64, String)>,
     pub(crate) isrs: Vec<String>,
+    /// T_IO in Pikosekunden; `None` ist offen.
+    pub(crate) t_io_ps: Option<u64>,
+    /// `output_timing = boundary` (12.1).
+    pub(crate) boundary: bool,
+    /// Die Adressen der Ausgaenge an Treibern.
+    pub(crate) outputs: Vec<String>,
+    /// Die gekoppelten Eingaenge (`from`, 8.10).
+    pub(crate) links: Vec<Link>,
+}
+
+/// Ein gekoppelter Eingang und was die Hardware-Konfiguration ueber seinen
+/// Schreiber sagt (8.10, 12.11).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Link {
+    pub(crate) input: String,
+    pub(crate) from: String,
+    pub(crate) tick_ns: u64,
+    pub(crate) boundary: bool,
+    /// Bei gleichem Tick rechnet der Schreiber zuerst.
+    pub(crate) first: bool,
+}
+
+impl Link {
+    /// `eingang<-ausgang tick timing zuerst`.
+    fn parse(text: &str) -> Option<Link> {
+        let (input, rest) = text.split_once("<-")?;
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        let [from, tick, timing, first] = words.as_slice() else { return None };
+        Some(Link {
+            input: input.trim().to_string(),
+            from: (*from).to_string(),
+            tick_ns: tick.parse().ok()?,
+            boundary: match *timing {
+                "boundary" => true,
+                "asap" => false,
+                _ => return None,
+            },
+            first: first.parse().ok()?,
+        })
+    }
 }
 
 impl Manifest {
@@ -123,6 +163,13 @@ impl Manifest {
             let bytes = values.get(format!("{key}_bytes").as_str()).map(|v| v.parse::<u64>()).transpose();
             Ok((symbol, bytes.map_err(|e| format!("`{key}_bytes`: {e}"))?.unwrap_or(0)))
         };
+        let list = |key: &str| -> Vec<String> {
+            values
+                .get(key)
+                .filter(|v| **v != "none")
+                .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect())
+                .unwrap_or_default()
+        };
         let optional = |key: &str| -> Result<Option<u64>, String> {
             match values.get(key) {
                 None | Some(&"none") => Ok(None),
@@ -135,11 +182,17 @@ impl Manifest {
             journal_block_ns: optional("journal_block_ns")?.unwrap_or(0),
             foreign_block: optional("foreign_block_ns")?
                 .map(|n| (n, values.get("foreign_block_origin").map_or("Vertrag", |o| *o).to_string())),
-            isrs: values
-                .get("isrs")
-                .filter(|v| **v != "none")
-                .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect())
-                .unwrap_or_default(),
+            isrs: list("isrs"),
+            t_io_ps: optional("t_io_ps")?.filter(|_| values.get("step_budget_origin") == Some(&"gemessen")),
+            boundary: values.get("output_timing") == Some(&"boundary"),
+            outputs: list("outputs"),
+            links: list("links")
+                .iter()
+                .map(|l| {
+                    Link::parse(l)
+                        .ok_or_else(|| format!("`links`: `{l}` ist nicht `eingang<-ausgang tick timing zuerst`"))
+                })
+                .collect::<Result<_, _>>()?,
         };
         Ok(Manifest {
             bench: false,
@@ -419,6 +472,7 @@ pub(crate) fn responses(manifests: &[&Manifest]) -> Vec<Line> {
         }
         None => out.push(open("Auslastung offen: ein Schrittbudget fehlt".to_string())),
     }
+    out.extend(couplings(&programs, &tasks, blocking.as_ref(), &isrs));
     for r in response::responses(&tasks, blocking.as_ref(), &isrs) {
         let tick = programs.iter().find(|m| m.prefix == r.name).map_or(0, |m| m.timing.tick_ns);
         out.push(match r.ps {
@@ -436,6 +490,105 @@ pub(crate) fn responses(manifests: &[&Manifest]) -> Vec<Line> {
                 text: format!("{}: Antwortzeit {} ns bei einem Tick von {tick} ns", r.name, ns(ps)),
             },
         });
+    }
+    out
+}
+
+/// Der groesste gemeinsame Teiler zweier Perioden.
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// Die Kopplungen zweier Programme (12.11, „An einer gemeinsamen Grenze"):
+/// Liest das hoehere einen Ausgang des niedrigeren, braucht das niedrigere
+/// `output_timing = boundary`; und in jeder Richtung muss das niedrigere S
+/// freigeben und abtasten, bevor die naechste Grenze des hoeheren F kommt:
+/// `R_io(S) < ggT(T_S, T_F)`. Rang: der kuerzere Tick, bei gleichem die
+/// Reihenfolge der Manifeste.
+fn couplings(
+    programs: &[&Manifest],
+    tasks: &[response::Program],
+    blocking: Option<&response::Load>,
+    isrs: &[response::Load],
+) -> Vec<Line> {
+    let mut out = Vec::new();
+    let higher = |a: usize, b: usize| (programs[a].timing.tick_ns, a) < (programs[b].timing.tick_ns, b);
+    for (reader, m) in programs.iter().enumerate() {
+        for link in &m.timing.links {
+            let (input, from) = (&link.input, &link.from);
+            let Some(writer) = programs.iter().position(|w| w.timing.outputs.contains(from)) else {
+                out.push(finding(format!(
+                    "{}: `{input}` liest `{from}`, aber kein Manifest nennt diesen Ausgang (12.11)",
+                    m.prefix
+                )));
+                continue;
+            };
+            let what = format!("{}:{input} <- {}:{from}", m.prefix, programs[writer].prefix);
+            if writer == reader {
+                out.push(finding(format!("{what}: ein Programm koppelt sich mit sich selbst (12.11)")));
+                continue;
+            }
+            // Was die Konfiguration ueber den Schreiber sagt, prueft der Leser
+            // zur Laufzeit; es muss stimmen (12.11).
+            let w = &programs[writer].timing;
+            let first = higher(writer, reader) && w.tick_ns == m.timing.tick_ns;
+            if (link.tick_ns, link.boundary) != (w.tick_ns, w.boundary)
+                || (w.tick_ns == m.timing.tick_ns && link.first != first)
+            {
+                out.push(finding(format!(
+                    "{what}: die Hardware-Konfiguration sagt Tick {} ns, `{}`{}, das Manifest von {} Tick {} ns, `{}`{} \
+                     (12.11)",
+                    link.tick_ns,
+                    if link.boundary { "boundary" } else { "asap" },
+                    if link.first { ", zuerst" } else { "" },
+                    programs[writer].prefix,
+                    w.tick_ns,
+                    if w.boundary { "boundary" } else { "asap" },
+                    if first { ", zuerst" } else { "" },
+                )));
+                continue;
+            }
+            let (low, high) = if higher(reader, writer) { (writer, reader) } else { (reader, writer) };
+            if low == writer && !programs[writer].timing.boundary {
+                out.push(finding(format!(
+                    "{what}: das hoehere Programm liest einen Ausgang des niedrigeren, das dafuer \
+                     `output_timing = boundary` braucht (12.11)"
+                )));
+                continue;
+            }
+            let period = gcd(programs[low].timing.tick_ns, programs[high].timing.tick_ns).saturating_mul(1000);
+            let Some(t_io) = programs[low].timing.t_io_ps else {
+                out.push(open(format!("{what}: offen, T_IO von {} fehlt (Kalibrierung)", programs[low].prefix)));
+                continue;
+            };
+            let mut probe = tasks.to_vec();
+            probe[low].budget_ps = Some(t_io);
+            let r = &response::responses(&probe, blocking, isrs)[low];
+            out.push(match r.ps {
+                None => open(format!("{what}: offen, ein Schrittbudget fehlt")),
+                Some(ps) if ps >= period => finding(format!(
+                    "{what}: {} gibt erst nach {} ns frei und tastet ab, die naechste Grenze von {} kommt nach {} ns \
+                     (12.11)",
+                    programs[low].prefix,
+                    ns(ps),
+                    programs[high].prefix,
+                    period / 1000
+                )),
+                Some(ps) => Line {
+                    origin: r.origin.into(),
+                    text: format!(
+                        "{what}: {} gibt frei und tastet ab nach {} ns, vor der naechsten Grenze von {} nach {} ns",
+                        programs[low].prefix,
+                        ns(ps),
+                        programs[high].prefix,
+                        period / 1000
+                    ),
+                },
+            });
+        }
     }
     out
 }
@@ -862,6 +1015,7 @@ mod tests {
                 journal_block_ns: 0,
                 foreign_block: Some((2000, "Vertrag".into())),
                 isrs: vec!["uart:1100:10850:gemessen".into()],
+                ..Timing::default()
             }
         );
         let open = Manifest::parse(&text.replace("origin = gemessen", "origin = offen")).expect("lesbar");
@@ -924,5 +1078,92 @@ mod tests {
         let lines = responses(&[&fast, &slow]);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].origin, Origin::Finding);
+    }
+
+    /// Das Paar aus Schritt 16: `fast` schreibt `pair/count`, `slow` liest
+    /// ihn als `pair/seen` und gibt `pair/last` frei.
+    fn pair(fast_budget_ns: u64, slow_t_io_ns: u64) -> (Manifest, Manifest) {
+        let mut fast = timed("fast", 1_000_000, Some(fast_budget_ns));
+        fast.timing.t_io_ps = Some(20_000_000);
+        fast.timing.outputs = vec!["pair/count".into()];
+        let mut slow = timed("slow", 10_000_000, Some(2_000_000));
+        slow.timing.t_io_ps = Some(slow_t_io_ns * 1000);
+        slow.timing.outputs = vec!["pair/last".into()];
+        slow.timing.links = vec![link("pair/seen", "pair/count", 1_000_000, false)];
+        (fast, slow)
+    }
+
+    /// Ein gekoppelter Eingang mit dem, was die Konfiguration ueber seinen
+    /// Schreiber sagt.
+    fn link(input: &str, from: &str, tick_ns: u64, boundary: bool) -> Link {
+        Link { input: input.into(), from: from.into(), tick_ns, boundary, first: false }
+    }
+
+    fn coupling(lines: &[Line]) -> Vec<(Origin, &str)> {
+        texts(lines).into_iter().filter(|(_, t)| t.contains(" <- ")).collect()
+    }
+
+    /// **Das niedrigere Programm gibt frei und tastet ab, bevor die naechste
+    /// Grenze des hoeheren kommt** (12.11): `R_io(slow)` = T_IO + ein Schritt
+    /// von `fast` = 300 us, unter ggT(10 ms, 1 ms) = 1 ms.
+    #[test]
+    fn a_coupling_holds_when_the_lower_program_samples_in_time() {
+        let (fast, slow) = pair(250_000, 50_000);
+        assert_eq!(
+            coupling(&responses(&[&fast, &slow])),
+            [(
+                Origin::Measured,
+                "slow:pair/seen <- fast:pair/count: slow gibt frei und tastet ab nach 300000 ns, vor der naechsten \
+                 Grenze von fast nach 1000000 ns"
+            )]
+        );
+        // 200 us T_IO, und je Millisekunde 900 us von `fast`: Bis zum Ende des
+        // Abtastens vergehen zwei Schritte von `fast`, 2 ms, und das ist zu spaet.
+        let (fast, slow) = pair(900_000, 200_000);
+        let found = coupling(&responses(&[&fast, &slow]))
+            .into_iter()
+            .filter(|(o, t)| *o == Origin::Finding && t.contains("erst nach 2000000 ns"))
+            .count();
+        assert_eq!(found, 1);
+    }
+
+    /// Liest das hoehere einen Ausgang des niedrigeren, braucht das niedrigere
+    /// `output_timing = boundary` (12.11); ohne ist es ein Befund. Ein
+    /// Eingang ohne schreibendes Programm ist ebenso einer.
+    #[test]
+    fn the_lower_program_publishes_at_its_boundary() {
+        let (mut fast, slow) = pair(250_000, 50_000);
+        fast.timing.links = vec![link("pair/back", "pair/last", 10_000_000, false)];
+        let lines = responses(&[&fast, &slow]);
+        assert!(coupling(&lines).iter().any(|(o, t)| *o == Origin::Finding && t.contains("boundary` braucht")));
+        let mut slow = slow;
+        slow.timing.boundary = true;
+        // Die Konfiguration sagt noch `asap`: Das stimmt nicht mit dem Manifest.
+        let lines = responses(&[&fast, &slow]);
+        assert!(
+            coupling(&lines).iter().any(|(o, t)| *o == Origin::Finding && t.contains("Hardware-Konfiguration sagt"))
+        );
+        fast.timing.links = vec![link("pair/back", "pair/last", 10_000_000, true)];
+        let lines = responses(&[&fast, &slow]);
+        assert!(coupling(&lines).iter().all(|(o, _)| *o == Origin::Measured), "{lines:?}");
+        fast.timing.links = vec![link("pair/back", "pair/nobody", 10_000_000, true)];
+        let lines = responses(&[&fast, &slow]);
+        assert!(lines.iter().any(|l| l.origin == Origin::Finding && l.text.contains("kein Manifest nennt")));
+    }
+
+    /// Das Manifest nennt Zeitverhalten und Kopplungen (12.11).
+    #[test]
+    fn the_manifest_names_its_couplings() {
+        let text = "# takt-manifest 1\nprefix = slow\nabi = 6\nlogic_hash = ab12\narena_bytes = 256\n\
+                    arena_align = 8\nxip_flash = false\ntick_path = slow_tick\ntick_ns = 10000000\n\
+                    step_budget_ps = 1\nstep_budget_origin = gemessen\nt_io_ps = 5\noutput_timing = boundary\n\
+                    outputs = pair/last, pair/step\nlinks = pair/seen<-pair/count 1000000 asap false\n";
+        let m = Manifest::parse(text).expect("lesbar");
+        assert_eq!(m.timing.t_io_ps, Some(5));
+        assert!(m.timing.boundary);
+        assert_eq!(m.timing.outputs, ["pair/last", "pair/step"]);
+        assert_eq!(m.timing.links, [link("pair/seen", "pair/count", 1_000_000, false)]);
+        assert!(Manifest::parse(&text.replace("pair/seen<-", "pair/seen=")).is_err());
+        assert!(Manifest::parse(&text.replace(" asap false", " sofort false")).is_err());
     }
 }

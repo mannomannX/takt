@@ -13,7 +13,7 @@ use std::process::Command;
 
 use takt_llvm::Target;
 use takt_llvm::symbols::Prefix;
-use takt_mir::program::RuntimeProfile;
+use takt_mir::program::{Direction, RuntimeProfile};
 
 /// Der Kopf des C-SDK (`crates/takt-embed-c`), wie die Lieferform ihn neben
 /// `P.h` legt: Er beschreibt die Tabelle `P_ops` und den Kern ohne Warten.
@@ -442,7 +442,47 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
             let _ = writeln!(s, "step_budget_origin = offen");
         }
     }
+    match target.filter(|t| budget.is_some() && t.fits_cost_model()) {
+        Some(t) => {
+            let _ = writeln!(s, "t_io_ps = {}", t.t_io_ps);
+        }
+        None => {
+            let _ = writeln!(s, "t_io_ps = none");
+        }
+    }
     let _ = writeln!(s, "journal_block_ns = {}", if persist_bytes > 0 { e.nvm_blocking_ns } else { 0 });
+    // 12.11: Was ein Programm ueber einen Treiber mit einem anderen koppelt.
+    let timing = match p.config.output_timing {
+        takt_mir::program::OutputTiming::Boundary => "boundary",
+        takt_mir::program::OutputTiming::Asap => "asap",
+    };
+    let _ = writeln!(s, "output_timing = {timing}");
+    let bound = |dir: Direction| -> Vec<String> {
+        p.channels
+            .iter()
+            .filter(|c| c.dir == dir)
+            .filter_map(|c| match &c.binding {
+                takt_mir::program::Binding::Hw(addr) => Some(addr.text()),
+                _ => None,
+            })
+            .collect()
+    };
+    let outputs = bound(Direction::Output);
+    let _ = writeln!(s, "outputs = {}", if outputs.is_empty() { "none".to_string() } else { outputs.join(", ") });
+    let links: Vec<String> = bound(Direction::Input)
+        .into_iter()
+        .filter_map(|addr| {
+            // Was die Konfiguration ueber den Schreiber sagt: Tick, Timing,
+            // ob er bei gleichem Tick zuerst rechnet (8.10).
+            let c = e.hardware?.channel(&addr)?;
+            let timing = match c.from_timing? {
+                takt_mir::program::OutputTiming::Boundary => "boundary",
+                takt_mir::program::OutputTiming::Asap => "asap",
+            };
+            Some(format!("{addr}<-{} {} {timing} {}", c.from.as_deref()?, c.from_tick_ns?, c.from_first == Some(true)))
+        })
+        .collect();
+    let _ = writeln!(s, "links = {}", if links.is_empty() { "none".to_string() } else { links.join(", ") });
     let foreign = target.map(|t| t.foreign.clone()).unwrap_or_default();
     match foreign.block_ns {
         Some(n) => {

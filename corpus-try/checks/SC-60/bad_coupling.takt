@@ -1,0 +1,19 @@
+system:
+    language = 1
+    tick     = 10 ms
+
+# Pruefung 60, die Kopplung zweier Programme (12.11): `pair/seen` liest den
+# Ausgang eines Programms mit Tick 100 ms, also eines niedrigeren, unter
+# `asap`; sein Wert hinge davon ab, wann dessen Schritt fertig wird. Und
+# `from` steht an einem Ausgang, gekoppelt wird aber nur ein skalarer Input.
+
+input  seen : int in 0..100 @ hw("pair/seen") with max_age = 300 ms  # ~ SC-60
+
+output sent : int in 0..100 @ hw("pair/sent") with safe = 0  # ~ SC-60
+
+machine m:
+    initial RUN
+
+    state RUN:
+        loop:
+            sent = seen if seen.valid else 0

@@ -164,8 +164,8 @@ pub fn build_with(p: &Program, frame: Frame<'_>) -> McuHarness {
     // 12.6: der Treiberrand vor dem Abtasten, das ihn speist.
     crate::edge::emit(&mut t, p, &layout, &driven, deliveries(p, &layout, x), x);
     init(&mut t.code, p, &layout, &driven, x);
-    tick(&mut t, p, &layout, &driven, x);
-    telemetry(&mut t, p, &layout, &driven, diagnostics, x);
+    tick(&mut t, p, &layout, &driven, hw, x);
+    telemetry(&mut t, p, &layout, &driven, diagnostics, hw, x);
     // Fuer einen Wirt, der die Arena nicht in C anlegt (12.11, [`arena_layout`]).
     let _ = writeln!(t.code, "const uint64_t {x}_arena_bytes = sizeof(struct {x}_arena);");
     let _ = writeln!(t.code, "const uint64_t {x}_arena_align = _Alignof(struct {x}_arena);");
@@ -973,8 +973,21 @@ fn init(s: &mut String, p: &Program, layout: &Layout, driven: &[&takt_mir::machi
 }
 
 /// `P_tick`: ein Tick, von der Schleife gerufen.
-fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine::Machine], x: &Prefix) {
+fn tick(
+    t: &mut Text,
+    p: &Program,
+    layout: &Layout,
+    driven: &[&takt_mir::machine::Machine],
+    hw: Option<&takt_mir::hardware::Hardware>,
+    x: &Prefix,
+) {
     let _ = writeln!(t.fields, "    _Bool overrun, hardware, operator_abort;");
+    // 12.11: Ein Zeitfehler einer Kopplung und ein Ueberlauf im selben Tick
+    // sind ein `Runtime(Overrun)`, nicht zwei.
+    let coupled = !couplings(p, layout, hw, x).is_empty();
+    if coupled {
+        let _ = writeln!(t.fields, "    _Bool overran;");
+    }
     // 12.11: die Eintrittssperre ([`locked`]).
     let _ = writeln!(t.fields, "    unsigned int entered;");
     let _ = writeln!(t.fields, "    _Bool driver_fault[{}];", driver_outputs(p, layout).len().max(1));
@@ -1004,6 +1017,9 @@ fn tick(t: &mut Text, p: &Program, layout: &Layout, driven: &[&takt_mir::machine
     let _ = writeln!(s, "static void takt_tick(struct {x}_arena *a, int64_t k) {{");
     let _ = writeln!(s, "    a->tick = k;");
     let _ = writeln!(s, "    a->done = k;");
+    if coupled {
+        let _ = writeln!(s, "    a->overran = a->overrun;");
+    }
     let _ = writeln!(s, "    if (a->overrun) {{");
     let _ = writeln!(s, "        a->overrun = 0;");
     let _ = writeln!(s, "        takt_trace_text(a->sink, \"t=\");");
@@ -1402,6 +1418,7 @@ fn telemetry(
     layout: &Layout,
     driven: &[&takt_mir::machine::Machine],
     diagnostics: takt_llvm::Diagnostics,
+    hw: Option<&takt_mir::hardware::Hardware>,
     x: &Prefix,
 ) {
     if diagnostics == takt_llvm::Diagnostics::None {
@@ -1412,7 +1429,7 @@ fn telemetry(
              int32_t accepted) {{ (void)sink; (void)k; (void)param; (void)v; (void)len; (void)accepted; }}\n"
         );
         program_counters(t, p, driven, x);
-        sample(t, p, layout, x);
+        sample(t, p, layout, hw, x);
         commit(&mut t.code, p, layout, x);
         outputs(&mut t.code, layout, x);
         return;
@@ -1688,7 +1705,7 @@ fn telemetry(
     let _ = writeln!(s, "}}");
     guarded(s, x, "void", "dump", "int32_t all", "all");
     program_counters(t, p, driven, x);
-    sample(t, p, layout, x);
+    sample(t, p, layout, hw, x);
     commit(&mut t.code, p, layout, x);
     outputs(&mut t.code, layout, x);
 }
@@ -1961,8 +1978,12 @@ fn enum_variants(p: &Program, name: &str) -> Option<Vec<(i64, String)>> {
 /// fragt der Rahmen nach der Kopplung im Commit: Liefert sein Treiber in
 /// diesem Tick, gilt die Lieferung statt des Modells, wie ein Stimulus im
 /// Interpreter (8.3); liefert er nichts, bleibt der Wert des Modells.
-fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
+fn sample(t: &mut Text, p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardware>, x: &Prefix) {
     let scalars = bound_scalars(p, layout, x);
+    let coupled = couplings(p, layout, hw, x);
+    if !coupled.is_empty() && p.config.overrun == takt_mir::program::OverrunPolicy::Fault {
+        let _ = writeln!(t.fields, "    _Bool coupling_late;");
+    }
     let streams = bound_streams(p, x);
     let commands = bound_commands(p, layout, x);
     for b in scalars.iter().filter(|b| b.ct.is_none()) {
@@ -2007,6 +2028,9 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
                 format!("{buf}, {}", b.size)
             }
         };
+        if let Some(c) = coupled.iter().find(|c| c.channel == b.channel) {
+            coupling_check(s, p, c);
+        }
         let _ = writeln!(
             s,
             "        if (got != 0) takt_edge_reading(a, {}, {value}, {}, q, r, got == 1, t, age);",
@@ -2102,9 +2126,85 @@ fn sample(t: &mut Text, p: &Program, layout: &Layout, x: &Prefix) {
             None => writeln!(s, "    a->image[{}] = {asked} ? 1 : 0; /* {} */", c.offset, c.name),
         };
     }
+    // 12.11, 7.3: Ein Zeitfehler einer Kopplung ist `Runtime(Overrun)` fuer
+    // alle Maschinen in diesem Tick, vor ihrem Schritt; einer, den die
+    // Schleife schon meldete, zaehlt nicht doppelt.
+    if !coupled.is_empty() && p.config.overrun == takt_mir::program::OverrunPolicy::Fault {
+        let overrun =
+            takt_llvm::abi::fault_code(takt_mir::machine::FaultKind::Runtime(takt_mir::machine::RuntimeKind::Overrun));
+        let _ = writeln!(s, "    if (a->coupling_late) {{");
+        let _ = writeln!(s, "        a->coupling_late = 0;");
+        let _ = writeln!(s, "        if (!a->overran) {{");
+        let _ = writeln!(s, "            a->overran = 1;");
+        let _ = writeln!(s, "            takt_trace_text(a->sink, \"t=\");");
+        let _ = writeln!(s, "            takt_trace_i64(a->sink, a->tick);");
+        let _ = writeln!(s, "            takt_trace_text(a->sink, \" runtime Overrun\\n\");");
+        let _ = writeln!(s, "            for (int m = 0; m < {}; m++) takt_pend(a, m, {overrun});", p.machines.len());
+        let _ = writeln!(s, "        }}");
+        let _ = writeln!(s, "    }}");
+    }
     let _ = writeln!(s, "    takt_edge_commit(a, a->tick);");
     let _ = writeln!(s, "}}\n");
     with_now(s, body, "takt_ticks_ns(a->tick)");
+}
+
+/// Ein gekoppelter Eingang (12.11): der Kanal, die Adresse des Schreibers
+/// und was die Hardware-Konfiguration ueber ihn sagt.
+struct Coupling {
+    channel: usize,
+    from: String,
+    /// Der Tick des Schreibers in Nanosekunden.
+    tick_ns: i64,
+    /// Der Schreiber gibt mit `output_timing = boundary` frei.
+    boundary: bool,
+    /// Der Schreiber rechnet an einer gemeinsamen Grenze vor dem Leser.
+    higher: bool,
+}
+
+/// Die gekoppelten Eingaenge unter den hw-gebundenen Skalaren (12.11).
+fn couplings(p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardware>, x: &Prefix) -> Vec<Coupling> {
+    let Some(hw) = hw else { return Vec::new() };
+    bound_scalars(p, layout, x)
+        .iter()
+        .filter_map(|b| {
+            let takt_mir::program::Binding::Hw(addr) = &p.channels[b.channel].binding else { return None };
+            let c = hw.channel(&addr.text())?;
+            let tick_ns = c.from_tick_ns?;
+            let first = c.from_first == Some(true);
+            Some(Coupling {
+                channel: b.channel,
+                from: c.from.clone()?,
+                tick_ns,
+                boundary: c.from_timing? == takt_mir::program::OutputTiming::Boundary,
+                higher: tick_ns < p.config.tick || (tick_ns == p.config.tick && first),
+            })
+        })
+        .collect()
+}
+
+/// Die Pruefung eines gekoppelten Eingangs (12.11): Erwartet ist der Stempel
+/// der Grenze, deren Wert die Zeitachse festlegt — beim hoeheren Schreiber
+/// seine letzte Grenze bis `now`, beim niedrigeren seine letzte davor, unter
+/// `boundary` je eine Grenze frueher, weil die Freigabe den Latch der Grenze
+/// davor bringt. Gibt es noch keinen, ist keine Lieferung faellig. Passt die
+/// Lieferung nicht, ist die Abtastung `Stale` ohne Wert und der Tick hat
+/// einen Zeitfehler.
+fn coupling_check(s: &mut String, p: &Program, c: &Coupling) {
+    let tw = c.tick_ns;
+    let lag = if c.boundary { tw } else { 0 };
+    let last = if c.higher { format!("now / {tw}LL * {tw}LL") } else { format!("(now - 1) / {tw}LL * {tw}LL") };
+    let _ = writeln!(s, "        /* 12.11: gekoppelt mit `{}` (Tick {tw} ns). */", c.from);
+    let _ = writeln!(
+        s,
+        "        int64_t due = {} - {lag}LL;",
+        if c.higher { last } else { format!("(now == 0 ? -{tw}LL : {last})") }
+    );
+    let _ = writeln!(s, "        if (due >= 0 ? (got == 0 || t != due) : got != 0) {{");
+    let _ = writeln!(s, "            got = 2; q = 2; r = 0; age = 0; t = now;");
+    if p.config.overrun == takt_mir::program::OverrunPolicy::Fault {
+        let _ = writeln!(s, "            a->coupling_late = 1;");
+    }
+    let _ = writeln!(s, "        }}");
 }
 
 /// Stellt `now`, die Zeit des Ticks, an den Anfang des Rumpfs ab `body`,
