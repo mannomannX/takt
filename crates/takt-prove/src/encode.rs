@@ -228,28 +228,22 @@ pub struct Model {
     /// Kegel einer Anfrage (`smt::cone`): beim ersten Kegel einmal ueber den
     /// geteilten Graphen gesammelt statt je Anfrage (FB-603).
     pub(crate) deps: std::cell::OnceCell<std::rc::Rc<Vec<std::collections::BTreeSet<String>>>>,
-    /// Der Folgewert von `s.run.ended` mit dem Ende an der Achse (3.3,
-    /// FB-694), fuer die konkrete Ausfuehrung ([`Model::run`],
-    /// [`Model::simulate`]). Der Zustand [`Model::state`], den der Solver
-    /// sieht, kennt dieses Ende nicht: Er rechnet, als liefe der Lauf weiter.
-    /// Bis zum Tick des Endes ist das derselbe Lauf bis auf `s.run.ended`,
-    /// das im Tick des Endes falsch bleibt, und danach muss nichts gelten.
-    /// Das traegt nur, weil jedes Ziel in `over` und `ended` antiton ist
-    /// ([`after_end`]): Dort hat der Solver dann hoechstens mehr Pflichten
-    /// als der Lauf. `now` liegt so nur im Kegel eines Ziels, das es liest.
-    pub exact_end: Option<Term>,
+    /// Der Zustand der konkreten Ausfuehrung ([`Model::run`],
+    /// [`Model::simulate`]), mit dem Ende an der Achse (3.3, FB-694). Der
+    /// Zustand [`Model::state`], den der Solver sieht, kennt dieses Ende
+    /// nicht: Er rechnet, als liefe der Lauf weiter, und ohne eigenes Ende
+    /// (`sys/next_run`) fuehrt er `s.run.ended` und `s.run.over` gar nicht —
+    /// sie waeren dort immer falsch. Bis zum Tick des Endes ist das derselbe
+    /// Lauf bis auf `s.run.ended`, das im Tick des Endes falsch bleibt, und
+    /// danach muss nichts gelten. Das traegt nur, weil jedes Ziel in `over`
+    /// und `ended` antiton ist ([`after_end`]): Dort hat der Solver dann
+    /// hoechstens mehr Pflichten als der Lauf. So ist sein Modell das ohne
+    /// Ende an der Achse, und `now` liegt nur im Kegel eines Ziels, das es
+    /// liest.
+    pub exact_state: Vec<StateVar>,
 }
 
 impl Model {
-    /// Der Folgewert von `v` in der konkreten Ausfuehrung: fuer
-    /// `s.run.ended` mit dem Ende an der Achse ([`Model::exact_end`]).
-    pub fn exact_next<'a>(&'a self, v: &'a StateVar) -> &'a Term {
-        match &self.exact_end {
-            Some(next) if v.name == ENDED => next,
-            _ => &v.next,
-        }
-    }
-
     /// Der Name eines Blattcodes.
     pub fn leaf_name(&self, machine: &str, code: i64) -> Option<&str> {
         self.leaves.get(machine)?.iter().find(|(c, _)| *c == code).map(|(_, n)| n.as_str())
@@ -263,15 +257,16 @@ impl Model {
         for (name, sort) in &self.inputs {
             env.insert(name.clone(), input(0, name).unwrap_or(eval::Val::zero(*sort)));
         }
-        let names = || self.state.iter().map(|v| v.name.clone());
-        let mut state: eval::Env = names().zip(eval::eval_all(self.state.iter().map(|v| &v.init), &env)).collect();
+        let names = || self.exact_state.iter().map(|v| v.name.clone());
+        let mut state: eval::Env =
+            names().zip(eval::eval_all(self.exact_state.iter().map(|v| &v.init), &env)).collect();
         out.push(state.clone());
         for k in 1..=steps {
             let mut env = state.clone();
             for (name, sort) in &self.inputs {
                 env.insert(name.clone(), input(k, name).unwrap_or(eval::Val::zero(*sort)));
             }
-            state = names().zip(eval::eval_all(self.state.iter().map(|v| self.exact_next(v)), &env)).collect();
+            state = names().zip(eval::eval_all(self.exact_state.iter().map(|v| &v.next), &env)).collect();
             out.push(state.clone());
         }
         out
@@ -463,9 +458,9 @@ struct Enc<'p> {
     notes: Vec<String>,
     /// `abort` in diesem Tick, je Stelle.
     aborts: Vec<Term>,
-    /// Der Folgewert von `s.run.ended` mit dem Ende an der Achse
-    /// (`Model::exact_end`), aus dem Tick.
-    exact_end: Option<Term>,
+    /// Der Folgewert von `s.run.ended` ohne das Ende an der Achse, wie der
+    /// Solver ihn sieht (`Model::exact_state`), aus dem Tick.
+    closed_end: Option<Term>,
     /// Feuerbedingungen der Pruefstellen der laufenden Phase, je Stelle.
     sites: BTreeMap<SiteKey, Vec<Fire>>,
     /// Position und Maschine je Pruefstelle.
@@ -852,7 +847,45 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
             .collect();
         (m.name.clone(), done)
     });
-    let exact_end = enc.exact_end.take();
+    // 3.3: Der Solver sieht das Ende an der Achse nicht (FB-694). Mit eigenem
+    // Ende folgt `s.run.ended` nur diesem; ohne faellt es mit `s.run.over`
+    // weg, und jeder Term wird mit beiden als falsch gefaltet.
+    let exact_state = state;
+    let mut closed = match enc.run_end() {
+        Some(_) => None,
+        None => Some(Closed::default()),
+    };
+    let state: Vec<StateVar> = match closed.as_mut() {
+        Some(fold) => exact_state
+            .iter()
+            .filter(|v| v.name != ENDED && v.name != OVER)
+            .map(|v| StateVar {
+                name: v.name.clone(),
+                sort: v.sort,
+                init: fold.term(&v.init),
+                next: fold.term(&v.next),
+            })
+            .collect(),
+        None => {
+            let own = enc.closed_end.take();
+            let ended = |v: &StateVar| own.clone().filter(|_| v.name == ENDED);
+            exact_state
+                .iter()
+                .map(|v| StateVar { next: ended(v).unwrap_or_else(|| v.next.clone()), ..v.clone() })
+                .collect()
+        }
+    };
+    let (invariants, assumptions, properties, checks, transitions, candidates) = match closed.as_mut() {
+        Some(fold) => (
+            invariants.iter().map(|t| fold.term(t)).filter(|t| !t.is_bool(true)).collect(),
+            assumptions.iter().map(|t| fold.term(t)).collect(),
+            properties.into_iter().map(|g| Goal { formula: fold.term(&g.formula), ..g }).collect(),
+            checks.into_iter().map(|c| fold.site(c)).collect(),
+            transitions.into_iter().map(|c| fold.site(c)).collect(),
+            candidates.iter().map(|t| fold.term(t)).collect(),
+        ),
+        None => (invariants, assumptions, properties, checks, transitions, candidates),
+    };
     let mut notes = enc.notes;
     notes.sort();
     notes.dedup();
@@ -874,7 +907,7 @@ fn encode_with(p: &Program, scope: Option<MachineId>, scenario: Option<MachineId
         observed,
         scenario,
         deps: Default::default(),
-        exact_end,
+        exact_state,
     })
 }
 
@@ -910,7 +943,7 @@ impl<'p> Enc<'p> {
             monitors: Vec::new(),
             confirms: Vec::new(),
             now: Term::int(0),
-            exact_end: None,
+            closed_end: None,
             ticks: Term::int(0),
             streams: Vec::new(),
             txs: Vec::new(),
@@ -3844,11 +3877,11 @@ impl Enc<'_> {
         }
         cur.insert(OVER.into(), ended.clone());
         // 3.3: Mit dem Tick, in dem `now` die groesste `Duration` erreicht,
-        // endet der Lauf; das weiss nur die konkrete Ausfuehrung
-        // (`Model::exact_end`), der Solver rechnet weiter (FB-694).
+        // endet der Lauf; das weiss nur die konkrete Ausfuehrung, der Solver
+        // rechnet weiter (`Model::exact_state`, FB-694).
         let axis = Term::eq(cur[NOW].clone(), Term::int(i64::MAX));
-        self.exact_end = Some(Term::or(vec![ended.clone(), own.clone(), axis]));
-        cur.insert(ENDED.into(), Term::or(vec![ended, own]));
+        self.closed_end = Some(Term::or(vec![ended.clone(), own.clone()]));
+        cur.insert(ENDED.into(), Term::or(vec![ended, own, axis]));
         let monitors = self.monitors.clone();
         self.monitors_next(&monitors, Some(pre), &mut cur)?;
         Ok(cur)
@@ -4804,11 +4837,64 @@ const ENDED: &str = "s.run.ended";
 /// Hatte er schon vor diesem Tick geendet? Dann ist der Tick keiner des Laufs.
 const OVER: &str = "s.run.over";
 
+/// Ein Modell ohne eigenes Ende, wie der Solver es sieht (3.3, FB-694):
+/// `s.run.ended` und `s.run.over` sind falsch, und jeder Term wird damit
+/// gefaltet, wie beim Bau (`Term::and`, `Term::or`, `Term::app`).
+#[derive(Default)]
+struct Closed {
+    memo: std::collections::HashMap<usize, Term>,
+}
+
+impl Closed {
+    /// `t` mit beiden Orten als falsch, gefaltet; ohne Rekursion, denn ein
+    /// Term kann sehr tief sein ([`term::post_order`]).
+    fn term(&mut self, t: &Term) -> Term {
+        let order = term::post_order(t, |n| self.memo.contains_key(&n.key()));
+        for node in order {
+            let Node::App(op, args) = &*node.0 else { continue };
+            let new: Vec<Term> = args.iter().map(|a| self.leaf(a)).collect();
+            let out = if new.iter().zip(args).all(|(a, b)| a.key() == b.key()) {
+                node.clone()
+            } else {
+                match op {
+                    Op::And => Term::and(new),
+                    Op::Or => Term::or(new),
+                    _ => Term::app(*op, new),
+                }
+            };
+            self.memo.insert(node.key(), out);
+        }
+        self.leaf(t)
+    }
+
+    /// Ein Blatt oder ein schon gefalteter Knoten.
+    fn leaf(&self, t: &Term) -> Term {
+        if let Some(done) = self.memo.get(&t.key()) {
+            return done.clone();
+        }
+        match &*t.0 {
+            Node::Var(v, _) if v == ENDED || v == OVER => Term::bool(false),
+            _ => t.clone(),
+        }
+    }
+
+    /// Eine Pruefstelle oder ein Uebergang, jede Bedingung gefaltet.
+    fn site(&mut self, c: CheckSite) -> CheckSite {
+        CheckSite {
+            init: self.term(&c.init),
+            fires: self.term(&c.fires),
+            init_fail: self.term(&c.init_fail),
+            fail: self.term(&c.fail),
+            ..c
+        }
+    }
+}
+
 /// Ein Ziel nach dem Ende eines Laufs (12.7, 3.3; FB-694): `over ∨ c`, und `c`
 /// liest das Ende nicht. Nur in dieser Form ist das Ziel antiton in `over`
 /// und `ended` — nach dem Ende hoechstens leerer —, und nur dann ist ein
 /// Beweis des Solvers, der das Ende an der Achse nicht kennt
-/// ([`Model::exact_end`]), einer fuer den Lauf: Im Tick des Endes ist dort
+/// ([`Model::exact_state`]), einer fuer den Lauf: Im Tick des Endes ist dort
 /// `ended` falsch, und ein Ziel, das mit dem Ende erst entstuende ("ist der
 /// Lauf vorbei, gilt X"), waere leer wahr. Ein solches Ziel baut die
 /// Kodierung darum nicht; das ist eine Bedingung der Soundness.

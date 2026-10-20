@@ -151,7 +151,8 @@ enum Source {
 
 impl Runner {
     fn new(model: &Model, reads: impl Fn(&str) -> bool) -> Runner {
-        let state: HashMap<&str, usize> = model.state.iter().enumerate().map(|(i, v)| (v.name.as_str(), i)).collect();
+        let state: HashMap<&str, usize> =
+            model.exact_state.iter().enumerate().map(|(i, v)| (v.name.as_str(), i)).collect();
         let input: HashMap<&str, usize> = model.inputs.iter().enumerate().map(|(i, (n, _))| (n.as_str(), i)).collect();
         let plan = |terms: Vec<&Term>, with_inputs: bool| {
             let plan = Plan::new(terms);
@@ -168,12 +169,12 @@ impl Runner {
         };
         let sites = model.checks.iter().flat_map(|c| [&c.fires, &c.fail]);
         Runner {
-            next: plan(model.state.iter().map(|v| model.exact_next(v)).chain(sites).collect(), true),
+            next: plan(model.exact_state.iter().map(|v| &v.next).chain(sites).collect(), true),
             invariants: plan(model.invariants.iter().collect(), false),
             assumptions: plan(model.assumptions.iter().collect(), true),
             goals: plan(model.properties.iter().map(|g| &g.formula).collect(), true),
             held: vec![true; model.properties.len()],
-            observed: (0..model.state.len()).filter(|&i| reads(&model.state[i].name)).collect(),
+            observed: (0..model.exact_state.len()).filter(|&i| reads(&model.exact_state[i].name)).collect(),
         }
     }
 
@@ -238,17 +239,17 @@ impl Runner {
             None => {
                 let env: Env = model.inputs.iter().map(|(n, _)| n.clone()).zip(given.iter().cloned()).collect();
                 let sites = model.checks.iter().flat_map(|c| [&c.init, &c.init_fail]);
-                eval::eval_all(model.state.iter().map(|v| &v.init).chain(sites), &env)
+                eval::eval_all(model.exact_state.iter().map(|v| &v.init).chain(sites), &env)
             }
             Some(pre) => self.next.0.eval(&gather(&self.next.1, pre, &given)),
         };
-        let sites = next.split_off(model.state.len());
+        let sites = next.split_off(model.exact_state.len());
         Ok(Advanced { next, given, sites })
     }
 
     /// Die Orte des Zustands, die der Trace liest, mit ihrem Wert.
     fn observed(&self, model: &Model, state: &[Val]) -> Env {
-        self.observed.iter().map(|&i| (model.state[i].name.clone(), state[i].clone())).collect()
+        self.observed.iter().map(|&i| (model.exact_state[i].name.clone(), state[i].clone())).collect()
     }
 }
 
