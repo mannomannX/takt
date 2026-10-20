@@ -148,16 +148,6 @@ impl Mpu {
         // Region.
         // SAFETY: schaltet die MPU aus, siehe oben.
         unsafe { mpu.ctrl.write(0) };
-        // Jede Region aus, bevor die eigenen kommen: Wer ohne Reset in den
-        // Bootloader sprang, liess seine stehen, und das Einschalten unten
-        // machte sie wieder wirksam (FB-752). So beginnt das Abbild wie nach
-        // einem Reset, gleich, was vorher lief.
-        for region in 0..regions(mpu) {
-            // SAFETY: waehlt eine Region, bei ausgeschalteter MPU.
-            unsafe { mpu.rnr.write(region) };
-            // SAFETY: Null in `RASR` schaltet die Region aus.
-            unsafe { mpu.rasr.write(0) };
-        }
         if let Some(g) = job_guard() {
             // SAFETY: waehlt die Region des Waechters unter dem Job-Stack.
             unsafe { mpu.rnr.write(JOB_GUARD) };
