@@ -895,12 +895,12 @@ fn random_value(p: &Program, ty: takt_mir::TypeId, rng: &mut Rng) -> Option<Stri
 /// Ein Zufallsstimulus aus den Deklarationen: Werte und Qualitaeten je
 /// Input (Stromelemente als Element), Commands, dazu Operator-Abort.
 fn corpus_stimulus(p: &Program, seed: u64, ticks: u64) -> String {
-    use takt_mir::program::Direction;
     use takt_mir::types::Type;
     let mut rng = Rng(seed | 1);
     let mut out = String::new();
     for t in 0..=ticks {
-        for c in p.channels.iter().filter(|c| c.dir == Direction::Input) {
+        // 12.5: nur, was das Produkt erleben kann (`takt_mir::stimulus`).
+        for c in p.channels.iter().filter(|c| takt_mir::stimulus::input(c).is_ok()) {
             // Ein Strom liefert Elemente, keine Qualitaeten (8.6).
             let (elem, stream) = match p.types.get(c.ty) {
                 Type::Stream(e) => (*e, true),
@@ -926,7 +926,7 @@ fn corpus_stimulus(p: &Program, seed: u64, ticks: u64) -> String {
                 out.push_str(&format!("t={t} cmd {}\n", cmd.name));
             }
         }
-        if rng.below(40) == 0 {
+        if rng.below(40) == 0 && takt_mir::stimulus::at(takt_mir::stimulus::Event::Abort, t).is_ok() {
             out.push_str(&format!("t={t} abort\n"));
         }
     }
