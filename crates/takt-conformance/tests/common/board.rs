@@ -856,8 +856,15 @@ pub fn zephyr_persistence_survives<B: Board>(
 /// `<target>/port-test/<name>-<example>.log`. Der Kopf nennt den
 /// Speicherschutz `protection` (M11 Schritt 23); unter `Partition` dazu die
 /// Zeile, mit der die Partition der Arena den Schreibzugriff eines Fadens im
-/// Benutzermodus abwies (M11 Schritt 19b).
-pub fn zephyr_verdict(name: &str, example: &str, protection: Case, run: Result<String, String>) -> Vec<String> {
+/// Benutzermodus abwies (M11 Schritt 19b). Mit `clock` verlangt es die
+/// Kopfzeile der Uhr des Ports (FB-733: `takt uhr counter 1000000 Hz`).
+pub fn zephyr_verdict(
+    name: &str,
+    example: &str,
+    protection: Case,
+    clock: Option<&str>,
+    run: Result<String, String>,
+) -> Vec<String> {
     let text = match run {
         Ok(text) => text,
         Err(e) => return vec![format!("{example}: kein Lauf: {e}")],
@@ -872,6 +879,11 @@ pub fn zephyr_verdict(name: &str, example: &str, protection: Case, run: Result<S
     if protection == Case::Partition {
         failed.extend(header_has(&text, &[PARTITION_REFUSED]).into_iter().map(|f| format!("{example}: {f}")));
     }
+    let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
+    if let Some(clock) = clock.filter(|c| !header.lines().any(|l| l.trim_end() == *c)) {
+        let seen: Vec<&str> = header.lines().filter(|l| l.starts_with("takt uhr")).collect();
+        failed.push(format!("{example}: keine Zeile `{clock}` vor der Marke, gesehen {seen:?}"));
+    }
     failed
 }
 
@@ -884,6 +896,10 @@ pub const PARTITION_REFUSED: &str = "takt schutz partition verweigert";
 /// Watchpoint unter dem Stack der Interrupts wirkt: kein Debugger, der bei
 /// einem Treffer anhielte (12.3).
 pub const GUARD_WATCHPOINT: &str = "takt waechter watchpoint";
+
+/// Die Kopfzeile von `examples/zephyr`, wenn der Port auf einem Zaehler mit
+/// 1 MHz rechnet (FB-733): TIM2 auf dem F401, Timer 0 auf dem C6.
+pub const ZEPHYR_COUNTER_CLOCK: &str = "takt uhr counter 1000000 Hz";
 
 /// **Ein absichtlich falscher Port faellt durch, und zwar an der Pflicht,
 /// die er verletzt** (M11 Schritt 15): Das Urteil verwirft ihn, jeder Grund
