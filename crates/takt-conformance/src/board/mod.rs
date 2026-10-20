@@ -197,6 +197,9 @@ pub struct Drift {
     pub ticks: usize,
     /// Median in ns.
     pub median: i64,
+    /// Das 99. Perzentil in ns: Hoechstens jeder hundertste Tick begann
+    /// spaeter (M11 Schritt 21b).
+    pub p99: i64,
     /// Der spaeteste Tick, in ns ueber dem Median.
     pub late: i64,
     /// Die fuenf spaetesten Ticks mit ihrer Nummer und Drift: Ihr Abstand
@@ -220,9 +223,10 @@ impl Drift {
             .collect();
         drifts.sort_unstable_by_key(|&(_, d)| d);
         let median = drifts.get(drifts.len() / 2).map_or(0, |&(_, d)| d);
+        let p99 = drifts.get(drifts.len() * 99 / 100).map_or(0, |&(_, d)| d);
         let late = drifts.last().map_or(0, |&(_, d)| d - median);
         let latest = drifts.iter().rev().take(5).copied().collect();
-        Drift { ticks: drifts.len(), median, late, latest, jitter: crate::bench::tick_jitter(text) }
+        Drift { ticks: drifts.len(), median, p99, late, latest, jitter: crate::bench::tick_jitter(text) }
     }
 }
 

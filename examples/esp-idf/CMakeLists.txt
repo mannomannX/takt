@@ -21,4 +21,9 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # Nur `main` und was es verlangt: Was die Anwendung nicht nennt, gehoert
 # nicht ins Abbild.
 idf_build_set_property(MINIMAL_BUILD ON)
+# Die fremde Last neben Takt (main/load.h): als Eigenschaft des Baus, denn
+# welche Komponenten `main` verlangt, liest ESP-IDF in einem eigenen
+# Skript, das den Cache nicht sieht.
+set(TAKT_LOAD quiet CACHE STRING "die fremde Last neben Takt: quiet, wifi, ble oder suspend")
+idf_build_set_property(TAKT_LOAD "${TAKT_LOAD}")
 project(takt_esp_idf)

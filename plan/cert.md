@@ -408,7 +408,12 @@ was clang von den Schaltern der GCC nicht kennt, nimmt die Zeile
 über `-specs=picolibc.specs` findet, nennt der Test clang ausdrücklich
 (`picolibc/include` neben dem `bin` der GCC). cppcheck prüft dieselben
 Quellen als eine Bindung mit den Kopfpfaden und Werten ihrer Aufrufe und
-der Plattform `unix32`. Was in ESP-IDF steht, zählt nicht, und Kopf des SDK
+der Plattform `unix32`; `tools/c-analysis/esp-idf.cfg` (Zeile „cppcheck
+unter ESP-IDF“) nennt ihm `__has_attribute` und die Listen aus `sys/queue.h`,
+ohne die es an Köpfen von ESP-IDF und NimBLE abbräche. Seit Schritt 21b
+prüfen beide Werkzeuge vier Baue: ohne fremde Last und mit WLAN, mit BLE und
+mit der Messung des automatischen Aussetzens; dieselbe Stelle in zwei Bauen
+zählt einmal. Was in ESP-IDF steht, zählt nicht, und Kopf des SDK
 und erzeugter Rahmen zählen in ihren eigenen Teilen. Beide laufen im Job
 `esp-idf` von `.github/workflows/boards.yml`; ihre Befunde zählen unter dem
 Teil „IDF-Bau“, den nur dieser Test urteilt.
@@ -420,6 +425,7 @@ Teil „IDF-Bau“, den nur dieser Test urteilt.
 | cppcheck unter Zephyr | 2.22.0 | `--library=tools/c-analysis/zephyr.cfg` |
 | clang-tidy unter Zephyr | LLVM 22.1.8 | `--removed-arg=-fno-reorder-functions` `--removed-arg=-mfp16-format=ieee` `--removed-arg=-fno-printf-return-value` `--removed-arg=-fstrict-volatile-bitfields` |
 | clang-tidy unter ESP-IDF | LLVM 22.1.8 | `--removed-arg=-fno-malloc-dce` `--removed-arg=-fno-tree-switch-conversion` `--removed-arg=-fstrict-volatile-bitfields` `--removed-arg=-fzero-init-padding-bits=all` `--removed-arg=-Wno-old-style-declaration` `--extra-arg=-Wno-unused-command-line-argument` |
+| cppcheck unter ESP-IDF | 2.22.0 | `--library=tools/c-analysis/esp-idf.cfg` |
 
 Das MISRA-Addon von cppcheck prüft einen Teil von MISRA C:2012 und läuft
 ohne die Regeltexte: Es nennt nur die Nummer. `tools/c-analysis/takt.cfg`
@@ -503,9 +509,9 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `bugprone-branch-clone` | Zephyr-Bau | 6 | CERT C MSC12-C | Fehlmeldung: `K_KERNEL_STACK_DEFINE` und `K_THREAD_STACK_DEFINE` von Zephyr nehmen für Ausrichtung und Größe das Größere zweier Werte, die auf dem F401 gleich sind (`MAX(128, 128)`); der Ausdruck steht im Kopf von Zephyr, nicht in den Beispielen |
 | `misra-c2012-1.4` | IDF-Bau | 1 | MISRA C:2012 1.4 (R) | `_Alignas(32)` am Stack der Jobs (`program_job_stack`): `takt check-image` verlangt ihn an 32 Byte ausgerichtet (Schritt 13), und ohne die Angabe hinge die Lage am Linker |
 | `misra-c2012-8.7` | IDF-Bau | 3 | MISRA C:2012 8.7 (A) | `app_main` ruft ESP-IDF aus seiner Hauptaufgabe; die Arena `program_arena` finden `takt check-image` und der Blick über JTAG unter ihrem Namen im Abbild (`arena_symbol` im Manifest); `takt_irq_release` ist die Vorgabe des Ports für einen Wirt in logischer Zeit, und der Wirt unter ESP-IDF fährt nur in Echtzeit |
-| `misra-c2012-10.1` | IDF-Bau | 4 | MISRA C:2012 10.1 (R) | Die Flags von `esp_intr_alloc` (`ESP_INTR_FLAG_IRAM`, `ESP_INTR_FLAG_LEVEL1` bis `3`) definiert ESP-IDF in `esp_intr_alloc.h` als verschobene vorzeichenbehaftete Eins, und die Funktion nimmt sie als `int`; der Adapter nennt sie, wie ESP-IDF sie vorgibt, statt ihre Werte nachzuschreiben |
-| `misra-c2012-12.2` | IDF-Bau | 1 | MISRA C:2012 12.2 (R) | wie 10.1: `ESP_INTR_FLAG_IRAM` ist `(1<<10)`, und das Modell der wesentlichen Typen misst die Breite an der Eins; der Wert ist ein `int`, die Verschiebung ohne Überlauf |
-| `misra-c2012-11.4` | IDF-Bau | 2 | MISRA C:2012 11.4 (A) | Der Adapter setzt und löscht den Software-Interrupt `FROM_CPU_INTR3` über `WRITE_PERI_REG` an seinem Register aus `soc/intpri_reg.h`; ESP-IDF bietet dafür keine Funktion |
+| `misra-c2012-10.1` | IDF-Bau | 5 | MISRA C:2012 10.1 (R) | Die Flags von `esp_intr_alloc` (`ESP_INTR_FLAG_IRAM`, `ESP_INTR_FLAG_LEVEL1` bis `3`) definiert ESP-IDF in `esp_intr_alloc.h` als verschobene vorzeichenbehaftete Eins, und die Funktion nimmt sie als `int`; der Adapter nennt sie, wie ESP-IDF sie vorgibt, statt ihre Werte nachzuschreiben. Ebenso setzt `WIFI_INIT_CONFIG_DEFAULT` (`esp_wifi.h`) die Merkmale des WLAN aus solchen Flags zusammen; die Last unter WLAN (Schritt 21b) nimmt die Vorgabe von ESP-IDF |
+| `misra-c2012-12.2` | IDF-Bau | 2 | MISRA C:2012 12.2 (R) | wie 10.1: `ESP_INTR_FLAG_IRAM` ist `(1<<10)`, ein Flag in `WIFI_INIT_CONFIG_DEFAULT` ebenso, und das Modell der wesentlichen Typen misst die Breite an der Eins; der Wert ist ein `int`, die Verschiebung ohne Überlauf |
+| `misra-c2012-11.4` | IDF-Bau | 3 | MISRA C:2012 11.4 (A) | Der Adapter setzt und löscht den Software-Interrupt `FROM_CPU_INTR3` über `WRITE_PERI_REG` an seinem Register aus `soc/intpri_reg.h`; ESP-IDF bietet dafür keine Funktion. Die Leitung liest den Wunsch des Hosts aus LP_AON STORE0 an seiner Adresse aus `soc/lp_aon_reg.h` (`line_store0`, eine Stelle) |
 | `misra-c2012-11.5` | IDF-Bau | 5 | MISRA C:2012 11.5 (A) | Das Gerät des Journals bekommt sich als `void *`: seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`) und der Einstieg seiner Aufgabe (`xTaskCreateStatic`) |
 | `constParameterCallback` | IDF-Bau | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt von `read` des Geräts gibt `struct takt_nvm` vor (`takt_sdk.h`); die übrigen Rückrufe schreiben in das Gerät |
 | `clang-analyzer-security.ArrayBound` | Rahmen | 2 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |

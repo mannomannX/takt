@@ -16,16 +16,17 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 
 use common::board::{
-    Case, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS, agreement, agreement_with, corpus, driver_edge_agrees,
-    journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
-    natives_agree, overrun_reaches_every_machine, overrun_reaches_every_machine_with, persistence_survives, ran,
-    replayed, runs_shared, simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline, the_port_passes, verdict,
-    zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
+    Case, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS, agreement, agreement_with, binds_no_driver, corpus,
+    driver_edge_agrees, journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output,
+    long_job_keeps_the_tick, natives_agree, overrun_reaches_every_machine, overrun_reaches_every_machine_with,
+    persistence_survives, ran, replayed, runs_shared, simultaneous_jobs_finish_on_time, the_form_keeps_its_deadline,
+    the_port_passes, the_port_passes_under_load, verdict, zephyr_access_in_the_run_faults, zephyr_image,
+    zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::esp32c6::{Esp32c6, REENUMERATE_REG, Tick};
 use takt_conformance::board::{self, Board, Form, Options};
 use takt_conformance::compare;
-use takt_conformance::esp_idf::Esp32c6Idf;
+use takt_conformance::esp_idf::{Esp32c6Idf, Load};
 use takt_conformance::zephyr::Variant;
 
 /// Ein Board, mehrere Tests: cargo fuehrt Tests nebenlaeufig aus, das Board
@@ -559,6 +560,97 @@ fn the_esp_idf_port_turns_an_overrun_into_a_fault() {
     let Some((board, _guard)) = board() else { return };
     let failed = overrun_reaches_every_machine_with(&mut Esp32c6Idf::on(board), "overrun_sim.takt", Form::Interrupt);
     verdict(&failed);
+}
+
+/// **Unter WLAN und NVS-Last besteht der Port die Portpruefung, und der Tick
+/// bleibt in der Schranke von `shared`** (12.8, 13.8; M11 Schritt 21b,
+/// KON1-021): `examples/esp-idf` mit `TAKT_LOAD=wifi` — ESP-NOW-Broadcast und
+/// aktiver Scan ohne Access Point, NVS schreibt jede Sekunde —, die
+/// Portpruefung wie ohne Last, und kein Tick beginnt 100 us oder mehr nach
+/// seiner Grenze (`the_port_passes_under_load`). Der C6 sendet dabei im
+/// 2,4-GHz-Band; den Kanal belegt er zu etwa 1,4 % (die Kopfzeile `Last:`).
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT, sendet WLAN; ESP-IDF: TAKT_IDF; mit --ignored"]
+fn the_esp_idf_port_passes_under_wifi_and_nvs() {
+    let Some((board, _guard)) = board() else { return };
+    let mut host = Esp32c6Idf::under(board, Load::Wifi);
+    let failed = the_port_passes_under_load(&mut host, Form::Interrupt, Case::Unprotected, "takt last wlan");
+    verdict(&failed);
+}
+
+/// **Unter BLE und NVS-Last besteht der Port die Portpruefung, und der Tick
+/// bleibt in der Schranke von `shared`** (12.8, 13.8; M11 Schritt 21b): wie
+/// unter WLAN, mit `TAKT_LOAD=ble` — Werbung ohne Verbindung alle 20 ms und
+/// passiver Scan (NimBLE), NVS jede Sekunde.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT, sendet BLE; ESP-IDF: TAKT_IDF; mit --ignored"]
+fn the_esp_idf_port_passes_under_ble_and_nvs() {
+    let Some((board, _guard)) = board() else { return };
+    let mut host = Esp32c6Idf::under(board, Load::Ble);
+    let failed = the_port_passes_under_load(&mut host, Form::Interrupt, Case::Unprotected, "takt last ble");
+    verdict(&failed);
+}
+
+/// **Unter WLAN rechnet die Korpusauswahl im Wirt unter ESP-IDF wie der
+/// Interpreter** (12.8, Satz 9.4.4; M11 Schritt 21b, KON1-021): jedes
+/// Programm des Board-Korpus, das unter `shared` laeuft und keinen Treiber
+/// bindet, in logischer Zeit hinter dem Tor von `app_main` mit verlustfreier
+/// Leitung, waehrend WLAN und NVS ihre Last machen. `TAKT_ESP32C6_ONLY` waehlt
+/// ein Programm.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT, sendet WLAN; ESP-IDF: TAKT_IDF; mit --ignored"]
+fn the_esp_idf_host_agrees_with_the_interpreter_under_wifi() {
+    let Some((board, _guard)) = board() else { return };
+    let only = std::env::var("TAKT_ESP32C6_ONLY").ok();
+    let names: Vec<&str> = board::corpus().into_iter().filter(|n| runs_shared(n) && binds_no_driver(n)).collect();
+    let options = Options::fresh(TICKS).in_form(Form::Interrupt);
+    let failed = agreement_with(&mut Esp32c6Idf::under(board, Load::Wifi), &names, only.as_deref(), &options);
+    verdict(&failed);
+}
+
+/// **Das automatische Aussetzen des Flash ist auf Board 2 gemessen**
+/// (plan/m11.md 1.7 und 2.5; M11 Schritt 21b): `TAKT_LOAD=suspend` misst vor
+/// dem Lauf, ob der Baustein Loeschen und Schreiben aussetzen kann, die
+/// Revision des C6 — ESP-IDF setzt erst ab v0.2 aus — und wie lange eine
+/// Aufgabe mit Code im Flash ohne Aussetzen steht, waehrend ein Sektor
+/// geloescht und beschrieben wird. Der Test urteilt nur, ob gemessen wurde;
+/// die Zahlen stehen im Bericht und in plan/m11.md.
+#[test]
+#[ignore = "Board: TAKT_ESP32C6_PORT; ESP-IDF: TAKT_IDF; mit --ignored"]
+fn the_esp_idf_flash_suspend_is_measured() {
+    let Some((board, _guard)) = board() else { return };
+    let mut host = Esp32c6Idf::under(board, Load::Suspend);
+    let path = board::corpus_path(takt_conformance::port::CORPUS_NAME);
+    let options = Options::timed(takt_conformance::port::TICKS).in_form(Form::Interrupt);
+    let failed = match host.build(&path, &options).and_then(|elf| host.run(&elf, &options)) {
+        Ok(text) => suspend_measured(&text),
+        Err(e) => vec![format!("kein Lauf: {e}")],
+    };
+    verdict(&failed);
+}
+
+/// Die Zeilen der Messung im Kopf (`takt aussetzen baustein ja|nein chip N`,
+/// `takt aussetzen pause P loeschen E`): Fehlt eine, oder stand die Probe nie
+/// laenger als ihre Periode, ist nichts gemessen. Der Bericht nennt die Zahlen.
+fn suspend_measured(text: &str) -> Vec<String> {
+    let header = text.find(board::MARK).map_or(text, |at| &text[..at]);
+    let words = |prefix: &str| -> Option<Vec<&str>> {
+        header.lines().map(str::trim).find_map(|l| l.strip_prefix(prefix)).map(|rest| rest.split_whitespace().collect())
+    };
+    let chip = words("takt aussetzen baustein ");
+    let pause = words("takt aussetzen pause ");
+    match (chip.as_deref(), pause.as_deref()) {
+        (Some([can @ ("ja" | "nein"), "chip", revision]), Some([pause_us, "loeschen", erase_us])) => {
+            let pause: u64 = pause_us.parse().unwrap_or(0);
+            eprintln!(
+                "esp32c6-idf-suspend: Baustein kann aussetzen: {can}; Chip-Revision {revision} (ESP-IDF setzt ab 2 \
+                 aus); Aufgabe im Flash stand ohne Aussetzen bis {pause} us, ein Sektor loeschen dauerte bis \
+                 {erase_us} us"
+            );
+            if pause > 1_000 { Vec::new() } else { vec![format!("die Probe stand nie laenger als 1 ms: {pause} us")] }
+        }
+        _ => vec![format!("keine Messung im Kopf:\n{header}")],
+    }
 }
 
 /// Schreibt ein Zephyr-Abbild (`zephyr.bin` mit dem Kopf fuer den ROM-Lader,

@@ -121,14 +121,69 @@ pub fn tick_address(elf: &Path, manifest: &Path) -> Result<u64, String> {
 /// Wo der C6 Code aus dem RAM rechnet: das HP-SRAM, 512 KiB.
 const IRAM: std::ops::Range<u64> = 0x4080_0000..0x4088_0000;
 
-/// Baut `examples/esp-idf` mit `program` in `dir`: das Werkzeug `takt`, das
-/// SDK-Archiv fuer [`TRIPLE`], `ticks` Ticks und, mit `fresh`, ein frisches
-/// Journal. Danach prueft es die Residenz im RAM am Abbild.
-pub fn build(idf: &Path, program: &Path, ticks: u64, fresh: bool, dir: &Path, takt: &Path) -> Result<Image, String> {
+/// Die fremde Last neben Takt (M11 Schritt 21b; `examples/esp-idf/main/load.h`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Load {
+    /// Keine; `app_main` rechnet nur seine Rechenlast.
+    Quiet,
+    /// WLAN ohne Access Point (ESP-NOW und Scan) und NVS jede Sekunde.
+    Wifi,
+    /// BLE (Werbung und passiver Scan) und NVS jede Sekunde.
+    Ble,
+    /// Vor dem Lauf die Messung des automatischen Aussetzens (plan/m11.md 1.7).
+    Suspend,
+}
+
+impl Load {
+    /// Alle Lasten, wie der Bau sie kennt.
+    pub const ALL: [Load; 4] = [Load::Quiet, Load::Wifi, Load::Ble, Load::Suspend];
+
+    /// Der Name fuer `TAKT_LOAD`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Load::Quiet => "quiet",
+            Load::Wifi => "wifi",
+            Load::Ble => "ble",
+            Load::Suspend => "suspend",
+        }
+    }
+
+    /// Die Konfiguration von ESP-IDF fuer diese Last (`SDKCONFIG_DEFAULTS`,
+    /// relativ zum Beispiel).
+    fn defaults(self) -> &'static str {
+        match self {
+            Load::Ble => "sdkconfig.defaults;sdkconfig.ble",
+            Load::Quiet | Load::Wifi | Load::Suspend => "sdkconfig.defaults",
+        }
+    }
+}
+
+/// Was ein Bau von `examples/esp-idf` faehrt.
+#[derive(Clone, Copy, Debug)]
+pub struct Spec<'a> {
+    /// Das Programm.
+    pub program: &'a Path,
+    /// So viele Ticks; 0 bis zum Ende des Programms.
+    pub ticks: u64,
+    /// Das Journal vor dem Lauf loeschen.
+    pub fresh: bool,
+    /// In logischer Zeit hinter dem Tor von `app_main` (13.8).
+    pub logical: bool,
+    /// Die fremde Last daneben.
+    pub load: Load,
+}
+
+/// Baut `examples/esp-idf` nach `spec` in `dir`, mit dem Werkzeug `takt` und
+/// dem SDK-Archiv fuer [`TRIPLE`]. Danach prueft es die Residenz im RAM am
+/// Abbild. Ein Bauverzeichnis, das schon einen Bau derselben Last haelt, baut
+/// nur nach, was das neue Programm aendert.
+pub fn build(idf: &Path, spec: &Spec, dir: &Path, takt: &Path) -> Result<Image, String> {
     let sdk = crate::harness::sdk_library_for(Some(TRIPLE))?;
     // CMake liest `\` in einem Pfad als Escape.
     let cmake_path = |p: &Path| p.display().to_string().replace('\\', "/");
+    let on = |b: bool| if b { "ON" } else { "OFF" };
     let project = crate::repo_root().join("examples").join("esp-idf");
+    let program = spec.program;
     let out = Command::new(idf)
         // Der Komponentenmanager legte sonst `dependencies.lock` ins Beispiel.
         .env("IDF_COMPONENT_MANAGER", "0")
@@ -139,11 +194,14 @@ pub fn build(idf: &Path, program: &Path, ticks: u64, fresh: bool, dir: &Path, ta
         // Die Konfiguration im Bauverzeichnis, nicht im Beispiel: Zwei Baue
         // zugleich schrieben sonst dieselbe Datei.
         .arg(format!("-DSDKCONFIG={}", cmake_path(&dir.join("sdkconfig"))))
+        .arg(format!("-DSDKCONFIG_DEFAULTS={}", spec.load.defaults()))
+        .arg(format!("-DTAKT_LOAD={}", spec.load.name()))
         .arg(format!("-DTAKT_EXECUTABLE={}", cmake_path(takt)))
         .arg(format!("-DTAKT_SDK_LIBRARY={}", cmake_path(&sdk)))
         .arg(format!("-DTAKT_PROGRAM={}", cmake_path(program)))
-        .arg(format!("-DTAKT_TICKS={ticks}"))
-        .arg(format!("-DTAKT_FRESH_JOURNAL={}", if fresh { "ON" } else { "OFF" }))
+        .arg(format!("-DTAKT_TICKS={}", spec.ticks))
+        .arg(format!("-DTAKT_FRESH_JOURNAL={}", on(spec.fresh)))
+        .arg(format!("-DTAKT_LOGICAL={}", on(spec.logical)))
         .args(["build", "merge-bin"])
         .output()
         .map_err(|e| format!("{}: {e}", idf.display()))?;
@@ -220,16 +278,20 @@ const TREES: &[&str] =
 #[cfg(feature = "board")]
 const FILES: &[&str] = &["corpus-try/hw/esp32c6-idf.hw", "crates/takt-embed-c/Cargo.lock"];
 
-/// Die Art des Stands im Zwischenspeicher: `esp-idf-<tripel>`.
+/// Die Art des Stands im Zwischenspeicher: `esp-idf-<tripel>`, mit fremder
+/// Last `esp-idf-<last>-<tripel>`.
 #[cfg(feature = "board")]
-fn kind() -> String {
-    format!("esp-idf-{TRIPLE}")
+fn kind(load: Load) -> String {
+    match load {
+        Load::Quiet => format!("esp-idf-{TRIPLE}"),
+        _ => format!("esp-idf-{}-{TRIPLE}", load.name()),
+    }
 }
 
 /// Das Verzeichnis des Stands: `<art>-<stand>` unter
 /// [`crate::board::IMAGES`], nur aus Inhalten.
 #[cfg(feature = "board")]
-fn stand() -> Result<PathBuf, String> {
+fn stand(load: Load) -> Result<PathBuf, String> {
     let root = crate::repo_root();
     let mut f = crate::board::Fingerprint::new();
     f.str(IDF_VERSION);
@@ -243,18 +305,17 @@ fn stand() -> Result<PathBuf, String> {
     }
     crate::board::hash_crates(&mut f)?;
     crate::board::hash_build_inputs(&root, &mut f)?;
-    Ok(crate::board::images().join(format!("{}-{:016x}", kind(), f.finish())))
+    Ok(crate::board::images().join(format!("{}-{:016x}", kind(load), f.finish())))
 }
 
 /// Was der Wirt unter ESP-IDF nicht kann, scheitert beim Bau, statt still zu
-/// fehlen: Er faehrt das Programm selbst in Echtzeit in der Interruptform,
-/// mit seiner eigenen Hardware-Konfiguration, ohne Treiber, falschen Port,
-/// verstellte FPU oder Tunes von der Konsole.
+/// fehlen: Er faehrt das Programm selbst in der Interruptform, in Echtzeit
+/// oder in logischer Zeit, mit seiner eigenen Hardware-Konfiguration, ohne
+/// Treiber, falschen Port, verstellte FPU oder Tunes von der Konsole.
 #[cfg(feature = "board")]
 fn supported(options: &Options) -> Result<(), String> {
     let missing = [
         (options.bin != Bin::Takt, "nur das Programm selbst, kein Mess- oder Native-Programm"),
-        (!options.timed, "nur Echtzeit; logische Zeit hat der Wirt nicht"),
         (options.form != Form::Interrupt, "nur die Interruptform (plan/m11.md 2.5)"),
         (options.hardware.is_some(), "nur seine Hardware-Konfiguration (esp32c6-idf.hw)"),
         (options.flaw.is_some(), "keinen absichtlich falschen Port"),
@@ -267,16 +328,25 @@ fn supported(options: &Options) -> Result<(), String> {
     }
 }
 
-/// Das Abbild fuer `program`, aus dem Zwischenspeicher der Abbilder oder mit
-/// `idf.py` frisch gebaut ([`build`]) und dort abgelegt; liefert sein ELF,
-/// neben dem `.bin` und `.manifest` liegen. Gebaut wird in einem Verzeichnis
-/// je Prozess. Ohne `idf.py` und ohne Abbild im Zwischenspeicher sagt der
-/// Fehler, was fehlt; `idf` ist `None`, wo ESP-IDF nicht eingerichtet ist,
-/// etwa am Rechner der Boards mit den Abbildern aus CI.
+/// Das Abbild fuer `program` mit der Last `load`, aus dem Zwischenspeicher
+/// der Abbilder oder mit `idf.py` gebaut ([`build`]) und dort abgelegt;
+/// liefert sein ELF, neben dem `.bin` und `.manifest` liegen. Gebaut wird in
+/// einem Verzeichnis je Last, Bauplatz `slot` und Prozess, das bleibt: Das
+/// naechste Programm desselben Platzes baut dort nur nach, was es aendert,
+/// statt ESP-IDF ganz zu uebersetzen (der Korpus unter Funk, KON1-021). Ohne
+/// `idf.py` und ohne Abbild im Zwischenspeicher sagt der Fehler, was fehlt;
+/// `idf` ist `None`, wo ESP-IDF nicht eingerichtet ist, etwa am Rechner der
+/// Boards mit den Abbildern aus CI.
 #[cfg(feature = "board")]
-pub fn image(idf: Option<&Path>, program: &Path, options: &Options) -> Result<PathBuf, String> {
+pub fn image(
+    idf: Option<&Path>,
+    program: &Path,
+    options: &Options,
+    load: Load,
+    slot: usize,
+) -> Result<PathBuf, String> {
     supported(options)?;
-    let stand = stand()?;
+    let stand = stand(load)?;
     let key = format!("{:016x}", crate::board::image_key(TRIPLE, program, options)?);
     let cached = |ext: &str| stand.join(format!("{key}.{ext}"));
     let elf = cached("elf");
@@ -292,54 +362,63 @@ pub fn image(idf: Option<&Path>, program: &Path, options: &Options) -> Result<Pa
     };
     crate::board::missed(&stand, &elf, &format!("examples/esp-idf {}", program.display()))?;
     let target = crate::target_dir();
-    let dir = target.join("takt-idf-build").join(format!("{key}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = target.join("takt-idf-build").join(format!("{}-{slot}-{}", load.name(), std::process::id()));
     let tool = target.join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" });
-    let built = build(idf, program, options.ticks, options.fresh, &dir, &tool);
-    let published = built.and_then(|image| {
-        crate::board::enter_stand(&kind(), &stand)?;
+    let spec = Spec { program, ticks: options.ticks, fresh: options.fresh, logical: !options.timed, load };
+    build(idf, &spec, &dir, &tool).and_then(|image| {
+        crate::board::enter_stand(&kind(load), &stand)?;
         // Das ELF zuletzt: Wer es findet, findet auch die anderen beiden.
         for (from, to) in
             [(&image.manifest, cached("manifest")), (&image.bin, cached("bin")), (&image.elf, elf.clone())]
         {
             crate::board::publish_checked(from, &to, |_| Ok(true))?;
         }
-        Ok(())
-    });
-    let _ = std::fs::remove_dir_all(&dir);
-    published.map(|()| elf)
+        Ok(elf)
+    })
 }
 
 /// Board 2 mit dem Wirt unter ESP-IDF (`examples/esp-idf`): geschrieben,
 /// gestartet und gelesen wie das Bring-up in Rust ([`Esp32c6`]), das Abbild
-/// am Stueck ab 0x0 ([`Image::bin`]).
+/// am Stueck ab 0x0 ([`Image::bin`]), mit der fremden Last `load`.
 #[cfg(feature = "board")]
 #[derive(Debug)]
 pub struct Esp32c6Idf {
     board: Esp32c6,
+    load: Load,
 }
 
 #[cfg(feature = "board")]
 impl Esp32c6Idf {
-    /// Das Board `board` mit dem Wirt unter ESP-IDF.
+    /// Das Board `board` mit dem Wirt unter ESP-IDF, ohne fremde Last.
     pub fn on(board: Esp32c6) -> Esp32c6Idf {
-        Esp32c6Idf { board }
+        Esp32c6Idf::under(board, Load::Quiet)
+    }
+
+    /// Das Board `board` mit dem Wirt unter ESP-IDF und der Last `load`.
+    pub fn under(board: Esp32c6, load: Load) -> Esp32c6Idf {
+        Esp32c6Idf { board, load }
     }
 }
 
 #[cfg(feature = "board")]
 impl Board for Esp32c6Idf {
     fn name(&self) -> &'static str {
-        "esp32c6-idf"
+        match self.load {
+            Load::Quiet => "esp32c6-idf",
+            Load::Wifi => "esp32c6-idf-wifi",
+            Load::Ble => "esp32c6-idf-ble",
+            Load::Suspend => "esp32c6-idf-suspend",
+        }
     }
 
     fn target(&self) -> &'static str {
         "riscv32imac"
     }
 
-    /// Ein Bau in ein Verzeichnis je Prozess: Jeder Bauplatz baut gleich.
-    fn builder(&self, _slot: usize) -> Builder {
-        Box::new(|program, options| image(idf().as_deref(), program, options))
+    /// Ein Bau je Bauplatz in sein eigenes Verzeichnis ([`image`]).
+    fn builder(&self, slot: usize) -> Builder {
+        let load = self.load;
+        Box::new(move |program, options| image(idf().as_deref(), program, options, load, slot))
     }
 
     /// Das Abbild am Stueck ab 0x0; den Tick fuer den Blick ueber JTAG nennt

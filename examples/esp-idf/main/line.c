@@ -24,7 +24,6 @@
 #include "hal/usb_serial_jtag_ll.h"
 #include "hal/wdt_hal.h"
 #include "soc/lp_aon_reg.h"
-#include "soc/soc.h"
 
 /* Hoechstens so viel geht je Paket an den Host: kuerzer als sein FIFO von
  * 64 Byte (FB-264, FB-267). */
@@ -44,9 +43,6 @@ static uint32_t line_filled;
 
 /* Abgeschickt und vom Host noch nicht abgeholt. */
 static uint8_t line_in_flight;
-
-/* Seit einem Bus-Reset, bis der Host wieder abfragt (FB-311). */
-static uint8_t line_stalled;
 
 /* Setzt den Chip auf RTC-Ebene zurueck, wie der EN-Pin: Auch der
  * USB-Serial-JTAG faengt neu an, und der Host sieht ein Abstecken. Ein
@@ -87,6 +83,8 @@ static IRAM_ATTR void line_receive(void) {
 
 /* Nimmt das Abholen zur Kenntnis: Das FIFO ist wieder frei. */
 static IRAM_ATTR void line_settle(void) {
+    /* Seit einem Bus-Reset, bis der Host wieder abfragt (FB-311). */
+    static uint8_t line_stalled;
     const uint32_t raw = usb_serial_jtag_ll_get_intraw_mask();
     if ((raw & (uint32_t)USB_SERIAL_JTAG_INTR_BUS_RESET) != 0U) {
         usb_serial_jtag_ll_clr_intsts_mask((uint32_t)USB_SERIAL_JTAG_INTR_BUS_RESET |
@@ -135,13 +133,16 @@ static IRAM_ATTR void line_flush(void *ctx) {
     }
 }
 
+/* LP_AON STORE0 an seiner Adresse aus dem Handbuch (`soc/lp_aon_reg.h`): Es
+ * ueberlebt einen Reset, und ESP-IDF nutzt es auf dem C6 nicht. */
+static volatile uint32_t *line_store0(void) { return (volatile uint32_t *)LP_AON_STORE0_REG; }
+
 void line_open(struct takt_line *line) {
     /* Den Wunsch nach einem Chip-Reset schreibt der Host ueber JTAG in
-     * LP_AON STORE0, das einen Reset ueberlebt und das ESP-IDF auf dem C6
-     * nicht nutzt, oder als `TAKT` in die Konsole: Der Start liest beides
-     * vor allem anderen. */
-    if (REG_READ(LP_AON_STORE0_REG) == LINE_MAGIC) {
-        REG_WRITE(LP_AON_STORE0_REG, 0U);
+     * STORE0 oder als `TAKT` in die Konsole: Der Start liest beides vor allem
+     * anderen. */
+    if (*line_store0() == LINE_MAGIC) {
+        *line_store0() = 0U;
         line_chip_reset();
     }
     line_receive();

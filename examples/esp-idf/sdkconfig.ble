@@ -1,0 +1,4 @@
+# BLE neben Takt (main/load_ble.c, M11 Schritt 21b): der Controller des C6
+# und der Host NimBLE, als Zusatz zu sdkconfig.defaults.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y

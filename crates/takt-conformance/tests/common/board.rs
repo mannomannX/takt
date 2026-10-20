@@ -721,6 +721,61 @@ pub fn the_port_passes_with_header(board: &mut dyn Board, form: Form, protection
     }
 }
 
+/// Die Schranke des Profils `shared` fuer Antwortzeit und Jitter des Ticks
+/// (12.8): der zweistellige Mikrosekundenbereich, also unter 100 us.
+pub const SHARED_BOUND_NS: i64 = 100_000;
+
+/// **Der Port besteht die Portpruefung neben fremder Last, und der Tick
+/// bleibt in der Schranke von `shared`** (12.8, 12.11, 13.8; M11 Schritt 21b,
+/// KON1-021): wie [`the_port_passes_with_header`] mit der Zeile `load` der
+/// Last vor der Marke, und kein Tick begann spaeter als [`SHARED_BOUND_NS`]
+/// nach seiner Grenze, kein Abstand zweier Tickbeginne ueberschritt die
+/// Periode um mehr. Der Bericht nennt die Last, wie der Kopf sie beschreibt,
+/// und Median, p99, spaetesten Tick und Jitter.
+pub fn the_port_passes_under_load(board: &mut dyn Board, form: Form, protection: Case, load: &str) -> Vec<String> {
+    match port_run(board, form, None) {
+        Ok((v, text)) => {
+            let mut failed = passed_with(&v, &format!("{form:?}"), protection);
+            failed.extend(header_has(&text, &[load]));
+            failed.extend(within_shared_bound(&v.drift));
+            let header = text.find(board::MARK).map_or(text.as_str(), |at| &text[..at]);
+            let described: Vec<&str> = header.lines().map(str::trim).filter(|l| l.starts_with("Last:")).collect();
+            eprintln!(
+                "{}: {}; Drift Median {} ns, p99 {} ns, spaetester {} ns, Jitter {} ns (Schranke {} ns)",
+                board.name(),
+                described.join(" "),
+                v.drift.median,
+                v.drift.p99,
+                v.drift.median + v.drift.late,
+                v.drift.jitter.map_or_else(|| "?".to_string(), |j| j.to_string()),
+                SHARED_BOUND_NS
+            );
+            failed
+        }
+        Err(e) => vec![format!("{form:?}: kein Lauf: {e}")],
+    }
+}
+
+/// Je Ueberschreiten der Schranke von `shared` ein Befund: der spaeteste
+/// Tickbeginn (Antwortzeit) und der groesste Jitter.
+pub fn within_shared_bound(drift: &Drift) -> Vec<String> {
+    let latest = drift.median + drift.late;
+    let mut failed = Vec::new();
+    if latest >= SHARED_BOUND_NS {
+        failed.push(format!(
+            "ein Tick begann {latest} ns nach seiner Grenze, ueber der Schranke von `shared` ({SHARED_BOUND_NS} ns, \
+             12.8); die spaetesten (Tick, Drift): {:?}",
+            drift.latest
+        ));
+    }
+    match drift.jitter {
+        Some(j) if j < SHARED_BOUND_NS => {}
+        Some(j) => failed.push(format!("Jitter {j} ns, ueber der Schranke von `shared` ({SHARED_BOUND_NS} ns, 12.8)")),
+        None => failed.push("kein Jitter: keine zwei Zeitzeilen".to_string()),
+    }
+    failed
+}
+
 /// Das Urteil `v` ueber den Port `label` hat bestanden und nennt den
 /// Speicherschutz `protection` (12.11).
 fn passed_with(v: &port::Verdict, label: &str, protection: Case) -> Vec<String> {

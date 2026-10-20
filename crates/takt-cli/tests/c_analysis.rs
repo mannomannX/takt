@@ -94,6 +94,8 @@ struct Catalog {
     zephyr_tidy: Tool,
     /// Was clang-tidy ueber den Bau unter ESP-IDF dazu bekommt.
     idf_tidy: Tool,
+    /// Was cppcheck fuer die Baue unter ESP-IDF dazu bekommt.
+    idf_cppcheck: Tool,
     /// Die ausgeschalteten Pruefungen von clang-tidy mit ihrer Regel.
     off: BTreeMap<String, String>,
     deviations: BTreeMap<(String, String), Deviation>,
@@ -123,6 +125,7 @@ fn catalog() -> Catalog {
         zephyr: tool("cppcheck unter Zephyr"),
         zephyr_tidy: tool("clang-tidy unter Zephyr"),
         idf_tidy: tool("clang-tidy unter ESP-IDF"),
+        idf_cppcheck: tool("cppcheck unter ESP-IDF"),
         off,
         deviations,
     }
@@ -311,8 +314,10 @@ fn of_a_build(part: &str) -> bool {
     part == ZEPHYR_BUILD || part == IDF_BUILD
 }
 
-/// Der Bau, den `esp_idf_example.rs` in `target/tmp` liegen laesst.
-const IDF_BUILD_DIR: &str = "takt-esp-idf-port-test";
+/// Die Baue, die `esp_idf_example.rs` in `target/tmp` liegen laesst: ohne
+/// fremde Last und mit jeder Last (M11 Schritt 21b).
+const IDF_BUILD_DIRS: &[&str] =
+    &["takt-esp-idf-port-test", "takt-esp-idf-wifi", "takt-esp-idf-ble", "takt-esp-idf-suspend"];
 
 /// Die Baue unter Zephyr, die `zephyr_example.rs` in `target/tmp` liegen
 /// laesst (`takt-<beispiel>-<tripel>`), je mit `compile_commands.json`.
@@ -836,12 +841,13 @@ fn idf_link(build: &Path) -> (Link, PathBuf) {
     (link, picolibc.expect("der Compiler des Baus"))
 }
 
-/// **Der Bau unter ESP-IDF weicht nur ab, wie der Katalog sagt** (M11
-/// Schritt 21a): clang-tidy ueber die eigenen Quellen des Baus von
-/// `esp_idf_example.rs` mit den Aufrufen seiner `compile_commands.json` und
+/// **Die Baue unter ESP-IDF weichen nur ab, wie der Katalog sagt** (M11
+/// Schritte 21a und 21b): clang-tidy ueber die eigenen Quellen jedes Baus von
+/// `esp_idf_example.rs`, ohne fremde Last und mit jeder Last ([`IDF_BUILD_DIRS`]), mit den Aufrufen seiner `compile_commands.json` und
 /// dem, was der Katalog dafuer nennt (`clang-tidy unter ESP-IDF`: was clang
 /// von der GCC nicht kennt), und cppcheck ueber dieselben Quellen als eine
-/// Bindung mit den echten Koepfen von ESP-IDF. Was in ESP-IDF, im Kopf des SDK
+/// Bindung je Bau mit den echten Koepfen von ESP-IDF; dieselbe Stelle in zwei
+/// Bauen zaehlt einmal. Was in ESP-IDF, im Kopf des SDK
 /// oder im erzeugten Rahmen steht, zaehlt hier nicht; die beiden letzten
 /// prueft [`the_c_part_deviates_only_as_the_catalog_says`]. Gegen die Zeilen
 /// des Teils [`IDF_BUILD`]. Laeuft nach `esp_idf_example.rs` im Job `esp-idf`
@@ -853,26 +859,29 @@ fn the_esp_idf_build_deviates_only_as_the_catalog_says() {
     let (Some(tidy), Some(cpp)) = (clang_tidy(), cppcheck()) else { return };
     check_version(&tidy, &catalog.tidy.version);
     check_version(&cpp, &catalog.cppcheck.version);
-    let build = Path::new(env!("CARGO_TARGET_TMPDIR")).join(IDF_BUILD_DIR);
-    assert!(
-        build.join("compile_commands.json").is_file(),
-        "{}: kein Bau unter ESP-IDF; zuerst `esp_idf_example.rs` mit --run-ignored all",
-        build.display()
-    );
-    let (link, picolibc) = idf_link(&build);
-    let mut args: Vec<String> = catalog.tidy.args.iter().chain(&catalog.idf_tidy.args).cloned().collect();
-    args.extend(["--extra-arg=-isystem".to_string(), format!("--extra-arg={}", picolibc.display())]);
-    let generated = build.join("esp-idf").join("main").join("takt");
-    let mut found: BTreeSet<Finding> = run_tidy_build(&tidy, &args, &build, &generated, IDF_BUILD)
-        .into_iter()
-        .filter(|f| in_own_sources(&f.at))
-        .collect();
-    let out = scratch("takt-c-esp-idf");
     let root = root();
-    for f in run_cppcheck(&cpp, &catalog.cppcheck.args, &link, &out, &out.join("cppcheck.txt")) {
-        let at = Path::new(&f.at).strip_prefix(&root).map_or_else(|_| f.at.clone(), |p| p.display().to_string());
-        if in_own_sources(&at) {
-            found.insert(Finding { id: f.id, part: IDF_BUILD, at });
+    let cppcheck_args: Vec<String> = catalog.cppcheck.args.iter().chain(&catalog.idf_cppcheck.args).cloned().collect();
+    let mut found: BTreeSet<Finding> = BTreeSet::new();
+    for name in IDF_BUILD_DIRS {
+        let build = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        assert!(
+            build.join("compile_commands.json").is_file(),
+            "{}: kein Bau unter ESP-IDF; zuerst `esp_idf_example.rs` mit --run-ignored all",
+            build.display()
+        );
+        let (link, picolibc) = idf_link(&build);
+        let mut args: Vec<String> = catalog.tidy.args.iter().chain(&catalog.idf_tidy.args).cloned().collect();
+        args.extend(["--extra-arg=-isystem".to_string(), format!("--extra-arg={}", picolibc.display())]);
+        let generated = build.join("esp-idf").join("main").join("takt");
+        found.extend(
+            run_tidy_build(&tidy, &args, &build, &generated, IDF_BUILD).into_iter().filter(|f| in_own_sources(&f.at)),
+        );
+        let out = scratch(&format!("takt-c-{name}"));
+        for f in run_cppcheck(&cpp, &cppcheck_args, &link, &out, &out.join("cppcheck.txt")) {
+            let at = Path::new(&f.at).strip_prefix(&root).map_or_else(|_| f.at.clone(), |p| p.display().to_string());
+            if in_own_sources(&at) {
+                found.insert(Finding { id: f.id, part: IDF_BUILD, at });
+            }
         }
     }
     if let Err(rows) = judge(&found, &catalog, |part| part == IDF_BUILD) {

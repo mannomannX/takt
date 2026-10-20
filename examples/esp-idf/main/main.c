@@ -22,7 +22,10 @@
  * (`TAKT`); dann setzt sich der Chip zurueck (line.c).
  *
  * Der Bau setzt `TAKT_TICKS` (so viele Ticks, 0: bis das Programm endet) und
- * `TAKT_FRESH_JOURNAL`; so baut ihn `takt_conformance::esp_idf`.
+ * `TAKT_FRESH_JOURNAL` und `TAKT_LOGICAL` (1: in logischer Zeit hinter dem Tor,
+ * das `app_main` oeffnet, mit verlustfreier Leitung; 13.8); so baut ihn
+ * `takt_conformance::esp_idf`. Neben Takt laeuft die fremde Last, die der
+ * Bau waehlt (load.h, Schritt 21b).
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -32,6 +35,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "line.h"
+#include "load.h"
 #include "sdkconfig.h"
 #include "takt_idf_nvm.h"
 #include "takt_irq.h"
@@ -44,6 +48,9 @@
 #endif
 #ifndef TAKT_FRESH_JOURNAL
 #error "TAKT_FRESH_JOURNAL: 1, wenn das Journal vor dem Lauf leer sein soll"
+#endif
+#ifndef TAKT_LOGICAL
+#error "TAKT_LOGICAL: 1, wenn der Lauf in logischer Zeit faehrt"
 #endif
 
 /* Der Schritt rechnet auf dem Stack der Interrupts von ESP-IDF. */
@@ -109,8 +116,9 @@ void app_main(void);
  * Der Schritt ruft ihn in seiner ISR. */
 static IRAM_ATTR void kick(void *ctx) { (void)ctx; }
 
-/* Der Kopf des Laufs, dann die Marke, ab der die Bilanz zaehlt. */
-static void banner(void) {
+/* Der Kopf des Laufs mit der fremden Last (`loaded` 0: sie laeuft), dann
+ * die Marke, ab der die Bilanz zaehlt. */
+static void banner(int loaded) {
     takt_board_trace("\r\ntakt auf esp32c6 in C unter ESP-IDF\r\n  Kerntakt ");
     takt_board_trace_u64((uint64_t)CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ * 1000000U);
     takt_board_trace("Hz, Tick ");
@@ -118,6 +126,11 @@ static void banner(void) {
     /* Die PMP des C6 gehoert ESP-IDF, und Takt schaltet sie im Lauf nicht um
      * (plan/m11.md 2.11): `Schutz: keiner`. */
     takt_board_trace("ns\r\n  Form interrupt\r\n" TAKT_IRQ_PROTECTION "\r\n\r\n");
+    if (loaded == 0) {
+        load_banner();
+    } else {
+        takt_board_trace("  Last: ESP-IDF legt sie nicht an\r\n");
+    }
     takt_line_mark();
 }
 
@@ -172,7 +185,7 @@ static int32_t start_core(takt_core *core) {
  * rechnet, und schreibt danach die Bilanz. */
 static void run(takt_core *core) {
     static struct takt_irq port;
-    const struct takt_irq_config config = {TAKT_TICKS, PROGRAM_TICK_NS, TIMER_HZ, STEP_PRIORITY, 0u};
+    const struct takt_irq_config config = {TAKT_TICKS, PROGRAM_TICK_NS, TIMER_HZ, STEP_PRIORITY, TAKT_LOGICAL};
     takt_foreign foreign = {0u, 0u};
 #if PROGRAM_JOB_STACK_BYTES > 0u
     takt_irq_esp_idf_jobs(program_job_stack, sizeof program_job_stack, JOB_PRIORITY);
@@ -184,6 +197,9 @@ static void run(takt_core *core) {
         takt_board_trace("takt: der Port startet nicht\r\n");
     } else {
         while (takt_irq_running(&port) != 0) {
+#if TAKT_LOGICAL
+            takt_irq_release(&port);
+#endif
             takt_foreign_round(&foreign);
         }
         struct takt_stacks stacks = {isr_stack_depth(), PROGRAM_TICK_STACK_BYTES, 0u, 0u, PROGRAM_JOB_STACK_BYTES, 0u};
@@ -199,8 +215,14 @@ void app_main(void) {
     static takt_core core;
     static struct takt_line line;
     line_open(&line);
-    if (takt_line_init(&line, ring, RING_BYTES) == TAKT_OK) {
-        banner();
+    int32_t ready = takt_line_init(&line, ring, RING_BYTES);
+#if TAKT_LOGICAL
+    if (ready == TAKT_OK) {
+        ready = takt_line_lossless();
+    }
+#endif
+    if (ready == TAKT_OK) {
+        banner(load_start());
         const int32_t status = start_core(&core);
         if (status != TAKT_OK) {
             takt_board_trace("takt: der Kern nimmt nicht an: ");

@@ -135,9 +135,10 @@ impl std::fmt::Display for Verdict {
         writeln!(f, "Portpruefung: {}", if self.passed() { "bestanden" } else { "durchgefallen" })?;
         writeln!(
             f,
-            "  Drift: {} Zeitzeilen, Median {} ns, spaetester {} ns darueber, Jitter {} ns",
+            "  Drift: {} Zeitzeilen, Median {} ns, p99 {} ns, spaetester {} ns darueber, Jitter {} ns",
             self.drift.ticks,
             self.drift.median,
+            self.drift.p99,
             self.drift.late,
             self.drift.jitter.map_or_else(|| "?".to_string(), |j| j.to_string())
         )?;
