@@ -97,11 +97,95 @@ pub fn rtc_wakeup(duration_ns: i64, rtc_hz: u32) -> RtcWakeup {
     }
 }
 
+/// So viele Takte bei `core_hz` dauert `rest_ns`, aufgerundet: das wache
+/// Warten eines Tiefschlafs, dessen RTC keinen Takt hat (FB-820). Wie der
+/// Wakeup-Timer endet es nicht vor der Frist.
+pub fn awake_cycles(rest_ns: u64, core_hz: u32) -> u64 {
+    let cycles = u128::from(rest_ns).saturating_mul(u128::from(core_hz)).div_ceil(1_000_000_000);
+    u64::try_from(cycles).unwrap_or(u64::MAX)
+}
+
+/// Der Uhrenquarz einer STM32-RTC.
+pub const LSE_HZ: u32 = 32_768;
+
+/// Der interne RC einer STM32-RTC, nominal; der F401 nennt 17 bis 47 kHz.
+pub const LSI_HZ: u32 = 32_000;
+
+/// Woran die RTC eines STM32 laeuft (RM0368 6.3.20, `RCC_BDCR`; 12.7,
+/// FB-820). Den Wakeup-Timer zaehlt nur ein laufender Takt: Ohne ihn weckte
+/// der Standby nie, und das Board kaeme nur ueber NRST zurueck.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RtcClock {
+    /// Die RTC ist aus: Seit die Backup-Domaene Strom hat, schlief das Board
+    /// nicht.
+    Off,
+    /// Der Uhrenquarz.
+    Lse,
+    /// Der interne RC.
+    Lsi,
+    /// Ein Takt ist gewaehlt, aber er laeuft nicht.
+    Stopped,
+}
+
+impl RtcClock {
+    /// Aus `RTCEN`, `RTCSEL` und den Bereit-Bits `LSERDY` und `LSIRDY`.
+    pub fn of(enabled: bool, select: u8, lse_ready: bool, lsi_ready: bool) -> RtcClock {
+        match (enabled, select) {
+            (false, _) => RtcClock::Off,
+            (true, 0b01) if lse_ready => RtcClock::Lse,
+            (true, 0b10) if lsi_ready => RtcClock::Lsi,
+            _ => RtcClock::Stopped,
+        }
+    }
+
+    /// Der Takt, an dem der Wakeup-Timer zaehlt; `None`, wenn keiner laeuft.
+    pub fn hz(self) -> Option<u32> {
+        match self {
+            RtcClock::Lse => Some(LSE_HZ),
+            RtcClock::Lsi => Some(LSI_HZ),
+            RtcClock::Off | RtcClock::Stopped => None,
+        }
+    }
+
+    /// Das Wort der Kopfzeile `RTC`.
+    pub fn name(self) -> &'static str {
+        match self {
+            RtcClock::Off => "aus",
+            RtcClock::Lse => "LSE",
+            RtcClock::Lsi => "LSI",
+            RtcClock::Stopped => "STEHT",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const LSE: u32 = 32_768;
+    const LSE: u32 = LSE_HZ;
+
+    /// **Nur ein laufender Takt weckt** (FB-820): Gewaehlt ist nicht genug;
+    /// ein LSI nach einem Reset oder ein Quarz, der nicht schwingt, laesst den
+    /// Wakeup-Timer stehen, und der Standby endete nie.
+    #[test]
+    fn only_a_running_clock_wakes_the_board() {
+        assert_eq!(RtcClock::of(true, 0b01, true, false).hz(), Some(LSE_HZ));
+        assert_eq!(RtcClock::of(true, 0b10, false, true).hz(), Some(LSI_HZ));
+        for (select, lse, lsi) in [(0b01, false, true), (0b10, true, false), (0b11, true, true), (0b00, true, true)] {
+            let clock = RtcClock::of(true, select, lse, lsi);
+            assert_eq!((clock, clock.hz(), clock.name()), (RtcClock::Stopped, None, "STEHT"), "{select:#04b}");
+        }
+        assert_eq!(RtcClock::of(false, 0b01, true, true), RtcClock::Off);
+    }
+
+    /// Das wache Warten rundet auf und laeuft auch bei Jahren nicht ueber.
+    #[test]
+    fn waiting_awake_counts_cycles_and_never_ends_early() {
+        assert_eq!(awake_cycles(2_000_000_000, 84_000_000), 168_000_000);
+        assert_eq!(awake_cycles(1, 84_000_000), 1);
+        assert_eq!(awake_cycles(0, 84_000_000), 0);
+        assert_eq!(awake_cycles(u64::MAX, u32::MAX), u64::MAX);
+    }
 
     #[test]
     fn a_short_sleep_counts_finely_and_never_early() {
