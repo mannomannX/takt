@@ -452,6 +452,57 @@ So arbeitet jeder Strang, als wäre er allein:
     deshalb die Gruppe ihres jüngsten Laufs.
   - Weiter: Schritt 2, Invarianten für „nicht k-induktiv“ und „Fragment“,
     dann der Speicher (FB-612).
+- **Stand nach Schritt 2, Teil 2 (2026-10-21, Zweig `b8-fragment`):**
+  - Die Invariantensuche lässt kein Ziel mehr aus, nur weil Fließkomma,
+    eine Bitoperation, eine Schiebung oder die Wickelung in seinem Kegel
+    steht (13.3). Sie ersetzt jeden größten Teilterm außerhalb ihres
+    Fragments, der selbst ein Wahrheitswert oder eine ganze Zahl ist,
+    durch eine frische Variable, frei und unbeschränkt; Zustand außerhalb
+    ist in jedem Tick frei. Eine gefundene Invariante gilt damit für das
+    genaue Modell. Einem Pfad der Suche folgt `takt prove` nicht, denn er
+    kann an einer freien Variable liegen (`Search::Abstract`).
+  - Der Grund eines offenen Induktionsschritts nennt, wie die Suche endete:
+    im Zeitlimit („Spacer im Zeitlimit (60 s)“), mit einem Pfad, der an
+    einer freien Variable liegen kann, oder ungesucht. Die Gruppen bleiben.
+  - Einordnung der neun Programme mit Stellen in „Fragment“, Basis main
+    7bde65f7 (Lauf 39508468191) gegen den Zweig (39508472131), mit gleichen
+    Parametern (Tiefen 10 und 20, 6 GB, zwei Fäden). Tiefe 20 fragt, was
+    Tiefe 10 nicht bewies:
+
+    | Gruppe | Basis, Tiefe 10 | Zweig, Tiefe 10 | Basis, Tiefe 20 | Zweig, Tiefe 20 |
+    |---|---|---|---|---|
+    | Fragment | 36 | 11 | 34 | 11 |
+    | nicht k-induktiv | – | 20 | – | 18 |
+    | Frist | 5 | 5 | 5 | 5 |
+    | bewiesen | 3 | 8 | 2 | 2 |
+
+  - Neu bewiesen, und die Pfade des Solvers (Lauf 39520803797) bestätigen
+    es: in `114_for_pairs` zwei `range` und zwei `ovf` (vorher außerhalb:
+    eine Schiebung), in `14_latency` der Übergang RUN->SAFE (vorher: `press`
+    ist Fließkomma). Neu sind `114_for_pairs.takt-proof` und
+    `14_latency.unfired`; beide Zeilen fallen aus `UNREACHED`.
+  - 18 Stellen gehen von „Fragment“ nach „nicht k-induktiv“: Spacer läuft
+    jetzt und endet im Zeitlimit. 17 davon sind der Nennablauf von
+    `hotfire` (`03_sequences_and_faults`, 15) und `rig`
+    (`06_test_harness`, 2), erreichbar, aber tiefer als BMC und die Läufe
+    (Fristen bis k = 3001 bzw. 9001). Sie brauchen einen Pfad, keine
+    Invariante (FB-803). Die achtzehnte ist `valid` in
+    `04_blocks_and_multirate`.
+  - 11 Stellen bleiben „Fragment“: Spacer sieht über die freien Variablen
+    einen Pfad. Das sind `17_nested` (2) und `61_requirements` (6) an
+    `p.x`, `53_stream_kinds` (1) und `88_capture_segments` (2) an der
+    Wickelung.
+  - Gefunden: FB-802, Spacer braucht für einen Rest über `div` das
+    Tausendfache (am Prüfprogramm 112 s gegen 0,1 s).
+  - Kosten: Der längste Teil der Einordnung brauchte 39 statt 10 Minuten,
+    weil Spacer auf den Stellen von `hotfire` bis ans Zeitlimit läuft.
+  - `UNREACHED`: Übergänge 93 → 92, nie bestanden 50, nie verletzt
+    283 → 279; 93 Programme. „Fragment“ 16 / 6 / 12 → 3 / 3 / 5,
+    „nicht k-induktiv“ 2 / 0 / 12 → 14 / 3 / 15 (Übergänge, nie bestanden,
+    nie verletzt); die übrigen Gruppen bleiben.
+  - Weiter: Pfade für FB-803 (ein Stimulus, der die Eingänge frisch hält
+    und `start` gibt, oder tiefes BMC), der Rest über `div` (FB-802), dann
+    der Speicher (FB-612).
 - **Abnahme:**
   - `UNREACHED` ist leer, oder jede verbleibende Zeile hat eine Gruppe als
     Grund.
@@ -463,8 +514,8 @@ So arbeitet jeder Strang, als wäre er allein:
 - **Hinweise:**
   - Parallele z3-Läufe sind schon am Speicher gescheitert (FB-510); die Zahl
     der Fäden bleibt begrenzt.
-  - Spacer kennt kein Fließkomma; was dort offen bleibt, ist ein Grund, kein
-    Fehler.
+  - Spacer kennt kein Fließkomma; die Suche macht es frei (13.3), und was
+    dort offen bleibt, ist ein Grund, kein Fehler.
 
 ### 14 — Rust ohne RTOS und mit Frameworks
 

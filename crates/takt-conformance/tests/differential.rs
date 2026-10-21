@@ -55,7 +55,18 @@ type Unreached = (&'static str, usize, usize, usize, usize, usize, usize, Groups
 const UNREACHED: &[Unreached] = &[
     ("01_minimal.takt", 0, 0, 0, 0, 1, 0, &[], &[], &[]),
     ("02_units_and_data.takt", 0, 0, 2, 0, 1, 0, &[], &[], &[("Frist", 1), ("bewiesen, nicht nachgerechnet", 1)]),
-    ("03_sequences_and_faults.takt", 10, 3, 2, 0, 1, 1, &[("Fragment", 10)], &[("Fragment", 3)], &[("Fragment", 2)]),
+    (
+        "03_sequences_and_faults.takt",
+        10,
+        3,
+        2,
+        0,
+        1,
+        1,
+        &[("nicht k-induktiv", 10)],
+        &[("nicht k-induktiv", 3)],
+        &[("nicht k-induktiv", 2)],
+    ),
     (
         "04_blocks_and_multirate.takt",
         2,
@@ -66,10 +77,10 @@ const UNREACHED: &[Unreached] = &[
         0,
         &[("Frist", 2)],
         &[("Frist", 1)],
-        &[("Speicher", 1), ("Fragment", 1)],
+        &[("Speicher", 1), ("nicht k-induktiv", 1)],
     ),
     ("05_streams_and_protocol.takt", 3, 0, 7, 0, 0, 0, &[("Speicher", 3)], &[], &[("Speicher", 7)]),
-    ("06_test_harness.takt", 2, 0, 0, 0, 0, 3, &[("Fragment", 2)], &[], &[]),
+    ("06_test_harness.takt", 2, 0, 0, 0, 0, 3, &[("nicht k-induktiv", 2)], &[], &[]),
     (
         "07_embedded_field.takt",
         13,
@@ -97,7 +108,6 @@ const UNREACHED: &[Unreached] = &[
     ("12_bitfields.takt", 1, 0, 2, 1, 0, 0, &[("Frist", 1)], &[], &[("Frist", 2)]),
     ("13_framing.takt", 0, 0, 0, 2, 0, 0, &[], &[], &[]),
     ("13_protocol_analysis.takt", 0, 0, 6, 3, 0, 0, &[], &[], &[("Frist", 6)]),
-    ("14_latency.takt", 1, 0, 0, 0, 0, 0, &[("Fragment", 1)], &[], &[]),
     ("17_nested.takt", 2, 0, 0, 0, 1, 0, &[("Fragment", 2)], &[], &[]),
     ("18_blocks.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
     ("23_patterns.takt", 0, 0, 3, 0, 0, 0, &[], &[], &[("Speicher", 3)]),
@@ -225,7 +235,6 @@ const UNREACHED: &[Unreached] = &[
     ("111_assign_mul.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
     ("112_assign_div.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
     ("113_case_ranges.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
-    ("114_for_pairs.takt", 0, 0, 4, 0, 0, 0, &[], &[], &[("Fragment", 4)]),
     ("115_affine_unit.takt", 0, 0, 2, 0, 0, 0, &[], &[], &[("Frist", 2)]),
     ("116_sequence_timeout.takt", 0, 0, 0, 1, 0, 0, &[], &[], &[]),
     ("117_many_text_handlers.takt", 0, 2, 1, 2, 0, 0, &[], &[("Frist", 1), ("Range bewiesen", 1)], &[("Speicher", 1)]),
@@ -292,9 +301,15 @@ const GROUPS: &[(&str, &str)] = &[
     (
         "nicht k-induktiv",
         "kein Pfad bis Tiefe 20 und im langen Lauf, der Induktionsschritt bleibt offen; meist verdeckt ein \
-         frueherer Fault derselben Maschine die Stelle (FB-613, Schritt 2)",
+         frueherer Fault derselben Maschine die Stelle (FB-613, Schritt 2), oder sie liegt tiefer als BMC und \
+         Laeufe (FB-803)",
     ),
-    ("Fragment", "Induktionsschritt offen, die Invariantensuche kennt kein Fliesskomma und keine Bitoperationen"),
+    (
+        "Fragment",
+        "Induktionsschritt offen; die Invariantensuche macht frei, was ausserhalb ihres Fragments liegt \
+         (Fliesskomma, Bitoperationen, Wickelung), und sieht dann einen Pfad, der an einer freien Variable \
+         liegen kann (13.3)",
+    ),
     (
         "Range bewiesen",
         "eine bewiesene Range (13.2 `proven`), die Modell und Codegen nicht pruefen: Sie besteht, sobald ihr \
