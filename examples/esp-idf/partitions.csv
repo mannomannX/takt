@@ -1,0 +1,9 @@
+# Die Partitionen des Wirts unter ESP-IDF (M11 Schritt 21a): die ueblichen
+# drei und das Journal von Takt, zwei Sektoren zu 4 KiB, je einer ein Slot
+# (5.9, `ports/esp-idf-nvm`). Der Untertyp 0x40 liegt im Bereich, den
+# ESP-IDF eigenen Daten laesst.
+# Name,        Type, SubType, Offset,  Size
+nvs,           data, nvs,     0x9000,  0x6000
+phy_init,      data, phy,     0xf000,  0x1000
+factory,       app,  factory, 0x10000, 0x180000
+takt_journal,  data, 0x40,    ,        0x2000

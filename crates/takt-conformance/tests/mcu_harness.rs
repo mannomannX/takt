@@ -797,14 +797,15 @@ fn the_start_samples_before_it_enters() {
     assert!(sample < enter, "`sample` muss vor `enter` stehen:\n{init}");
 }
 
-/// **Ein `sim`-Eingang bekommt kein Symbol.** Zu ihm gehoert kein Geraet;
-/// ihn stellt das Modell im selben Tick (8.3).
+/// **Der Schreibstrom eines Ports bekommt keinen Treiber** (8.1, 12.10;
+/// FB-688): Er ist der eine Input, der `sim` traegt, und ihn speisen die
+/// Schreibvorgaenge des Ports, nie ein Geraet.
 #[test]
-fn a_simulated_input_gets_no_driver_symbol() {
-    let src = takt_frame::mcu::build(&program(SIM_INPUT)).source;
+fn a_port_write_stream_gets_no_driver_symbol() {
+    let src = takt_frame::mcu::build(&program(PORT_WRITES)).source;
     assert!(
-        !src.contains("app_in_"),
-        "ein `sim`-Eingang braucht keinen Treiber:
+        !src.contains("app_poll_") && !src.contains("app_in_"),
+        "der Schreibstrom eines Ports braucht keinen Treiber:
 {src}"
     );
 }
@@ -1179,21 +1180,30 @@ machine m:
         after 1 s: -> RUN
 ";
 
-const SIM_INPUT: &str = "system:
+const PORT_WRITES: &str = "system:
     language = 1
     tick     = 10 ms
 
-input  x   : bool @ sim(\"model/x\") with max_age = 100 ms
-output led : bool @ hw(\"ui/led\") with safe = false
+record Reg layout little:
+    flags : u8 with bits:
+        ready : bool at 0
+        fail  : bool at 1
+    count : u16
 
-machine m:
+port dev : Reg @ mmio(0x40000000)
+
+input  dev_w : stream<bytes<4>> @ sim(\"mmio/0x40000000/w\") with capacity = 2, max_rate = 200 Hz
+output got   : int in 0..999    @ hw(\"o/got\") with safe = 0
+
+driver machine drv:
     initial RUN
 
     state RUN:
         loop:
-            led = x.or(false)
+            dev.count = 7
 
-        after 1 s: -> RUN
+        on dev_w as w:
+            got = w.data.len
 ";
 
 /// **Was das Programm nicht liest, liest der Rahmen fuer die Aufzeichnung**

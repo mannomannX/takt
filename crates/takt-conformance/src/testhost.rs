@@ -50,7 +50,8 @@ use std::path::Path;
 
 use takt_interp::value::{Quality, Reason};
 use takt_llvm::symbols::Prefix;
-use takt_mir::program::{Binding, Direction, OverrunPolicy, Program};
+use takt_mir::program::{Binding, Direction, Program};
+use takt_mir::stimulus::{self as admissible, Event};
 use takt_mir::types::Type;
 
 use crate::stimulus::Stimulus;
@@ -317,8 +318,10 @@ fn boundary(tick: u64, tick_ns: i64) -> Result<i64, String> {
         .ok_or_else(|| format!("Tick {tick} liegt jenseits der Zeitachse"))
 }
 
-/// Der Plan des Testwirts aus dem Stimulus.
-fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
+/// Der Plan des Testwirts aus dem Stimulus bis Tick `ticks`. Eine Zeile
+/// hinter dem Lauf erreicht den Wirt nicht, wie den Interpreter (12.5,
+/// FB-620).
+fn plan(p: &Program, stimulus: &[Stimulus], ticks: u64) -> Result<Plan, String> {
     let tick_ns = p.config.tick;
     let layout = takt_frame::layout::of(p);
     let mut out = Plan::default();
@@ -329,7 +332,7 @@ fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
         }
         Ok(())
     };
-    for stim in stimulus {
+    for stim in stimulus.iter().filter(|s| s.tick() <= ticks) {
         let tick = stim.tick();
         let now =
             i64::try_from(tick).ok().and_then(|t| t.checked_mul(tick_ns)).ok_or("Tick ausserhalb der Zeitachse")?;
@@ -340,6 +343,8 @@ fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
                     .iter()
                     .find(|ch| ch.name == *channel && ch.dir == Direction::Input)
                     .ok_or_else(|| format!("t={tick}: kein Eingang `{channel}`"))?;
+                // 12.5: von aussen nur ueber den Treiber einer `hw`-Adresse (FB-688).
+                admissible::input(ch).map_err(|e| format!("t={tick}: {e}"))?;
                 let Binding::Hw(addr) = &ch.binding else {
                     return Err(format!(
                         "t={tick}: `{channel}` hat keine `hw`-Bindung und darum keinen Treiber (8.10)"
@@ -383,33 +388,38 @@ fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
                 let bytes = crate::harness::tune_bytes(p, index, text)
                     .ok_or_else(|| format!("t={tick}: `{text}` ist kein Wert von `{name}`"))?;
                 if tick == 0 {
-                    return Err(format!("t=0: `tune {name}`; ein Tunable gilt ab einer Grenze nach Tick 0 (8.4)"));
+                    return Err(format!(
+                        "t=0: `tune {name}` ist ein Startwert (12.5); der Testwirt baut das Programm mit seinen Vorgaben"
+                    ));
                 }
                 out.tunes.push((tick - 1, index, bytes));
                 event(&mut out, tick)?;
             }
             Stimulus::Abort { .. } => {
-                if tick == 0 {
-                    return Err("t=0: `abort` vor dem ersten Tick hat keinen Weg (5.4)".into());
-                }
+                admissible::at(Event::Abort, tick).map_err(|e| format!("t={tick}: `abort`: {e}"))?;
                 out.calls.entry(boundary(tick, tick_ns)?).or_default().abort = true;
                 event(&mut out, tick)?;
             }
             Stimulus::Runtime { kind, output, .. } => {
                 use takt_mir::machine::RuntimeKind;
-                match (kind, output) {
-                    (RuntimeKind::Driver, Some(o)) => {
-                        let ch = p
-                            .channels
+                // 12.5: nur ein Runtime-Fault mit Quelle, ab seinem ersten Tick (FB-689).
+                let channel = match output {
+                    Some(o) => Some(
+                        p.channels
                             .iter()
                             .find(|c| c.name == *o && c.dir == Direction::Output)
-                            .ok_or_else(|| format!("t={tick}: kein Ausgang `{o}`"))?;
+                            .ok_or_else(|| format!("t={tick}: kein Ausgang `{o}`"))?,
+                    ),
+                    None => None,
+                };
+                admissible::runtime(p, *kind, channel)
+                    .and_then(|()| admissible::at(Event::Runtime(*kind), tick))
+                    .map_err(|e| format!("t={tick}: `runtime {kind:?}`: {e}"))?;
+                match (kind, channel) {
+                    (RuntimeKind::Driver, Some(ch)) => {
                         let Binding::Hw(addr) = &ch.binding else {
-                            return Err(format!("t={tick}: `runtime Driver {o}`: `{o}` hat keinen Treiber (8.10)"));
+                            return Err(format!("t={tick}: `runtime Driver {}`: kein Treiber (8.10)", ch.name));
                         };
-                        if tick == 0 {
-                            return Err(format!("t=0: `runtime Driver {o}` vor jedem Commit (12.6 Zeile 6)"));
-                        }
                         // Der Commit des Ticks davor scheitert; der Fault wirkt hier.
                         let before = (now - tick_ns).max(0);
                         out.failing.entry(addr.text()).or_default().push(before);
@@ -417,23 +427,10 @@ fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
                         event(&mut out, tick)?;
                     }
                     (RuntimeKind::Hardware, _) => {
-                        if tick == 0 {
-                            return Err("t=0: `runtime Hardware` vor dem ersten Tick hat keinen Weg (12.3)".into());
-                        }
                         out.calls.entry(boundary(tick, tick_ns)?).or_default().hardware = true;
                         event(&mut out, tick)?;
                     }
-                    (RuntimeKind::Overrun, _) => {
-                        if p.config.overrun == OverrunPolicy::Alert {
-                            return Err(format!(
-                                "t={tick}: `runtime Overrun` unter `overrun = alert`: Ein Ueberlauf faultet dort nicht (7.3)"
-                            ));
-                        }
-                        if tick < 2 {
-                            return Err(format!("t={tick}: `runtime Overrun` verlangt einen Tick davor (7.3)"));
-                        }
-                        overruns.push(tick);
-                    }
+                    (RuntimeKind::Overrun, _) => overruns.push(tick),
                     (other, _) => {
                         return Err(format!(
                             "t={tick}: `runtime {other:?}`: Diesen Runtime-Fault erhebt im Produkt kein Weg des Wirts"
@@ -532,7 +529,7 @@ fn reading(
 fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
     let x = prefix(run)?;
     let upper = x.as_str().to_uppercase();
-    let plan = plan(p, run.stimulus)?;
+    let plan = plan(p, run.stimulus, run.ticks)?;
     let layout = takt_frame::layout::of(p);
     let drivers = takt_frame::drivers::of(p, &layout);
     let mut s = String::new();
@@ -972,8 +969,8 @@ machine m:
         let p = program(SRC);
         for (text, why) in [
             ("t=3 in p 1\nt=3 in p 2\n", "zwei Lieferungen"),
-            ("t=3 runtime Node\n", "kein Weg des Wirts"),
-            ("t=1 runtime Overrun\n", "Tick davor"),
+            ("t=3 runtime Node\n", "ohne Knoten"),
+            ("t=1 runtime Overrun\n", "erst ab Tick 2"),
         ] {
             let run = Run { ticks: 10, stimulus: &stimulus(text), ..Run::default() };
             let e = host(&p, &run).expect_err(text);
@@ -988,7 +985,7 @@ machine m:
     fn an_overrun_is_a_late_call() {
         let p = program(SRC);
         let run = Run { ticks: 10, stimulus: &stimulus("t=5 runtime Overrun\n"), ..Run::default() };
-        let plan = plan(&p, run.stimulus).expect("Plan");
+        let plan = plan(&p, run.stimulus, run.ticks).expect("Plan");
         let calls: Vec<(i64, bool, bool)> = plan.calls.iter().map(|(at, c)| (*at, c.wake, c.late)).collect();
         assert_eq!(calls, [(29_999_999, true, false), (40_000_001, false, true)]);
     }

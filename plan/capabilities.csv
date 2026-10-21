@@ -277,7 +277,7 @@ Feature(Campaign),ja,ja,ja
 Feature(Node),ja,ja,nein
 Feature(FramingRaw),ja,ja,ja
 Feature(FramingLines),ja,ja,ja
-Feature(FramingCobs),ja,ja,nein
+Feature(FramingCobs),ja,ja,ja
 Feature(FramingLengthPrefixed),ja,ja,nein
 Feature(FramingFixed),ja,ja,nein
 Feature(Label),ja,ja,ja

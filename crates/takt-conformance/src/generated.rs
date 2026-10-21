@@ -22,16 +22,16 @@
 //!   Vertrag haelt (13.3); diesen Lauf rechnen Interpreter und erzeugter
 //!   Code ([`EDGE`]).
 //!
-//! Geliefert wird an Inputs mit `hw`-Bindung oder ohne; einen `sim`-Input
-//! speist das Modell des Programms (8.3). Alles ist deterministisch: Derselbe
-//! Korpus ergibt dieselben Laeufe.
+//! Geliefert wird nur, wohin der Rand von aussen liefert: an Inputs mit
+//! `hw`-Bindung (12.5, `takt_mir::stimulus`). Alles ist deterministisch:
+//! Derselbe Korpus ergibt dieselben Laeufe.
 
 use std::fmt::Write as _;
 
 use takt_interp::Value;
 use takt_interp::trace::value_text;
 use takt_mir::TypeId;
-use takt_mir::program::{Binding, Channel, Direction, Program};
+use takt_mir::program::{Channel, Program};
 use takt_mir::types::{Const, FloatWidth, Type};
 
 use crate::cases::Case;
@@ -85,15 +85,10 @@ pub fn cases(p: &Program) -> Vec<Case> {
     out
 }
 
-/// Die Inputs, an die der Stimulus liefert: `hw`-gebunden oder ohne Bindung,
-/// ohne `sys/outer_fault` — den stellt der Kern (13.3).
+/// Die Inputs, an die der Stimulus liefert: die mit `hw`-Bindung, ohne
+/// `sys/outer_fault` — den stellt der Kern (13.3).
 fn inputs(p: &Program) -> Vec<(usize, &Channel)> {
-    let outer = takt_mir::sys::outer_fault(p);
-    p.channels
-        .iter()
-        .enumerate()
-        .filter(|(i, c)| c.dir == Direction::Input && !matches!(c.binding, Binding::Sim(_)) && outer != Some(*i))
-        .collect()
+    p.channels.iter().enumerate().filter(|(_, c)| takt_mir::stimulus::input(c).is_ok()).collect()
 }
 
 /// Die Abschnitte von `erzeugt`, in dieser Folge.

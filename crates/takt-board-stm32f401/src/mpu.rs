@@ -1,9 +1,9 @@
 //! Speicherschutz mit der MPU des Cortex-M4 (12.3).
 //!
-//! Drei Regionen. Der Programmzustand — der Programmbereich der Arena in
-//! `.takt_state` am Anfang des RAM, siehe `build.rs` des Bring-ups (12.11)
-//! — ist nur waehrend des Programmschritts
-//! beschreibbar; ausserhalb — und in jeder ISR, auch einer, die den Schritt
+//! Drei Regionen; jede andere schaltet [`Mpu::arm`] aus. Der
+//! Programmzustand — der Programmbereich der Arena in `.takt_state` am
+//! Anfang des RAM, siehe `build.rs` des Bring-ups (12.11) — ist nur
+//! waehrend des Programmschritts beschreibbar; ausserhalb — und in jeder ISR, auch einer, die den Schritt
 //! unterbricht ([`isr`]) — darf ihn die TCB nur lesen. Unter dem Hauptstack
 //! und unter dem Stack des Job-Kontexts liegt je ein Waechter ohne Zugriff.
 //! Ein Zugriff, der eine Regel verletzt, loest `MemoryManagement` aus: Der
@@ -63,6 +63,11 @@ fn guard_above(bottom: u32) -> Region {
 /// Der Waechter unter dem Hauptstack.
 fn guard() -> Region {
     guard_above(crate::word((&raw const _stack_end).expose_provenance()))
+}
+
+/// Wie viele Regionen die MPU hat (`MPU_TYPE.DREGION`; der Cortex-M4 hat 8).
+pub fn regions(mpu: &cortex_m::peripheral::mpu::RegisterBlock) -> u32 {
+    (mpu._type.read() >> 8) & 0xFF
 }
 
 /// Der Waechter unter dem Job-Stack, falls es einen gibt.
@@ -126,7 +131,8 @@ pub struct Mpu {
 }
 
 impl Mpu {
-    /// Richtet die Regionen ein und schaltet MPU und `MemoryManagement` ein.
+    /// Richtet die Regionen ein und schaltet MPU und `MemoryManagement` ein;
+    /// jede andere Region schaltet sie aus.
     /// `job_stack` ist das untere Ende des Job-Stacks; der Rahmen richtet
     /// ihn an 32 Byte aus und reserviert den Waechter darin.
     ///
@@ -142,6 +148,16 @@ impl Mpu {
         // Region.
         // SAFETY: schaltet die MPU aus, siehe oben.
         unsafe { mpu.ctrl.write(0) };
+        // Jede Region aus, bevor die eigenen kommen: Wer ohne Reset in den
+        // Bootloader sprang, liess seine stehen, und das Einschalten unten
+        // machte sie wieder wirksam (FB-752). So beginnt das Abbild wie nach
+        // einem Reset, gleich, was vorher lief.
+        for region in 0..regions(mpu) {
+            // SAFETY: waehlt eine Region, bei ausgeschalteter MPU.
+            unsafe { mpu.rnr.write(region) };
+            // SAFETY: Null in `RASR` schaltet die Region aus.
+            unsafe { mpu.rasr.write(0) };
+        }
         if let Some(g) = job_guard() {
             // SAFETY: waehlt die Region des Waechters unter dem Job-Stack.
             unsafe { mpu.rnr.write(JOB_GUARD) };

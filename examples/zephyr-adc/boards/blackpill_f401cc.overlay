@@ -1,0 +1,44 @@
+/* Board 1: die Leitung auf USART1 wie in examples/zephyr und die
+ * Drahtbruecke PA0 an PA1 (plan/f401.md): PA0 als Knoten mit `gpios`, PA1
+ * als Eingang 1 von ADC1, den das Board schon auf PA1 legt
+ * (`adc1_in1_pa1`). Die Labels nennt `takt/analog.hw`. `gpio-leds` traegt
+ * nur den Pin: Ohne CONFIG_LED greift kein Treiber des Zephyr-Kerns nach
+ * ihm. Der Kanal misst mit 12 Bit gegen die Referenz von 3,3 V, die der
+ * Knoten von ADC1 nennt (`vref-mv`). */
+#include <zephyr/dt-bindings/adc/adc.h>
+
+/ {
+	chosen {
+		takt,line = &usart1;
+	};
+
+	takt-wire-out {
+		compatible = "gpio-leds";
+
+		takt_wire_out: wire-out {
+			gpios = <&gpioa 0 GPIO_ACTIVE_HIGH>;
+		};
+	};
+
+	takt_adc_in: takt-adc-in {
+		compatible = "takt,adc-input";
+		io-channels = <&adc1 1>;
+	};
+};
+
+&adc1 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	channel@1 {
+		reg = <1>;
+		zephyr,gain = "ADC_GAIN_1";
+		zephyr,reference = "ADC_REF_INTERNAL";
+		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
+		zephyr,resolution = <12>;
+	};
+};
+
+&usart1 {
+	current-speed = <921600>;
+};
