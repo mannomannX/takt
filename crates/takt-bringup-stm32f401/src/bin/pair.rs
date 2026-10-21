@@ -102,6 +102,12 @@ pub mod slow_drivers {
 /// Nach so vielen Ticks von `fast` endet der Lauf (`TAKT_TICKS`); 0 heisst nie.
 const TICKS: Option<&str> = option_env!("TAKT_TICKS");
 
+/// So weit vor dem gemeinsamen Ursprung beginnt der Lauf: Davor rechnet jedes
+/// Programm in der Rangfolge Tick 0 bis zum Commit (12.11), und der erste
+/// Tick beider kommt aus ihrer ISR, nicht aus `main`. Beide `init` mit Kopf
+/// brauchen am F401 unter 1 ms.
+const START_NS: i64 = 20_000_000;
+
 /// Der Schritt von `fast` unter der Leitung.
 const FAST_PRIORITY: u8 = 0x20;
 /// Der Schritt von `slow` unter dem von `fast`.
@@ -570,8 +576,8 @@ fn main() -> ! {
     }
     takt_board_stm32f401::stack::paint();
 
-    // Gemeinsamer Ursprung (12.11): Beide Raster beginnen jetzt.
-    let origin = alarm.now_ns();
+    // Gemeinsamer Ursprung (12.11): Beide Raster beginnen nach Tick 0 beider.
+    let origin = alarm.now_ns().saturating_add(START_NS);
     let (fast_lead, slow_lead): (Lead, Lead) = (fast_telemetry, slow_telemetry);
     let mut fast_program = {
         let (arena, rig) = (&raw mut FAST_ARENA, &raw mut FAST_RIG);
@@ -592,8 +598,8 @@ fn main() -> ! {
         fast::TICK_NS,
         policy(fast::OVERRUN_ALERT),
     );
-    // An der gemeinsamen Grenze 0 committet `fast` zuerst; erst danach tastet
-    // `slow` in seinem `init` ab (12.11).
+    // Vor dem Ursprung committet `fast` Tick 0; erst danach tastet `slow` in
+    // seinem `init` ab (12.11). Vor dem Ursprung rechnet `service` keinen Tick.
     let _ = fast_rt.service_with(None);
     let fast_form = Form::start(&mut fast_rt, alarm, None);
     let mut slow_program = {

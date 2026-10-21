@@ -11,6 +11,7 @@
 
 mod common;
 
+use takt_conformance::couple::{self, Writer};
 use takt_conformance::run::compare;
 use takt_conformance::stimulus::Stimulus;
 use takt_conformance::testhost::Run;
@@ -65,13 +66,15 @@ fn agree(
 }
 
 /// Die Lieferungen eines hoeheren Schreibers mit Tick 1 ms unter `asap` an
-/// einen Leser mit Tick 10 ms: an jeder Grenze k der Wert mit dem Stempel
-/// dieser Grenze; mit `late` an Tick 3 der Stempel der Grenze davor.
+/// einen Leser mit Tick 10 ms: je Tick der Wert mit dem faelligen Stempel
+/// (`couple::due`); mit `late` an Tick 3 der Stempel des Ticks davor.
 fn from_higher(late: bool) -> String {
+    let w = Writer { tick_ns: MS, boundary: false, higher: true };
     (0..=6)
-        .map(|k: i64| {
-            let stamp = if late && k == 3 { k * 10 * MS - MS } else { k * 10 * MS };
-            format!("t={k} in seen {} t={stamp}\n", 10 * k + 1)
+        .filter_map(|k: u64| {
+            let due = couple::due(10 * MS, k, w)?;
+            let stamp = if late && k == 3 { due - MS } else { due };
+            Some(format!("t={k} in seen {} t={stamp}\n", due / MS))
         })
         .collect()
 }
@@ -87,38 +90,39 @@ fn a_coupled_input_with_the_expected_stamp_reads_its_value() {
 }
 
 /// **Eine verspaetete Freigabe ist ein Zeitfehler, kein anderer Wert**
-/// (12.11, 7.3): Der Schreiber liefert an Tick 3 noch den Stempel der Grenze
+/// (12.11, 7.3): Der Schreiber liefert an Tick 3 noch den Stempel des Ticks
 /// davor. Der Rahmen macht die Abtastung `Stale` und meldet
 /// `Runtime(Overrun)` in diesem Tick, wie der Interpreter mit `stale` und
 /// `runtime Overrun` an derselben Stelle.
 #[test]
 fn a_late_release_is_a_timing_fault() {
     let p = program("10 ms");
-    let reference =
-        from_higher(false).replace("t=3 in seen 31 t=30000000\n", "t=3 in seen stale\nt=3 runtime Overrun\n");
+    let on_time = from_higher(false);
+    let line = on_time.lines().find(|l| l.starts_with("t=3 ")).expect("Tick 3");
+    let reference = on_time.replace(&format!("{line}\n"), "t=3 in seen stale\nt=3 runtime Overrun\n");
     let native = agree("coupled-late", &p, &coupling(MS, "asap"), 6, &from_higher(true), &reference);
     assert!(native.contains("t=3 runtime Overrun"), "{native}");
 }
 
 /// **Die Gegenrichtung** (12.11): Ein Leser mit Tick 1 ms liest einen
-/// niedrigeren Schreiber mit Tick 10 ms unter `boundary`. An seiner Grenze t
-/// sieht er die Freigabe der letzten Grenze des Schreibers vor t, also den
-/// Latch der Grenze davor: an 11 ms den von 0, an 10 ms noch keinen. Liefert
-/// der Schreiber an 10 ms schon (er haette vor dem Leser freigegeben), ist
-/// das ein Zeitfehler.
+/// niedrigeren Schreiber mit Tick 10 ms unter `boundary`. An seiner Grenze b
+/// sieht er die Freigabe der letzten Grenze des Schreibers vor b: am Ursprung
+/// keine, ab Tick 2 (b = 1 ms) die von 0, ab Tick 12 (b = 11 ms) die von
+/// 10 ms. Liefert der Schreiber an Tick 11 (b = 10 ms) schon die Freigabe von
+/// 10 ms, hat er vor dem Leser freigegeben: ein Zeitfehler.
 #[test]
 fn a_lower_writer_is_seen_one_boundary_later() {
     let p = program("1 ms");
     let hw = coupling(10 * MS, "boundary");
-    // Ticks 0 bis 21: ab 11 ms der Latch von 0, ab 21 ms der von 10 ms.
-    let due = |k: i64| -> Option<i64> { (k > 10).then(|| (k - 1) / 10 * 10 * MS - 10 * MS) };
-    let on_time: String =
-        (0..=22).filter_map(|k| due(k).map(|stamp| format!("t={k} in seen {} t={stamp}\n", stamp / MS))).collect();
+    let w = Writer { tick_ns: 10 * MS, boundary: true, higher: false };
+    let on_time: String = (0..=22)
+        .filter_map(|k| couple::due(MS, k, w).map(|stamp| format!("t={k} in seen {} t={stamp}\n", stamp / MS)))
+        .collect();
     let native = agree("coupled-lower", &p, &hw, 22, &on_time, &on_time);
     assert!(!native.contains("runtime Overrun"), "{native}");
-    // Zu frueh: an 10 ms schon die Freigabe von 10 ms (Latch von 0).
-    let early = format!("t=10 in seen 0 t=0\n{on_time}");
-    let reference = format!("t=10 in seen stale\nt=10 runtime Overrun\n{on_time}");
+    let early = on_time.replace("t=11 in seen 0 t=0\n", "t=11 in seen 10 t=10000000\n");
+    let reference = on_time.replace("t=11 in seen 0 t=0\n", "t=11 in seen stale\nt=11 runtime Overrun\n");
+    assert_ne!(early, on_time, "Tick 11 erwartet die Freigabe von 0");
     let native = agree("coupled-early", &p, &hw, 22, &early, &reference);
-    assert!(native.contains("t=10 runtime Overrun"), "{native}");
+    assert!(native.contains("t=11 runtime Overrun"), "{native}");
 }

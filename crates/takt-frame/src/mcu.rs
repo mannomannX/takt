@@ -2192,23 +2192,28 @@ fn couplings(p: &Program, layout: &Layout, hw: Option<&takt_mir::hardware::Hardw
         .collect()
 }
 
-/// Die Pruefung eines gekoppelten Eingangs (12.11): Erwartet ist der Stempel
-/// der Grenze, deren Wert die Zeitachse festlegt — beim hoeheren Schreiber
-/// seine letzte Grenze bis `now`, beim niedrigeren seine letzte davor, unter
-/// `boundary` je eine Grenze frueher, weil die Freigabe den Latch der Grenze
-/// davor bringt. Gibt es noch keinen, ist keine Lieferung faellig. Passt die
+/// Die Pruefung eines gekoppelten Eingangs (12.11). Vor dem Ursprung rechnet
+/// jedes Programm in der Rangfolge Tick 0 bis zum Commit; danach beginnt
+/// Tick k an der Grenze b = (k − 1)·T, und sein `now` ist k·T. Der Stempel
+/// ist das `now` des Ticks, dessen Wert er traegt. In Tick 0 erwartet der
+/// Leser nur den Commit von Tick 0 eines hoeheren Schreibers unter `asap`,
+/// danach vom hoeheren den Tick, den dieser an seiner letzten Grenze ≤ b
+/// begann (`asap`: Stempel diese Grenze plus `T_W`, `boundary`: die Freigabe
+/// an ihr, Stempel die Grenze), vom niedrigeren die Freigabe an dessen
+/// letzter Grenze vor b (`takt_conformance::couple::due`). Passt die
 /// Lieferung nicht, ist die Abtastung `Stale` ohne Wert und der Tick hat
 /// einen Zeitfehler.
 fn coupling_check(s: &mut String, p: &Program, c: &Coupling) {
-    let tw = c.tick_ns;
-    let lag = if c.boundary { tw } else { 0 };
-    let last = if c.higher { format!("now / {tw}LL * {tw}LL") } else { format!("(now - 1) / {tw}LL * {tw}LL") };
+    let (tw, tr) = (c.tick_ns, p.config.tick);
+    let (init, due) = match (c.higher, c.boundary) {
+        (true, false) => ("0LL", format!("b / {tw}LL * {tw}LL + {tw}LL")),
+        (true, true) => ("-1LL", format!("b / {tw}LL * {tw}LL")),
+        // Ein niedrigerer Schreiber unter `asap` baut nicht (Pruefung 60).
+        (false, _) => ("-1LL", format!("b == 0 ? -1LL : (b - 1) / {tw}LL * {tw}LL")),
+    };
     let _ = writeln!(s, "        /* 12.11: gekoppelt mit `{}` (Tick {tw} ns). */", c.from);
-    let _ = writeln!(
-        s,
-        "        int64_t due = {} - {lag}LL;",
-        if c.higher { last } else { format!("(now == 0 ? -{tw}LL : {last})") }
-    );
+    let _ = writeln!(s, "        int64_t b = now - {tr}LL;");
+    let _ = writeln!(s, "        int64_t due = now == 0 ? {init} : ({due});");
     let _ = writeln!(s, "        if (due >= 0 ? (got == 0 || t != due) : got != 0) {{");
     let _ = writeln!(s, "            got = 2; q = 2; r = 0; age = 0; t = now;");
     if p.config.overrun == takt_mir::program::OverrunPolicy::Fault {

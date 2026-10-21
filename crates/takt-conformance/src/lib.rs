@@ -47,6 +47,7 @@ pub mod bench;
 pub mod board;
 pub mod bringup;
 pub mod cases;
+pub mod couple;
 mod deliveries;
 pub mod esp_idf;
 pub mod generated;

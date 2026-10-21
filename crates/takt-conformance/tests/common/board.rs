@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub use takt_conformance::board::Drift;
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
 use takt_conformance::compare;
+use takt_conformance::couple;
 use takt_conformance::port;
 use takt_mir::program::Program;
 pub use takt_rt_core::protection::Case;
@@ -1537,7 +1538,7 @@ pub fn zephyr_access_in_the_run_faults(name: &str, run: Result<String, String>) 
 pub const PAIR_TICKS: u64 = 2000;
 
 /// Eine Millisekunde, der Tick von `fast`; der von `slow` ist zehnmal so lang.
-const MS: u64 = 1_000_000;
+const MS: i64 = 1_000_000;
 
 /// Die Zeilen eines Programms eines Paars ohne sein Praefix, jede mit ihrem
 /// Zeilenende (12.11: ein Leser stellt jeder Zeile das Praefix voran).
@@ -1570,49 +1571,18 @@ fn whole(name: &str, text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Der Wert des Ausgangs `output` je Tick, an dem er sich aenderte.
-fn changes(trace: &str, output: &str) -> BTreeMap<u64, String> {
-    let marker = format!(" out {output} ");
-    trace
-        .lines()
-        .filter_map(|l| {
-            let (tick, value) = l.trim_end().strip_prefix("t=")?.split_once(&marker)?;
-            Some((tick.parse().ok()?, value.to_string()))
-        })
-        .collect()
-}
-
-/// Der Wert eines Ausgangs zu Tick `k`: der seiner letzten Aenderung bis `k`.
-fn at(values: &BTreeMap<u64, String>, k: u64) -> Option<&str> {
-    values.range(..=k).next_back().map(|(_, v)| v.as_str())
-}
-
-/// Der Stimulus von `slow` aus dem Trace von `fast` (12.11): An seiner Grenze
-/// j, der gemeinsamen Grenze 10·j, sieht `slow` den Commit von `fast` an
-/// dieser Grenze (`asap`), mit ihrer Zeit als Stempel.
+/// Der Stimulus von `slow` aus dem Trace von `fast` (12.11,
+/// `takt_conformance::couple`): `fast` ist hoeher und gibt `asap` frei.
 fn slow_stimulus(fast: &str, ticks: u64) -> String {
-    let counts = changes(fast, "count");
-    (0..=ticks)
-        .filter_map(|j| {
-            let k = j.checked_mul(10)?;
-            Some(format!("t={j} in seen {} t={}\n", at(&counts, k)?, k.checked_mul(MS)?))
-        })
-        .collect()
+    let w = couple::Writer { tick_ns: MS, boundary: false, higher: true };
+    couple::stimulus(fast, "count", "seen", 10 * MS, w, ticks)
 }
 
-/// Der Stimulus von `fast` aus dem Trace von `slow` (12.11): An seiner Grenze
-/// k (in ms) sieht `fast` die Freigabe von `slow` an dessen letzter Grenze vor
-/// k, also unter `boundary` den Latch des Ticks davor, mit dessen Grenze als
-/// Stempel; vor 11 ms keinen.
+/// Der Stimulus von `fast` aus dem Trace von `slow`: `slow` ist niedriger
+/// und gibt unter `boundary` frei.
 fn fast_stimulus(slow: &str, ticks: u64) -> String {
-    let lasts = changes(slow, "last");
-    (11..=ticks)
-        .filter_map(|k| {
-            let released = (k - 1) / 10;
-            let latch = released.checked_sub(1)?;
-            Some(format!("t={k} in back {} t={}\n", at(&lasts, latch)?, latch.checked_mul(10 * MS)?))
-        })
-        .collect()
+    let w = couple::Writer { tick_ns: 10 * MS, boundary: true, higher: false };
+    couple::stimulus(slow, "last", "back", MS, w, ticks)
 }
 
 /// Der Trace des Interpreters fuer `p` ueber `ticks` Ticks mit `stimulus`.
