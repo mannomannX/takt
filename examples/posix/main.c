@@ -11,9 +11,11 @@
  * fremde Last. Es faehrt so viele Ticks, wie das erste Argument sagt (ohne:
  * 2000), und schreibt den Lauf auf stdout; `takt port-test --judge` urteilt.
  * Das zweite Argument nennt die Prioritaet des Schrittfadens unter
- * SCHED_FIFO (ohne: 0, die des Systems). Zeit sagt der Wirt nur unter
- * PREEMPT_RT mit ihr und gesperrtem Speicher zu (12.2); sonst nennt der Kopf
- * den Grund, und das Urteil misst die Zeit, ohne sie zu bewerten (FB-860).
+ * SCHED_FIFO (ohne: 0, die des Systems). Den Speicher sperrt der Wirt vor
+ * dem Lauf (`mlockall`, 12.2): Ohne das hatten auf dem gehosteten Runner
+ * 9 von 60 Laeufen verspaetete Ticks, mit ihm keiner (FB-860). Zeit sagt er
+ * nur unter PREEMPT_RT mit SCHED_FIFO und gesperrtem Speicher zu; sonst nennt
+ * der Kopf den Grund, und das Urteil misst die Zeit, ohne sie zu bewerten.
  *
  *     clang -std=c11 -O2 -pthread -I DIR -I ports/rtos -I ports/posix main.c \
  *         ports/rtos/takt_rtos.c ports/posix/takt_os.c DIR/libport_test.a libtakt_sdk.a -lm
@@ -126,9 +128,10 @@ static int ticks_of(const char *text, uint64_t *ticks) {
 }
 
 /* Die Zeitgarantie des Wirts (12.2, 13.8; FB-860): PREEMPT_RT, ein
- * Schrittfaden in SCHED_FIFO und gesperrter Speicher. NULL, wenn sie gilt;
- * sonst der Grund fuer die Kopfzeile `Zeit: ohne Garantie: <Grund>`. */
-static const char *untimed(int step_priority) {
+ * Schrittfaden in SCHED_FIFO und gesperrter Speicher (`locked`, die Rueckgabe
+ * von `mlockall`). NULL, wenn sie gilt; sonst der Grund fuer die Kopfzeile
+ * `Zeit: ohne Garantie: <Grund>`. */
+static const char *untimed(int step_priority, int locked) {
     const char *why;
     char flag = '0';
     FILE *f = fopen("/sys/kernel/realtime", "r");
@@ -142,7 +145,7 @@ static const char *untimed(int step_priority) {
         why = "kein PREEMPT_RT (/sys/kernel/realtime)";
     } else if (step_priority <= 0) {
         why = "der Schrittfaden rechnet ohne SCHED_FIFO";
-    } else if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+    } else if (locked != 0) {
         why = "mlockall scheiterte";
     } else {
         why = NULL;
@@ -208,7 +211,8 @@ static int run(uint64_t ticks, int step_priority) {
     if (status != TAKT_OK) {
         (void)fprintf(stderr, "takt_line_init: %d\n", (int)status);
     } else {
-        const char *why = untimed(step_priority);
+        const int locked = mlockall(MCL_CURRENT | MCL_FUTURE);
+        const char *why = untimed(step_priority, locked);
         takt_board_trace("takt auf posix\n" TAKT_RTOS_PROTECTION "\n");
         if (why != NULL) {
             takt_board_trace("  Zeit: ohne Garantie: ");
