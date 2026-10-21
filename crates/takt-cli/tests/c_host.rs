@@ -102,6 +102,34 @@ fn ran(exe: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
+/// **Ein Wirt nach altem SDK scheitert beim Uebersetzen** (12.11,
+/// SDK-Fassung 4): `takt_sdk.h` vergiftet die Namen vor der Senke, und clang
+/// nennt die Stelle, statt eine Funktion ohne Deklaration still zu rufen.
+#[test]
+fn the_names_before_the_sink_do_not_compile() {
+    let Some(clang) =
+        takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren")
+    else {
+        return;
+    };
+    let dir = scratch("takt-c-old-sdk");
+    let include = root().join("crates/takt-embed-c/include");
+    for (name, call) in
+        [("takt_line_init", "takt_line_init(0, 0, 0)"), ("takt_board_trace_i64", "takt_board_trace_i64(1)")]
+    {
+        let src = dir.join(format!("{name}.c"));
+        std::fs::write(&src, format!("#include \"takt_sdk.h\"\nvoid host(void) {{ {call}; }}\n")).expect("C schreiben");
+        let out = Command::new(&clang)
+            .args(["-std=c11", "-fsyntax-only", "-I"])
+            .arg(&include)
+            .arg(&src)
+            .output()
+            .expect("clang startet");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success() && err.contains("poisoned") && err.contains(name), "{name}:\n{err}");
+    }
+}
+
 /// **Ein C-Wirt rechnet wie der Interpreter** (12.11, 13.1): `main.c` aus
 /// `examples/c-host`, mit clang aus der Lieferform und dem SDK-Archiv
 /// gebunden, faehrt das Ventil in logischer Zeit ueber `takt_core_service`.
@@ -133,15 +161,16 @@ uint8_t persist_out_o_first(void *user, int64_t now, int64_t value) { (void)user
 uint8_t persist_alive_o(void *user, int64_t now) { (void)user; (void)now; return 1; }
 "#;
 
-/// Was jeder C-Wirt dieser Tests stellt, der ein Journal hat: die Leitung
-/// nach stdout, einen Watchdog, dessen Meldung nirgendwohin geht (12.11),
-/// und ein Flash im Speicher mit zwei Slots, jeder Vorgang sofort fertig
-/// (5.9).
+/// Was jeder C-Wirt dieser Tests stellt, der ein Journal hat: die Senke mit
+/// ihrer Leitung nach stdout, einen Watchdog, dessen Meldung nirgendwohin
+/// geht (12.11), und ein Flash im Speicher mit zwei Slots, jeder Vorgang
+/// sofort fertig (5.9).
 const RAM_FLASH: &str = r#"
 static uint8_t put(void *ctx, uint8_t byte) { return fputc(byte, (FILE *)ctx) != EOF; }
 static void kick(void *ctx) { (void)ctx; }
 static const struct takt_watchdog watchdog = {NULL, kick};
 static uint8_t ring[4096];
+static takt_sink sink;
 
 #define SLOT 4096u
 static uint8_t slots[2][SLOT];
@@ -191,8 +220,8 @@ static struct persist_arena arena;
 static takt_core core;
 
 static int run(long long ticks) {
-    int32_t status = takt_core_init_journaled(&core, &persist_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm,
-                                              current, stored, PERSIST_PERSIST_BOUND);
+    int32_t status = takt_core_init_journaled(&core, &persist_ops, &arena, NULL, &sink, TAKT_PROFILE_BAREMETAL,
+                                              &watchdog, &nvm, current, stored, PERSIST_PERSIST_BOUND);
     if (status != TAKT_OK) {
         fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
         return 2;
@@ -213,7 +242,7 @@ static int run(long long ticks) {
 int main(int argc, char **argv) {
     long long ticks = argc > 1 ? strtoll(argv[1], NULL, 10) : 60;
     const struct takt_line line = {stdout, put, NULL};
-    if (takt_line_init(&line, ring, sizeof ring) != TAKT_OK) {
+    if (takt_sink_init(&sink, &line, ring, sizeof ring) != TAKT_OK) {
         return 2;
     }
     memset(slots, 0xff, sizeof slots);
@@ -274,9 +303,9 @@ int main(int argc, char **argv) {
     long long ticks = argc > 1 ? strtoll(argv[1], NULL, 10) : 400;
     const struct takt_line line = {stdout, put, NULL};
     memset(slots, 0xff, sizeof slots);
-    if (takt_line_init(&line, ring, sizeof ring) != TAKT_OK ||
-        takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm, current, stored,
-                                 PORT_TEST_PERSIST_BOUND) != TAKT_OK) {
+    if (takt_sink_init(&sink, &line, ring, sizeof ring) != TAKT_OK ||
+        takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, &sink, TAKT_PROFILE_BAREMETAL, &watchdog, &nvm,
+                                 current, stored, PORT_TEST_PERSIST_BOUND) != TAKT_OK) {
         return 2;
     }
     int64_t now = 0;

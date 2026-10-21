@@ -25,7 +25,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use takt_rt_core::{Clock, Program, Runtime, Store, Tunables, Watchdog};
 
-use crate::run::{Stats, Trace, stats};
+use crate::run::{Lead, Stats, Trace, stats};
 use crate::telemetry::{Port, Telemetry};
 
 /// Was die Interruptform vom Board braucht.
@@ -89,7 +89,7 @@ impl<A: Alarm> Form<A> {
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P>>,
+        F: Lead<P>,
         J: Store,
         P: Port + 'static,
     {
@@ -116,7 +116,7 @@ impl<A: Alarm> Form<A> {
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P>>,
+        F: Lead<P>,
         J: Store,
         P: Port + 'static,
     {
@@ -150,7 +150,7 @@ impl<A: Alarm> Form<A> {
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P>>,
+        F: Lead<P>,
         J: Store,
         P: Port + 'static,
     {
@@ -176,7 +176,7 @@ impl<A: Alarm> Form<A> {
         G: Program,
         C: Clock,
         W: Watchdog,
-        F: FnMut() -> Option<&'static mut Telemetry<P>>,
+        F: Lead<P>,
         J: Store,
         P: Port + 'static,
     {

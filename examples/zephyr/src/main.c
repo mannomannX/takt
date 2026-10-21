@@ -26,6 +26,11 @@
 /* So viele Ticks faehrt der Port: `takt_conformance::port::TICKS`. */
 #define TICKS 2000U
 
+/* Die Senke des Programms (12.5, 12.11): ein Ring vor der Leitung des
+ * Wirts, gebunden mit `takt_sink_init`; in ihr stehen Kopf, Trace und
+ * Bilanz. */
+static takt_sink sink;
+
 /* Der Watchdog des Wirts (12.11): Dieses Beispiel startet keinen. Ein Wirt
  * mit einem fuettert hier den Task-Watchdog (`task_wdt_feed`) oder den der
  * Hardware (`wdt_feed`). */
@@ -77,7 +82,7 @@ static void clock_line(void) {
     uint32_t hz = 0U;
     const char *source = takt_os_clock(&hz);
     (void)snprintk(line, sizeof line, "takt uhr %s %u Hz\n", source, (unsigned int)hz);
-    takt_board_trace(line);
+    takt_trace_text(&sink, line);
 }
 
 /* Faehrt den Kern `core` ueber den Port, waehrend `main` die fremde Last
@@ -120,7 +125,7 @@ static void drive(takt_core *core) {
             measured = &stacks;
         }
     } else {
-        takt_board_trace("takt port: kein Start\n");
+        takt_trace_text(&sink, "takt port: kein Start\n");
     }
     takt_core_report(core, measured, &foreign);
 }
@@ -133,13 +138,13 @@ int main(void) {
     static struct takt_nvm nvm;
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
-    if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
-        takt_board_trace("takt auf zephyr\n" TAKT_RTOS_PROTECTION "\n");
-        takt_board_trace(protection());
+    if ((line_open(&line) == 0) && (takt_sink_init(&sink, &line, ring, sizeof ring) == TAKT_OK)) {
+        takt_trace_text(&sink, "takt auf zephyr\n" TAKT_RTOS_PROTECTION "\n");
+        takt_trace_text(&sink, protection());
         clock_line();
-        takt_line_mark();
+        takt_sink_mark(&sink);
         if ((journal_open(&nvm) == 0) &&
-            (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
+            (takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog, &nvm,
                                       current, stored, PORT_TEST_PERSIST_BOUND) == TAKT_OK)) {
             partition_guard(&core);
             drive(&core);

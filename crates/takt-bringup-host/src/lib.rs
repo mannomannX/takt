@@ -41,7 +41,7 @@
         reason = "Stufe 1 des Regelwerks (plan/cert.md Abschnitt 6)"
     )
 )]
-#![allow(unsafe_code, reason = "Telemetrie fuer den C-Rahmen; 9.5 fuehrt ihn in der TCB")]
+#![allow(unsafe_code, reason = "die Leitung als Static fuer die Senke des C-Rahmens; 9.5 fuehrt ihn in der TCB")]
 #![cfg_attr(
     not(test),
     deny(
@@ -60,9 +60,9 @@ use takt_rt_baremetal::{Cadence, DRAIN_ROUNDS, JournalStats, LogicalClock, NoWat
 use takt_rt_core::{FakeNvm, Fits, Journal, Memory, Policy, Profile, Runtime, Store, Unloaded};
 
 /// Die Standardausgabe als Leitung: Sie nimmt jedes Byte.
-struct Console(BufWriter<Stdout>);
+struct Stdio(BufWriter<Stdout>);
 
-impl Port for Console {
+impl Port for Stdio {
     fn try_write(&mut self, b: u8) -> bool {
         self.0.write_all(&[b]).is_ok()
     }
@@ -73,76 +73,34 @@ impl Port for Console {
 }
 
 /// Der Ring vor der Konsole; verlustfrei, denn auf dem Wirt zaehlt die Zeit nicht.
-type Line = Telemetry<Console>;
+type Line = Telemetry<Stdio>;
 
-/// Die Leitung, statisch: Der Rahmen ruft `takt_board_trace` als C-Symbol,
-/// und eine Funktion ohne Empfaenger kommt an nichts heran, was in [`run`]
-/// liegt.
+/// Die Leitung, statisch: Die Senke des Programms ([`Console`]) hat keinen
+/// Empfaenger und kommt nur so an das, was [`run`] anlegt.
 static mut LINE: Option<Line> = None;
 
 fn line() -> Option<&'static mut Line> {
     let slot = &raw mut LINE;
-    // SAFETY: ein Faden; der Rahmen ruft die Leitung nur aus der Schleife.
+    // SAFETY: ein Faden; der Rahmen schreibt nur aus der Schleife.
     unsafe { slot.as_mut() }.and_then(Option::as_mut)
 }
 
-/// Vom Rahmen gerufen: eine Zeile Trace, nullterminiert.
-///
-/// Ganz, ohne Schranke: Eine still nach 256 Byte gekuerzte Zeile waere ein
-/// Trace, der vom Interpreter abweicht, ohne es zu sagen (RT-038).
-///
-/// # Safety
-///
-/// `text` ist null oder ein nullterminierter Text; der Rahmen uebergibt nur
-/// Literale und Namen aus seinen Tabellen.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn takt_board_trace(text: *const u8) {
-    let Some(line) = line() else { return };
-    if text.is_null() {
-        return;
-    }
-    // SAFETY: siehe oben.
-    let text = unsafe { core::ffi::CStr::from_ptr(text.cast()) };
-    trace_text(text, &mut |b| line.write_byte(b));
-}
+/// Die Konsole als Senke des Programms (12.11): Was der Rahmen ueber die
+/// Haken schreibt, geht ganz und in dieser Reihenfolge auf die Leitung. Die
+/// Huelle bekommt sie als `&Console`.
+#[derive(Debug)]
+pub struct Console;
 
-/// Jedes Byte eines Texts an `put`.
-fn trace_text(text: &core::ffi::CStr, put: &mut dyn FnMut(u8)) {
-    for &b in text.to_bytes() {
-        put(b);
+impl takt_embed::Line for Console {
+    fn write(&self, bytes: &[u8]) {
+        let Some(line) = line() else { return };
+        for &b in bytes {
+            line.write_byte(b);
+        }
     }
 }
 
-/// Vom Rahmen gerufen: eine Zahl im Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_i64(value: i64) {
-    let Some(line) = line() else { return };
-    line.write_i64(value);
-    line.write_byte(b' ');
-}
-
-/// Vom Rahmen gerufen: eine Zahl ohne Vorzeichen im Trace.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_u64(value: u64) {
-    let Some(line) = line() else { return };
-    line.write_u64(value);
-    line.write_byte(b' ');
-}
-
-/// Vom Rahmen gerufen: eine Fliesskommazahl als kuerzeste eindeutige Ziffernfolge (4.2).
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_f64(value: f64) {
-    use core::fmt::Write as _;
-    let Some(line) = line() else { return };
-    let _ = write!(line, "{value:?} ");
-}
-
-/// Vom Rahmen gerufen: ein Byte eines Ausgabestroms, wie der Interpreter es schreibt.
-#[unsafe(no_mangle)]
-pub extern "C" fn takt_board_trace_hex8(value: u8) {
-    let Some(line) = line() else { return };
-    line.write_hex8(value);
-}
+takt_embed::hooks!(Console);
 
 /// Das Geraet hinter `input … @ hw("sys/previous_run")` (12.7): Ein Prozess
 /// beginnt wie ein frisch geschriebenes Board ohne vorigen Lauf (`NONE`).
@@ -204,7 +162,7 @@ where
     };
     let ring = vec![0; 4096].leak();
     // SAFETY: vor dem ersten Aufruf des Rahmens, in einem Faden.
-    unsafe { LINE = Some(Telemetry::new(Console(BufWriter::new(std::io::stdout())), ring).lossless()) };
+    unsafe { LINE = Some(Telemetry::new(Stdio(BufWriter::new(std::io::stdout())), ring).lossless()) };
     let Some(head) = line() else { return ExitCode::FAILURE };
     head.write("takt auf dem wirt");
     head.newline();
@@ -240,17 +198,4 @@ where
         line.drain(DRAIN_ROUNDS);
     }
     ExitCode::SUCCESS
-}
-
-#[cfg(test)]
-mod tests {
-    /// Eine Zeile ueber 256 Byte kommt ganz an (RT-038).
-    #[test]
-    fn a_long_trace_line_is_not_cut() {
-        let long: Vec<u8> = (0..300u32).map(|i| b'a' + (i % 26) as u8).chain([0]).collect();
-        let text = core::ffi::CStr::from_bytes_with_nul(&long).expect("nullterminiert");
-        let mut got = Vec::new();
-        super::trace_text(text, &mut |b| got.push(b));
-        assert_eq!(got, long[..300]);
-    }
 }

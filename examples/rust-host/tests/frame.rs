@@ -20,7 +20,11 @@ fn agrees(name: &str, trace: &str, ticks: u64) {
 #[test]
 fn a_send_to_a_full_drop_oldest_stream_evicts_the_oldest() {
     let mut arena = drop_oldest::Arena::new();
-    let trace = takt_embed::testing::run(drop_oldest::Program::init(&mut arena), drop_oldest::TICK_NS, 40);
+    let trace = takt_embed::testing::run(
+        drop_oldest::Program::init(&mut arena, takt_embed::testing::sink()),
+        drop_oldest::TICK_NS,
+        40,
+    );
     assert!(!trace.contains(" fault "), "der Sender faultet nicht:\n{trace}");
     assert!(trace.contains("stream q dropped=1 "), "verdraengt:\n{trace}");
     agrees("drop_oldest", &trace, 40);
@@ -32,7 +36,11 @@ fn a_send_to_a_full_drop_oldest_stream_evicts_the_oldest() {
 #[test]
 fn a_fault_exit_of_the_owner_skips_the_exit_blocks_of_its_instance() {
     let mut arena = exit_fault::Arena::new();
-    let trace = takt_embed::testing::run(exit_fault::Program::init(&mut arena), exit_fault::TICK_NS, 16);
+    let trace = takt_embed::testing::run(
+        exit_fault::Program::init(&mut arena, takt_embed::testing::sink()),
+        exit_fault::TICK_NS,
+        16,
+    );
     let logs: Vec<&str> = trace.lines().filter(|l| l.contains(" log ")).collect();
     assert_eq!(logs.len(), 1, "nur der regulaere Austritt:\n{trace}");
     agrees("exit_fault", &trace, 16);
@@ -64,8 +72,11 @@ fn an_overflow_in_an_inactive_tick_faults_at_the_next_activation() {
     let mut script = Script { rx, resume_at: None, tick_ns: overflow_late::TICK_NS };
     let stim = stimulus(&script);
     let mut arena = overflow_late::Arena::new();
-    let trace =
-        takt_embed::testing::run(overflow_late::Program::init(&mut arena, &mut script), overflow_late::TICK_NS, 20);
+    let trace = takt_embed::testing::run(
+        overflow_late::Program::init(&mut arena, &mut script, takt_embed::testing::sink()),
+        overflow_late::TICK_NS,
+        20,
+    );
     assert!(trace.contains(" fault slow StreamOverflow"), "der Ueberlauf faultet:\n{trace}");
     agrees_with("overflow_late", &stim, &trace, 20);
 }
@@ -79,8 +90,11 @@ fn an_overflow_while_faulted_waits_until_the_machine_leaves_faulted() {
         Script { rx: vec![(6, 6), (7, 7), (8, 8), (9, 9)], resume_at: Some(12), tick_ns: faulted_pending::TICK_NS };
     let stim = stimulus(&script);
     let mut arena = faulted_pending::Arena::new();
-    let trace =
-        takt_embed::testing::run(faulted_pending::Program::init(&mut arena, &mut script), faulted_pending::TICK_NS, 20);
+    let trace = takt_embed::testing::run(
+        faulted_pending::Program::init(&mut arena, &mut script, takt_embed::testing::sink()),
+        faulted_pending::TICK_NS,
+        20,
+    );
     assert!(trace.contains(" fault reader StreamOverflow"), "nach FAULTED faultet der Ueberlauf:\n{trace}");
     agrees_with("faulted_pending", &stim, &trace, 20);
 }
@@ -97,10 +111,16 @@ fn two_arenas_stepped_alternately_each_match_their_own_interpreter_run() {
     let mut b_script = Script { rx: vec![(1, 41), (2, 42), (4, 44)], resume_at: Some(5), tick_ns };
     let (a_stim, b_stim) = (stimulus(&a_script), stimulus(&b_script));
     let (mut a_arena, mut b_arena) = (faulted_pending::Arena::new(), faulted_pending::Arena::new());
-    let mut a =
-        takt_embed::testing::Stepper::new(faulted_pending::Program::init(&mut a_arena, &mut a_script), tick_ns, 20);
-    let mut b =
-        takt_embed::testing::Stepper::new(faulted_pending::Program::init(&mut b_arena, &mut b_script), tick_ns, 20);
+    let mut a = takt_embed::testing::Stepper::new(
+        faulted_pending::Program::init(&mut a_arena, &mut a_script, takt_embed::testing::sink()),
+        tick_ns,
+        20,
+    );
+    let mut b = takt_embed::testing::Stepper::new(
+        faulted_pending::Program::init(&mut b_arena, &mut b_script, takt_embed::testing::sink()),
+        tick_ns,
+        20,
+    );
     let (mut a_trace, mut b_trace) = (String::new(), String::new());
     loop {
         let (x, y) = (a.step(), b.step());
@@ -122,7 +142,11 @@ fn two_arenas_stepped_alternately_each_match_their_own_interpreter_run() {
 fn an_overlong_line_arrives_truncated_like_in_the_interpreter() {
     let mut line = rust_host::Line { at: 1, text: b"0123456789ABCDEFXXXX", tick_ns: long_line::TICK_NS };
     let mut arena = long_line::Arena::new();
-    let trace = takt_embed::testing::run(long_line::Program::init(&mut arena, &mut line), long_line::TICK_NS, 4);
+    let trace = takt_embed::testing::run(
+        long_line::Program::init(&mut arena, &mut line, takt_embed::testing::sink()),
+        long_line::TICK_NS,
+        4,
+    );
     assert!(trace.contains("out len 16"), "auf sechzehn gekuerzt:\n{trace}");
     assert!(trace.contains("t=1 out cut 1"), "`.truncated` meldet das Kuerzen (KON2-028):\n{trace}");
     agrees_with("long_line", "t=1 in rx \"0123456789ABCDEFXXXX\"\n", &trace, 4);
@@ -138,7 +162,11 @@ fn the_host_provides_the_sys_inputs_like_a_stimulus() {
     let wall_at_zero = 4_999_000_000;
     let mut host = Host { previous_run: 1, wall_at_zero, pressed_at: Some(3), tick_ns };
     let mut arena = sys_inputs::Arena::new();
-    let trace = takt_embed::testing::run(sys_inputs::Program::init(&mut arena, &mut host), tick_ns, 6);
+    let trace = takt_embed::testing::run(
+        sys_inputs::Program::init(&mut arena, &mut host, takt_embed::testing::sink()),
+        tick_ns,
+        6,
+    );
     // Der Wirt meldet beide je Tick frisch; `max_age` ist zwei Perioden.
     let mut stim = String::new();
     for k in 0..6 {
@@ -167,7 +195,11 @@ fn nan_and_infinity_in_a_stream_element_are_malformed() {
     ];
     let mut bits = Bits { elements, tick_ns };
     let mut arena = float_elements::Arena::new();
-    let trace = takt_embed::testing::run(float_elements::Program::init(&mut arena, &mut bits), tick_ns, 8);
+    let trace = takt_embed::testing::run(
+        float_elements::Program::init(&mut arena, &mut bits, takt_embed::testing::sink()),
+        tick_ns,
+        8,
+    );
     assert!(trace.contains("stream rx dropped=0 overflowed=0 malformed=3"), "drei verworfen:\n{trace}");
     let counts = trace.lines().filter(|l| l.contains(" out count ") && !l.starts_with("t=0 ")).count();
     assert_eq!(counts, 2, "zwei angekommen:\n{trace}");
@@ -184,7 +216,7 @@ fn nan_and_infinity_in_a_stream_element_are_malformed() {
 #[test]
 fn the_hull_runs_jobs_sleep_and_the_end_of_a_run_like_the_interpreter() {
     let mut arena = lifecycle::Arena::new();
-    let mut program = lifecycle::Program::new(&mut arena);
+    let mut program = lifecycle::Program::new(&mut arena, takt_embed::testing::sink());
     let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
     let journal = lifecycle_journal(&mut program, &mut current, &mut stored);
     let trace = takt_embed::testing::run_journaled(program, journal, lifecycle::TICK_NS, 60);
@@ -215,14 +247,14 @@ fn lifecycle_journal<'a>(
 fn the_hull_restores_persist_before_tick_zero() {
     use takt_embed::rt::Program as _;
     let mut first = lifecycle::Arena::new();
-    let mut started = lifecycle::Program::new(&mut first);
+    let mut started = lifecycle::Program::new(&mut first, takt_embed::testing::sink());
     started.ensure_init();
     let mut payload = [0u8; 64];
     let n = started.persist_snapshot(&mut payload);
     assert!(n > 0, "der Start schreibt `starts`");
 
     let mut second = lifecycle::Arena::new();
-    let mut restored = lifecycle::Program::new(&mut second);
+    let mut restored = lifecycle::Program::new(&mut second, takt_embed::testing::sink());
     assert_eq!(restored.persist_restore(&payload[..n]), 1, "ein Eintrag uebernommen");
     let (mut current, mut stored) = ([0u8; lifecycle::PERSIST_BOUND], [0u8; lifecycle::PERSIST_BOUND]);
     let journal = lifecycle_journal(&mut restored, &mut current, &mut stored);
@@ -238,7 +270,11 @@ fn the_hull_restores_persist_before_tick_zero() {
 #[test]
 fn sleep_over_machines_with_their_own_period_is_invisible() {
     let mut arena = idle_multirate::Arena::new();
-    let trace = takt_embed::testing::run(idle_multirate::Program::init(&mut arena), idle_multirate::TICK_NS, 150);
+    let trace = takt_embed::testing::run(
+        idle_multirate::Program::init(&mut arena, takt_embed::testing::sink()),
+        idle_multirate::TICK_NS,
+        150,
+    );
     agrees("idle_multirate", &trace, 150);
 }
 
@@ -281,7 +317,12 @@ fn tunables_reach_the_program_through_the_loop() {
         (9, 0, 3i32.to_le_bytes().to_vec()),
     ]);
     let mut arena = tuning::Arena::new();
-    let trace = takt_embed::testing::run_tuned(tuning::Program::init(&mut arena), tuning::TICK_NS, 12, &mut sets);
+    let trace = takt_embed::testing::run_tuned(
+        tuning::Program::init(&mut arena, takt_embed::testing::sink()),
+        tuning::TICK_NS,
+        12,
+        &mut sets,
+    );
     for line in ["t=3 out level 14", "t=6 out level 200", "t=8 out level 0"] {
         assert!(trace.contains(line), "{line}:\n{trace}");
     }
@@ -323,7 +364,11 @@ fn a_sample_ages_through_the_slept_ticks() {
     let tick_ns = aging::TICK_NS;
     let mut device = Once { at: 0, value: 5, tick_ns };
     let mut arena = aging::Arena::new();
-    let trace = takt_embed::testing::run(aging::Program::init(&mut arena, &mut device), tick_ns, 14);
+    let trace = takt_embed::testing::run(
+        aging::Program::init(&mut arena, &mut device, takt_embed::testing::sink()),
+        tick_ns,
+        14,
+    );
     assert!(trace.contains("t=10 out age 100 ms"), "das Alter nach dem Schlaf:\n{trace}");
     agrees_with("aging", "t=0 in x 5\n", &trace, 14);
 }
@@ -336,7 +381,11 @@ fn a_sample_ages_through_the_slept_ticks() {
 #[test]
 fn the_byte_ring_wraps_around_like_in_the_interpreter() {
     let mut arena = byte_ring::Arena::new();
-    let trace = takt_embed::testing::run(byte_ring::Program::init(&mut arena), byte_ring::TICK_NS, 120);
+    let trace = takt_embed::testing::run(
+        byte_ring::Program::init(&mut arena, takt_embed::testing::sink()),
+        byte_ring::TICK_NS,
+        120,
+    );
     assert!(trace.contains(" fault feed_a StreamOverflow"), "tight laeuft ueber:\n{trace}");
     assert!(trace.contains("stream rolling dropped="), "rolling verdraengt:\n{trace}");
     agrees("byte_ring", &trace, 120);
@@ -352,7 +401,11 @@ fn a_driver_that_reports_more_room_than_the_stream_has_breaks_the_contract() {
     let tick_ns = overfull_tx::TICK_NS;
     let mut device = Overfull { at: 5, capacity: 64, tick_ns };
     let mut arena = overfull_tx::Arena::new();
-    let trace = takt_embed::testing::run(overfull_tx::Program::init(&mut arena, &mut device), tick_ns, 10);
+    let trace = takt_embed::testing::run(
+        overfull_tx::Program::init(&mut arena, &mut device, takt_embed::testing::sink()),
+        tick_ns,
+        10,
+    );
     let driver: Vec<&str> = trace.lines().filter(|l| l.contains("runtime Driver")).collect();
     assert_eq!(driver, ["t=6 runtime Driver tx"], "{trace}");
     assert!(trace.contains("t=6 out up 0"), "der Besitzer geht auf DOWN:\n{trace}");

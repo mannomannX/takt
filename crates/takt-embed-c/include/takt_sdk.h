@@ -9,16 +9,21 @@
  * ruft ein Kontext niedrigerer Prioritaet `takt_core_job_work` und danach
  * der Schrittkontext `takt_core_service` erneut (12.11).
  *
- * Den Trace schreibt der Rahmen ueber `takt_board_trace*` (12.5); sie
- * stellt das Archiv, mit einem Ring vor der Leitung, die der Wirt mit
- * `takt_line_init` bindet. Ueber dieselbe Leitung gehen je Tick die
- * Zeitzeile, die Marke (`takt_line_mark`) und am Ende die Bilanz
- * (`takt_core_report`), die `takt port-test --judge` liest.
+ * Den Trace schreibt der Rahmen ueber die Haken `takt_trace_*` (12.5), jeden
+ * Aufruf mit der Senke, die sein Kern bei `takt_core_init` bekam; die Haken
+ * stellt das Archiv. Eine Senke (`takt_sink`) ist ein Ring vor einer Leitung
+ * des Wirts, gebunden mit `takt_sink_init`. In ihr stehen je Tick die
+ * Zeitzeile, die Marke (`takt_sink_mark`) und am Ende die Bilanz
+ * (`takt_core_report`), die `takt port-test --judge` liest; davor darf der
+ * Wirt einen Kopf schreiben (`takt_trace_text`). Die Haken deklariert der
+ * Kopf des Programms (`P.h`), eine Deklaration fuer alle Programme; ein
+ * Haken haengt nichts an, Leerzeichen und Zeilenende schreibt, wer ruft.
  *
  * Der Kern wartet nie und nimmt keinen Heap; `takt_core_service` laeuft nie
- * zweimal zugleich. `ops`, Arena und Treiberobjekt leben so lange wie der
- * Kern. Die Leitung ist eine fuer alle Kerne: Nie schreiben zwei Kontexte
- * zugleich auf sie.
+ * zweimal zugleich. `ops`, Arena, Treiberobjekt und Senke leben so lange wie
+ * der Kern. Jeder Kern bekommt eine Senke; zwei Kerne mit zwei Senken
+ * schreiben nie ineinander. Teilen Kerne eine Senke, schreiben nie zwei
+ * Kontexte zugleich in sie.
  */
 #ifndef TAKT_SDK_H
 #define TAKT_SDK_H
@@ -31,12 +36,29 @@ extern "C" {
 
 /* Die Fassung dieser Schnittstelle; eine Tabelle anderer Fassung nimmt
  * `takt_core_init` nicht an. Fassung 2: Der Wirt nennt seinen Watchdog.
- * Fassung 3: Die Tabelle traegt `operator_abort` (`takt_core_abort`). */
-#define TAKT_SDK_ABI 3u
+ * Fassung 3: Die Tabelle traegt `operator_abort` (`takt_core_abort`).
+ * Fassung 4: die Senke je Kern (`takt_sink`), `init` und `init_with` mit ihr,
+ * die Haken `takt_trace_*` mit ihr; `takt_line_*` entfaellt. */
+#define TAKT_SDK_ABI 4u
 
 /* So viele Byte haelt `takt_core`; das Archiv prueft beim Bau, dass sein
  * Kern hineinpasst. */
 #define TAKT_CORE_BYTES 1024u
+
+/* So viele Byte haelt `takt_sink`, ebenso geprueft. */
+#define TAKT_SINK_BYTES 128u
+
+/* Die Namen vor Fassung 4 gibt es nicht mehr. Ein Wirt nach altem SDK
+ * scheitert hier beim Uebersetzen, statt still eine Funktion ohne
+ * Deklaration zu rufen. Statt `takt_line_init`, `_mark`, `_flush` und
+ * `_lossless` stehen `takt_sink_init`, `_mark`, `_flush` und `_lossless`,
+ * statt `takt_board_trace…` die Haken `takt_trace_text`, `takt_trace_i64`,
+ * `takt_trace_u64`, `takt_trace_f64` und `takt_trace_hex8`, jeweils mit der
+ * Senke als erstem Argument. */
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC poison takt_line_init takt_line_mark takt_line_flush takt_line_lossless
+#pragma GCC poison takt_board_trace takt_board_trace_i64 takt_board_trace_u64 takt_board_trace_f64 takt_board_trace_hex8
+#endif
 
 /* Die Einstiege einer Programmbibliothek (`P_ops`); `arena` ist ihre Arena. */
 struct takt_ops {
@@ -47,8 +69,8 @@ struct takt_ops {
     uint64_t logic_hash;
     int64_t persist_min_interval_ns;
     uint32_t persist_bound;
-    void (*init)(void *arena, void *user);
-    int32_t (*init_with)(void *arena, void *user, const void *bytes, int32_t len);
+    void (*init)(void *arena, void *user, void *sink);
+    int32_t (*init_with)(void *arena, void *user, void *sink, const void *bytes, int32_t len);
     void (*tick)(void *arena, int64_t k);
     void (*commit)(void *arena);
     uint8_t (*idle)(void *arena);
@@ -96,6 +118,11 @@ typedef struct takt_core {
     _Alignas(8) unsigned char opaque[TAKT_CORE_BYTES];
 } takt_core;
 
+/* Der Speicher einer Senke, im Wirt gestellt (`takt_sink_init`). */
+typedef struct takt_sink {
+    _Alignas(8) unsigned char opaque[TAKT_SINK_BYTES];
+} takt_sink;
+
 /* Das Laufzeitprofil (12.8). */
 #define TAKT_PROFILE_BAREMETAL 0
 #define TAKT_PROFILE_SHARED 1
@@ -108,7 +135,7 @@ typedef struct takt_core {
 #define TAKT_ERR_MEMORY (-3) /* mit `persist` der Einstieg mit Journal, ohne der andere (5.9) */
 #define TAKT_ERR_PROFILE (-4)
 #define TAKT_ERR_BOUND (-5) /* ein Puffer ist zu klein: `P_PERSIST_BOUND`, ein leerer Ring */
-#define TAKT_ERR_LINE (-6)  /* keine Leitung gebunden (`takt_line_init`) */
+#define TAKT_ERR_LINE (-6)  /* keine Senke (`takt_sink_init`) */
 
 /* Das Ende eines Laufs (12.7) in `takt_next.ended`; 0, solange er geht. */
 #define TAKT_NEXT_NOW 1
@@ -133,19 +160,20 @@ struct takt_watchdog {
 };
 
 /* Baut den Kern eines Programms ohne `persist`: `ops` seine Einstiege
- * (`P_ops`), `arena` seine Arena, `user` das Treiberobjekt, `profile`
- * TAKT_PROFILE_*, `watchdog` der Watchdog des Wirts. Die Leitung ist schon
- * gebunden (`takt_line_init`), sonst TAKT_ERR_LINE: Die Senke stellt der
- * Wirt ausdruecklich (12.11). Danach steht das Programm in Tick 0 (9.4). */
-int32_t takt_core_init(takt_core *core, const struct takt_ops *ops, void *arena, void *user, int32_t profile,
-                       const struct takt_watchdog *watchdog);
+ * (`P_ops`), `arena` seine Arena, `user` das Treiberobjekt, `sink` die
+ * Senke seines Trace aus `takt_sink_init`, ohne sie TAKT_ERR_LINE: Die Senke
+ * stellt der Wirt ausdruecklich (12.11). `profile` ist TAKT_PROFILE_*,
+ * `watchdog` der Watchdog des Wirts. Danach steht das Programm in Tick 0
+ * (9.4). */
+int32_t takt_core_init(takt_core *core, const struct takt_ops *ops, void *arena, void *user, takt_sink *sink,
+                       int32_t profile, const struct takt_watchdog *watchdog);
 
 /* Wie `takt_core_init`, fuer ein Programm mit `persist`: Es beginnt ueber
  * sein Journal auf `nvm`, mit zwei Puffern von je `bound` Byte
  * (`P_PERSIST_BOUND`), die nur der Kern benutzt (5.9). */
 int32_t takt_core_init_journaled(takt_core *core, const struct takt_ops *ops, void *arena, void *user,
-                                 int32_t profile, const struct takt_watchdog *watchdog, const struct takt_nvm *nvm,
-                                 uint8_t *current, uint8_t *stored, uint32_t bound);
+                                 takt_sink *sink, int32_t profile, const struct takt_watchdog *watchdog,
+                                 const struct takt_nvm *nvm, uint8_t *current, uint8_t *stored, uint32_t bound);
 
 /* Rechnet alle Tickgrenzen bis `now_ns` (12.1). */
 takt_next takt_core_service(takt_core *core, int64_t now_ns);
@@ -200,24 +228,26 @@ struct takt_line {
     void (*flush)(void *ctx);
 };
 
-/* Bindet die Leitung, eine fuer alle Kerne; `ring` haelt `len` Byte
+/* Bindet die Leitung `line` an die Senke `sink`; `ring` haelt `len` Byte
  * zwischen Schritt und Leitung. Ist er voll und nimmt die Leitung nichts,
- * wird verworfen und gezaehlt (12.2). Vor dem ersten Schritt. */
-int32_t takt_line_init(const struct takt_line *line, uint8_t *ring, uint32_t len);
+ * wird verworfen und gezaehlt (12.2). Vor dem ersten Schritt eines Kerns,
+ * der sie bekommt. */
+int32_t takt_sink_init(takt_sink *sink, const struct takt_line *line, uint8_t *ring, uint32_t len);
 
 /* Verlustfrei (13.8): Ist der Ring voll, wartet der Schreibende, bis die
  * Leitung ihn geleert hat, statt zu verwerfen. Nur fuer Laeufe in logischer
- * Zeit; im Betrieb verbietet 12.2 das Warten. Nach `takt_line_init`, vor
- * dem ersten Schritt; TAKT_ERR_LINE ohne Leitung. */
-int32_t takt_line_lossless(void);
+ * Zeit; im Betrieb verbietet 12.2 das Warten. Nach `takt_sink_init`, vor
+ * dem ersten Schritt; TAKT_ERR_LINE ohne Senke. */
+int32_t takt_sink_lossless(takt_sink *sink);
 
 /* Gibt an die Leitung, was der Ring haelt und sie ohne Warten nimmt, fuer
  * Zeilen des Wirts ausserhalb des Laufs. Kein Schritt laeuft. */
-void takt_line_flush(void);
+void takt_sink_flush(takt_sink *sink);
 
 /* Die Marke `takt trace`, ab der die Bilanz die gesendeten Byte zaehlt;
- * davor darf ein Kopf stehen (`takt_board_trace`). Kein Schritt laeuft. */
-void takt_line_mark(void);
+ * davor darf ein Kopf stehen (`takt_trace_text`). Kein Schritt laeuft. */
+void takt_sink_mark(takt_sink *sink);
+
 
 /* Die Stacks eines Laufs (12.3), wie der Port sie misst: die Tiefe unter
  * Last und die Schranke des Programms (`P_TICK_STACK_BYTES`,
@@ -241,9 +271,10 @@ typedef struct takt_foreign {
 
 void takt_foreign_round(takt_foreign *foreign);
 
-/* Beendet den Lauf wie `takt_core_finish` und schreibt die Bilanz (13.8),
- * davor die Zeile der fremden Last, wenn `foreign` nicht NULL ist, danach
- * `takt end`; leert den Ring. Kein Schritt laeuft; `stacks` darf NULL sein. */
+/* Beendet den Lauf wie `takt_core_finish` und schreibt die Bilanz (13.8) in
+ * die Senke des Kerns, davor die Zeile der fremden Last, wenn `foreign` nicht
+ * NULL ist, danach `takt end`; leert den Ring. Kein Schritt laeuft; `stacks`
+ * darf NULL sein. */
 void takt_core_report(takt_core *core, const struct takt_stacks *stacks, const takt_foreign *foreign);
 
 #ifdef __cplusplus

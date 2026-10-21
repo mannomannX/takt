@@ -5,8 +5,8 @@
  * `takt_add_program` liefert `wire` (Bibliothek, `wire.h`, `takt_sdk.h`) und
  * unter Zephyr die Treiber beider Pins (`wire_zephyr.c`, `wire_zephyr.h`);
  * das SDK-Archiv bringt den Kern, das Modul den Port. Diese Anwendung stellt
- * den Rest, den der Wirt stellt (12.11): die Leitung, den Watchdog und beide
- * Stacks. Der Trace zeichnet jeden Pegel auf, den der Eingang las; der
+ * den Rest, den der Wirt stellt (12.11): die Senke vor der Leitung, den
+ * Watchdog und beide Stacks. Der Trace zeichnet jeden Pegel auf, den der Eingang las; der
  * Board-Test vergleicht ihn mit dem Interpreter und mit dem Pegel, den der
  * Ausgang im Tick davor schrieb.
  */
@@ -33,6 +33,11 @@
  * meldet (12.3). */
 #define STACK_SLACK 1024U
 
+/* Die Senke des Programms (12.5, 12.11): ein Ring vor der Leitung des
+ * Wirts, gebunden mit `takt_sink_init`; in ihr stehen Kopf, Trace und
+ * Bilanz. */
+static takt_sink sink;
+
 /* Der Watchdog des Wirts (12.11): Dieses Beispiel startet keinen. */
 static void kick(void *ctx) {
     ARG_UNUSED(ctx);
@@ -45,7 +50,7 @@ static void clock_line(void) {
     uint32_t hz = 0U;
     const char *source = takt_os_clock(&hz);
     (void)snprintk(line, sizeof line, "takt uhr %s %u Hz\n", source, (unsigned int)hz);
-    takt_board_trace(line);
+    takt_trace_text(&sink, line);
 }
 
 /* Faehrt den Kern `core` ueber den Port und schreibt die Bilanz. Verlangt
@@ -78,7 +83,7 @@ static void drive(takt_core *core) {
             measured = &stacks;
         }
     } else {
-        takt_board_trace("takt port: kein Start\n");
+        takt_trace_text(&sink, "takt port: kein Start\n");
     }
     takt_core_report(core, measured, NULL);
 }
@@ -90,17 +95,17 @@ int main(void) {
     static const struct takt_watchdog watchdog = {NULL, kick};
     struct takt_line line;
     const char *channel = NULL;
-    if ((line_open(&line) == 0) && (takt_line_init(&line, ring, sizeof ring) == TAKT_OK)) {
-        takt_board_trace("takt auf zephyr mit pins aus dem devicetree\n" TAKT_RTOS_PROTECTION "\n");
+    if ((line_open(&line) == 0) && (takt_sink_init(&sink, &line, ring, sizeof ring) == TAKT_OK)) {
+        takt_trace_text(&sink, "takt auf zephyr mit pins aus dem devicetree\n" TAKT_RTOS_PROTECTION "\n");
         clock_line();
         if (wire_zephyr_init(&channel) != 0) {
             /* Die Pins vor dem Kern (8.10): Ein Kanal ohne Pin beginnt nicht. */
-            takt_board_trace("takt pins: nicht eingerichtet: ");
-            takt_board_trace(channel);
-            takt_board_trace("\n");
+            takt_trace_text(&sink, "takt pins: nicht eingerichtet: ");
+            takt_trace_text(&sink, channel);
+            takt_trace_text(&sink, "\n");
         } else {
-            takt_line_mark();
-            if (takt_core_init(&core, &wire_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog) == TAKT_OK) {
+            takt_sink_mark(&sink);
+            if (takt_core_init(&core, &wire_ops, &arena, NULL, &sink, TAKT_PROFILE_SHARED, &watchdog) == TAKT_OK) {
                 drive(&core);
             }
         }
