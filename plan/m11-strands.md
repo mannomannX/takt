@@ -499,7 +499,10 @@ So arbeitet jeder Strang, als wäre er allein:
   - `UNREACHED`: Übergänge 93 → 92, nie bestanden 50, nie verletzt
     283 → 279; 93 Programme. „Fragment“ 16 / 6 / 12 → 3 / 3 / 5,
     „nicht k-induktiv“ 2 / 0 / 12 → 14 / 3 / 15 (Übergänge, nie bestanden,
-    nie verletzt); die übrigen Gruppen bleiben.
+    nie verletzt). `fin` in `04_blocks_and_multirate` steht jetzt unter
+    „Frist“ statt „Speicher“, wie beide Läufe es einordnen (BMC im
+    Zeitlimit, 6 GB): nie verletzt Speicher 96 → 95, Frist 80 → 81. Die
+    übrigen Gruppen bleiben.
   - Weiter: Pfade für FB-803 (ein Stimulus, der die Eingänge frisch hält
     und `start` gibt, oder tiefes BMC), der Rest über `div` (FB-802), dann
     der Speicher (FB-612).

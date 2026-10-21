@@ -77,7 +77,7 @@ const UNREACHED: &[Unreached] = &[
         0,
         &[("Frist", 2)],
         &[("Frist", 1)],
-        &[("Speicher", 1), ("nicht k-induktiv", 1)],
+        &[("Frist", 1), ("nicht k-induktiv", 1)],
     ),
     ("05_streams_and_protocol.takt", 3, 0, 7, 0, 0, 0, &[("Speicher", 3)], &[], &[("Speicher", 7)]),
     ("06_test_harness.takt", 2, 0, 0, 0, 0, 3, &[("nicht k-induktiv", 2)], &[], &[]),
