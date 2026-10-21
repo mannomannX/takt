@@ -435,7 +435,42 @@ property apart: never(m.a == 3 and m.b == 5)
     let model = encode(&p).expect("kodierbar");
     let reports = prove(&model, &p, 3, &solver, 60).expect("Solver laeuft");
     let Verdict::Unproven { reason } = &reports[0].verdict else { panic!("{:?}", reports[0]) };
-    assert!(reason.contains("Induktionsschritt offen") && reason.contains("freien Variablen"), "{reason}");
+    assert!(reason.contains("Induktionsschritt offen") && reason.contains("freie Variable"), "{reason}");
+}
+
+/// **Eine offene Suche nennt, wie sie endete** (13.3): Fuer den Rest ueber
+/// `div` braucht Spacer rund 100 s (FB-802); mit 2 s je Anfrage endet die
+/// Invariantensuche im Zeitlimit, und der Grund sagt es.
+#[test]
+fn an_open_invariant_search_names_its_time_limit() {
+    let Some(solver) = solver() else { return };
+    let p = compile(
+        "system:
+    language = 1
+    tick     = 10 ms
+
+output y : int in 0..6 @ hw(\"o/y\") with safe = 0
+
+machine m:
+    var a : int in 0..6 = 0
+    var b : int in 0..6 = 0
+    var x : float = 0.0
+    initial RUN
+    state RUN:
+        loop:
+            x = x * 0.5 + 1.0
+            if x > 1.0:
+                a = (a + 1) % 7
+                b = (b + 1) % 7
+            check a != 3 or b != 5, \"nie\"
+            y = a
+",
+    );
+    let model = encode(&p).expect("kodierbar");
+    let sites = classify(&model, &p, 3, &solver, 2).expect("Solver laeuft");
+    let site = sites.iter().find(|s| s.kind == "check").expect("die Pruefstelle");
+    let CheckVerdict::Undecided { reason } = &site.verdict else { panic!("{}", site.text()) };
+    assert!(reason.contains("Induktionsschritt offen") && reason.contains("Spacer im Zeitlimit (2 s)"), "{reason}");
 }
 
 /// P3 (11.3): Eine implizite Range-Pruefung, die ein Uebergang unerreichbar

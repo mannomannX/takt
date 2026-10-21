@@ -733,11 +733,9 @@ fn confirmed(model: &Model, program: &Program, i: usize, bmc: &str, depth: u32) 
     Some(CheckVerdict::Reachable { at, stimulus })
 }
 
-/// Die Invariantensuche nach einem offenen Induktionsschritt (FB-375):
-/// `Some(true)`, wenn z3 eine induktive Invariante findet, `Some(false)`,
-/// wenn es einen Pfad ueber jede Tiefe hinaus gibt, `None` ohne Urteil —
-/// auch ausserhalb des ganzzahligen Fragments und mit cvc5, das keine
-/// Horn-Klauseln liest.
+/// Die Invariantensuche nach einem offenen Induktionsschritt (FB-375),
+/// ausserhalb ihres Fragments ueber freie Variablen (13.3); cvc5 liest
+/// keine Horn-Klauseln.
 fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> Result<Search, String> {
     if solver.is_cvc5() {
         return Ok(Search::Outside("cvc5 sucht keine induktive Invariante (Spacer ist ein Teil von z3)".into()));
@@ -752,7 +750,9 @@ fn invariant(model: &Model, target: Target, solver: &Solver, timeout_s: u64) -> 
         ("unsat", None) => Search::Path,
         // Ein Pfad durch freie Variablen ist keiner des Modells.
         ("unsat", Some(why)) => Search::Abstract(why),
-        _ => Search::Open,
+        // Unter `-T` schreibt z3 `timeout`.
+        ("timeout", _) => Search::Open(format!("Spacer im Zeitlimit ({timeout_s} s)")),
+        (other, _) => Search::Open(format!("Spacer sagt `{other}`")),
     })
 }
 
@@ -762,8 +762,8 @@ enum Search {
     Invariant,
     /// Ein Pfad zur Verletzung, tiefer als die Anfrage.
     Path,
-    /// Weder noch, etwa im Zeitlimit.
-    Open,
+    /// Weder noch, und wie die Suche endete, etwa im Zeitlimit.
+    Open(String),
     /// Nicht gesucht: Der Kegel des Ziels liegt ausserhalb des Fragments.
     Outside(String),
     /// Keine Invariante, wo Teilterme ausserhalb des Fragments frei wurden;
@@ -783,16 +783,16 @@ fn open(model: &Model, depth: u32, search: &Search) -> String {
     } else {
         format!("; die laengste Frist braucht k = {} (`--depth auto`)", model.horizon + 1)
     };
-    let outside = match search {
+    let search = match search {
         Search::Outside(why) => format!("; keine Invariantensuche, ausserhalb ihres Fragments: {why}"),
-        Search::Abstract(why) => {
-            format!(
-                "; keine Invariante, auch nicht mit freien Variablen fuer, was ausserhalb ihres Fragments liegt: {why}"
-            )
-        }
-        _ => String::new(),
+        Search::Abstract(why) => format!(
+            "; die Invariantensuche sieht einen Pfad, womoeglich nur ueber eine freie Variable; ausserhalb ihres \
+             Fragments: {why}"
+        ),
+        Search::Open(how) => format!("; die Invariantensuche bleibt offen: {how}"),
+        Search::Invariant | Search::Path => String::new(),
     };
-    format!("Induktionsschritt offen (k = {depth}){deadline}{outside}")
+    format!("Induktionsschritt offen (k = {depth}){deadline}{search}")
 }
 
 /// Das Urteil, wenn weder BMC noch Induktion noch die Invariantensuche
