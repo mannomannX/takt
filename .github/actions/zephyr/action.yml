@@ -1,8 +1,10 @@
 name: Zephyr
 description: >-
-  Zephyr v4.4.2 mit den Modulen cmsis, cmsis_6, hal_stm32 und hal_espressif,
-  das Zephyr-SDK 1.0.1 mit arm-zephyr-eabi und riscv64-zephyr-elf, west und
-  gperf: dieselben Fassungen wie in D:\takt-tools (M11 Schritt 19, FB-731).
+  Zephyr v4.5.0-rc2 (Commit c136c73d) mit den Modulen cmsis, cmsis_6,
+  hal_stm32 und hal_espressif, das Zephyr-SDK 1.0.1 mit arm-zephyr-eabi und
+  riscv64-zephyr-elf, west und gperf: dieselben Fassungen wie in
+  D:\takt-tools (M11 Schritt 19, FB-731). v4.5.0-rc2 statt v4.4.2 wegen des
+  Zeitgebers des ESP32-C6 (FB-781); auf v4.5.0, sobald sie erscheint.
   Setzt TAKT_WEST, ZEPHYR_BASE, ZEPHYR_SDK_INSTALL_DIR und
   ZEPHYR_TOOLCHAIN_VARIANT, wie activate.ps1 es dort tut.
 
@@ -29,7 +31,7 @@ runs:
         path: |
           ~/zephyrproject
           ~/zephyr-sdk-1.0.1
-        key: zephyr-v4.4.2-sdk-1.0.1-linux-x64-1
+        key: zephyr-v4.5.0-rc2-c136c73d-sdk-1.0.1-linux-x64-1
 
     # west, was der Bau importiert, und esptool fuer den C6: jedes Paket
     # mit Fassung und Pruefsumme aus der Sperrdatei, auch die mittelbaren.
@@ -39,16 +41,16 @@ runs:
         python3 -m venv "$HOME/zephyr-venv"
         "$HOME/zephyr-venv/bin/pip" install -q --require-hashes -r "$GITHUB_WORKSPACE/tools/ci/zephyr-requirements.txt"
 
-    - name: Zephyr v4.4.2 laden
+    - name: Zephyr v4.5.0-rc2 laden
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         west="$HOME/zephyr-venv/bin/west"
-        "$west" init -m https://github.com/zephyrproject-rtos/zephyr --mr v4.4.2 "$HOME/zephyrproject"
-        # Der Tag v4.4.2 zeigt auf diesen Commit, wie in D:\takt-tools; ein
-        # verschobener Tag bricht hier ab. Die Module legt sein west.yml je
-        # auf einen Commit fest.
-        test "$(git -C "$HOME/zephyrproject/zephyr" rev-parse HEAD)" = dccb09599635bdff17633fa7e9dab014b91dce90
+        "$west" init -m https://github.com/zephyrproject-rtos/zephyr --mr v4.5.0-rc2 "$HOME/zephyrproject"
+        # Festgelegt ist der Commit, nicht der Tag: v4.5.0-rc2 zeigt auf
+        # diesen, wie in D:\takt-tools; ein verschobener Tag bricht hier ab.
+        # Die Module legt sein west.yml je auf einen Commit fest.
+        test "$(git -C "$HOME/zephyrproject/zephyr" rev-parse HEAD)" = c136c73d7be3305d2c07ee5726d4c6d0d985068b
         cd "$HOME/zephyrproject"
         "$west" config manifest.project-filter -- '-.*,+cmsis,+cmsis_6,+hal_stm32,+hal_espressif'
         "$west" update --narrow -o=--depth=1

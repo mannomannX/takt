@@ -38,8 +38,8 @@ static void kick(void *ctx) {
     ARG_UNUSED(ctx);
 }
 
-/* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733); hier der
- * Systemtick, denn dieses Beispiel waehlt keinen Zaehler. */
+/* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733); auf dem C6
+ * der Zaehler aus dem Overlay, auf dem F401 der Systemtick. */
 static void clock_line(void) {
     char line[48];
     uint32_t hz = 0U;

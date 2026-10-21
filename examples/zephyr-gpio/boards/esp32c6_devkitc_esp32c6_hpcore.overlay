@@ -8,6 +8,7 @@
 / {
 	chosen {
 		takt,line = &usb_serial;
+		takt,timer = &takt_timer;
 	};
 
 	takt-wire-out {
@@ -24,6 +25,18 @@
 		takt_wire_in: wire-in {
 			gpios = <&gpio0 17 GPIO_ACTIVE_HIGH>;
 		};
+	};
+};
+
+/* Die Uhr des Ports (FB-733, FB-781): Timer 0 der Gruppe 0 mit 1 MHz wie in
+ * examples/zephyr; Takt stellt seine Frist auf ihn, auf 1 us genau und
+ * unabhaengig vom Systemzeitgeber. */
+&timer0 {
+	prescaler = <80>;
+	status = "okay";
+
+	takt_timer: counter {
+		status = "okay";
 	};
 };
 

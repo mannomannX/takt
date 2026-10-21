@@ -11,14 +11,11 @@
 #include "line.h"
 
 #include <errno.h>
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <zephyr/device.h>
-#include <zephyr/devicetree.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/printk.h>
 #include <zephyr/sys/ring_buffer.h>
 
 #include "handback.h"
@@ -125,45 +122,3 @@ int line_open(struct takt_line *line) {
     }
     return rc;
 }
-
-/* TODO(FB-757): die Vermerke (line.h), nur mit einer Konsole neben der
- * Leitung. */
-#if DT_HAS_CHOSEN(zephyr_console) && !DT_SAME_NODE(DT_CHOSEN(zephyr_console), DT_CHOSEN(takt_line))
-
-/* Der stille Zeitgeber: Er weckt nur. */
-static void line_tick(struct k_timer *timer) {
-    ARG_UNUSED(timer);
-}
-
-K_TIMER_DEFINE(line_watch_timer, line_tick, NULL);
-
-void line_watch_alarm(void) {
-    (void)k_msleep(1);
-    printk("takt wecker\n");
-}
-
-void line_watch_arm(int ticking) {
-    printk("takt start, zeitgeber %s\n", (ticking != 0) ? "ja" : "nein");
-    if (ticking != 0) {
-        k_timer_start(&line_watch_timer, K_MSEC(100), K_MSEC(100));
-    }
-}
-
-void line_watch_end(const char *what) {
-    printk("takt ende: %s, leitung haelt %u byte\n", what, (unsigned int)ring_buf_size_get(&line_ring));
-}
-
-#else
-
-void line_watch_alarm(void) {
-}
-
-void line_watch_arm(int ticking) {
-    ARG_UNUSED(ticking);
-}
-
-void line_watch_end(const char *what) {
-    ARG_UNUSED(what);
-}
-
-#endif

@@ -210,11 +210,13 @@ pub fn build(
     Ok(Image { elf: zephyr.join("zephyr.elf"), bin: zephyr.join("zephyr.bin"), config, manifest })
 }
 
-/// Die Fassung von Zephyr, gegen die jedes Beispiel baut: dieselbe in
-/// `D:\takt-tools` und im Job `zephyr` von `.github/workflows/boards.yml`.
-/// Sie geht in den Stand der Abbilder ein; welche Fassung wirklich baut,
-/// prueft der Bau nicht.
-pub const ZEPHYR_VERSION: &str = "v4.4.2";
+/// Die Fassung von Zephyr, gegen die jedes Beispiel baut, mit ihrem
+/// Commit: dieselbe in `D:\takt-tools` und im Job `zephyr` von
+/// `.github/workflows/boards.yml` (`.github/actions/zephyr`). v4.5.0-rc2,
+/// weil v4.4.2 den Zeitgeber des ESP32-C6 ohne ausstehende Frist in einen
+/// Sturm von Interrupts stellt (FB-781). Sie geht in den Stand der Abbilder
+/// ein; welche Fassung wirklich baut, prueft der Bau nicht.
+pub const ZEPHYR_VERSION: &str = "v4.5.0-rc2 c136c73d7be3305d2c07ee5726d4c6d0d985068b";
 
 /// Die Fassung des Zephyr-SDK, ebenso.
 pub const SDK_VERSION: &str = "1.0.1";

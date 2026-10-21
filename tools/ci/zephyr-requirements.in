@@ -1,6 +1,6 @@
 # Was der Zephyr-Job (.github/actions/zephyr) wirklich braucht: `west build`
 # fuer examples/zephyr*, nichts zum Flashen, Signieren oder Testen. Aus
-# scripts/requirements-base.txt von Zephyr v4.4.2 die Pakete, die der Bau
+# scripts/requirements-base.txt von Zephyr v4.5.0-rc2 die Pakete, die der Bau
 # importiert (west_commands/build.py, zephyr_module.py, list_boards.py,
 # list_hardware.py, snippets.py, edtlib, scripts/build/*), dazu esptool aus
 # hal_espressif (zephyr/requirements.txt) fuer das Abbild des C6.

@@ -9,6 +9,7 @@
 / {
 	chosen {
 		takt,line = &usb_serial;
+		takt,timer = &takt_timer;
 	};
 
 	takt-wire-out {
@@ -36,6 +37,18 @@
 		zephyr,reference = "ADC_REF_INTERNAL";
 		zephyr,acquisition-time = <ADC_ACQ_TIME_DEFAULT>;
 		zephyr,resolution = <12>;
+	};
+};
+
+/* Die Uhr des Ports (FB-733, FB-781): Timer 0 der Gruppe 0 mit 1 MHz wie in
+ * examples/zephyr; Takt stellt seine Frist auf ihn, auf 1 us genau und
+ * unabhaengig vom Systemzeitgeber. */
+&timer0 {
+	prescaler = <80>;
+	status = "okay";
+
+	takt_timer: counter {
+		status = "okay";
 	};
 };
 

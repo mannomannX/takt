@@ -38,8 +38,8 @@ static void kick(void *ctx) {
     ARG_UNUSED(ctx);
 }
 
-/* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733); hier der
- * Systemtick, denn dieses Beispiel waehlt keinen Zaehler. */
+/* Die Uhr des Ports als Kopfzeile: Quelle und Rate (FB-733); auf dem C6
+ * der Zaehler aus dem Overlay, auf dem F401 der Systemtick. */
 static void clock_line(void) {
     char line[48];
     uint32_t hz = 0U;
@@ -67,28 +67,20 @@ static void drive(takt_core *core) {
     };
     struct takt_stacks stacks;
     const struct takt_stacks *measured = NULL;
-    line_watch_arm(0);
     if (takt_rtos_start(&rtos, core, &config) == 0) {
         while (takt_rtos_running(&rtos) != 0) {
             handback_serve();
             (void)k_msleep(POLL_MS);
         }
-        line_watch_end("lauf vorbei");
         if (takt_rtos_join(&rtos, &stacks) == 0) {
             stacks.tick_bound = WIRE_TICK_STACK_BYTES;
             stacks.job_bound = WIRE_JOB_STACK_BYTES;
             measured = &stacks;
         }
-        line_watch_end("faeden zurueck");
     } else {
         takt_board_trace("takt port: kein Start\n");
     }
     takt_core_report(core, measured, NULL);
-    line_watch_end("bilanz geschrieben");
-    takt_line_flush();
-    line_watch_end("geleert");
-    (void)k_msleep(100);
-    line_watch_end("nach 100 ms");
 }
 
 /* Ein Schritt vor dem Lauf scheiterte: Er steht mit seinem Code auf der
@@ -122,7 +114,6 @@ int main(void) {
         } else {
             takt_line_mark();
             takt_line_flush();
-            line_watch_alarm();
             const int32_t status = takt_core_init(&core, &wire_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog);
             if (status != TAKT_OK) {
                 refused("takt kern: nicht bereit ", status);
