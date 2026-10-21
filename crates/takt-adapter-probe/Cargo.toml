@@ -1,0 +1,19 @@
+[package]
+name = "takt-adapter-probe"
+version = "0.1.0"
+description = "Takt: die Adapter aus takt-embed als Treiber-Crate auf dem Wirt (plan/m11.md 2.7, 12.6, 13.8)"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Die Adapter: ein Pin aus `embedded-hal`, eine Schnittstelle aus
+# `embedded-io`, der Ring fuer eine ISR (plan/m11.md 2.7).
+takt-embed = { path = "../takt-embed", features = ["hal", "io"] }
+# Die nachgebauten Peripherie-Objekte erfuellen dieselben Traits wie die
+# eines echten HAL.
+embedded-hal = "1.0.0"
+embedded-io = "0.7.1"
+
+[lints]
+workspace = true

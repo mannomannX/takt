@@ -192,7 +192,8 @@ impl Esp32c6 {
                     options.within().as_secs()
                 ));
             }
-            let when = if text.is_empty() { "" } else { " mittendrin" };
+            // Wo die Konsole verstummte, sagen ihre letzten Zeilen.
+            let when = if text.is_empty() { String::new() } else { format!(" mittendrin nach\n{}\n", tail(&text, 12)) };
             last = format!("das Programm lief bis Tick {reached}, die Konsole schwieg{when}");
             eprintln!("{last}; {next}");
             if attempt > 0 {
@@ -497,6 +498,12 @@ const RAM: u64 = 0x4080_0000;
 /// Die Symbole des Abbilds.
 fn symbols(elf: &Path) -> Result<Vec<takt_llvm::inspect::Symbol>, String> {
     Binutils::best_for(Target::RISCV32IMAC).symbols(elf).ok_or_else(|| "`nm` fehlt: kein Blick ins Abbild".to_string())
+}
+
+/// Die letzten `n` Zeilen von `text`.
+fn tail(text: &str, n: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
 /// Ein Schritt an der Leitung.

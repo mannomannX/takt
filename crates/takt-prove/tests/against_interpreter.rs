@@ -1645,7 +1645,7 @@ const SCOPED: &str = r#"system:
     language = 1
     tick     = 1 ms
 
-input  go   : int in 0..3  @ sim("i/go") with max_age = 1 s
+input  go   : int in 0..3  @ hw("i/go") with max_age = 1 s
 
 output o1   : int in 0..99 @ sim("o/o1") with safe = 0
 output mode : int in 0..9  @ sim("o/mode")

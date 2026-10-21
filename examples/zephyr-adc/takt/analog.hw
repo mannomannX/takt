@@ -1,0 +1,28 @@
+# takt-hw 17
+# Ein Pin und ein analoger Eingang unter Zephyr (8.10, „Treiber aus dem
+# Devicetree“, FB-735). Den Pin bedient `zephyr-gpio`, den Eingang
+# `zephyr-adc`; `port` ist das Label des Knotens in boards/*.overlay. Der
+# Treiber des Eingangs liefert ganze Mikrovolt (`raw = i32`), und
+# `linear(a, b)` macht daraus Volt. Beide Treiber erzeugt `takt build
+# --emit embed --zephyr`.
+
+[device.pin]
+driver = "zephyr-gpio"
+
+[device.adc]
+driver = "zephyr-adc"
+
+[channel pin/out]
+direction = output
+raw = bool
+safe = false
+device = pin
+port = "takt_wire_out"
+
+[channel adc/in]
+direction = input
+raw = i32
+unit = V
+calibration = "linear(0.000001, 0)"
+device = adc
+port = "takt_adc_in"
