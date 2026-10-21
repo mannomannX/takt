@@ -33,7 +33,9 @@ fn scratch(name: &str) -> PathBuf {
 /// puenktlichen Ticks, die fremde Last ohne Fehler, beide Stacks unter ihrer
 /// Schranke, das Journal schrieb. Der Test laeuft allein (nextest,
 /// `threads-required`): Neben anderen Tests verspaetete ein voller Runner
-/// den Tick.
+/// den Tick. **Ohne Zeitgarantie misst die Pruefung die Zeit und sagt es**
+/// (12.2, 13.8; FB-860): Auf einem Wirt ohne PREEMPT_RT nennt der Kopf den
+/// Grund, und das Urteil sagt `ohne Zeiturteil`.
 #[test]
 #[cfg_attr(
     not(all(target_os = "linux", target_arch = "x86_64")),
@@ -83,6 +85,14 @@ fn a_posix_port_passes_the_port_test() {
     assert!(verdict.passed(), "{verdict}\n{}{}", String::from_utf8_lossy(&run.stdout), excerpt(&log));
     // 12.11: Faeden eines Prozesses teilen seinen Speicher.
     assert_eq!(verdict.protection.map(|c| c.name()), Some("keiner"), "{verdict}");
+    if !realtime_kernel() {
+        assert!(verdict.to_string().contains("ohne Zeiturteil: kein PREEMPT_RT"), "{verdict}");
+    }
+}
+
+/// Laeuft der Wirt unter PREEMPT_RT (`/sys/kernel/realtime`)?
+fn realtime_kernel() -> bool {
+    std::fs::read_to_string("/sys/kernel/realtime").is_ok_and(|s| s.trim() == "1")
 }
 
 /// **Die Vorlage `c-port` passt zum Port** (12.11, 2.9): `ports/template`

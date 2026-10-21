@@ -16,8 +16,17 @@
 //! | Stacks unter der Schranke | Schritt- und Job-Stack gemessen, unter `TICK_STACK_BYTES` und `JOB_STACK_BYTES` (12.3); rechnen die Jobs auf dem Schritt-Stack, sagt die Bilanz `jobstack geteilt`, und seine Schranke deckt sie (FB-459) |
 //! | Drift | kein Tick ueber seiner Periode und keiner eine Periode zu spaet (`ueberlaeufe`, `verspaetet`, 7.3) |
 //! | Keine Runtime-Faults | keine Zeile `runtime` (5.3, 7.3, 12.3, 12.6): Das Pruefprogramm gibt einem richtigen Port keinen Anlass |
+//! | Zeitgarantie genannt | ohne sie die Kopfzeile `Zeit: ohne Garantie: <Grund>` ([`UNTIMED`]) |
 //! | Journal | geschrieben, nie fehlgeschlagen (5.9, 12.3) |
 //! | Speicherschutz genannt | vor der Marke die Kopfzeile `Schutz: Fenster`, `Partition` oder `keiner` (12.11), und kein Nachweis darunter widerspricht ihr |
+//!
+//! **Die Zeit urteilt nur, wo sie zugesagt ist** (12.2, 13.8; FB-860).
+//! Ueberlaeufe, verspaetete Ticks und `Runtime(Overrun)` bewertet das
+//! Urteil nur auf einer Plattform mit Zeitgarantie: einem Board, einer
+//! Linux-Box nach 12.2. Ein Port ohne sie nennt den Grund im Kopf
+//! ([`UNTIMED`]); das Urteil misst die Zeit dann und sagt `ohne Zeiturteil`
+//! mit dem Grund, statt still zu bestehen. Trace, FPU, Jobs, Stacks und
+//! Journal gelten ueberall.
 //!
 //! Drift und Jitter stehen gemessen im Urteil und im Konformitaetsbericht
 //! (`[port <name>]`), bewertet werden sie nicht. `verloren` folgt aus
@@ -78,6 +87,11 @@ pub const FOREIGN: &str = takt_rt_core::port_test::LINE;
 /// (`examples/zephyr`, der C-Wirt der Black Pill unter FreeRTOS-MPU).
 pub const PARTITION_PROBE: &str = "takt schutz partition ";
 
+/// Die Kopfzeile eines Ports, dessen Plattform keine Zeit zusagt; dahinter
+/// der Grund (12.2, 13.8; FB-860). Ein Port ohne sie bekommt das Urteil
+/// ueber die Zeit.
+pub const UNTIMED: &str = "Zeit: ohne Garantie: ";
+
 /// Das Urteil ueber eine Ausgabe.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Verdict {
@@ -97,6 +111,11 @@ pub struct Verdict {
     pub journal_writes: Option<u64>,
     /// Der Speicherschutz, den der Kopf nennt (12.11).
     pub protection: Option<Case>,
+    /// Ohne Zeitgarantie der Grund, den der Kopf nennt ([`UNTIMED`]).
+    pub untimed: Option<String>,
+    /// Ohne Zeitgarantie, was das Urteil ueber die Zeit gefunden haette:
+    /// gemessen, nicht bewertet.
+    pub measured: Vec<String>,
     /// Was der Port nicht belegt hat, je Pflicht eine Zeile.
     pub failures: Vec<String>,
 }
@@ -125,6 +144,7 @@ impl Verdict {
             job_stack_shared: self.job_stack_shared,
             journal_writes: self.journal_writes,
             protection: self.protection.map(|c| c.name().to_string()),
+            untimed: self.untimed.clone(),
         }
     }
 }
@@ -155,6 +175,12 @@ impl std::fmt::Display for Verdict {
             self.journal_writes.map_or_else(|| "?".to_string(), |w| w.to_string())
         )?;
         writeln!(f, "  {}{}", protection::LABEL, self.protection.map_or("?", Case::name))?;
+        if let Some(reason) = &self.untimed {
+            writeln!(f, "  ohne Zeiturteil: {reason}")?;
+            for m in &self.measured {
+                writeln!(f, "    gemessen: {m}")?;
+            }
+        }
         for failure in &self.failures {
             writeln!(f, "  - {failure}")?;
         }
@@ -218,6 +244,7 @@ pub fn program(text: &str) -> Result<takt_mir::Program, String> {
 /// gefahren hat (Modulkopf).
 pub fn judge(log: &str, text: &str) -> Verdict {
     let mut v = Verdict { drift: Drift::of(log), ..Verdict::default() };
+    let mut time = Vec::new();
     match job_bytes(text) {
         Ok(_) => trace_agrees(log, text, &mut v.failures),
         Err(e) => v.failures.push(e),
@@ -225,10 +252,16 @@ pub fn judge(log: &str, text: &str) -> Verdict {
     foreign_load(log, &mut v);
     jobs_interruptible(log, &mut v);
     stacks(log, &mut v);
-    on_time(log, &mut v.failures);
-    no_faults(log, &mut v.failures);
+    on_time(log, &mut v.failures, &mut time);
+    no_faults(log, &mut v.failures, &mut time);
     journal(log, &mut v);
     protected(log, &mut v);
+    untimed(log, &mut v);
+    if v.untimed.is_some() {
+        v.measured = time;
+    } else {
+        v.failures.append(&mut time);
+    }
     v
 }
 
@@ -366,23 +399,31 @@ fn stacks(log: &str, v: &mut Verdict) {
     }
 }
 
-/// Kein Tick kam zu spaet (7.3).
-fn on_time(log: &str, failures: &mut Vec<String>) {
+/// Kein Tick kam zu spaet (7.3): ein Befund in `time`; eine Zahl, die
+/// fehlt, in `failures`.
+fn on_time(log: &str, failures: &mut Vec<String>, time: &mut Vec<String>) {
     for (label, what) in
         [("ueberlaeufe", "Ticks ueberschritten ihre Periode"), ("verspaetet", "Ticks begannen eine Periode zu spaet")]
     {
         match board::counter(log, label) {
             Some(0) => {}
-            Some(n) => failures.push(format!("{n} {what} (`{label}`, 7.3)")),
+            Some(n) => time.push(format!("{n} {what} (`{label}`, 7.3)")),
             None => failures.push(format!("die Bilanz nennt `{label}` nicht")),
         }
     }
 }
 
 /// Der Port erhob keinen Runtime-Fault; jeder nennt seine Art und ihren
-/// Abschnitt.
-fn no_faults(log: &str, failures: &mut Vec<String>) {
-    let faults: Vec<&str> = runtime_lines(log).collect();
+/// Abschnitt. `Overrun` ist ein Befund ueber die Zeit und geht nach `time`.
+fn no_faults(log: &str, failures: &mut Vec<String>, time: &mut Vec<String>) {
+    let overrun = |l: &&str| l.split_whitespace().nth(2) == Some("Overrun");
+    let (late, faults): (Vec<&str>, Vec<&str>) = runtime_lines(log).partition(overrun);
+    faults_of(&late, time);
+    faults_of(&faults, failures);
+}
+
+/// Eine Zeile fuer die Runtime-Faults `faults`, wenn es welche gibt.
+fn faults_of(faults: &[&str], into: &mut Vec<String>) {
     let Some(first) = faults.first() else { return };
     let section = |kind: &str| match kind {
         "Overrun" => "7.3",
@@ -394,7 +435,20 @@ fn no_faults(log: &str, failures: &mut Vec<String>) {
     kinds.sort_unstable();
     kinds.dedup();
     let named: Vec<String> = kinds.iter().map(|k| format!("`{k}` ({})", section(k))).collect();
-    failures.push(format!("{} Runtime-Faults, zuerst `{first}`: {}", faults.len(), named.join(", ")));
+    into.push(format!("{} Runtime-Faults, zuerst `{first}`: {}", faults.len(), named.join(", ")));
+}
+
+/// Ohne Zeitgarantie nennt der Kopf den Grund ([`UNTIMED`]); die letzte
+/// Kopfzeile vor der Marke gilt. Ein leerer Grund ist keiner.
+fn untimed(log: &str, v: &mut Verdict) {
+    let header = log.rfind(board::MARK).map_or(log, |at| &log[..at]);
+    let Some(reason) = header.lines().rev().find_map(|l| l.trim().strip_prefix(UNTIMED.trim_end())) else {
+        return;
+    };
+    match reason.trim() {
+        "" => v.failures.push(format!("`{}` ohne Grund (13.8)", UNTIMED.trim_end())),
+        reason => v.untimed = Some(reason.to_string()),
+    }
 }
 
 /// Der Kopf nennt den Speicherschutz (12.11): eine Kopfzeile `Schutz: …`
@@ -516,6 +570,49 @@ mod tests {
         assert_eq!(entry.protection.as_deref(), Some("keiner"));
     }
 
+    /// Der Lauf von [`port_log`] mit `ueberlaeufe` und `verspaetet` in der
+    /// Bilanz und `header` als weiterer Kopfzeile: ein erzwungener Ueberlauf.
+    fn late_log(header: &str) -> String {
+        let log = port_log().replacen("  Schutz: keiner\r\n", &format!("  Schutz: keiner\r\n{header}"), 1);
+        log.replacen("ueberlaeufe 0 verspaetet 0", "ueberlaeufe 2 verspaetet 1", 1)
+    }
+
+    /// **Auf einer Plattform mit Zeitgarantie faellt ein Port mit einem
+    /// Ueberlauf durch** (7.3, 13.8; FB-860): Der Kopf nennt keinen Grund,
+    /// also gilt das Urteil ueber die Zeit wie auf einem Board.
+    #[test]
+    fn a_late_tick_fails_where_time_is_guaranteed() {
+        let v = judge(&late_log(""), PROGRAM);
+        assert!(!v.passed() && v.untimed.is_none(), "{v}");
+        assert!(v.failures.iter().any(|f| f.contains("2 Ticks ueberschritten")), "{v}");
+        assert!(v.failures.iter().any(|f| f.contains("1 Ticks begannen")), "{v}");
+        assert!(!v.to_string().contains("ohne Zeiturteil"), "{v}");
+    }
+
+    /// **Ohne Zeitgarantie misst das Urteil die Zeit und sagt es** (12.2,
+    /// 13.8; FB-860): Derselbe Ueberlauf ist dann gemessen, nicht bewertet,
+    /// und das Urteil nennt `ohne Zeiturteil` mit dem Grund aus dem Kopf,
+    /// auch im Bericht. Ein Grund, der fehlt, ist ein Befund.
+    #[test]
+    fn without_a_time_guarantee_the_verdict_measures_time_and_says_so() {
+        let v = judge(&late_log("  Zeit: ohne Garantie: kein PREEMPT_RT\r\n"), PROGRAM);
+        assert!(v.passed(), "{v}");
+        assert_eq!(v.untimed.as_deref(), Some("kein PREEMPT_RT"));
+        let text = v.to_string();
+        assert!(text.contains("ohne Zeiturteil: kein PREEMPT_RT"), "{text}");
+        assert!(text.contains("gemessen: 2 Ticks ueberschritten"), "{text}");
+        assert_eq!(v.entry("posix", "2026-10-21").untimed.as_deref(), Some("kein PREEMPT_RT"));
+        let on_time = judge(
+            &late_log("  Zeit: ohne Garantie: kein PREEMPT_RT\r\n")
+                .replace("ueberlaeufe 2 verspaetet 1", "ueberlaeufe 0 verspaetet 0"),
+            PROGRAM,
+        );
+        assert!(on_time.passed() && on_time.measured.is_empty(), "{on_time}");
+        assert!(on_time.to_string().contains("ohne Zeiturteil: kein PREEMPT_RT"), "nicht still: {on_time}");
+        let silent = judge(&late_log("  Zeit: ohne Garantie:\r\n"), PROGRAM);
+        assert!(silent.failures.iter().any(|f| f.contains("ohne Grund")), "{silent}");
+    }
+
     /// **Der Kopf nennt den Speicherschutz, und kein Nachweis widerspricht**
     /// (12.11): ohne Kopfzeile, mit einem unbekannten Fall oder gegen die
     /// Probe der Partition faellt der Port durch; die letzte Kopfzeile vor
@@ -581,9 +678,9 @@ mod tests {
         let mut v = Verdict::default();
         jobs_interruptible("t=16 job hasher v done start=15\nt=18 job hasher v done start=17\n", &mut v);
         assert!(v.failures.iter().any(|f| f.contains("Tickgrenze")), "{v}");
-        let mut late = Vec::new();
-        on_time(&summary(0).replace("verspaetet 0 verloren 0", "verspaetet 12 verloren 31"), &mut late);
-        assert!(late.iter().any(|f| f.contains("12 Ticks begannen")), "{late:?}");
+        let (mut missing, mut late) = (Vec::new(), Vec::new());
+        on_time(&summary(0).replace("verspaetet 0 verloren 0", "verspaetet 12 verloren 31"), &mut missing, &mut late);
+        assert!(missing.is_empty() && late.iter().any(|f| f.contains("12 Ticks begannen")), "{late:?}");
         let mut none = Verdict::default();
         jobs_interruptible("t=40 out hashes 0\n", &mut none);
         assert!(none.failures.iter().any(|f| f.contains("kein Job")), "{none}");
@@ -593,19 +690,26 @@ mod tests {
     /// (FB-519), und das Urteil nennt den verspaeteten Tick (7.3).
     #[test]
     fn jitter_alone_loses_no_tick() {
-        let mut quiet = Vec::new();
-        on_time(&summary(0).replace("verloren 0", "verloren 3"), &mut quiet);
-        assert!(quiet.is_empty(), "{quiet:?}");
+        let (mut missing, mut quiet) = (Vec::new(), Vec::new());
+        on_time(&summary(0).replace("verloren 0", "verloren 3"), &mut missing, &mut quiet);
+        assert!(missing.is_empty() && quiet.is_empty(), "{quiet:?}");
     }
 
     /// **Ein Runtime-Fault ist ein Befund**, und der Interpreter spielt ihn
     /// nach (12.5): Das Urteil nennt seine Art mit ihrem Abschnitt.
+    /// `Overrun` ist ein Befund ueber die Zeit, jeder andere gilt ueberall
+    /// (FB-860).
     #[test]
     fn a_runtime_fault_is_named_and_replayed() {
         let log = "t=0 out hashes 0\nt=17 runtime Overrun\nt=18 job hasher v done start=15\nt=19 runtime Overrun\n";
-        let mut failures = Vec::new();
-        no_faults(log, &mut failures);
-        assert_eq!(failures, ["2 Runtime-Faults, zuerst `t=17 runtime Overrun`: `Overrun` (7.3)"]);
+        let (mut failures, mut time) = (Vec::new(), Vec::new());
+        no_faults(log, &mut failures, &mut time);
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(time, ["2 Runtime-Faults, zuerst `t=17 runtime Overrun`: `Overrun` (7.3)"]);
+        let (mut failures, mut time) = (Vec::new(), Vec::new());
+        no_faults(&format!("{log}t=20 runtime Hardware\n"), &mut failures, &mut time);
+        assert_eq!(failures, ["1 Runtime-Faults, zuerst `t=20 runtime Hardware`: `Hardware` (12.3)"]);
+        assert_eq!(time.len(), 1, "{time:?}");
         assert_eq!(
             stimulus(log),
             "t=17 runtime Overrun\nt=18 job hasher v done start=15\nt=19 runtime Overrun\n",
@@ -626,9 +730,9 @@ mod tests {
         let mut deep = Verdict::default();
         stacks(&summary(0).replace("stack 3900", "stack 4600"), &mut deep);
         assert!(deep.failures.iter().any(|f| f.contains("4600")), "{deep}");
-        let mut quiet = Vec::new();
-        on_time("takt schlief 0 gesendet 0\n", &mut quiet);
-        assert_eq!(quiet.len(), 2, "{quiet:?}");
+        let (mut quiet, mut time) = (Vec::new(), Vec::new());
+        on_time("takt schlief 0 gesendet 0\n", &mut quiet, &mut time);
+        assert_eq!((quiet.len(), time.len()), (2, 0), "{quiet:?}");
         let mut unwritten = Verdict::default();
         journal(&summary(0).replace("geschrieben 1", "geschrieben 0"), &mut unwritten);
         assert!(unwritten.failures.iter().any(|f| f.contains("schrieb nie")), "{unwritten}");
