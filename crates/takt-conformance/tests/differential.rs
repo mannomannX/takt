@@ -875,11 +875,12 @@ fn without(trace: &str, kinds: &[(&str, &str)]) -> String {
 ///
 /// Der Test gibt sie aus, damit ein gruener Lauf sie mitliefert — und er
 /// prueft, dass die Liste nicht leer laeuft. Eine Grenze ohne Termin
-/// waere eine Ausrede; jede traegt einen.
+/// waere eine Ausrede; jede traegt einen. Eine Mindestzahl gibt es nicht:
+/// Jeder behobene Befund nimmt seine Grenze heraus (FB-382, FB-688).
 #[test]
 fn the_limits_of_the_acceptance_are_written_down() {
     let limits = takt_conformance::LIMITS;
-    assert!(limits.len() >= 5, "die Liste ist zu kurz, um vollstaendig zu sein: {}", limits.len());
+    assert!(!limits.is_empty(), "die Liste ist leer");
     for l in limits {
         assert!(!l.was.is_empty() && !l.warum.is_empty(), "eine Grenze ohne Begruendung");
         assert!(!l.wann.is_empty(), "`{}` hat keinen Termin", l.was);

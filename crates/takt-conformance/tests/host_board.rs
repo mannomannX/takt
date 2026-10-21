@@ -144,7 +144,7 @@ fn the_host_serves_the_wall_clock() {
     let text =
         host.build(&program, &options).and_then(|exe| host.run(&exe, &options)).unwrap_or_else(|e| panic!("{e}"));
     // Der MCU-Rahmen schreibt `bool` als 0 und 1.
-    assert!(text.contains("t=0 out known 1") && text.contains("t=0 out late 1"), "{text}");
+    assert!(text.contains("t=0 out known true") && text.contains("t=0 out late true"), "{text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

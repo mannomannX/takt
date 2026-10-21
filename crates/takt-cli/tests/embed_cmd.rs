@@ -67,13 +67,19 @@ fn one_call_delivers_library_header_module_and_manifest() {
     for line in [
         "# takt-manifest 1",
         "prefix = valve",
-        "abi = 5",
+        "abi = 6",
         "protect = none",
         &format!("triple = {}", host_triple()),
         "form = logical",
         "profile = none",
         "tick_ns = 10000000",
         "drivers = valve_out_tank_valve, valve_alive_tank",
+        // 12.11: ohne Hardware-Konfiguration kein Budget und keine fremde Last.
+        "step_budget_ps = none",
+        "step_budget_origin = offen",
+        "journal_block_ns = 0",
+        "foreign_block_ns = none",
+        "isrs = none",
     ] {
         assert!(manifest.lines().any(|l| l == line), "`{line}` fehlt im Manifest:\n{manifest}");
     }
@@ -140,13 +146,13 @@ fn one_call_delivers_library_header_module_and_manifest() {
     assert!(in_header.len() >= 10, "{in_header:?}");
     assert_eq!(in_header, in_module, "Kopf und Modul nennen andere Konstanten oder Werte");
 
-    assert!(module.contains("ffi::valve_abi_5"), "die Huelle liest das ABI-Symbol nicht");
+    assert!(module.contains("ffi::valve_abi_6"), "die Huelle liest das ABI-Symbol nicht");
     let nm = clang.with_file_name(if cfg!(windows) { "llvm-nm.exe" } else { "llvm-nm" });
     let symbols = Command::new(&nm).arg("--defined-only").arg(&lib).output().expect("llvm-nm");
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     let abi: Vec<&str> =
         symbols.lines().filter_map(|l| l.split_whitespace().last()).filter(|s| s.contains("_abi_")).collect();
-    assert_eq!(abi, ["valve_abi_5"], "{symbols}");
+    assert_eq!(abi, ["valve_abi_6"], "{symbols}");
 }
 
 /// **Die Float-ABI des Tripels gehoert zur Zielklasse** (12.11, 2.9): Ein
@@ -388,7 +394,7 @@ fn every_target_class_gets_a_library_with_its_entries_and_arena() {
             "valve_commit",
             "valve_deadline",
             "valve_output_timing",
-            "valve_abi_5",
+            "valve_abi_6",
             "valve_arena_bytes",
         ] {
             assert!(defined.contains(&entry), "{triple}: `{entry}` fehlt:\n{symbols}");
@@ -458,6 +464,55 @@ main_loop_ns = 1000
     assert_eq!(manifest_value(&interrupt, "tick_stack_reserve"), "1700");
     assert_eq!(manifest_value(&poll, "tick_stack_reserve"), "none", "keine geborgte Reserve");
     assert!(warned.contains("`stack_reserve_poll`"), "{warned}");
+}
+
+/// **Das Manifest nennt, was die Antwortzeiten brauchen** (11.5, 12.11, M11
+/// Schritt 16): mit der Kalibrierung des F401 das Schrittbudget als
+/// `gemessen`, dazu die fremde Last der Hardware-Konfiguration mit ihrer
+/// Herkunft: die Sperre, die der F401 zusagt, und ein gemessener Stoerer.
+#[test]
+fn the_manifest_names_budget_and_foreign_load() {
+    if takt_testkit::require("clang", find().path().cloned(), "`TAKT_CLANG` setzen oder LLVM installieren").is_none() {
+        return;
+    }
+    let dir = scratch("takt-embed-budget");
+    let full = std::fs::read_to_string(root().join("corpus-try/hw/stm32f401.hw")).expect("hw");
+    let start = full.find("[target.thumbv7em]").expect("Ziel");
+    let section = &full[start..];
+    // Bis einschliesslich des Zeilenendes vor dem naechsten Abschnitt.
+    let section = section[1..].find("\n[").map_or(section, |end| &section[..end + 2]);
+    let hw = dir.join("board.hw");
+    std::fs::write(
+        &hw,
+        format!(
+            "# takt-hw 19\n{section}entry_ns = 1200\n\n[target.thumbv7em.isr.uart]\ncost_ns = 1100\n\
+             period_ns = 10850\norigin = gemessen\n"
+        ),
+    )
+    .expect("hw");
+    let out = dir.join("own");
+    let run = takt(&[
+        "build",
+        VALVE,
+        "--emit",
+        "embed",
+        "--target",
+        "thumbv7em-none-eabihf",
+        "--form",
+        "own",
+        "--hardware",
+        hw.to_str().expect("Pfad"),
+        "--out",
+        out.to_str().expect("Pfad"),
+    ]);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert_eq!(manifest_value(&out, "step_budget_origin"), "gemessen");
+    let budget: u64 = manifest_value(&out, "step_budget_ps").parse().expect("Zahl");
+    assert!(budget > 8_869_048, "das Budget enthaelt T_IO: {budget}");
+    assert_eq!(manifest_value(&out, "entry_ns"), "1200", "der Eintrittsaufwand des eigenen Kerns");
+    assert_eq!(manifest_value(&out, "foreign_block_ns"), "1000");
+    assert_eq!(manifest_value(&out, "foreign_block_origin"), "Vertrag");
+    assert_eq!(manifest_value(&out, "isrs"), "uart:1100:10850:gemessen");
 }
 
 /// 12.11: Jede Form baut und traegt ihr Profil ins Manifest; zwei Laeufe in

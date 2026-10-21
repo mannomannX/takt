@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! takt bench --emit embed --target ZIEL [--hardware DATEI.hw] [--part I/N] --out VERZEICHNIS
-//! takt bench --import LOG… --target ZIEL [--loop LOG] [--load LOG…] [--natives LOG]
+//! takt bench --import LOG… --target ZIEL [--loop LOG] [--load LOG…] [--entry LOG…] [--natives LOG]
 //!            [--board NAME] [--hardware DATEI.hw] [--conformance DATEI]
 //! takt bench --board stm32f401|esp32c6 [--runs N] [--logs VERZEICHNIS]
 //!            [--hardware DATEI.hw] [--conformance DATEI]
@@ -237,6 +237,7 @@ fn import(args: &Args) -> bool {
             bench: args.files.iter().map(|f| read(f)).collect::<Result<_, _>>()?,
             looped: args.value("--loop").map(read).transpose()?,
             loads: args.values("--load").into_iter().map(read).collect::<Result<_, _>>()?,
+            entries: args.values("--entry").into_iter().map(read).collect::<Result<_, _>>()?,
             natives: args.value("--natives").map(read).transpose()?,
         })
     })();
@@ -313,6 +314,9 @@ fn keep(logs: &Logs, dir: &Path) -> Result<(), String> {
     }
     for (i, text) in logs.loads.iter().enumerate() {
         write(&dir.join(format!("load-{}.log", i + 1)), text)?;
+    }
+    for (i, text) in logs.entries.iter().enumerate() {
+        write(&dir.join(format!("entry-{}.log", i + 1)), text)?;
     }
     println!("  Protokolle: {}", dir.display());
     Ok(())

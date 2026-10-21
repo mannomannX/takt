@@ -37,12 +37,19 @@
 //! des Interpreters.
 //!
 //! **Die Leitung ist die Senke.** Den Trace schreibt der Rahmen ueber die
-//! Leitung des SDK nach stdout, wie auf jedem Board: der Anfangszustand ganz,
+//! Senke des SDK nach stdout, wie auf jedem Board: der Anfangszustand ganz,
 //! danach die Aenderungen und je Tick die Zeitzeile, am Ende die Bilanz und
 //! `takt end`. Ein Programm mit `persist` beginnt ueber sein Journal auf einem
 //! Flash im Speicher; die Nutzlast des Laufs schreibt das Journal aus
 //! `takt-rt-core` vorher hinein, und nach dem Lauf steht der Stand als Zeile
 //! `persist`.
+//!
+//! **Mehrere Instanzen** (12.11, FB-691): Ein Lauf kann dasselbe Programm
+//! mehrmals nebeneinander fahren, jede Instanz mit eigener Arena, eigenem
+//! Kern und eigener Senke und mit eigenem Zustand der Testtreiber (Zeiger der
+//! Stroeme, Tunables, Flash), den sie ueber `user` und die Rueckrufe des
+//! Wirts bekommt. Alle sehen denselben Stimulus; die erste schreibt wie
+//! allein, jede weitere mit der Marke `i<n> ` vor jeder Zeile ([`instance`]).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -90,6 +97,25 @@ pub struct Run<'a> {
     /// `guard`, `jitter` und `tick_granular` je Ausgang; ohne sie die Nullen
     /// der Simulation (7.5).
     pub hardware: Option<&'a takt_mir::hardware::Hardware>,
+    /// So viele Instanzen des Programms nebeneinander (12.11, FB-691); 0 und
+    /// 1 heissen eine.
+    pub instances: usize,
+}
+
+/// Der Trace der Instanz `i` aus der Ausgabe eines Laufs mit mehreren
+/// (FB-691): Die erste schreibt ohne Marke, jede weitere mit `i<n> ` vor
+/// jeder Zeile.
+pub fn instance(text: &str, i: usize) -> String {
+    let tagged = |l: &str| {
+        l.strip_prefix('i')
+            .and_then(|r| r.split_once(' '))
+            .is_some_and(|(n, _)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    if i == 0 {
+        return text.lines().filter(|l| !tagged(l)).map(|l| format!("{l}\n")).collect();
+    }
+    let tag = format!("i{i} ");
+    text.lines().filter_map(|l| l.strip_prefix(tag.as_str())).map(|l| format!("{l}\n")).collect()
 }
 
 /// Die Quellen eines Testwirts, je Dateiname.
@@ -209,7 +235,9 @@ pub fn run(
             stderr.join("\n")
         ));
     }
-    complete(&text, run.ticks)?;
+    for i in 0..run.instances.max(1) {
+        complete(&instance(&text, i), run.ticks)?;
+    }
     Ok(text)
 }
 
@@ -534,11 +562,11 @@ fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
     let drivers = takt_frame::drivers::of(p, &layout);
     let mut s = String::new();
     let _ = writeln!(s, "/* Testwirt des Differentials (13.8); erzeugt von takt-conformance. */");
-    let _ = writeln!(s, "#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n");
+    let _ = writeln!(s, "#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n");
     let _ = writeln!(s, "#include \"takt_sdk.h\"\n#include \"{x}.h\"\n");
     if let Some(mxcsr) = run.mxcsr {
         // Die Flags (5:0) darf jeder setzen; der Rest gehoert dem Wirt (4.2).
-        let _ = writeln!(s, "#include <stdlib.h>\n#include <xmmintrin.h>\n");
+        let _ = writeln!(s, "#include <xmmintrin.h>\n");
         let _ = writeln!(s, "static void host_fenv(const char *after) {{");
         let _ = writeln!(s, "    unsigned int now = _mm_getcsr();");
         let _ = writeln!(s, "    if ((now & ~0x3Fu) != {mxcsr:#x}u) {{");
@@ -575,10 +603,31 @@ fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
         if calls.is_empty() { "{ 0, 0, 0, 0 }".to_string() } else { calls.join(", ") }
     );
     let _ = writeln!(s, "static const size_t g_ncalls = {};\n", calls.len());
-    let _ = writeln!(
-        s,
-        "static uint8_t host_put(void *ctx, uint8_t byte) {{ return fputc((int)byte, (FILE *)ctx) != EOF; }}"
-    );
+    let n = run.instances.max(1);
+    if n == 1 {
+        let _ = writeln!(
+            s,
+            "static uint8_t host_put(void *ctx, uint8_t byte) {{ return fputc((int)byte, (FILE *)ctx) != EOF; }}"
+        );
+    } else {
+        // Die Senken geben ihre Bytes, wann sie wollen; nach stdout geht erst
+        // die ganze Zeile mit der Marke ihrer Instanz.
+        let _ = writeln!(s, "/* Die Leitung einer Instanz (FB-691): ganze Zeilen hinter ihrer Marke. */");
+        let _ = writeln!(s, "struct host_out {{ const char *tag; char *text; size_t len, cap; }};");
+        let _ = writeln!(
+            s,
+            "static void host_line(struct host_out *o) {{\n    fputs(o->tag, stdout);\n    \
+             fwrite(o->text, 1, o->len, stdout);\n    o->len = 0;\n}}"
+        );
+        let _ = writeln!(
+            s,
+            "static uint8_t host_put(void *ctx, uint8_t byte) {{\n    struct host_out *o = (struct host_out *)ctx;\n    \
+             if (o->len == o->cap) {{\n        size_t cap = o->cap == 0 ? 256 : 2 * o->cap;\n        \
+             char *text = (char *)realloc(o->text, cap);\n        if (text == NULL) return 0;\n        \
+             o->text = text;\n        o->cap = cap;\n    }}\n    o->text[o->len++] = (char)byte;\n    \
+             if (byte == '\\n') host_line(o);\n    return 1;\n}}"
+        );
+    }
     let _ = writeln!(s, "static void host_kick(void *ctx) {{ (void)ctx; }}\n");
     // Nach jedem Aufruf des SDK: MXCSR ist wieder der des Wirts.
     let fenv = |s: &mut String, indent: &str, after: &str| {
@@ -587,79 +636,130 @@ fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
         }
     };
     let _ = writeln!(s, "int main(void) {{");
-    let _ = writeln!(s, "    static uint8_t ring[4096];");
-    let _ = writeln!(s, "    static struct {x}_arena arena;");
-    let _ = writeln!(s, "    static takt_core core;");
+    let _ = writeln!(s, "    static uint8_t ring[{n}][4096];");
+    let _ = writeln!(s, "    static struct {x}_arena arena[{n}];");
+    let _ = writeln!(s, "    static takt_core core[{n}];");
+    let _ = writeln!(s, "    static takt_sink sink[{n}];");
+    let _ = writeln!(s, "    static struct takt_line line[{n}];");
+    let _ = writeln!(s, "    static struct host_instance inst[{n}];");
+    let _ = writeln!(s, "    static struct host_tunes tunes[{n}];");
+    let _ = writeln!(s, "    static struct takt_tunables tunables[{n}];");
+    let _ = writeln!(s, "    static uint8_t ended[{n}];");
+    if n > 1 {
+        let tags: Vec<String> = (0..n).map(|i| if i == 0 { "\"\"".into() } else { format!("\"i{i} \"") }).collect();
+        let _ = writeln!(s, "    static const char *const tags[{n}] = {{ {} }};", tags.join(", "));
+        let _ = writeln!(s, "    static struct host_out out[{n}];");
+    }
+    if persists {
+        let _ = writeln!(s, "    static struct host_flash flash[{n}];");
+        let _ = writeln!(s, "    static struct takt_nvm nvm[{n}];");
+        let _ =
+            writeln!(s, "    static uint8_t current[{n}][{upper}_PERSIST_BOUND], stored[{n}][{upper}_PERSIST_BOUND];");
+    }
     if let Some(mxcsr) = run.mxcsr {
         let _ = writeln!(s, "    _mm_setcsr({mxcsr:#x}u);");
     }
     if run.fill != 0 {
-        let _ = writeln!(s, "    memset(&arena, {:#04x}, sizeof arena);", run.fill);
+        let _ = writeln!(s, "    memset(arena, {:#04x}, sizeof arena);", run.fill);
     }
-    let _ = writeln!(s, "    const struct takt_line line = {{ stdout, host_put, NULL }};");
     let _ = writeln!(s, "    const struct takt_watchdog watchdog = {{ NULL, host_kick }};");
-    let _ = writeln!(s, "    const struct takt_tunables tunables = {{ NULL, host_tune, NULL }};");
-    let _ = writeln!(s, "    int32_t status = takt_line_init(&line, ring, sizeof ring);");
-    let _ = writeln!(s, "    if (status == TAKT_OK) {{");
-    let _ = writeln!(s, "        takt_line_mark();");
+    let _ = writeln!(s, "    int32_t status = TAKT_OK;");
+    let _ = writeln!(s, "    for (size_t c = 0; c < {n} && status == TAKT_OK; c++) {{");
+    if n > 1 {
+        let _ = writeln!(s, "        out[c].tag = tags[c];");
+    }
+    let line = if n == 1 { "stdout" } else { "&out[c]" };
+    let _ = writeln!(s, "        line[c] = (struct takt_line){{ {line}, host_put, NULL }};");
+    let _ = writeln!(s, "        tunes[c].at = UINT64_MAX;");
+    let _ = writeln!(s, "        tunables[c] = (struct takt_tunables){{ &tunes[c], host_tune, NULL }};");
+    let _ = writeln!(s, "        status = takt_sink_init(&sink[c], &line[c], ring[c], sizeof ring[c]);");
+    let _ = writeln!(s, "        if (status != TAKT_OK) break;");
+    let _ = writeln!(s, "        takt_sink_mark(&sink[c]);");
     if persists {
-        let _ = writeln!(s, "        static uint8_t current[{upper}_PERSIST_BOUND], stored[{upper}_PERSIST_BOUND];");
-        let _ = writeln!(s, "        host_flash_init();");
+        let _ = writeln!(s, "        host_flash_init(&flash[c]);");
         let _ = writeln!(
             s,
-            "        status = takt_core_init_journaled(&core, &{x}_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog, \
-             &host_nvm, current, stored, {upper}_PERSIST_BOUND);"
+            "        nvm[c] = (struct takt_nvm){{ &flash[c], HOST_SLOT, -1, host_erase, host_write, host_poll, host_read }};"
+        );
+        let _ = writeln!(
+            s,
+            "        status = takt_core_init_journaled(&core[c], &{x}_ops, &arena[c], &inst[c], &sink[c], \
+             TAKT_PROFILE_BAREMETAL, &watchdog, &nvm[c], current[c], stored[c], {upper}_PERSIST_BOUND);"
         );
     } else {
         let _ = writeln!(
             s,
-            "        status = takt_core_init(&core, &{x}_ops, &arena, NULL, TAKT_PROFILE_BAREMETAL, &watchdog);"
+            "        status = takt_core_init(&core[c], &{x}_ops, &arena[c], &inst[c], &sink[c], TAKT_PROFILE_BAREMETAL, \
+             &watchdog);"
         );
     }
     fenv(&mut s, "        ", "init");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    if (status != TAKT_OK) {{");
-    let _ = writeln!(s, "        fprintf(stderr, \"takt: Leitung oder Kern: %d\\n\", (int)status);");
+    let _ = writeln!(s, "        fprintf(stderr, \"takt: Senke oder Kern: %d\\n\", (int)status);");
     let _ = writeln!(s, "        return 2;");
     let _ = writeln!(s, "    }}");
     // Logische Zeit (12.11): die Uhr zu jeder Frist und zu jedem Ereignis des
-    // Stimulus; jeder Job rechnet zu Ende, bevor sie weiterspringt.
+    // Stimulus; jeder Job rechnet zu Ende, bevor sie weiterspringt. Die
+    // Instanzen rechnen je Zeitpunkt nacheinander; die Uhr springt zur
+    // fruehesten Frist, die eine nennt.
     let _ = writeln!(s, "    int64_t now = {}LL;", plan.start);
     let _ = writeln!(s, "    size_t e = 0;");
     let _ = writeln!(s, "    for (;;) {{");
     let _ = writeln!(s, "        for (; e < g_ncalls && g_calls[e].at <= now; e++) {{");
-    let _ = writeln!(s, "            if (g_calls[e].abort) takt_core_abort(&core);");
-    let _ = writeln!(s, "            if (g_calls[e].hardware) takt_core_hardware_fault(&core);");
-    let _ = writeln!(s, "            if (g_calls[e].wake) takt_core_wake(&core);");
+    let _ = writeln!(s, "            for (size_t c = 0; c < {n}; c++) {{");
+    let _ = writeln!(s, "                if (ended[c]) continue;");
+    let _ = writeln!(s, "                if (g_calls[e].abort) takt_core_abort(&core[c]);");
+    let _ = writeln!(s, "                if (g_calls[e].hardware) takt_core_hardware_fault(&core[c]);");
+    let _ = writeln!(s, "                if (g_calls[e].wake) takt_core_wake(&core[c]);");
+    let _ = writeln!(s, "            }}");
     let _ = writeln!(s, "        }}");
-    let _ = writeln!(s, "        takt_next next = takt_core_service_with(&core, now, &tunables);");
-    fenv(&mut s, "        ", "service");
-    let _ = writeln!(s, "        if (next.jobs) {{");
-    let _ = writeln!(s, "            takt_core_job_work(&core);");
-    fenv(&mut s, "            ", "job_work");
-    let _ = writeln!(s, "            continue;");
+    let _ = writeln!(s, "        int64_t at = INT64_MAX;");
+    let _ = writeln!(s, "        size_t running = 0;");
+    let _ = writeln!(s, "        for (size_t c = 0; c < {n}; c++) {{");
+    let _ = writeln!(s, "            if (ended[c]) continue;");
+    let _ = writeln!(s, "            takt_next next = takt_core_service_with(&core[c], now, &tunables[c]);");
+    fenv(&mut s, "            ", "service");
+    let _ = writeln!(s, "            while (next.jobs) {{");
+    let _ = writeln!(s, "                takt_core_job_work(&core[c]);");
+    fenv(&mut s, "                ", "job_work");
+    let _ = writeln!(s, "                next = takt_core_service_with(&core[c], now, &tunables[c]);");
+    fenv(&mut s, "                ", "service");
+    let _ = writeln!(s, "            }}");
+    let _ = writeln!(s, "            if (next.ended != 0) {{");
+    let _ = writeln!(s, "                ended[c] = 1;");
+    let _ = writeln!(s, "                continue;");
+    let _ = writeln!(s, "            }}");
+    let _ = writeln!(s, "            running++;");
+    let _ = writeln!(s, "            if (next.deadline_ns < at) at = next.deadline_ns;");
     let _ = writeln!(s, "        }}");
-    let _ = writeln!(s, "        if (next.ended != 0) break;");
-    let _ = writeln!(s, "        int64_t at = next.deadline_ns;");
+    let _ = writeln!(s, "        if (running == 0) break;");
     let _ = writeln!(s, "        if (e < g_ncalls && (g_calls[e].at < at || g_calls[e].late)) at = g_calls[e].at;");
     let _ = writeln!(s, "        if (at > {horizon}LL) break;");
     let _ = writeln!(s, "        now = at;");
     let _ = writeln!(s, "    }}");
+    let _ = writeln!(s, "    for (size_t c = 0; c < {n}; c++) {{");
     if persists {
         // Der Stand nach dem Lauf (5.9), wie die Zeile `persist` des Interpreters.
-        let _ = writeln!(s, "    takt_core_finish(&core);");
-        fenv(&mut s, "    ", "finish");
-        let _ = writeln!(s, "    {{");
-        let _ = writeln!(s, "        static uint8_t out[{upper}_PERSIST_BOUND];");
-        let _ = writeln!(s, "        int32_t n = {x}_persist_snapshot(&arena, out, (int32_t)sizeof out);");
+        let _ = writeln!(s, "        takt_core_finish(&core[c]);");
+        fenv(&mut s, "        ", "finish");
+        let _ = writeln!(s, "        static uint8_t snapshot[{upper}_PERSIST_BOUND];");
+        let _ = writeln!(s, "        int32_t n = {x}_persist_snapshot(&arena[c], snapshot, (int32_t)sizeof snapshot);");
         let _ = writeln!(s, "        fflush(stdout);");
-        let _ = writeln!(s, "        printf(\"t={} persist \");", run.ticks);
-        let _ = writeln!(s, "        for (int32_t i = 0; i < n; i++) printf(\"%02x\", out[i]);");
+        if n == 1 {
+            let _ = writeln!(s, "        printf(\"t={} persist \");", run.ticks);
+        } else {
+            let _ = writeln!(s, "        printf(\"%st={} persist \", tags[c]);", run.ticks);
+        }
+        let _ = writeln!(s, "        for (int32_t i = 0; i < n; i++) printf(\"%02x\", snapshot[i]);");
         let _ = writeln!(s, "        printf(\"\\n\");");
-        let _ = writeln!(s, "    }}");
     }
-    let _ = writeln!(s, "    takt_core_report(&core, NULL, NULL);");
-    fenv(&mut s, "    ", "report");
+    let _ = writeln!(s, "        takt_core_report(&core[c], NULL, NULL);");
+    fenv(&mut s, "        ", "report");
+    if n > 1 {
+        let _ = writeln!(s, "        if (out[c].len != 0) host_line(&out[c]);");
+    }
+    let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    fflush(stdout);");
     let _ = writeln!(s, "    return 0;");
     let _ = writeln!(s, "}}");
@@ -679,6 +779,16 @@ fn drivers_c(s: &mut String, drivers: &[takt_frame::drivers::Driver], plan: &Pla
         "/* Ein Element eines Eingabestroms: Zeit seines Ticks, Bytes, Zeitstempel, Folgenummer. */\n\
          struct host_element {{ int64_t at; const uint8_t *bytes; int32_t len; int64_t t, seq; uint8_t has_seq; }};\n"
     );
+    // FB-691: Was ein Testtreiber ueber den Tick hinaus haelt, liegt je
+    // Instanz im Objekt hinter `user`.
+    let streams =
+        drivers.iter().filter(|d| d.kind == Kind::Poll && plan.elements.get(&d.address).is_some_and(|e| !e.is_empty()));
+    let _ = writeln!(
+        s,
+        "/* Der Zustand der Testtreiber je Instanz: der Zeiger jedes Stroms. */\nstruct host_instance {{ size_t next[{}]; }};\n",
+        streams.count().max(1)
+    );
+    let mut stream = 0usize;
     for d in drivers {
         let symbol = d.symbol(x);
         let signature = prototypes
@@ -734,16 +844,17 @@ fn drivers_c(s: &mut String, drivers: &[takt_frame::drivers::Driver], plan: &Pla
                     let _ = writeln!(s, "    return 0;");
                 } else {
                     let (g, n) = (format!("g_{symbol}"), elements.len());
-                    let _ = writeln!(s, "    static size_t next = 0;");
+                    let _ = writeln!(s, "    size_t *next = &((struct host_instance *)user)->next[{stream}];");
+                    stream += 1;
                     // Was ein Tick nicht abholte, verfaellt mit ihm: Der Stimulus
                     // nennt die Lieferungen seines Ticks (12.6 Zeile 2).
-                    let _ = writeln!(s, "    while (next < {n} && {g}[next].at < now) next++;");
-                    let _ = writeln!(s, "    if (next >= {n} || {g}[next].at != now) return 0;");
-                    let _ = writeln!(s, "    int32_t n = {g}[next].len < cap ? {g}[next].len : cap;");
-                    let _ = writeln!(s, "    if (n > 0) memcpy(buf, {g}[next].bytes, (size_t)n);");
-                    let _ = writeln!(s, "    *len = n; *t = {g}[next].t;");
-                    let _ = writeln!(s, "    if ({g}[next].has_seq) *seq = {g}[next].seq;");
-                    let _ = writeln!(s, "    next++;");
+                    let _ = writeln!(s, "    while (*next < {n} && {g}[*next].at < now) (*next)++;");
+                    let _ = writeln!(s, "    if (*next >= {n} || {g}[*next].at != now) return 0;");
+                    let _ = writeln!(s, "    int32_t n = {g}[*next].len < cap ? {g}[*next].len : cap;");
+                    let _ = writeln!(s, "    if (n > 0) memcpy(buf, {g}[*next].bytes, (size_t)n);");
+                    let _ = writeln!(s, "    *len = n; *t = {g}[*next].t;");
+                    let _ = writeln!(s, "    if ({g}[*next].has_seq) *seq = {g}[*next].seq;");
+                    let _ = writeln!(s, "    (*next)++;");
                     let _ = writeln!(s, "    return 1;");
                 }
             }
@@ -795,7 +906,8 @@ fn failing_c(s: &mut String, failing: Option<&Vec<i64>>, fail: &str, ok: &str) {
 }
 
 /// Die Tunables des Stimulus als Quelle des Wirts (`struct takt_tunables`,
-/// 8.4): je Grenze des Kerns ihre Aenderungen in Reihenfolge.
+/// 8.4): je Grenze des Kerns ihre Aenderungen in Reihenfolge. Wie weit eine
+/// Instanz gelesen hat, steht in ihrem `struct host_tunes` (FB-691).
 fn tunables_c(s: &mut String, plan: &Plan) {
     let rows: Vec<String> = plan
         .tunes
@@ -817,18 +929,19 @@ fn tunables_c(s: &mut String, plan: &Plan) {
         rows.len().max(1),
         if rows.is_empty() { "{ 0, 0, 0, 0 }".to_string() } else { rows.join(", ") }
     );
+    let _ = writeln!(s, "/* Wie weit eine Instanz die Tunables gelesen hat: Grenze, Zeile. */");
+    let _ = writeln!(s, "struct host_tunes {{ uint64_t at; size_t i; }};");
     let _ = writeln!(
         s,
         "static int32_t host_tune(void *ctx, uint64_t k, uint32_t *param, const uint8_t **value, uint32_t *len) {{"
     );
-    let _ = writeln!(s, "    static uint64_t at = UINT64_MAX;");
-    let _ = writeln!(s, "    static size_t i = 0;");
-    let _ = writeln!(s, "    (void)ctx;");
-    let _ = writeln!(s, "    if (k != at) {{ at = k; i = 0; }}");
-    let _ = writeln!(s, "    for (; i < {}; i++) {{", rows.len());
-    let _ = writeln!(s, "        if (g_tunes[i].k != k) continue;");
-    let _ = writeln!(s, "        *param = g_tunes[i].param; *value = g_tunes[i].value; *len = g_tunes[i].len;");
-    let _ = writeln!(s, "        i++;");
+    let _ = writeln!(s, "    struct host_tunes *r = (struct host_tunes *)ctx;");
+    let _ = writeln!(s, "    if (k != r->at) {{ r->at = k; r->i = 0; }}");
+    let _ = writeln!(s, "    for (; r->i < {}; r->i++) {{", rows.len());
+    let _ = writeln!(s, "        if (g_tunes[r->i].k != k) continue;");
+    let _ =
+        writeln!(s, "        *param = g_tunes[r->i].param; *value = g_tunes[r->i].value; *len = g_tunes[r->i].len;");
+    let _ = writeln!(s, "        r->i++;");
     let _ = writeln!(s, "        return 1;");
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    (void)param; (void)value; (void)len;");
@@ -840,12 +953,13 @@ fn tunables_c(s: &mut String, plan: &Plan) {
 /// Vorgang sofort fertig. Die Nutzlast `payload` schreibt das Journal aus
 /// `takt-rt-core` vorher hinein, mit dem Logik-Hash des Programms als
 /// Schluessel — derselbe Weg, auf dem ein voriger Lauf sie hinterliesse.
+/// Jede Instanz hat ihr Flash (`struct host_flash`, FB-691); alle beginnen
+/// mit derselben Nutzlast.
 fn flash_c(s: &mut String, p: &Program, payload: &[u8]) -> Result<(), String> {
     let image = journal_image(p, payload)?;
-    let _ = writeln!(s, "/* Das Flash des Journals (5.9). */");
+    let _ = writeln!(s, "/* Das Flash des Journals (5.9), eines je Instanz. */");
     let _ = writeln!(s, "#define HOST_SLOT {SLOT}u");
-    let _ = writeln!(s, "static uint8_t host_slots[2][HOST_SLOT];");
-    let _ = writeln!(s, "static int32_t host_pending = TAKT_NVM_IDLE;");
+    let _ = writeln!(s, "struct host_flash {{ uint8_t slots[2][HOST_SLOT]; int32_t pending; }};");
     for (i, slot) in image.iter().enumerate() {
         let used = slot.iter().rposition(|b| *b != 0xff).map_or(0, |n| n + 1);
         let list: Vec<String> = slot[..used].iter().map(u8::to_string).collect();
@@ -856,37 +970,36 @@ fn flash_c(s: &mut String, p: &Program, payload: &[u8]) -> Result<(), String> {
             if list.is_empty() { "0xff".to_string() } else { list.join(", ") }
         );
     }
-    let _ = writeln!(s, "static void host_flash_init(void) {{");
-    let _ = writeln!(s, "    memset(host_slots, 0xff, sizeof host_slots);");
+    let _ = writeln!(s, "static void host_flash_init(struct host_flash *f) {{");
+    let _ = writeln!(s, "    memset(f->slots, 0xff, sizeof f->slots);");
     for i in 0..2 {
-        let _ = writeln!(s, "    memcpy(host_slots[{i}], host_image{i}, sizeof host_image{i});");
+        let _ = writeln!(s, "    memcpy(f->slots[{i}], host_image{i}, sizeof host_image{i});");
     }
+    let _ = writeln!(s, "    f->pending = TAKT_NVM_IDLE;");
     let _ = writeln!(s, "}}");
     let _ = writeln!(
         s,
-        "static uint8_t host_erase(void *ctx, uint8_t slot) {{ (void)ctx; memset(host_slots[slot & 1u], 0xff, HOST_SLOT); \
-         host_pending = TAKT_NVM_DONE; return 1; }}"
+        "static uint8_t host_erase(void *ctx, uint8_t slot) {{\n    struct host_flash *f = (struct host_flash *)ctx;\n    \
+         memset(f->slots[slot & 1u], 0xff, HOST_SLOT);\n    f->pending = TAKT_NVM_DONE;\n    return 1;\n}}"
     );
     let _ = writeln!(
         s,
         "static uint8_t host_write(void *ctx, uint8_t slot, uint32_t offset, const uint8_t *bytes, uint32_t len) {{\n    \
-         (void)ctx;\n    if (offset > HOST_SLOT || len > HOST_SLOT - offset) {{ host_pending = TAKT_NVM_FAILED; return 1; }}\n    \
-         memcpy(&host_slots[slot & 1u][offset], bytes, len);\n    host_pending = TAKT_NVM_DONE;\n    return 1;\n}}"
+         struct host_flash *f = (struct host_flash *)ctx;\n    \
+         if (offset > HOST_SLOT || len > HOST_SLOT - offset) {{ f->pending = TAKT_NVM_FAILED; return 1; }}\n    \
+         memcpy(&f->slots[slot & 1u][offset], bytes, len);\n    f->pending = TAKT_NVM_DONE;\n    return 1;\n}}"
     );
     let _ = writeln!(
         s,
-        "static int32_t host_poll(void *ctx) {{ (void)ctx; int32_t state = host_pending; host_pending = TAKT_NVM_IDLE; \
-         return state; }}"
+        "static int32_t host_poll(void *ctx) {{\n    struct host_flash *f = (struct host_flash *)ctx;\n    \
+         int32_t state = f->pending;\n    f->pending = TAKT_NVM_IDLE;\n    return state;\n}}"
     );
     let _ = writeln!(
         s,
         "static uint8_t host_read(void *ctx, uint8_t slot, uint32_t offset, uint8_t *into, uint32_t len) {{\n    \
-         (void)ctx;\n    if (offset > HOST_SLOT || len > HOST_SLOT - offset) return 0;\n    \
-         memcpy(into, &host_slots[slot & 1u][offset], len);\n    return 1;\n}}"
-    );
-    let _ = writeln!(
-        s,
-        "static const struct takt_nvm host_nvm = {{ NULL, HOST_SLOT, -1, host_erase, host_write, host_poll, host_read }};\n"
+         const struct host_flash *f = (const struct host_flash *)ctx;\n    \
+         if (offset > HOST_SLOT || len > HOST_SLOT - offset) return 0;\n    \
+         memcpy(into, &f->slots[slot & 1u][offset], len);\n    return 1;\n}}\n"
     );
     Ok(())
 }
@@ -1000,6 +1113,17 @@ machine m:
         assert!(complete(text, 10).is_ok());
         assert!(complete(text, 11).is_err_and(|e| e.contains("bis Tick 10 von 11")));
         assert!(complete("t=1 time took=0 drift=0 slept=20\n", 10).is_err(), "ohne `takt end`");
+    }
+
+    /// Jede Instanz liest nur ihre Zeilen: die erste die ohne Marke, jede
+    /// weitere die hinter `i<n> ` (FB-691).
+    #[test]
+    fn each_instance_reads_its_own_lines() {
+        let text = "takt trace\ni1 takt trace\nt=0 out y 1\ni12 t=0 out y 2\ni1 t=0 out y 3\nin x\n";
+        assert_eq!(instance(text, 0), "takt trace\nt=0 out y 1\nin x\n");
+        assert_eq!(instance(text, 1), "takt trace\nt=0 out y 3\n");
+        assert_eq!(instance(text, 12), "t=0 out y 2\n");
+        assert_eq!(instance(text, 2), "");
     }
 
     /// Das Journal des Laufs haelt die Nutzlast: Ein Journal ueber den Slots

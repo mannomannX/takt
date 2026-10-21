@@ -48,12 +48,12 @@ Workspace ohne Zeile, keine Zeile ohne Crate.
 | takt-board-esp32c6 | Register des ESP32-C6 (SYSTIMER, USB-Serial-JTAG, GPIO, MWDT), CSR-Zugriffe, `wfi` |
 | takt-board-stm32f401 | Register des STM32F401 (TIM2, USART1, IWDG, GPIO, Flash), DWT, `wfi` |
 | takt-native-abi | die C-Einstiege der kuratierten Natives (`takt_native_*`), die der erzeugte Code auf Wirt und Board ruft; gerechnet wird in `takt-native` und `takt-crypto` (4.5, FB-293) |
-| takt-bringup-esp32c6 | die Hülle der Lieferform (`app.rs`) hinter der C-ABI des Programms und seines Rahmens (12.11), der erzeugte Kleber der Treiber (`app_in_*`, `app_out_*`, …) zum Prüfstand, Geräte über statische Peripherie, `takt_board_trace*` hinter der C-ABI |
+| takt-bringup-esp32c6 | die Hülle der Lieferform (`app.rs`) hinter der C-ABI des Programms und seines Rahmens (12.11), der erzeugte Kleber der Treiber (`app_in_*`, `app_out_*`, …) zum Prüfstand, Geräte über statische Peripherie, die Haken `takt_trace_*` (`takt_embed::hooks!`) über der Leitung als Senke |
 | takt-trampoline-stm32f401 | das Sprungbrett in Sektor 1 der Black Pill (FB-385): liest die Vektortabelle der Anwendung in Sektor 4 und springt hinein, ohne sie in den DFU-Bootloader des ROM (`takt-board-stm32f401::bootloader`) |
 | takt-bringup-stm32f401 | dasselbe für die Black Pill; im Profil `shared` dazu RTIC 2 und `rtic-sync` — das RTOS gehört dort zur TCB (12.8) |
-| takt-bringup-host | die Schleife auf dem Wirt für `takt driver-test --crate` (13.8): `takt_board_trace*` hinter der C-ABI, die Leitung als statische Konsole; Lieferform, Hülle und Kleber zum Prüfstand bindet das Programm, das `takt-conformance::board::host` erzeugt |
-| takt-embed | Takt als Baustein in Rust (12.11): in der Testhilfe `takt_board_trace*` hinter der C-ABI, die Leitung je Faden; die Geräte-Traits und der Bauhelfer stehen unter `deny(unsafe_code)` |
-| takt-embed-c | Takt als Baustein in C (12.11, M11 Schritt 18a): der Kern ohne Warten hinter der C-ABI (`takt_core_*`), die Tabelle `P_ops` und das Gerät des Journals als Rückrufe des Wirts, der Kern im Speicher des Wirts (`takt_core`); dazu der Panic-Handler des Archivs (`abort`) |
+| takt-bringup-host | die Schleife auf dem Wirt für `takt driver-test --crate` (13.8): die Haken `takt_trace_*` (`takt_embed::hooks!`) über der Konsole als Senke, die Leitung als statische Konsole; Lieferform, Hülle und Kleber zum Prüfstand bindet das Programm, das `takt-conformance::board::host` erzeugt |
+| takt-embed | Takt als Baustein in Rust (12.11): die Haken `takt_trace_*` hinter der C-ABI, die das Makro `hooks!` für die eine Senke eines Wirts stellt (`trace`), in der Testhilfe die Senke je Faden; die Geräte-Traits und der Bauhelfer stehen unter `deny(unsafe_code)` |
+| takt-embed-c | Takt als Baustein in C (12.11, M11 Schritt 18a): der Kern ohne Warten hinter der C-ABI (`takt_core_*`), die Tabelle `P_ops` und das Gerät des Journals als Rückrufe des Wirts, der Kern und seine Senke im Speicher des Wirts (`takt_core`, `takt_sink`) mit den Haken `takt_trace_*`; dazu der Panic-Handler des Archivs (`abort`) |
 
 **Rechnen außerhalb der TCB.** Was in einem Board-Crate keine
 Registerarbeit ist — Perioden in Timer-Schritte, Zyklen in Nanosekunden,
@@ -472,7 +472,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 
 | Befund | Teil | Zahl | Regel | Grund |
 |---|---|---|---|---|
-| `misra-c2012-1.4` | SDK | 1 | MISRA C:2012 1.4 (R) | `_Alignas(8)` am Speicher des Kerns: Das Archiv legt dort einen Rust-Typ mit Ausrichtung 8 ab; ohne die Angabe hinge sie an der ABI des Wirts |
+| `misra-c2012-1.4` | SDK | 2 | MISRA C:2012 1.4 (R) | `_Alignas(8)` am Speicher des Kerns und der Senke (`takt_core`, `takt_sink`): Das Archiv legt dort Rust-Typen mit Ausrichtung 8 ab; ohne die Angabe hinge sie an der ABI des Wirts |
 | `misra-c2012-2.5` | SDK | 19 | MISRA C:2012 2.5 (A) | Die Konstanten (`TAKT_NVM_*`, `TAKT_ERR_*`, `TAKT_NEXT_*`, `TAKT_PROFILE_*`) sind Schnittstelle für jeden Wirt; eine Bindung nutzt nur einige |
 | `constParameterPointer` | Port | 2 | MISRA C:2012 8.13 (A) | Fehlmeldung: `pthread_attr_setstack` nimmt den Stack als `void *`, und der Faden schreibt hinein; `const` brauchte einen Cast, der es wieder entfernt (11.8). Und `takt_os_join` des POSIX-Adapters liest den Zustand nur, doch der Vertrag `takt_os.h` gilt jedem Adapter, und unter Zephyr schreibt das Warten in den Faden (`k_thread_join`) |
 | `constParameterCallback` | Port | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: Der Einstieg eines Fadens (`takt_os_run`) hat die Gestalt, die `pthread_create` verlangt (`void *(*)(void *)`) |
@@ -512,7 +512,7 @@ Namen (Aliase einer Prüfung), zählt sie unter dem aus CERT C.
 | `misra-c2012-11.5` | IDF-Bau | 5 | MISRA C:2012 11.5 (A) | Das Gerät des Journals bekommt sich als `void *`: seine Rückrufe (`struct takt_nvm`, `takt_sdk.h`) und der Einstieg seiner Aufgabe (`xTaskCreateStatic`) |
 | `constParameterCallback` | IDF-Bau | 1 | MISRA C:2012 8.13 (A) | Fehlmeldung: Die Gestalt von `read` des Geräts gibt `struct takt_nvm` vor (`takt_sdk.h`); die übrigen Rückrufe schreiben in das Gerät |
 | `clang-analyzer-security.ArrayBound` | Rahmen | 2 | CERT C ARR30-C | Fehlmeldung: Der Kopf eines Rings liegt stets unter seiner Kapazität (`takt_int_push` und `takt_int_pop` halten es), der Index darum nach einer Subtraktion im Ring; die Invariante über Aufrufe sieht der Analyzer nicht |
-| `constParameterPointer` | Rahmen | 83 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
+| `constParameterPointer` | Rahmen | 53 | MISRA C:2012 8.13 (A) | Die Einstiege und Helfer nehmen die Arena veränderlich, weil der Text für jedes Programm derselbe ist; was in einem Programm nur liest, schreibt in einem anderen |
 | `knownConditionTrueFalse` | Rahmen | 16 | MISRA C:2012 14.3 (R) | Der Rahmen ist für jedes Programm derselbe Text mit dessen Konstanten; eine Bedingung, die für ein Programm feststeht (keine Jobs, kein `next_run`), entscheidet in einem anderen, und der Übersetzer entfernt den toten Zweig |
 | `misc-no-recursion` | Rahmen | 8 | MISRA C:2012 17.2 (R) | `takt_dump_field` und `takt_dump_fields` steigen nur im Trace in die Felder eines Records ab; die Tiefe ist die Schachtelung der Typen des Programms, eine Konstante, und der Stack des Ticks ist gemessen (12.3) |
 | `misra-c2012-1.4` | Rahmen | 112 | MISRA C:2012 1.4 (R) | `_Alignas` und `_Alignof`: Arena und Puffer des Randes liegen ausgerichtet, wie der erzeugte LLVM-Code sie liest (12.11) |

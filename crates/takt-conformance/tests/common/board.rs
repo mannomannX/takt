@@ -6,6 +6,7 @@ use std::path::PathBuf;
 pub use takt_conformance::board::Drift;
 use takt_conformance::board::{self, Board, Flaw, Form, Options};
 use takt_conformance::compare;
+use takt_conformance::couple;
 use takt_conformance::port;
 use takt_mir::program::Program;
 pub use takt_rt_core::protection::Case;
@@ -134,7 +135,7 @@ pub fn driver_edge_agrees(board: &mut dyn Board) -> Vec<String> {
         failed.push(format!("Interpreter: `failing` steht in Tick 1 nicht in FAULTED:\n{interpreted}"));
     }
     // FAULTED setzt den Ausgang auf `safe` (5.3), im selben Tick.
-    if !text.lines().any(|l| l.trim_end() == "t=1 out f 0") {
+    if !text.lines().any(|l| l.trim_end() == "t=1 out f false") {
         failed.push(format!("{}: `f` geht in Tick 1 nicht auf `safe`:\n{text}", board.name()));
     }
     eprintln!("{} Treiberrand: {} Abweichungen", board.name(), failed.len());
@@ -398,7 +399,7 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
     let mut failed = Vec::new();
     match run(&program, Options::fresh(20).with_hardware(hardware.clone())) {
         Ok(with) => {
-            if !with.lines().any(|l| l.contains("out probe 1")) {
+            if !with.lines().any(|l| l.contains("out probe true")) {
                 failed.push(format!("1 ms voraus geht nicht durch:\n{with}"));
             }
             if !with.lines().any(|l| l.contains("fault m") && l.contains("Timing")) {
@@ -413,8 +414,8 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
         }
         // Beide geplanten Ausgaben kommen an: erst die Eins, dann die Null.
         Ok(without) => {
-            let one = without.lines().position(|l| l.contains("out probe 1"));
-            let zero = one.and_then(|i| without.lines().skip(i).position(|l| l.contains("out probe 0")));
+            let one = without.lines().position(|l| l.contains("out probe true"));
+            let zero = one.and_then(|i| without.lines().skip(i).position(|l| l.contains("out probe false")));
             if zero.is_none() {
                 failed.push(format!("ohne `guard` fehlen `out probe 1` und danach `out probe 0`:\n{without}"));
             }
@@ -451,8 +452,8 @@ pub fn a_schedule_inside_the_guard_is_a_timing_fault(board: &mut dyn Board) -> V
         (Some(k), [fault]) if tick_of(fault) == Some(k) && fault.contains("Timing") => {}
         _ => failed.push(format!("`at now + {guard} ns` faultet nicht im Tick des Eintritts in EDGE:\n{text}")),
     }
-    let one = text.lines().position(|l| l.contains("out probe 1"));
-    if one.and_then(|i| text.lines().skip(i).position(|l| l.contains("out probe 0"))).is_none() {
+    let one = text.lines().position(|l| l.contains("out probe true"));
+    if one.and_then(|i| text.lines().skip(i).position(|l| l.contains("out probe false"))).is_none() {
         failed.push(format!("`at now + {} ns` geht nicht durch:\n{text}", guard + 1));
     }
     if !text.contains(&format!("out spread {spread} ns")) {
@@ -1529,6 +1530,264 @@ pub fn zephyr_access_in_the_run_faults(name: &str, run: Result<String, String>) 
     let last = port::TICKS - 1;
     if !trace.lines().any(|l| l.starts_with(&format!("t={last} "))) {
         failed.push(format!("zephyr-probe: der Trace reicht nicht bis Tick {last}"));
+    }
+    failed
+}
+
+/// Ticks von `fast` im Lauf eines Paars: zwei Sekunden bei 1 kHz (12.11).
+pub const PAIR_TICKS: u64 = 2000;
+
+/// Eine Millisekunde, der Tick von `fast`; der von `slow` ist zehnmal so lang.
+const MS: i64 = 1_000_000;
+
+/// Die Zeilen eines Programms eines Paars ohne sein Praefix, jede mit ihrem
+/// Zeilenende (12.11: ein Leser stellt jeder Zeile das Praefix voran).
+fn lines_of(text: &str, prefix: &str) -> String {
+    text.split_inclusive('\n').filter_map(|l| l.strip_prefix(prefix)).collect()
+}
+
+/// Die Zahl hinter `word` in der letzten Bilanz von `text`.
+fn count_after(text: &str, word: &str) -> Option<u64> {
+    let summary = &text[text.rfind("takt schlief ")?..];
+    let mut words = summary.split_whitespace();
+    words.find(|w| *w == word)?;
+    words.next()?.parse().ok()
+}
+
+/// Kam der Trace eines Programms ganz an? Seine Marke, seine Bilanz, nichts
+/// verworfen, und angekommen, was es sandte (FB-292, FB-304).
+fn whole(name: &str, text: &str) -> Result<(), String> {
+    let mark = text.find(board::MARK).ok_or_else(|| format!("{name}: keine Marke `takt trace`"))?;
+    let summary = text.rfind("takt schlief ").ok_or_else(|| format!("{name}: keine Bilanz"))?;
+    match count_after(text, "verworfen") {
+        Some(0) => {}
+        other => return Err(format!("{name}: die Telemetrie verwarf {other:?} Byte")),
+    }
+    let sent = count_after(text, "gesendet").ok_or_else(|| format!("{name}: die Bilanz nennt kein `gesendet`"))?;
+    let arrived = summary.saturating_sub(mark + board::MARK.len());
+    if u64::try_from(arrived).ok() != Some(sent) {
+        return Err(format!("{name}: gesendet {sent} Byte, angekommen {arrived}"));
+    }
+    Ok(())
+}
+
+/// Der Stimulus von `slow` aus dem Trace von `fast` (12.11,
+/// `takt_conformance::couple`): `fast` ist hoeher und gibt `asap` frei.
+fn slow_stimulus(fast: &str, ticks: u64) -> String {
+    let w = couple::Writer { tick_ns: MS, boundary: false, higher: true };
+    couple::stimulus(fast, "count", "seen", 10 * MS, w, ticks)
+}
+
+/// Der Stimulus von `fast` aus dem Trace von `slow`: `slow` ist niedriger
+/// und gibt unter `boundary` frei.
+fn fast_stimulus(slow: &str, ticks: u64) -> String {
+    let w = couple::Writer { tick_ns: 10 * MS, boundary: true, higher: false };
+    couple::stimulus(slow, "last", "back", MS, w, ticks)
+}
+
+/// Der Trace des Interpreters fuer `p` ueber `ticks` Ticks mit `stimulus`.
+fn interpreted_with(p: &Program, stimulus: &str, ticks: u64) -> String {
+    let trace = takt_interp::Trace::parse(stimulus).unwrap_or_else(|e| panic!("Stimulus: {e:?}"));
+    let options = takt_interp::RunOptions { ticks, inputs: true, ..Default::default() };
+    takt_interp::run(p, &trace, &options).expect("Lauf").trace.render()
+}
+
+/// Ein Wert eines Manifests (12.11).
+fn manifest_value(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .find_map(|l| Some(l.split_once('=')?).filter(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string()))
+}
+
+/// `takt` fuer `check-image`: `TAKT_TOOL` (so nennt `tools/board-run.ps1`
+/// das `takt` eines Laufs aus CI), sonst das des Zielverzeichnisses.
+fn takt_tool() -> std::path::PathBuf {
+    std::env::var_os(takt_conformance::bringup::TOOL).map_or_else(
+        || takt_conformance::target_dir().join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" }),
+        std::path::PathBuf::from,
+    )
+}
+
+/// Die Antwortzeit jedes Programms in Nanosekunden, wie `takt check-image`
+/// sie fuer das Abbild und die Manifeste daneben berichtet (12.11); `None`
+/// fuer eine offene oder eine ueber dem Tick.
+fn response_times(elf: &std::path::Path) -> Result<BTreeMap<String, Option<u64>>, String> {
+    let tool = takt_tool();
+    let mut check = std::process::Command::new(&tool);
+    check.arg("check-image").arg(elf);
+    for prefix in ["fast", "slow"] {
+        check.arg("--manifest").arg(board::pair_manifest(elf, prefix));
+    }
+    let out = check.output().map_err(|e| format!("{}: {e}", tool.display()))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let times: BTreeMap<String, Option<u64>> = text
+        .lines()
+        .filter_map(|l| {
+            let (name, rest) = l.split_once("] ")?.1.split_once(": Antwortzeit ")?;
+            Some((name.to_string(), rest.split_once(" ns bei einem Tick").and_then(|(n, _)| n.parse().ok())))
+        })
+        .collect();
+    if times.len() < 2 {
+        return Err(format!(
+            "`takt check-image` nennt keine Antwortzeiten:\n{text}{}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(times)
+}
+
+/// Der laengste Lauf der ISR der Leitung in Nanosekunden, wie das Binary
+/// `pair` ihn misst.
+fn measured_isr(text: &str) -> Option<u64> {
+    text.lines().find_map(|l| l.trim_end().strip_prefix("takt isr uart laengste ")?.strip_suffix(" ns")?.parse().ok())
+}
+
+/// Die zugesagten Kosten der ISR der Leitung in Nanosekunden, aus dem
+/// Manifest.
+fn declared_isr(elf: &std::path::Path) -> Option<u64> {
+    let text = std::fs::read_to_string(board::pair_manifest(elf, "fast")).ok()?;
+    let entry = manifest_value(&text, "isrs")?;
+    entry.split(',').map(str::trim).find_map(|e| e.strip_prefix("uart:")?.split(':').next()?.parse().ok())
+}
+
+/// Die laengste gemessene Antwort eines Programms: Rueckstand und Dauer
+/// seines Schritts, aus den Zeitzeilen (7.3).
+fn measured_response(trace: &str) -> Option<i64> {
+    trace
+        .lines()
+        .filter_map(|l| {
+            let rest = l.trim_end().strip_prefix("t=")?.split_once(" time ")?.1;
+            let field = |name: &str| rest.split_whitespace().find_map(|w| w.strip_prefix(name)?.parse::<i64>().ok());
+            Some(field("took=")?.saturating_add(field("drift=")?))
+        })
+        .max()
+}
+
+/// **Zwei Programme auf einem Kern rechnen wie der Interpreter, und keines
+/// antwortet spaeter als berichtet** (12.11, M11 Schritt 16). `fast` (1 kHz)
+/// und `slow` (100 Hz) laufen in Echtzeit, gekoppelt ueber die Mailbox in
+/// beide Richtungen. Jeder Trace kam ganz an; der Stimulus jedes Programms
+/// folgt aus dem Trace des anderen nach 12.11, und beide gleichen dem
+/// Interpreter, ohne Zeitfehler der Kopplung. Die laengste gemessene Antwort
+/// jedes Programms (Rueckstand und Schritt) bleibt unter der Antwortzeit, die
+/// aus den Manifesten des Abbilds folgt; der Kopf zaehlt die Regionen der MPU
+/// unter acht ab.
+pub fn two_programs_share_a_core(board: &mut dyn Board, fast_name: &str) -> Vec<String> {
+    let programs = board::root().join("crates/takt-conformance/tests/programs");
+    let (fast_path, slow_path) = (programs.join(fast_name), programs.join("pair_slow.takt"));
+    let options = Options::pair(PAIR_TICKS, slow_path.clone());
+    let elf = match board.build(&fast_path, &options) {
+        Ok(elf) => elf,
+        Err(e) => return vec![format!("pair: kein Abbild: {e}")],
+    };
+    let text = match board.run(&elf, &options) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("pair: kein Lauf: {e}")],
+    };
+    pair_verdict(&elf, &text, &fast_path, &slow_path)
+}
+
+/// Das Urteil ueber den Lauf `text` eines Paars aus `elf` (12.11).
+fn pair_verdict(
+    elf: &std::path::Path,
+    text: &str,
+    fast_path: &std::path::Path,
+    slow_path: &std::path::Path,
+) -> Vec<String> {
+    let mut failed = Vec::new();
+    let header = text.find(board::MARK).map_or(text, |at| &text[..at]);
+    match header.lines().find_map(|l| l.trim_end().strip_suffix(" von 8 Regionen")) {
+        Some(line) if line.rsplit(", ").next().and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| n < 8) => {}
+        other => failed.push(format!("pair: der Kopf zaehlt die Regionen der MPU nicht unter acht ab: {other:?}")),
+    }
+    let (fast, slow) = (lines_of(text, "fast "), lines_of(text, "slow "));
+    for (name, trace) in [("fast", &fast), ("slow", &slow)] {
+        if let Err(e) = whole(name, trace) {
+            failed.push(e);
+        }
+        if trace.lines().any(|l| l.trim_end().ends_with(" runtime Overrun")) {
+            failed.push(format!("{name}: ein Zeitfehler der Kopplung oder ein Ueberlauf (12.11, 7.3)"));
+        }
+    }
+    let slow_ticks = PAIR_TICKS / 10;
+    let fast_p = program(fast_path);
+    let slow_p = program(slow_path);
+    for (name, p, trace, stimulus, ticks) in [
+        ("fast", &fast_p, &fast, fast_stimulus(&slow, PAIR_TICKS), PAIR_TICKS),
+        ("slow", &slow_p, &slow, slow_stimulus(&fast, slow_ticks), slow_ticks),
+    ] {
+        let expected = interpreted_with(p, &stimulus, ticks);
+        let diffs = compare(&expected, trace);
+        if !diffs.is_empty() {
+            let shown: Vec<String> = diffs.iter().take(6).map(ToString::to_string).collect();
+            failed.push(format!("{name}: {} Abweichungen vom Interpreter\n{}", diffs.len(), shown.join("\n")));
+        }
+    }
+    match response_times(elf) {
+        Ok(times) => {
+            for (name, trace) in [("fast", &fast), ("slow", &slow)] {
+                match (times.get(name).copied().flatten(), measured_response(trace)) {
+                    (Some(r), Some(m)) if u64::try_from(m).is_ok_and(|m| m <= r) => {}
+                    (r, m) => failed.push(format!("{name}: gemessen {m:?} ns, Antwortzeit {r:?} ns (12.11)")),
+                }
+            }
+        }
+        Err(e) => failed.push(format!("pair: keine Antwortzeiten: {e}")),
+    }
+    // Die Kosten der ISR der Leitung sind zugesagt (`Vertrag`); der Lauf
+    // misst ihren laengsten Lauf.
+    match (measured_isr(text), declared_isr(elf)) {
+        (Some(longest), Some(cost)) if longest <= cost => {}
+        (measured, declared) => failed
+            .push(format!("pair: die ISR der Leitung lief bis {measured:?} ns, zugesagt sind {declared:?} ns (12.11)")),
+    }
+    if !failed.is_empty() {
+        failed.push(text.lines().take(40).collect::<Vec<_>>().join("\n"));
+    }
+    failed
+}
+
+/// **Ein Programm schreibt nicht in die Arena des anderen** (12.3, 12.11; M11
+/// Schritt 16): `pair_intrude` laesst mit dem Commit von Tick 5 in die Arena
+/// von `slow` schreiben. Die MPU weist es ab, `fast` bekommt in Tick 6
+/// `Runtime(Hardware)`, wie der Interpreter mit diesem Stimulus, und `slow`
+/// rechnet ungestoert wie der Interpreter.
+pub fn a_write_into_the_other_arena_is_refused(board: &mut dyn Board) -> Vec<String> {
+    let programs = board::root().join("crates/takt-conformance/tests/programs");
+    let (fast_path, slow_path) = (programs.join("pair_intrude.takt"), programs.join("pair_slow.takt"));
+    let options = Options::pair(PAIR_TICKS, slow_path.clone());
+    let text = match board.build(&fast_path, &options).and_then(|elf| board.run(&elf, &options)) {
+        Ok(text) => text,
+        Err(e) => return vec![format!("pair: kein Lauf: {e}")],
+    };
+    let (fast, slow) = (lines_of(&text, "fast "), lines_of(&text, "slow "));
+    let mut failed = Vec::new();
+    let faults: Vec<&str> =
+        fast.lines().map(str::trim_end).filter(|l| l.split_whitespace().nth(1) == Some("runtime")).collect();
+    if faults != ["t=6 runtime Hardware"] {
+        failed.push(format!("fast: verlangt genau `t=6 runtime Hardware`, gesehen {faults:?}"));
+    }
+    let stimulus = format!("t=6 runtime Hardware\n{}", fast_stimulus(&slow, PAIR_TICKS));
+    let expected = interpreted_with(&program(&fast_path), &stimulus, PAIR_TICKS);
+    let diffs = compare(&expected, &fast);
+    if !diffs.is_empty() {
+        failed.push(format!(
+            "fast: {} Abweichungen vom Interpreter: {:?}",
+            diffs.len(),
+            diffs.iter().take(4).collect::<Vec<_>>()
+        ));
+    }
+    let slow_ticks = PAIR_TICKS / 10;
+    let expected = interpreted_with(&program(&slow_path), &slow_stimulus(&fast, slow_ticks), slow_ticks);
+    let diffs = compare(&expected, &slow);
+    if !diffs.is_empty() {
+        failed.push(format!(
+            "slow: {} Abweichungen vom Interpreter: {:?}",
+            diffs.len(),
+            diffs.iter().take(4).collect::<Vec<_>>()
+        ));
+    }
+    if !failed.is_empty() {
+        failed.push(text.lines().take(40).collect::<Vec<_>>().join("\n"));
     }
     failed
 }

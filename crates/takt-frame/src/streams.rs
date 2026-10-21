@@ -111,17 +111,17 @@ fn report(t: &mut Text, dyns: &[Dynamic], x: &Prefix) {
         let _ = writeln!(s, "        if (a->int_based && memcmp(now, a->int_shown[k], sizeof now) == 0) continue;");
         let _ = writeln!(s, "        memcpy(a->int_shown[k], now, sizeof now);");
         let _ = writeln!(s, "        if (!a->int_based) continue;");
-        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
-        let _ = writeln!(s, "        takt_board_trace_i64(t);");
-        let _ = writeln!(s, "        takt_board_trace(\"stream \");");
-        let _ = writeln!(s, "        takt_board_trace(g_int_name[k]);");
-        let _ = writeln!(s, "        takt_board_trace(\" dropped=\");");
-        let _ = writeln!(s, "        takt_board_trace_u64(now[0]);");
-        let _ = writeln!(s, "        takt_board_trace(\"overflowed=\");");
-        let _ = writeln!(s, "        takt_board_trace_u64(now[1]);");
-        let _ = writeln!(s, "        takt_board_trace(\"malformed=\");");
-        let _ = writeln!(s, "        takt_board_trace_u64(now[2]);");
-        let _ = writeln!(s, "        takt_board_trace(\"\\n\");");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \"t=\");");
+        let _ = writeln!(s, "        takt_trace_i64(a->sink, t);");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \" stream \");");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, g_int_name[k]);");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \" dropped=\");");
+        let _ = writeln!(s, "        takt_trace_u64(a->sink, now[0]);");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \" overflowed=\");");
+        let _ = writeln!(s, "        takt_trace_u64(a->sink, now[1]);");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \" malformed=\");");
+        let _ = writeln!(s, "        takt_trace_u64(a->sink, now[2]);");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \"\\n\");");
 
         let _ = writeln!(s, "    }}");
     }
@@ -693,11 +693,11 @@ fn deliver_sent(s: &mut String, p: &Program, dyns: &[Dynamic], readers: usize, x
     let _ = writeln!(s, "            _Bool on = dropped > 0;");
     let _ = writeln!(s, "            if (a->int_alerted[k][r] == on) continue;");
     let _ = writeln!(s, "            a->int_alerted[k][r] = on;");
-    let _ = writeln!(s, "            takt_board_trace(\"t=\");");
-    let _ = writeln!(s, "            takt_board_trace_i64(a->tick);");
-    let _ = writeln!(s, "            takt_board_trace(\"alert \");");
-    let _ = writeln!(s, "            takt_board_trace(g_int_reader_name[k][r]);");
-    let _ = writeln!(s, "            takt_board_trace(on ? \" on\\n\" : \" off\\n\");");
+    let _ = writeln!(s, "            takt_trace_text(a->sink, \"t=\");");
+    let _ = writeln!(s, "            takt_trace_i64(a->sink, a->tick);");
+    let _ = writeln!(s, "            takt_trace_text(a->sink, \" alert \");");
+    let _ = writeln!(s, "            takt_trace_text(a->sink, g_int_reader_name[k][r]);");
+    let _ = writeln!(s, "            takt_trace_text(a->sink, on ? \" on\\n\" : \" off\\n\");");
 
     let _ = writeln!(s, "        }}");
     let _ = writeln!(s, "    }}");
@@ -848,14 +848,14 @@ fn emit_send(t: &mut Text, p: &Program, rings: bool, x: &Prefix) {
             let _ = writeln!(s, "    if (a->tx_n[{slot}] > 0) {{");
             let _ = writeln!(s, "        int n = a->tx_n[{slot}] < {per_tick} ? a->tx_n[{slot}] : {per_tick};");
         }
-        let _ = writeln!(s, "        takt_board_trace(\"t=\");");
-        let _ = writeln!(s, "        takt_board_trace_i64(t);");
-        let _ = writeln!(s, "        takt_board_trace(\"out {} [\");", c.name);
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \"t=\");");
+        let _ = writeln!(s, "        takt_trace_i64(a->sink, t);");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \" out {} [\");", c.name);
         let _ = writeln!(s, "        for (int i = 0; i < n; i++) {{");
-        let _ = writeln!(s, "            if (i) takt_board_trace(\", \");");
-        let _ = writeln!(s, "            takt_board_trace_hex8(a->tx[{slot}][i]);");
+        let _ = writeln!(s, "            if (i) takt_trace_text(a->sink, \", \");");
+        let _ = writeln!(s, "            takt_trace_hex8(a->sink, a->tx[{slot}][i]);");
         let _ = writeln!(s, "        }}");
-        let _ = writeln!(s, "        takt_board_trace(\"]\\n\");");
+        let _ = writeln!(s, "        takt_trace_text(a->sink, \"]\\n\");");
 
         let _ = writeln!(s, "        memcpy(a->tx_sent[{slot}], a->tx[{slot}], (size_t)n);");
         let _ = writeln!(s, "        a->tx_sent_n[{slot}] = n;");

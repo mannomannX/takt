@@ -245,6 +245,36 @@ fn memory_budget(p: &Program, target: &Target, span: Span, form: Form) -> Vec<Di
     out
 }
 
+/// Pruefung 60, die Kopplung zweier Programme (12.11): Ein Kanal mit `from`
+/// ist ein skalarer Input, und liest er den Ausgang eines niedrigeren
+/// Programms, verlangt er dessen `output_timing = boundary` — sonst hinge
+/// sein Wert davon ab, wann der Schritt des Schreibers fertig wird.
+fn coupling(p: &Program, c: &takt_mir::program::Channel, entry: &HwChannel) -> Option<Diagnostic> {
+    let from = entry.from.as_deref()?;
+    if c.dir != Direction::Input || matches!(p.types.get(c.ty), Type::Stream(_)) {
+        return Some(Diagnostic::error(
+            SC60,
+            c.span,
+            format!("`{}` nennt `from = \"{from}\"`; gekoppelt wird nur ein skalarer Input (12.11)", c.name),
+        ));
+    }
+    let writer = entry.from_tick_ns.unwrap_or(0);
+    let lower = writer > p.config.tick || (writer == p.config.tick && entry.from_first != Some(true));
+    let asap = entry.from_timing == Some(takt_mir::program::OutputTiming::Asap);
+    (lower && asap).then(|| {
+        Diagnostic::error(
+            SC60,
+            c.span,
+            format!(
+                "`{}` liest `{from}` eines niedrigeren Programms unter `output_timing = asap`; sein Wert hinge \
+                 davon ab, wann dessen Schritt fertig wird (12.11)",
+                c.name
+            ),
+        )
+        .with_suggestion("der Schreiber rechnet mit `output_timing = boundary`, und `from_timing` nennt es".to_string())
+    })
+}
+
 /// Prüfungen 60 und 28: die Bindungen des Programms gegen die Kanäle der
 /// Konfiguration (8.10).
 ///
@@ -294,6 +324,7 @@ pub fn check_bindings(p: &Program, hw: &Hardware) -> Vec<Diagnostic> {
                 ));
             }
         }
+        out.extend(coupling(p, c, entry));
         let elem = element_type(p, c.ty);
         if let (Some(cfg_unit), Some(unit)) = (&entry.unit, unit_name(p, elem)) {
             if cfg_unit != &unit {

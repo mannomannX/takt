@@ -29,8 +29,15 @@
 //! `takt_bench_measure` als Einstieg — ein Kern, der aus dem Flash liefe,
 //! maesse den Cache mit.
 //!
-//! Die Antwortzeiten mehrerer Programme eines Kerns prueft Schritt 16. Jede Zeile traegt ihren Ursprung (11.5): `exakt` aus
-//! Symboltabelle und Disassemblierung, `offen`, wo das Abbild es nicht sagt.
+//! 5. mit den Manifesten mehrerer Programme eines Kerns: die Auslastung und
+//!    je Programm die Antwortzeit mit festen Prioritaeten
+//!    (`takt_mir::analysis::response`, 12.11) aus den Schrittbudgets der
+//!    Manifeste, ihren Ticks und der fremden Last, die sie aus der
+//!    Hardware-Konfiguration mitbringen.
+//!
+//! Jede Zeile traegt ihren Ursprung (11.5): `exakt` aus Symboltabelle und
+//! Disassemblierung, `gemessen` und `Vertrag` wie die Summanden einer
+//! Antwortzeit, `offen`, wo das Abbild oder ein Manifest es nicht sagt.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
@@ -39,6 +46,7 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use takt_llvm::inspect::Function;
 use takt_llvm::inspect::{CallGraph, SectionRange, Symbol, runs_without_flash};
+use takt_mir::analysis::response;
 
 /// Die Crates, die jedes Programm teilt, mit ihrem Pfad im demangelten Namen.
 const TAKT_CRATES: [&str; 7] = [
@@ -67,6 +75,68 @@ pub(crate) struct Manifest {
     /// Die Stacks: Name im Abbild und Bedarf in Byte (12.3).
     pub(crate) tick_stack: (String, u64),
     pub(crate) job_stack: (String, u64),
+    /// Was die Antwortzeiten brauchen (12.11); vor Schritt 16 nannte ein
+    /// Manifest es nicht.
+    pub(crate) timing: Timing,
+}
+
+/// Was ein Manifest fuer die Antwortzeiten nennt (12.11, 11.5).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Timing {
+    /// Der Tick in Nanosekunden.
+    pub(crate) tick_ns: u64,
+    /// Das Schrittbudget in Pikosekunden; `None` ist offen.
+    pub(crate) budget_ps: Option<u64>,
+    /// So lange haelt ein Journal-Vorgang den Kern an.
+    pub(crate) journal_block_ns: u64,
+    /// Die fremde Last: die laengste Sperre mit Herkunft und die Stoerer
+    /// (`name:kosten:periode:herkunft`), wie die Hardware-Konfiguration sie
+    /// nennt.
+    pub(crate) foreign_block: Option<(u64, String)>,
+    pub(crate) isrs: Vec<String>,
+    /// T_IO in Pikosekunden; `None` ist offen.
+    pub(crate) t_io_ps: Option<u64>,
+    /// Der Eintrittsaufwand der Form in Nanosekunden, vom Alarm bis zum
+    /// Beginn des Ticks (`takt bench`); `None` ist offen.
+    pub(crate) entry_ns: Option<u64>,
+    /// `output_timing = boundary` (12.1).
+    pub(crate) boundary: bool,
+    /// Die Adressen der Ausgaenge an Treibern.
+    pub(crate) outputs: Vec<String>,
+    /// Die gekoppelten Eingaenge (`from`, 8.10).
+    pub(crate) links: Vec<Link>,
+}
+
+/// Ein gekoppelter Eingang und was die Hardware-Konfiguration ueber seinen
+/// Schreiber sagt (8.10, 12.11).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Link {
+    pub(crate) input: String,
+    pub(crate) from: String,
+    pub(crate) tick_ns: u64,
+    pub(crate) boundary: bool,
+    /// Bei gleichem Tick rechnet der Schreiber zuerst.
+    pub(crate) first: bool,
+}
+
+impl Link {
+    /// `eingang<-ausgang tick timing zuerst`.
+    fn parse(text: &str) -> Option<Link> {
+        let (input, rest) = text.split_once("<-")?;
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        let [from, tick, timing, first] = words.as_slice() else { return None };
+        Some(Link {
+            input: input.trim().to_string(),
+            from: (*from).to_string(),
+            tick_ns: tick.parse().ok()?,
+            boundary: match *timing {
+                "boundary" => true,
+                "asap" => false,
+                _ => return None,
+            },
+            first: first.parse().ok()?,
+        })
+    }
 }
 
 impl Manifest {
@@ -99,8 +169,41 @@ impl Manifest {
             let bytes = values.get(format!("{key}_bytes").as_str()).map(|v| v.parse::<u64>()).transpose();
             Ok((symbol, bytes.map_err(|e| format!("`{key}_bytes`: {e}"))?.unwrap_or(0)))
         };
+        let list = |key: &str| -> Vec<String> {
+            values
+                .get(key)
+                .filter(|v| **v != "none")
+                .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect())
+                .unwrap_or_default()
+        };
+        let optional = |key: &str| -> Result<Option<u64>, String> {
+            match values.get(key) {
+                None | Some(&"none") => Ok(None),
+                Some(v) => v.parse::<u64>().map(Some).map_err(|e| format!("`{key}`: {e}")),
+            }
+        };
+        let timing = Timing {
+            tick_ns: optional("tick_ns")?.unwrap_or(0),
+            budget_ps: optional("step_budget_ps")?.filter(|_| values.get("step_budget_origin") == Some(&"gemessen")),
+            journal_block_ns: optional("journal_block_ns")?.unwrap_or(0),
+            foreign_block: optional("foreign_block_ns")?
+                .map(|n| (n, values.get("foreign_block_origin").map_or("Vertrag", |o| *o).to_string())),
+            isrs: list("isrs"),
+            t_io_ps: optional("t_io_ps")?.filter(|_| values.get("step_budget_origin") == Some(&"gemessen")),
+            entry_ns: optional("entry_ns")?,
+            boundary: values.get("output_timing") == Some(&"boundary"),
+            outputs: list("outputs"),
+            links: list("links")
+                .iter()
+                .map(|l| {
+                    Link::parse(l)
+                        .ok_or_else(|| format!("`links`: `{l}` ist nicht `eingang<-ausgang tick timing zuerst`"))
+                })
+                .collect::<Result<_, _>>()?,
+        };
         Ok(Manifest {
             bench: false,
+            timing,
             tick_stack: stack("tick_stack", format!("{prefix}_tick_stack"))?,
             job_stack: stack("job_stack", format!("{prefix}_job_stack"))?,
             arena_symbol: values.get("arena_symbol").map_or_else(|| format!("{prefix}_arena"), |s| s.to_string()),
@@ -156,8 +259,21 @@ impl Library {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Origin {
     Exact,
+    Measured,
+    Contract,
     Open,
     Finding,
+}
+
+impl From<response::Origin> for Origin {
+    fn from(o: response::Origin) -> Origin {
+        match o {
+            response::Origin::Exact => Origin::Exact,
+            response::Origin::Measured => Origin::Measured,
+            response::Origin::Contract => Origin::Contract,
+            response::Origin::Open => Origin::Open,
+        }
+    }
 }
 
 /// Eine Zeile des Berichts.
@@ -287,6 +403,247 @@ pub(crate) fn check(image: &Image, m: &Manifest, library: &Library, arenas: &[(u
     out
 }
 
+/// Eine Herkunft der fremden Last aus ihrem Namen (8.10).
+fn provenance(name: &str) -> response::Origin {
+    if name == "gemessen" { response::Origin::Measured } else { response::Origin::Contract }
+}
+
+/// Pikosekunden als Nanosekunden, aufgerundet: eine Schranke bleibt eine.
+fn ns(ps: u64) -> u64 {
+    ps.div_ceil(1000)
+}
+
+/// Punkt 5: Auslastung und Antwortzeiten der Programme eines Kerns (12.11);
+/// mit weniger als zwei Programmen nichts.
+pub(crate) fn responses(manifests: &[&Manifest]) -> Vec<Line> {
+    let programs: Vec<&Manifest> = manifests.iter().copied().filter(|m| !m.bench).collect();
+    if programs.len() < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    // Die fremde Last gehoert dem Kern: Jedes Manifest muss dieselbe nennen.
+    let first = &programs[0].timing;
+    let differs: Vec<&str> = programs
+        .iter()
+        .filter(|m| m.timing.foreign_block != first.foreign_block || m.timing.isrs != first.isrs)
+        .map(|m| m.prefix.as_str())
+        .collect();
+    if !differs.is_empty() {
+        out.push(finding(format!(
+            "fremde Last: {} nennt eine andere als {}; sie gehoert dem Kern, nicht einem Programm (12.11)",
+            differs.join(", "),
+            programs[0].prefix
+        )));
+        return out;
+    }
+    let mut isrs = Vec::new();
+    for entry in &first.isrs {
+        let parts: Vec<&str> = entry.split(':').collect();
+        let parsed = match parts.as_slice() {
+            [name, cost, period, origin] => {
+                cost.parse::<u64>().ok().zip(period.parse::<u64>().ok()).map(|(c, p)| response::Load {
+                    name: (*name).to_string(),
+                    cost_ps: c.saturating_mul(1000),
+                    period_ps: p.saturating_mul(1000),
+                    origin: provenance(origin),
+                })
+            }
+            _ => None,
+        };
+        match parsed {
+            Some(load) => isrs.push(load),
+            None => {
+                out.push(finding(format!("fremde Last: Stoerer `{entry}` ist nicht `name:kosten:periode:herkunft`")));
+                return out;
+            }
+        }
+    }
+    // B: das Groessere aus der fremden Sperre und der Sperre eines Journals.
+    let journal = programs.iter().map(|m| m.timing.journal_block_ns).max().unwrap_or(0);
+    let foreign = first.foreign_block.as_ref().map(|(n, o)| (*n, provenance(o)));
+    let blocking = match foreign {
+        Some((n, o)) if n >= journal => Some(response::Load {
+            name: "fremde Sperre".into(),
+            cost_ps: n.saturating_mul(1000),
+            period_ps: 0,
+            origin: o,
+        }),
+        _ if journal > 0 => Some(response::Load {
+            name: "Journal".into(),
+            cost_ps: journal.saturating_mul(1000),
+            period_ps: 0,
+            origin: response::Origin::Measured,
+        }),
+        _ => None,
+    };
+    if first.foreign_block.is_none() && first.isrs.is_empty() {
+        out.push(open("fremde Last: keine Angabe in der Hardware-Konfiguration (8.10)".to_string()));
+    }
+    // C eines Programms: sein Schrittbudget und der Weg vom Alarm bis zum
+    // Beginn des Ticks; fehlt eines, ist C offen.
+    let tasks: Vec<response::Program> = programs
+        .iter()
+        .map(|m| {
+            let c = m.timing.budget_ps.zip(m.timing.entry_ns).map(|(b, e)| b.saturating_add(e.saturating_mul(1000)));
+            response::Program {
+                name: m.prefix.clone(),
+                period_ps: m.timing.tick_ns.saturating_mul(1000),
+                budget_ps: c,
+                origin: if c.is_some() { response::Origin::Measured } else { response::Origin::Open },
+            }
+        })
+        .collect();
+    match response::utilisation_ppm(&tasks, &isrs) {
+        Some(ppm) => {
+            let permille = ppm.div_ceil(1000);
+            let text = format!("Auslastung {},{} %", permille / 10, permille % 10);
+            let origin = tasks
+                .iter()
+                .map(|t| t.origin)
+                .chain(isrs.iter().map(|k| k.origin))
+                .fold(response::Origin::Exact, Ord::max);
+            out.push(if ppm > 1_000_000 {
+                finding(format!("{text}: mehr als der Kern hat (12.11)"))
+            } else {
+                Line { origin: origin.into(), text }
+            });
+        }
+        None => out.push(open("Auslastung offen: ein Schrittbudget fehlt".to_string())),
+    }
+    out.extend(couplings(&programs, &tasks, blocking.as_ref(), &isrs));
+    for r in response::responses(&tasks, blocking.as_ref(), &isrs) {
+        let tick = programs.iter().find(|m| m.prefix == r.name).map_or(0, |m| m.timing.tick_ns);
+        let entry_missing = programs.iter().any(|m| m.prefix == r.name && m.timing.entry_ns.is_none());
+        out.push(match r.ps {
+            None if entry_missing => open(format!(
+                "{}: Antwortzeit offen: der Eintrittsaufwand der Form fehlt (`takt bench`, 12.11)",
+                r.name
+            )),
+            None => open(format!(
+                "{}: Antwortzeit offen: ein Schrittbudget fehlt (Kalibrierung zum Kostenmodell, 7.2)",
+                r.name
+            )),
+            Some(ps) if !r.fits => finding(format!(
+                "{}: Antwortzeit ueber {} ns, ueber dem Tick von {tick} ns (7.3, 12.11)",
+                r.name,
+                ns(ps)
+            )),
+            Some(ps) => Line {
+                origin: r.origin.into(),
+                text: format!("{}: Antwortzeit {} ns bei einem Tick von {tick} ns", r.name, ns(ps)),
+            },
+        });
+    }
+    out
+}
+
+/// Der groesste gemeinsame Teiler zweier Perioden.
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// Die Kopplungen zweier Programme (12.11, „An einer gemeinsamen Grenze"):
+/// Liest das hoehere einen Ausgang des niedrigeren, braucht das niedrigere
+/// `output_timing = boundary`; und in jeder Richtung muss das niedrigere S
+/// freigeben und abtasten, bevor die naechste Grenze des hoeheren F kommt:
+/// `R_io(S) < ggT(T_S, T_F)`. Rang: der kuerzere Tick, bei gleichem die
+/// Reihenfolge der Manifeste.
+fn couplings(
+    programs: &[&Manifest],
+    tasks: &[response::Program],
+    blocking: Option<&response::Load>,
+    isrs: &[response::Load],
+) -> Vec<Line> {
+    let mut out = Vec::new();
+    let higher = |a: usize, b: usize| (programs[a].timing.tick_ns, a) < (programs[b].timing.tick_ns, b);
+    for (reader, m) in programs.iter().enumerate() {
+        for link in &m.timing.links {
+            let (input, from) = (&link.input, &link.from);
+            let Some(writer) = programs.iter().position(|w| w.timing.outputs.contains(from)) else {
+                out.push(finding(format!(
+                    "{}: `{input}` liest `{from}`, aber kein Manifest nennt diesen Ausgang (12.11)",
+                    m.prefix
+                )));
+                continue;
+            };
+            let what = format!("{}:{input} <- {}:{from}", m.prefix, programs[writer].prefix);
+            if writer == reader {
+                out.push(finding(format!("{what}: ein Programm koppelt sich mit sich selbst (12.11)")));
+                continue;
+            }
+            // Was die Konfiguration ueber den Schreiber sagt, prueft der Leser
+            // zur Laufzeit; es muss stimmen (12.11).
+            let w = &programs[writer].timing;
+            let first = higher(writer, reader) && w.tick_ns == m.timing.tick_ns;
+            if (link.tick_ns, link.boundary) != (w.tick_ns, w.boundary)
+                || (w.tick_ns == m.timing.tick_ns && link.first != first)
+            {
+                out.push(finding(format!(
+                    "{what}: die Hardware-Konfiguration sagt Tick {} ns, `{}`{}, das Manifest von {} Tick {} ns, `{}`{} \
+                     (12.11)",
+                    link.tick_ns,
+                    if link.boundary { "boundary" } else { "asap" },
+                    if link.first { ", zuerst" } else { "" },
+                    programs[writer].prefix,
+                    w.tick_ns,
+                    if w.boundary { "boundary" } else { "asap" },
+                    if first { ", zuerst" } else { "" },
+                )));
+                continue;
+            }
+            let (low, high) = if higher(reader, writer) { (writer, reader) } else { (reader, writer) };
+            if low == writer && !programs[writer].timing.boundary {
+                out.push(finding(format!(
+                    "{what}: das hoehere Programm liest einen Ausgang des niedrigeren, das dafuer \
+                     `output_timing = boundary` braucht (12.11)"
+                )));
+                continue;
+            }
+            let period = gcd(programs[low].timing.tick_ns, programs[high].timing.tick_ns).saturating_mul(1000);
+            let Some(t_io) = programs[low].timing.t_io_ps else {
+                out.push(open(format!("{what}: offen, T_IO von {} fehlt (Kalibrierung)", programs[low].prefix)));
+                continue;
+            };
+            let Some(entry) = programs[low].timing.entry_ns else {
+                out.push(open(format!(
+                    "{what}: offen, der Eintrittsaufwand von {} fehlt (`takt bench`)",
+                    programs[low].prefix
+                )));
+                continue;
+            };
+            // Von der Grenze bis zum Ende des Abtastens: Eintritt und T_IO.
+            let mut probe = tasks.to_vec();
+            probe[low].budget_ps = Some(t_io.saturating_add(entry.saturating_mul(1000)));
+            let r = &response::responses(&probe, blocking, isrs)[low];
+            out.push(match r.ps {
+                None => open(format!("{what}: offen, ein Schrittbudget fehlt")),
+                Some(ps) if ps >= period => finding(format!(
+                    "{what}: {} gibt erst nach {} ns frei und tastet ab, die naechste Grenze von {} kommt nach {} ns \
+                     (12.11)",
+                    programs[low].prefix,
+                    ns(ps),
+                    programs[high].prefix,
+                    period / 1000
+                )),
+                Some(ps) => Line {
+                    origin: r.origin.into(),
+                    text: format!(
+                        "{what}: {} gibt frei und tastet ab nach {} ns, vor der naechsten Grenze von {} nach {} ns",
+                        programs[low].prefix,
+                        ns(ps),
+                        programs[high].prefix,
+                        period / 1000
+                    ),
+                },
+            });
+        }
+    }
+    out
+}
+
 /// Die Adressbereiche, die der Wirt einem Programm stellt: Arena und, wo er
 /// sie unter ihren Namen stellt, die Stacks. Was darin liegt, ist kein
 /// beschreibbares Symbol ausserhalb (Punkt 2).
@@ -390,9 +747,11 @@ pub(crate) fn render(image: &Path, lines: &[Line]) -> String {
     let mut s = format!("takt check-image {}\n", image.display());
     for l in lines {
         let tag = match l.origin {
-            Origin::Exact => "exakt ",
-            Origin::Open => "offen ",
-            Origin::Finding => "BEFUND",
+            Origin::Exact => "exakt   ",
+            Origin::Measured => "gemessen",
+            Origin::Contract => "Vertrag ",
+            Origin::Open => "offen   ",
+            Origin::Finding => "BEFUND  ",
         };
         let _ = writeln!(s, "  [{tag}] {}", l.text);
     }
@@ -449,6 +808,7 @@ pub(crate) fn run(image_path: &Path, manifests: &[&str]) -> bool {
         };
         lines.extend(check(&image, m, &library, &arenas));
     }
+    lines.extend(responses(&parsed.iter().map(|(_, m)| m).collect::<Vec<_>>()));
     print!("{}", render(image_path, &lines));
     lines.iter().all(|l| l.origin != Origin::Finding)
 }
@@ -474,7 +834,44 @@ mod tests {
             arena_align: 8,
             xip_flash: true,
             tick_path: vec!["app_tick".into(), "app_commit".into()],
+            timing: Timing::default(),
         }
+    }
+
+    /// Ein Programm mit Tick und Schrittbudget, ohne fremde Last und mit einem
+    /// Eintrittsaufwand von 0.
+    fn timed(prefix: &str, tick_ns: u64, budget_ns: Option<u64>) -> Manifest {
+        Manifest {
+            prefix: prefix.into(),
+            timing: Timing { tick_ns, budget_ps: budget_ns.map(|n| n * 1000), entry_ns: Some(0), ..Timing::default() },
+            ..manifest()
+        }
+    }
+
+    /// **Der Weg vom Alarm bis zum Beginn des Ticks gehoert zu C** (12.11):
+    /// Er verlaengert jede Antwort und den Weg bis zum Ende des Abtastens;
+    /// fehlt er, ist die Antwortzeit offen und hat keine Zahl.
+    #[test]
+    fn the_entry_cost_belongs_to_every_response() {
+        let (mut fast, mut slow) = pair(250_000, 50_000);
+        fast.timing.entry_ns = Some(20_000);
+        slow.timing.entry_ns = Some(20_000);
+        let lines = responses(&[&fast, &slow]);
+        let found = |text: &str| lines.iter().any(|l| l.text.contains(text));
+        assert!(found("fast: Antwortzeit 270000 ns"), "{lines:?}");
+        assert!(found("slow gibt frei und tastet ab nach 340000 ns"), "{lines:?}");
+        slow.timing.entry_ns = None;
+        let open = responses(&[&fast, &slow]);
+        assert!(
+            open.iter()
+                .any(|l| l.origin == Origin::Open && l.text.starts_with("slow: Antwortzeit offen: der Eintritt")),
+            "{open:?}"
+        );
+        assert!(!open.iter().any(|l| l.text.starts_with("slow: Antwortzeit 3")), "{open:?}");
+    }
+
+    fn texts(lines: &[Line]) -> Vec<(Origin, &str)> {
+        lines.iter().map(|l| (l.origin, l.text.as_str())).collect()
     }
 
     /// Ein Abbild ohne Befund: RAM ab 0x4080_0000, Flash ab 0x4200_0000, ROM
@@ -695,5 +1092,174 @@ mod tests {
                     arena_bytes = 256\narena_align = 8\nxip_flash = true\ntick_path = app_tick, app_commit\n";
         assert_eq!(Manifest::parse(text), Ok(manifest()));
         assert!(Manifest::parse("prefix = app\n").is_err());
+    }
+
+    /// **Das Manifest nennt, was die Antwortzeiten brauchen** (12.11): ein
+    /// offenes Budget ist keines, auch wenn eine Zahl dasteht.
+    #[test]
+    fn the_manifest_names_budget_and_foreign_load() {
+        let text = "# takt-manifest 1\nprefix = app\nabi = 6\nlogic_hash = ab12\narena_bytes = 256\n\
+                    arena_align = 8\nxip_flash = false\ntick_path = app_tick\ntick_ns = 1000000\n\
+                    step_budget_ps = 250000000\nstep_budget_origin = gemessen\njournal_block_ns = 0\n\
+                    foreign_block_ns = 2000\nforeign_block_origin = Vertrag\nisrs = uart:1100:10850:gemessen\n";
+        let m = Manifest::parse(text).expect("lesbar");
+        assert_eq!(
+            m.timing,
+            Timing {
+                tick_ns: 1_000_000,
+                budget_ps: Some(250_000_000),
+                journal_block_ns: 0,
+                foreign_block: Some((2000, "Vertrag".into())),
+                isrs: vec!["uart:1100:10850:gemessen".into()],
+                ..Timing::default()
+            }
+        );
+        let open = Manifest::parse(&text.replace("origin = gemessen", "origin = offen")).expect("lesbar");
+        assert_eq!(open.timing.budget_ps, None);
+    }
+
+    /// **Zwei Programme eines Kerns** (12.11): Auslastung und Antwortzeiten
+    /// mit ihrer Herkunft; ein einzelnes Programm rechnet nichts.
+    #[test]
+    fn two_programs_have_utilisation_and_response_times() {
+        let (fast, slow) = (timed("fast", 1_000_000, Some(250_000)), timed("slow", 10_000_000, Some(2_000_000)));
+        assert!(responses(&[&fast]).is_empty());
+        let lines = responses(&[&fast, &slow]);
+        assert_eq!(
+            texts(&lines),
+            [
+                (Origin::Open, "fremde Last: keine Angabe in der Hardware-Konfiguration (8.10)"),
+                (Origin::Measured, "Auslastung 45,0 %"),
+                (Origin::Measured, "fast: Antwortzeit 250000 ns bei einem Tick von 1000000 ns"),
+                (Origin::Measured, "slow: Antwortzeit 2750000 ns bei einem Tick von 10000000 ns"),
+            ]
+        );
+    }
+
+    /// Mit angegebener fremder Last ist die Antwortzeit `Vertrag`; ein
+    /// Programm ueber seinem Tick und eine Auslastung ueber 1 sind Befunde,
+    /// ein offenes Budget laesst die Antwortzeit offen.
+    #[test]
+    fn foreign_load_overload_and_open_budgets_are_reported() {
+        let mut fast = timed("fast", 1_000_000, Some(250_000));
+        let mut slow = timed("slow", 10_000_000, Some(2_000_000));
+        for m in [&mut fast, &mut slow] {
+            m.timing.foreign_block = Some((2000, "Vertrag".into()));
+            m.timing.isrs = vec!["uart:1100:10850:gemessen".into()];
+        }
+        let lines = responses(&[&fast, &slow]);
+        assert!(
+            lines.iter().filter(|l| l.text.contains("Antwortzeit")).all(|l| l.origin == Origin::Contract),
+            "{lines:?}"
+        );
+        let heavy = timed("slow", 10_000_000, Some(9_000_000));
+        let lines = responses(&[&timed("fast", 1_000_000, Some(250_000)), &heavy]);
+        assert!(
+            lines.iter().any(|l| l.origin == Origin::Finding && l.text.starts_with("Auslastung 115,0 %")),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.origin == Origin::Finding && l.text.starts_with("slow: Antwortzeit ueber")));
+        let open = responses(&[&timed("fast", 1_000_000, None), &timed("slow", 10_000_000, Some(2_000_000))]);
+        assert!(open.iter().any(|l| l.origin == Origin::Open && l.text.starts_with("slow: Antwortzeit offen")));
+        assert!(open.iter().all(|l| l.origin != Origin::Finding));
+    }
+
+    /// Die fremde Last gehoert dem Kern: Zwei Manifeste mit verschiedener
+    /// sind ein Befund.
+    #[test]
+    fn different_foreign_loads_are_a_finding() {
+        let fast = timed("fast", 1_000_000, Some(250_000));
+        let mut slow = timed("slow", 10_000_000, Some(2_000_000));
+        slow.timing.foreign_block = Some((5000, "Vertrag".into()));
+        let lines = responses(&[&fast, &slow]);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].origin, Origin::Finding);
+    }
+
+    /// Das Paar aus Schritt 16: `fast` schreibt `pair/count`, `slow` liest
+    /// ihn als `pair/seen` und gibt `pair/last` frei.
+    fn pair(fast_budget_ns: u64, slow_t_io_ns: u64) -> (Manifest, Manifest) {
+        let mut fast = timed("fast", 1_000_000, Some(fast_budget_ns));
+        fast.timing.t_io_ps = Some(20_000_000);
+        fast.timing.outputs = vec!["pair/count".into()];
+        let mut slow = timed("slow", 10_000_000, Some(2_000_000));
+        slow.timing.t_io_ps = Some(slow_t_io_ns * 1000);
+        slow.timing.outputs = vec!["pair/last".into()];
+        slow.timing.links = vec![link("pair/seen", "pair/count", 1_000_000, false)];
+        (fast, slow)
+    }
+
+    /// Ein gekoppelter Eingang mit dem, was die Konfiguration ueber seinen
+    /// Schreiber sagt.
+    fn link(input: &str, from: &str, tick_ns: u64, boundary: bool) -> Link {
+        Link { input: input.into(), from: from.into(), tick_ns, boundary, first: false }
+    }
+
+    fn coupling(lines: &[Line]) -> Vec<(Origin, &str)> {
+        texts(lines).into_iter().filter(|(_, t)| t.contains(" <- ")).collect()
+    }
+
+    /// **Das niedrigere Programm gibt frei und tastet ab, bevor die naechste
+    /// Grenze des hoeheren kommt** (12.11): `R_io(slow)` = T_IO + ein Schritt
+    /// von `fast` = 300 us, unter ggT(10 ms, 1 ms) = 1 ms.
+    #[test]
+    fn a_coupling_holds_when_the_lower_program_samples_in_time() {
+        let (fast, slow) = pair(250_000, 50_000);
+        assert_eq!(
+            coupling(&responses(&[&fast, &slow])),
+            [(
+                Origin::Measured,
+                "slow:pair/seen <- fast:pair/count: slow gibt frei und tastet ab nach 300000 ns, vor der naechsten \
+                 Grenze von fast nach 1000000 ns"
+            )]
+        );
+        // 200 us T_IO, und je Millisekunde 900 us von `fast`: Bis zum Ende des
+        // Abtastens vergehen zwei Schritte von `fast`, 2 ms, und das ist zu spaet.
+        let (fast, slow) = pair(900_000, 200_000);
+        let found = coupling(&responses(&[&fast, &slow]))
+            .into_iter()
+            .filter(|(o, t)| *o == Origin::Finding && t.contains("erst nach 2000000 ns"))
+            .count();
+        assert_eq!(found, 1);
+    }
+
+    /// Liest das hoehere einen Ausgang des niedrigeren, braucht das niedrigere
+    /// `output_timing = boundary` (12.11); ohne ist es ein Befund. Ein
+    /// Eingang ohne schreibendes Programm ist ebenso einer.
+    #[test]
+    fn the_lower_program_publishes_at_its_boundary() {
+        let (mut fast, slow) = pair(250_000, 50_000);
+        fast.timing.links = vec![link("pair/back", "pair/last", 10_000_000, false)];
+        let lines = responses(&[&fast, &slow]);
+        assert!(coupling(&lines).iter().any(|(o, t)| *o == Origin::Finding && t.contains("boundary` braucht")));
+        let mut slow = slow;
+        slow.timing.boundary = true;
+        // Die Konfiguration sagt noch `asap`: Das stimmt nicht mit dem Manifest.
+        let lines = responses(&[&fast, &slow]);
+        assert!(
+            coupling(&lines).iter().any(|(o, t)| *o == Origin::Finding && t.contains("Hardware-Konfiguration sagt"))
+        );
+        fast.timing.links = vec![link("pair/back", "pair/last", 10_000_000, true)];
+        let lines = responses(&[&fast, &slow]);
+        assert!(coupling(&lines).iter().all(|(o, _)| *o == Origin::Measured), "{lines:?}");
+        fast.timing.links = vec![link("pair/back", "pair/nobody", 10_000_000, true)];
+        let lines = responses(&[&fast, &slow]);
+        assert!(lines.iter().any(|l| l.origin == Origin::Finding && l.text.contains("kein Manifest nennt")));
+    }
+
+    /// Das Manifest nennt Zeitverhalten und Kopplungen (12.11).
+    #[test]
+    fn the_manifest_names_its_couplings() {
+        let text = "# takt-manifest 1\nprefix = slow\nabi = 6\nlogic_hash = ab12\narena_bytes = 256\n\
+                    arena_align = 8\nxip_flash = false\ntick_path = slow_tick\ntick_ns = 10000000\n\
+                    step_budget_ps = 1\nstep_budget_origin = gemessen\nt_io_ps = 5\noutput_timing = boundary\n\
+                    outputs = pair/last, pair/step\nlinks = pair/seen<-pair/count 1000000 asap false\n";
+        let m = Manifest::parse(text).expect("lesbar");
+        assert_eq!(m.timing.t_io_ps, Some(5));
+        assert!(m.timing.boundary);
+        assert_eq!(m.timing.outputs, ["pair/last", "pair/step"]);
+        assert_eq!(m.timing.links, [link("pair/seen", "pair/count", 1_000_000, false)]);
+        assert!(Manifest::parse(&text.replace("pair/seen<-", "pair/seen=")).is_err());
+        assert!(Manifest::parse(&text.replace(" asap false", " sofort false")).is_err());
     }
 }

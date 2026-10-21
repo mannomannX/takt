@@ -16,12 +16,12 @@ use std::time::Duration;
 
 use common::board::{
     Case, Drift, GUARD_WATCHPOINT, PARTITION_REFUSED, TICKS, ZEPHYR_COUNTER_CLOCK, ZEPHYR_WIRE_TICKS,
-    a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, agreement, agreement_with,
-    binds_no_driver, corpus, driver_edge_agrees, fits_the_poll_form, header_names,
+    a_foreign_write_becomes_runtime_hardware, a_hostile_fpu_changes_nothing, a_write_into_the_other_arena_is_refused,
+    agreement, agreement_with, binds_no_driver, corpus, driver_edge_agrees, fits_the_poll_form, header_names,
     journal_costs_time_but_not_semantics, journal_writes_in_sleep_windows, last_output, long_job_keeps_the_tick,
     natives_agree, overrun_reaches_every_machine, persistence_survives, ran, runs_shared,
     simultaneous_jobs_finish_on_time, the_flawed_port_fails, the_form_keeps_its_deadline,
-    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, verdict,
+    the_poll_form_keeps_its_round, the_port_passes, the_port_passes_with_header, two_programs_share_a_core, verdict,
     zephyr_access_in_the_run_faults, zephyr_image, zephyr_persistence_survives, zephyr_verdict, zephyr_wire_follows,
 };
 use takt_conformance::board::stm32f401::{Stm32f401, Stm32f401C};
@@ -64,7 +64,7 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     assert!(!quiet.contains("takt auf stm32f401"), "zu frueh geweckt:\n{quiet}");
     let second = board.listen(Duration::from_secs(6)).unwrap_or_else(|e| panic!("{e}"));
     assert!(second.contains("takt auf stm32f401"), "kein neuer Lauf nach der Dauer:\n{second}");
-    assert!(second.contains("out woke 1"), "der zweite Lauf beginnt mit `previous_run = ENDED`:\n{second}");
+    assert!(second.contains("out woke true"), "der zweite Lauf beginnt mit `previous_run = ENDED`:\n{second}");
     // Der Kopf nennt, woran der Tiefschlaf weckte (FB-820): `LSE` oder `LSI`,
     // `STEHT`, wenn der Start ihn wach abwartete.
     assert!(second.lines().any(|l| l.trim_start().starts_with("RTC ")), "der Kopf nennt die RTC nicht:\n{second}");
@@ -87,7 +87,7 @@ fn a_run_ended_now_begins_the_next_at_once() {
     assert!(first.contains("end now"), "der erste Lauf endet mit `next_run`:\n{first}");
     assert!(first.contains("out previous NONE"), "nach dem Flashen kein voriger Lauf:\n{first}");
     let second = board.listen(Duration::from_secs(4)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(second.contains("out again 1"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
+    assert!(second.contains("out again true"), "der zweite Lauf beginnt mit `ENDED`:\n{second}");
     assert!(second.contains("out previous ENDED"), "{second}");
 }
 
@@ -179,7 +179,7 @@ fn a_missed_kick_begins_the_next_run_after_the_watchdog() {
     };
     let previous: Vec<String> = runs.iter().filter_map(|r| first(r, "previous")).collect();
     assert_eq!(previous, ["NONE", "WATCHDOG"], "der zweite Lauf weiss vom Watchdog (12.7):\n{text}");
-    assert!(runs.iter().all(|r| r.contains("out rested 1")), "jeder Lauf schlief vor dem Reset:\n{text}");
+    assert!(runs.iter().all(|r| r.contains("out rested true")), "jeder Lauf schlief vor dem Reset:\n{text}");
 }
 
 /// **Das Board kommt ohne Hand zurueck** (FB-275): Zwei Laeufe
@@ -795,4 +795,25 @@ fn the_zephyr_partition_turns_an_access_in_the_run_into_a_fault() {
     let run = zephyr_image(board.name(), example, takt_conformance::zephyr::STM32F401, Variant::PROBE_IN_RUN)
         .and_then(|image| board.run(&image.elf, &options));
     verdict(&zephyr_access_in_the_run_faults(board.name(), run));
+}
+
+/// **Zwei Programme auf einem Kern** (12.11, M11 Schritt 16): `pair_fast`
+/// (1 kHz) und `pair_slow` (100 Hz) im Binary `pair`, gekoppelt ueber die
+/// Mailbox in beide Richtungen; beide Traces gleich dem Interpreter, keine
+/// Antwort laenger als berichtet ([`two_programs_share_a_core`]).
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn two_programs_share_the_core() {
+    let Some((mut board, _guard)) = board() else { return };
+    verdict(&two_programs_share_a_core(&mut board, "pair_fast.takt"));
+}
+
+/// **Kein Programm schreibt in die Arena des anderen** (12.3, 12.11, M11
+/// Schritt 16): Die MPU weist den Zugriff ab, und nur das schreibende
+/// Programm bekommt `Runtime(Hardware)` ([`a_write_into_the_other_arena_is_refused`]).
+#[test]
+#[ignore = "Board: TAKT_F401_PORT; mit --ignored"]
+fn a_program_cannot_write_into_the_other_arena() {
+    let Some((mut board, _guard)) = board() else { return };
+    verdict(&a_write_into_the_other_arena_is_refused(&mut board));
 }

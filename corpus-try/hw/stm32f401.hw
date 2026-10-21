@@ -1,4 +1,4 @@
-# takt-hw 17 edition 1 compiler 0.1.0
+# takt-hw 18 edition 1 compiler 0.1.0
 # WeAct Black Pill (STM32F401CCU6, Cortex-M4F): Kalibrierung, Speicher,
 # Geraete und Kanaele fuer 29_heartbeat.takt (8.10).
 #
@@ -70,6 +70,12 @@ stack_reserve_rtos = 4240
 # gemessene laengste Runde. EXTI1 ist der Job-Interrupt.
 main_loop_ns = 50000
 job_interrupt = true
+# Die fremde Last der Board-Unterstuetzung (8.10, 12.11; M11 Schritt 16),
+# fuer die Antwortzeiten mehrerer Programme eines Kerns. Die laengste Sperre
+# unter einem Schritt setzt `TXEIE` in der Hauptschleife oder stellt das
+# Ziel eines Alarms, je einige Dutzend Takte. Zugesagt, nicht gemessen.
+foreign_block_ns = 1000
+foreign_block_origin = Vertrag
 f32_fma = 287016
 f64_fma = 6270647
 f32_sqrt = 465587
@@ -77,6 +83,16 @@ f64_sqrt = 3826699
 call_hook = 1499256
 f32_math = 395222097
 f64_math = 878439483
+
+# Die ISR der Leitung (USART1) liegt ueber jedem Schritt. Ein Byte dauert
+# bei 921 600 Baud 10,85 us; zugesagt sind zwei Eintritte je Byte, denn
+# `TXE` ist doppelt gepuffert und der Empfang kommt dazu. Die Kosten misst
+# das Binary `pair`, und sein Board-Test vergleicht
+# (`two_programs_share_a_core`).
+[target.thumbv7em.isr.uart]
+cost_ns = 3000
+period_ns = 5425
+origin = Vertrag
 
 [device.gpio]
 driver = "stm32f4-gpio"

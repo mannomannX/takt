@@ -13,7 +13,7 @@ use std::process::Command;
 
 use takt_llvm::Target;
 use takt_llvm::symbols::Prefix;
-use takt_mir::program::RuntimeProfile;
+use takt_mir::program::{Direction, RuntimeProfile};
 
 /// Der Kopf des C-SDK (`crates/takt-embed-c`), wie die Lieferform ihn neben
 /// `P.h` legt: Er beschreibt die Tabelle `P_ops` und den Kern ohne Warten.
@@ -188,7 +188,8 @@ pub(crate) fn embed(e: &Embed<'_>) -> Result<(), String> {
         write(&e.out.join(format!("{x}_ram.x")), &takt_frame::linker::ld_fragment(x))?;
         write(&e.out.join(format!("{x}.lf")), &takt_frame::linker::ldgen_fragment(x))?;
     }
-    let placement = Placement { bytes, align, tick_at: frame.tick_at, protect: memory.protect.zip(window) };
+    let placement =
+        Placement { bytes, align, tick_at: frame.tick_at, sink_at: frame.sink_at, protect: memory.protect.zip(window) };
     let layout_lines = Layout { arena: &placement, tick_stack: &tick_stack, job_stack, xip };
     write(&e.out.join(format!("{x}.manifest")), &manifest(e, &drivers, &layout_lines))?;
     let count = |kind| drivers.iter().filter(|d| d.kind == kind).count();
@@ -284,12 +285,13 @@ fn tick_stack(e: &Embed<'_>, obj: &Path, memory: &takt_mir::hardware::Memory) ->
     Ok(stack)
 }
 
-/// Wie die Arena liegt: Groesse, Ausrichtung, die Stelle des Ticks und die
-/// Schutzregion (12.11).
+/// Wie die Arena liegt: Groesse, Ausrichtung, die Stellen des Ticks und der
+/// Senke und die Schutzregion (12.11).
 struct Placement {
     bytes: u64,
     align: u64,
     tick_at: u64,
+    sink_at: u64,
     protect: Option<(takt_mir::hardware::Protect, takt_mir::hardware::Window)>,
 }
 
@@ -408,6 +410,8 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
     let _ = writeln!(s, "job_stack_symbol = {x}_job_stack");
     // Wo der Tick in der Arena steht: Eine Probe liest ihn, wenn die Leitung schweigt.
     let _ = writeln!(s, "tick_at = {}", arena.tick_at);
+    // 12.11: der Slot der Senke, ausserhalb des Programmbereichs.
+    let _ = writeln!(s, "sink_at = {}", arena.sink_at);
     // 12.3: die Schutzregion und wie viel der Arena sie deckt.
     match arena.protect {
         Some((unit, w)) => {
@@ -418,7 +422,93 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
             let _ = writeln!(s, "protect = none");
         }
     }
-    let _ = writeln!(s, "persist_bytes = {}", takt_mir::persist::max_payload(p).unwrap_or(0));
+    let persist_bytes = takt_mir::persist::max_payload(p).unwrap_or(0);
+    let _ = writeln!(s, "persist_bytes = {persist_bytes}");
+    // 12.11: was `takt check-image` fuer die Antwortzeiten mehrerer Programme
+    // eines Kerns braucht, jeder Wert mit seiner Herkunft (11.5).
+    let target = e.hardware.and_then(|hw| hw.target(e.target.name));
+    let budget = target.filter(|t| t.fits_cost_model()).and_then(|t| {
+        let verdict = takt_mir::analysis::schedulability::load(p).judge(&t.c_target, t.t_io_ps)?;
+        Some(verdict.needed_ps.saturating_add(t.t_io_ps))
+    });
+    let _ = writeln!(s, "# Schrittbudget = Rechenlast eines Ticks mit der Kalibrierung + T_IO (7.2), in ps");
+    match budget {
+        Some(ps) => {
+            let _ = writeln!(s, "step_budget_ps = {ps}");
+            let _ = writeln!(s, "step_budget_origin = gemessen");
+        }
+        None => {
+            let _ = writeln!(s, "step_budget_ps = none");
+            let _ = writeln!(s, "step_budget_origin = offen");
+        }
+    }
+    match target.filter(|t| budget.is_some() && t.fits_cost_model()) {
+        Some(t) => {
+            let _ = writeln!(s, "t_io_ps = {}", t.t_io_ps);
+        }
+        None => {
+            let _ = writeln!(s, "t_io_ps = none");
+        }
+    }
+    // Der Weg vom Alarm bis zum Beginn des Ticks gehoert zu C (12.11); ihn
+    // misst `takt bench` je Form.
+    match target.zip(e.form.reserve_form()).and_then(|(t, f)| t.host.entry_ns.get(f)) {
+        Some(n) => {
+            let _ = writeln!(s, "entry_ns = {n}");
+        }
+        None => {
+            let _ = writeln!(s, "entry_ns = none");
+        }
+    }
+    let _ = writeln!(s, "journal_block_ns = {}", if persist_bytes > 0 { e.nvm_blocking_ns } else { 0 });
+    // 12.11: Was ein Programm ueber einen Treiber mit einem anderen koppelt.
+    let timing = match p.config.output_timing {
+        takt_mir::program::OutputTiming::Boundary => "boundary",
+        takt_mir::program::OutputTiming::Asap => "asap",
+    };
+    let _ = writeln!(s, "output_timing = {timing}");
+    let bound = |dir: Direction| -> Vec<String> {
+        p.channels
+            .iter()
+            .filter(|c| c.dir == dir)
+            .filter_map(|c| match &c.binding {
+                takt_mir::program::Binding::Hw(addr) => Some(addr.text()),
+                _ => None,
+            })
+            .collect()
+    };
+    let outputs = bound(Direction::Output);
+    let _ = writeln!(s, "outputs = {}", if outputs.is_empty() { "none".to_string() } else { outputs.join(", ") });
+    let links: Vec<String> = bound(Direction::Input)
+        .into_iter()
+        .filter_map(|addr| {
+            // Was die Konfiguration ueber den Schreiber sagt: Tick, Timing,
+            // ob er bei gleichem Tick zuerst rechnet (8.10).
+            let c = e.hardware?.channel(&addr)?;
+            let timing = match c.from_timing? {
+                takt_mir::program::OutputTiming::Boundary => "boundary",
+                takt_mir::program::OutputTiming::Asap => "asap",
+            };
+            Some(format!("{addr}<-{} {} {timing} {}", c.from.as_deref()?, c.from_tick_ns?, c.from_first == Some(true)))
+        })
+        .collect();
+    let _ = writeln!(s, "links = {}", if links.is_empty() { "none".to_string() } else { links.join(", ") });
+    let foreign = target.map(|t| t.foreign.clone()).unwrap_or_default();
+    match foreign.block_ns {
+        Some(n) => {
+            let _ = writeln!(s, "foreign_block_ns = {n}");
+            let _ = writeln!(s, "foreign_block_origin = {}", foreign.block_origin.name());
+        }
+        None => {
+            let _ = writeln!(s, "foreign_block_ns = none");
+        }
+    }
+    let isrs: Vec<String> = foreign
+        .isrs
+        .iter()
+        .map(|(name, i)| format!("{name}:{}:{}:{}", i.cost_ns, i.period_ns, i.origin.name()))
+        .collect();
+    let _ = writeln!(s, "isrs = {}", if isrs.is_empty() { "none".to_string() } else { isrs.join(", ") });
     let jobs = !takt_frame::parts::job_slots(p).is_empty();
     let _ = writeln!(s, "jobs = {jobs}");
     let mut services = Vec::new();
@@ -524,7 +614,7 @@ mod tests {
 
     fn poll_host(main_loop_ns: i64, job_interrupt: bool) -> takt_mir::hardware::Target {
         takt_mir::hardware::Target {
-            host: Host { main_loop_ns: Some(main_loop_ns), job_interrupt },
+            host: Host { main_loop_ns: Some(main_loop_ns), job_interrupt, ..Host::default() },
             ..Default::default()
         }
     }

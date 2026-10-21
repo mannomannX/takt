@@ -266,14 +266,14 @@ fn report(s: &mut String, x: &Prefix) {
     let _ = writeln!(s, "    }}");
     let _ = writeln!(s, "    default: return;");
     let _ = writeln!(s, "    }}");
-    let _ = writeln!(s, "    takt_board_trace(\"t=\");");
-    let _ = writeln!(s, "    takt_board_trace_i64(tick);");
-    let _ = writeln!(s, "    takt_board_trace(\"driver \");");
-    let _ = writeln!(s, "    takt_board_trace(device);");
-    let _ = writeln!(s, "    takt_board_trace(\" \");");
-    let _ = writeln!(s, "    takt_board_trace(word);");
-    let _ = writeln!(s, "    if (rest) {{ takt_board_trace(\" \"); takt_board_trace(rest); }}");
-    let _ = writeln!(s, "    takt_board_trace(\"\\n\");");
+    let _ = writeln!(s, "    takt_trace_text(a->sink, \"t=\");");
+    let _ = writeln!(s, "    takt_trace_i64(a->sink, tick);");
+    let _ = writeln!(s, "    takt_trace_text(a->sink, \" driver \");");
+    let _ = writeln!(s, "    takt_trace_text(a->sink, device);");
+    let _ = writeln!(s, "    takt_trace_text(a->sink, \" \");");
+    let _ = writeln!(s, "    takt_trace_text(a->sink, word);");
+    let _ = writeln!(s, "    if (rest) {{ takt_trace_text(a->sink, \" \"); takt_trace_text(a->sink, rest); }}");
+    let _ = writeln!(s, "    takt_trace_text(a->sink, \"\\n\");");
 
     let _ = writeln!(s, "}}");
 }

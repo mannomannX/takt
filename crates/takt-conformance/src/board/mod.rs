@@ -290,10 +290,24 @@ pub enum Bin {
     /// `natives`: die Vektoren der kuratierten Natives mit dem
     /// Stack-Bedarf je Aufruf (13.8); das Takt-Programm bleibt ungenutzt.
     Natives,
+    /// `pair`: zwei Programme auf einem Kern (12.11, M11 Schritt 16), das
+    /// Programm des Baus als `fast` und `slow` als zweites. Neben dem ELF
+    /// liegen die Manifeste beider ([`pair_manifest`]), fuer `takt
+    /// check-image`.
+    Pair {
+        /// Das zweite Programm, mit dem laengeren Tick.
+        slow: PathBuf,
+    },
     /// `leftover`: ein Vorgaenger, nach dem das Sprungbrett dem naechsten
     /// Abbild eine Region der MPU hinterlaesst (FB-752); nur auf dem F401,
     /// das Takt-Programm bleibt ungenutzt.
     Leftover,
+}
+
+/// Das Manifest des Programms `prefix` (`fast` oder `slow`) neben dem ELF
+/// eines Paars (12.11).
+pub fn pair_manifest(elf: &Path, prefix: &str) -> PathBuf {
+    elf.with_extension(format!("{prefix}.manifest"))
 }
 
 /// Die Form, in der das Bring-up den Kern ruft (12.11); jede ausser dem
@@ -506,6 +520,13 @@ impl Options {
         }
     }
 
+    /// Das Paar aus `fast` (dem Programm des Baus) und `slow` (12.11): in
+    /// Echtzeit ueber `ticks` Ticks von `fast`; die Pruefung des Laufs macht
+    /// der Test selbst, je Programm.
+    pub fn pair(ticks: u64, slow: PathBuf) -> Options {
+        Options { ticks, timed: true, judged: true, bin: Bin::Pair { slow }, ..Options::default() }
+    }
+
     /// Die Vektoren der kuratierten Natives.
     pub fn natives() -> Options {
         Options { bin: Bin::Natives, ..Options::default() }
@@ -700,8 +721,17 @@ impl Bringup {
             Ok(takt_board_support::image_key::carries(&elf, &key))
         };
         for _ in 0..ATTEMPTS {
-            let elf = self.build_uncached(program, options, &key, slot)?;
+            let (elf, out_dir) = self.build_uncached(program, options, &key, slot)?;
             self.enter(&stand)?;
+            // Die Manifeste eines Paars vor dem ELF: Wer das ELF findet,
+            // findet sie auch.
+            if let (Bin::Pair { .. }, Some(out)) = (&options.bin, &out_dir) {
+                for prefix in ["fast", "slow"] {
+                    let from = out.join("takt").join(prefix).join(format!("{prefix}.manifest"));
+                    std::fs::copy(&from, pair_manifest(&cached, prefix))
+                        .map_err(|e| format!("{}: {e}", from.display()))?;
+                }
+            }
             if publish_checked(&elf, &cached, ours)? {
                 return Ok(cached);
             }
@@ -741,11 +771,18 @@ impl Bringup {
 
     /// `cargo build` des Bring-ups mit dem Programm; `key` landet als Symbol
     /// im ELF.
-    fn build_uncached(&self, program: &Path, options: &Options, key: &str, slot: usize) -> Result<PathBuf, String> {
+    fn build_uncached(
+        &self,
+        program: &Path,
+        options: &Options,
+        key: &str,
+        slot: usize,
+    ) -> Result<(PathBuf, Option<PathBuf>), String> {
         let bin = match options.bin {
             Bin::Takt => "takt",
             Bin::Bench { .. } => "bench",
             Bin::Natives => "natives",
+            Bin::Pair { .. } => "pair",
             Bin::Leftover => "leftover",
         };
         let target = crate::target_dir();
@@ -801,7 +838,11 @@ impl Bringup {
                 .env(crate::bringup::BENCH_PART, part.to_string()),
             _ => cargo.env_remove("TAKT_BENCH_SHIFT").env_remove(crate::bringup::BENCH_PART),
         };
-        built_executable(&mut cargo)
+        match &options.bin {
+            Bin::Pair { slow } => cargo.args(["--features", "pair"]).env("TAKT_PAIR_SLOW", slow),
+            _ => cargo.env_remove("TAKT_PAIR_SLOW"),
+        };
+        built_with_out_dir(&mut cargo)
     }
 }
 
@@ -881,9 +922,36 @@ pub(crate) fn image_key(triple: &str, program: &Path, options: &Options) -> Resu
             f.file(&crate::natives::spec_path())?;
             f.file(&crate::math::spec_path())?;
         }
+        Bin::Pair { slow } => {
+            f.str("pair");
+            hash_program(slow, &mut f)?;
+        }
         Bin::Leftover => f.str("leftover"),
     }
     Ok(f.finish())
+}
+
+/// Wie [`built_executable`], dazu das `OUT_DIR` des Bauskripts des
+/// Bring-ups, in dem die Lieferformen liegen.
+fn built_with_out_dir(cargo: &mut Command) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let out = cargo.output().map_err(|e| format!("cargo: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let field = |l: &str, name: &str| -> Option<String> {
+        let key = format!("\"{name}\":\"");
+        let rest = &l[l.find(&key)? + key.len()..];
+        Some(rest[..rest.find('"')?].replace("\\\\", "\\"))
+    };
+    let elf = stdout.lines().filter_map(|l| field(l, "executable")).next_back().map(PathBuf::from);
+    let out_dir = stdout
+        .lines()
+        .filter(|l| l.contains("\"build-script-executed\"") && l.contains("takt-bringup"))
+        .filter_map(|l| field(l, "out_dir"))
+        .next_back()
+        .map(PathBuf::from);
+    Ok((elf.ok_or_else(|| "cargo meldete kein Binary".to_string())?, out_dir))
 }
 
 /// Fuehrt `cargo build --message-format=json-render-diagnostics` aus und

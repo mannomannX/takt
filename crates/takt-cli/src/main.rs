@@ -253,6 +253,7 @@ const FLAGS: &[(&str, &[&str])] = &[
             "--board",
             "--conformance",
             "--emit",
+            "--entry",
             "--hardware",
             "--import",
             "--load",

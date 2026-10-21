@@ -87,3 +87,15 @@ unit = V
 calibration = "table(0 0, 3300000 3.3)"
 device = adc
 port = "takt_table"
+
+[channel pair/seen]
+direction = input
+from = "pair/last"
+from_tick_ns = 100000000
+from_timing = asap
+
+[channel pair/sent]
+direction = output
+from = "pair/last"
+from_tick_ns = 100000000
+from_timing = boundary

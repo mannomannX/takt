@@ -1,0 +1,28 @@
+# Das langsame Programm eines Paars auf einem Kern (12.11, M11 Schritt 16):
+# 100 Hz, die niedrigere Prioritaet. An jeder Grenze liest es den Zaehler,
+# den das schnelle Programm (`pair_fast.takt`) an derselben Grenze
+# committet hat (12.11, „An einer gemeinsamen Grenze“), und gibt ihn und
+# den Abstand zum vorigen aus. Das schnelle Programm liest `last` zurueck;
+# darum gibt dieses Programm seinen Latch erst an der naechsten Grenze frei
+# (`output_timing = boundary`).
+
+system:
+    language      = 1
+    tick          = 10 ms
+    output_timing = boundary
+
+input  seen  : int in 0..1000000 @ hw("pair/seen")  with max_age = 20 ms
+output last  : int in 0..1000000 @ hw("pair/last")  with safe = 0
+output delta : int in 0..1000000 @ hw("pair/delta") with safe = 0
+
+machine follower:
+    var before : int in 0..1000000 = 0
+
+    initial RUN
+
+    state RUN:
+        loop:
+            last = seen
+            if seen >= before:
+                delta = seen - before
+            before = seen

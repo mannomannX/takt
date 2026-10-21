@@ -154,6 +154,12 @@ pub fn drivers(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) 
 /// dazu bringt das Modul der Lieferform (`P.rs`); hier steht er im Modul
 /// `crate::app`.
 pub fn rig(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) {
+    rig_in(p, wiring, file, "app");
+}
+
+/// Wie [`rig`], fuer ein Programm, dessen Lieferform im Modul `crate::module`
+/// steht: mit zwei Programmen auf einem Kern hat jedes sein Praefix (12.11).
+pub fn rig_in(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path, module: &str) {
     use takt_frame::drivers::{Kind, of, rust_rig};
     let list = of(p, &takt_frame::layout::of(p));
     let mut used = vec!["Drivers"];
@@ -164,7 +170,7 @@ pub fn rig(p: &takt_mir::Program, wiring: &[(String, String)], file: &Path) {
     }
     let traits = if used.len() == 1 { "Drivers".to_string() } else { format!("{{{}}}", used.join(", ")) };
     let text = format!(
-        "// Erzeugt von `takt_conformance::bringup::rig` (12.6).\n\nuse crate::app::{traits};\n\n{}",
+        "// Erzeugt von `takt_conformance::bringup::rig` (12.6).\n\nuse crate::{module}::{traits};\n\n{}",
         rust_rig(&list, "Rig", wiring)
     );
     fs::write(file, text).unwrap_or_else(|e| panic!("{}: {e}", file.display()));

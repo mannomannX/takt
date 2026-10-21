@@ -86,6 +86,9 @@ interrupt = []
 # Hardware-Konfiguration.
 poll = []
 bench = []
+# Zwei Programme auf einem Kern (12.11, M11 Schritt 16): `build.rs` baut
+# `fast` und `slow` fuer das Binary `pair`.
+pair = []
 
 # Das Messprogramm von `takt bench` (13.8): `bench` bindet die Bibliothek aus
 # `takt bench --emit embed`, die nur dieser Bau braucht.
@@ -93,6 +96,12 @@ bench = []
 name = "bench"
 path = "src/bin/bench.rs"
 required-features = ["bench"]
+
+# Zwei Programme auf einem Kern (12.11): nur mit dem Merkmal `pair`.
+[[bin]]
+name = "pair"
+path = "src/bin/pair.rs"
+required-features = ["pair"]
 
 # Ein Bring-up-Programm ist nur mit Optimierung brauchbar: Ohne sie
 # braucht ein Tick ein Vielfaches, und die Periodenmessung misst den

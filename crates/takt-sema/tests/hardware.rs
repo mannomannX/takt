@@ -622,3 +622,28 @@ fn another_driver_keeps_its_port_opaque() {
     let diags = check_zephyr(&compile(PINS), &pins("PA0 active_low", "stm32f4-gpio", "u8"));
     assert!(diags.is_empty(), "{:?}", codes(&diags));
 }
+
+/// **Pruefung 60 kennt die Kopplung zweier Programme** (12.11): Liest ein
+/// Programm den Ausgang eines niedrigeren, verlangt das dessen
+/// `output_timing = boundary`; bei gleichem Tick ist der Schreiber ohne
+/// `from_first` der niedrigere.
+#[test]
+fn a_coupling_from_a_lower_program_needs_its_boundary_timing() {
+    let p = compile(
+        "input seen : int in 0..100 @ hw(\"pair/seen\") with max_age = 20 ms\n\
+         output o : int in 0..100 @ hw(\"pair/o\") with safe = 0\n\n\
+         machine m:\n    initial RUN\n    state RUN:\n        loop:\n            o = seen\n",
+    );
+    let coupling = |writer: &str| -> Vec<String> {
+        let config = hw(&format!(
+            "[channel pair/seen]\ndirection = input\nfrom = \"pair/last\"\n{writer}\n\n[channel pair/o]\ndirection = output\n"
+        ));
+        codes(&check_bindings(&p, &config)).into_iter().filter(|c| c.contains("pair/last")).collect()
+    };
+    let lower = coupling("from_tick_ns = 10000000\nfrom_timing = asap");
+    assert!(lower.iter().any(|c| c.contains("SC-60") && c.contains("niedrigeren")), "{lower:?}");
+    assert!(coupling("from_tick_ns = 10000000\nfrom_timing = boundary").is_empty());
+    assert!(coupling("from_tick_ns = 1000000\nfrom_timing = asap\nfrom_first = true").is_empty());
+    assert!(!coupling("from_tick_ns = 1000000\nfrom_timing = asap").is_empty(), "gleicher Tick ohne `from_first`");
+    assert!(coupling("from_tick_ns = 100000\nfrom_timing = asap").is_empty(), "der Schreiber ist hoeher");
+}

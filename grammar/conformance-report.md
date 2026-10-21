@@ -25,7 +25,8 @@ Ein Leser nimmt jede Version bis zu seiner eigenen und lehnt eine neuere ab
 `suite` und `placements` im Lauf, `overhead` in der Kalibrierung, `function`
 und `placements` je Probe; eine Datei der Version 1 kennt sie nicht. Version 3
 (FB-513) führt die Stack-Reserve je Form, Version 4 (M11 Schritt 15) das Urteil
-der Portprüfung je Port, Version 5 (M11 Schritt 23) darin den Speicherschutz.
+der Portprüfung je Port, Version 5 (M11 Schritt 23) darin den Speicherschutz,
+Version 6 (M11 Schritt 16) den Eintrittsaufwand je Form.
 Er ist streng: Ein unbekannter Abschnitt oder Schlüssel ist ein Fehler
 mit Zeilennummer — ein Bericht ist ein Beleg, und ein still überlesenes Feld
 wäre einer weniger.
@@ -35,7 +36,7 @@ wäre einer weniger.
 | Abschnitt | Einmal | Schlüssel |
 |---|---|---|
 | `[run]` | ja | `date` (`"JJJJ-MM-TT"`, UTC), `board`, `target` (Zielklasse wie `takt build --target`, 12.8), `profile` (12.8), `tool` (Werkzeug mit Version), `core_hz`, `runs` (Messungen je Kern und Lage), `suite` (Kennung der Kerne des Messprogramms), `placements` (die Lagen als Verschiebung des Programms in Byte, FB-367) |
-| `[calibration]` | höchstens | `t_io_ps` (7.2), `stretch` (Bruch `z/n`, `1/1` ohne Streckung), `stack_reserve` (Byte, 12.3; fehlt ohne Messung), `subnormal_failures` (4.2), `overhead` (Zyklen zweier Lesungen des Zählers, von jeder Reihe abgezogen) |
+| `[calibration]` | höchstens | `t_io_ps` (7.2), `stretch` (Bruch `z/n`, `1/1` ohne Streckung), `stack_reserve` (Byte, 12.3; fehlt ohne Messung), je Form `stack_reserve_<form>` und `entry_ns_<form>` (der eigene Kern ohne Zusatz; der Weg vom Alarm bis zum Beginn des Ticks in Nanosekunden, 12.11), `subnormal_failures` (4.2), `overhead` (Zyklen zweier Lesungen des Zählers, von jeder Reihe abgezogen) |
 | `[probe <name>]` | je Gewicht | `function` (nur bei der Mathematik: die Funktion des teuersten Aufrufs), `ps` (Gewicht vor der Streckung), `ops` (Unterschied der Operationen zwischen kleinem und großem Kern), `small`, `large` (Streuungen über alle Lagen), `placements` (das Gewicht je Lage in Pikosekunden, wenn in mehreren gemessen) |
 | `[check <name>]` | je Kern | `measured_ps` (Maximum), `bound_ps` (`Σ N_c · c_target[c] + T_IO` der gestreckten Tabelle, dazu das Mehrgewicht jeder Division, jedes `fma` und jeder Wurzel, 7.2) |
 | `[kernel <name>]` | je Referenzkern | `takt`, `c` (Streuungen), `same_digest` (`true`/`false`), `implicit_checks` (3.4) |
@@ -76,7 +77,7 @@ behält die Urteile, wenn es den Bericht neu schreibt.
 ## R4 Vektor
 
 ```text
-# takt-conformance 5
+# takt-conformance 6
 [run]
 date = "2026-09-25"
 board = "stm32f401"
@@ -92,6 +93,7 @@ placements = 0 8 24
 t_io_ps = 5000
 stretch = 21/20
 stack_reserve = 1432
+entry_ns_interrupt = 4300
 subnormal_failures = 0
 overhead = 6
 
