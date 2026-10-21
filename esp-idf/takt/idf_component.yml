@@ -1,0 +1,9 @@
+# Takt als Komponente von ESP-IDF (12.11, M11 Schritt 21a): der Port der
+# Interruptform mit dem Adapter fuer ESP-IDF, das Geraet des Journals und
+# `takt_add_program` (CMakeLists.txt). Gebaut und geprueft gegen ESP-IDF
+# v6.1-beta1 auf dem ESP32-C6; die Fassung legt der Bau fest
+# (`.github/actions/esp-idf`), nicht dieses Manifest.
+version: "0.1.0"
+description: "Takt: der Port der Interruptform und das Journal fuer ESP-IDF"
+targets:
+  - esp32c6
