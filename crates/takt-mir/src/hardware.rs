@@ -111,8 +111,11 @@ use crate::fns::{CostClass, CostVec, Heavy};
 /// `foreign_block_origin`, Abschnitte `[target.<z>.isr.<name>]`) und
 /// `from` am Kanal, die Kopplung zweier Programme eines Kerns (8.10,
 /// 12.11, M11 Schritt 16); eine aeltere Datei nennt beides nicht, und die
-/// Antwortzeiten mehrerer Programme rechnen ohne fremde Last.
-pub const FORMAT_VERSION: u32 = 18;
+/// Antwortzeiten mehrerer Programme rechnen ohne fremde Last. 19: der
+/// Eintrittsaufwand je Form (`entry_ns`, `entry_ns_interrupt`,
+/// `entry_ns_poll`, `entry_ns_rtos`), den `takt bench` misst (12.11, 13.8);
+/// ohne ihn ist die Antwortzeit eines Programms in dieser Form offen.
+pub const FORMAT_VERSION: u32 = 19;
 
 /// Die Kennung in der ersten Zeile.
 const MAGIC: &str = "takt-hw";
@@ -341,6 +344,11 @@ pub struct Host {
     /// Der Wirt stellt einen Job-Interrupt (4.5); ohne ihn baut ein Programm
     /// mit Jobs in der Pollform nicht.
     pub job_interrupt: bool,
+    /// Der Eintrittsaufwand je Form in Nanosekunden: vom Alarm bis zum Beginn
+    /// des Ticks, die laengste Verspaetung eines leeren Kerns in Echtzeit, wie
+    /// `takt bench` sie misst (12.11, 13.8). Er gehoert zu C jedes Programms;
+    /// ohne ihn ist die Antwortzeit in dieser Form offen.
+    pub entry_ns: PerForm,
 }
 
 impl Target {
@@ -372,7 +380,7 @@ pub struct Memory {
     pub iram: Option<u64>,
     /// Stack-Reserven fuer Runtime, Treiber, ISRs und Port, je Form
     /// (12.3, 12.11).
-    pub stack_reserve: Reserves,
+    pub stack_reserve: PerForm,
     /// Marge auf den gerechneten Stack (12.3).
     pub stack_margin: Option<u64>,
     /// Was der Job-Kontext ueber den groessten `stack`-Vertrag der Jobs
@@ -428,25 +436,36 @@ impl Form {
             Form::Rtos => "stack_reserve_rtos",
         }
     }
+
+    /// Der Schluessel ihres Eintrittsaufwands in der Konfiguration.
+    pub fn entry_key(self) -> &'static str {
+        match self {
+            Form::Own => "entry_ns",
+            Form::Interrupt => "entry_ns_interrupt",
+            Form::Poll => "entry_ns_poll",
+            Form::Rtos => "entry_ns_rtos",
+        }
+    }
 }
 
-/// Die Stack-Reserve je Form in Byte (8.10, 12.3). Eine Form ohne Reserve
-/// hat keine: Die Reserve einer anderen traegt andere Rahmen.
+/// Ein Wert je Form: die Stack-Reserve in Byte (8.10, 12.3), der
+/// Eintrittsaufwand in Nanosekunden (12.11). Eine Form ohne Wert hat keinen:
+/// Der einer anderen gilt anderen Rahmen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Reserves([Option<u64>; 4]);
+pub struct PerForm([Option<u64>; 4]);
 
-impl Reserves {
-    /// Die Reserve der Form `form`.
+impl PerForm {
+    /// Der Wert der Form `form`.
     pub fn get(self, form: Form) -> Option<u64> {
         self.0[form as usize]
     }
 
-    /// Setzt die Reserve der Form `form`.
-    pub fn set(&mut self, form: Form, bytes: Option<u64>) {
-        self.0[form as usize] = bytes;
+    /// Setzt den Wert der Form `form`.
+    pub fn set(&mut self, form: Form, value: Option<u64>) {
+        self.0[form as usize] = value;
     }
 
-    /// Jede Form mit Reserve, in der Reihenfolge von [`Form::ALL`].
+    /// Jede Form mit Wert, in der Reihenfolge von [`Form::ALL`].
     pub fn iter(self) -> impl Iterator<Item = (Form, u64)> {
         Form::ALL.into_iter().filter_map(move |f| Some((f, self.get(f)?)))
     }
@@ -1026,6 +1045,10 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
             })?;
             target.memory.protect = Some(unit);
         }
+        key if Form::ALL.iter().any(|f| f.entry_key() == key) => {
+            let form = Form::ALL.into_iter().find(|f| f.entry_key() == key).unwrap_or(Form::Own);
+            target.host.entry_ns.set(form, Some(number(value, line)?));
+        }
         "main_loop_ns" => target.host.main_loop_ns = Some(field::<i64>(value, line)?),
         "job_interrupt" => target.host.job_interrupt = boolean(value, line)?,
         "foreign_block_ns" => target.foreign.block_ns = Some(field::<i64>(value, line)?),
@@ -1040,7 +1063,8 @@ fn target_key(target: &mut Target, key: &str, value: &str, line: u32) -> Result<
                 message: format!(
                     "unbekannter Schluessel `{key}`; bekannt: cost_model, core_hz, t_io, tick_jitter_ns, ram, flash, iram, \
                      stack_reserve, stack_reserve_interrupt, stack_reserve_poll, stack_reserve_rtos, stack_margin, \
-                     job_stack_reserve, protect, main_loop_ns, job_interrupt, foreign_block_ns, \
+                     job_stack_reserve, protect, main_loop_ns, job_interrupt, entry_ns, entry_ns_interrupt, \
+                     entry_ns_poll, entry_ns_rtos, foreign_block_ns, \
                      foreign_block_origin, nvm_sector_bytes, \
                      nvm_sectors, nvm_min_interval, nvm_erase_ns, \
                      nvm_program_ns, nvm_blocking, die Klassen {} und die eigenen Gewichte {}",
@@ -1322,6 +1346,9 @@ pub fn measured_values(t: &Target) -> Vec<(String, String)> {
     for (form, bytes) in t.memory.stack_reserve.iter() {
         v.push((form.reserve_key().to_string(), bytes.to_string()));
     }
+    for (form, ns) in t.host.entry_ns.iter() {
+        v.push((form.entry_key().to_string(), ns.to_string()));
+    }
     v
 }
 
@@ -1389,6 +1416,9 @@ pub fn render(hw: &Hardware) -> String {
         }
         if target.host.job_interrupt {
             s.push_str("job_interrupt = true\n");
+        }
+        for (form, ns) in target.host.entry_ns.iter() {
+            s.push_str(&format!("{} = {ns}\n", form.entry_key()));
         }
         let f = &target.foreign;
         if let Some(n) = f.block_ns {
@@ -1566,6 +1596,18 @@ t_io = 120000
         }
     }
 
+    /// **Der Eintrittsaufwand je Form** (8.10, 12.11, Version 19): gelesen,
+    /// geschrieben und wieder gelesen; eine Form ohne Schluessel hat keinen.
+    #[test]
+    fn the_entry_cost_is_kept_per_form() {
+        let text = format!("# {MAGIC} 19\n[target.thumbv7em]\nentry_ns = 900\nentry_ns_interrupt = 4200\n");
+        let hw = parse(&text).expect("lesbar");
+        let e = hw.target("thumbv7em").expect("Ziel").host.entry_ns;
+        assert_eq!((e.get(Form::Own), e.get(Form::Interrupt), e.get(Form::Poll)), (Some(900), Some(4200), None));
+        assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
+        assert!(render(&hw).contains("entry_ns_interrupt = 4200\n"));
+    }
+
     /// **Die Hauptschleife der Pollform** (8.10, 12.11, Version 16): Runde
     /// und Job-Interrupt, gelesen, geschrieben und wieder gelesen; ohne
     /// beide nennt das Ziel keine Runde und keinen Job-Interrupt.
@@ -1574,7 +1616,7 @@ t_io = 120000
         let text = format!("# {MAGIC} 16\n[target.thumbv7em]\nmain_loop_ns = 50000\njob_interrupt = true\n");
         let hw = parse(&text).expect("lesbar");
         let host = hw.target("thumbv7em").expect("Ziel").host;
-        assert_eq!(host, Host { main_loop_ns: Some(50_000), job_interrupt: true });
+        assert_eq!(host, Host { main_loop_ns: Some(50_000), job_interrupt: true, entry_ns: PerForm::default() });
         assert_eq!(parse(&render(&hw)).expect("wieder lesbar").targets, hw.targets);
         let bare = parse(&format!("# {MAGIC} 15\n[target.thumbv7em]\nram = 1024\n")).expect("Version 15");
         assert_eq!(bare.target("thumbv7em").expect("Ziel").host, Host::default());

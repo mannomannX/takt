@@ -450,6 +450,16 @@ fn manifest(e: &Embed<'_>, drivers: &[takt_frame::drivers::Driver], plan: &Layou
             let _ = writeln!(s, "t_io_ps = none");
         }
     }
+    // Der Weg vom Alarm bis zum Beginn des Ticks gehoert zu C (12.11); ihn
+    // misst `takt bench` je Form.
+    match target.zip(e.form.reserve_form()).and_then(|(t, f)| t.host.entry_ns.get(f)) {
+        Some(n) => {
+            let _ = writeln!(s, "entry_ns = {n}");
+        }
+        None => {
+            let _ = writeln!(s, "entry_ns = none");
+        }
+    }
     let _ = writeln!(s, "journal_block_ns = {}", if persist_bytes > 0 { e.nvm_blocking_ns } else { 0 });
     // 12.11: Was ein Programm ueber einen Treiber mit einem anderen koppelt.
     let timing = match p.config.output_timing {
@@ -604,7 +614,7 @@ mod tests {
 
     fn poll_host(main_loop_ns: i64, job_interrupt: bool) -> takt_mir::hardware::Target {
         takt_mir::hardware::Target {
-            host: Host { main_loop_ns: Some(main_loop_ns), job_interrupt },
+            host: Host { main_loop_ns: Some(main_loop_ns), job_interrupt, ..Host::default() },
             ..Default::default()
         }
     }

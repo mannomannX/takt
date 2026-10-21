@@ -1598,58 +1598,41 @@ fn manifest_value(text: &str, key: &str) -> Option<String> {
         .find_map(|l| Some(l.split_once('=')?).filter(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string()))
 }
 
+/// `takt` fuer `check-image`: `TAKT_TOOL` (so nennt `tools/board-run.ps1`
+/// das `takt` eines Laufs aus CI), sonst das des Zielverzeichnisses.
+fn takt_tool() -> std::path::PathBuf {
+    std::env::var_os(takt_conformance::bringup::TOOL).map_or_else(
+        || takt_conformance::target_dir().join("release").join(if cfg!(windows) { "takt.exe" } else { "takt" }),
+        std::path::PathBuf::from,
+    )
+}
+
 /// Die Antwortzeit jedes Programms in Nanosekunden, wie `takt check-image`
-/// sie aus den Manifesten neben dem ELF rechnet (12.11,
-/// `takt_mir::analysis::response`); `None` fuer eine offene.
+/// sie fuer das Abbild und die Manifeste daneben berichtet (12.11); `None`
+/// fuer eine offene oder eine ueber dem Tick.
 fn response_times(elf: &std::path::Path) -> Result<BTreeMap<String, Option<u64>>, String> {
-    use takt_mir::analysis::response::{self, Load, Origin};
-    let mut programs = Vec::new();
-    let mut isrs = Vec::new();
-    let mut block = 0u64;
+    let tool = takt_tool();
+    let mut check = std::process::Command::new(&tool);
+    check.arg("check-image").arg(elf);
     for prefix in ["fast", "slow"] {
-        let path = board::pair_manifest(elf, prefix);
-        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let number = |key: &str| manifest_value(&text, key).and_then(|v| v.parse::<u64>().ok());
-        let tick = number("tick_ns").ok_or_else(|| format!("{prefix}: kein `tick_ns`"))?;
-        let budget = number("step_budget_ps")
-            .filter(|_| manifest_value(&text, "step_budget_origin").as_deref() == Some("gemessen"));
-        programs.push(response::Program {
-            name: prefix.to_string(),
-            period_ps: tick.saturating_mul(1000),
-            budget_ps: budget,
-            origin: if budget.is_some() { Origin::Measured } else { Origin::Open },
-        });
-        block = block.max(number("journal_block_ns").unwrap_or(0)).max(number("foreign_block_ns").unwrap_or(0));
-        if prefix == "fast" {
-            for entry in manifest_value(&text, "isrs")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|e| !e.is_empty() && *e != "none")
-            {
-                let parts: Vec<&str> = entry.split(':').collect();
-                let [name, cost, period, _] = parts.as_slice() else { return Err(format!("Stoerer `{entry}`")) };
-                let ns =
-                    |v: &str| v.parse::<u64>().map(|n| n.saturating_mul(1000)).map_err(|e| format!("`{entry}`: {e}"));
-                isrs.push(Load {
-                    name: (*name).to_string(),
-                    cost_ps: ns(cost)?,
-                    period_ps: ns(period)?,
-                    origin: Origin::Contract,
-                });
-            }
-        }
+        check.arg("--manifest").arg(board::pair_manifest(elf, prefix));
     }
-    let blocking = (block > 0).then(|| Load {
-        name: "Sperre".into(),
-        cost_ps: block.saturating_mul(1000),
-        period_ps: 0,
-        origin: Origin::Contract,
-    });
-    Ok(response::responses(&programs, blocking.as_ref(), &isrs)
-        .into_iter()
-        .map(|r| (r.name, r.ps.filter(|_| r.fits).map(|ps| ps.div_ceil(1000))))
-        .collect())
+    let out = check.output().map_err(|e| format!("{}: {e}", tool.display()))?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let times: BTreeMap<String, Option<u64>> = text
+        .lines()
+        .filter_map(|l| {
+            let (name, rest) = l.split_once("] ")?.1.split_once(": Antwortzeit ")?;
+            Some((name.to_string(), rest.split_once(" ns bei einem Tick").and_then(|(n, _)| n.parse().ok())))
+        })
+        .collect();
+    if times.len() < 2 {
+        return Err(format!(
+            "`takt check-image` nennt keine Antwortzeiten:\n{text}{}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(times)
 }
 
 /// Der laengste Lauf der ISR der Leitung in Nanosekunden, wie das Binary

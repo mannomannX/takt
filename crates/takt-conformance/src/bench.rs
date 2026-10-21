@@ -856,9 +856,9 @@ fn load_runs(forms: &[Form]) -> Vec<Options> {
 /// (FB-513): je Lauf die Tiefe ohne den Anteil des Programms, den die Bilanz
 /// nennt; je Form die tiefste. Die Form nennt der Kopf des Laufs
 /// ([`form_of`]).
-fn stack_reserves<'a>(runs: impl IntoIterator<Item = &'a str>) -> takt_mir::hardware::Reserves {
+fn stack_reserves<'a>(runs: impl IntoIterator<Item = &'a str>) -> takt_mir::hardware::PerForm {
     let counter = crate::board::counter;
-    let mut reserves = takt_mir::hardware::Reserves::default();
+    let mut reserves = takt_mir::hardware::PerForm::default();
     for t in runs {
         let Some(depth) = counter(t, "stack").map(|s| s.saturating_sub(counter(t, "programm").unwrap_or(0))) else {
             continue;
@@ -867,6 +867,24 @@ fn stack_reserves<'a>(runs: impl IntoIterator<Item = &'a str>) -> takt_mir::hard
         reserves.set(form, Some(reserves.get(form).map_or(depth, |d| d.max(depth))));
     }
     reserves
+}
+
+/// Der Eintrittsaufwand je Form (12.11, 13.8): je Lauf des leeren Kerns in
+/// Echtzeit die laengste Verspaetung eines Tickbeginns nach seiner Frist
+/// (`drift` der Zeitzeilen) ohne den ersten Tick, der nach dem Kopf des Laufs
+/// beginnt; je Form die laengste. Darin steckt der Weg vom Alarm bis zum
+/// Beginn des Ticks: der Eintritt in die ISR, das Umschalten der MPU, der
+/// Alarm und die Form, dazu, was der Lauf an Stoerern sah.
+fn entry_costs<'a>(runs: impl IntoIterator<Item = &'a str>) -> takt_mir::hardware::PerForm {
+    let mut entries = takt_mir::hardware::PerForm::default();
+    for t in runs {
+        let drifts =
+            t.lines().filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("drift="))?.parse().ok());
+        let Some(ns) = drifts.skip(1).map(|d: i64| u64::try_from(d).unwrap_or(0)).max() else { continue };
+        let form = form_of(t);
+        entries.set(form, Some(entries.get(form).map_or(ns, |e| e.max(ns))));
+    }
+    entries
 }
 
 /// Die Form eines Laufs aus seinem Kopf (`  Form interrupt`, 12.11); ein
@@ -904,10 +922,13 @@ pub struct Outcome {
     /// Die Reserve fuer Runtime, Treiber, ISRs und Port (12.3) je Form: die
     /// tiefste Stack-Tiefe in der Tickschleife ohne den Anteil des
     /// Programms, aus dem leeren Kern und dem Lastkern (FB-513).
-    pub stack_reserve: takt_mir::hardware::Reserves,
+    pub stack_reserve: takt_mir::hardware::PerForm,
     /// Um wie viel der Abstand zweier Tickbeginne die Periode hoechstens
     /// ueberschreitet (7.3).
     pub tick_jitter_ns: Option<i64>,
+    /// Der Eintrittsaufwand je Form in Nanosekunden (12.11): die laengste
+    /// Verspaetung eines Tickbeginns im leeren Kern ([`entry_costs`]).
+    pub entry_ns: takt_mir::hardware::PerForm,
 }
 
 /// Was `takt bench --import` liest.
@@ -920,6 +941,9 @@ pub struct Logs {
     /// Der Lastkern in der Tickschleife, je Lauf ein Protokoll: die
     /// Stack-Reserve unter Last.
     pub loads: Vec<String>,
+    /// Der leere Kern in Echtzeit in jeder weiteren Form: ihr
+    /// Eintrittsaufwand; den des eigenen Kerns misst [`Logs::looped`].
+    pub entries: Vec<String>,
     /// Das Messprogramm `natives`: Ergebnisse und Stack der Natives und der
     /// Mathematik.
     pub natives: Option<String>,
@@ -1028,6 +1052,7 @@ pub fn import(logs: &Logs) -> Result<Outcome, String> {
         subnormal: merged.subnormal.ok_or("der Subnormal-Vektor fehlt im Protokoll (`bench subnormal`)")?,
         stack_reserve: stack_reserves(looped.into_iter().chain(logs.loads.iter().map(String::as_str))),
         tick_jitter_ns: looped.and_then(tick_jitter),
+        entry_ns: entry_costs(looped.into_iter().chain(logs.entries.iter().map(String::as_str))),
     })
 }
 
@@ -1039,6 +1064,8 @@ enum Image {
     Loop,
     /// Der Lastkern in einer Form.
     Load,
+    /// Der leere Kern in Echtzeit in einer weiteren Form: ihr Eintrittsaufwand.
+    Entry,
     /// Die Natives und die Mathematik.
     Natives,
 }
@@ -1061,6 +1088,7 @@ impl Image {
                 },
                 if options.timed { " in Echtzeit" } else { " in logischer Zeit" }
             ),
+            Image::Entry => format!("Tickschleife in der Form {}", options.form.feature().unwrap_or("own")),
             Image::Natives => "Natives und Mathematik".into(),
         }
     }
@@ -1081,6 +1109,14 @@ fn images(board: &dyn Board, runs: u64) -> Result<Vec<(Image, PathBuf, Options)>
     }
     images.push((Image::Loop, frame.clone(), Options::timed(LOOP_TICKS).calibrating()));
     images.extend(load_runs(board.forms()).into_iter().map(|options| (Image::Load, load.clone(), options)));
+    let entry = Options::timed(LOOP_TICKS).calibrating();
+    images.extend(
+        board
+            .forms()
+            .iter()
+            .filter(|f| **f != Form::Own)
+            .map(|&f| (Image::Entry, frame.clone(), entry.clone().in_form(f))),
+    );
     images.push((Image::Natives, frame, Options::natives()));
     Ok(images)
 }
@@ -1165,6 +1201,10 @@ pub fn run(board: &mut dyn Board, runs: u64, mut log: impl FnMut(&str)) -> Resul
                 ));
                 logs.loads.push(text);
             }
+            Image::Entry => {
+                log(&format!("{}: Eintritt {:?}", image.what(&options), entry_costs([text.as_str()])));
+                logs.entries.push(text);
+            }
             Image::Natives => {
                 log("Natives und Mathematik gerechnet");
                 logs.natives = Some(text);
@@ -1232,6 +1272,7 @@ impl Outcome {
             ..takt_mir::hardware::Target::default()
         };
         t.memory.stack_reserve = self.stack_reserve;
+        t.host.entry_ns = self.entry_ns;
         t
     }
 
@@ -1259,6 +1300,7 @@ impl Outcome {
                 t_io_ps: c.t_io_ps,
                 stretch: c.stretch,
                 stack_reserve: self.stack_reserve,
+                entry_ns: self.entry_ns,
                 subnormal_failures: self.subnormal,
                 overhead: self.overhead,
             }),
@@ -1586,8 +1628,9 @@ mod tests {
             overhead: 0,
             runs: 10,
             subnormal: 0,
-            stack_reserve: takt_mir::hardware::Reserves::default(),
+            stack_reserve: takt_mir::hardware::PerForm::default(),
             tick_jitter_ns: None,
+            entry_ns: takt_mir::hardware::PerForm::default(),
         };
         let line = outcome.kernel_lines().join("\n");
         assert!(line.contains("1.03") && line.contains("gleicher Digest"), "{line}");
@@ -1865,9 +1908,31 @@ mod tests {
         assert_eq!((own.get(Form::Own), own.get(Form::Rtos)), (Some(984), None));
         let all = stack_reserves(loads.iter().map(String::as_str).chain([looped.as_str()]));
         assert_eq!((all.get(Form::Own), all.get(Form::Rtos), all.get(Form::Interrupt)), (Some(2800), Some(3648), None));
-        assert_eq!(stack_reserves(["takt schlief 0\n"]), takt_mir::hardware::Reserves::default());
-        let logs = Logs { bench: vec![synthetic(0, 6)], looped: Some(looped), loads: loads.to_vec(), natives: None };
+        assert_eq!(stack_reserves(["takt schlief 0\n"]), takt_mir::hardware::PerForm::default());
+        let logs =
+            Logs { bench: vec![synthetic(0, 6)], looped: Some(looped), loads: loads.to_vec(), ..Logs::default() };
         assert_eq!(import(&logs).unwrap_or_else(|e| panic!("{e}")).stack_reserve, all);
+    }
+
+    /// **Der Eintrittsaufwand ist die laengste Verspaetung je Form** (12.11):
+    /// ohne den ersten Tick, der nach dem Kopf beginnt; ein Lauf ohne
+    /// Zeitzeilen sagt nichts.
+    #[test]
+    fn the_entry_cost_is_the_longest_drift_per_form() {
+        use takt_mir::hardware::Form;
+        let run = |form: &str, drifts: &[i64]| -> String {
+            let lines: String = drifts
+                .iter()
+                .enumerate()
+                .map(|(k, d)| format!("t={} time took=10 drift={d} slept=0\n", k + 1))
+                .collect();
+            format!("takt auf board\n{form}takt trace\n{lines}takt end\n")
+        };
+        let own = run("", &[90_000, 1_200, 1_500]);
+        let interrupt = [run("  Form interrupt\n", &[50_000, 4_100, 3_900]), run("  Form interrupt\n", &[0, 4_300])];
+        let e = entry_costs([own.as_str()].into_iter().chain(interrupt.iter().map(String::as_str)));
+        assert_eq!((e.get(Form::Own), e.get(Form::Interrupt), e.get(Form::Poll)), (Some(1_500), Some(4_300), None));
+        assert_eq!(entry_costs(["takt auf board\ntakt end\n"]), takt_mir::hardware::PerForm::default());
     }
 
     /// **Der Import findet die Tabelle wieder**, aus der das Protokoll

@@ -193,6 +193,8 @@ try {
                 continue
             }
             if ($FromCi) {
+                # Das `takt` des Laufs fuer `takt check-image` in den Paar-Tests (12.11).
+                $env:TAKT_TOOL = $ci.Takt
                 $expr = if ($Filter) { "binary(=board_$b) & ($Filter)" } else { "binary(=board_$b)" }
                 cargo nextest run --archive-file $ci.Archive --workspace-remap $Worktree `
                     --run-ignored ignored-only --no-fail-fast -E $expr *>> $log

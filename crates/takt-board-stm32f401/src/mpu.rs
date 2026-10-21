@@ -142,13 +142,17 @@ pub fn state_address() -> u32 {
 /// Nach [`Mpu::arm`] waehlt jeder nur noch die Region des Programmzustands;
 /// eine ISR, die eine Umschaltung der Schleife unterbricht, hinterlaesst
 /// Auswahl und Rechte, wie sie sie vorfand.
+///
+/// Sie schliesst beide Regionen der Programmzustaende, auch wo nur eine
+/// eingerichtet ist (eine ausgeschaltete bleibt aus): Der Eintritt kostet in
+/// jedem Abbild gleich viel, und `takt bench` misst den eines Paars mit
+/// (12.11).
 pub fn isr<R>(f: impl FnOnce() -> R) -> R {
     // SAFETY: Registerpaare der MPU, die die ISR vor ihrer Rueckkehr
     // wiederherstellt.
     let mpu = unsafe { &*MPU::PTR };
-    let in_use = IN_USE.load(Ordering::SeqCst);
     let mut before = [0u32; 2];
-    for (region, kept) in STATES.iter().zip(before.iter_mut()).take(in_use) {
+    for (region, kept) in STATES.iter().zip(before.iter_mut()) {
         // SAFETY: wie oben.
         unsafe { mpu.rnr.write(*region) };
         *kept = mpu.rasr.read();
@@ -160,7 +164,7 @@ pub fn isr<R>(f: impl FnOnce() -> R) -> R {
     let r = f();
     // In umgekehrter Folge: `RNR` steht danach wieder auf dem ersten
     // Programmzustand, wie `arm` ihn hinterliess.
-    for (region, kept) in STATES.iter().zip(before.iter()).take(in_use).rev() {
+    for (region, kept) in STATES.iter().zip(before.iter()).rev() {
         // SAFETY: wie oben; die ISR hat `RNR` vielleicht umgestellt.
         unsafe { mpu.rnr.write(*region) };
         // SAFETY: wie oben; die Rechte von vorher.
@@ -362,9 +366,8 @@ unsafe extern "C" fn takt_mem_manage(frame: *mut u32) {
     }
     let address = scb.mmfar.read();
     let hit = |g: Region| (g.base..g.base.saturating_add(g.size)).contains(&address);
-    let in_arena = ARENAS
-        .iter()
-        .any(|[low, high]| (low.load(Ordering::SeqCst)..high.load(Ordering::SeqCst)).contains(&address));
+    let in_arena =
+        ARENAS.iter().any(|[low, high]| (low.load(Ordering::SeqCst)..high.load(Ordering::SeqCst)).contains(&address));
     let region = if in_arena {
         1
     } else if hit(guard()) || job_guard().is_some_and(hit) {

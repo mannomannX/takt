@@ -22,8 +22,9 @@ use std::fmt::Write as _;
 /// `placements` je Probe; die Kerne heissen wie im Protokoll. 3: die
 /// Stack-Reserve je Form (`stack_reserve_<form>`, FB-513). 4: das Urteil der
 /// Portpruefung je Port (`[port <name>]`, M11 Schritt 15). 5: der
-/// Speicherschutz je Port (`protection`, M11 Schritt 23).
-pub const FORMAT_VERSION: u32 = 5;
+/// Speicherschutz je Port (`protection`, M11 Schritt 23). 6: der
+/// Eintrittsaufwand je Form (`entry_ns_<form>`, M11 Schritt 16).
+pub const FORMAT_VERSION: u32 = 6;
 
 const MAGIC: &str = "takt-conformance";
 
@@ -84,7 +85,10 @@ pub struct Calibration {
     pub stretch: (u64, u64),
     /// Stack-Reserve von Runtime, Treibern, ISRs und Port in Byte, je Form
     /// (12.3, FB-513).
-    pub stack_reserve: takt_mir::hardware::Reserves,
+    pub stack_reserve: takt_mir::hardware::PerForm,
+    /// Der Weg vom Alarm bis zum Beginn des Ticks in Nanosekunden, je Form
+    /// (12.11).
+    pub entry_ns: takt_mir::hardware::PerForm,
     /// Faelle des Subnormal-Vektors mit falschem Ergebnis (4.2).
     pub subnormal_failures: u64,
     /// Was die Messung selbst kostet, in Zyklen; von jeder Reihe abgezogen.
@@ -251,6 +255,9 @@ pub fn render(r: &Report) -> String {
         let _ = write!(s, "\n[calibration]\nt_io_ps = {}\nstretch = {}/{}\n", c.t_io_ps, c.stretch.0, c.stretch.1);
         for (form, bytes) in c.stack_reserve.iter() {
             let _ = writeln!(s, "{} = {bytes}", form.reserve_key());
+        }
+        for (form, ns) in c.entry_ns.iter() {
+            let _ = writeln!(s, "{} = {ns}", form.entry_key());
         }
         let _ = writeln!(s, "subnormal_failures = {}\noverhead = {}", c.subnormal_failures, c.overhead);
     }
@@ -454,6 +461,13 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                             .unwrap_or(takt_mir::hardware::Form::Own);
                         c.stack_reserve.set(form, Some(number()?));
                     }
+                    key if takt_mir::hardware::Form::ALL.iter().any(|f| f.entry_key() == key) => {
+                        let form = takt_mir::hardware::Form::ALL
+                            .into_iter()
+                            .find(|f| f.entry_key() == key)
+                            .unwrap_or(takt_mir::hardware::Form::Own);
+                        c.entry_ns.set(form, Some(number()?));
+                    }
                     "subnormal_failures" => c.subnormal_failures = number()?,
                     "overhead" => c.overhead = number()?,
                     _ => return Err(unknown()),
@@ -598,10 +612,15 @@ mod tests {
                 t_io_ps: 5_000,
                 stretch: (21, 20),
                 stack_reserve: {
-                    let mut r = takt_mir::hardware::Reserves::default();
+                    let mut r = takt_mir::hardware::PerForm::default();
                     r.set(takt_mir::hardware::Form::Own, Some(1_432));
                     r.set(takt_mir::hardware::Form::Rtos, Some(2_048));
                     r
+                },
+                entry_ns: {
+                    let mut e = takt_mir::hardware::PerForm::default();
+                    e.set(takt_mir::hardware::Form::Interrupt, Some(4_300));
+                    e
                 },
                 subnormal_failures: 0,
                 overhead: 6,
@@ -666,12 +685,13 @@ mod tests {
     fn a_report_round_trips() {
         let r = sample();
         let text = render(&r);
-        assert!(text.starts_with("# takt-conformance 5\n"), "{text}");
+        assert!(text.starts_with("# takt-conformance 6\n"), "{text}");
         assert!(text.contains("job_stack = 1100 2700\nprotection = \"Fenster\"\n"), "{text}");
         assert!(text.contains("[port interrupt]\ndate = \"2026-10-11\"\npassed = true\n"), "{text}");
         assert!(text.contains("stack = 3900 4500\njob_stack = 1100 2700\n"), "{text}");
         assert!(!text.contains("journal_writes"), "was die Ausgabe nicht nannte, fehlt: {text}");
         assert!(text.contains("stack_reserve = 1432\nstack_reserve_rtos = 2048\n"), "Reserve je Form: {text}");
+        assert!(text.contains("entry_ns_interrupt = 4300\n"), "Eintritt je Form: {text}");
         assert!(text.contains("[probe f64_math]\nfunction = \"acos\"\nps = "), "{text}");
         assert!(text.contains("placements = 0 8 24\n") && text.contains("placements = 11905 11905 11905\n"), "{text}");
         assert_eq!(parse(&text), Ok(r));

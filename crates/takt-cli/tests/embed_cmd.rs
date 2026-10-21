@@ -485,8 +485,8 @@ fn the_manifest_names_budget_and_foreign_load() {
     std::fs::write(
         &hw,
         format!(
-            "# takt-hw 18\n{section}\n[target.thumbv7em.isr.uart]\ncost_ns = 1100\nperiod_ns = 10850\n\
-             origin = gemessen\n"
+            "# takt-hw 19\n{section}entry_ns = 1200\n\n[target.thumbv7em.isr.uart]\ncost_ns = 1100\n\
+             period_ns = 10850\norigin = gemessen\n"
         ),
     )
     .expect("hw");
@@ -509,6 +509,7 @@ fn the_manifest_names_budget_and_foreign_load() {
     assert_eq!(manifest_value(&out, "step_budget_origin"), "gemessen");
     let budget: u64 = manifest_value(&out, "step_budget_ps").parse().expect("Zahl");
     assert!(budget > 8_869_048, "das Budget enthaelt T_IO: {budget}");
+    assert_eq!(manifest_value(&out, "entry_ns"), "1200", "der Eintrittsaufwand des eigenen Kerns");
     assert_eq!(manifest_value(&out, "foreign_block_ns"), "1000");
     assert_eq!(manifest_value(&out, "foreign_block_origin"), "Vertrag");
     assert_eq!(manifest_value(&out, "isrs"), "uart:1100:10850:gemessen");

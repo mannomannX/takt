@@ -96,6 +96,9 @@ pub(crate) struct Timing {
     pub(crate) isrs: Vec<String>,
     /// T_IO in Pikosekunden; `None` ist offen.
     pub(crate) t_io_ps: Option<u64>,
+    /// Der Eintrittsaufwand der Form in Nanosekunden, vom Alarm bis zum
+    /// Beginn des Ticks (`takt bench`); `None` ist offen.
+    pub(crate) entry_ns: Option<u64>,
     /// `output_timing = boundary` (12.1).
     pub(crate) boundary: bool,
     /// Die Adressen der Ausgaenge an Treibern.
@@ -187,6 +190,7 @@ impl Manifest {
                 .map(|n| (n, values.get("foreign_block_origin").map_or("Vertrag", |o| *o).to_string())),
             isrs: list("isrs"),
             t_io_ps: optional("t_io_ps")?.filter(|_| values.get("step_budget_origin") == Some(&"gemessen")),
+            entry_ns: optional("entry_ns")?,
             boundary: values.get("output_timing") == Some(&"boundary"),
             outputs: list("outputs"),
             links: list("links")
@@ -475,13 +479,18 @@ pub(crate) fn responses(manifests: &[&Manifest]) -> Vec<Line> {
     if first.foreign_block.is_none() && first.isrs.is_empty() {
         out.push(open("fremde Last: keine Angabe in der Hardware-Konfiguration (8.10)".to_string()));
     }
+    // C eines Programms: sein Schrittbudget und der Weg vom Alarm bis zum
+    // Beginn des Ticks; fehlt eines, ist C offen.
     let tasks: Vec<response::Program> = programs
         .iter()
-        .map(|m| response::Program {
-            name: m.prefix.clone(),
-            period_ps: m.timing.tick_ns.saturating_mul(1000),
-            budget_ps: m.timing.budget_ps,
-            origin: if m.timing.budget_ps.is_some() { response::Origin::Measured } else { response::Origin::Open },
+        .map(|m| {
+            let c = m.timing.budget_ps.zip(m.timing.entry_ns).map(|(b, e)| b.saturating_add(e.saturating_mul(1000)));
+            response::Program {
+                name: m.prefix.clone(),
+                period_ps: m.timing.tick_ns.saturating_mul(1000),
+                budget_ps: c,
+                origin: if c.is_some() { response::Origin::Measured } else { response::Origin::Open },
+            }
         })
         .collect();
     match response::utilisation_ppm(&tasks, &isrs) {
@@ -504,7 +513,12 @@ pub(crate) fn responses(manifests: &[&Manifest]) -> Vec<Line> {
     out.extend(couplings(&programs, &tasks, blocking.as_ref(), &isrs));
     for r in response::responses(&tasks, blocking.as_ref(), &isrs) {
         let tick = programs.iter().find(|m| m.prefix == r.name).map_or(0, |m| m.timing.tick_ns);
+        let entry_missing = programs.iter().any(|m| m.prefix == r.name && m.timing.entry_ns.is_none());
         out.push(match r.ps {
+            None if entry_missing => open(format!(
+                "{}: Antwortzeit offen: der Eintrittsaufwand der Form fehlt (`takt bench`, 12.11)",
+                r.name
+            )),
             None => open(format!(
                 "{}: Antwortzeit offen: ein Schrittbudget fehlt (Kalibrierung zum Kostenmodell, 7.2)",
                 r.name
@@ -593,8 +607,16 @@ fn couplings(
                 out.push(open(format!("{what}: offen, T_IO von {} fehlt (Kalibrierung)", programs[low].prefix)));
                 continue;
             };
+            let Some(entry) = programs[low].timing.entry_ns else {
+                out.push(open(format!(
+                    "{what}: offen, der Eintrittsaufwand von {} fehlt (`takt bench`)",
+                    programs[low].prefix
+                )));
+                continue;
+            };
+            // Von der Grenze bis zum Ende des Abtastens: Eintritt und T_IO.
             let mut probe = tasks.to_vec();
-            probe[low].budget_ps = Some(t_io);
+            probe[low].budget_ps = Some(t_io.saturating_add(entry.saturating_mul(1000)));
             let r = &response::responses(&probe, blocking, isrs)[low];
             out.push(match r.ps {
                 None => open(format!("{what}: offen, ein Schrittbudget fehlt")),
@@ -816,13 +838,36 @@ mod tests {
         }
     }
 
-    /// Ein Programm mit Tick und Schrittbudget, ohne fremde Last.
+    /// Ein Programm mit Tick und Schrittbudget, ohne fremde Last und mit einem
+    /// Eintrittsaufwand von 0.
     fn timed(prefix: &str, tick_ns: u64, budget_ns: Option<u64>) -> Manifest {
         Manifest {
             prefix: prefix.into(),
-            timing: Timing { tick_ns, budget_ps: budget_ns.map(|n| n * 1000), ..Timing::default() },
+            timing: Timing { tick_ns, budget_ps: budget_ns.map(|n| n * 1000), entry_ns: Some(0), ..Timing::default() },
             ..manifest()
         }
+    }
+
+    /// **Der Weg vom Alarm bis zum Beginn des Ticks gehoert zu C** (12.11):
+    /// Er verlaengert jede Antwort und den Weg bis zum Ende des Abtastens;
+    /// fehlt er, ist die Antwortzeit offen und hat keine Zahl.
+    #[test]
+    fn the_entry_cost_belongs_to_every_response() {
+        let (mut fast, mut slow) = pair(250_000, 50_000);
+        fast.timing.entry_ns = Some(20_000);
+        slow.timing.entry_ns = Some(20_000);
+        let lines = responses(&[&fast, &slow]);
+        let found = |text: &str| lines.iter().any(|l| l.text.contains(text));
+        assert!(found("fast: Antwortzeit 270000 ns"), "{lines:?}");
+        assert!(found("slow gibt frei und tastet ab nach 340000 ns"), "{lines:?}");
+        slow.timing.entry_ns = None;
+        let open = responses(&[&fast, &slow]);
+        assert!(
+            open.iter()
+                .any(|l| l.origin == Origin::Open && l.text.starts_with("slow: Antwortzeit offen: der Eintritt")),
+            "{open:?}"
+        );
+        assert!(!open.iter().any(|l| l.text.starts_with("slow: Antwortzeit 3")), "{open:?}");
     }
 
     fn texts(lines: &[Line]) -> Vec<(Origin, &str)> {
