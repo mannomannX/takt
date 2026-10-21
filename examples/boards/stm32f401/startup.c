@@ -115,7 +115,25 @@ static volatile uint32_t *board_word(uintptr_t address) { return (volatile uint3
 /* Die Adresse eines Objekts als Zahl. */
 static uintptr_t board_start_address(const volatile uint32_t *object) { return (uintptr_t)object; }
 
-void Reset_Handler(void) {
+/* Der Start nach dem Ausschalten der MPU: `.data`, `.bss`, `main`. */
+void board_reset(void);
+
+/* Der Resetvektor schaltet vor allem anderen die MPU aus (FB-752): Ein
+ * Vorgaenger, der ohne Reset in den Bootloader sprang, kann sie mit seinen
+ * Regionen eingeschaltet lassen, und schon der erste Rahmen auf dem Stack
+ * oder das Nullen von `.bss` fiele unter eine fremde Region. Ohne Prolog,
+ * also ohne Stack; `MPU_CTRL` steht bei 0xE000ED94. */
+__attribute__((naked)) void Reset_Handler(void) {
+    __asm__ volatile("movw r0, #0xED94\n\t"
+                     "movt r0, #0xE000\n\t"
+                     "movs r1, #0\n\t"
+                     "str r1, [r0]\n\t"
+                     "dsb\n\t"
+                     "isb\n\t"
+                     "b board_reset\n\t");
+}
+
+void board_reset(void) {
     const uintptr_t load = board_start_address(&board_data_load);
     const uintptr_t data = board_start_address(&board_data_start);
     const uintptr_t data_end = board_start_address(&board_data_end);

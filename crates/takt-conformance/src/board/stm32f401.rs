@@ -55,7 +55,15 @@ pub(super) const BRINGUP: Bringup = Bringup {
         "../takt-trampoline-stm32f401/memory.x",
     ],
     env: &[],
+    checked: Some(reset_path),
 };
+
+/// Der Weg ab dem Resetvektor schaltet die MPU aus, bevor er Speicher
+/// beruehrt ([`super::reset_path`], FB-752): fuer jedes Abbild der
+/// Anwendung, in Rust wie in C.
+fn reset_path(elf: &Path) -> Result<(), String> {
+    super::reset_path::mpu_off_first(elf, APP)
+}
 
 /// Der Kern von FreeRTOS, den der C-Wirt unter FreeRTOS bindet (M11 Schritt
 /// 20): V11.3.1 mit dem Port `ARM_CM4F`, aus `FREERTOS_KERNEL_PATH` (auf CI
@@ -140,6 +148,7 @@ pub const C_HOST: CHost = CHost {
             kernel: Some(FREERTOS),
         },
     ],
+    checked: Some(reset_path),
 };
 
 /// Der C-Wirt unter FreeRTOS-MPU (12.11, M11 Schritt 20b): Die Regionen der
