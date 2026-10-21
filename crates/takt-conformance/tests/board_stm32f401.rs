@@ -65,6 +65,9 @@ fn a_run_ended_after_a_delay_begins_the_next_after_it() {
     let second = board.listen(Duration::from_secs(6)).unwrap_or_else(|e| panic!("{e}"));
     assert!(second.contains("takt auf stm32f401"), "kein neuer Lauf nach der Dauer:\n{second}");
     assert!(second.contains("out woke true"), "der zweite Lauf beginnt mit `previous_run = ENDED`:\n{second}");
+    // Der Kopf nennt, woran der Tiefschlaf weckte (FB-820): `LSE` oder `LSI`,
+    // `STEHT`, wenn der Start ihn wach abwartete.
+    assert!(second.lines().any(|l| l.trim_start().starts_with("RTC ")), "der Kopf nennt die RTC nicht:\n{second}");
 }
 
 /// **`next_run = NOW` beginnt sofort den naechsten Lauf, und der weiss es**

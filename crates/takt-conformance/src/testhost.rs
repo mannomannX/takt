@@ -346,8 +346,10 @@ fn boundary(tick: u64, tick_ns: i64) -> Result<i64, String> {
         .ok_or_else(|| format!("Tick {tick} liegt jenseits der Zeitachse"))
 }
 
-/// Der Plan des Testwirts aus dem Stimulus.
-fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
+/// Der Plan des Testwirts aus dem Stimulus bis Tick `ticks`. Eine Zeile
+/// hinter dem Lauf erreicht den Wirt nicht, wie den Interpreter (12.5,
+/// FB-620).
+fn plan(p: &Program, stimulus: &[Stimulus], ticks: u64) -> Result<Plan, String> {
     let tick_ns = p.config.tick;
     let layout = takt_frame::layout::of(p);
     let mut out = Plan::default();
@@ -358,7 +360,7 @@ fn plan(p: &Program, stimulus: &[Stimulus]) -> Result<Plan, String> {
         }
         Ok(())
     };
-    for stim in stimulus {
+    for stim in stimulus.iter().filter(|s| s.tick() <= ticks) {
         let tick = stim.tick();
         let now =
             i64::try_from(tick).ok().and_then(|t| t.checked_mul(tick_ns)).ok_or("Tick ausserhalb der Zeitachse")?;
@@ -555,7 +557,7 @@ fn reading(
 fn host(p: &Program, run: &Run<'_>) -> Result<String, String> {
     let x = prefix(run)?;
     let upper = x.as_str().to_uppercase();
-    let plan = plan(p, run.stimulus)?;
+    let plan = plan(p, run.stimulus, run.ticks)?;
     let layout = takt_frame::layout::of(p);
     let drivers = takt_frame::drivers::of(p, &layout);
     let mut s = String::new();
@@ -1096,7 +1098,7 @@ machine m:
     fn an_overrun_is_a_late_call() {
         let p = program(SRC);
         let run = Run { ticks: 10, stimulus: &stimulus("t=5 runtime Overrun\n"), ..Run::default() };
-        let plan = plan(&p, run.stimulus).expect("Plan");
+        let plan = plan(&p, run.stimulus, run.ticks).expect("Plan");
         let calls: Vec<(i64, bool, bool)> = plan.calls.iter().map(|(at, c)| (*at, c.wake, c.late)).collect();
         assert_eq!(calls, [(29_999_999, true, false), (40_000_001, false, true)]);
     }

@@ -590,6 +590,37 @@ fn a_running_job_keeps_the_native_system_awake() {
     assert!(diffs.is_empty(), "{diffs:?}\n--- Interpreter ---\n{interpreted}\n--- nativ ---\n{native}");
 }
 
+/// **Eine Zeile hinter dem Lauf erreicht keinen Ausfuehrer** (12.5,
+/// FB-620): Der Lauf hat vier Ticks, der Stimulus verlangt in Tick 6 einen
+/// Abbruch. Der Interpreter rechnet bis Tick 4 und liest die Zeile nie.
+/// Vorher rechnete der Testwirt bis zur letzten Zeile des Stimulus, und
+/// der Vergleich meldete den Zaehler der Ticks 5 und 6 als Abweichung.
+#[test]
+fn a_stimulus_line_behind_the_run_reaches_no_executor() {
+    let Some(clang) = common::clang() else { return };
+    let src = "system:\n    language = 1\n    tick = 1 ms\n\n\
+               output count : int @ hw(\"o/count\") with safe = 0\n\n\
+               machine m:\n    var n : int in 0..1000 = 0\n    initial RUN\n\n\
+               \x20   state RUN:\n        loop:\n            n = (n + 1) % 1000\n            count = n\n";
+    let options = takt_sema::Options { build: takt_sema::Build::Sim, ..Default::default() };
+    let out = takt_sema::compile(src, &options);
+    let p = out.program.unwrap_or_else(|| panic!("{:?}", out.diagnostics));
+    let stimulus = takt_interp::Trace::parse("t=6 abort\n").expect("Stimulus");
+    let options = takt_interp::RunOptions { ticks: 4, inputs: true, ..Default::default() };
+    let interpreted = takt_interp::run(&p, &stimulus, &options).expect("Lauf").trace.render();
+    let inputs = Stimulus::from_trace(&stimulus).expect("Stimulus");
+    let native =
+        common::run_native_all_with(&clang, &p, "behind_the_run", 4, &inputs).unwrap_or_else(|e| panic!("{e}"));
+    for (who, trace) in [("Interpreter", &interpreted), ("nativ", &native)] {
+        let reached = |tick: u64| trace.lines().any(|l| l.starts_with(&format!("t={tick} ")));
+        assert!(reached(4), "{who} erreicht Tick 4 nicht:\n{trace}");
+        assert!(!reached(5) && !reached(6), "{who} rechnet hinter dem Lauf:\n{trace}");
+    }
+    if let Some(e) = disagreement("BEHIND_THE_RUN", "Interpreter", &interpreted, "nativ", &native) {
+        panic!("{e}");
+    }
+}
+
 /// Was eine Spalte des Vergleichs nicht rechnet, je Programm, Lauf und
 /// Spalte, mit Grund. Die Liste ist eine Ratsche wie [`UNREACHED`]: Eine neue
 /// Luecke scheitert ebenso wie eine, die es nicht mehr gibt. Ein Programm

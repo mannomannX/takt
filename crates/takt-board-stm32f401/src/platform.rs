@@ -21,10 +21,21 @@
 //! **Laenger, als der Timer zaehlt** (2^17 s), schlaeft das Board in
 //! Abschnitten. Den Rest tragen dieselben Register, die den Standby
 //! ueberleben, und jeder Start nach einem Abschnitt schlaeft weiter.
+//!
+//! **Standby nur mit laufender Uhr** (FB-820). Die Wahl der Quelle steht in
+//! der Backup-Domaene und ueberlebt jeden Reset, der LSI selbst nicht: Ein
+//! Reset schaltet ihn ab, auch der, mit dem [`deep_sleep`] den Standby
+//! einleitet. Mit dem LSI gewaehlt und aus zaehlte der Wakeup-Timer nie, und
+//! das Board schlief, bis NRST es holte. Darum schaltet der Start den LSI
+//! wieder ein und geht nur in den Standby, wenn der gewaehlte Takt laeuft;
+//! sonst wartet er die Dauer wach ab ([`wait_awake`]). Der Kopf eines Laufs
+//! nennt die Quelle ([`rtc_clock`]).
 
 use cortex_m::peripheral::SCB;
 use stm32f4::stm32f401::{PWR, RCC, RTC, pwr, rcc, rtc};
-use takt_board_support::platform::{ENDED_MARK, RUNNING, RtcWakeup, rtc_wakeup};
+use takt_board_support::platform::{
+    ENDED_MARK, LSE_HZ, LSI_HZ, RUNNING, RtcClock, RtcWakeup, awake_cycles, rtc_wakeup,
+};
 
 use crate::{CORE_HZ, cycles};
 
@@ -38,9 +49,6 @@ const WITHOUT_TIMER: u64 = u64::MAX;
 
 /// Das Backup-Register mit dem Wort des geordneten Endes (12.7).
 const ENDED: usize = 3;
-
-const LSE_HZ: u32 = 32_768;
-const LSI_HZ: u32 = 32_000;
 
 /// So lange darf der Uhrenquarz zum Anschwingen brauchen (AN2867: bis 2 s).
 const LSE_START_CYCLES: u32 = 2 * CORE_HZ;
@@ -90,20 +98,52 @@ pub fn restart() -> ! {
 /// Schlaeft einen Tiefschlaf, der bevorsteht oder noch einen Rest hat, und
 /// kehrt sonst zurueck. Als Erstes beim Start zu rufen: Der Watchdog ist
 /// dann noch aus.
-pub fn continue_deep_sleep() {
+///
+/// Hat die RTC keinen laufenden Takt, weckte der Standby nie (FB-820): Dann
+/// kehrt es mit dem Rest in Nanosekunden zurueck, und der Start wartet ihn
+/// wach ab ([`wait_awake`]).
+pub fn continue_deep_sleep() -> Option<u64> {
     let (rcc, pwr, rtc) = registers();
     rcc.apb1enr().modify(|_, w| w.pwren().set_bit());
     if rtc.bkpr(0).read().bits() != PENDING {
-        return;
+        return None;
     }
     let rest = u64::from(rtc.bkpr(1).read().bits()) | (u64::from(rtc.bkpr(2).read().bits()) << 32);
     pwr.cr().modify(|_, w| w.dbp().set_bit());
     if rest == WITHOUT_TIMER {
         disarm(rtc);
+    } else if let Some(hz) = rtc_hz(rcc) {
+        arm(rtc, rtc_wakeup(i64::try_from(rest).unwrap_or(i64::MAX), hz));
     } else {
-        arm(rtc, rtc_wakeup(i64::try_from(rest).unwrap_or(i64::MAX), rtc_hz(rcc)));
+        disarm(rtc);
+        pwr.cr().modify(|_, w| w.dbp().clear_bit());
+        return Some(rest);
     }
     standby(pwr)
+}
+
+/// Wartet `rest_ns` wach ab, am Zykluszaehler: der Tiefschlaf, den
+/// [`continue_deep_sleep`] ohne laufende RTC nicht schlafen konnte. Nach Takt
+/// und Zykluszaehler zu rufen, vor dem Watchdog. Steht der Zykluszaehler,
+/// gibt es nichts, woran zu warten waere, und es kehrt sofort zurueck.
+pub fn wait_awake(rest_ns: u64) {
+    if !cycles::running() {
+        return;
+    }
+    let total = awake_cycles(rest_ns, CORE_HZ);
+    let (mut waited, mut last) = (0u64, cycles::now());
+    while waited < total {
+        let now = cycles::now();
+        waited = waited.saturating_add(u64::from(now.wrapping_sub(last)));
+        last = now;
+    }
+}
+
+/// Woran die RTC laeuft, fuer den Kopf eines Laufs (FB-820).
+pub fn rtc_clock() -> RtcClock {
+    let (rcc, _, _) = registers();
+    let (bdcr, csr) = (rcc.bdcr().read(), rcc.csr().read());
+    RtcClock::of(bdcr.rtcen().bit_is_set(), bdcr.rtcsel().bits(), bdcr.lserdy().bit_is_set(), csr.lsirdy().bit_is_set())
 }
 
 /// `next_run = AFTER(delay)` (`Some`), `ON_WAKE` oder `ON_START` (`None`):
@@ -123,11 +163,16 @@ pub fn deep_sleep(duration_ns: Option<i64>) -> ! {
 }
 
 /// Der Takt der RTC; waehlt ihn beim ersten Mal. Die Backup-Domaene
-/// ueberlebt Resets und Standby, eine gewaehlte Quelle bleibt also.
-fn rtc_hz(rcc: &rcc::RegisterBlock) -> u32 {
+/// ueberlebt Resets und Standby, eine gewaehlte Quelle bleibt also; den LSI
+/// schaltet jeder Reset ab, und er wird wieder eingeschaltet. `None`, wenn
+/// der gewaehlte Takt nicht laeuft (FB-820).
+fn rtc_hz(rcc: &rcc::RegisterBlock) -> Option<u32> {
     let bdcr = rcc.bdcr().read();
     if bdcr.rtcen().bit_is_set() {
-        return if bdcr.rtcsel().bits() == 0b01 { LSE_HZ } else { LSI_HZ };
+        if bdcr.rtcsel().bits() == 0b10 {
+            start_lsi(rcc);
+        }
+        return rtc_clock().hz();
     }
     rcc.bdcr().modify(|_, w| w.lseon().set_bit());
     // Die Frist misst der Zykluszaehler; steht er, begrenzt die Zahl der
@@ -137,23 +182,29 @@ fn rtc_hz(rcc: &rcc::RegisterBlock) -> u32 {
         if rcc.bdcr().read().lserdy().bit_is_set() {
             // SAFETY: `0b01` waehlt in `RTCSEL` den LSE, der eben anlief.
             rcc.bdcr().modify(|_, w| unsafe { w.rtcsel().bits(0b01) }.rtcen().set_bit());
-            return LSE_HZ;
+            return Some(LSE_HZ);
         }
         if cycles::running() && cycles::now().wrapping_sub(start) >= LSE_START_CYCLES {
             break;
         }
     }
     rcc.bdcr().modify(|_, w| w.lseon().clear_bit());
+    start_lsi(rcc);
+    // SAFETY: `0b10` waehlt in `RTCSEL` den LSI.
+    rcc.bdcr().modify(|_, w| unsafe { w.rtcsel().bits(0b10) }.rtcen().set_bit());
+    set_one_hertz(LSI_HZ);
+    rtc_clock().hz()
+}
+
+/// Schaltet den LSI ein und wartet, bis er bereit ist, hoechstens
+/// [`SETTLE`] Anlaeufe.
+fn start_lsi(rcc: &rcc::RegisterBlock) {
     rcc.csr().modify(|_, w| w.lsion().set_bit());
     for _ in 0..SETTLE {
         if rcc.csr().read().lsirdy().bit_is_set() {
             break;
         }
     }
-    // SAFETY: `0b10` waehlt in `RTCSEL` den LSI.
-    rcc.bdcr().modify(|_, w| unsafe { w.rtcsel().bits(0b10) }.rtcen().set_bit());
-    set_one_hertz(LSI_HZ);
-    LSI_HZ
 }
 
 /// `ck_spre` = 1 Hz bei `hz`: `PREDIV_A` = 127, `PREDIV_S` = hz/128 - 1.

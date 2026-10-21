@@ -712,7 +712,7 @@ struct Setup {
 /// Speicherschutz nicht einzurichten sind.
 fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     // Ein Tiefschlaf mit Rest schlaeft weiter, bevor irgendetwas laeuft (12.7).
-    platform::continue_deep_sleep();
+    let awake = platform::continue_deep_sleep();
     PREVIOUS_RUN.store(platform::previous_run(), Ordering::SeqCst);
     let board = Board::WEACT_BLACKPILL;
     let led = Led::new(dp.GPIOC, &dp.RCC, board);
@@ -759,6 +759,11 @@ fn setup(dp: Peripherals, cp: cortex_m::Peripherals) -> Setup {
     let nvic = cp.NVIC;
     let (mut dcb, mut dwt, mut core_mpu, mut scb) = (cp.DCB, cp.DWT, cp.MPU, cp.SCB);
     cycles::enable(&mut dcb, &mut dwt);
+    // Ohne laufende RTC schlief der Tiefschlaf nicht; der Start wartet ihn
+    // ab, bevor der Watchdog laeuft (FB-820).
+    if let Some(rest) = awake {
+        platform::wait_awake(rest);
+    }
     let Some(protection) = Mpu::arm(&mut core_mpu, &mut scb, guarded) else {
         if let Some(u) = uart() {
             u.write("takt: Speicherschutz nicht einrichtbar");
@@ -1793,6 +1798,10 @@ fn banner(nominal_ns: i64) {
     uart.newline();
     uart.write("  DWT ");
     uart.write(if cycles::running() { "laeuft" } else { "STEHT" });
+    uart.newline();
+    // Woran der Tiefschlaf weckt (12.7, FB-820).
+    uart.write("  RTC ");
+    uart.write(platform::rtc_clock().name());
     uart.newline();
     uart.newline();
     uart.mark();
