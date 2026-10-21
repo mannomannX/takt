@@ -10,6 +10,12 @@
  * Journals und beide Stacks. Waehrend des Laufs rechnet es die
  * fremde Last. Es faehrt so viele Ticks, wie das erste Argument sagt (ohne:
  * 2000), und schreibt den Lauf auf stdout; `takt port-test --judge` urteilt.
+ * Das zweite Argument nennt die Prioritaet des Schrittfadens unter
+ * SCHED_FIFO (ohne: 0, die des Systems). Den Speicher sperrt der Wirt vor
+ * dem Lauf (`mlockall`, 12.2): Ohne das hatten auf dem gehosteten Runner
+ * 9 von 60 Laeufen verspaetete Ticks, mit ihm keiner (FB-860). Zeit sagt er
+ * nur unter PREEMPT_RT mit SCHED_FIFO und gesperrtem Speicher zu; sonst nennt
+ * der Kopf den Grund, und das Urteil misst die Zeit, ohne sie zu bewerten.
  *
  *     clang -std=c11 -O2 -pthread -I DIR -I ports/rtos -I ports/posix main.c \
  *         ports/rtos/takt_rtos.c ports/posix/takt_os.c DIR/libport_test.a libtakt_sdk.a -lm
@@ -22,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include "port_test.h"
@@ -120,13 +127,39 @@ static int ticks_of(const char *text, uint64_t *ticks) {
     return rc;
 }
 
+/* Die Zeitgarantie des Wirts (12.2, 13.8; FB-860): PREEMPT_RT, ein
+ * Schrittfaden in SCHED_FIFO und gesperrter Speicher (`locked`, die Rueckgabe
+ * von `mlockall`). NULL, wenn sie gilt; sonst der Grund fuer die Kopfzeile
+ * `Zeit: ohne Garantie: <Grund>`. */
+static const char *untimed(int step_priority, int locked) {
+    const char *why;
+    char flag = '0';
+    FILE *f = fopen("/sys/kernel/realtime", "r");
+    if (f != NULL) {
+        if (fread(&flag, 1u, 1u, f) != 1u) {
+            flag = '0';
+        }
+        (void)fclose(f);
+    }
+    if (flag != '1') {
+        why = "kein PREEMPT_RT (/sys/kernel/realtime)";
+    } else if (step_priority <= 0) {
+        why = "der Schrittfaden rechnet ohne SCHED_FIFO";
+    } else if (locked != 0) {
+        why = "mlockall scheiterte";
+    } else {
+        why = NULL;
+    }
+    return why;
+}
+
 /* Die Stacks beider Faeden; reichlich ueber PTHREAD_STACK_MIN, gemessen wird
  * die Tiefe (12.3). */
 #define STACK_BYTES (256u * 1024u)
 
 /* Faehrt den Kern `core` ueber den Port, waehrend dieser Faden die fremde
  * Last rechnet, und schreibt die Bilanz; 0 oder 2. */
-static int drive(takt_core *core, uint64_t ticks) {
+static int drive(takt_core *core, uint64_t ticks, int step_priority) {
     static struct takt_rtos port;
     static _Alignas(64) uint8_t tick_stack[STACK_BYTES];
     static _Alignas(64) uint8_t job_stack[STACK_BYTES];
@@ -137,7 +170,7 @@ static int drive(takt_core *core, uint64_t ticks) {
         .tick_stack_bytes = sizeof tick_stack,
         .job_stack = job_stack,
         .job_stack_bytes = sizeof job_stack,
-        .step_priority = 0,
+        .step_priority = step_priority,
         .job_priority = 0,
     };
     int rc = takt_rtos_start(&port, core, &config);
@@ -163,7 +196,7 @@ static int drive(takt_core *core, uint64_t ticks) {
 }
 
 /* Was der Wirt fuer den Lauf stellt: Leitung, Journal und Kern; 0 oder 2. */
-static int run(uint64_t ticks) {
+static int run(uint64_t ticks, int step_priority) {
     static struct out out;
     static uint8_t ring[65536];
     static uint8_t current[PORT_TEST_PERSIST_BOUND];
@@ -178,7 +211,14 @@ static int run(uint64_t ticks) {
     if (status != TAKT_OK) {
         (void)fprintf(stderr, "takt_line_init: %d\n", (int)status);
     } else {
+        const int locked = mlockall(MCL_CURRENT | MCL_FUTURE);
+        const char *why = untimed(step_priority, locked);
         takt_board_trace("takt auf posix\n" TAKT_RTOS_PROTECTION "\n");
+        if (why != NULL) {
+            takt_board_trace("  Zeit: ohne Garantie: ");
+            takt_board_trace(why);
+            takt_board_trace("\n");
+        }
         takt_line_mark();
         (void)memset(slots, 0xff, sizeof slots);
         status = takt_core_init_journaled(&core, &port_test_ops, &arena, NULL, TAKT_PROFILE_SHARED, &watchdog, &nvm,
@@ -186,7 +226,7 @@ static int run(uint64_t ticks) {
         if (status != TAKT_OK) {
             (void)fprintf(stderr, "takt_core_init_journaled: %d\n", (int)status);
         } else {
-            rc = drive(&core, ticks);
+            rc = drive(&core, ticks, step_priority);
         }
     }
     return rc;
@@ -194,14 +234,17 @@ static int run(uint64_t ticks) {
 
 int main(int argc, char **argv) {
     uint64_t ticks = 2000u;
+    uint64_t priority = 0u;
     const int flags = fcntl(STDOUT_FILENO, F_GETFL);
     int rc = 2;
     if ((argc > 1) && (ticks_of(argv[1], &ticks) != 0)) {
         (void)fprintf(stderr, "takt: keine Zahl von Ticks: %s\n", argv[1]);
+    } else if ((argc > 2) && ((ticks_of(argv[2], &priority) != 0) || (priority > 99u))) {
+        (void)fprintf(stderr, "takt: keine Prioritaet unter SCHED_FIFO: %s\n", argv[2]);
     } else if ((flags < 0) || (fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK) != 0)) {
         perror("fcntl");
     } else {
-        rc = run(ticks);
+        rc = run(ticks, (int)priority);
     }
     return rc;
 }

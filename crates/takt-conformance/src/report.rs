@@ -22,8 +22,9 @@ use std::fmt::Write as _;
 /// `placements` je Probe; die Kerne heissen wie im Protokoll. 3: die
 /// Stack-Reserve je Form (`stack_reserve_<form>`, FB-513). 4: das Urteil der
 /// Portpruefung je Port (`[port <name>]`, M11 Schritt 15). 5: der
-/// Speicherschutz je Port (`protection`, M11 Schritt 23).
-pub const FORMAT_VERSION: u32 = 5;
+/// Speicherschutz je Port (`protection`, M11 Schritt 23). 6: ohne
+/// Zeitgarantie ihr Grund je Port (`untimed`, FB-860).
+pub const FORMAT_VERSION: u32 = 6;
 
 const MAGIC: &str = "takt-conformance";
 
@@ -210,6 +211,9 @@ pub struct PortEntry {
     /// Der Speicherschutz, den der Kopf des Laufs nannte (12.11): `Fenster`,
     /// `Partition` oder `keiner`.
     pub protection: Option<String>,
+    /// Ohne Zeitgarantie ihr Grund: Die Zeit ist gemessen, nicht bewertet
+    /// (13.8, FB-860).
+    pub untimed: Option<String>,
 }
 
 /// Was beim Lesen schiefgehen kann; jeder Fall nennt die Zeile.
@@ -305,6 +309,7 @@ pub fn render(r: &Report) -> String {
             ("job_stack_shared", p.job_stack_shared.then(|| "true".to_string())),
             ("journal_writes", p.journal_writes.map(|n| n.to_string())),
             ("protection", p.protection.as_ref().map(|c| format!("\"{c}\""))),
+            ("untimed", p.untimed.as_ref().map(|c| format!("\"{c}\""))),
         ];
         for (key, value) in numbers {
             if let Some(value) = value {
@@ -533,6 +538,7 @@ pub fn parse(text: &str) -> Result<Report, ParseError> {
                     "job_stack_shared" => p.job_stack_shared = flag()?,
                     "journal_writes" => p.journal_writes = Some(number()?),
                     "protection" => p.protection = Some(text()),
+                    "untimed" => p.untimed = Some(text()),
                     _ => return Err(unknown()),
                 }
             }
@@ -642,23 +648,33 @@ mod tests {
                 contract: 512,
             }],
             corpus: Some(Corpus { programs: 44, deviations: 0 }),
-            ports: vec![PortEntry {
-                name: "interrupt".into(),
-                date: "2026-10-11".into(),
-                passed: true,
-                ticks: 2998,
-                drift_median_ns: 3_100,
-                drift_late_ns: 2_400,
-                jitter_ns: Some(2_200),
-                foreign_rounds: Some(41_000),
-                foreign_errors: Some(0),
-                longest_job_ticks: Some(4),
-                stack: Some((3_900, 4_500)),
-                job_stack: Some((1_100, 2_700)),
-                job_stack_shared: false,
-                journal_writes: None,
-                protection: Some("Fenster".into()),
-            }],
+            ports: vec![
+                PortEntry {
+                    name: "interrupt".into(),
+                    date: "2026-10-11".into(),
+                    passed: true,
+                    ticks: 2998,
+                    drift_median_ns: 3_100,
+                    drift_late_ns: 2_400,
+                    jitter_ns: Some(2_200),
+                    foreign_rounds: Some(41_000),
+                    foreign_errors: Some(0),
+                    longest_job_ticks: Some(4),
+                    stack: Some((3_900, 4_500)),
+                    job_stack: Some((1_100, 2_700)),
+                    job_stack_shared: false,
+                    journal_writes: None,
+                    protection: Some("Fenster".into()),
+                    untimed: None,
+                },
+                PortEntry {
+                    name: "posix".into(),
+                    date: "2026-10-21".into(),
+                    passed: true,
+                    untimed: Some("kein PREEMPT_RT".into()),
+                    ..PortEntry::default()
+                },
+            ],
         }
     }
 
@@ -666,7 +682,8 @@ mod tests {
     fn a_report_round_trips() {
         let r = sample();
         let text = render(&r);
-        assert!(text.starts_with("# takt-conformance 5\n"), "{text}");
+        assert!(text.starts_with("# takt-conformance 6\n"), "{text}");
+        assert!(text.contains("[port posix]\n") && text.contains("untimed = \"kein PREEMPT_RT\"\n"), "{text}");
         assert!(text.contains("job_stack = 1100 2700\nprotection = \"Fenster\"\n"), "{text}");
         assert!(text.contains("[port interrupt]\ndate = \"2026-10-11\"\npassed = true\n"), "{text}");
         assert!(text.contains("stack = 3900 4500\njob_stack = 1100 2700\n"), "{text}");
