@@ -13,7 +13,7 @@
 # west in der Fassung aus D:\takt-tools.
 west==1.5.0
 pyelftools>=0.29
-PyYAML>=6.0
+PyYAML>=6.0.4
 pykwalify
 jsonschema
 packaging
